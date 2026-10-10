@@ -17,6 +17,7 @@
 import { Unzip, UnzipInflate, type UnzipFile } from 'fflate';
 import { DecompressionLimits, OfficeErrorType, OfficeParserConfig, SupportedFileType } from '../types.js';
 import { checkAbortSignal, getAbortError, getOfficeError } from './errorUtils.js';
+import { lookupTable } from './lookupUtils.js';
 
 /**
  * Signature of the End Of Central Directory record ("PK\x05\x06"), the trailer every ZIP
@@ -99,15 +100,19 @@ export interface ZipFileContent {
  * 
  * @see https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT ZIP file format specification
  */
+/** The bytes one archive may inflate to: `limits.maxUncompressedBytes` when it is a valid limit, else 512 MB. */
+export const maxUncompressedBytesOf = (limits: DecompressionLimits | undefined): number =>
+    limits?.maxUncompressedBytes !== undefined && Number.isFinite(limits.maxUncompressedBytes) && limits.maxUncompressedBytes >= 0
+        ? limits.maxUncompressedBytes
+        : 512 * 1024 * 1024;
+
 export const extractFiles = (
     zipInput: Buffer,
     filterFn: (fileName: string) => boolean,
     limits: DecompressionLimits,
     config?: OfficeParserConfig
 ): Promise<ZipFileContent[]> => {
-    const maxUncompressedBytes = limits?.maxUncompressedBytes !== undefined && Number.isFinite(limits.maxUncompressedBytes) && limits.maxUncompressedBytes >= 0
-        ? limits.maxUncompressedBytes
-        : 512 * 1024 * 1024;
+    const maxUncompressedBytes = maxUncompressedBytesOf(limits);
 
     const maxZipEntries = limits?.maxZipEntries !== undefined && Number.isFinite(limits.maxZipEntries) && limits.maxZipEntries >= 0
         ? limits.maxZipEntries
@@ -259,6 +264,20 @@ export const extractFiles = (
 };
 
 /**
+ * A relationship's target as a package path, resolved against the folder of the part naming it
+ * (`ppt/slides/` and `../notesSlides/notesSlide1.xml` give `ppt/notesSlides/notesSlide1.xml`). A target
+ * starting with `/` is from the package root.
+ */
+export const resolvePartPath = (folder: string, target: string): string => {
+    const segments: string[] = [];
+    for (const segment of (target.startsWith('/') ? target.slice(1) : folder + target).split('/')) {
+        if (segment === '..') segments.pop();
+        else if (segment && segment !== '.') segments.push(segment);
+    }
+    return segments.join('/');
+};
+
+/**
  * Finds the archive part that every document of a given format must contain, and fails loudly
  * when it is absent.
  *
@@ -312,7 +331,7 @@ const OOXML_MAIN_CONTENT_TYPES: ReadonlyArray<readonly [string, SupportedFileTyp
 ];
 
 /** Exact `mimetype` entry contents for the packages that carry one. */
-const PACKAGE_MIMETYPES: Readonly<Record<string, SupportedFileType>> = {
+const PACKAGE_MIMETYPES: Readonly<Record<string, SupportedFileType>> = lookupTable({
     'application/vnd.oasis.opendocument.text': 'odt',
     'application/vnd.oasis.opendocument.spreadsheet': 'ods',
     'application/vnd.oasis.opendocument.presentation': 'odp',
@@ -324,7 +343,7 @@ const PACKAGE_MIMETYPES: Readonly<Record<string, SupportedFileType>> = {
     'application/vnd.oasis.opendocument.presentation-template': 'odp',
     'application/vnd.oasis.opendocument.graphics-template': 'odg',
     'application/epub+zip': 'epub',
-};
+});
 
 /** First two bytes of every ZIP local file header ("PK"). */
 const ZIP_MAGIC_BYTES = [0x50, 0x4b];
@@ -393,7 +412,7 @@ export const detectOfficeTypeFromZip = async (
     try {
         files = await extractFiles(
             zipInput,
-            name => name === OOXML_CONTENT_TYPES_PATH || name === ODF_MIMETYPE_PATH,
+            name => name === OOXML_CONTENT_TYPES_PATH || name === ODF_MIMETYPE_PATH || isRootTexFile(name),
             // Never inflate more for a sniff than the caller already allows for the parse, and
             // never more than a sniff could legitimately need.
             {
@@ -405,9 +424,15 @@ export const detectOfficeTypeFromZip = async (
             },
             { ...SILENT_DETECTION_CONFIG, abortSignal }
         );
-    } catch (error) {
+    } catch (error: any) {
         if (typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError') throw error;
-        // Unreadable, truncated, or not an archive at all. The caller keeps whatever the
+        // A limit the caller set was exceeded: parsing the archive would fail on it too, so that is
+        // the error to report, not "unsupported format" for want of a detected type. (The sniff's
+        // own, smaller size cap is not the caller's limit, and exceeding it is no failure.)
+        const code = error?.officeIssue?.code;
+        if (code === OfficeErrorType.ZIP_ENTRY_COUNT_LIMIT_EXCEEDED) throw error;
+        if (code === OfficeErrorType.ZIP_SIZE_LIMIT_EXCEEDED && (limits?.maxUncompressedBytes ?? Infinity) <= MAX_DETECTION_INFLATED_BYTES) throw error;
+        // Otherwise unreadable, truncated, or not an archive at all. The caller keeps whatever the
         // byte-level sniff decided, and the parser it dispatches to reports the real problem.
         return undefined;
     }
@@ -426,5 +451,17 @@ export const detectOfficeTypeFromZip = async (
         if (match) return match[1];
     }
 
+    // A LaTeX project (an Overleaf download, the LaTeX generator's bundle) declares nothing, but
+    // its main file sits at the top level and starts a document.
+    if (files.some(file => isRootTexFile(file.path) && /\\documentclass/.test(file.content.toString('utf8')))) return 'tex';
+
     return undefined;
 };
+
+/**
+ * A `.tex` file at the top level of an archive, or one folder down (a repository download wraps the
+ * project in a folder): where a LaTeX project keeps its main file.
+ */
+function isRootTexFile(name: string): boolean {
+    return name.split('/').length <= 2 && name.toLowerCase().endsWith('.tex');
+}

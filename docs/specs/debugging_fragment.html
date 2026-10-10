@@ -88,7 +88,8 @@ await terminateOcr(); // Snappy exit</code></pre>
     <p>If <code>metadata.customProperties</code> is empty:</p>
     <ul>
         <li><code>metadata.customProperties</code> is populated for <strong>OOXML (DOCX, XLSX, PPTX)</strong>, <strong>ODF
-                (ODT, ODS, ODP, ODG)</strong>, and <strong>PDF</strong>.</li>
+                (ODT, ODS, ODP, ODG)</strong>, <strong>PDF</strong>, and <strong>LaTeX</strong> (the custom
+            <code>pdfinfo</code> keys of <code>\hypersetup</code>).</li>
         <li>HTML and Markdown expose their <code>&lt;meta&gt;</code> tags / YAML front matter as
             <code>metadata.nativeProperties</code> rather than <code>customProperties</code>; EPUB exposes its OPF
             metadata. Legacy <strong>RTF</strong> supports no custom-property extraction.</li>
@@ -106,8 +107,8 @@ await terminateOcr(); // Snappy exit</code></pre>
     </ul>
 
     <h2>7. Text-Based Buffer Detection Failure (<code>IMPROPER_BUFFERS</code>)</h2>
-    <p>When passing a <code>Buffer</code> or <code>ArrayBuffer</code> for <code>md</code>, <code>html</code>, or
-        <code>csv</code> files, the parser cannot auto-detect the format — these formats have no magic bytes. You must
+    <p>When passing a <code>Buffer</code> or <code>ArrayBuffer</code> for <code>md</code>, <code>html</code>,
+        <code>csv</code>, or <code>tex</code> files, the parser cannot auto-detect the format, since these formats have no magic bytes. You must
         provide a <code>fileType</code> hint:
     </p>
     <pre><code>// Without fileType → throws IMPROPER_BUFFERS
@@ -116,7 +117,8 @@ await officeParser.parseOffice(markdownBuffer);
 // Correct:
 await officeParser.parseOffice(markdownBuffer, { fileType: 'md' });
 await officeParser.parseOffice(htmlBuffer,     { fileType: 'html' });
-await officeParser.parseOffice(csvBuffer,      { fileType: 'csv' });</code></pre>
+await officeParser.parseOffice(csvBuffer,      { fileType: 'csv' });
+await officeParser.parseOffice(latexBuffer,    { fileType: 'tex' });</code></pre>
     <p><strong>ZIP-backed formats do not need this hint.</strong> DOCX, XLSX, PPTX, ODT, ODS, ODP and EPUB are all ZIP
         archives, and identifying them from the leading bytes alone is unreliable for archives written by streaming
         producers (which defer entry sizes to trailing data descriptors) or holding very many parts. When the byte
@@ -124,7 +126,11 @@ await officeParser.parseOffice(csvBuffer,      { fileType: 'csv' });</code></pre
         declaration, either <code>[Content_Types].xml</code> or the <code>mimetype</code> entry. If you previously saw
         <code>Sorry, OfficeParser currently supports docx, pptx, xlsx&hellip;</code> for a valid document, that was this
         case and it no longer occurs.</p>
-    <p>The <code>fileType</code> option is authoritative — it bypasses magic-bytes detection even for binary formats.
+    <p>A <strong>LaTeX project zip</strong> (an Overleaf "Download source" zip, or a <code>texConfig.bundle</code> zip) is
+        recognized the same way: an archive holding a <code>.tex</code> file with <code>\documentclass</code> near its root
+        parses as <code>tex</code>. A file named <code>.zip</code> is always routed by what the archive holds, since
+        <code>zip</code> itself names no format.</p>
+    <p>The <code>fileType</code> option is authoritative: it bypasses magic-bytes detection even for binary formats.
     </p>
 
     <h2>8. PDF Generation Fails (Node.js)</h2>
@@ -149,11 +155,18 @@ await officeParser.parseOffice(csvBuffer,      { fileType: 'csv' });</code></pre
     <p>By default, <code>officeParser</code> enforces extraction limits to prevent excessive memory and CPU consumption when processing large archives (archives that expand to massive sizes or contain a very large number of files).</p>
     <ul>
         <li><strong>Max Uncompressed Size:</strong> Defaults to 512 MB. Files exceeding this size will reject with a <code>ZIP_SIZE_LIMIT_EXCEEDED</code> error.</li>
+        <li><strong>Max XML Elements:</strong> Defaults to 2,000,000 per document (<code>decompressionLimits.maxXmlElements</code>). A document whose XML holds more rejects with an <code>XML_ELEMENT_LIMIT_EXCEEDED</code> error.</li>
+        <li><strong>Max Table Cells:</strong> Defaults to 1,000,000 per document (<code>decompressionLimits.maxTableCells</code>), plus one per byte of the document, for ODF repeated cells and XLSX workbooks alike. Past it the parse keeps the cells it has and warns with <code>TABLE_CELL_LIMIT_EXCEEDED</code>.</li>
+        <li><strong>Max Repeated Content:</strong> Defaults to 16,777,216 (<code>decompressionLimits.maxRepeatedContent</code>), plus 16 per byte of the document: the content a document repeats by reference (ODF repeated cells, XLSX shared strings, style values, link targets), each use after the first costing its characters past 64. Past it later repeats are not made, shortened or go without the value, with a <code>REPEATED_CONTENT_LIMIT_EXCEEDED</code> warning.</li>
+        <li><strong>PDF Content:</strong> A PDF yields at most <code>pdfParserConfig.maxTextItems</code> (20,000) text items (an item counting once more per 64 characters), keeps at most <code>maxOperators</code> (250,000) drawing operators (paths do not count) and reads <code>maxAnnotations</code> (10,000) annotations, and the separate pdf.js process may spend at most <code>maxTimeMs</code> (5,000 ms) of CPU time on it, each plus an allowance for the file's size. Past the text or time limit, the rest of the document is not read; past the operator limit, its images, text colours and font styles are not (its text is). The <code>PDF_CONTENT_LIMIT_EXCEEDED</code> warning names the limit.</li>
+        <li><strong>PDF Process:</strong> In Node, pdf.js runs in separate processes (at most one per CPU, each reading one document at a time) under <code>pdfParserConfig.processMemoryMb</code> (1,024 MB). A PDF pdf.js cannot hold in that rejects with <code>PDF_PROCESS_FAILED</code>, and the host is unaffected; <code>abortSignal</code> ends the process mid-stream. Set <code>separateProcess: false</code> to read in the host, where pdf.js's time is not bounded (no measure of time there is the document's own) and <code>abortSignal</code> stops it at its next time slice.</li>
+        <li><strong>Max Raw Content Length:</strong> Defaults to 64M characters (<code>decompressionLimits.maxRawContentLength</code>) of <code>rawContent</code> per document with <code>includeRawContent</code>. Past it the remaining nodes carry none, with a <code>RAW_CONTENT_LIMIT_EXCEEDED</code> warning.</li>
         <li><strong>Max Zip Entries:</strong> Defaults to 10,000 entries. Archives with more files will reject with a <code>ZIP_ENTRY_COUNT_LIMIT_EXCEEDED</code> error.</li>
         <li><strong>Corrupt / non-ZIP input:</strong> Data that yields no readable ZIP entries at all rejects with a <code>ZIP_NO_ENTRIES_FOUND</code> error, since every ZIP-based document format requires at least one entry. This is not a tunable limit: it means the input is corrupt, truncated, or not actually a ZIP-based file.</li>
         <li><strong>Truncated input:</strong> An archive missing its End of Central Directory record rejects with a <code>ZIP_TRUNCATED</code> error. The file was cut off (typically an interrupted download or upload), so entries recovered from it cannot be trusted to be the whole document.</li>
         <li><strong>Wrong kind of archive:</strong> A perfectly readable ZIP that lacks the part its format requires rejects with a <code>REQUIRED_PART_MISSING</code> error naming the missing part (<code>word/document.xml</code>, <code>xl/workbook.xml</code>, <code>ppt/presentation.xml</code>, ODF <code>content.xml</code>, or the EPUB OPF). This is what a renamed ZIP or a partial upload looks like.</li>
     </ul>
+    <p><strong>Nesting depth:</strong> markup nested past what the parsers read rejects with a <code>MAX_NESTING_DEPTH_EXCEEDED</code> error before anything can run out of stack on it: HTML (and EPUB chapters, and a Markdown document's HTML tables) more than 256 elements deep, RTF groups more than 256 deep, and Word paragraph content (such as nested hyperlinks) more than 512 elements deep. Real documents nest a few levels, so this means the input was built to be deep. Other Office and ODF documents and ASTs handed to a generator are rejected with the same error when they nest past what the stack holds. LaTeX keeps content nested past its bound as plain text instead (see section 10).</p>
     <p>None of these three are tunable: they report that the input is not a usable document, not that a limit was hit. A workbook with only chartsheets and a presentation with no slides are legitimate and still parse, emitting a <code>NO_WORKSHEETS_FOUND</code> or <code>NO_SLIDES_FOUND</code> warning so an empty result is never silent.</p>
     <p>If you need to process larger files, you can increase these limits or disable them by providing custom values in <code>decompressionLimits</code>:</p>
     <pre><code>const ast = await officeParser.parseOffice('large_file.docx', {
@@ -162,6 +175,31 @@ await officeParser.parseOffice(csvBuffer,      { fileType: 'csv' });</code></pre
         maxZipEntries: 50000 // Allow up to 50k zip entries
     }
 });</code></pre>
+
+    <h2>10. LaTeX Input</h2>
+    <p>LaTeX is a macro language, so the parser interprets it under fixed bounds rather than running it: nothing is
+        executed, there is no shell escape, and nothing is read from the filesystem (included files and images come only
+        from a project <code>.zip</code>, and paths escaping its root are refused). What it could not do is reported
+        through <code>onWarning</code> / <code>ast.warnings</code>:</p>
+    <ul>
+        <li><strong><code>LATEX_FILE_NOT_FOUND</code></strong>: an <code>\input</code>/<code>\include</code>d file or an
+            <code>\includegraphics</code> image could not be read. A <code>.tex</code> holds only the files it carries in
+            <code>filecontents</code> blocks, so parse the project <code>.zip</code> instead (with
+            <code>extractAttachments: true</code> for the image bytes). Images are kept as references to their path
+            (<code>metadata.url</code>).</li>
+        <li><strong><code>LATEX_CONSTRUCT_NOT_INTERPRETED</code></strong>: the document uses commands or environments the
+            parser does not interpret (a TikZ picture, for example). Text inside them is kept where there is any; drawings
+            are omitted. The message names each construct once. It also names a conditional the parser could not decide
+            (such as <code>\ifnum</code> on a counter; both of its branches were read, where engine tests and
+            <code>\newif</code> switches are decided as pdfLaTeX would), an <code>xparse</code> argument specification
+            it does not support, and a ConTeXt document (read for its text, as it is not LaTeX).</li>
+        <li><strong><code>LATEX_EXPANSION_LIMIT_REACHED</code></strong>: a bound was hit (200,000 macro expansions,
+            5,000,000 expanded characters, which included files count toward too, 128 nested input frames, include depth 16,
+            nesting depth 128, or 32 nested tables), so content past it was not expanded (content nested too deep is kept as
+            plain text). Include cycles are cut the same way. The bounds are not configurable, and parsing time grows
+            linearly with the document. The parse runs synchronously: an <code>abortSignal</code> is honoured before it
+            starts, while a project zip is read and while OCR runs, but a timer cannot interrupt a <code>.tex</code> being parsed.</li>
+    </ul>
 
     <h2>Quick Reference</h2>
     <table>
@@ -189,8 +227,8 @@ await officeParser.parseOffice(csvBuffer,      { fileType: 'csv' });</code></pre
                 <td>Call <code>await ast.to('text')</code> early and discard the AST to allow GC</td>
             </tr>
             <tr>
-                <td><code>md</code>/<code>html</code>/<code>csv</code> buffer not detected</td>
-                <td>Add <code>fileType: 'md'</code> (or <code>'html'</code>, <code>'csv'</code>) to config</td>
+                <td><code>md</code>/<code>html</code>/<code>csv</code>/<code>tex</code> buffer not detected</td>
+                <td>Add <code>fileType: 'md'</code> (or <code>'html'</code>, <code>'csv'</code>, <code>'tex'</code>) to config</td>
             </tr>
             <tr>
                 <td><code>IMPROPER_BUFFERS</code> error</td>
@@ -217,12 +255,60 @@ await officeParser.parseOffice(csvBuffer,      { fileType: 'csv' });</code></pre
                 <td>A readable ZIP that is not the document type it claims. Check the file opens in its native application, and that <code>fileType</code> matches what it actually is</td>
             </tr>
             <tr>
+                <td><code>MAX_NESTING_DEPTH_EXCEEDED</code> error</td>
+                <td>HTML or RTF nested more than 256 levels deep, far beyond real documents. The input is malformed or built to exhaust the parser; it is refused rather than parsed</td>
+            </tr>
+            <tr>
+                <td><code>OUTPUT_TOO_LARGE</code> error when generating</td>
+                <td>The output would not fit in a string, or an AST built in code shares its nodes, lists or long strings along more paths than a writer follows (each shared value is written at every use). Parsed documents stay inside it (a style many cells share counts at each only what it weighs past a node's own record). Write in parts, or widen the bound with the AST's <code>config.decompressionLimits.maxRepeatedContent</code> (up to 1 GiB)</td>
+            </tr>
+            <tr>
                 <td>Document parses but comes back empty</td>
                 <td>Check <code>ast.warnings</code> for <code>NO_WORKSHEETS_FOUND</code> / <code>NO_SLIDES_FOUND</code> - the file really is empty. Corrupt input throws instead of returning empty</td>
             </tr>
             <tr>
+                <td>LaTeX images or <code>\input</code> files missing (<code>LATEX_FILE_NOT_FOUND</code>)</td>
+                <td>Parse the project <code>.zip</code> (e.g. Overleaf's "Download source") instead of the bare <code>.tex</code>, with <code>extractAttachments: true</code></td>
+            </tr>
+            <tr>
+                <td>A TikZ figure or unknown environment is missing (<code>LATEX_CONSTRUCT_NOT_INTERPRETED</code>)</td>
+                <td>Expected: drawings are omitted and unknown constructs keep only their text. Export the figure as an image and <code>\includegraphics</code> it</td>
+            </tr>
+            <tr>
+                <td>LaTeX content stops expanding partway (<code>LATEX_EXPANSION_LIMIT_REACHED</code>)</td>
+                <td>The document hit a macro/include bound (often a runaway recursive macro or an include cycle). Simplify the macro or remove the cycle</td>
+            </tr>
+            <tr>
+                <td>A config option seems to have no effect</td>
+                <td>Check <code>onWarning</code> or the result's <code>messages</code>: <code>UNRECOGNIZED_CONFIG_OPTION</code> means a typo or an option in the wrong config object (the message names where it belongs), <code>INVALID_CONFIG_VALUE</code> a value the option does not accept (its default was used)</td>
+            </tr>
+            <tr>
+                <td>A LaTeX document's <code>\today</code> reads as the day it was parsed</td>
+                <td>Expected: LaTeX prints the day of the compile. Set <code>texParserConfig.today</code> to a fixed date, or to a placeholder to replace later</td>
+            </tr>
+            <tr>
+                <td>Generated LaTeX shows <code>[U+XXXX]</code> markers</td>
+                <td>pdfLaTeX has no fonts for that script (CJK, Cyrillic, emoji). Compile with XeLaTeX or LuaLaTeX</td>
+            </tr>
+            <tr>
+                <td>Generated LaTeX shows an equation as literal text (<code>MATH_WRITTEN_AS_TEXT</code>)</td>
+                <td>The expression used a command refused for safety or was unbalanced; the message names what. Correct the math in the source document</td>
+            </tr>
+            <tr>
+                <td>Generated LaTeX prints <code>[?]</code> for citations (<code>CITATIONS_NOT_RESOLVED</code>)</td>
+                <td>The document cites keys it has no bibliography entry for (a Markdown <code>[@key]</code>, say); the message names them. Add a <code>\bibliography{file}</code> with a <code>.bib</code> file holding them, or parse the LaTeX project with its <code>.bib</code> so its bibliography is part of the document</td>
+            </tr>
+            <tr>
+                <td>Images missing when compiling generated LaTeX (<code>IMAGES_NOT_BUNDLED</code>)</td>
+                <td>PNG and JPEG images travel inside the <code>.tex</code> unless <code>texConfig.embedImages</code> is <code>false</code>; for the files the message names, generate with <code>texConfig: { bundle: true }</code> for a zip of the source and its images, or place them where the message says</td>
+            </tr>
+            <tr>
+                <td>XeLaTeX or dvipdfmx cannot find an <code>image-&lt;hash&gt;.pdf</code> the generated LaTeX carries</td>
+                <td>The <code>.tex</code> writes its images beside itself when compiled; with <code>--output-directory</code> they land in that folder, where XeLaTeX and dvipdfmx do not look. Compile in the <code>.tex</code>'s folder, or generate with <code>texConfig: { bundle: true }</code></td>
+            </tr>
+            <tr>
                 <td>Images missing from generated EPUB</td>
-                <td>Pass <code>extractAttachments: true</code> on the parse step — without it there are no image bytes for the EPUB generator to package. <code>OfficeConverter.convert()</code> sets this automatically.</td>
+                <td>Pass <code>extractAttachments: true</code> on the parse step; without it there are no image bytes for the EPUB generator to package. <code>OfficeConverter.convert()</code> sets this automatically.</td>
             </tr>
         </tbody>
     </table>

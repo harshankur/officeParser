@@ -1,4 +1,5 @@
 import { isElement } from './xmlUtils.js';
+import { lookupTable } from './lookupUtils.js';
 
 /**
  * Equation markup normalization.
@@ -87,20 +88,20 @@ const OMML_PROPERTY_TAGS = new Set([
  * `m:scr` math alphabets. OOXML encodes `ℝ` as an ASCII `R` plus a script attribute rather than
  * as the Unicode character ODF uses, so these carry meaning and not merely styling.
  */
-const OMML_MATH_ALPHABETS: Record<string, string> = {
+const OMML_MATH_ALPHABETS: Record<string, string> = lookupTable({
     'double-struck': '\\mathbb',
     'script': '\\mathcal',
     'fraktur': '\\mathfrak',
     'monospace': '\\mathtt',
     'sans-serif': '\\mathsf',
     'roman': '\\mathrm',
-};
+});
 
 /** Named OMML functions that map onto a LaTeX command of the same meaning. */
-const OMML_NARY_OPERATORS: Record<string, string> = {
+const OMML_NARY_OPERATORS: Record<string, string> = lookupTable({
     '∑': '\\sum', '∏': '\\prod', '∫': '\\int', '∬': '\\iint', '∭': '\\iiint',
     '∮': '\\oint', '⋃': '\\bigcup', '⋂': '\\bigcap', '⋀': '\\bigwedge', '⋁': '\\bigvee',
-};
+});
 
 /**
  * Converts an OMML subtree (`<m:oMath>` or any node within one) to LaTeX.
@@ -268,7 +269,7 @@ export const ommlToLatex = (node: Node, depth = 0): string => {
 // ─── MathML (ODF embedded objects, HTML, EPUB3) ──────────────────────────────
 
 /** MathML operators that have a dedicated LaTeX command. */
-const MATHML_OPERATORS: Record<string, string> = {
+const MATHML_OPERATORS: Record<string, string> = lookupTable({
     '∑': '\\sum', '∏': '\\prod', '∫': '\\int', '∮': '\\oint', '√': '\\sqrt',
     '±': '\\pm', '∓': '\\mp', '×': '\\times', '÷': '\\div', '⋅': '\\cdot',
     '≤': '\\leq', '≥': '\\geq', '≠': '\\neq', '≈': '\\approx', '≡': '\\equiv',
@@ -276,7 +277,7 @@ const MATHML_OPERATORS: Record<string, string> = {
     '∩': '\\cap', '∞': '\\infty', '→': '\\to', '⇒': '\\Rightarrow', '⇔': '\\Leftrightarrow',
     '∀': '\\forall', '∃': '\\exists', '∂': '\\partial', '∇': '\\nabla', '…': '\\ldots',
     'ℝ': '\\mathbb{R}', 'ℕ': '\\mathbb{N}', 'ℤ': '\\mathbb{Z}', 'ℚ': '\\mathbb{Q}', 'ℂ': '\\mathbb{C}',
-};
+});
 
 /** Maps a literal run through the operator table, falling back to plain escaped text. */
 const mathmlToken = (raw: string): string => {

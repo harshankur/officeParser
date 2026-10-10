@@ -1,0 +1,219 @@
+<p>
+    Every engineer who sets out to pull text from a PDF starts with optimism: <em>"How hard can it be?
+    It's just text and images on a page."</em>
+</p>
+<p>
+    Two weeks later they are deep in transformation matrices, font encoding tables, kerning adjustments,
+    and scrambled multi-column layouts.
+</p>
+<p>
+    Adobe introduced PDF in 1993 with one goal: <strong>a page should look the same on every screen and
+    every printer</strong>. It was not designed to be reflowed, searched, or read by a machine. Here is
+    what is actually going on inside a PDF content stream.
+</p>
+
+<h2>1. PDF Has No Words, Lines, or Paragraphs</h2>
+<p>
+    In HTML, Word, or Markdown, text sits in containers that say what it is:
+</p>
+<pre><code>&lt;p&gt;The quick brown fox jumps over the lazy dog.&lt;/p&gt;</code></pre>
+<p>
+    In PDF, <strong>none of these concepts exist</strong>. A content stream is a list of drawing
+    commands, in a notation that comes from PostScript:
+</p>
+
+<pre><code>BT                  % Begin a text object
+/F1 12 Tf           % Select font F1 at 12pt
+1 0 0 1 72 710 Tm   % Text matrix: position at x=72, y=710
+(The) Tj            % Show the glyphs "The"
+30 0 Td             % Move 30 units to the right
+(quick) Tj          % Show the glyphs "quick"
+ET                  % End the text object</code></pre>
+
+<p>
+    Notice what is missing:
+</p>
+<ul>
+    <li>Nothing says <code>(The)</code> and <code>(quick)</code> are in the same paragraph.</li>
+    <li>Nothing says they are on the same line.</li>
+    <li>Nothing says what order they should be read in.</li>
+</ul>
+
+<h2>2. The Missing Spaces</h2>
+<p>
+    In a text file, words are separated by space characters. In a PDF, <strong>the space is often not
+    stored at all</strong>.
+</p>
+<p>
+    Typesetting software positions glyphs precisely with the <code>TJ</code> operator, which mixes
+    strings with numeric adjustments:
+</p>
+
+<pre><code>[(T) 12 (h) -5 (i) 2 (s) -250 (i) 4 (s) -250 (P) 10 (D) -3 (F)] TJ</code></pre>
+
+<p>
+    The numbers are in thousandths of the font size, and a positive number moves the next glyph
+    <em>back</em>. So <code>-250</code> means "move forward by a quarter of the font size before the
+    next letter".
+</p>
+<p>
+    To a human, that gap is a space between words. To a naive extractor there is no space character
+    anywhere, and the result is <code>ThisisPDF</code>.
+</p>
+
+<div class="callout">
+    <div class="callout-title">A threshold, not a fact</div>
+    <p>
+        Every PDF extractor has to guess where the spaces are. The usual rule is a threshold: if the gap
+        between two fragments is wider than some fraction of the font size, insert a space. Set it too
+        high and words run together. Set it too low and kerning splits single words apart. In
+        officeParser that fraction is <code>pdfParserConfig.spaceToleranceFactor</code>, and it defaults
+        to <code>0.25</code>.
+    </p>
+</div>
+
+<h2>3. Font Encodings: Why Copied Text Comes Out as Gibberish</h2>
+<p>
+    Have you ever copied text out of a PDF and pasted nonsense?
+</p>
+<p>
+    A PDF does not have to store Unicode. To save space, PDF producers <strong>subset fonts</strong>:
+    they embed only the glyphs the document uses, and they are free to number those glyphs however they
+    like:
+</p>
+<ul>
+    <li>Code <code>0x01</code> &rarr; the glyph for <strong>"E"</strong></li>
+    <li>Code <code>0x02</code> &rarr; the glyph for <strong>"T"</strong></li>
+    <li>Code <code>0x03</code> &rarr; the glyph for <strong>"O"</strong></li>
+</ul>
+<p>
+    On screen the page shows "ETO". The bytes in the file are 1, 2, and 3.
+</p>
+
+<h3>The ToUnicode CMap</h3>
+<p>
+    For such a font to be searchable, the producer embeds a <strong>ToUnicode CMap</strong> that maps
+    each code back to Unicode:
+</p>
+
+<pre><code>/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+1 begincodespacerange
+&lt;0000&gt; &lt;FFFF&gt;
+endcodespacerange
+1 beginbfrange
+&lt;0001&gt; &lt;0001&gt; &lt;0045&gt;   % Code 0x0001 is U+0045 ("E")
+endbfrange
+endcmap</code></pre>
+
+<p>
+    A font that uses a standard encoding can still be decoded without one. But when a subset font has
+    neither a usable encoding nor a ToUnicode map, or the map is wrong, the text layer cannot be
+    recovered. The only way to get the words back is to render the page and run OCR on it.
+</p>
+
+<h2>4. Ligatures: When Two Letters Become One Glyph</h2>
+<p>
+    Good typography joins certain letter pairs into one shape: "ff", "fi", "fl", "ffi", and "ffl".
+</p>
+<p>
+    In a PDF a ligature is drawn as a single glyph. Unicode has code points for these five
+    (<code>U+FB00</code> to <code>U+FB04</code>, in the Alphabetic Presentation Forms block), and a PDF
+    may map the glyph to one of them. So the word "financial" can arrive as
+    <code>&#xFB01;nancial</code>, with the single character <code>U+FB01</code> at the front.
+</p>
+<p>
+    Unless the extractor expands those back to plain letters, a search for "financial" will not match
+    the document.
+</p>
+
+<h2>5. The 2D Layout Problem: The Multi-Column Trap</h2>
+<p>
+    Take an ordinary two-column page:
+</p>
+
+<pre><code>+------------------+------------------+
+| (1) The quarter's| (3) Next year's  |
+| (2) revenue grew.| (4) plans hold.  |
++------------------+------------------+</code></pre>
+
+<p>
+    A parser that sorts text by vertical position reads straight across the gutter:
+</p>
+<ol>
+    <li>y = 700: <em>(1) The quarter's</em> (left column)</li>
+    <li>y = 700: <em>(3) Next year's</em> (right column)</li>
+    <li>y = 680: <em>(2) revenue grew.</em> (left column)</li>
+    <li>y = 680: <em>(4) plans hold.</em> (right column)</li>
+</ol>
+<p>
+    The result reads: <em>"The quarter's Next year's revenue grew. plans hold."</em>
+</p>
+
+<h3>The Fix: Recursive XY-Cut</h3>
+<p>
+    The classic way to recover reading order is the <strong>XY-cut</strong>:
+</p>
+<ol>
+    <li>Project every text box onto the horizontal axis.</li>
+    <li>Look for a vertical band where no text falls (a gutter).</li>
+    <li>If there is a clear one, cut the page into a left part and a right part.</li>
+    <li>Do the same on the vertical axis to cut each part into horizontal bands.</li>
+    <li>Repeat inside every piece until nothing more can be cut. Then read the pieces in order.</li>
+</ol>
+<p>
+    The hard part is deciding what counts as a gutter. Cut too eagerly and a wide gap between two words
+    reorders a sentence. In officeParser a vertical cut needs a gap that runs the full height of the
+    block.
+</p>
+
+<hr>
+
+<h2>What officeParser Does with a PDF</h2>
+<p>
+    officeParser does not decode PDFs from scratch. It uses Mozilla's <strong>pdf.js</strong> to read
+    content streams, fonts, and CMaps, and builds the layout reconstruction on top:
+</p>
+<ul>
+    <li><strong>Lines and spaces.</strong> Fragments are grouped into lines and spaces are inserted from
+        the gaps between them (<code>lineToleranceFactor</code>, <code>spaceToleranceFactor</code>).</li>
+    <li><strong>Reading order.</strong> Multi-column pages are read with a recursive XY-cut
+        (<code>detectColumns</code>, on by default).</li>
+    <li><strong>Words.</strong> Words hyphenated across a line break are joined
+        (<code>mergeHyphenatedWords</code>), and ligatures are expanded (<code>normalizeText</code>).</li>
+    <li><strong>Structure.</strong> When a PDF is tagged, headings, tables, lists, and footnotes come
+        from its tag tree (<code>useTags</code>). When it is not, they are recovered from geometry.</li>
+    <li><strong>OCR.</strong> Scanned pages have no text layer. OCR (Tesseract) is opt-in, and runs over
+        the images extracted from the pages.</li>
+</ul>
+
+<pre><code>import { parseOffice } from 'officeparser';
+
+const ast = await parseOffice('research-paper.pdf', {
+    pdfParserConfig: {
+        detectColumns: true,         // recursive XY-cut (default)
+        mergeHyphenatedWords: true,  // default
+        spaceToleranceFactor: 0.25,  // default
+    },
+    // For scanned documents, OCR the page images:
+    extractAttachments: true,
+    ocr: true,
+    onWarning: issue =&gt; console.warn(issue.code, issue.message),
+});
+
+const { value: markdown } = await ast.to('markdown');</code></pre>
+
+<div class="callout">
+    <div class="callout-title">Where it is best-effort</div>
+    <p>
+        Structure recovered from geometry is a guess. In an untagged PDF, a table, or text floated
+        beside a figure, may not separate perfectly. Underline and strikethrough are not extracted,
+        because a PDF draws them as separate lines.
+    </p>
+    <p>
+        The parser tells you when it suspects trouble: <code>PDF_NO_TEXT_EXTRACTED</code> when a document
+        yields almost no text and OCR is off, and <code>PDF_TEXT_ENCODING_SUSPECT</code> when a fifth or
+        more of the characters it read (out of at least 50) could not be mapped to Unicode.
+    </p>
+</div>

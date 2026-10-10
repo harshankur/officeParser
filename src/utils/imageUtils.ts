@@ -7,7 +7,7 @@
  * @module imageUtils
  */
 
-import { OfficeAttachment, OfficeMimeType } from '../types';
+import { OfficeAttachment, OfficeContentNode, OfficeMimeType } from '../types';
 
 /**
  * Converts a file extension to its corresponding MIME type.
@@ -33,6 +33,7 @@ export const getMimeFromExtension = (ext: string): string => {
         case 'bmp': return 'image/bmp';
         case 'tiff': return 'image/tiff';
         case 'webp': return 'image/webp';
+        case 'pdf': return 'application/pdf';
         default: return 'application/octet-stream'; // Generic binary MIME type
     }
 };
@@ -53,6 +54,11 @@ export const getMimeFromExtension = (ext: string): string => {
  */
 export const getMimeFromBytes = (buffer: Buffer): string | undefined => {
     if (buffer.length < 4) return undefined;
+
+    // PDF: 25 50 44 46 ("%PDF"), as a LaTeX project's figures often are
+    if (buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46) {
+        return 'application/pdf';
+    }
 
     // PNG: 89 50 4E 47 (0x89 "PNG")
     if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
@@ -138,4 +144,45 @@ export const createAttachment = (name: string, content: Buffer): OfficeAttachmen
         name: name, // Original filename
         extension: ext // File extension for reference
     };
+};
+
+/** Precomputed CRC-32 table (polynomial 0xEDB88320) for PNG chunk checksums. */
+const CRC32_TABLE = (() => {
+    const table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+        table[n] = c >>> 0;
+    }
+    return table;
+})();
+
+/** CRC-32 over a byte range, as PNG requires over each chunk's type+data. */
+export function crc32(bytes: Uint8Array): number {
+    let c = 0xFFFFFFFF;
+    for (let i = 0; i < bytes.length; i++) c = CRC32_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+/**
+ * Points each node in `nodes` (their children, notes and comments too) that names a renamed attachment
+ * at its new name: content read from one part (an EPUB chapter, a DOCX chunk) into a document whose
+ * attachments already hold some of its names. A node shared along several paths is renamed once.
+ */
+export const renameAttachments = (nodes: OfficeContentNode[], renamed: ReadonlyMap<string, string>): void => {
+    if (renamed.size === 0) return;
+    const seen = new Set<OfficeContentNode>();
+    const pending: OfficeContentNode[] = [];
+    for (let i = nodes.length - 1; i >= 0; i--) pending.push(nodes[i]);
+    while (pending.length) {
+        const node = pending.pop()!;
+        if (!node || typeof node !== 'object' || seen.has(node)) continue;
+        seen.add(node);
+        const meta = node.metadata as { attachmentName?: unknown } | undefined;
+        const name = meta && typeof meta.attachmentName === 'string' ? renamed.get(meta.attachmentName) : undefined;
+        if (name !== undefined) (node as { metadata?: unknown }).metadata = { ...meta, attachmentName: name };
+        for (const list of [node.children, node.notes, node.comments]) {
+            if (Array.isArray(list)) for (let i = list.length - 1; i >= 0; i--) pending.push(list[i]);
+        }
+    }
 };

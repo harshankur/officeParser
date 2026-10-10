@@ -29,7 +29,7 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
             } catch (err: any) {
                 if (this.config.abortSignal?.aborted) throw getAbortError();
                 if (err?.officeIssue) throw err;
-                throw getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, this.ast.config, err?.message || String(err));
+                throw getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, this.config, err?.message || String(err));
             }
         }
 
@@ -93,7 +93,7 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
                 // @ts-ignore
                 puppeteerModule = await import('puppeteer');
             } catch {
-                throw getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, this.ast.config,
+                throw getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, this.config,
                     "the default PDF engine requires the optional peer dependency 'puppeteer' (install it with `npm install puppeteer`), or use pdfConfig.engine: 'native' (which uses pdf-lib and needs no browser)");
             }
             const puppeteer = puppeteerModule.default || puppeteerModule;
@@ -128,7 +128,7 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
 
             // Harden against SSRF: the HTML being rendered is derived from an untrusted
             // document, and `networkidle0` would otherwise fetch every URL it references
-            // (external images, stylesheets, etc.) from this host — reaching internal
+            // (external images, stylesheets, etc.) from this host, reaching internal
             // services or a cloud metadata endpoint (169.254.169.254). Intercept requests
             // and allow only inline data/blob URIs and the configured chart CDN; abort every
             // other remote fetch.
@@ -149,7 +149,7 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
                     if (allowedHosts.has(new URL(url).host)) {
                         return req.continue().catch(() => { /* request already handled */ });
                     }
-                } catch { /* unparseable URL — fall through and block */ }
+                } catch { /* unparseable URL: fall through and block */ }
                 blockedRemoteResource = true;
                 return req.abort().catch(() => { /* request already handled */ });
             });
@@ -212,7 +212,7 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
             }
             // Never return an empty PDF: a zero-byte buffer looks like success to callers who don't
             // inspect `messages` and silently produces broken files. Fail loudly with a typed error.
-            throw getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, this.ast.config, err?.message || String(err));
+            throw getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, this.config, err?.message || String(err));
         } finally {
             if (signal) {
                 signal.removeEventListener('abort', onAbort);

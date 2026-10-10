@@ -8,9 +8,9 @@ Maintenance and security patches are currently provided for the latest major bra
 
 | Version | Supported          |
 | ------- | ------------------ |
+| v8.x    | :white_check_mark: |
 | v7.x    | :white_check_mark: |
-| v6.x    | :white_check_mark: |
-| < v6.x  | :x:                |
+| < v7.x  | :x:                |
 
 ## Reporting a Vulnerability
 
@@ -49,8 +49,11 @@ not yet addressed.
 
 Treat it as garbage in, garbage out. Sanitize and validate untrusted files at your own boundary,
 and run parsing in isolation appropriate to your threat model (sandboxing or containerization,
-memory and time limits, a low-privilege process, and the `abortSignal` and `decompressionLimits`
-options this library exposes) rather than relying on the library's hardening alone. No software
+memory and time limits enforced from outside the parse, such as a worker you can end, since
+`abortSignal` cannot interrupt a parse already running (a PDF in Node excepted: pdf.js runs in a
+separate process under a memory limit, which the signal ends); a low-privilege process; and the
+`abortSignal` and `decompressionLimits` options this library exposes) rather than relying on the
+library's hardening alone. No software
 can be guaranteed free of vulnerabilities; `officeParser` is provided "AS IS", without warranty of
 any kind, per the [LICENSE](LICENSE). Final responsibility for the impact of a malicious file on
 your system rests with you, the consumer of the library.

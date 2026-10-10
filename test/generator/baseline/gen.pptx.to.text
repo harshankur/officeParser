@@ -57,11 +57,6 @@ Next, we have something a little more complex, a nested table, i.e. a table in
 
 |  | To the left is a table inside a table, with some cells merged. | 
 
-Now calendars
-1. Sun
-2. Mon
-7. Sat
-5
  We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.
 
 | December 2007 |  |     |  |     |  |     |  |     |  |     |  |     |  | 
@@ -78,6 +73,11 @@ Now calendars
 |               |  |     |  |     |  |     |  |     |  |     |  |     |  | 
 | 30            |  | 31  |  |     |  |     |  |     |  |     |  |     |  | 
 
+Now calendars
+1. Sun
+2. Mon
+7. Sat
+5
 Structural Elements
 Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like. 
 Footnotes & Endnotes
@@ -119,29 +119,21 @@ An interruption in our regularly scheduled listing, for this essential and very
 3. We now resume our normal programming
 4. Four
 Charts
-Series 1
 Category 1
 Category 2
 Category 3
 Category 4
+Series 1
 4.3
 2.5
 3.5
 4.5
 Series 2
-Category 1
-Category 2
-Category 3
-Category 4
 2.4
 4.4000000000000004
 1.8
 2.8
 Series 3
-Category 1
-Category 2
-Category 3
-Category 4
 2
 2
 3

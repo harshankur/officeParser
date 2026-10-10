@@ -35,15 +35,18 @@ import { FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentN
 import { createAST } from '../utils/astUtils.js';
 import { parseOfficeDate } from '../utils/dateUtils.js';
 import { assertNode, isBrowser } from '../utils/envUtils.js';
-import { checkAbortSignal, getOfficeError, logWarning } from '../utils/errorUtils.js';
-import { createAttachment } from '../utils/imageUtils.js';
+import { checkAbortSignal, getAbortError, getOfficeError, logWarning } from '../utils/errorUtils.js';
+import { crc32, createAttachment } from '../utils/imageUtils.js';
 import { loadPdfJs } from '../utils/moduleLoader.js';
-import { performOcr } from '../utils/ocrUtils.js';
+import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { collectColorMarks, ColorLookup, makeColorLookup } from './pdf/pdfColor.js';
 import { computeRunBox, identityMatrix, mulMatrix, roundBounds, rotateBoundsToRendered, toMatrix6, unionAll } from './pdf/geometry.js';
 import { PageExtract, PdfImage, PdfLayoutConfig, RawRun, ResolvedFont } from './pdf/pdfTypes.js';
 import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, PageContext, recoverTaggedGrids, runsToParagraph, segmentIntoBlocks } from './pdf/textLayout.js';
 import { buildTaggedNodes } from './pdf/structTree.js';
+import { setOwn } from '../utils/lookupUtils.js';
+import { acquirePdfProcess, PdfProcess } from './pdf/pdfProcess.js';
+import { appendAll } from '../utils/nodeListUtils.js';
 
 /** Type guard for a pdf.js TextItem (marked-content items lack `str`/`transform`). */
 function isTextItem(item: any): item is { str: string; transform: number[]; width: number; height: number; fontName: string; dir?: string; hasEOL?: boolean } {
@@ -84,24 +87,6 @@ class SectionLinks {
         this.targets.push(target);
         return `#__pdfsec_${k}`;
     }
-}
-
-/** Precomputed CRC-32 table (polynomial 0xEDB88320) for PNG chunk checksums. */
-const CRC32_TABLE = (() => {
-    const table = new Uint32Array(256);
-    for (let n = 0; n < 256; n++) {
-        let c = n;
-        for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
-        table[n] = c >>> 0;
-    }
-    return table;
-})();
-
-/** CRC-32 over a byte range, as PNG requires over each chunk's type+data. */
-function crc32(bytes: Uint8Array): number {
-    let c = 0xFFFFFFFF;
-    for (let i = 0; i < bytes.length; i++) c = CRC32_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
-    return (c ^ 0xFFFFFFFF) >>> 0;
 }
 
 /**
@@ -196,23 +181,58 @@ function convertToRgbaBuffer(data: Uint8Array | Uint8ClampedArray, width: number
     return Buffer.from(rgbaData.buffer, rgbaData.byteOffset, rgbaData.byteLength);
 }
 
-/** Reads and coerces the PDF-specific knobs from a resolved parser config. */
+/**
+ * Reads and coerces the PDF-specific knobs from a resolved parser config. A number may arrive as text
+ * (the CLI passes `--pdfParserConfig.maxTextItems=20` as "20"). A budget or memory limit the parser
+ * cannot use (negative, not a number, or a heap too small for Node to start) is reported with
+ * INVALID_CONFIG_VALUE and its default used, rather than read as something else: NaN made a budget
+ * unlimited (or no annotations at all), "20" was added to the per-byte allowance as text, and a
+ * time budget past what a timer holds cut every page short.
+ */
 function resolvePdfLayoutConfig(config: FullOfficeParserConfig): PdfLayoutConfig {
     const p = config.pdfParserConfig ?? {};
-    const num = (v: unknown, fallback: number) => {
+    const defaults = DEFAULT_OFFICE_PARSER_CONFIG.pdfParserConfig;
+    /** A number, or its text; `fallback` for anything else, and for Infinity unless `infinite`. */
+    const num = (v: unknown, fallback: number, infinite = false) => {
         const n = typeof v === 'number' ? v : Number(v);
-        return Number.isFinite(n) ? n : fallback;
+        return Number.isFinite(n) || (infinite && n === Infinity) ? n : fallback;
+    };
+    const invalid = (key: string, value: unknown, expected: string, fallback: number) => {
+        logWarning(OfficeWarningType.INVALID_CONFIG_VALUE, config, { option: `pdfParserConfig.${key}`, value, expected, fallback });
+        return fallback;
+    };
+    /** Only a number or its text is one here: `num` reads `null`, `true` and '' as 0 or 1. */
+    const given = (v: unknown) => typeof v === 'number' || (typeof v === 'string' && v.trim() !== '');
+    /** A budget: 0 or more, `Infinity` for no limit. */
+    const budget = (key: 'maxTextItems' | 'maxOperators' | 'maxAnnotations' | 'maxTimeMs'): number => {
+        const value = p[key];
+        if (value === undefined) return defaults[key];
+        const n = given(value) ? num(value, NaN, true) : NaN;
+        return n >= 0 ? n : invalid(key, value, 'a number of 0 or more (Infinity for no limit)', defaults[key]);
+    };
+    const memory = (): number => {
+        const value = p.processMemoryMb;
+        if (value === undefined) return defaults.processMemoryMb;
+        const n = given(value) ? num(value, NaN) : NaN;
+        // A limit below what Node itself needs to start would fail every parse.
+        return n >= 64 ? Math.floor(n) : invalid('processMemoryMb', value, 'a number of MB, 64 or more', defaults.processMemoryMb);
     };
     return {
         useTags: p.useTags !== false,
         detectColumns: p.detectColumns !== false,
         mergeHyphenatedWords: p.mergeHyphenatedWords !== false,
-        lineToleranceFactor: num(p.lineToleranceFactor, 0.35),
-        spaceToleranceFactor: num(p.spaceToleranceFactor, 0.25),
+        lineToleranceFactor: given(p.lineToleranceFactor) ? num(p.lineToleranceFactor, 0.35) : 0.35,
+        spaceToleranceFactor: given(p.spaceToleranceFactor) ? num(p.spaceToleranceFactor, 0.25) : 0.25,
         headingDetection: p.headingDetection ?? 'auto',
         normalizeText: p.normalizeText !== false,
         extractTextColor: p.extractTextColor !== false, // default true, matching defaults.ts and its siblings
         includeBounds: !config.ignorePageGeometry,
+        separateProcess: p.separateProcess !== false,
+        processMemoryMb: memory(),
+        maxTextItems: budget('maxTextItems'),
+        maxOperators: budget('maxOperators'),
+        maxAnnotations: budget('maxAnnotations'),
+        maxTimeMs: budget('maxTimeMs'),
     };
 }
 
@@ -313,6 +333,9 @@ function highlightRects(viewport: any, annot: any): [number, number, number, num
     return annot.rect ? [toViewportRect(viewport, annot.rect)] : [];
 }
 
+/** The most distinct links, and highlight areas, read from one page (see resolveAnnotations). */
+const MAX_PAGE_ANNOTATIONS = 1000;
+
 /**
  * Resolves a page's Link and Highlight annotations. Links become geometry + hyperlink metadata
  * (honoring config flags); highlights become per-quad viewport rects carrying their color, so a run
@@ -320,22 +343,37 @@ function highlightRects(viewport: any, annot: any): [number, number, number, num
  */
 async function resolveAnnotations(
     page: any, viewport: any, pdfDocument: any, config: FullOfficeParserConfig,
-    destCache: Map<string, SectionTarget | null>, sectionLinks: SectionLinks,
+    destCache: Map<string, SectionTarget | null>, sectionLinks: SectionLinks, work: PdfWorkBudget,
 ): Promise<{ links: ResolvedLink[]; highlights: ResolvedHighlight[] }> {
     const links: ResolvedLink[] = [];
     const highlights: ResolvedHighlight[] = [];
+    if (!work.annotationsAllowed) return { links, highlights };
     let annots: any[];
     try {
-        annots = await page.getAnnotations();
+        const read = await work.within(page.getAnnotations() as Promise<any[]>);
+        if (!read) return { links, highlights };
+        annots = read;
     } catch (e) {
         logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, config, page.pageNumber, e);
         return { links, highlights };
     }
+    annots = annots.slice(0, work.takeAnnotations(annots.length, page.pageNumber));
+    // Each distinct highlight quad and link once, and at most MAX_PAGE_ANNOTATIONS of each: every run on
+    // the page is matched against them, so a page listing one annotation many times, or a highlight of
+    // a huge QuadPoints array, took time in the square of the page.
+    const seenHighlights = new Set<string>(), seenLinks = new Set<string>();
+    let capped = false;
     for (const annot of annots) {
         if (annot.subtype === 'Highlight') {
             // A highlight with no /C renders yellow (pdf.js synthesizes that appearance), so mirror it.
             const color = rgbArrayToHex(annot.color) ?? '#ffff00';
-            for (const rect of highlightRects(viewport, annot)) highlights.push({ rect, color });
+            for (const rect of highlightRects(viewport, annot)) {
+                const key = `${rect.join(',')}|${color}`;
+                if (seenHighlights.has(key)) continue;
+                if (highlights.length >= MAX_PAGE_ANNOTATIONS) { capped = true; break; }
+                seenHighlights.add(key);
+                highlights.push({ rect, color });
+            }
             continue;
         }
         if (annot.subtype !== 'Link' || !annot.rect) continue;
@@ -347,11 +385,19 @@ async function resolveAnnotations(
             meta = { link: url, linkType: internal ? 'internal' : 'external' };
         } else if (annot.dest) {
             if (config.ignoreInternalLinks) continue;
-            const target = await resolveDestFull(annot.dest, pdfDocument, destCache);
+            const target = await resolveDestFull(annot.dest, pdfDocument, destCache, work);
             meta = { link: target ? sectionLinks.register(target) : '#internal', linkType: 'internal' };
         }
-        if (meta) links.push({ rect: toViewportRect(viewport, annot.rect), meta });
+        if (meta) {
+            const rect = toViewportRect(viewport, annot.rect);
+            const key = `${rect.join(',')}|${meta.link}`;
+            if (seenLinks.has(key)) continue;
+            if (links.length >= MAX_PAGE_ANNOTATIONS) { capped = true; continue; }
+            seenLinks.add(key);
+            links.push({ rect, meta });
+        }
     }
+    if (capped) logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, config, page.pageNumber, `the page has more than ${MAX_PAGE_ANNOTATIONS} distinct links or highlight areas; the rest were not read`);
     return { links, highlights };
 }
 
@@ -390,18 +436,20 @@ const MAX_DEST_CACHE = 50000;
  * resolved cheaply. Named destinations are resolved via `getDestination` and cached.
  */
 async function resolveDestFull(
-    dest: string | unknown[], pdfDocument: any, cache: Map<string, SectionTarget | null>,
+    dest: string | unknown[], pdfDocument: any, cache: Map<string, SectionTarget | null>, work: PdfWorkBudget,
 ): Promise<SectionTarget | null> {
+    if (work.spent) return null;
     try {
         let explicit = dest;
         if (typeof dest === 'string') {
             if (cache.has(dest)) return cache.get(dest) ?? null;
             if (cache.size >= MAX_DEST_CACHE) return null;
-            explicit = await pdfDocument.getDestination(dest);
-            if (!explicit) { cache.set(dest, null); return null; }
+            explicit = await work.within(pdfDocument.getDestination(dest) as Promise<unknown[] | null>) as unknown[];
+            if (!explicit) { if (!work.spent) cache.set(dest, null); return null; }
         }
         if (Array.isArray(explicit) && explicit[0]) {
-            const pageIndex = await pdfDocument.getPageIndex(explicit[0]);
+            const pageIndex = await work.pageIndex(pdfDocument, explicit[0]);
+            if (pageIndex === undefined) return null;
             const target: SectionTarget = { pageIndex, pdfY: destTopY(explicit) };
             if (typeof dest === 'string') cache.set(dest, target);
             return target;
@@ -420,14 +468,24 @@ async function resolveDestFull(
  */
 function segmentByLinks(x: number, width: number, yTop: number, height: number, len: number, links: ResolvedLink[]): { start: number; end: number; link?: TextMetadata }[] {
     const charLink: (TextMetadata | undefined)[] = new Array(len).fill(undefined);
+    // The characters whose centre a link's rect holds are a range, computed rather than tested one by
+    // one; each character is assigned once (the first link holding it), skipping over assigned ones.
+    const nextFree = new Int32Array(len + 1).map((_, i) => i);
+    const free = (i: number): number => { let r = i; while (nextFree[r] !== r) r = nextFree[r]; while (nextFree[i] !== r) { const n = nextFree[i]; nextFree[i] = r; i = n; } return r; };
     for (const l of links) {
         const [lx1, ly1, lx2, ly2] = l.rect;
         if (!(yTop < ly2 && yTop + height > ly1)) continue; // require vertical overlap
-        for (let i = 0; i < len; i++) {
-            if (charLink[i]) continue;
-            const cx = x + ((i + 0.5) / len) * width;
-            if (cx >= lx1 && cx <= lx2) charLink[i] = l.meta;
+        if (width === 0) {
+            // No width to place characters by: the centre of every character is `x`.
+            if (x >= lx1 && x <= lx2) for (let i = free(0); i < len; i = free(i + 1)) { charLink[i] = l.meta; nextFree[i] = i + 1; }
+            continue;
         }
+        if (!Number.isFinite(width)) continue;
+        // The i whose centre x + (i + 0.5) / len * width lies in [lx1, lx2] (width may be negative).
+        const a = ((lx1 - x) / width) * len - 0.5, b = ((lx2 - x) / width) * len - 0.5;
+        const from = Math.max(0, Math.ceil(Math.min(a, b)));
+        const to = Math.min(len - 1, Math.floor(Math.max(a, b)));
+        for (let i = free(from); i <= to; i = free(i + 1)) { charLink[i] = l.meta; nextFree[i] = i + 1; }
     }
     const segs: { start: number; end: number; link?: TextMetadata }[] = [];
     let s = 0;
@@ -447,7 +505,7 @@ function linkForBox(x: number, yTop: number, w: number, h: number, links: Resolv
     return undefined;
 }
 
-/** Warns when a document's extracted text is dominated by unmappable glyphs (bad/missing ToUnicode). */
+/** Warns when a fifth or more of a document's characters (of at least 50) are unmappable glyphs (bad/missing ToUnicode). */
 function warnIfEncodingSuspect(runs: RawRun[], config: FullOfficeParserConfig): void {
     let total = 0, bad = 0;
     for (const r of runs) {
@@ -511,10 +569,10 @@ const MAX_OUTLINE_ITEMS = 10000;
  * destinations. A truncated outline is reported as a warning; the rest of the document is unaffected.
  */
 async function buildOutline(
-    pdfDocument: any, destCache: Map<string, SectionTarget | null>, sectionLinks: SectionLinks, config: FullOfficeParserConfig,
+    pdfDocument: any, destCache: Map<string, SectionTarget | null>, sectionLinks: SectionLinks, config: FullOfficeParserConfig, work: PdfWorkBudget,
 ): Promise<OfficeContentNode[] | undefined> {
-    let outline: any[] | null;
-    try { outline = await pdfDocument.getOutline(); } catch { return undefined; }
+    let outline: any[] | null | undefined;
+    try { outline = await work.within(pdfDocument.getOutline() as Promise<any[] | null>); } catch { return undefined; }
     if (!Array.isArray(outline) || !outline.length) return undefined;
 
     const roots: OfficeContentNode[] = [];
@@ -534,7 +592,7 @@ async function buildOutline(
         let linkType: 'internal' | 'external' | undefined;
         if (item?.url) { link = item.url; linkType = 'external'; }
         else if (item?.dest != null) {
-            const target = await resolveDestFull(item.dest, pdfDocument, destCache);
+            const target = await resolveDestFull(item.dest, pdfDocument, destCache, work);
             link = target ? sectionLinks.register(target) : '#internal';
             linkType = 'internal';
         }
@@ -554,7 +612,7 @@ async function buildOutline(
         if (frame.depth + 1 >= MAX_OUTLINE_DEPTH) truncated = truncated || `nesting deeper than ${MAX_OUTLINE_DEPTH} levels`;
         else stack.push({ items: kids, i: 0, n: 0, depth: frame.depth + 1, out: node.children! });
     }
-    if (truncated) {
+    if (truncated && !work.cancelled) {
         logWarning(OfficeWarningType.PDF_OUTLINE_TRUNCATED, config, truncated);
     }
     return roots.length ? roots : undefined;
@@ -604,6 +662,7 @@ function resolveSectionLinks(
 
     // Assign a unique, stable anchor id to a heading the first time a link targets it.
     const usedIds = new Set<string>();
+    const nextSuffix = new Map<string, number>();
     const idFor = new Map<OfficeContentNode, string>();
     const anchorFor = (h: OfficeContentNode): string => {
         const existing = idFor.get(h);
@@ -613,9 +672,12 @@ function resolveSectionLinks(
         // The generator gives every same-text heading the bare slug, so when this base is shared (or
         // already taken) use a suffixed id the generator never emits, so the link lands on THIS one.
         if ((slugCount.get(base) || 0) > 1 || usedIds.has(base)) {
-            let i = 2;
+            // The numbering resumes where it left off for the base: from 2 each time, many same-text
+            // headings a link targets took time in the square of their number.
+            let i = nextSuffix.get(base) ?? 2;
             id = `${base}-${i}`;
             while (usedIds.has(id) || (slugCount.get(id) || 0) > 0) id = `${base}-${++i}`;
+            nextSuffix.set(base, i + 1);
         }
         usedIds.add(id);
         idFor.set(h, id);
@@ -664,13 +726,308 @@ function resolveSectionLinks(
     for (const roots of rewriteRoots) for (const n of roots) rewrite(n);
 }
 
+/** The longest delay a timer holds (about 24.8 days): Node runs a longer one after 1 ms. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+/** How long an object a page draws (an image pdf.js has not sent yet) is waited for. */
+const OBJECT_WAIT_MS = 500;
+
+/**
+ * What pdf.js may produce, and spend, for one document. A form XObject can draw another many times,
+ * and pdf.js reads a form again at each use, so 2.5 KB nesting seven forms that each draw the one
+ * below ten times asked for ten million text items and ended the process out of memory (forms that
+ * draw only shapes did the same through the operator list). Text items, the operators kept and
+ * annotations each have a budget of their `pdfParserConfig` base plus an allowance per byte of the
+ * file (1 text item, 4 operators, 1 annotation per 32 bytes), so a large document is never cut short
+ * for its size; and the CPU time the separate pdf.js process spends on the document is held to
+ * `maxTimeMs` plus 20 ms per KB (see checkTime). Past the text or the time budget the rest of the
+ * document is not read: pdf.js keeps working on a request it was asked to stop, so the document is
+ * closed and its process ended, which is what stops it. Past the operator budget only operators stop
+ * being read (see readOperatorList), past the annotation budget only annotations.
+ */
+class PdfWorkBudget {
+    private textLeft: number;
+    private operatorsLeft: number;
+    private annotationsLeft: number;
+    private annotationsWarned = false;
+    private readonly timeLimit: number;
+    /** The process's clock when reading began, and the timer comparing it with the time budget. */
+    private readonly clockStart?: number;
+    private timer?: ReturnType<typeof setTimeout>;
+    /** How long pages waited for objects that never arrived (see mayWaitForObjects). */
+    private waited = 0;
+    private stop!: () => void;
+    /** Settles, to undefined, once nothing more is asked of pdf.js (see within). */
+    private readonly stopped = new Promise<undefined>(resolve => { this.stop = () => resolve(undefined); });
+    /** Nothing more is asked of pdf.js for this document: a budget ran out, or the parse ended. */
+    spent = false;
+    /** The parse ended while the document was still being read (it failed or was aborted): nothing more is read, or reported. */
+    cancelled = false;
+    /** The operator budget ran out: no more operators are read, text still is. */
+    operatorsSpent = false;
+    constructor(private pdfDocument: any, private config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, fileBytes: number, private pdfProcess?: PdfProcess) {
+        this.textLeft = pdfCfg.maxTextItems + fileBytes;
+        this.operatorsLeft = pdfCfg.maxOperators + 4 * fileBytes;
+        this.annotationsLeft = pdfCfg.maxAnnotations + Math.floor(fileBytes / 32);
+        this.timeLimit = pdfCfg.maxTimeMs + Math.floor(fileBytes / 1024) * 20;
+        if (pdfProcess && this.timeLimit < Infinity) {
+            this.clockStart = pdfProcess.clock();
+            this.checkTime();
+        }
+    }
+    /**
+     * Compares the CPU time the document's process has spent with the time budget, and checks again
+     * when it could next run out. pdf.js drops text it places off the page and reads a form again at
+     * every use, so a form drawing a 1 MB string off the page a hundred times gave no item or operator
+     * to count while pdf.js worked for over a minute: only its time bounds that. It is the process's
+     * CPU time, not the time passed: 150 parses at once, or a host too busy to read the process's
+     * replies, stretched every request, and a wall-clock budget cut three in four ordinary documents
+     * short. CPU time runs about as fast as the clock while pdf.js works, so it cannot run out much
+     * before the time left has passed; the process reports it every 20 ms while it works.
+     *
+     * pdf.js in this process has no time budget: it shares this thread with every other parse and
+     * whatever else the host does, so no measure of time is the document's own. The item, operator
+     * and annotation budgets still hold there, and `abortSignal` stops it.
+     */
+    private checkTime(): void {
+        if (this.spent || this.clockStart === undefined) return;
+        const used = this.pdfProcess!.clock() - this.clockStart;
+        if (used >= this.timeLimit) { this.spend('maxTimeMs'); return; }
+        this.timer = setTimeout(() => this.checkTime(), Math.min(MAX_TIMER_MS, Math.max(20, this.timeLimit - used)));
+    }
+    /**
+     * How many of `items` may be kept; fewer than all means the budget is spent (see spend). An item
+     * counts once more for each 64 characters it holds: a form drawing one 1 MB string a hundred times
+     * made a hundred items of pdf.js work for 1.8 KB, 13 seconds the item count did not see.
+     */
+    takeText(items: readonly { str?: unknown }[]): number {
+        let allowed = 0;
+        for (const item of items) {
+            const cost = 1 + (typeof item?.str === 'string' ? Math.floor(item.str.length / 64) : 0);
+            if (cost > this.textLeft) { this.textLeft = -1; break; }
+            this.textLeft -= cost;
+            allowed++;
+        }
+        return allowed;
+    }
+    /**
+     * Whether a page's annotations may be read, and how many of the `count` it has may be kept. pdf.js
+     * builds every annotation a page lists, and pages may list one shared array: 58 KB of 300 pages
+     * sharing 3,000 annotations ran the process out of memory. Past the budget the rest of the
+     * document's links and highlights are not read (its text is), with ANNOTATION_EXTRACTION_FAILED.
+     * pdf.js builds a page's annotations for its operator list too, whatever it is asked; that work
+     * the time budget bounds (see checkTime).
+     */
+    get annotationsAllowed(): boolean {
+        return this.annotationsLeft > 0;
+    }
+    takeAnnotations(count: number, pageNumber: number): number {
+        const allowed = Math.max(0, Math.min(count, this.annotationsLeft));
+        this.annotationsLeft -= count;
+        if (this.annotationsLeft < 0 && !this.annotationsWarned) {
+            this.annotationsWarned = true;
+            logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, this.config, pageNumber, 'the document\'s annotations passed pdfParserConfig.maxAnnotations (plus one per 32 bytes of the file); from this page on, the rest were not read');
+        }
+        return allowed;
+    }
+    /**
+     * `request` (to pdf.js), or undefined once nothing more is asked of pdf.js before it settles: a
+     * budget ran out (a separate process is ended then, whatever it was doing), or the parse ended (it
+     * was aborted, or its process died), which leaves no request of an abandoned read waiting on a
+     * process that will never answer.
+     */
+    within<T>(request: Promise<T>): Promise<T | undefined> {
+        if (this.spent) {
+            // Not awaited: its end, whatever it is, is no one's concern.
+            request.catch(() => { /* not read */ });
+            return Promise.resolve(undefined);
+        }
+        return Promise.race([request, this.stopped]);
+    }
+    /**
+     * Whether an object a page draws that pdf.js has not sent yet may be waited for (OBJECT_WAIT_MS at
+     * most). A wait that ran out cost the parse its length and nothing of pdf.js's, so the waits that
+     * ran out are held to the time budget in all (a page naming many objects that never arrive waited
+     * for each); past it, a missing object is not waited for. The document is read on regardless.
+     */
+    get mayWaitForObjects(): boolean {
+        return !this.spent && this.waited < this.timeLimit;
+    }
+    objectWaitRanOut(): void {
+        this.waited += OBJECT_WAIT_MS;
+    }
+    /**
+     * The index of the page `ref` names, through the time budget and asked of pdf.js once per page: it
+     * walks the page tree to the root for each, so links and bookmarks each naming a page deep in a
+     * long tree took minutes outside the budget (630 KB, 89 seconds). A page it could not find is
+     * remembered too. Undefined once the budget is spent.
+     */
+    async pageIndex(pdfDocument: any, ref: unknown): Promise<number | undefined> {
+        const key = ref && typeof ref === 'object' && 'num' in ref ? `${(ref as any).num} ${(ref as any).gen}` : undefined;
+        if (key !== undefined && this.pageIndexes.has(key)) return this.pageIndexes.get(key) ?? undefined;
+        let index: number | undefined;
+        try { index = await this.within(pdfDocument.getPageIndex(ref) as Promise<number>); } catch { index = undefined; }
+        if (key !== undefined && !this.spent) this.pageIndexes.set(key, index ?? null);
+        return index;
+    }
+    private readonly pageIndexes = new Map<string, number | null>();
+    /**
+     * Whether `count` more operators may be kept (only those kept count: paths, which are not, are most
+     * of a drawing, and counting them cut a 21 KB plan of 3,000 symbols short at its first page). Past
+     * the budget no more operators are read, for this page or any after it, and a warning says so; the
+     * text of every page still is.
+     */
+    takeOperators(count: number, pageNumber: number): boolean {
+        if (this.operatorsSpent) return false;
+        this.operatorsLeft -= count;
+        if (this.operatorsLeft >= 0) return true;
+        this.operatorsSpent = true;
+        if (!this.cancelled) logWarning(OfficeWarningType.PDF_CONTENT_LIMIT_EXCEEDED, this.config, { limit: 'maxOperators', pageNumber });
+        return false;
+    }
+    /**
+     * Leaves the rest of an operator list unread (`reader` is the stream it arrives by). pdf.js waits
+     * for a stream's reader before it builds more, so the list's remaining work waits, costing nothing,
+     * while the rest of the document is read, and the document still closes. Not cancelled: pdf.js
+     * then only stops sending the list, and works it through to its end (a second of CPU for the
+     * rest of a 21 KB plan).
+     */
+    leaveUnread(reader: any): void {
+        if (reader && typeof reader.read === 'function') reader.read = () => new Promise(() => { /* never read */ });
+    }
+    /**
+     * Closes the document once the text or time budget is spent, which stops pdf.js's tasks. A stream
+     * being read is left unread rather than cancelled (see leaveUnread).
+     */
+    spend(limit: 'maxTextItems' | 'maxTimeMs', pageNumber?: number): void {
+        if (this.spent) return;
+        this.spent = true;
+        clearTimeout(this.timer);
+        this.stop();
+        logWarning(OfficeWarningType.PDF_CONTENT_LIMIT_EXCEEDED, this.config, { limit, pageNumber, budgetMs: limit === 'maxTimeMs' ? this.timeLimit : undefined });
+        try { Promise.resolve(this.pdfDocument.loadingTask.destroy()).catch(() => { /* already closed */ }); } catch { /* already closed */ }
+        // A separate process ends at once, whatever it was doing.
+        this.pdfProcess?.end();
+    }
+    /**
+     * Stops reading the document because its parse has ended: it succeeded (this only stops the time
+     * check), or it failed or was aborted while the read went on. Nothing more is then asked of pdf.js,
+     * a request waiting on it returns at once (see within), and nothing more is reported: an abandoned
+     * read kept asking a process that had been ended, until the time budget ran out 20 seconds later
+     * and reported the limit to a parse that had already failed.
+     */
+    cancel(): void {
+        this.cancelled = true;
+        this.spent = true;
+        clearTimeout(this.timer);
+        this.stop();
+    }
+    /** Ends a read whose parse has already ended (see cancel), before it reports anything. */
+    throwIfCancelled(): void {
+        if (this.cancelled) throw getAbortError();
+    }
+}
+
+/** A page's text as `getTextContent` gives it, read as a stream so reading stops at the budget. */
+async function readTextContent(page: any, params: object, work: PdfWorkBudget): Promise<{ items: any[]; styles: Record<string, any> }> {
+    const items: any[] = [];
+    const styles: Record<string, any> = Object.create(null);
+    const reader = page.streamTextContent(params).getReader();
+    while (!work.spent) {
+        const next = await work.within(reader.read() as Promise<{ value: any; done: boolean }>);
+        if (!next || next.done) break;
+        const value = next.value;
+        Object.assign(styles, value.styles);
+        const allowed = work.takeText(value.items);
+        for (let i = 0; i < allowed; i++) items.push(value.items[i]);
+        // Past the budget the stream is left unread, not cancelled (see spend).
+        if (allowed < value.items.length) work.spend('maxTextItems', page.pageNumber);
+    }
+    return { items, styles };
+}
+
+/** The operators the image and color readers use; the rest (paths, above all) are not kept. */
+const keptOperatorsCache = new WeakMap<object, Set<number>>();
+const keptOperators = (OPS: any): Set<number> => {
+    let kept = keptOperatorsCache.get(OPS);
+    if (!kept) {
+        kept = new Set(['save', 'restore', 'transform', 'paintFormXObjectBegin', 'paintFormXObjectEnd', 'dependency',
+            'paintImageXObject', 'paintImageXObjectRepeat', 'paintInlineImageXObject',
+            'setFillRGBColor', 'setFillColorN', 'setFillTransparent', 'setStrokeRGBColor', 'setStrokeColorN', 'setStrokeTransparent',
+            'beginText', 'setTextMatrix', 'moveText', 'setLeadingMoveText', 'setLeading', 'nextLine', 'setTextRise',
+            'setTextRenderingMode', 'showText'].map(name => OPS[name]).filter((op): op is number => typeof op === 'number'));
+        keptOperatorsCache.set(OPS, kept);
+    }
+    return kept;
+};
+
+/**
+ * A page's operator list within the budget, holding only what `keep` asks for: nothing when it is read
+ * only so pdf.js resolves the page's `fonts`, and then only until pdf.js has sent them all. pdf.js
+ * offers no stream of it, so each chunk is counted as it arrives (its `_renderPageChunk`); without
+ * that hook the list is read unbounded, as before. What is kept is what counts, a shown string once
+ * more for each 64 glyphs it holds (as a text item counts per 64 characters). Past the budget the rest
+ * of the list is left unread (see PdfWorkBudget.leaveUnread) and the page keeps what was read of it;
+ * later pages read none.
+ */
+async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep: 'none' | 'drawing', fonts: readonly string[] = []): Promise<any | null> {
+    if (work.spent || work.operatorsSpent) return null;
+    const kept = keep === 'drawing' ? keptOperators(pdfjs.OPS) : null;
+    const showText = pdfjs.OPS.showText;
+    let stopped!: (partial: any) => void;
+    const stop = new Promise<any>(resolve => { stopped = resolve; });
+    let done = false;
+    /** Stops reading the list, which resolves to what was read of it. */
+    const leave = (intentState: any) => {
+        done = true;
+        work.leaveUnread(intentState?.streamReader);
+        stopped(intentState?.operatorList ?? null);
+    };
+    // The fonts pdf.js has sent so far, in order: each is looked up again only until it arrives.
+    let fontsSent = 0;
+    const hooked = typeof page._renderPageChunk === 'function' && !Object.prototype.hasOwnProperty.call(page, '_renderPageChunk');
+    if (hooked) {
+        const original = page._renderPageChunk;
+        page._renderPageChunk = function (chunk: any, intentState: any) {
+            // Once left, a chunk still arriving (where the list could not be left unread) is dropped.
+            if (done) return;
+            const fnArray: number[] = [];
+            const argsArray: unknown[] = [];
+            let weight = 0;
+            if (kept) {
+                for (let i = 0; i < chunk.length; i++) {
+                    const fn = chunk.fnArray[i];
+                    if (!kept.has(fn)) continue;
+                    const args = chunk.argsArray[i];
+                    fnArray.push(fn);
+                    argsArray.push(args);
+                    if (fn === showText && Array.isArray(args?.[0])) weight += Math.floor(args[0].length / 64);
+                }
+            }
+            if (!work.takeOperators(fnArray.length + weight, page.pageNumber)) { leave(intentState); return; }
+            const result = original.call(this, { ...chunk, fnArray, argsArray, length: fnArray.length }, intentState);
+            // Read only for the page's fonts: once pdf.js has sent them (it sends a font before the
+            // operators using it), the rest of the list is not needed, and is left unread.
+            if (!kept && !chunk.lastChunk) {
+                while (fontsSent < fonts.length && page.commonObjs?.has?.(fonts[fontsSent])) fontsSent++;
+                if (fontsSent === fonts.length) leave(intentState);
+            }
+            return result;
+        };
+    }
+    try { return (await work.within(Promise.race([page.getOperatorList(), stop]))) ?? null; }
+    catch { return null; }
+    // A list left unread keeps the hook, so nothing it still delivers is kept whole.
+    finally { if (hooked && !done) delete page._renderPageChunk; }
+}
+
 /** Collects one page's text runs, images and annotations into a PageExtract. */
 async function collectPage(
     pdfjs: any, pdfDocument: any, pageNumber: number, config: FullOfficeParserConfig,
     pdfCfg: PdfLayoutConfig, fontCache: Map<string, ResolvedFont>, destCache: Map<string, SectionTarget | null>,
-    sectionLinks: SectionLinks,
-): Promise<PageExtract> {
-    const page = await pdfDocument.getPage(pageNumber);
+    sectionLinks: SectionLinks, work: PdfWorkBudget,
+): Promise<PageExtract | undefined> {
+    const page = await work.within(pdfDocument.getPage(pageNumber) as Promise<any>);
+    if (!page) return undefined;
     const rotation = ((page.rotate % 360) + 360) % 360;
     const layoutViewport = page.getViewport({ scale: 1, rotation: 0 });
     const authoredW = layoutViewport.width;
@@ -681,7 +1038,7 @@ async function collectPage(
     const width = rotation % 180 === 0 ? authoredW : authoredH;
     const height = rotation % 180 === 0 ? authoredH : authoredW;
 
-    const textContent = await page.getTextContent({ includeMarkedContent: true, disableNormalization: !pdfCfg.normalizeText });
+    const textContent = await readTextContent(page, { includeMarkedContent: true, disableNormalization: !pdfCfg.normalizeText }, work);
     const styles: Record<string, any> = textContent.styles || {};
 
     // Resolve every font on the page once (document-scoped cache). Real font objects (with their
@@ -691,12 +1048,12 @@ async function collectPage(
     // first page or two pay this; the list is reused for image extraction below.
     const seen = new Set<string>();
     for (const item of textContent.items) if (isTextItem(item) && item.fontName) seen.add(item.fontName);
-    const needFonts = [...seen].some(k => !fontCache.has(k));
+    const newFonts = [...seen].filter(k => !fontCache.has(k));
     let ops: any = null;
     // Not `config.ocr`: page-image OCR runs over collected images, which require extractAttachments, so
     // ocr alone needs no operator list (and must not fetch one just to discard it).
-    if (needFonts || config.extractAttachments || pdfCfg.extractTextColor) {
-        try { ops = await page.getOperatorList(); } catch { ops = null; }
+    if (newFonts.length || config.extractAttachments || pdfCfg.extractTextColor) {
+        ops = await readOperatorList(pdfjs, page, work, config.extractAttachments || pdfCfg.extractTextColor ? 'drawing' : 'none', newFonts);
     }
     for (const key of seen) if (!fontCache.has(key)) fontCache.set(key, await resolveFont(key, page.commonObjs, styles));
 
@@ -705,16 +1062,24 @@ async function collectPage(
         ? makeColorLookup(collectColorMarks(ops, layoutViewport.transform, pdfjs.OPS))
         : null;
 
-    const { links, highlights } = await resolveAnnotations(page, layoutViewport, pdfDocument, config, destCache, sectionLinks);
+    // Past the budget the document is closed: the page keeps the text read, without what pdf.js would read next.
+    const { links, highlights } = work.spent
+        ? { links: [] as ResolvedLink[], highlights: [] as ResolvedHighlight[] }
+        : await resolveAnnotations(page, layoutViewport, pdfDocument, config, destCache, sectionLinks, work);
 
     // Walk items, tracking the marked-content stack for mcid / Artifact scope.
-    const stack: { id: string | null; tag: string | null }[] = [];
+    // Each entry carries the nearest mcid and whether an Artifact encloses it, set when pushed, so a run
+    // reads them from the top entry: looked up through the whole stack for each run, content nested
+    // thousands deep took time in the square of the page.
+    const stack: { mcid: string | null; artifact: boolean }[] = [];
     const runs: RawRun[] = [];
     for (const item of textContent.items) {
         if (!isTextItem(item)) {
             const type = (item as any).type as string | undefined;
             if (type === 'beginMarkedContent' || type === 'beginMarkedContentProps') {
-                stack.push({ id: (item as any).id ?? null, tag: (item as any).tag ?? null });
+                const parent = stack[stack.length - 1];
+                const id: string | null = (item as any).id ?? null;
+                stack.push({ mcid: id ?? parent?.mcid ?? null, artifact: (item as any).tag === 'Artifact' || !!parent?.artifact });
             } else if (type === 'endMarkedContent') {
                 stack.pop();
             }
@@ -744,11 +1109,8 @@ async function collectPage(
             if (bg) formatting.backgroundColor = bg;
         }
 
-        let mcid: string | null = null, inArtifact = false;
-        for (let i = stack.length - 1; i >= 0; i--) {
-            if (stack[i].tag === 'Artifact') inArtifact = true;
-            if (mcid === null && stack[i].id !== null) mcid = stack[i].id;
-        }
+        const top = stack[stack.length - 1];
+        const mcid = top?.mcid ?? null, inArtifact = !!top?.artifact;
 
         const dir = (item.dir === 'rtl' || item.dir === 'ttb') ? item.dir : 'ltr';
         const angle = box.angle === -1 ? 0 : box.angle;
@@ -781,25 +1143,26 @@ async function collectPage(
     // OCR of page images is emitted through the attachment path (`emitImage` requires
     // extractAttachments), so collecting images for `ocr` alone would decode and then drop them.
     // Gate on extractAttachments only; `ocr` without it raised OCR_REQUIRES_ATTACHMENTS above.
-    const images = config.extractAttachments
-        ? await collectImages(pdfjs, page, layoutViewport, config, pageNumber, ops)
+    const images = config.extractAttachments && !work.spent
+        ? await collectImages(pdfjs, page, layoutViewport, config, pageNumber, work, ops)
         : [];
 
     let structTree: unknown | null = null;
-    if (pdfCfg.useTags) {
-        try { structTree = await page.getStructTree(); } catch { structTree = null; }
+    if (pdfCfg.useTags && !work.spent) {
+        try { structTree = (await work.within(page.getStructTree())) ?? null; } catch { structTree = null; }
     }
 
-    if (typeof page.cleanup === 'function') { try { page.cleanup(); } catch { /* best effort */ } }
+    if (typeof page.cleanup === 'function' && !work.spent) { try { page.cleanup(); } catch { /* best effort */ } }
 
     return { pageNumber, width, height, authoredW, authoredH, authoredY1, rotation, runs, images, structTree };
 }
 
 /** Extracts images from a page's operator list, positioned in layout-viewport space. */
-async function collectImages(pdfjs: any, page: any, viewport: any, config: FullOfficeParserConfig, pageNumber: number, prefetchedOps?: any): Promise<PdfImage[]> {
+async function collectImages(pdfjs: any, page: any, viewport: any, config: FullOfficeParserConfig, pageNumber: number, work: PdfWorkBudget, prefetchedOps?: any): Promise<PdfImage[]> {
     const images: PdfImage[] = [];
     try {
-        const ops = prefetchedOps || await page.getOperatorList();
+        const ops = prefetchedOps || await readOperatorList(pdfjs, page, work, 'drawing');
+        if (!ops) return images;
         const fnArray = ops.fnArray;
         const argsArray = ops.argsArray;
         // Graphics-state CTM, tracked exactly as `collectColorMarks` tracks it: an image fills the
@@ -811,6 +1174,7 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
         let ctm = identityMatrix();
         const ctmStack: number[][] = [];
         let inlineSeq = 0;
+        let missingReported = false;
 
         /**
          * Encodes one decoded image object to PNG at the current CTM and records it. Shared by the
@@ -871,10 +1235,14 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
                         // which on a multi-font document adds up to many seconds of pure sleep per page.
                         const pool = typeof dep === 'string' && dep.startsWith('g_') ? page.commonObjs : page.objs;
                         if (pool.has(dep)) continue;
-                        await new Promise<void>((resolve) => {
-                            const timeout = setTimeout(resolve, 500);
-                            pool.get(dep, () => { clearTimeout(timeout); resolve(); });
-                        });
+                        // Held to the document's time budget in all: a page naming many objects that
+                        // never arrive waited for each (see mayWaitForObjects).
+                        if (!work.mayWaitForObjects) break;
+                        const arrived = await work.within(new Promise<boolean>((resolve) => {
+                            const timeout = setTimeout(() => resolve(false), OBJECT_WAIT_MS);
+                            pool.get(dep, () => { clearTimeout(timeout); resolve(true); });
+                        }));
+                        if (arrived === false) work.objectWaitRanOut();
                     } catch (e) {
                         logWarning(OfficeWarningType.DEPENDENCY_LOAD_FAILED, config, dep, e);
                     }
@@ -900,7 +1268,12 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
                     let hasObj = page.objs.has(imgName);
                     let targetObjs = page.objs;
                     if (!hasObj && page.commonObjs.has(imgName)) { hasObj = true; targetObjs = page.commonObjs; }
-                    if (!hasObj) continue;
+                    if (!hasObj) {
+                        // Not dropped silently: once per page, the images pdf.js never sent are reported.
+                        if (!missingReported) logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `from page ${pageNumber}`, `pdf.js did not send the image ${String(imgName)} it draws (or others after it on the page)`);
+                        missingReported = true;
+                        continue;
+                    }
                     const imgObj: any = await new Promise((resolve) => targetObjs.get(imgName, (d: any) => resolve(d)));
                     await pushImage(imgObj, imgName, placement);
                 } catch {
@@ -932,6 +1305,18 @@ function imageBounds(viewport: any, ctm: number[]): { x: number; y: number; widt
 }
 
 /**
+ * Whether the caller preloaded pdf.js's worker as `globalThis.pdfjsWorker`, which runs pdf.js in this
+ * process (see `separateProcess`). pdf.js's own worker module sets that global too, when it loads
+ * here: the first time pdf.js runs in this process (`separateProcess: false`, or the fallback). So
+ * the global is read until then and settled when it happens (settleCallerPreloadedWorker); read
+ * afterwards, one parse in this process took pdf.js's own worker for the caller's, and every later
+ * parse ran pdf.js here too, without its memory limit.
+ */
+let workerPreloaded: boolean | undefined;
+const callerPreloadedWorker = (): boolean => workerPreloaded ?? !!(globalThis as any).pdfjsWorker;
+const settleCallerPreloadedWorker = (): void => { workerPreloaded ??= !!(globalThis as any).pdfjsWorker; };
+
+/**
  * Parses a PDF file and extracts content.
  *
  * @param buffer - The PDF file buffer
@@ -948,12 +1333,12 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     if (isBrowser) {
         pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
     } else {
-        assertNode('pdf-worker-auto-resolution');
+        assertNode('pdf-worker-auto-resolution', config);
         let resolved = false;
         if (workerSrc !== DEFAULT_OFFICE_PARSER_CONFIG.pdfWorkerSrc && workerSrc !== '') {
             pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
             resolved = true;
-        } else if ((globalThis as any).pdfjsWorker) {
+        } else if (callerPreloadedWorker()) {
             resolved = true;
         } else {
             try {
@@ -969,14 +1354,6 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         if (!resolved) pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
     }
 
-    // Password / onPassword are top-level (they apply to every encryptable format); PDF reads them
-    // the same way the OOXML/ODF decryptors do.
-    const onPassword = config.onPassword;
-    // Cap callback-driven retries so an onPassword that keeps returning a wrong password can't loop.
-    const MAX_PASSWORD_ATTEMPTS = 3;
-    let password: string | undefined = config.password || undefined;
-    let passwordAttempts = 0;
-
     // Bound how many pixels pdf.js will decode per image. When we never read image bytes, set 1 so
     // image XObjects are skipped entirely: colour marks come from the operator list, not the decoded
     // bitmap, and getOperatorList otherwise decodes every image on every page for nothing. We read
@@ -989,57 +1366,118 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // (it applies to every format, not just PDF), so it is not repeated here.
     const maxImageSize = config.extractAttachments ? 40_000_000 : 1;
 
-    // Open the document, retrying with an onPassword-supplied password when the PDF is encrypted.
-    while (true) {
-        checkAbortSignal(config.abortSignal);
-        // A fresh copy per attempt: pdf.js transfers the data buffer to its worker, detaching it, so
-        // reusing the same Uint8Array on a password retry would fail with a transfer error.
-        const loadingTask = pdfjs.getDocument({
-            data: new Uint8Array(buffer),
-            verbosity: 0,
-            isEvalSupported: false,
-            maxImageSize,
-            password,
-        });
-
-        let pdfDocument;
-        try {
-            pdfDocument = await loadingTask.promise;
-        } catch (e: any) {
-            try { await loadingTask.destroy(); } catch { /* best effort cleanup */ }
-            if (e?.name === 'PasswordException') {
-                const need = pdfjs.PasswordResponses?.NEED_PASSWORD;
-                const reason: 'required' | 'incorrect' = e.code === need ? 'required' : 'incorrect';
-                if (onPassword && passwordAttempts < MAX_PASSWORD_ATTEMPTS) {
-                    passwordAttempts++;
-                    const supplied = await onPassword(reason);
-                    if (supplied) { password = supplied; continue; }
-                }
-                throw getOfficeError(reason === 'required' ? OfficeErrorType.PASSWORD_REQUIRED : OfficeErrorType.PASSWORD_INCORRECT, config);
-            }
-            const message = e instanceof Error ? e.message : String(e);
-            if (message.includes('workerSrc') || message.includes('No "GlobalWorkerOptions.workerSrc" specified')) {
-                throw getOfficeError(OfficeErrorType.PDF_WORKER_MISSING, config);
-            }
-            throw e;
-        }
-
-        try {
-            return await buildAst(pdfjs, pdfDocument, config, pdfCfg);
-        } finally {
-            try { await loadingTask.destroy(); } catch { /* best effort cleanup */ }
-        }
+    // pdf.js's worker in a process of its own (see pdfProcess), so what pdf.js does inside one stream
+    // cannot exhaust this one's memory. Only for a worker Node can import from disk; one the caller
+    // preloaded as `globalThis.pdfjsWorker`, or no separate process at all, runs pdf.js here.
+    const workerUrl = String(pdfjs.GlobalWorkerOptions.workerSrc ?? '');
+    let pdfProcess: PdfProcess | undefined;
+    if (!isBrowser && pdfCfg.separateProcess && !callerPreloadedWorker() && workerUrl.startsWith('file:')) {
+        pdfProcess = await acquirePdfProcess(pdfjs, workerUrl, pdfCfg.processMemoryMb, config.abortSignal);
+        if (!pdfProcess) logWarning(OfficeWarningType.PDF_SEPARATE_PROCESS_UNAVAILABLE, config);
+    }
+    if (!pdfProcess && !isBrowser) settleCallerPreloadedWorker();
+    try {
+        return await readPdf(pdfjs, buffer, config, pdfCfg, maxImageSize, pdfProcess);
+    } finally {
+        pdfProcess?.release();
     }
 };
 
+/** Opens the document, retrying with an onPassword-supplied password when it is encrypted, and reads it. */
+async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, maxImageSize: number, pdfProcess: PdfProcess | undefined): Promise<OfficeParserAST> {
+    // Password / onPassword are top-level (they apply to every encryptable format); PDF reads them
+    // the same way the OOXML/ODF decryptors do.
+    const onPassword = config.onPassword;
+    // Cap callback-driven retries so an onPassword that keeps returning a wrong password can't loop.
+    const MAX_PASSWORD_ATTEMPTS = 3;
+    let password: string | undefined = config.password || undefined;
+    let passwordAttempts = 0;
+    // The separate process ending while in use (out of memory, above all) fails the parse, and
+    // `abortSignal` fails it at once: a separate process is ended, stopping pdf.js mid-stream, and
+    // pdf.js in this process stops at its next time slice once its document is closed. Either way the
+    // document's read is cancelled (see PdfWorkBudget.cancel), so nothing more is asked or reported.
+    let work: PdfWorkBudget | undefined;
+    const died = pdfProcess?.died.catch((reason: string) => { throw getOfficeError(OfficeErrorType.PDF_PROCESS_FAILED, config, { reason, memoryMb: pdfCfg.processMemoryMb }); });
+    const signal = config.abortSignal;
+    let onAbort: (() => void) | undefined;
+    const aborted = signal ? new Promise<never>((_, reject) => {
+        onAbort = () => { work?.cancel(); pdfProcess?.end(); reject(getAbortError()); };
+        if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true });
+    }) : undefined;
+    aborted?.catch(() => { /* raced below */ });
+    const stoppers = [died, aborted].filter((p): p is Promise<never> => !!p);
+    const whileAlive = <T>(promise: Promise<T>): Promise<T> => stoppers.length ? Promise.race([promise, ...stoppers]) : promise;
+    try {
+        while (true) {
+            checkAbortSignal(config.abortSignal);
+            // A fresh copy per attempt: pdf.js transfers the data buffer to its worker, detaching it, so
+            // reusing the same Uint8Array on a password retry would fail with a transfer error.
+            const loadingTask = pdfjs.getDocument({
+                data: new Uint8Array(buffer),
+                verbosity: 0,
+                isEvalSupported: false,
+                maxImageSize,
+                password,
+                ...(pdfProcess ? { worker: pdfProcess.worker } : {}),
+            });
+
+            let pdfDocument;
+            try {
+                pdfDocument = await whileAlive(loadingTask.promise);
+            } catch (e: any) {
+                if (e?.officeIssue || e?.name === 'AbortError') throw e;
+                try { await loadingTask.destroy(); } catch { /* best effort cleanup */ }
+                if (e?.name === 'PasswordException') {
+                    const need = pdfjs.PasswordResponses?.NEED_PASSWORD;
+                    const reason: 'required' | 'incorrect' = e.code === need ? 'required' : 'incorrect';
+                    if (onPassword && passwordAttempts < MAX_PASSWORD_ATTEMPTS) {
+                        passwordAttempts++;
+                        const supplied = await onPassword(reason);
+                        if (supplied) { password = supplied; continue; }
+                    }
+                    throw getOfficeError(reason === 'required' ? OfficeErrorType.PASSWORD_REQUIRED : OfficeErrorType.PASSWORD_INCORRECT, config);
+                }
+                const message = e instanceof Error ? e.message : String(e);
+                if (message.includes('workerSrc') || message.includes('No "GlobalWorkerOptions.workerSrc" specified')) {
+                    throw getOfficeError(OfficeErrorType.PDF_WORKER_MISSING, config);
+                }
+                throw e;
+            }
+
+            // Every request to pdf.js goes through the document's budget, from the first (see PdfWorkBudget).
+            const budget = work = new PdfWorkBudget(pdfDocument, config, pdfCfg, buffer.length, pdfProcess);
+            try {
+                return await whileAlive(buildAst(pdfjs, pdfDocument, config, pdfCfg, budget));
+            } finally {
+                // Whatever ended the parse, the read ends with it (see PdfWorkBudget.cancel).
+                budget.cancel();
+                // Bounded: closing waits for pdf.js's tasks, and one that never ends must not hold the
+                // parse (nor one whose process has ended, which never answers).
+                let timer: ReturnType<typeof setTimeout> | undefined;
+                const closed = Promise.resolve(loadingTask.destroy()).then(() => true, () => true);
+                const wait = pdfProcess && !pdfProcess.alive ? 0 : 2000;
+                const done = await Promise.race([closed, new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), wait); })]);
+                clearTimeout(timer);
+                // A process whose document did not close is still at work on it: it is ended, not
+                // handed to the next parse, whose requests would wait behind that work (and pay for it).
+                if (!done) pdfProcess?.end();
+            }
+        }
+    } finally {
+        // The listener goes with the parse: left on the signal, it fired after the parse had ended and
+        // ended the process by then serving another parse (and a shared signal gathered one per parse).
+        if (onAbort) signal!.removeEventListener('abort', onAbort);
+    }
+}
+
 /** Assembles the AST from an opened document. Separated so the caller can guarantee task cleanup. */
-async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig): Promise<OfficeParserAST> {
+async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, work: PdfWorkBudget): Promise<OfficeParserAST> {
     const content: OfficeContentNode[] = [];
     const attachments: OfficeAttachment[] = [];
     const numPages = pdfDocument.numPages;
 
     // --- Metadata ---
-    const meta = await pdfDocument.getMetadata().catch(() => ({ info: {} }));
+    const meta = (await work.within(pdfDocument.getMetadata().catch(() => ({ info: {} })) as Promise<any>)) ?? { info: {} };
     const info = (meta.info || {}) as Record<string, unknown>;
     const metadata: OfficeMetadata = {
         pages: numPages,
@@ -1064,9 +1502,9 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         metadata.nativeProperties = {};
         for (const [key, val] of Object.entries(info)) {
             if (key === 'Custom' && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Date) && val !== null) {
-                for (const [ck, cv] of Object.entries(val)) metadata.nativeProperties[ck] = cv;
+                for (const [ck, cv] of Object.entries(val)) setOwn(metadata.nativeProperties, ck, cv);
             } else {
-                metadata.nativeProperties[key] = val;
+                setOwn(metadata.nativeProperties, key, val);
             }
         }
         const customProperties: Record<string, string | number | boolean | Date> = {};
@@ -1077,11 +1515,11 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             if (key === 'Custom' && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Date)) {
                 for (const [ck, cv] of Object.entries(val)) {
                     if (cv === null || cv === undefined) continue;
-                    if (typeof cv === 'string' || typeof cv === 'number' || typeof cv === 'boolean' || cv instanceof Date) customProperties[ck] = cv;
+                    if (typeof cv === 'string' || typeof cv === 'number' || typeof cv === 'boolean' || cv instanceof Date) setOwn(customProperties, ck, cv);
                 }
                 continue;
             }
-            if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean' || val instanceof Date) customProperties[key] = val;
+            if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean' || val instanceof Date) setOwn(customProperties, key, val);
         }
         if (Object.keys(customProperties).length > 0) metadata.customProperties = customProperties;
     }
@@ -1093,7 +1531,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
 
     // Tagged flag for consumers.
     let markInfo: any = null;
-    try { markInfo = await pdfDocument.getMarkInfo(); } catch { markInfo = null; }
+    try { markInfo = (await work.within(pdfDocument.getMarkInfo())) ?? null; } catch { markInfo = null; }
     if (!metadata.nativeProperties) metadata.nativeProperties = {};
     metadata.nativeProperties['tagged'] = !!(markInfo && markInfo.Marked);
     if (markInfo) metadata.nativeProperties['markInfo'] = markInfo;
@@ -1101,14 +1539,14 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     // Document permissions (which user actions the file allows). `null` means all actions allowed;
     // pdf.js cannot validate signatures, so we only report presence, never validity.
     try {
-        const perms: number[] | null = await pdfDocument.getPermissions();
+        const perms: number[] | null = (await work.within(pdfDocument.getPermissions() as Promise<number[] | null>)) ?? null;
         metadata.nativeProperties['permissions'] = perms ? permissionNames(pdfjs, perms) : 'all';
     } catch { /* not available */ }
 
     // Optional-content group (layer) names and default visibility, for consumers that care which
     // layers exist. Text inside hidden layers is still extracted (getTextContent ignores visibility).
     try {
-        const oc = await pdfDocument.getOptionalContentConfig();
+        const oc = await work.within(pdfDocument.getOptionalContentConfig());
         const layers = listOptionalContentLayers(oc);
         if (layers.length) metadata.nativeProperties['layers'] = layers;
     } catch { /* no optional content */ }
@@ -1116,7 +1554,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     // AcroForm field values (filled form data). Many real-world PDFs (applications, invoices) carry
     // their content here rather than as page text. Reported structurally; extraction, not validation.
     try {
-        const fieldObjects = await pdfDocument.getFieldObjects();
+        const fieldObjects = await work.within(pdfDocument.getFieldObjects());
         if (fieldObjects) {
             const fields: Record<string, unknown> = {};
             for (const name of Object.keys(fieldObjects)) {
@@ -1125,7 +1563,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
                 if (!f || typeof f !== 'object') continue;
                 const entry: Record<string, unknown> = { value: f.value, type: f.type };
                 if (f.defaultValue !== undefined && f.defaultValue !== null) entry.defaultValue = f.defaultValue;
-                fields[name] = entry;
+                setOwn(fields, name, entry);
             }
             if (Object.keys(fields).length) metadata.nativeProperties['formFields'] = fields;
         }
@@ -1133,11 +1571,11 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
 
     // Printed page labels (e.g. roman-numeral front matter), distinct from the physical page index.
     let pageLabels: (string | null)[] | null = null;
-    try { pageLabels = await pdfDocument.getPageLabels(); } catch { pageLabels = null; }
+    try { pageLabels = (await work.within(pdfDocument.getPageLabels() as Promise<(string | null)[] | null>)) ?? null; } catch { pageLabels = null; }
 
     // --- Embedded file attachments ---
     try {
-        const embeddedFiles = await pdfDocument.getAttachments();
+        const embeddedFiles: Record<string, any> | null | undefined = await work.within(pdfDocument.getAttachments());
         if (embeddedFiles && config.extractAttachments) {
             for (const name in embeddedFiles) {
                 const file = embeddedFiles[name];
@@ -1156,12 +1594,17 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     const extracts: PageExtract[] = [];
     for (const pageNum of pageNumbers) {
         checkAbortSignal(config.abortSignal);
+        if (work.spent) break;
         try {
-            extracts.push(await collectPage(pdfjs, pdfDocument, pageNum, config, pdfCfg, fontCache, destCache, sectionLinks));
+            const extract = await collectPage(pdfjs, pdfDocument, pageNum, config, pdfCfg, fontCache, destCache, sectionLinks, work);
+            if (extract) extracts.push(extract);
         } catch (e: any) {
+            // A page failing because its parse has ended (its process ended with it) is not reported.
+            work.throwIfCancelled();
             logWarning(OfficeWarningType.PAGE_LOAD_FAILED, config, pageNum, e);
         }
     }
+    work.throwIfCancelled();
 
     const allRuns = extracts.flatMap(e => e.runs);
     // Layout always runs in the authored (rotation-0) frame with geometry ON, whatever the caller
@@ -1172,7 +1615,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     const layoutCfg: PdfLayoutConfig = { ...pdfCfg, includeBounds: true };
     const docCtx = computeDocContext(allRuns, layoutCfg, config.newlineDelimiter);
 
-    // Warn when extracted text is mostly unmappable glyphs (broken/missing ToUnicode), so consumers
+    // Warn when much of the extracted text is unmappable glyphs (broken/missing ToUnicode), so consumers
     // can tell "genuinely empty" from "font could not be decoded" and reach for OCR.
     warnIfEncodingSuspect(allRuns, config);
 
@@ -1180,10 +1623,11 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     // silent empty output is otherwise indistinguishable from a genuine failure. Only when OCR is off,
     // since with OCR the caller is already handling image-only content.
     if (!config.ocr) {
-        // Scale the "looks empty" threshold to the pages actually processed, not the whole document:
-        // with a pageRange, `allRuns` covers only the selected pages, so comparing against the full
-        // numPages would spuriously warn whenever a small slice of a large PDF is requested.
-        const processedPages = pageNumbers.length;
+        // Scale the "looks empty" threshold to the pages actually read, not the whole document: with
+        // a pageRange, `allRuns` covers only the selected pages, and a content limit can stop the read
+        // after a few, so comparing against more pages than were read warned that a document of text
+        // had none (a plan whose first page is a drawing, stopped there, was "a scanned document").
+        const processedPages = extracts.length;
         const textChars = allRuns.reduce((sum, r) => sum + r.text.replace(/\s/g, '').length, 0);
         if (processedPages > 0 && textChars < Math.max(10, processedPages)) {
             logWarning(OfficeWarningType.PDF_NO_TEXT_EXTRACTED, config, processedPages);
@@ -1208,6 +1652,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     let imageCounter = 0;
     for (const extract of extracts) {
         checkAbortSignal(config.abortSignal);
+        work.throwIfCancelled();
         const pageCtx: PageContext = { pageNumber: extract.pageNumber, authoredW: extract.authoredW, authoredH: extract.authoredH, rotation: extract.rotation };
         // The frame every node is built in: authored space, so a `/Rotate` page's boxes stay
         // comparable to the runs they came from. `finalizeBounds` maps them at the end of the page.
@@ -1294,8 +1739,8 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             for (const node of geometricNodes(footerRuns, layoutCtx, docCtx, layoutCfg, false)) pageFooters.push(retypeAsHeaderFooter(node, 'footer'));
             finalizeBounds(pageHeaders, pageCtx, pdfCfg.includeBounds);
             finalizeBounds(pageFooters, pageCtx, pdfCfg.includeBounds);
-            auxHeaders.push(...pageHeaders);
-            auxFooters.push(...pageFooters);
+            appendAll(auxHeaders, pageHeaders);
+            appendAll(auxFooters, pageFooters);
         }
 
         finalizeBounds(pageContent, pageCtx, pdfCfg.includeBounds);
@@ -1321,10 +1766,12 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     // Document outline (bookmarks / TOC), when present, into auxiliary. A malformed or hostile
     // outline must never cost the caller the whole document, so anything thrown here is a warning.
     let outline: OfficeContentNode[] | undefined;
-    if (!config.ignoreInternalLinks) {
-        try { outline = await buildOutline(pdfDocument, destCache, sectionLinks, config); }
+    // Past the budget the document is closed (its process ended): nothing more is asked of pdf.js.
+    if (!config.ignoreInternalLinks && !work.spent) {
+        try { outline = await buildOutline(pdfDocument, destCache, sectionLinks, config, work); }
         catch { logWarning(OfficeWarningType.PDF_OUTLINE_TRUNCATED, config, 'it could not be read'); }
     }
+    work.throwIfCancelled();
 
     // Now that every page's headings and their positions are known, point each internal link at the
     // nearest heading on its target page (falling back to the page itself), rather than a page jump.
@@ -1350,7 +1797,7 @@ function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext
     const remaining = consumed.size ? lines.filter(l => !consumed.has(l)) : lines;
 
     const out: OfficeContentNode[] = [];
-    for (const block of segmentIntoBlocks(remaining, pdfCfg)) out.push(...blockToNodes(block, pageCtx, docCtx));
+    for (const block of segmentIntoBlocks(remaining, pdfCfg)) appendAll(out, blockToNodes(block, pageCtx, docCtx));
     // Splice each detected table into the flow at its vertical position.
     for (const t of tables) {
         const ty = t.node.bounds?.y ?? Infinity;
@@ -1360,7 +1807,7 @@ function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext
     // Rescue rotated text (90/180/270), which the horizontal line builder skips, so it is not
     // silently dropped. It is appended after the main flow, in the source content order (which is
     // usually the correct reading order); precise visual ordering of rotated text is a limitation.
-    out.push(...rotatedTextNodes(runs, pageCtx, pdfCfg));
+    appendAll(out, rotatedTextNodes(runs, pageCtx, pdfCfg));
     return out;
 }
 
@@ -1370,12 +1817,16 @@ function rotatedTextNodes(runs: RawRun[], pageCtx: PageContext, pdfCfg: PdfLayou
     for (const angle of [90, 270, 180] as const) {
         const group = runs.filter(r => r.angle === angle && r.text.trim().length > 0);
         if (!group.length) continue;
-        let text = '';
+        // Joined once, a space between runs that do not already meet at one; testing the end of the
+        // growing text for each run instead copied all of it every time.
+        const parts: string[] = [];
+        let endsInSpace = true;
         for (const r of group) {
-            if (text && !/\s$/.test(text) && !/^\s/.test(r.text)) text += ' ';
-            text += r.text;
+            if (!endsInSpace && !/^\s/.test(r.text)) parts.push(' ');
+            parts.push(r.text);
+            if (r.text) endsInSpace = /\s/.test(r.text[r.text.length - 1]);
         }
-        text = text.replace(/\s+/g, ' ').trim();
+        const text = parts.join('').replace(/\s+/g, ' ').trim();
         if (!text) continue;
         const node: OfficeContentNode = { type: 'paragraph', text, children: [{ type: 'text', text }] };
         const box = unionAll(group.map(r => ({ x: r.x, y: r.yTop, width: r.width, height: r.height })));
@@ -1456,15 +1907,17 @@ async function emitImage(
         const attachment = createAttachment(attachmentName, png);
         attachment.mimeType = 'image/png';
         if (config.ocr && img.pixelWidth >= 10 && img.pixelHeight >= 10) {
-            try { attachment.ocrText = (await performOcr(png, { ...config.ocrConfig })).trim(); }
-            catch (e) { logWarning(OfficeWarningType.OCR_FAILED, config, attachmentName, e); }
+            const ocrText = await ocrDuringParse(png, config, attachmentName, 'image/png');
+            if (ocrText !== undefined) attachment.ocrText = ocrText;
         }
         attachments.push(attachment);
         const metadata: ImageMetadata = { attachmentName };
         const node: OfficeContentNode = { type: 'image', text: attachment.ocrText || '', metadata };
         node.bounds = roundBounds(img.bounds);
         return node;
-    } catch (e) {
+    } catch (e: any) {
+        // A cancelled parse rejects; it is not a failed image.
+        if (e?.name === 'AbortError') throw e;
         logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, attachmentName, e);
         return null;
     }

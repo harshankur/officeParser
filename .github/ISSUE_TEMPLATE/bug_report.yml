@@ -22,6 +22,7 @@ body:
         - Markdown Parser
         - HTML Parser
         - EPUB Parser
+        - LaTeX Parser
         - HTML Generator
         - Markdown Generator
         - PDF Generator
@@ -29,6 +30,9 @@ body:
         - CSV Generator
         - Text Generator
         - EPUB Generator
+        - DOCX Generator
+        - ODT Generator
+        - LaTeX Generator
         - Chunking / RAG Generator
         - Core / Shared (AST, types, config resolution - not specific to one format)
         - OCR Scheduler & Infrastructure

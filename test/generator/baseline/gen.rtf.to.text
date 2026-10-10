@@ -45,9 +45,7 @@ Next, we see a table with special formatting in various locations. Notice how th
 Source: Fictitious data, for illustration purposes only
 Next, we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged. The table is displayed horizontally centered.
 
-| One Three | Two                                                            | 
-|           | Four                                                           | 
-|           | To the left is a table inside a table, with some cells merged. | 
+| | One Three | Two |  | Four      | | To the left is a table inside a table, with some cells merged. | 
 
 We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.
 

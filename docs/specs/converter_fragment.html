@@ -17,6 +17,12 @@ const { value, messages } = await OfficeConverter.convert('report.docx', 'pdf', 
     }
 });</code></pre>
 
+    <p>LaTeX input converts the same way. A <code>.zip</code> is routed by what it holds, so an Overleaf "Download
+        source" zip (or a <code>texConfig.bundle</code> zip) parses as LaTeX, with its <code>\input</code>/<code>\include</code>
+        files and <code>\includegraphics</code> images read from the archive:</p>
+    <pre><code>const { value: docx } = await OfficeConverter.convert('paper.tex', 'docx');
+const { value: fromProject } = await OfficeConverter.convert('overleaf-project.zip', 'docx'); // images included</code></pre>
+
     <h3>Arguments</h3>
     <table>
         <thead>
@@ -35,7 +41,7 @@ const { value, messages } = await OfficeConverter.convert('report.docx', 'pdf', 
             <tr>
                 <td><code>destination</code></td>
                 <td><code>UniversalGeneratorFormat</code></td>
-                <td>Target format: 'html', 'md', 'pdf', 'docx', 'odt', 'csv', 'text', 'rtf', 'epub', 'chunks'.</td>
+                <td>Target format: 'html', 'md', 'pdf', 'docx', 'odt', 'tex' (alias 'latex'), 'csv', 'text', 'rtf', 'epub', 'chunks'.</td>
             </tr>
             <tr>
                 <td><code>config</code></td>
@@ -78,10 +84,25 @@ const { value, messages } = await OfficeConverter.convert('report.docx', 'pdf', 
         </tbody>
     </table>
 
+    <h3>Return value</h3>
+    <p>A <code>ConversionResult</code>: <code>value</code> is the generated document, of the type
+        <code>ast.to(destination)</code> returns (see <a href="#spec/generator">OfficeGenerator</a>), and
+        <code>messages</code> lists every warning of the conversion once: configuration mistakes first, then the parse's
+        warnings, then the generator's. Each also reaches <code>onWarning</code> as it happens.</p>
+
+    <blockquote>
+        [!IMPORTANT]
+        Parser and generator options go inside <code>parseConfig</code> and <code>generatorConfig</code>; only
+        <code>onWarning</code> is read at the top level. An option placed there has no effect and is reported as
+        <code>UNRECOGNIZED_CONFIG_OPTION</code>, naming where it belongs (<code>{ texConfig }</code> belongs in
+        <code>generatorConfig</code>, <code>{ ocr }</code> in <code>parseConfig</code>).
+    </blockquote>
+
     <blockquote>
         [!NOTE]
-        <code>convert()</code> forces OCR <strong>off</strong>. If you need OCR, parse with <code>OfficeParser</code>
-        (setting <code>ocr: true</code>) and then render with <code>OfficeGenerator</code>.
+        <code>convert()</code> honors <code>parseConfig.ocr</code>. OCR runs over extracted images, so unless you set
+        <code>parseConfig.extractAttachments</code> yourself, <code>convert()</code> turns it on whenever OCR is enabled
+        (and whenever the output will show images or charts).
     </blockquote>
 
     <blockquote>

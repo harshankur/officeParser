@@ -187,6 +187,15 @@
     }
   },
   {
+    "text": "| One Three Two Four | To the left is a table inside a table, with some cells merged. |",
+    "metadata": {
+      "sourceType": "pdf",
+      "closestHeading": "Tables",
+      "pageNumber": 4,
+      "isTableChunk": true
+    }
+  },
+  {
     "text": "We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.",
     "metadata": {
       "sourceType": "pdf",

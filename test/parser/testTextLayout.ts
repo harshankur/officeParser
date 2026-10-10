@@ -12,10 +12,12 @@
  */
 
 import { blockToNodes, buildLines, computeDocContext, detectTables, PageContext, recoverTaggedGrids, segmentIntoBlocks } from '../../src/parsers/pdf/textLayout';
+import { buildTaggedNodes } from '../../src/parsers/pdf/structTree';
 import { makeColorLookup } from '../../src/parsers/pdf/pdfColor';
 import { PdfLayoutConfig, RawRun } from '../../src/parsers/pdf/pdfTypes';
 import { layoutOcrText, sniffImageMime } from '../../src/utils/ocrUtils';
 import { OfficeContentNode } from '../../src/types';
+import { DEFAULT_OFFICE_PARSER_CONFIG } from '../../src/defaults';
 
 /** Mirrors `FeatureTest` in testOfficeParser.ts (structurally, so results can be pushed there). */
 interface LayoutTest {
@@ -25,22 +27,18 @@ interface LayoutTest {
     result: { status: 'PASS' | 'FAIL' | 'WARN' | 'SKIP'; expected: any; actual: any; details: string };
 }
 
-/** The shipped PDF layout defaults (see DEFAULT_PDF_PARSER_CONFIG in src/defaults.ts). */
+/** The shipped PDF layout defaults with deliberate test overrides. */
 const CFG: PdfLayoutConfig = {
+    ...DEFAULT_OFFICE_PARSER_CONFIG.pdfParserConfig,
     useTags: false,
-    detectColumns: true,
-    mergeHyphenatedWords: true,
-    lineToleranceFactor: 0.35,
-    spaceToleranceFactor: 0.25,
-    headingDetection: 'auto',
-    normalizeText: true,
     extractTextColor: false,
     includeBounds: false,
+    separateProcess: false,
 };
 
 const PAGE: PageContext = { pageNumber: 1, authoredW: 612, authoredH: 792, rotation: 0 };
 
-interface RunOpts { fontKey?: string; bold?: boolean; width?: number }
+interface RunOpts { bold?: boolean; width?: number }
 
 /** Builds one run at (x, baseline). Width defaults to a rough 0.5em per character. */
 function run(text: string, x: number, yBaseline: number, fontSize = 12, opts: RunOpts = {}): RawRun {
@@ -50,9 +48,7 @@ function run(text: string, x: number, yBaseline: number, fontSize = 12, opts: Ru
         width: opts.width ?? text.length * fontSize * 0.5,
         height: fontSize * 1.2,
         fontSize,
-        fontKey: opts.fontKey ?? 'g_d0_f1',
         dir: 'ltr',
-        hasEOL: false,
         angle: 0,
         mcid: null,
         inArtifact: false,
@@ -93,7 +89,7 @@ function bulletList(itemGap: number): RawRun[] {
     const F = 12, WRAP = 14.4;
     const runs: RawRun[] = [];
     let y = 100;
-    const item = (text: string) => runs.push(run('•', 72, y, F, { fontKey: 'g_d0_f2', width: 6 }), run(text, 90, y, F));
+    const item = (text: string) => runs.push(run('•', 72, y, F, { width: 6 }), run(text, 90, y, F));
     item('First item is short');
     y += itemGap;
     item('Second item wraps onto a');
@@ -129,7 +125,7 @@ export async function testTextLayout(): Promise<LayoutTest[]> {
         const runs: RawRun[] = [];
         let y = 100;
         for (const t of ['Alpha item text', 'Beta item text', 'Gamma item text']) {
-            runs.push(run('•', 72, y, 12, { fontKey: 'g_d0_f9', bold: true, width: 6 }), run(t, 90, y, 12));
+            runs.push(run('•', 72, y, 12, { bold: true, width: 6 }), run(t, 90, y, 12));
             y += 14.4;
         }
         const nodes = nodesOf(runs);
@@ -325,6 +321,20 @@ export async function testTextLayout(): Promise<LayoutTest[]> {
         for (let i = 0; i < 5; i++) { nodes.push(paraNode('L' + i, 100, 100 + i * 20, 8, 12), paraNode('R' + i, 300, 100 + i * 20, 8, 12)); }
         const out = recoverTaggedGrids(nodes);
         add('Two-column short paragraphs are not a table', !out.some(n => n.type === 'table'), 'no table', `${out.filter(n => n.type === 'table').length} table(s)`);
+    }
+
+    // ── Tagged TOC entries: a dot leader is one space, however many runs of dots it is split into ──
+    {
+        const entry = (texts: string[]) => {
+            const runsByMcid = new Map<string, RawRun[]>();
+            const kids = texts.map((t, i) => { runsByMcid.set(`m${i}`, [{ ...run(t, 72 + i * 60, 100), mcid: `m${i}` }]); return { type: 'content', id: `m${i}` }; });
+            const all = [...runsByMcid.values()].flat();
+            const { nodes } = buildTaggedNodes({ role: 'Root', children: [{ role: 'TOCI', children: kids }] }, runsByMcid, PAGE, computeDocContext(all, CFG, '\n'), { ignoreNotes: false, listCounter: { n: 0 } });
+            return (nodes[0]?.text ?? '').replace(/\s+/g, ' ');
+        };
+        const split = entry(['Scope', '....', '....', '....', '12']);
+        const joined = entry(['Scope ................ 12']);
+        add('TOC dot leaders split into runs collapse to one space', split === 'Scope 12' && joined === 'Scope 12', 'Scope 12 (both)', `${JSON.stringify(split)} / ${JSON.stringify(joined)}`);
     }
 
     // ── L-SS: super/subscript merging vs a caption ──────────────────────────

@@ -1,6 +1,8 @@
-import { DEFAULT_GENERATOR_CONFIG, DEFAULT_OFFICE_PARSER_CONFIG } from '../defaults.js';
-import { FullGeneratorConfig, FullOfficeParserConfig, GeneratorConfig, OfficeParserConfig, OfficeWarningType } from '../types.js';
+import { DEFAULT_DOCUMENT_STRUCTURE_CHUNKING_CONFIG, DEFAULT_FIXED_SIZE_CHUNKING_CONFIG, DEFAULT_GENERATOR_CONFIG, DEFAULT_OFFICE_PARSER_CONFIG, DEFAULT_SEMANTIC_CHUNKING_CONFIG } from '../defaults.js';
+import { FullGeneratorConfig, FullOfficeParserConfig, GeneratorConfig, OfficeIssue, OfficeParserConfig, OfficeWarningType } from '../types.js';
 import { logWarning } from './errorUtils.js';
+import { PAPER_FORMAT_NAMES } from './officeGenUtils.js';
+import { lookupTable } from './lookupUtils.js';
 
 /**
  * Keys that must never be copied from a caller-supplied config onto one of our objects.
@@ -13,14 +15,14 @@ import { logWarning } from './errorUtils.js';
  * `constructor` and `prototype` are included because they are the other two names that reach a
  * prototype through an ordinary property write.
  */
-const PROTOTYPE_POLLUTION_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+export const PROTOTYPE_POLLUTION_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 /**
  * Every recognized top-level parser-config key. `DEFAULT_OFFICE_PARSER_CONFIG` is `DeepRequired`, so
  * its own keys are exactly the full option surface; a caller key absent from this set is genuinely
  * unrecognized (a typo, or a key that no longer exists), never a valid-but-omitted option.
  */
-const RECOGNIZED_PARSER_KEYS = new Set(Object.keys(DEFAULT_OFFICE_PARSER_CONFIG));
+export const RECOGNIZED_PARSER_KEYS = new Set(Object.keys(DEFAULT_OFFICE_PARSER_CONFIG));
 
 /**
  * Options renamed or removed in a major release, mapped old key -> what to use instead, so the
@@ -31,12 +33,12 @@ const RECOGNIZED_PARSER_KEYS = new Set(Object.keys(DEFAULT_OFFICE_PARSER_CONFIG)
  * replacement, so the warning renders the sentence as-is (see `UNRECOGNIZED_CONFIG_OPTION`).
  * Nested keys are spelled with their full dotted path, matching how the check below reports them.
  */
-const RENAMED_PARSER_KEYS: Record<string, string> = {
+const RENAMED_PARSER_KEYS: Record<string, string> = lookupTable({
     ocrLanguage: 'ocrConfig.language',
     outputErrorToConsole: 'onWarning',
     putNotesAtLast: '(removed; notes are attached to the node they belong to, as node.notes)',
     'ocrConfig.autoTerminateTimeout': 'ocrConfig.timeout.autoTerminate',
-};
+});
 
 /**
  * Every recognized key of each nested parser-config container, keyed by the container's dotted path
@@ -47,13 +49,14 @@ const RENAMED_PARSER_KEYS: Record<string, string> = {
  * `ocrConfig.autoTerminateTimeout`, say) is copied in and then simply never read, so the caller's
  * setting is silently replaced by the default it meant to override.
  */
-const RECOGNIZED_NESTED_PARSER_KEYS: Record<string, Set<string>> = {
+const RECOGNIZED_NESTED_PARSER_KEYS: Record<string, Set<string>> = lookupTable({
     ocrConfig: new Set(Object.keys(DEFAULT_OFFICE_PARSER_CONFIG.ocrConfig)),
     'ocrConfig.timeout': new Set(Object.keys(DEFAULT_OFFICE_PARSER_CONFIG.ocrConfig.timeout)),
     pdfParserConfig: new Set(Object.keys(DEFAULT_OFFICE_PARSER_CONFIG.pdfParserConfig)),
     htmlParserConfig: new Set(Object.keys(DEFAULT_OFFICE_PARSER_CONFIG.htmlParserConfig)),
+    texParserConfig: new Set(Object.keys(DEFAULT_OFFICE_PARSER_CONFIG.texParserConfig)),
     decompressionLimits: new Set(Object.keys(DEFAULT_OFFICE_PARSER_CONFIG.decompressionLimits)),
-};
+});
 
 /**
  * Appends every key of `container` that the container at `path` does not recognize to `out`, as a
@@ -126,6 +129,7 @@ export function isFullGeneratorConfig(config: any): config is FullGeneratorConfi
         'csvConfig' in config &&
         'docxConfig' in config &&
         'odtConfig' in config &&
+        'texConfig' in config &&
         'onNode' in config);
 }
 
@@ -175,6 +179,9 @@ export function resolveParserConfig(
         if (userConfig.pdfParserConfig) {
             resolved.pdfParserConfig = { ...userConfig.pdfParserConfig };
         }
+        if (userConfig.texParserConfig) {
+            resolved.texParserConfig = { ...userConfig.texParserConfig };
+        }
         return resolved;
     }
 
@@ -186,9 +193,9 @@ export function resolveParserConfig(
     }
 
     // 2. Merge user config
-    // We handle ocrConfig, decompressionLimits, htmlParserConfig, and pdfParserConfig specially to
-    // avoid shallow-overwriting the whole nested objects
-    const { ocrConfig, decompressionLimits, htmlParserConfig, pdfParserConfig, ...rest } = userConfig;
+    // We handle ocrConfig, decompressionLimits and the per-format parser configs specially to avoid
+    // shallow-overwriting the whole nested objects
+    const { ocrConfig, decompressionLimits, htmlParserConfig, pdfParserConfig, texParserConfig, ...rest } = userConfig;
     Object.assign(config, withoutPrototypeKeys(rest));
 
     // Flag any option the caller passed that this version does not recognize: a typo, or a key renamed
@@ -202,6 +209,7 @@ export function resolveParserConfig(
     collectUnknownNestedKeys(ocrConfig, 'ocrConfig', unknownKeys);
     collectUnknownNestedKeys(pdfParserConfig, 'pdfParserConfig', unknownKeys);
     collectUnknownNestedKeys(htmlParserConfig, 'htmlParserConfig', unknownKeys);
+    collectUnknownNestedKeys(texParserConfig, 'texParserConfig', unknownKeys);
     collectUnknownNestedKeys(decompressionLimits, 'decompressionLimits', unknownKeys);
     if (unknownKeys.length) {
         logWarning(OfficeWarningType.UNRECOGNIZED_CONFIG_OPTION, config, { keys: unknownKeys, renames: RENAMED_PARSER_KEYS });
@@ -228,6 +236,18 @@ export function resolveParserConfig(
         };
     }
 
+    if (texParserConfig) {
+        config.texParserConfig = {
+            ...config.texParserConfig,
+            ...texParserConfig,
+        };
+        const today = config.texParserConfig.today;
+        if (typeof today !== 'string') {
+            logWarning(OfficeWarningType.INVALID_CONFIG_VALUE, config, { option: 'texParserConfig.today', value: today, expected: 'a string', fallback: '' });
+            config.texParserConfig.today = '';
+        }
+    }
+
     if (ocrConfig) {
         const { timeout, ...ocrRest } = ocrConfig;
         config.ocrConfig = {
@@ -252,7 +272,7 @@ export function resolveParserConfig(
 /** The per-destination and metadata sub-objects a generator config groups its settings into. */
 const GENERATOR_CONFIG_CONTAINERS = [
     'metadataOverrides', 'htmlConfig', 'mdConfig', 'pdfConfig',
-    'csvConfig', 'textConfig', 'rtfConfig', 'docxConfig', 'odtConfig', 'chunksConfig',
+    'csvConfig', 'textConfig', 'rtfConfig', 'docxConfig', 'odtConfig', 'texConfig', 'chunksConfig',
 ] as const;
 
 /**
@@ -275,22 +295,67 @@ function copyGeneratorConfigContainers(source: FullGeneratorConfig): FullGenerat
 }
 
 /**
+ * Every recognized top-level generator-config key and, per per-format container, every key that
+ * container recognizes: the generator-side counterpart of RECOGNIZED_PARSER_KEYS, derived from the
+ * defaults the same way. Chunking takes the keys of all three strategies (plus `embeddingFunction`,
+ * which has no default); metadata overrides list their named fields, since their default is empty.
+ */
+export const RECOGNIZED_GENERATOR_KEYS = new Set(Object.keys(DEFAULT_GENERATOR_CONFIG));
+const RECOGNIZED_NESTED_GENERATOR_KEYS: Record<string, Set<string>> = lookupTable({
+    ...Object.fromEntries(GENERATOR_CONFIG_CONTAINERS.map(key => [key, new Set(Object.keys((DEFAULT_GENERATOR_CONFIG as any)[key] ?? {}))])),
+    chunksConfig: new Set([
+        ...Object.keys(DEFAULT_FIXED_SIZE_CHUNKING_CONFIG), ...Object.keys(DEFAULT_DOCUMENT_STRUCTURE_CHUNKING_CONFIG),
+        ...Object.keys(DEFAULT_SEMANTIC_CHUNKING_CONFIG), 'embeddingFunction',
+    ]),
+    metadataOverrides: new Set(['title', 'author', 'description', 'subject', 'keywords', 'lastModifiedBy', 'created', 'modified', 'language', 'custom']),
+});
+
+/**
+ * The top-level keys and per-format container keys of a caller's generator config that this
+ * version does not recognize, as dotted paths (as the parser side reports its own).
+ */
+function unknownGeneratorKeys(userConfig: Record<string, any>): string[] {
+    const unknown: string[] = [];
+    for (const key of Object.keys(userConfig)) {
+        if (PROTOTYPE_POLLUTION_KEYS.has(key)) continue;
+        if (!RECOGNIZED_GENERATOR_KEYS.has(key)) { unknown.push(key); continue; }
+        const recognized = RECOGNIZED_NESTED_GENERATOR_KEYS[key];
+        const container = userConfig[key];
+        if (!recognized || !container || typeof container !== 'object' || Array.isArray(container)) continue;
+        for (const inner of Object.keys(container)) {
+            if (!PROTOTYPE_POLLUTION_KEYS.has(inner) && !recognized.has(inner)) unknown.push(`${key}.${inner}`);
+        }
+    }
+    return unknown;
+}
+
+/**
  * Resolves a full, destination-specific configuration by merging defaults,
  * AST-level settings, and user-provided overrides.
  *
  * As with {@link resolveParserConfig}, the returned object belongs solely to the caller of this
  * function, so that per-run normalization cannot edit a config the caller still holds.
  *
+ * Problems with the configuration itself (an unrecognized key, a value an option does not accept)
+ * are reported once the config is resolved: to its `onWarning`, and to `onIssue` when given, which
+ * a generator uses to list them among its result's messages.
+ *
  * @param destination - The target format
  * @param userConfig - Optional configuration provided by the user
  * @param astConfig - Optional configuration from the source AST (for inheritance)
+ * @param onIssue - Optional collector for the configuration problems found while resolving
  * @returns A fully populated configuration object, owned by the caller
  */
 export function resolveGeneratorConfig<D extends string>(
     destination: D,
     astConfig?: OfficeParserConfig,
-    userConfig?: GeneratorConfig<D> | FullGeneratorConfig
+    userConfig?: GeneratorConfig<D> | FullGeneratorConfig,
+    onIssue?: (issue: OfficeIssue) => void
 ): FullGeneratorConfig {
+    // Configuration problems go to the resolved config's own handler (set once the merge below is
+    // done) and to the optional collector.
+    let resolvedConfig: FullGeneratorConfig | undefined;
+    const reporter = { onWarning: (issue: OfficeIssue) => { onIssue?.(issue); resolvedConfig?.onWarning?.(issue); } } as any;
     // Already complete, so nothing to merge. Still copied rather than handed straight back, for
     // the same reason as resolveParserConfig: generation writes to the config it is given. The
     // width check below normalizes an invalid `containerWidth` to 'auto', and doing that to the
@@ -298,17 +363,24 @@ export function resolveGeneratorConfig<D extends string>(
     // later run, so the same config would report a problem once and then appear clean.
     if (isFullGeneratorConfig(userConfig) && !astConfig) {
         const resolved = copyGeneratorConfigContainers(userConfig);
-        validateHtmlConfigWidth(resolved.htmlConfig, resolved);
+        resolvedConfig = resolved;
+        validateHtmlConfigWidth(resolved.htmlConfig, reporter);
+        validateGeneratorChoices(resolved, reporter);
         return resolved;
     }
 
     // 1. Start with full defaults (deep cloned to avoid reference sharing)
     const config: FullGeneratorConfig = deepClone(DEFAULT_GENERATOR_CONFIG);
+    let unknownKeys: string[] = [];
 
     // 2. Merge common properties and sub-configs
     if (userConfig) {
+        // As on the parser side: an option this version does not recognize (a typo such as
+        // `texConfig.bundel`, or a parser option passed to a generator) would otherwise do nothing
+        // with no signal at all.
+        unknownKeys = unknownGeneratorKeys(userConfig as Record<string, any>);
         // Extract sub-configs to avoid shallow-overwriting the whole sub-config objects
-        const { htmlConfig, mdConfig, pdfConfig, csvConfig, textConfig, rtfConfig, docxConfig, odtConfig, chunksConfig, ...commonProps } = userConfig as any;
+        const { htmlConfig, mdConfig, pdfConfig, csvConfig, textConfig, rtfConfig, docxConfig, odtConfig, texConfig, chunksConfig, ...commonProps } = userConfig as any;
         Object.assign(config, withoutPrototypeKeys(commonProps));
 
         // Merge sub-configs individually, ignoring undefined properties to preserve defaults
@@ -353,40 +425,137 @@ export function resolveGeneratorConfig<D extends string>(
         if (rtfConfig) mergeSubConfig(config.rtfConfig, rtfConfig);
         if (docxConfig) mergeSubConfig(config.docxConfig, docxConfig);
         if (odtConfig) mergeSubConfig(config.odtConfig, odtConfig);
+        if (texConfig) mergeSubConfig(config.texConfig, texConfig);
         if (chunksConfig) mergeSubConfig(config.chunksConfig, chunksConfig);
     }
 
 
     // 3. Inherit from AST config if not explicitly provided
+    const refusedDelimiters: { option: string; value: unknown; expected: string; fallback: string }[] = [];
     if (astConfig) {
         if (userConfig?.onWarning === undefined) {
             config.onWarning = astConfig.onWarning || config.onWarning;
         }
 
-        // Inherit newlineDelimiter for text-based generators
-        const astNewline = astConfig.newlineDelimiter;
-        if (astNewline && ['text', 'md', 'rtf'].includes(destination)) {
-            // If user didn't specify a newline delimiter in their specific config, use AST's
-            if (destination === 'text' && (userConfig as any)?.textConfig?.newlineDelimiter === undefined) {
-                config.textConfig.newlineDelimiter = astNewline;
-            }
-            // For MD and RTF, they use common newline settings or internal defaults.
-            // We ensure the resolved config reflects this if possible, or generators can check astConfig directly.
-            // Since FullGeneratorConfig doesn't have an 'mdConfig', we rely on the generator implementation.
+        // The parse's own delimiters carry over to output a caller did not set them for, within what is
+        // safe to take from an AST's config (an AST from JSON, say, is not the caller). One refused is
+        // reported, so output's delimiter never differs from the parse's without a word.
+        const refused = (option: string, value: unknown, expected: string, fallback: string) => refusedDelimiters.push({ option, value, expected, fallback });
+
+        // A line delimiter for text output, of at most MAX_INHERITED_DELIMITER characters: one is written
+        // at every line, so a long one multiplied the output by the document's line count.
+        const astNewline: unknown = astConfig.newlineDelimiter;
+        if (destination === 'text' && astNewline !== undefined && astNewline !== '\n' && (userConfig as any)?.textConfig?.newlineDelimiter === undefined) {
+            if (typeof astNewline === 'string' && astNewline.length <= MAX_INHERITED_DELIMITER) config.textConfig.newlineDelimiter = astNewline;
+            else refused('newlineDelimiter', astNewline, `text of at most ${MAX_INHERITED_DELIMITER} characters to carry over to text output`, '\n');
         }
 
-        // Inherit the parse-side `csvDelimiter` into CSV output when the user did not set the
-        // generator's `csvConfig.columnDelimiter`, so `parseOffice(f, { csvDelimiter: ';' }).to('csv')`
-        // matches the CLI's `--csvDelimiter=';'` (which wires the same propagation). Precedence:
-        // csvConfig.columnDelimiter > csvDelimiter > ','.
-        const astCsvDelim = astConfig.csvDelimiter;
-        if (astCsvDelim && destination === 'csv' && (userConfig as any)?.csvConfig?.columnDelimiter === undefined) {
-            config.csvConfig.columnDelimiter = astCsvDelim;
+        // The parse-side `csvDelimiter` into CSV output when the user did not set the generator's
+        // `csvConfig.columnDelimiter`, so `parseOffice(f, { csvDelimiter: ';' }).to('csv')` matches the
+        // CLI's `--csvDelimiter=';'` (which wires the same propagation). Precedence:
+        // csvConfig.columnDelimiter > csvDelimiter > ','. At most MAX_INHERITED_DELIMITER characters,
+        // none that ends a row or quotes a cell, and not starting with one a spreadsheet reads as the start
+        // of a formula (a row whose first cell is empty starts with the delimiter): a delimiter of `\n=`
+        // wrote a formula line that no cell of the document held.
+        const astCsvDelimiter: unknown = astConfig.csvDelimiter;
+        if (destination === 'csv' && astCsvDelimiter !== undefined && astCsvDelimiter !== ',' && (userConfig as any)?.csvConfig?.columnDelimiter === undefined) {
+            const safe = typeof astCsvDelimiter === 'string' && astCsvDelimiter.length > 0 && astCsvDelimiter.length <= MAX_INHERITED_DELIMITER
+                && !/[\r\n"]/.test(astCsvDelimiter) && !'=+-@'.includes(astCsvDelimiter[0]);
+            if (safe) config.csvConfig.columnDelimiter = astCsvDelimiter;
+            else refused('csvDelimiter', astCsvDelimiter, `text of at most ${MAX_INHERITED_DELIMITER} characters with no line break or quote, not starting with =, +, - or @, to carry over to CSV output (set csvConfig.columnDelimiter to use another)`, ',');
         }
     }
 
-    validateHtmlConfigWidth(config.htmlConfig, config);
+    resolvedConfig = config;
+    if (unknownKeys.length) logWarning(OfficeWarningType.UNRECOGNIZED_CONFIG_OPTION, reporter, { keys: unknownKeys });
+    for (const refusal of refusedDelimiters) logWarning(OfficeWarningType.INVALID_CONFIG_VALUE, reporter, refusal);
+    validateHtmlConfigWidth(config.htmlConfig, reporter);
+    validateGeneratorChoices(config, reporter);
     return config;
+}
+
+/** The longest line or column delimiter a generator takes from the AST's own config (see resolveGeneratorConfig). */
+const MAX_INHERITED_DELIMITER = 16;
+
+/**
+ * Generator options that take one of a fixed set of named values, with the values each accepts.
+ * Kept here, next to the check that uses them; each list is the runtime form of its type in
+ * types.ts (a unit test keeps the Markdown presets in step with the generator's table).
+ */
+const GENERATOR_CHOICES: { container: string; key: string; choices: readonly string[]; caseInsensitive?: boolean }[] = [
+    { container: 'texConfig', key: 'documentClass', choices: ['auto', 'article', 'report', 'book', 'beamer'] },
+    { container: 'pdfConfig', key: 'engine', choices: ['html', 'native'] },
+    { container: 'chunksConfig', key: 'strategy', choices: ['fixed-size', 'document-structure', 'semantic'] },
+    { container: 'chunksConfig', key: 'splitBy', choices: ['page', 'slide', 'sheet', 'heading', 'paragraph'] },
+    { container: 'chunksConfig', key: 'tableSplitStrategy', choices: ['row', 'flatten'] },
+    ...['pdfConfig', 'docxConfig', 'odtConfig', 'texConfig'].map(container => ({ container, key: 'format', choices: PAPER_FORMAT_NAMES, caseInsensitive: true })),
+];
+
+/** The Markdown dialect presets `mdConfig.dialect` (or its `extends`) may name. */
+export const MARKDOWN_DIALECT_PRESET_NAMES: readonly string[] = ['extended', 'github', 'gitlab', 'obsidian', 'pandoc', 'commonmark'];
+
+/** The generator configs with page margins, whose sides take points or a length. */
+const MARGIN_CONTAINERS = ['pdfConfig', 'docxConfig', 'odtConfig', 'texConfig'];
+
+/** Whether a margin side is usable: a finite number of points, a length (`'1in'`, `'2cm'`), or `''` (unset). */
+function isValidMargin(value: unknown): boolean {
+    if (typeof value === 'number') return Number.isFinite(value);
+    if (typeof value !== 'string') return false;
+    return value.trim() === '' || /^\s*-?(\d+(?:\.\d*)?|\.\d+)\s*(?:(pt|in|cm|mm|px)\s*)?$/i.test(value);
+}
+
+/**
+ * Checks the generator options that take named values (see GENERATOR_CHOICES), the Markdown
+ * dialect preset and the page margins. An unusable value is reported with INVALID_CONFIG_VALUE
+ * and replaced by the option's default, so every generator sees the same, valid choice rather
+ * than each falling back its own way.
+ */
+function validateGeneratorChoices(config: FullGeneratorConfig, reporter: any): void {
+    const anyConfig = config as any;
+    const invalid = (option: string, value: unknown, expected: string, fallback: unknown) =>
+        logWarning(OfficeWarningType.INVALID_CONFIG_VALUE, reporter, { option, value, expected, fallback });
+    for (const { container, key, choices, caseInsensitive } of GENERATOR_CHOICES) {
+        const target = anyConfig[container];
+        const value = target?.[key];
+        if (value === undefined) continue;
+        const ok = typeof value === 'string' && choices.includes(caseInsensitive ? value.toLowerCase() : value);
+        if (ok) continue;
+        const fallback = (DEFAULT_GENERATOR_CONFIG as any)[container]?.[key];
+        invalid(`${container}.${key}`, value, `one of ${choices.join(', ')}`, fallback);
+        target[key] = fallback;
+    }
+    // Nested objects (a dialect object, a margin) may still be the caller's own: a fix replaces them
+    // with a corrected copy rather than writing into them.
+    const md = anyConfig.mdConfig;
+    const presetOk = (v: unknown) => typeof v === 'string' && MARKDOWN_DIALECT_PRESET_NAMES.includes(v);
+    const expectedPreset = `one of ${MARKDOWN_DIALECT_PRESET_NAMES.join(', ')}`;
+    if (typeof md?.dialect === 'string' || (md?.dialect !== undefined && (typeof md.dialect !== 'object' || md.dialect === null))) {
+        if (!presetOk(md.dialect)) {
+            invalid('mdConfig.dialect', md.dialect, expectedPreset, 'extended');
+            md.dialect = 'extended';
+        }
+    } else if (md?.dialect && md.dialect.extends !== undefined && !presetOk(md.dialect.extends)) {
+        invalid('mdConfig.dialect.extends', md.dialect.extends, expectedPreset, 'extended');
+        md.dialect = { ...md.dialect, extends: 'extended' };
+    }
+    // `htmlConfig.standalone` is a boolean or an object whose `styles` names a stylesheet mode.
+    const standalone = anyConfig.htmlConfig?.standalone;
+    const STYLE_MODES = ['full', 'scoped', 'none'];
+    if (standalone && typeof standalone === 'object' && standalone.styles !== undefined && !STYLE_MODES.includes(standalone.styles)) {
+        invalid('htmlConfig.standalone.styles', standalone.styles, `one of ${STYLE_MODES.join(', ')}`, 'full');
+        anyConfig.htmlConfig.standalone = { ...standalone, styles: 'full' };
+    }
+    for (const container of MARGIN_CONTAINERS) {
+        const margin = anyConfig[container]?.margin;
+        if (!margin || typeof margin !== 'object') continue;
+        for (const side of ['top', 'right', 'bottom', 'left']) {
+            const value = anyConfig[container].margin[side];
+            if (value === undefined || isValidMargin(value)) continue;
+            const fallback = (DEFAULT_GENERATOR_CONFIG as any)[container]?.margin?.[side];
+            invalid(`${container}.margin.${side}`, value, "a number of points or a length such as '1in', '2cm', '36pt'", fallback);
+            anyConfig[container].margin = { ...anyConfig[container].margin, [side]: fallback };
+        }
+    }
 }
 
 /**
@@ -412,11 +581,11 @@ export function isValidContainerWidth(width: any): boolean {
 /**
  * Emits a warning and falls back to 'auto' if the HTML containerWidth is invalid.
  */
-function validateHtmlConfigWidth(htmlConfig: any, config: any): void {
+function validateHtmlConfigWidth(htmlConfig: any, reporter: any): void {
     if (htmlConfig?.containerWidth !== undefined) {
         const width = htmlConfig.containerWidth;
         if (!isValidContainerWidth(width)) {
-            logWarning(OfficeWarningType.INVALID_CONTAINER_WIDTH, config as any, width);
+            logWarning(OfficeWarningType.INVALID_CONTAINER_WIDTH, reporter, width);
             htmlConfig.containerWidth = 'auto';
         }
     }

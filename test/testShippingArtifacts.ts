@@ -449,6 +449,49 @@ function checkBundlerCompatibility(relPath: string, label: string): CheckResult[
     return results;
 }
 
+/**
+ * Pins the rule that finds and replaces what a bundle evaluates from a string at load (see
+ * scripts/loadTimeEval.js), against fixed inputs, independently of any bundle: the bundle check below
+ * uses the same rule, so on its own it cannot see a rule that is wrong in both places.
+ */
+function checkLoadTimeEvalRule(): CheckResult[] {
+    const { findLoadTimeEvals, replaceLoadTimeEvals } = require('../scripts/loadTimeEval.js');
+    const results: CheckResult[] = [];
+    const probe = 'c=(function(){if(!e)return!1;try{return Function("return function*() {}")()}catch{}})()';
+
+    const { output, replaced } = replaceLoadTimeEvals(probe);
+    const label = 'Load-time evaluation rule: the generator probe is replaced by its value';
+    if (replaced === 1 && output === 'c=(function(){if(!e)return!1;try{return (function*() {})}catch{}})()' && findLoadTimeEvals(output).length === 0) results.push(pass(label));
+    else results.push(fail(label, `replaced ${replaced}, output ${output}`));
+
+    const cases: Array<{ source: string, found: boolean, why: string }> = [
+        { source: probe, found: true, why: 'the probe as the polyfill writes it' },
+        { source: "Function('return function* () {}')()", found: true, why: 'the same probe spelled another way is still found' },
+        { source: 'Function("return this")()', found: false, why: 'not the generator probe (and behind `globalThis` where it occurs)' },
+        { source: '(function*() {})', found: false, why: 'a generator function written out evaluates nothing' },
+    ];
+    for (const { source, found, why } of cases) {
+        const name = `Load-time evaluation rule: ${source}`;
+        if ((findLoadTimeEvals(source).length > 0) === found) results.push(pass(name, why));
+        else results.push(fail(name, `expected ${found ? 'found' : 'not found'} (${why})`));
+    }
+    return results;
+}
+
+/**
+ * A browser bundle evaluates no code from a string as it loads, so a page whose Content Security
+ * Policy has no `'unsafe-eval'` loads it without a violation report.
+ */
+function checkNoLoadTimeEval(relPath: string, label: string): CheckResult[] {
+    if (!fileExists(relPath)) {
+        return [fail(`${label}: ${relPath} exists`, 'File not found')];
+    }
+    const { findLoadTimeEvals } = require('../scripts/loadTimeEval.js');
+    const found = findLoadTimeEvals(readFile(relPath));
+    const name = `${label}: nothing is evaluated from a string at load`;
+    return found.length === 0 ? [pass(name)] : [fail(name, `${found.length} call(s), first: ${found[0].snippet}`)];
+}
+
 function checkFileTypeInlined(relPath: string, label: string): CheckResult[] {
     if (!fileExists(relPath)) {
         return [fail(`${label}: ${relPath} exists`, 'File not found')];
@@ -657,6 +700,16 @@ async function main() {
                 ...checkBundlerCompatibility('dist/officeparser.browser.slim.mjs', 'Browser ESM Slim'),
                 ...checkBundlerCompatibility('dist/officeparser.browser.iife.js', 'Browser IIFE'),
                 ...checkBundlerCompatibility('dist/officeparser.browser.slim.iife.js', 'Browser IIFE Slim'),
+            ]
+        },
+        { title: 'Load-time evaluation rule', fn: () => checkLoadTimeEvalRule() },
+        {
+            title: 'Browser bundles load under a strict Content Security Policy', fn: () => [
+                ...checkNoLoadTimeEval('dist/officeparser.browser.mjs', 'Browser ESM'),
+                ...checkNoLoadTimeEval('dist/officeparser.browser.slim.mjs', 'Browser ESM Slim'),
+                ...checkNoLoadTimeEval('dist/officeparser.browser.iife.js', 'Browser IIFE'),
+                ...checkNoLoadTimeEval('dist/officeparser.browser.slim.iife.js', 'Browser IIFE Slim'),
+                ...checkNoLoadTimeEval('dist/officeparser.browser.native-pdf.mjs', 'Browser ESM (pdf-lib external)'),
             ]
         },
         {

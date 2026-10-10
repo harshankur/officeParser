@@ -1,9 +1,12 @@
 import { zipSync, Zippable } from 'fflate';
+import { UniqueNames } from '../utils/uniqueNames.js';
+import { layoutTableRows } from '../utils/tableLayout.js';
 import { ConversionResult, GeneratorConfig, ImageMode, OdtGeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { ADMONITION_COLOR, decodeBase64, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { lookupTable } from '../utils/lookupUtils.js';
 
 /**
  * The full ODF namespace set. Declared unconditionally on every part root (content.xml, styles.xml,
@@ -129,6 +132,9 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
 
     private media: MediaPart[] = [];
     private mediaByAttachment = new Map<string, string>();
+    /** Each attachment's intrinsic size, measured when it was first decoded, and those that could not be decoded. */
+    private readonly mediaIntrinsic = new Map<string, { w: number; h: number } | null>();
+    private readonly mediaUndecodable = new Set<string>();
     private manifestMedia = new Map<string, string>(); // Pictures/xxx -> contentType
 
     private listDefs = new Map<string, ListDef>();
@@ -137,9 +143,11 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     private frameCounter = 0;
     private commentCounter = 0;
     private footnoteOrd = 0;
+    /** Where each note was written: its id and number, in each part (by the part's style registry) it is written in. */
+    private readonly writtenNotes = new Map<OfficeContentNode, { id: string; ord: number; cls: 'footnote' | 'endnote'; part: StyleRegistry }[]>();
     private endnoteOrd = 0;
 
-    private usedBookmarkNames = new Set<string>();
+    private usedBookmarkNames = new UniqueNames();
     private mathWarned = false;
 
     constructor(ast: OfficeParserAST, config?: GeneratorConfig<'odt'>) {
@@ -194,9 +202,30 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         let out = '';
         let prevPaginated: string | null = null;
         const items = nodes || [];
+        // Where the run of inline nodes last found without text ends (see below), so it is looked at once.
+        let inlineWithoutTextUntil = -1;
         for (let idx = 0; idx < items.length; idx++) {
             const node = items[idx];
             checkAbortSignal(this.config.abortSignal);
+            // Inline nodes among the blocks (a cell's, a note's or a comment's runs, as ODS and several
+            // parsers give them) are one paragraph: each was a paragraph of its own, so a cell reading
+            // "Total: 5 units" with the 5 in bold was three lines. A run of pictures or breaks with no
+            // text stays blocks.
+            if (idx >= inlineWithoutTextUntil && isInlineNode(node)) {
+                let end = idx;
+                let hasText = false;
+                while (end < items.length && isInlineNode(items[end])) {
+                    if (items[end].type === 'text') hasText = true;
+                    end++;
+                }
+                if (hasText) {
+                    out += await this.paragraph({ type: 'paragraph', children: items.slice(idx, end) } as OfficeContentNode);
+                    prevPaginated = null;
+                    idx = end - 1;
+                    continue;
+                }
+                inlineWithoutTextUntil = end;
+            }
             if (node.type === 'list') {
                 // Consume the maximal run of consecutive sibling lists sharing a listId, so the parser
                 // rejoins them (it keys the logical list off the shared list style name). handleOnNode
@@ -218,7 +247,9 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             if ((node.type === 'page' || node.type === 'slide') && prevPaginated === node.type) {
                 out += `<text:p text:style-name="${this.pageBreakStyle()}"/>`;
             }
-            out += await this.renderBlockNode(node);
+            const block = await this.renderBlockNode(node);
+            // Paragraphs and headings write their own bookmarks; every other block's go in its first paragraph.
+            out += OWN_BOOKMARKS.has(node.type) ? block : this.withBookmarks(block, node);
             prevPaginated = (node.type === 'page' || node.type === 'slide') ? node.type : null;
         }
         return out;
@@ -323,8 +354,8 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     private bookmarksFor(node: OfficeContentNode): string {
         if (this.config.ignoreInternalLinks) return '';
         const names: string[] = [...(((node.metadata as any)?.anchorIds) || [])];
-        if (this.config.generateIds && node.type === 'heading' && node.text) {
-            const slug = this.slugify(node.text);
+        if (this.config.generateIds && node.type === 'heading') {
+            const slug = this.slugify(node.text || this.getNodeText(node));
             if (slug && !names.includes(slug)) names.push(slug);
         }
         let out = '';
@@ -332,13 +363,46 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         return out;
     }
 
+    /**
+     * A block's bookmarks (see bookmarksFor) in the first paragraph it writes: a table's in its first
+     * cell's, a picture's, code block's or chart's in its own. ODF has bookmarks in paragraphs only, and
+     * only paragraphs and headings wrote theirs, so an internal link to a table, a picture, an equation
+     * or a list item (LaTeX's `\ref{tab:main}` among them) had no target. A block writing no paragraph
+     * has a paragraph of its own for them.
+     */
+    private withBookmarks(xml: string, node: OfficeContentNode): string {
+        const marks = this.bookmarksFor(node);
+        if (!marks) return xml;
+        for (let at = xml.indexOf('<text:'); at >= 0; at = xml.indexOf('<text:', at + 1)) {
+            const tag = xml[at + 6];
+            if ((tag !== 'p' && tag !== 'h') || !/[\s/>]/.test(xml[at + 7] ?? '')) continue;
+            const end = xml.indexOf('>', at);
+            if (end < 0) break;
+            return xml[end - 1] === '/'
+                ? `${xml.slice(0, end - 1)}>${marks}</text:${tag}>${xml.slice(end + 1)}`
+                : xml.slice(0, end + 1) + marks + xml.slice(end + 1);
+        }
+        return `<text:p>${marks}</text:p>${xml}`;
+    }
+
+    /** A node in a line with bookmarks of its own: what it writes between each bookmark's start and end. */
+    private withInlineBookmarks(xml: string, node: OfficeContentNode): string {
+        const raw = (node.metadata as any)?.anchorIds;
+        if (this.config.ignoreInternalLinks || !Array.isArray(raw) || raw.length === 0) return xml;
+        let start = '';
+        let end = '';
+        for (const name of raw) {
+            const minted = xmlText(this.mintBookmark(String(name)));
+            start += `<text:bookmark-start text:name="${minted}"/>`;
+            end = `<text:bookmark-end text:name="${minted}"/>${end}`;
+        }
+        return start + xml + end;
+    }
+
     /** Mints a unique bookmark name; the first claim of a base keeps it, later claims get `_2`. */
     private mintBookmark(rawName: string): string {
         const base = toBookmarkNameRaw(rawName);
-        let name = base, i = 2;
-        while (this.usedBookmarkNames.has(name)) { const suffix = `_${i++}`; name = base.slice(0, 40 - suffix.length) + suffix; }
-        this.usedBookmarkNames.add(name);
-        return name;
+        return this.usedBookmarkNames.claim(base, n => base.slice(0, 40 - `_${n}`.length) + `_${n}`);
     }
     private anchorName(rawName: string): string { return toBookmarkNameRaw(rawName); }
 
@@ -368,6 +432,10 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     }
 
     private async inlineNode(node: OfficeContentNode): Promise<string> {
+        return this.withInlineBookmarks(await this.inlineContent(node), node);
+    }
+
+    private async inlineContent(node: OfficeContentNode): Promise<string> {
         switch (node.type) {
             case 'text': return this.span(node.text || '', node.formatting) + await this.notesFor(node) + await this.commentsFor(node);
             case 'code': return this.inlineCode(node);
@@ -411,18 +479,23 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     }
 
     private async hyperlink(link: string, linkType: string | undefined, group: OfficeContentNode[]): Promise<string> {
-        const spans = group.map(n => this.span(n.text || '', n.formatting)).join('');
+        const spans = group.map(n => this.withInlineBookmarks(this.span(n.text || '', n.formatting), n)).join('');
         let trailing = '';
         for (const n of group) trailing += (await this.notesFor(n)) + (await this.commentsFor(n));
+        const href = this.linkHref(link, linkType);
+        return (href ? `<text:a xlink:type="simple" xlink:href="${href}">${spans}</text:a>` : spans) + trailing;
+    }
+
+    /**
+     * The escaped `xlink:href` a link is written with: `#` and the bookmark name for an internal
+     * target, the encoded URL for an external one. Empty when the link is not written: an internal
+     * one under `ignoreInternalLinks`, or a target the scheme check refuses.
+     */
+    private linkHref(link: string, linkType: string | undefined): string {
         const internal = linkType === 'internal' || link.startsWith('#');
-        if (internal) {
-            if (this.config.ignoreInternalLinks) return spans + trailing;
-            const name = this.anchorName(link.replace(/^#/, ''));
-            return `<text:a xlink:type="simple" xlink:href="#${xmlText(name)}">${spans}</text:a>${trailing}`;
-        }
+        if (internal) return this.config.ignoreInternalLinks ? '' : `#${xmlText(this.anchorName(link.replace(/^#/, '')))}`;
         const safe = sanitizeOfficePackageUrl(link);
-        if (!safe) return spans + trailing;
-        return `<text:a xlink:type="simple" xlink:href="${xmlText(encUrl(safe))}">${spans}</text:a>${trailing}`;
+        return safe ? xmlText(encUrl(safe)) : '';
     }
 
     private inlineCode(node: OfficeContentNode): string {
@@ -450,8 +523,19 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     }
 
     private async note(node: OfficeContentNode, cls: 'footnote' | 'endnote'): Promise<string> {
-        const ord = cls === 'footnote' ? ++this.footnoteOrd : ++this.endnoteOrd;
-        const id = `${cls === 'footnote' ? 'ftn' : 'edn'}${ord}`;
+        // A note referred to again is a reference to it (its number), its text written once: written at
+        // every reference, one note a small document refers to thousands of times was copied that often.
+        // Within the part it was written in only (content.xml, or styles.xml for the header and footer):
+        // a reference cannot reach a note in the other part, so there it is written again, once, with
+        // the same number.
+        const written = this.writtenNotes.get(node);
+        const writtenHere = written?.find(w => w.part === this.activeStyles);
+        if (writtenHere) return `<text:note-ref text:note-class="${writtenHere.cls}" text:reference-format="text" text:ref-name="${writtenHere.id}">${writtenHere.ord}</text:note-ref>`;
+        const ord = written ? written[0].ord : cls === 'footnote' ? ++this.footnoteOrd : ++this.endnoteOrd;
+        const id = `${cls === 'footnote' ? 'ftn' : 'edn'}${ord}${written ? `_${written.length + 1}` : ''}`;
+        const entry = { id, ord, cls, part: this.activeStyles };
+        if (written) written.push(entry);
+        else this.writtenNotes.set(node, [entry]);
         const body = this.styleNoteBody((await this.renderBlocks(this.bodyBlocks(node))) || '<text:p/>');
         return `<text:note text:id="${id}" text:note-class="${cls}"><text:note-citation>${ord}</text:note-citation><text:note-body>${body}</text:note-body></text:note>`;
     }
@@ -473,10 +557,13 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     }
 
     private async standaloneComment(node: OfficeContentNode): Promise<string> {
-        return `<text:p>${await this.annotation(node)}</text:p>`;
+        const annotation = await this.annotation(node);
+        return annotation ? `<text:p>${annotation}</text:p>` : '';
     }
 
     private async annotation(node: OfficeContentNode): Promise<string> {
+        // Written once, at its first reference (see firstWriteOfComment).
+        if (!this.firstWriteOfComment(node)) return '';
         const meta = node.metadata as any;
         const name = `cmt${++this.commentCounter}`;
         const creator = meta?.author ? `<dc:creator>${xmlText(meta.author)}</dc:creator>` : '';
@@ -537,7 +624,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             if (meta?.isTask) prefix = this.span(meta.checked ? '☑ ' : '☐ ', undefined);
             const blockRefs = (await this.notesFor(item)) + (await this.commentsFor(item));
             const inner = await this.renderInline(item.children || [{ type: 'text', text: item.text || '' } as OfficeContentNode]);
-            out += `<text:p>${prefix}${blockRefs}${inner}</text:p>`;
+            out += `<text:p>${this.bookmarksFor(item)}${prefix}${blockRefs}${inner}</text:p>`;
         }
         for (let d = depth; d >= 0; d--) out += '</text:list-item></text:list>';
         return out;
@@ -563,57 +650,34 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     private async table(node: OfficeContentNode): Promise<string> {
         const rows = (node.children || []).filter(r => r.type === 'row');
         if (!rows.length) return '';
-        const cols = this.gridWidth(rows);
+        // Each row's cells, merges and gaps laid out by occupancy, as the grid budget laid them out.
+        const layout = layoutTableRows(rows)!;
+        const cols = layout.cols;
         const tableName = `Table${++this.tableCounter}`;
         const tableStyle = this.ensureTableStyle(this.tableAlign((node.metadata as any)?.align));
         const colXml = `<table:table-column table:number-columns-repeated="${cols}"/>`;
 
-        const active = new Map<number, number>();
         const rendered: { xml: string; header: boolean }[] = [];
         for (let ri = 0; ri < rows.length; ri++) {
             const row = rows[ri];
-            const cells = (row.children || []).filter(c => c.type === 'cell');
             const header = isHeaderRow(row, ri === 0);
             let cellsXml = '';
-            let col = 0, ci = 0;
-            while (ci < cells.length || [...active.keys()].some(c => c >= col)) {
-                if ((active.get(col) || 0) > 0) {
-                    cellsXml += '<table:covered-table-cell/>';
-                    active.set(col, active.get(col)! - 1);
-                    if (active.get(col)! <= 0) active.delete(col);
-                    col++;
-                    continue;
-                }
-                if (ci >= cells.length) {
-                    // No explicit cells left, but a vertical merge is still pending at a later column:
-                    // fill this gap with an empty cell and advance, so the covered cell lands correctly.
-                    if (![...active.keys()].some(c => c > col)) break;
-                    cellsXml += '<table:table-cell><text:p/></table:table-cell>';
-                    col++;
-                    continue;
-                }
-                // Sparse source grid: ExcelParser emits only the non-empty cells, each carrying its own
-                // column index. Fill the skipped columns with empty cells so a value in D1 lands in
-                // column 4, rather than sliding left to whatever the running cursor happened to reach.
-                const nextCol = (cells[ci].metadata as any)?.col;
-                if (typeof nextCol === 'number' && nextCol > col && col < cols) {
-                    cellsXml += '<table:table-cell><text:p/></table:table-cell>';
-                    col++;
-                    continue;
-                }
-                const cell = cells[ci++];
+            for (const slot of layout.rows[ri]) {
+                if (slot.kind === 'covered') { cellsXml += '<table:covered-table-cell/>'.repeat(slot.span); continue; }
+                // A column the row skips (a sparse grid, or before a vertical merge still pending further right).
+                if (slot.kind === 'gap') { cellsXml += '<table:table-cell><text:p/></table:table-cell>'; continue; }
+                const { cell, rowSpan } = slot;
                 const cmeta = cell.metadata as any;
-                const colSpan = Math.max(1, Math.min(cols, cmeta?.colSpan || 1));
-                const rowSpan = Math.max(1, Math.min(1000, cmeta?.rowSpan || 1));
+                const colSpan = Math.min(cols, slot.colSpan);
                 const cellStyle = this.ensureCellStyle(hexColor(cmeta?.backgroundColor));
                 let spanAttr = '';
                 if (colSpan > 1) spanAttr += ` table:number-columns-spanned="${colSpan}"`;
-                if (rowSpan > 1) { spanAttr += ` table:number-rows-spanned="${rowSpan}"`; for (let k = 0; k < colSpan; k++) active.set(col + k, rowSpan - 1); }
+                if (rowSpan > 1) spanAttr += ` table:number-rows-spanned="${rowSpan}"`;
                 let inner = await this.renderBlocks(cell.children);
                 if (!inner.trim()) inner = '<text:p/>';
+                inner = this.withBookmarks(inner, cell);
                 cellsXml += `<table:table-cell table:style-name="${cellStyle}"${spanAttr}>${inner}</table:table-cell>`;
                 for (let k = 1; k < colSpan; k++) cellsXml += '<table:covered-table-cell/>';
-                col += colSpan;
             }
             if (!cellsXml) cellsXml = '<table:table-cell><text:p/></table:table-cell>';
             rendered.push({ xml: `<table:table-row>${cellsXml}</table:table-row>`, header });
@@ -627,34 +691,6 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         }
         for (; i < rendered.length; i++) body += rendered[i].xml;
         return `<table:table table:name="${tableName}" table:style-name="${tableStyle}">${colXml}${body}</table:table>`;
-    }
-
-    private gridWidth(rows: OfficeContentNode[]): number {
-        let max = 1;
-        const active = new Map<number, number>();
-        for (const row of rows) {
-            let col = 0;
-            const cells = (row.children || []).filter(c => c.type === 'cell');
-            let ci = 0;
-            while (ci < cells.length || [...active.keys()].some(c => c >= col)) {
-                if ((active.get(col) || 0) > 0) { active.set(col, active.get(col)! - 1); if (active.get(col)! <= 0) active.delete(col); col++; continue; }
-                if (ci >= cells.length) {
-                    if (![...active.keys()].some(c => c > col)) break;
-                    col++; // gap column before a still-pending vertical merge
-                    continue;
-                }
-                // Mirror table()'s sparse-grid placement, or the grid would be narrower than the rows.
-                const nextCol = (cells[ci].metadata as any)?.col;
-                if (typeof nextCol === 'number' && nextCol > col && col < 1000) { col++; continue; }
-                const cmeta = cells[ci++].metadata as any;
-                const colSpan = Math.max(1, Math.min(1000, cmeta?.colSpan || 1));
-                const rowSpan = Math.max(1, Math.min(1000, cmeta?.rowSpan || 1));
-                if (rowSpan > 1) for (let k = 0; k < colSpan; k++) active.set(col + k, rowSpan - 1);
-                col += colSpan;
-            }
-            max = Math.max(max, col);
-        }
-        return Math.min(1000, max);
     }
 
     private tableAlign(alignment: string | undefined): string | null {
@@ -678,7 +714,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         const name = (node.metadata as any)?.sheetName;
         const heading = name ? `<text:h text:outline-level="2" text:style-name="Heading_20_2">${encodeOdfText(name)}</text:h>` : '';
         const children = node.children || [];
-        const table = await this.table({ type: 'table', children: fillSheetRowGaps(children.filter(c => c.type === 'row')) } as OfficeContentNode);
+        const table = await this.table({ type: 'table', children: fillSheetRowGaps(children.filter(c => c.type === 'row'), n => this.takeGridPositions(n)) } as OfficeContentNode);
         // A sheet's drawing images and charts are pushed as non-row children after the rows; render
         // them after the grid (the HTML generator does the same) rather than dropping them.
         const extras = await this.renderBlocks(children.filter(c => c.type !== 'row'));
@@ -709,10 +745,15 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             const title = meta?.altText ? `<svg:title>${xmlText(meta.altText)}</svg:title>` : '';
             frame = `<draw:frame draw:name="${frameName}" text:anchor-type="as-char" svg:width="${fmtPt(w)}" svg:height="${fmtPt(h)}" draw:z-index="0">`
                 + `<draw:image xlink:href="${media.href}" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/>${title}</draw:frame>`;
-            if (meta?.link) { const safe = sanitizeOfficePackageUrl(meta.link); if (safe) frame = `<draw:a xlink:type="simple" xlink:href="${xmlText(encUrl(safe))}">${frame}</draw:a>`; }
+            // A picture that is a link is a frame inside <draw:a>.
+            const href = meta?.link ? this.linkHref(meta.link, meta.linkType) : '';
+            if (href) frame = `<draw:a xlink:type="simple" xlink:href="${href}">${frame}</draw:a>`;
         } else if (meta?.url) {
+            // Remote-only image: a link on the alt text, to where the picture links when it is a link,
+            // and to the image otherwise.
             const safe = sanitizeOfficePackageUrl(meta.url);
-            if (safe) frame = `<text:a xlink:type="simple" xlink:href="${xmlText(encUrl(safe))}">${this.span(meta.altText || safe, undefined)}</text:a>`;
+            const href = (meta.link ? this.linkHref(meta.link, meta.linkType) : '') || (safe ? xmlText(encUrl(safe)) : '');
+            if (safe) frame = `<text:a xlink:type="simple" xlink:href="${href}">${this.span(meta.altText || safe, undefined)}</text:a>`;
         }
         if (!frame) { const fb = meta?.altText || ocr; return fb ? this.span(fb, undefined) : ''; }
         if (mode === 'image+ocr-text' && ocr) return frame + this.span('\n' + ocr, undefined);
@@ -724,17 +765,25 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         if (!att || !att.data) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName, reason: 'missing attachment' }); return null; }
         const ext = MIME_EXT[(att.mimeType || '').toLowerCase()];
         if (!ext) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName, reason: 'unsupported mime' }); return null; }
-        let bytes: Uint8Array;
-        try { bytes = decodeBase64(att.data); } catch { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName }); return null; }
+        // Each attachment decoded and measured once, at the first picture showing it: decoded again at
+        // every picture before the media was looked up, one 3 MB picture shown 20,000 times took 105 s.
+        if (this.mediaUndecodable.has(attachmentName)) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName }); return null; }
         let name = this.mediaByAttachment.get(attachmentName);
         if (!name) {
+            let bytes: Uint8Array;
+            try { bytes = decodeBase64(att.data); } catch {
+                this.mediaUndecodable.add(attachmentName);
+                this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName });
+                return null;
+            }
+            this.mediaIntrinsic.set(attachmentName, sniffImageSize(bytes));
             name = `image${this.media.length + 1}.${ext}`;
             const contentType = att.mimeType || 'image/png';
             this.media.push({ name, bytes, ext, contentType });
             this.mediaByAttachment.set(attachmentName, name);
             this.manifestMedia.set(`Pictures/${name}`, contentType);
         }
-        return { href: `Pictures/${name}`, intrinsic: sniffImageSize(bytes) };
+        return { href: `Pictures/${name}`, intrinsic: this.mediaIntrinsic.get(attachmentName) ?? null };
     }
 
     /** Image size in points, priority: explicit width -> PDF bounds -> intrinsic@96dpi -> 3x2.25in, capped to content width. */
@@ -809,16 +858,13 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         const data = att?.chartData;
         if (!data) return `<text:p>${encodeOdfText(`[Chart: ${meta?.attachmentName || ''}]`)}</text:p>`;
         const caption = data.title ? `<text:p><text:span text:style-name="${this.boldStyle()}">${encodeOdfText(data.title)}</text:span></text:p>` : '';
-        const rows: OfficeContentNode[] = [{ type: 'row', children: [cellOf(''), ...data.dataSets.map(d => cellOf(d.name || ''))] } as OfficeContentNode];
-        (data.labels || []).forEach((label, i) => {
-            rows.push({ type: 'row', children: [cellOf(label), ...data.dataSets.map(d => cellOf(String(d.values?.[i] ?? '')))] } as OfficeContentNode);
-        });
-        return caption + await this.table({ type: 'table', children: rows } as OfficeContentNode);
+        return caption + await this.table(this.chartTable(data, cellOf));
     }
 
     private async embed(node: OfficeContentNode): Promise<string> {
         const meta = node.metadata as any;
-        const url = meta?.url ? sanitizeOfficePackageUrl(meta.url) : '';
+        const rawUrl = embedUrl(meta);
+        const url = rawUrl ? sanitizeOfficePackageUrl(rawUrl) : '';
         if (!url) {
             this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'odt', feature: 'embed' });
             const fb = meta?.label || node.text || this.getNodeText(node);
@@ -831,14 +877,14 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
 
     private styleForTag(tag: string | undefined): string | undefined {
         if (!tag || !isSafeStyleMapTag(tag)) return undefined;
-        const map: Record<string, string> = {
+        const map: Record<string, string> = lookupTable({
             h1: 'Heading_20_1', h2: 'Heading_20_2', h3: 'Heading_20_3', h4: 'Heading_20_4', h5: 'Heading_20_5', h6: 'Heading_20_6',
             blockquote: 'Quotations', pre: 'Preformatted_20_Text',
-        };
+        });
         return map[tag.toLowerCase()];
     }
     private knownParaStyle(style: string | undefined): string | undefined {
-        const map: Record<string, string> = { Quote: 'Quotations', IntenseQuote: 'Quotations', Title: 'Title', Code: 'Preformatted_20_Text' };
+        const map: Record<string, string> = lookupTable({ Quote: 'Quotations', IntenseQuote: 'Quotations', Title: 'Title', Code: 'Preformatted_20_Text' });
         return style ? map[style] : undefined;
     }
 
@@ -920,6 +966,19 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         return `<?xml version="1.0" encoding="UTF-8"?>\n`
             + `<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2">${files}</manifest:manifest>`;
     }
+}
+
+/**
+ * Blocks that write their bookmarks themselves: through `paragraph()` or `heading()`, a list's items,
+ * and a run, row or cell among blocks, written in a line (see withInlineBookmarks).
+ */
+const OWN_BOOKMARKS: ReadonlySet<string> = new Set(['paragraph', 'heading', 'definitionTerm', 'definitionDescription', 'list', 'text', 'row', 'cell']);
+
+/** Whether a node among blocks belongs in a paragraph's line: a run, a picture, a line break, inline math. */
+function isInlineNode(node: OfficeContentNode): boolean {
+    if (node.type === 'text' || node.type === 'image') return true;
+    if (node.type === 'break') return !['page', 'column', 'thematic', 'lastRenderedPage'].includes((node.metadata as any)?.breakType);
+    return node.type === 'code' && (node.metadata as any)?.math === 'inline';
 }
 
 function cellOf(text: string): OfficeContentNode {

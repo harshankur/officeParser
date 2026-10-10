@@ -1,5 +1,6 @@
-import { OfficeContentNode, OfficeErrorType, StructuredStyleMapping } from '../types.js';
+import { OfficeContentNode, OfficeErrorType, OfficeIssue, StructuredStyleMapping } from '../types.js';
 import { getOfficeError } from './errorUtils.js';
+import { lookupTable } from './lookupUtils.js';
 
 export interface StyleMapping {
     selector: {
@@ -34,7 +35,10 @@ const DEFAULT_MAPPINGS: StructuredStyleMapping[] = [
 export class StyleMapper {
     private mappings: StyleMapping[] = [];
 
-    constructor(mappings?: string[] | StructuredStyleMapping[] | Record<string, any>, ignoreDefaults: boolean = false) {
+    /**
+     * @param issues - The config whose `onWarning` an invalid mapping is reported to, before it is thrown.
+     */
+    constructor(mappings?: string[] | StructuredStyleMapping[] | Record<string, any>, ignoreDefaults: boolean = false, private readonly issues?: { onWarning?: (issue: OfficeIssue) => void }) {
         // 1. Add user mappings (they take precedence)
         if (mappings) {
             if (Array.isArray(mappings)) {
@@ -110,12 +114,13 @@ export class StyleMapper {
         }
 
         // Metadata attributes
-        if (node.metadata && attr in node.metadata) {
+        // Own fields only: `constructor` or `toString` is in every object, and answered with a function.
+        if (node.metadata && Object.prototype.hasOwnProperty.call(node.metadata, attr)) {
             return (node.metadata as any)[attr];
         }
 
         // Formatting attributes
-        if (node.formatting && attr in node.formatting) {
+        if (node.formatting && Object.prototype.hasOwnProperty.call(node.formatting, attr)) {
             return (node.formatting as any)[attr];
         }
 
@@ -162,7 +167,7 @@ export class StyleMapper {
     private parseMappingString(mapping: string): StyleMapping {
         const lastIndex = mapping.lastIndexOf('=>');
         if (lastIndex === -1) {
-            throw getOfficeError(OfficeErrorType.INVALID_STYLE_MAPPING, undefined, mapping);
+            throw getOfficeError(OfficeErrorType.INVALID_STYLE_MAPPING, this.issues, mapping);
         }
 
         const selectorStr = mapping.substring(0, lastIndex).trim();
@@ -171,10 +176,10 @@ export class StyleMapper {
         // Parse Selector
         const selectorMatch = selectorStr.match(/^([a-z]+)?(?:\[(.+?)\])?$/);
         if (!selectorMatch) {
-            throw getOfficeError(OfficeErrorType.INVALID_SELECTOR, undefined, selectorStr);
+            throw getOfficeError(OfficeErrorType.INVALID_SELECTOR, this.issues, selectorStr);
         }
 
-        const typeMap: Record<string, string> = {
+        const typeMap: Record<string, string> = lookupTable({
             'p': 'paragraph',
             'h': 'heading',
             't': 'table',
@@ -182,7 +187,7 @@ export class StyleMapper {
             'td': 'cell',
             'li': 'list',
             'img': 'image'
-        };
+        });
 
         const nodeType = selectorMatch[1] ? (typeMap[selectorMatch[1]] || selectorMatch[1]) : undefined;
         const attrStr = selectorMatch[2];
@@ -226,7 +231,7 @@ export class StyleMapper {
 
         const outputMatch = mainOutput.match(/^([a-z0-9]+)?((?:\.[\w-]+)*)(?:\[(.+?)\])?$/);
         if (!outputMatch) {
-            throw getOfficeError(OfficeErrorType.INVALID_OUTPUT_MAPPING, undefined, mainOutput);
+            throw getOfficeError(OfficeErrorType.INVALID_OUTPUT_MAPPING, this.issues, mainOutput);
         }
 
         const tag = outputMatch[1] || 'div';

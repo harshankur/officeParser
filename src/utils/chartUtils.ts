@@ -1,5 +1,6 @@
-import { ChartData } from "../types";
-import { parseXmlString, getElementsByTagName, getDirectChildren } from "./xmlUtils";
+import { ChartData, OfficeParserConfig } from "../types";
+import { parseXmlString, getElementsByTagName, getDirectChildren, getFirstElementByTagName, getChildElements } from "./xmlUtils";
+import { repeatPreview, takeRepeats } from "./repeatUtils";
 
 /**
  * Extracts a single text element located at:
@@ -9,18 +10,19 @@ import { parseXmlString, getElementsByTagName, getDirectChildren } from "./xmlUt
  * @param tagName The tag to search for (e.g., "c:title", "c:tx")
  */
 const extractOpenXmlRichText = (el: Element, tagName: string): string | undefined => {
-    const target = (el.localName === tagName || el.tagName === tagName) ? el : el.getElementsByTagName(tagName)[0];
+    const target = (el.localName === tagName || el.tagName === tagName) ? el : getFirstElementByTagName(el, tagName);
     if (!target) return undefined;
 
     // 1. Try c:rich or a:p (standard rich text)
-    const richNodes = target.getElementsByTagName("c:rich");
-    const pNodes = target.getElementsByTagName("a:p");
+    // (Through the helpers, which read nested content once: see getElementsByTagName.)
+    const richNodes = getElementsByTagName(target, "c:rich");
+    const pNodes = getElementsByTagName(target, "a:p");
     const textContainers = richNodes.length > 0 ? Array.from(richNodes) : Array.from(pNodes);
 
     if (textContainers.length > 0) {
         let acc = "";
         for (const container of textContainers) {
-            const tNodes = container.getElementsByTagName("a:t");
+            const tNodes = getElementsByTagName(container, "a:t");
             for (let i = 0; i < tNodes.length; i++) {
                 acc += (tNodes[i].textContent || "") + " ";
             }
@@ -29,7 +31,7 @@ const extractOpenXmlRichText = (el: Element, tagName: string): string | undefine
     }
 
     // 2. Try c:v (cached values/strings)
-    const vNode = target.getElementsByTagName("c:v")[0];
+    const vNode = getFirstElementByTagName(target, "c:v");
     if (vNode && vNode.textContent) {
         return vNode.textContent.trim() || undefined;
     }
@@ -38,12 +40,42 @@ const extractOpenXmlRichText = (el: Element, tagName: string): string | undefine
 };
 
 /**
+ * The most series one chart's table makes, and values it holds in all. A chart's table can repeat a
+ * cell any number of times (`table:number-columns-repeated`), and a chart of 1 KB asking for a hundred
+ * million ran the process out of memory.
+ */
+const MAX_CHART_SERIES = 10_000;
+export const MAX_CHART_VALUES = 1_000_000;
+
+/**
+ * A chart's text: its title (when given), its category labels once, then each series' name and values.
+ * The labels were written again for every series, so a small chart of many series and many labels
+ * made text of their product (gigabytes from a few KB).
+ */
+export function chartRawTexts(title: string | undefined, dataSets: ChartData['dataSets'], labels: string[]): string[] {
+    const raw: string[] = [];
+    if (title) raw.push(title);
+    for (const label of labels) raw.push(label);
+    for (const ds of dataSets) {
+        if (ds.name) raw.push(ds.name);
+        for (const value of ds.values) raw.push(value);
+    }
+    return raw;
+}
+
+/** A repeat count as a document states it: at least 1, NaN as 1. */
+const repeats = (value: string | null): number => {
+    const n = parseInt(value || '1', 10);
+    return Number.isFinite(n) && n > 1 ? n : 1;
+};
+
+/**
  * Extracts fully structured chart data from OpenXML (PPTX, XLSX) chart XML.
  * @param xmlBuffer Chart XML buffer
  */
-const extractOpenXmlChartData = (xmlBuffer: Buffer): ChartData => {
+const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig): ChartData => {
     const xml = xmlBuffer.toString("utf8");
-    const dom = parseXmlString(xml);
+    const dom = parseXmlString(xml, { config });
     const root = dom.documentElement as Element;
     if (!root) return { title: undefined, xAxisTitle: undefined, yAxisTitle: undefined, dataSets: [], labels: [], rawTexts: [] };
 
@@ -53,14 +85,17 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer): ChartData => {
     let xAxisTitle: string | undefined = undefined;
     let yAxisTitle: string | undefined = undefined;
 
-    const catAxes = root.getElementsByTagName("c:catAx");
+    const catAxes = getElementsByTagName(root, "c:catAx");
     if (catAxes.length > 0) xAxisTitle = extractOpenXmlRichText(catAxes[0] as Element, "c:title");
 
-    const valAxes = root.getElementsByTagName("c:valAx");
+    const valAxes = getElementsByTagName(root, "c:valAx");
     if (valAxes.length > 0) yAxisTitle = extractOpenXmlRichText(valAxes[0] as Element, "c:title");
 
     // Extract Series (dataSets)
-    const seriesNodes = root.getElementsByTagName("c:ser");
+    // The outermost series, at most MAX_CHART_SERIES of them, holding at most MAX_CHART_VALUES values
+    // in all: series nested in series each read every value below them (22 KB, out of memory).
+    const seriesNodes = getElementsByTagName(root, "c:ser").slice(0, MAX_CHART_SERIES);
+    let valuesLeft = MAX_CHART_VALUES;
     const dataSets: ChartData['dataSets'] = [];
     const sharedLabels: string[] = [];
 
@@ -72,47 +107,41 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer): ChartData => {
 
         // Values (c:val)
         const values: string[] = [];
-        const valNode = ser.getElementsByTagName("c:val")[0] || ser.getElementsByTagName("c:yVal")[0];
+        const valNode = getChildElements(ser, "c:val")[0] || getChildElements(ser, "c:yVal")[0];
         if (valNode) {
-            const vNodes = valNode.getElementsByTagName("c:v");
-            for (let j = 0; j < vNodes.length; j++) {
+            const vNodes = getElementsByTagName(valNode, "c:v");
+            for (let j = 0; j < vNodes.length && valuesLeft > 0; j++) {
                 const v = vNodes[j].textContent?.trim();
-                if (v) values.push(v);
+                if (v) { values.push(v); valuesLeft--; }
             }
         }
 
         // Point Labels (data labels)
         const pointLabels: string[] = [];
-        const dLbls = ser.getElementsByTagName("c:dLbl");
+        const dLbls = getElementsByTagName(ser, "c:dLbl");
         for (let j = 0; j < dLbls.length; j++) {
             const lbl = extractOpenXmlRichText(dLbls[j], "c:tx");
             if (lbl) pointLabels.push(lbl);
         }
 
         // Categories (labels) - c:cat or c:xVal
-        const catNode = ser.getElementsByTagName("c:cat")[0] || ser.getElementsByTagName("c:xVal")[0];
+        const catNode = getChildElements(ser, "c:cat")[0] || getChildElements(ser, "c:xVal")[0];
         if (catNode) {
-            const vNodes = catNode.getElementsByTagName("c:v");
+            const vNodes = getElementsByTagName(catNode, "c:v");
             const localLabels: string[] = [];
-            for (let j = 0; j < vNodes.length; j++) {
+            for (let j = 0; j < vNodes.length && localLabels.length < MAX_CHART_VALUES; j++) {
                 const v = vNodes[j].textContent?.trim();
                 if (v) localLabels.push(v);
             }
             if (localLabels.length > 0 && sharedLabels.length === 0) {
-                sharedLabels.push(...localLabels);
+                for (const label of localLabels) sharedLabels.push(label);
             }
         }
 
         dataSets.push({ name, values, pointLabels });
     }
 
-    // Structured rawTexts: for each dataset: Name -> Labels -> Values
-    const rawTexts: string[] = [];
-    for (const ds of dataSets) {
-        if (ds.name) rawTexts.push(ds.name);
-        rawTexts.push(...sharedLabels);
-        rawTexts.push(...ds.values);
-    }
+    const rawTexts = chartRawTexts(undefined, dataSets, sharedLabels);
 
     return {
         title,
@@ -128,9 +157,39 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer): ChartData => {
  * Extracts structured chart data from ODF (ODP, ODS) chart content.xml.
  * @param xmlBuffer Chart XML buffer
  */
-const extractOdfChartData = (xmlBuffer: Buffer): ChartData => {
+/**
+ * How many of `copies` of a repeated cell's `text` are whole: every series a repeated cell fills
+ * carries its text, and the chart's text is written with each, so 1.3 KB repeating one 100 KB value
+ * 2,500 times made 250 MB. Copies after the first are charged to the document's repeated-content
+ * budget (see repeatUtils); the rest hold the text's start.
+ */
+const copiesWhole = (config: OfficeParserConfig | undefined, copies: number, text: string | undefined): number =>
+    copies <= 1 || !text ? copies : 1 + takeRepeats(config ?? {}, copies - 1, text.length);
+
+/** What holds a table's rows besides the table itself. */
+const ROW_GROUPS = new Set(["table:table-header-rows", "table:table-rows", "table:table-row-group"]);
+
+/** A table's rows in document order, those in row groups (nested ones too) included, each read once. */
+const tableRows = (table: Element): Element[] => {
+    const rows: Element[] = [];
+    // Children still to read, last first: a group's are put in its place.
+    const pending: Node[] = [];
+    for (let i = table.childNodes.length - 1; i >= 0; i--) pending.push(table.childNodes[i]);
+    while (pending.length > 0) {
+        const node = pending.pop()!;
+        if (node.nodeType !== 1) continue;
+        const element = node as Element;
+        if (element.tagName === "table:table-row") rows.push(element);
+        else if (ROW_GROUPS.has(element.tagName)) {
+            for (let i = element.childNodes.length - 1; i >= 0; i--) pending.push(element.childNodes[i]);
+        }
+    }
+    return rows;
+};
+
+const extractOdfChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig): ChartData => {
     const xml = xmlBuffer.toString("utf8");
-    const dom = parseXmlString(xml);
+    const dom = parseXmlString(xml, { config });
 
     const chart = getElementsByTagName(dom, "chart:chart")[0] || dom.documentElement;
     const titleNode = getElementsByTagName(chart, "chart:title")[0];
@@ -139,45 +198,42 @@ const extractOdfChartData = (xmlBuffer: Buffer): ChartData => {
     const table = getElementsByTagName(chart, "table:table")[0];
     const dataSets: ChartData['dataSets'] = [];
     const labels: string[] = [];
-    const rawTexts: string[] = [];
 
     if (table) {
-        // Chart with embedded data table (common in ODP presentations)
-        let rows: Element[] = [];
-        const headerRowsNode = getDirectChildren(table, "table:table-header-rows")[0];
-        if (headerRowsNode) {
-            rows.push(...getDirectChildren(headerRowsNode, "table:table-row"));
-        }
-        rows.push(...getDirectChildren(table, "table:table-row"));
+        // Chart with embedded data table (common in ODP presentations). Its rows in document order,
+        // including those in row groups: LibreOffice writes the data rows in `table:table-rows`, and
+        // read from the table's own rows alone, its charts had series names and no values.
+        const rows = tableRows(table);
 
         if (rows.length > 0) {
             // Header row for series names
             const headerCells = getDirectChildren(rows[0], "table:table-cell");
-            for (let j = 1; j < headerCells.length; j++) {
-                const colsRepeated = parseInt(headerCells[j].getAttribute("table:number-columns-repeated") || "1");
+            for (let j = 1; j < headerCells.length && dataSets.length < MAX_CHART_SERIES; j++) {
+                // A repeated cell is as many series as it repeats, up to the chart's limit.
+                const colsRepeated = Math.min(repeats(headerCells[j].getAttribute("table:number-columns-repeated")), MAX_CHART_SERIES - dataSets.length);
                 const name = getDirectChildren(headerCells[j], "text:p")[0]?.textContent || undefined;
+                const whole = copiesWhole(config, colsRepeated, name);
                 for (let k = 0; k < colsRepeated; k++) {
-                    dataSets.push({ name, values: [], pointLabels: [] });
+                    dataSets.push({ name: k < whole || name === undefined ? name : repeatPreview(name), values: [], pointLabels: [] });
                 }
             }
 
-            // Data rows
-            for (let i = 1; i < rows.length; i++) {
+            // Data rows: a repeated cell fills as many series as remain in its row, and the chart
+            // holds at most MAX_CHART_VALUES values.
+            let valuesLeft = MAX_CHART_VALUES;
+            for (let i = 1; i < rows.length && valuesLeft > 0; i++) {
                 const dataCells = getDirectChildren(rows[i], "table:table-cell");
                 if (dataCells.length > 0) {
                     const label = getDirectChildren(dataCells[0], "text:p")[0]?.textContent || undefined;
                     if (label) labels.push(label);
 
                     let dsIdx = 0;
-                    for (let j = 1; j < dataCells.length; j++) {
-                        const colsRepeated = parseInt(dataCells[j].getAttribute("table:number-columns-repeated") || "1");
+                    for (let j = 1; j < dataCells.length && dsIdx < dataSets.length; j++) {
+                        const colsRepeated = Math.min(repeats(dataCells[j].getAttribute("table:number-columns-repeated")), dataSets.length - dsIdx, valuesLeft);
                         const val = dataCells[j].getAttribute("office:value") || getDirectChildren(dataCells[j], "text:p")[0]?.textContent || "";
-                        for (let k = 0; k < colsRepeated; k++) {
-                            if (dataSets[dsIdx]) {
-                                dataSets[dsIdx].values.push(val);
-                            }
-                            dsIdx++;
-                        }
+                        const whole = copiesWhole(config, colsRepeated, val);
+                        for (let k = 0; k < colsRepeated; k++) dataSets[dsIdx++].values.push(k < whole ? val : repeatPreview(val));
+                        valuesLeft -= colsRepeated;
                     }
                 }
             }
@@ -185,7 +241,7 @@ const extractOdfChartData = (xmlBuffer: Buffer): ChartData => {
     } else {
         // Chart with cell references (common in ODS spreadsheets)
         // Extract series info from chart:series elements
-        const seriesNodes = getElementsByTagName(chart, "chart:series");
+        const seriesNodes = getElementsByTagName(chart, "chart:series").slice(0, MAX_CHART_SERIES);
         for (const series of seriesNodes) {
             // Series label is in chart:label-cell-address attribute
             const labelAddr = series.getAttribute("chart:label-cell-address");
@@ -242,13 +298,7 @@ const extractOdfChartData = (xmlBuffer: Buffer): ChartData => {
         else if (dimension === 'y') yAxisTitle = axisTitle;
     }
 
-    // Structured rawTexts: title + series info
-    if (title) rawTexts.push(title);
-    for (const ds of dataSets) {
-        if (ds.name) rawTexts.push(ds.name);
-        rawTexts.push(...labels);
-        rawTexts.push(...ds.values);
-    }
+    const rawTexts = chartRawTexts(title, dataSets, labels);
 
     return {
         title,
@@ -264,11 +314,14 @@ const extractOdfChartData = (xmlBuffer: Buffer): ChartData => {
  * Universal chart data extractor that selects logic based on XML content.
  * @param xmlBuffer Chart XML buffer
  */
-export const extractChartData = (xmlBuffer: Buffer): ChartData => {
-    const head = xmlBuffer.toString("utf8", 0, 500);
-    if (head.includes("urn:oasis:names:tc:opendocument:xmlns:chart:1.0")) {
-        return extractOdfChartData(xmlBuffer);
+export const extractChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig): ChartData => {
+    // An ODF part declares the OpenDocument namespaces on its root, which LibreOffice writes with some
+    // forty declarations: looked for in the first 500 bytes, its chart namespace (past byte 750) was
+    // missed and every LibreOffice chart was read as OpenXML, empty.
+    const head = xmlBuffer.toString("utf8", 0, 64 * 1024);
+    if (head.includes("urn:oasis:names:tc:opendocument:xmlns:")) {
+        return extractOdfChartData(xmlBuffer, config);
     } else {
-        return extractOpenXmlChartData(xmlBuffer);
+        return extractOpenXmlChartData(xmlBuffer, config);
     }
 };

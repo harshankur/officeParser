@@ -17,9 +17,9 @@
  * @module generators/pdf/nativePdfEngine
  */
 
-import { FullGeneratorConfig, ImageMode, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextFormatting } from '../../types.js';
+import { EmbedMetadata, FullGeneratorConfig, ImageMode, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextFormatting } from '../../types.js';
 import { getAbortError, getOfficeError } from '../../utils/errorUtils.js';
-import { isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize } from '../../utils/officeGenUtils.js';
+import { documentLanguage, embedUrl, isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize } from '../../utils/officeGenUtils.js';
 
 /**
  * Megapixel ceiling for an embedded image. `embedPng`/`embedJpg` decode the full bitmap, so a
@@ -99,8 +99,11 @@ class NativeLayout {
     private readonly imageMode: ImageMode;
     /** `name -> attachment` index, so image lookups are O(1) rather than a scan per image node. */
     private readonly attachmentsByName = new Map<string, OfficeParserAST['attachments'][number]>();
+    /** Each attachment's embedded image, or why it was not embedded: made once, drawn at every picture showing it. */
+    private readonly embeddedImages = new Map<OfficeParserAST['attachments'][number], Promise<any>>();
     /** Footnote/endnote bodies gathered from `node.notes` during the walk, drawn at document end. */
     private readonly collectedNotes: OfficeContentNode[] = [];
+    private readonly collectedNoteSet = new Set<OfficeContentNode>();
 
     constructor(
         private readonly pdf: any,
@@ -162,6 +165,8 @@ class NativeLayout {
     }
 
     private winAnsiWarned = false;
+    /** Whether the embed-as-link warning was given (once per document). */
+    private embedWarned = false;
     /** WinAnsi-sanitizes text before it is measured or drawn, warning once if any character is lost. */
     private enc(text: string): string {
         const r = toWinAnsi(text);
@@ -186,13 +191,21 @@ class NativeLayout {
         const out: { text: string; fmt: TextFormatting; link: boolean }[] = [];
         const walk = async (n: OfficeContentNode, inherited: TextFormatting, isRoot: boolean): Promise<void> => {
             let text = n.text;
+            let override: string | false | void = undefined;
             if (!isRoot) {
-                const override = await this.onNodeValue(n);
+                override = await this.onNodeValue(n);
                 if (override === false) return;
                 if (typeof override === 'string') text = override;
             }
             const fmt = { ...inherited, ...(n.formatting || {}) };
             const link = !!(n.metadata as any)?.link;
+            // A picture in a line the engine draws as text (a list item, heading or note; a paragraph
+            // draws its pictures itself) is its alt or recognized text: it was dropped.
+            if (n.type === 'image' && !isRoot) {
+                const alt = this.inlineImageText(n, typeof override === 'string' ? override : undefined);
+                if (alt) out.push({ text: alt, fmt, link });
+                return;
+            }
             if (n.type === 'text' || (!n.children?.length && text)) {
                 if (text) out.push({ text, fmt, link });
                 return;
@@ -233,6 +246,24 @@ class NativeLayout {
         }
         const flat = (await this.collectRuns(node)).map(r => r.text).join('');
         return flat || node.text || '';
+    }
+
+    private inlineImageWarned = false;
+    /**
+     * The text a picture in a line of text degrades to, as the image mode has it (none for 'none', the
+     * recognized text for 'ocr-text-only', else the alt text or the recognized text), warning once that
+     * the native engine draws such a picture as text. `override` is the onNode hook's replacement.
+     */
+    private inlineImageText(node: OfficeContentNode, override?: string): string {
+        if (override !== undefined) return override;
+        if (this.imageMode === 'none') return '';
+        const ocr = (node.text || '').trim();
+        const text = this.imageMode === 'ocr-text-only' ? ocr : (((node.metadata as any)?.altText || '').trim() || ocr);
+        if (text && !this.inlineImageWarned) {
+            this.inlineImageWarned = true;
+            this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature: 'image inside a list item, heading or note (native engine renders its alt/OCR text)' });
+        }
+        return text;
     }
 
     private cellImageWarned = false;
@@ -387,6 +418,21 @@ class NativeLayout {
             case 'code': return this.code(node);
             case 'note': return this.note(node);
             case 'break': return this.breakNode(node);
+            case 'embed': {
+                // A video or framed page cannot play in a PDF: its URL is written, styled as a link (with
+                // its label), as the DOCX and ODT generators write it. It was dropped.
+                const meta = node.metadata as EmbedMetadata | undefined;
+                const url = embedUrl(meta);
+                const text = [meta?.label, url].filter(Boolean).join(': ');
+                if (!text) return;
+                if (!this.embedWarned) {
+                    this.embedWarned = true;
+                    this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature: 'embed' });
+                }
+                this.drawRuns([{ text, fmt: {}, link: !!url }], this.margin.left, this.contentWidth);
+                this.y += 6;
+                return;
+            }
             case 'chart':
                 // includeCharts: false omits charts in every generator. The native engine cannot draw a
                 // chart, so it otherwise renders the chart's data text (in node.text); skip it when off.
@@ -417,6 +463,26 @@ class NativeLayout {
     }
 
     private async paragraph(node: OfficeContentNode, indentLeft = 0): Promise<void> {
+        // A picture in the paragraph (where Word, ODF and Markdown put one) is drawn where it stands,
+        // between the lines of text around it: runs carry text only, and it was dropped.
+        if (node.children?.some(child => child.type === 'image')) {
+            let run: OfficeContentNode[] = [];
+            const flush = async () => {
+                const runs = run.length ? await this.collectRuns({ ...node, text: undefined, children: run }) : [];
+                if (runs.some(r => r.text.trim())) {
+                    this.drawRuns(runs, this.margin.left + indentLeft, this.contentWidth - indentLeft);
+                    this.y += 6;
+                }
+                run = [];
+            };
+            for (const child of node.children) {
+                if (child.type !== 'image') { run.push(child); continue; }
+                await flush();
+                await this.render(child);
+            }
+            await flush();
+            return;
+        }
         const runs = await this.collectRuns(node);
         if (!runs.length) { this.y += 6; return; }
         this.drawRuns(runs, this.margin.left + indentLeft, this.contentWidth - indentLeft);
@@ -532,17 +598,27 @@ class NativeLayout {
             return;
         }
         try {
-            const bytes = base64ToBytes(attachment.data);
-            // Reject an image whose declared dimensions are absurd BEFORE decoding it: embedPng/embedJpg
-            // allocate the full bitmap, so a decompression bomb would OOM the process uncatchably.
-            const dim = sniffImageSize(bytes);
-            if (dim && dim.w * dim.h > MAX_IMAGE_PIXELS) {
-                this.reportWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name, reason: `image is too large to embed (${dim.w}x${dim.h} pixels)` });
+            // Each attachment decoded and embedded once, and drawn wherever a picture shows it: embedded
+            // again at each, one 3 MB picture shown 400 times (a 3 MB DOCX) made a 1.2 GB PDF.
+            let embedded = this.embeddedImages.get(attachment);
+            if (!embedded) {
+                embedded = (async () => {
+                    const bytes = base64ToBytes(attachment.data);
+                    // Reject an image whose declared dimensions are absurd BEFORE decoding it: embedPng/embedJpg
+                    // allocate the full bitmap, so a decompression bomb would OOM the process uncatchably.
+                    const dim = sniffImageSize(bytes);
+                    if (dim && dim.w * dim.h > MAX_IMAGE_PIXELS) return `image is too large to embed (${dim.w}x${dim.h} pixels)`;
+                    const isJpg = /jpe?g/i.test(attachment.extension || '') || attachment.mimeType === 'image/jpeg';
+                    return isJpg ? await this.pdf.embedJpg(bytes) : await this.pdf.embedPng(bytes);
+                })();
+                this.embeddedImages.set(attachment, embedded);
+            }
+            const img = await embedded;
+            if (typeof img === 'string') {
+                this.reportWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name, reason: img });
                 fallback();
                 return;
             }
-            const isJpg = /jpe?g/i.test(attachment.extension || '') || attachment.mimeType === 'image/jpeg';
-            const img = isJpg ? await this.pdf.embedJpg(bytes) : await this.pdf.embedPng(bytes);
             // Resolve the draw size in points, by priority: an explicit ImageMetadata.width/height
             // (a length like '200px'/'3cm', a number in px, or a '%' of the content width), then PDF
             // page bounds (already points), then the intrinsic pixel size converted px->pt. Aspect ratio
@@ -585,7 +661,13 @@ class NativeLayout {
      */
     collectNotes(node: OfficeContentNode): void {
         if (!node) return;
-        if (node.notes?.length) this.collectedNotes.push(...node.notes);
+        // The notes a note's own text refers to follow it (they were left out); each note once.
+        for (const note of node.notes || []) {
+            if (this.collectedNoteSet.has(note)) continue;
+            this.collectedNoteSet.add(note);
+            this.collectedNotes.push(note);
+            this.collectNotes(note);
+        }
         for (const c of node.children || []) this.collectNotes(c);
     }
 
@@ -806,6 +888,8 @@ function applyMetadata(pdf: any, m: OfficeMetadata): void {
     set('setTitle', m.title);
     set('setAuthor', m.author);
     set('setSubject', m.subject);
+    // The document language, as the HTML engine's `<html lang>` gives it (`/Lang`).
+    if (m.language || m.nativeProperties?.language) set('setLanguage', documentLanguage(m));
     if (m.keywords) set('setKeywords', String(m.keywords).split(/[,;]\s*/).filter(Boolean));
     set('setCreator', 'officeParser (native engine)');
     set('setProducer', 'officeParser (pdf-lib)');

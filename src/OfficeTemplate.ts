@@ -43,7 +43,7 @@ export type TemplateInput = string | Buffer | ArrayBuffer | Uint8Array | BlobLik
 /** Reads the template input into a Node Buffer (path via fs in Node; bytes/blob anywhere). */
 async function readInput(input: TemplateInput, errCfg: OfficeParserConfig): Promise<Buffer> {
     if (typeof input === 'string') {
-        assertNode('path-parsing');
+        assertNode('path-parsing', errCfg);
         const fs = await import('fs');
         try { return fs.readFileSync(input); }
         catch { throw getOfficeError(OfficeErrorType.FILE_DOES_NOT_EXIST, errCfg, input); }
@@ -105,9 +105,11 @@ export class OfficeTemplate {
         // output cross-machine) and safely inside fflate's 1980-2099 range everywhere.
         const mtime = new Date(2001, 0, 1, 0, 0, 0);
         const onFieldMissing = (key: string): never => { throw getOfficeError(OfficeErrorType.TEMPLATE_FIELD_MISSING, errCfg, key); };
+        const maxRepeatedContent = config.decompressionLimits?.maxRepeatedContent ?? 16 * 1024 * 1024;
+        const onRepeatLimit = (): never => { throw getOfficeError(OfficeErrorType.OUTPUT_TOO_LARGE, errCfg, { repeatedLimit: maxRepeatedContent }); };
 
         const renderOne = (data: TemplateData): Uint8Array =>
-            renderDocxTemplate(entries, data, { start, end, onMissing, mtime, onFieldMissing });
+            renderDocxTemplate(entries, data, { start, end, onMissing, mtime, onFieldMissing, maxRepeatedContent, onRepeatLimit });
 
         return Array.isArray(config.data) ? rows.map(renderOne) : renderOne(config.data);
     }

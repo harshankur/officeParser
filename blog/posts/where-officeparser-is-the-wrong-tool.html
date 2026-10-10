@@ -1,0 +1,223 @@
+<p>
+    Every architecture is a set of trade-offs. When I designed <code>officeParser</code>, I made three
+    on purpose:
+</p>
+<ul>
+    <li>I chose <strong>an npm package with no office suite behind it</strong> over wrapping a desktop
+        application.</li>
+    <li>I chose <strong>structure and meaning</strong> over reproducing how a page looks in print.</li>
+    <li>I chose <strong>running in both Node.js and the browser</strong> over features that would need
+        a native rendering engine.</li>
+</ul>
+<p>
+    Those choices make officeParser a good fit for document ingestion, format conversion, and
+    client-side processing. They also mean there are jobs it <strong>cannot do</strong>, and it is
+    better that you hear that from me than discover it in production.
+</p>
+<p>
+    If your project needs any of the following, use something else.
+</p>
+
+<h2>1. You Need a PDF That Matches Word Exactly</h2>
+<p>
+    Suppose the requirement is:
+    <em>"I have a contract in Word. I need a PDF with the same line breaks and the same page breaks that
+    Word would produce."</em>
+</p>
+<p>
+    <strong>officeParser cannot do this.</strong>
+</p>
+<p>
+    Where Word breaks a line or a page is not written in the file. It is computed by Word's layout
+    engine from font metrics, kerning, and its own rules. officeParser models what a document
+    <em>says</em>: headings, paragraphs, tables, lists, formatting. Its PDF output lays that structure
+    out again, through a browser engine or its own simpler one. The content will be right. The page
+    breaks will not be Word's.
+</p>
+
+<div class="callout">
+    <div class="callout-title">What to use instead</div>
+    <ul>
+        <li><strong>Word itself</strong>, or Microsoft's own conversion through the Graph API. Only
+            Word's engine reproduces Word.</li>
+        <li><strong>LibreOffice in headless mode:</strong>
+            <code>soffice --headless --convert-to pdf document.docx</code>. Close to Word, though not
+            identical, and it needs the document's fonts installed.</li>
+        <li><strong>Gotenberg:</strong> a Docker service that wraps LibreOffice and Chromium behind an
+            HTTP API.</li>
+    </ul>
+</div>
+
+<h2>2. You Need a Spreadsheet That Recalculates</h2>
+<p>
+    Suppose the requirement is:
+    <em>"Load a workbook, change cell B4, and have every formula that depends on it update."</em>
+</p>
+<p>
+    <strong>officeParser is not a calculation engine.</strong>
+</p>
+<p>
+    When it reads an <code>.xlsx</code> file, it reads the <strong>values</strong>: for a formula cell,
+    the result Excel computed and saved the last time the file was written. It does not read the formula
+    text, it does not evaluate anything, and it cannot write an <code>.xlsx</code> back out (see
+    section 4).
+</p>
+
+<div class="callout">
+    <div class="callout-title">What to use instead</div>
+    <ul>
+        <li><strong>HyperFormula:</strong> a headless spreadsheet engine in TypeScript, from the
+            Handsontable team, with a dependency graph and several hundred built-in functions.</li>
+        <li><strong>ExcelJS:</strong> reads and writes workbooks, including formulas and styling. It
+            does not calculate either.</li>
+        <li><strong>Apache POI (Java):</strong> workbook manipulation with a formula evaluator.</li>
+    </ul>
+</div>
+
+<h2>3. You Have Legacy Binary Files (.doc, .xls, .ppt)</h2>
+<p>
+    The pre-2007 Office formats are a different family: binary records inside a compound file, not XML
+    in a ZIP. officeParser reads the modern formats (<code>.docx</code>, <code>.xlsx</code>,
+    <code>.pptx</code>), OpenDocument, PDF, RTF, and the text formats. It does <strong>not</strong>
+    read <code>.doc</code>, <code>.xls</code>, or <code>.ppt</code>.
+</p>
+<p>
+    If you have an archive of old files, convert them first. LibreOffice does this well:
+    <code>soffice --headless --convert-to docx old-file.doc</code>. Then parse the result.
+</p>
+
+<h2>4. You Need to Write Spreadsheets or Slides</h2>
+<p>
+    officeParser reads fourteen formats but writes fewer. It generates DOCX, ODT, PDF, HTML, Markdown,
+    LaTeX, RTF, EPUB, CSV, plain text, and chunks for retrieval. It does <strong>not</strong> generate
+    <code>.xlsx</code>, <code>.pptx</code>, <code>.ods</code>, or <code>.odp</code>.
+</p>
+<p>
+    A spreadsheet can go out as CSV, and a deck can go out as a document, but if the deliverable has to
+    open in Excel or PowerPoint as a native file, use a library built for writing them, such as ExcelJS
+    or PptxGenJS.
+</p>
+
+<h2>5. You Need to Run Macros</h2>
+<p>
+    Macro-enabled files carry VBA code. officeParser has no VBA runtime. It never executes macro code,
+    and it does not read it or carry it into anything it generates. If your workflow depends on a macro
+    running, you need Office itself.
+</p>
+
+<h2>6. You Need a TeX Engine</h2>
+<p>
+    officeParser reads LaTeX and writes LaTeX, but it <strong>interprets</strong> LaTeX. It does not
+    compile it.
+</p>
+<p>
+    Reading a <code>.tex</code> file, it follows the structure the way a converter does: sections,
+    lists, tables, math, footnotes, citations, and the macros you define yourself
+    (<code>\newcommand</code>, <code>\def</code>), which it expands within fixed limits. It does not
+    load packages, so a command from a package it does not know keeps its text. Drawings (TikZ,
+    pgfplots, <code>picture</code>) are left out. And it never typesets, so there are no line breaks,
+    page numbers, or floats placed on a page.
+</p>
+<p>
+    Going the other way, <code>ast.to('tex')</code> gives you source that compiles with pdfLaTeX,
+    XeLaTeX, or LuaLaTeX. To turn that source into a camera-ready PDF, you still run a real TeX
+    distribution.
+</p>
+
+<h2>Smaller Limits Worth Knowing</h2>
+<ul>
+    <li><strong>Slide reading order.</strong> Shapes on a slide are read in the order the file lists
+        them, not sorted by position.
+        <a href="post:how-pptx-stores-a-slide">The PPTX article</a> explains why that is hard.</li>
+    <li><strong>Untagged PDFs.</strong> Without a tag tree, tables and headings are recovered from
+        geometry, which is best-effort.
+        <a href="post:why-pdf-text-extraction-is-hard">The PDF article</a> has the details.</li>
+    <li><strong>Runtime.</strong> The npm package needs Node.js 22.13 or newer.</li>
+</ul>
+
+<hr>
+
+<h2>The Decision Matrix</h2>
+<p>
+    A summary of how officeParser compares with three tools people often reach for:
+</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Capability</th>
+            <th>officeParser</th>
+            <th>Pandoc</th>
+            <th>LibreOffice (headless)</th>
+            <th>python-docx / openpyxl</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>What you install</td>
+            <td>An npm package</td>
+            <td>A native binary</td>
+            <td>A full office suite</td>
+            <td>Python packages</td>
+        </tr>
+        <tr>
+            <td>Runs in the browser</td>
+            <td>Yes</td>
+            <td>Not as shipped</td>
+            <td>Not as shipped</td>
+            <td>Not as shipped</td>
+        </tr>
+        <tr>
+            <td>One document model across formats</td>
+            <td>Yes (typed AST)</td>
+            <td>Yes (Pandoc AST)</td>
+            <td>Only through its UNO API</td>
+            <td>No, one model per library</td>
+        </tr>
+        <tr>
+            <td>Chunks for retrieval</td>
+            <td>Built in</td>
+            <td>No</td>
+            <td>No</td>
+            <td>No</td>
+        </tr>
+        <tr>
+            <td>Legacy .doc / .xls / .ppt</td>
+            <td>No</td>
+            <td>No</td>
+            <td>Yes</td>
+            <td>No</td>
+        </tr>
+        <tr>
+            <td>Formula recalculation</td>
+            <td>No</td>
+            <td>No</td>
+            <td>Yes</td>
+            <td>No</td>
+        </tr>
+        <tr>
+            <td>Print layout close to Word</td>
+            <td>No</td>
+            <td>No</td>
+            <td>Closest of the four</td>
+            <td>No</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>When officeParser is the Right Tool</h2>
+<p>
+    Reach for it when the job is:
+</p>
+<ul>
+    <li>Getting documents into a search index, a retrieval pipeline, or an LLM prompt with their
+        structure intact.</li>
+    <li>Converting between Office formats, Markdown, HTML, LaTeX, and PDF from one typed tree.</li>
+    <li>Processing documents in the browser, so a confidential file never leaves the user's machine.</li>
+    <li>Running in a plain Node.js service where you would rather not install and supervise an office
+        suite.</li>
+</ul>
+<p>
+    That is the job it was built for. For everything above the line, use the tool built for that job.
+    Knowing where the boundary sits is part of using any library well.
+</p>

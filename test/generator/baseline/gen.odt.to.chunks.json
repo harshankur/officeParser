@@ -164,6 +164,14 @@
     }
   },
   {
+    "text": "| One Three Two Four | To the left is a table inside a table, with some cells merged. |",
+    "metadata": {
+      "sourceType": "odt",
+      "closestHeading": "Tables",
+      "isTableChunk": true
+    }
+  },
+  {
     "text": "We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.",
     "metadata": {
       "sourceType": "odt",
@@ -376,6 +384,13 @@
   },
   {
     "text": "Centered images like this are useful for large pictures that should be a focus of attention.",
+    "metadata": {
+      "sourceType": "odt",
+      "closestHeading": "Images"
+    }
+  },
+  {
+    "text": "[Image: 165 Inspirational Quotes To Keep You Motivated In Life]",
     "metadata": {
       "sourceType": "odt",
       "closestHeading": "Images"

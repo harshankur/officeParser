@@ -1,9 +1,12 @@
 import { zipSync, Zippable } from 'fflate';
+import { UniqueNames } from '../utils/uniqueNames.js';
+import { layoutTableRows } from '../utils/tableLayout.js';
 import { ConversionResult, DocxGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { ADMONITION_COLOR, decodeBase64, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { lookupTable } from '../utils/lookupUtils.js';
 
 const EMU_PER_PT = 12700;
 const EMU_PER_IN = 914400;
@@ -24,6 +27,23 @@ const WML_NS = `xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006
     + `xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" `
     + `xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" `
     + `xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"`;
+
+/**
+ * The blocks that write their own bookmarks: inside the paragraph they are, or (a note) at the start of
+ * its text. The rest are written where the block stands (see pointBookmarks).
+ */
+const OWN_BOOKMARKS: ReadonlySet<string> = new Set(['paragraph', 'heading', 'list', 'definitionTerm', 'note']);
+
+/** A note's number as Word shows it: footnotes in arabic numerals, endnotes in lower-case roman ones up to 3999. */
+function noteMark(kind: 'footnote' | 'endnote', number: number): string {
+    if (kind === 'footnote' || number > 3999) return String(number);
+    let out = '';
+    let left = number;
+    for (const [value, numeral] of [[1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'], [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i']] as const) {
+        while (left >= value) { out += numeral; left -= value; }
+    }
+    return out;
+}
 
 interface Rel { id: string; type: string; target: string; mode?: string; }
 interface MediaPart { name: string; bytes: Uint8Array; ext: string; contentType: string; }
@@ -46,9 +66,12 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     private currentRelOwner = 'word/document.xml';
     private media: MediaPart[] = [];
     private mediaByAttachment = new Map<string, string>();
+    /** Each attachment's intrinsic size, measured when it was first decoded, and those that could not be decoded. */
+    private readonly mediaIntrinsic = new Map<string, { w: number; h: number } | null>();
+    private readonly mediaUndecodable = new Set<string>();
     private usedExtensions = new Set<string>();
     private drawingCounter = 0;
-    private usedBookmarkNames = new Set<string>();
+    private usedBookmarkNames = new UniqueNames();
     private bookmarkCounter = 0;
     private footnotes: NoteEntry[] = [];
     private endnotes: NoteEntry[] = [];
@@ -94,9 +117,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
      */
     private mintBookmark(rawName: string): { id: number; name: string } {
         const base = toBookmarkNameRaw(rawName);
-        let name = base, i = 2;
-        while (this.usedBookmarkNames.has(name)) { const suffix = `_${i++}`; name = base.slice(0, 40 - suffix.length) + suffix; }
-        this.usedBookmarkNames.add(name);
+        const name = this.usedBookmarkNames.claim(base, n => base.slice(0, 40 - `_${n}`.length) + `_${n}`);
         return { id: this.bookmarkCounter++, name };
     }
 
@@ -118,10 +139,18 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         // Word does not render an SVG referenced by a bare a:blip (it needs the asvg extension + a
         // raster fallback); emit nothing here so the caller degrades to alt text instead of a broken image.
         if (ext === 'svg') { this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'docx', feature: 'svg image' }); return null; }
-        let bytes: Uint8Array;
-        try { bytes = decodeBase64(att.data); } catch { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName }); return null; }
+        // Each attachment decoded and measured once, at the first picture showing it: decoded again at
+        // every picture before the media was looked up, one 3 MB picture shown 20,000 times took 105 s.
+        if (this.mediaUndecodable.has(attachmentName)) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName }); return null; }
         let name = this.mediaByAttachment.get(attachmentName);
         if (!name) {
+            let bytes: Uint8Array;
+            try { bytes = decodeBase64(att.data); } catch {
+                this.mediaUndecodable.add(attachmentName);
+                this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName });
+                return null;
+            }
+            this.mediaIntrinsic.set(attachmentName, sniffImageSize(bytes));
             name = `image${this.media.length + 1}.${ext}`;
             const contentType = (att.mimeType || 'image/png');
             this.media.push({ name, bytes, ext, contentType });
@@ -129,7 +158,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
             this.usedExtensions.add(ext);
         }
         const rid = this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/image', `media/${name}`);
-        return { rid, cx: 0, cy: 0, intrinsic: sniffImageSize(bytes) };
+        return { rid, cx: 0, cy: 0, intrinsic: this.mediaIntrinsic.get(attachmentName) ?? null };
     }
 
     // ── metadata / reproducibility ─────────────────────────────────────────────
@@ -185,6 +214,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
             // later separate list starts fresh instead of continuing the first one's numbering.
             const isBareList = node.type === 'list' && !(node.metadata as any)?.listId;
             if (isBareList && !prevBareList) this.syntheticListRun++;
+            if (!OWN_BOOKMARKS.has(node.type)) out += this.pointBookmarks(node);
             out += await this.renderBlockNode(node, isBareList ? `__run${this.syntheticListRun}` : undefined);
             prevPaginated = (node.type === 'page' || node.type === 'slide') ? node.type : null;
             prevBareList = isBareList;
@@ -276,8 +306,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     private bookmarksFor(node: OfficeContentNode): { start: string; end: string } {
         if (this.config.ignoreInternalLinks) return { start: '', end: '' };
         const names: string[] = [...(((node.metadata as any)?.anchorIds) || [])];
-        if (this.config.generateIds && node.type === 'heading' && node.text) {
-            const slug = this.slugify(node.text);
+        if (this.config.generateIds && node.type === 'heading') {
+            const slug = this.slugify(node.text || this.getNodeText(node));
             if (slug && !names.includes(slug)) names.push(slug);
         }
         let start = '', end = '';
@@ -287,6 +317,18 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
             end += `<w:bookmarkEnd w:id="${id}"/>`;
         }
         return { start, end };
+    }
+
+    /**
+     * The bookmarks of a node that writes no paragraph of its own to hold them (a table, a picture, an
+     * equation, a cell, a note), where it stands: an internal link to it (LaTeX's `\ref{tab:main}`)
+     * found no bookmark, as only paragraphs and headings wrote theirs. Each is a point (its start and
+     * end together), valid between blocks, in a cell and in a note, and read back as the next block's.
+     */
+    private pointBookmarks(node: OfficeContentNode): string {
+        if (!(node.metadata as any)?.anchorIds?.length) return '';
+        const { start, end } = this.bookmarksFor(node);
+        return start + end;
     }
 
     private headingStyle(node: OfficeContentNode): string {
@@ -336,7 +378,14 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         return out;
     }
 
+    /** An inline node's runs, around its bookmarks (an equation's or a picture's label). */
     private async inlineNode(node: OfficeContentNode): Promise<string> {
+        if (!(node.metadata as any)?.anchorIds?.length) return this.inlineContent(node);
+        const { start, end } = this.bookmarksFor(node);
+        return start + await this.inlineContent(node) + end;
+    }
+
+    private async inlineContent(node: OfficeContentNode): Promise<string> {
         switch (node.type) {
             case 'text': return this.textRuns(node) + await this.noteRefs(node) + await this.commentRefs(node);
             case 'code': return this.inlineCode(node);
@@ -394,16 +443,24 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         // Notes/comments anchored on linked text still have to be emitted; place them after the link.
         let trailing = '';
         for (const n of group) trailing += await this.noteRefs(n) + await this.commentRefs(n);
+        return (this.hyperlinkAround(link, linkType, runs) ?? group.map(n => this.textRuns(n)).join('')) + trailing;
+    }
+
+    /**
+     * `runs` inside a hyperlink to `link`: a bookmark for an internal target, a relationship for an
+     * external one. Null when the link is not written: an internal one under `ignoreInternalLinks`,
+     * or a target the scheme check refuses.
+     */
+    private hyperlinkAround(link: string, linkType: string | undefined, runs: string): string | null {
         const internal = linkType === 'internal' || link.startsWith('#');
         if (internal) {
-            if (this.config.ignoreInternalLinks) return group.map(n => this.textRuns(n)).join('') + trailing;
-            const name = this.anchorName(link.replace(/^#/, ''));
-            return `<w:hyperlink w:anchor="${escapeXml(name)}">${runs}</w:hyperlink>${trailing}`;
+            if (this.config.ignoreInternalLinks) return null;
+            return `<w:hyperlink w:anchor="${escapeXml(this.anchorName(link.replace(/^#/, '')))}">${runs}</w:hyperlink>`;
         }
         const safe = sanitizeOfficePackageUrl(link);
-        if (!safe) return group.map(n => this.textRuns(n)).join('') + trailing;
+        if (!safe) return null;
         const rid = this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink', escapeXml(encUrl(safe)), 'External');
-        return `<w:hyperlink r:id="${rid}">${runs}</w:hyperlink>${trailing}`;
+        return `<w:hyperlink r:id="${rid}">${runs}</w:hyperlink>`;
     }
 
     private styledRun(text: string, fmt: TextFormatting | undefined, styleId: string): string {
@@ -424,20 +481,50 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     }
 
     /**
-     * Registers a note (once, keyed by content) into the footnotes/endnotes part, rendering its body
-     * with relationships routed to that part, and returns the in-text reference run.
+     * Each note written, at its first reference: its number as Word shows it, and the bookmark around
+     * that reference when the AST refers to the note again (see noteRefField).
+     */
+    private readonly writtenNotes = new Map<OfficeContentNode, { kind: 'footnote' | 'endnote'; number: number; bookmark?: string }>();
+
+    /**
+     * Registers a note into the footnotes/endnotes part at its first reference, rendering its body with
+     * relationships routed to that part, and returns the in-text reference run. A note the AST refers
+     * to again (a parser shares one note among all its references) is referred to as Word does, with a
+     * NOTEREF field to a bookmark around its first reference: a second `w:footnoteReference` to the same
+     * note made Word and LibreOffice show an empty note, or drop the reference.
      */
     private async registerNote(note: OfficeContentNode, kind: 'footnote' | 'endnote'): Promise<string> {
+        const written = this.writtenNotes.get(note);
+        if (written) return this.noteRefField(written);
         const key = this.getFootnoteKey(note);
-        if (!this.noteBodies.has(key)) {
-            (kind === 'endnote' ? this.endnotes : this.footnotes).push({ key, kind, node: note });
-            const owner = kind === 'endnote' ? 'word/endnotes.xml' : 'word/footnotes.xml';
-            const body = (await this.withRelOwner(owner, () => this.renderBlocks(this.bodyBlocks(note)))) || '<w:p/>';
-            this.noteBodies.set(key, this.withNoteMarker(this.styleNoteBody(body), kind));
-        }
+        const notes = kind === 'endnote' ? this.endnotes : this.footnotes;
+        notes.push({ key, kind, node: note });
+        const entry: { kind: 'footnote' | 'endnote'; number: number; bookmark?: { id: number; name: string } } = { kind, number: notes.length };
+        if (this.noteReferences(note) > 1) entry.bookmark = this.mintBookmark(`_RefNote${this.writtenNotes.size + 1}`);
+        // Marked written before its body is, so a reference to the note inside it refers back.
+        this.writtenNotes.set(note, { kind, number: entry.number, bookmark: entry.bookmark?.name });
+        const owner = kind === 'endnote' ? 'word/endnotes.xml' : 'word/footnotes.xml';
+        const body = (await this.withRelOwner(owner, () => this.renderBlocks(this.bodyBlocks(note)))) || '<w:p/>';
+        this.noteBodies.set(key, this.withNoteMarker(this.styleNoteBody(body), kind, this.pointBookmarks(note)));
         const id = this.noteId(key);
         const tag = kind === 'endnote' ? 'w:endnoteReference' : 'w:footnoteReference';
-        return `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><${tag} w:id="${id}"/></w:r>`;
+        const reference = `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><${tag} w:id="${id}"/></w:r>`;
+        if (!entry.bookmark) return reference;
+        return `<w:bookmarkStart w:id="${entry.bookmark.id}" w:name="${escapeXml(entry.bookmark.name)}"/>${reference}<w:bookmarkEnd w:id="${entry.bookmark.id}"/>`;
+    }
+
+    /**
+     * A later reference to a written note: a NOTEREF field to the bookmark around its first reference,
+     * formatted as its mark (`\f`) and a link to it (`\h`, unless internal links are ignored), its number
+     * the field's result until Word updates it. A simple field, as small as the reference it stands for:
+     * a note referred to thousands of times is written in size linear in its references. A note the AST
+     * referred to once (a reference outside the content, such as a header's) has no bookmark, and is its
+     * mark alone.
+     */
+    private noteRefField(written: { kind: 'footnote' | 'endnote'; number: number; bookmark?: string }): string {
+        const mark = `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:t>${noteMark(written.kind, written.number)}</w:t></w:r>`;
+        if (!written.bookmark) return mark;
+        return `<w:fldSimple w:instr=" NOTEREF ${escapeXml(written.bookmark)} \\f${this.config.ignoreInternalLinks ? '' : ' \\h'} ">${mark}</w:fldSimple>`;
     }
 
     private styleNoteBody(body: string): string {
@@ -445,9 +532,12 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         return body.replace(/<w:p>(?!<w:pPr>)/g, '<w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>');
     }
 
-    /** Prepends the numbered marker run (w:footnoteRef/w:endnoteRef) to the note body's first paragraph. */
-    private withNoteMarker(body: string, kind: 'footnote' | 'endnote'): string {
-        const ref = `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:${kind}Ref/></w:r>`;
+    /**
+     * Prepends the numbered marker run (w:footnoteRef/w:endnoteRef) to the note body's first paragraph,
+     * followed by the note's own bookmarks (`anchors`), where a link to the note arrives.
+     */
+    private withNoteMarker(body: string, kind: 'footnote' | 'endnote', anchors = ''): string {
+        const ref = `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:${kind}Ref/></w:r>${anchors}`;
         const m = /^<w:p>(<w:pPr>[\s\S]*?<\/w:pPr>)?/.exec(body);
         if (m) return body.slice(0, m[0].length) + ref + body.slice(m[0].length);
         // The body does not open with a paragraph (a note whose first block is a table). A run is not
@@ -477,6 +567,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
 
     /** Registers a comment into comments.xml (body rels routed there) and returns its reference run. */
     private async registerComment(node: OfficeContentNode, ownParagraph: boolean): Promise<string> {
+        // Written once, at its first reference (see firstWriteOfComment).
+        if (!this.firstWriteOfComment(node)) return '';
         const id = this.commentCounter++;
         this.comments.push({ id, node });
         const body = (await this.withRelOwner('word/comments.xml', () => this.renderBlocks(this.bodyBlocks(node)))) || '<w:p/>';
@@ -513,7 +605,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
             this.numByListId.set(listId, numId);
             this.needsNumbering = true;
         } else {
-            entry = this.numbering.find(n => n.numId === numId)!;
+            // numId is the entry's place in `numbering` plus one: a scan per item took items x lists.
+            entry = this.numbering[numId - 1];
         }
         const lvl = Math.max(0, Math.min(8, meta?.indentation | 0));
         if (!entry.levels.has(lvl)) {
@@ -531,28 +624,39 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         const pPr = this.buildPPr({ style: 'ListParagraph', numPr, meta });
         let prefix = '';
         if (meta?.isTask) prefix = this.run(meta.checked ? '☑ ' : '☐ ', undefined);
+        const bookmarks = this.bookmarksFor(node);
         const blockRefs = (await this.noteRefs(node)) + (await this.commentRefs(node));
         const inner = await this.renderInline(node.children || [{ type: 'text', text: node.text || '' } as OfficeContentNode]);
-        return `<w:p>${pPr}${prefix}${blockRefs}${inner}</w:p>`;
+        return `<w:p>${pPr}${bookmarks.start}${prefix}${blockRefs}${inner}${bookmarks.end}</w:p>`;
     }
 
     private buildNumberingXml(): string {
+        // Lists with the same kind at every level share one definition, each list a numbering of its own
+        // that restarts its ordered levels (at 1, or where the list starts): a definition per list wrote
+        // all nine levels (2 KB) for each, and 200,000 two-line Markdown lists made 400 MB of XML.
+        const abstractIds = new Map<string, number>();
         let abstracts = '', nums = '';
         for (const entry of this.numbering) {
-            const aId = entry.numId - 1;
-            let levels = '';
-            for (let l = 0; l <= 8; l++) {
-                const type = entry.levels.get(l) ?? entry.levels.get(0) ?? 'unordered';
-                const fmt = type === 'ordered' ? 'decimal' : 'bullet';
-                const text = type === 'ordered' ? `%${l + 1}.` : '•';
-                levels += `<w:lvl w:ilvl="${l}"><w:start w:val="1"/><w:numFmt w:val="${fmt}"/>`
-                    + `<w:lvlText w:val="${escapeXml(text)}"/><w:lvlJc w:val="left"/>`
-                    + `<w:pPr><w:ind w:left="${720 * (l + 1)}" w:hanging="360"/></w:pPr></w:lvl>`;
+            const types = Array.from({ length: 9 }, (_, l) => entry.levels.get(l) ?? entry.levels.get(0) ?? 'unordered');
+            const signature = types.join(',');
+            let aId = abstractIds.get(signature);
+            if (aId === undefined) {
+                aId = abstractIds.size;
+                abstractIds.set(signature, aId);
+                let levels = '';
+                types.forEach((type, l) => {
+                    const fmt = type === 'ordered' ? 'decimal' : 'bullet';
+                    const text = type === 'ordered' ? `%${l + 1}.` : '•';
+                    levels += `<w:lvl w:ilvl="${l}"><w:start w:val="1"/><w:numFmt w:val="${fmt}"/>`
+                        + `<w:lvlText w:val="${escapeXml(text)}"/><w:lvlJc w:val="left"/>`
+                        + `<w:pPr><w:ind w:left="${720 * (l + 1)}" w:hanging="360"/></w:pPr></w:lvl>`;
+                });
+                abstracts += `<w:abstractNum w:abstractNumId="${aId}"><w:multiLevelType w:val="multilevel"/>${levels}</w:abstractNum>`;
             }
-            abstracts += `<w:abstractNum w:abstractNumId="${aId}"><w:multiLevelType w:val="multilevel"/>${levels}</w:abstractNum>`;
             let overrides = '';
-            for (const [lvl, start] of entry.startAt) {
-                if (start > 1) overrides += `<w:lvlOverride w:ilvl="${lvl}"><w:startOverride w:val="${start}"/></w:lvlOverride>`;
+            for (const lvl of [...entry.levels.keys()].sort((a, b) => a - b)) {
+                if (types[lvl] !== 'ordered') continue;
+                overrides += `<w:lvlOverride w:ilvl="${lvl}"><w:startOverride w:val="${Math.max(1, entry.startAt.get(lvl) ?? 1)}"/></w:lvlOverride>`;
             }
             nums += `<w:num w:numId="${entry.numId}"><w:abstractNumId w:val="${aId}"/>${overrides}</w:num>`;
         }
@@ -565,8 +669,9 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     private async table(node: OfficeContentNode): Promise<string> {
         const rows = (node.children || []).filter(r => r.type === 'row');
         if (!rows.length) return '';
-        // Grid-occupancy pass: compute grid width and per-row rendered cells with synthesized merges.
-        const cols = this.gridWidth(rows);
+        // Each row's cells, merges and gaps laid out by occupancy, as the grid budget laid them out.
+        const layout = layoutTableRows(rows)!;
+        const cols = layout.cols;
         const contentWidth = this.contentWidthTwips();
         const colW = Math.max(1, Math.floor(contentWidth / Math.max(1, cols)));
         const tblGrid = `<w:tblGrid>${Array.from({ length: cols }, () => `<w:gridCol w:w="${colW}"/>`).join('')}</w:tblGrid>`;
@@ -576,62 +681,40 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
             + (tableAlign ? `<w:jc w:val="${tableAlign}"/>` : '')
             + `<w:tblBorders>${['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(s => `<w:${s} w:val="single" w:sz="4" w:space="0" w:color="auto"/>`).join('')}</w:tblBorders></w:tblPr>`;
 
-        // grid left-col -> a pending vertical merge (rows still to cover, and the merge's column span).
-        const active = new Map<number, { remaining: number; span: number }>();
         let trs = '';
         for (let ri = 0; ri < rows.length; ri++) {
             const row = rows[ri];
-            const cells = (row.children || []).filter(c => c.type === 'cell');
             const trPr = isHeaderRow(row, ri === 0) ? '<w:trPr><w:tblHeader/></w:trPr>' : '';
             let tcs = '';
-            let col = 0, ci = 0;
-            while (ci < cells.length || [...active.keys()].some(c => c >= col)) {
-                const act = active.get(col);
-                if (act) {
+            for (const slot of layout.rows[ri]) {
+                if (slot.kind === 'covered') {
                     // Continuation cell for an active vertical merge. Carry the origin's gridSpan so a cell
                     // merged BOTH across columns and down emits one spanning continuation, not one narrow
                     // vMerge per column (which made the merge cover only its first column in Word).
-                    const gs = act.span > 1 ? `<w:gridSpan w:val="${act.span}"/>` : '';
+                    const gs = slot.span > 1 ? `<w:gridSpan w:val="${slot.span}"/>` : '';
                     tcs += `<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/>${gs}<w:vMerge/></w:tcPr><w:p/></w:tc>`;
-                    act.remaining--;
-                    if (act.remaining <= 0) active.delete(col);
-                    col += act.span;
                     continue;
                 }
-                if (ci >= cells.length) {
-                    // No explicit cells left. A vertical merge is still pending at a later column, so
-                    // fill this gap column with an empty cell and advance until the merges are placed;
-                    // breaking here would drop the continuation and shift the grid a row down.
-                    if (![...active.keys()].some(c => c > col)) break;
+                if (slot.kind === 'gap') {
+                    // A column the row skips: a sparse grid's (ExcelParser emits only non-empty cells, each
+                    // with its column), or one before a vertical merge still pending further right.
                     tcs += `<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr><w:p/></w:tc>`;
-                    col++;
                     continue;
                 }
-                // Sparse source grid: ExcelParser emits only the non-empty cells, each carrying its own
-                // column index. Fill the skipped columns with empty cells so a value in D1 lands in
-                // column 4, rather than sliding left to whatever the running cursor happened to reach.
-                const nextCol = (cells[ci].metadata as any)?.col;
-                if (typeof nextCol === 'number' && nextCol > col && col < cols) {
-                    tcs += `<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr><w:p/></w:tc>`;
-                    col++;
-                    continue;
-                }
-                const cell = cells[ci++];
+                const { cell, rowSpan } = slot;
                 const cmeta = cell.metadata as any;
-                const colSpan = Math.max(1, Math.min(cols, cmeta?.colSpan || 1));
-                const rowSpan = Math.max(1, Math.min(1000, cmeta?.rowSpan || 1));
+                const colSpan = Math.min(cols, slot.colSpan);
                 let tcPr = `<w:tcW w:w="0" w:type="auto"/>`;
                 if (colSpan > 1) tcPr += `<w:gridSpan w:val="${colSpan}"/>`;
-                if (rowSpan > 1) { tcPr += `<w:vMerge w:val="restart"/>`; active.set(col, { remaining: rowSpan - 1, span: colSpan }); }
+                if (rowSpan > 1) tcPr += `<w:vMerge w:val="restart"/>`;
                 const bg = hexColor(cmeta?.backgroundColor);
                 if (bg) tcPr += `<w:shd w:val="clear" w:color="auto" w:fill="${bg}"/>`;
                 let inner = await this.renderBlocks(cell.children);
-                // A w:tc must end with a w:p: append one only when empty or ending in a nested table.
+                // A w:tc must end with a w:p: append one when it is empty or ends in anything else (a
+                // nested table, a bookmark of a block that wrote nothing).
                 const trimmed = inner.trimEnd();
-                if (!trimmed) inner = '<w:p/>';
-                else if (trimmed.endsWith('</w:tbl>')) inner = trimmed + '<w:p/>';
-                tcs += `<w:tc><w:tcPr>${tcPr}</w:tcPr>${inner}</w:tc>`;
-                col += colSpan;
+                inner = trimmed.endsWith('</w:p>') || trimmed.endsWith('<w:p/>') ? trimmed : trimmed + '<w:p/>';
+                tcs += `<w:tc><w:tcPr>${tcPr}</w:tcPr>${this.pointBookmarks(cell)}${inner}</w:tc>`;
             }
             // A w:tr must contain at least one w:tc.
             if (!tcs) tcs = `<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr><w:p/></w:tc>`;
@@ -640,39 +723,11 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         return `<w:tbl>${tblPr}${tblGrid}${trs}</w:tbl>`;
     }
 
-    private gridWidth(rows: OfficeContentNode[]): number {
-        let max = 1;
-        const active = new Map<number, number>();
-        for (const row of rows) {
-            let col = 0;
-            const cells = (row.children || []).filter(c => c.type === 'cell');
-            let ci = 0;
-            while (ci < cells.length || [...active.keys()].some(c => c >= col)) {
-                if ((active.get(col) || 0) > 0) { active.set(col, active.get(col)! - 1); if (active.get(col)! <= 0) active.delete(col); col++; continue; }
-                if (ci >= cells.length) {
-                    if (![...active.keys()].some(c => c > col)) break;
-                    col++; // gap column before a still-pending vertical merge
-                    continue;
-                }
-                // Mirror table()'s sparse-grid placement, or the grid would be narrower than the rows.
-                const nextCol = (cells[ci].metadata as any)?.col;
-                if (typeof nextCol === 'number' && nextCol > col && col < 1000) { col++; continue; }
-                const cmeta = cells[ci++].metadata as any;
-                const colSpan = Math.max(1, Math.min(1000, cmeta?.colSpan || 1));
-                const rowSpan = Math.max(1, Math.min(1000, cmeta?.rowSpan || 1));
-                if (rowSpan > 1) for (let k = 0; k < colSpan; k++) active.set(col + k, rowSpan - 1);
-                col += colSpan;
-            }
-            max = Math.max(max, col);
-        }
-        return Math.min(1000, max);
-    }
-
     private async sheet(node: OfficeContentNode): Promise<string> {
         const name = (node.metadata as any)?.sheetName;
         const heading = name ? `<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t xml:space="preserve">${xmlText(name)}</w:t></w:r></w:p>` : '';
         const children = node.children || [];
-        const table = await this.table({ type: 'table', children: fillSheetRowGaps(children.filter(c => c.type === 'row')) } as OfficeContentNode);
+        const table = await this.table({ type: 'table', children: fillSheetRowGaps(children.filter(c => c.type === 'row'), n => this.takeGridPositions(n)) } as OfficeContentNode);
         // A sheet's drawing images and charts are pushed as non-row children after the rows; render
         // them after the grid (the HTML generator does the same) rather than dropping them.
         const extras = await this.renderBlocks(children.filter(c => c.type !== 'row'));
@@ -704,19 +759,17 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
                 + `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>`
                 + `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
             // A picture that is itself a link (ImageMetadata.link) wraps in a hyperlink run container,
-            // exactly as ODT wraps the frame in <draw:a>. Dropped here until now, so a linked image
-            // survived ODT round-trip but lost its link through DOCX.
-            if (meta?.link) {
-                const safeLink = sanitizeOfficePackageUrl(meta.link);
-                if (safeLink) {
-                    const rid = this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink', escapeXml(encUrl(safeLink)), 'External');
-                    drawing = `<w:hyperlink r:id="${rid}">${drawing}</w:hyperlink>`;
-                }
-            }
+            // exactly as ODT wraps the frame in <draw:a>.
+            if (meta?.link) drawing = this.hyperlinkAround(meta.link, meta.linkType, drawing) ?? drawing;
         } else if (meta?.url) {
-            // Remote-only image: degrade to a link on the alt text (never fetch bytes: SSRF).
+            // Remote-only image: degrade to a link on the alt text (never fetch bytes: SSRF), to where
+            // the picture links when it is a link, and to the image otherwise.
             const safe = sanitizeOfficePackageUrl(meta.url);
-            if (safe) { const rid = this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink', escapeXml(encUrl(safe)), 'External'); drawing = `<w:hyperlink r:id="${rid}">${this.styledRun(meta.altText || safe, undefined, 'Hyperlink')}</w:hyperlink>`; }
+            if (safe) {
+                const run = this.styledRun(meta.altText || safe, undefined, 'Hyperlink');
+                drawing = (meta.link ? this.hyperlinkAround(meta.link, meta.linkType, run) : null)
+                    ?? `<w:hyperlink r:id="${this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink', escapeXml(encUrl(safe)), 'External')}">${run}</w:hyperlink>`;
+            }
         }
         // No renderable image (unresolvable/unsupported attachment, no url): keep the alt text or OCR
         // so the content is not silently lost.
@@ -810,20 +863,15 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         const data = att?.chartData;
         if (!data) return `<w:p><w:r><w:t xml:space="preserve">[Chart: ${xmlText(meta?.attachmentName || '')}]</w:t></w:r></w:p>`;
         const caption = data.title ? `<w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">${xmlText(data.title)}</w:t></w:r></w:p>` : '';
-        // Build a table: header = series names, first col = labels.
-        const rows: OfficeContentNode[] = [];
-        const header: OfficeContentNode = { type: 'row', children: [cellOf(''), ...data.dataSets.map(d => cellOf(d.name || ''))] };
-        rows.push(header);
-        (data.labels || []).forEach((label, i) => {
-            rows.push({ type: 'row', children: [cellOf(label), ...data.dataSets.map(d => cellOf(String(d.values?.[i] ?? '')))] });
-        });
-        const table = await this.table({ type: 'table', children: rows } as OfficeContentNode);
+        // A table: header = series names, first col = labels (within the grid budget, see chartTable).
+        const table = await this.table(this.chartTable(data, cellOf));
         return caption + table;
     }
 
     private embed(node: OfficeContentNode): string {
         const meta = node.metadata as any;
-        const url = meta?.url ? sanitizeOfficePackageUrl(meta.url) : '';
+        const rawUrl = embedUrl(meta);
+        const url = rawUrl ? sanitizeOfficePackageUrl(rawUrl) : '';
         if (!url) {
             this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'docx', feature: 'embed' });
             const fallback = meta?.label || node.text || this.getNodeText(node);
@@ -837,10 +885,10 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
 
     private styleForTag(tag: string | undefined): string | undefined {
         if (!tag || !isSafeStyleMapTag(tag)) return undefined;
-        const map: Record<string, string> = {
+        const map: Record<string, string> = lookupTable({
             h1: 'Heading1', h2: 'Heading2', h3: 'Heading3', h4: 'Heading4', h5: 'Heading5', h6: 'Heading6',
             blockquote: 'Quote', pre: 'Code',
-        };
+        });
         return map[tag.toLowerCase()];
     }
     private knownStyle(style: string | undefined): string | undefined {

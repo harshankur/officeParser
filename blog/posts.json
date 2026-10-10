@@ -1,0 +1,80 @@
+{
+    "blog": {
+        "url": "https://officeparser.harshankur.com/blog/",
+        "title": "Engineering Blog | officeParser",
+        "author": "Harsh Ankur",
+        "description": "How document formats work inside, how officeParser reads and writes them, where it falls short, and how to chunk documents for retrieval. Written by Harsh Ankur, author of officeParser."
+    },
+    "categories": [
+        { "id": "deep-dive", "label": "Format Deep Dives" },
+        { "id": "security", "label": "Security & War Stories" },
+        { "id": "architecture", "label": "Build Notes" },
+        { "id": "comparisons", "label": "Honest Comparisons" },
+        { "id": "rag", "label": "RAG & AI" }
+    ],
+    "posts": [
+        {
+            "slug": "what-is-actually-inside-a-docx",
+            "title": "What is Actually Inside a .docx File? An Architectural Deep Dive",
+            "shortTitle": "What is Inside a .docx",
+            "category": "deep-dive",
+            "published": "2026-10-04",
+            "description": "A tour of the .docx package: parts and relationships, runs that Word splits mid-word, lists stored in another file, merged cells, text boxes, and field codes, and what officeParser makes of them.",
+            "deck": "Most developers assume a Word document is styled text in a zip archive. It is closer to a small database: parts tied together by relationships, text split into runs, lists defined in another file, and text boxes nested inside drawings."
+        },
+        {
+            "slug": "how-pptx-stores-a-slide",
+            "title": "How PowerPoint Really Stores a Slide: Coordinate Systems, Master Trees, and DrawingML",
+            "shortTitle": "How PPTX Stores a Slide",
+            "category": "deep-dive",
+            "published": "2026-10-04",
+            "description": "Why a slide is a canvas and not a text flow: English Metric Units, the theme, master and layout chain, the shape tree, speaker notes, and why reading order is hard.",
+            "deck": "A word processing file flows from top to bottom. A presentation is the opposite: a set of separate canvases where shapes sit at coordinates, formatting is inherited through four layers, and every length is a whole number of units, 914,400 to the inch."
+        },
+        {
+            "slug": "why-pdf-text-extraction-is-hard",
+            "title": "Why PDF Text Extraction is Unforgivingly Hard",
+            "shortTitle": "Why PDF Extraction is Hard",
+            "category": "deep-dive",
+            "published": "2026-10-04",
+            "description": "A PDF has no words, paragraphs, or reading order. Positioned glyphs, missing spaces, font encodings, ligatures, multi-column pages, and the XY-cut that rebuilds reading order.",
+            "deck": "PDF describes how a page looks, not what it says. It knows how to paint glyphs at coordinates. Getting text back out means reconstructing what a reader's eye does without being told."
+        },
+        {
+            "slug": "security-war-stories-zip-bombs-and-ssrf",
+            "title": "Security War Stories: Decompression Bombs, SSRF, and Hardening an Office Parser",
+            "shortTitle": "Security War Stories",
+            "category": "security",
+            "published": "2026-10-04",
+            "description": "Four holes found and fixed in officeParser: a ZIP header that lies about its size, SSRF through PDF rendering, spreadsheet repeat attributes, and nesting that runs the stack out.",
+            "deck": "A parser's whole job is to open files that someone else built. Here are four ways a crafted document attacked officeParser, and what the code does about each one now."
+        },
+        {
+            "slug": "from-text-extraction-to-ast-and-round-trip",
+            "title": "From String Scraping to AST: The Architectural Evolution of officeParser",
+            "shortTitle": "From String Scraping to AST",
+            "category": "architecture",
+            "published": "2026-10-04",
+            "description": "Why returning one flat string hit a ceiling, and how a typed AST made conversion between Office, Markdown, HTML, and LaTeX possible.",
+            "deck": "For more than six years officeParser returned a string. Here is why that stopped being enough, what replaced it, and the rule that has governed every feature since."
+        },
+        {
+            "slug": "where-officeparser-is-the-wrong-tool",
+            "title": "Where officeParser is the Wrong Tool: An Honest Engineering Guide",
+            "shortTitle": "Where officeParser is the Wrong Tool",
+            "category": "comparisons",
+            "published": "2026-10-04",
+            "description": "The jobs officeParser does not do: PDFs that match Word exactly, formula recalculation, legacy .doc files, writing spreadsheets and slides, macros, and TeX typesetting, and what to use instead.",
+            "deck": "Most documentation reads like a sales pitch, with the drawbacks in the fine print. I would rather be plain: here are the problems officeParser does not solve, and the tools to use instead."
+        },
+        {
+            "slug": "rag-document-chunking-done-right",
+            "title": "Document Chunking for Retrieval Done Right: Beyond Naive Token Windows",
+            "shortTitle": "Chunking for Retrieval",
+            "category": "rag",
+            "published": "2026-10-04",
+            "description": "Why a sliding token window shreds tables and orphans headings, what chunking on document structure fixes, and what officeParser's chunker does and does not do.",
+            "deck": "Teams tune embedding models and re-rankers while feeding them chunks that were cut in the wrong places. Here is what a fixed-size splitter does to a real document, and what chunking on the document's structure fixes."
+        }
+    ]
+}

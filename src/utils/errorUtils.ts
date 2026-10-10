@@ -11,6 +11,9 @@ import { OfficeError, OfficeErrorType, OfficeIssue, OfficeParserConfig, OfficeWa
 /** Error header prefix for all error messages */
 const ERRORHEADER = "[OfficeParser]: ";
 
+/** Where an issue is reported: a parser's or a generator's config (their `onWarning`). */
+type IssueHandler = { onWarning?: (issue: OfficeIssue) => void };
+
 // `OfficeError` (the public shape callers catch) lives in types.ts alongside `OfficeIssue`.
 // Every error built by getOfficeError is branded with its issue, which serves two purposes:
 // consumers branch on `err.officeIssue.code` instead of matching message text, and
@@ -22,8 +25,8 @@ const ERRORHEADER = "[OfficeParser]: ";
  * Some entries are functions that take parameters to build dynamic messages.
  */
 const ERROR_MESSAGES: Record<OfficeErrorType, string | ((...args: any[]) => string)> = {
-    [OfficeErrorType.EXTENSION_UNSUPPORTED]: (ext: string) => `Sorry, OfficeParser currently supports docx, pptx, xlsx, odt, odp, ods, odg, pdf, rtf, md, html, csv, epub files only. Create a ticket in Issues on github to add support for ${ext} files. Stay tuned for further updates.`,
-    [OfficeErrorType.FORMAT_UNSUPPORTED]: (format: string) => `Sorry, OfficeGenerator does not support generating '${format}' files. Supported formats: json, text, md, html, csv, rtf, pdf, docx, odt, epub, chunks.`,
+    [OfficeErrorType.EXTENSION_UNSUPPORTED]: (ext: string) => `Sorry, OfficeParser currently supports docx, pptx, xlsx, odt, odp, ods, odg, pdf, rtf, md, html, csv, epub, tex files only. Create a ticket in Issues on github to add support for ${ext} files. Stay tuned for further updates.`,
+    [OfficeErrorType.FORMAT_UNSUPPORTED]: (format: string) => `Sorry, OfficeGenerator does not support generating '${format}' files. Supported formats: json, text, md, html, csv, rtf, pdf, docx, odt, tex, epub, chunks.`,
     [OfficeErrorType.FILE_CORRUPTED]: (filepath: string) => `Your file ${filepath} seems to be corrupted. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce error.`,
     [OfficeErrorType.FILE_DOES_NOT_EXIST]: (filepath: string) => `File ${filepath} could not be found! Check if the file exists or verify if the relative path to the file is correct from your terminal's location.`,
     [OfficeErrorType.LOCATION_NOT_FOUND]: (location: string) => `Entered location ${location} is not reachable! Please make sure that the entered directory location exists. Check relative paths and reenter.`,
@@ -46,11 +49,17 @@ const ERROR_MESSAGES: Record<OfficeErrorType, string | ((...args: any[]) => stri
     [OfficeErrorType.ZIP_ENTRY_COUNT_LIMIT_EXCEEDED]: (limit: number) => `ZIP entry count exceeds limit (${limit})`,
     [OfficeErrorType.ZIP_ENTRY_INVALID_SIZE]: `ZIP entry missing a valid declared size`,
     [OfficeErrorType.ZIP_SIZE_LIMIT_EXCEEDED]: (limit: number) => `ZIP uncompressed size limit exceeded (${limit} bytes)`,
+    [OfficeErrorType.XML_ELEMENT_LIMIT_EXCEEDED]: (limit: number) => `XML element limit exceeded: the document's XML holds more than ${limit} elements, comments and processing instructions, counting the lines, control words or parts of content embedded in it (decompressionLimits.maxXmlElements). Each takes several hundred bytes of memory to read; raise the limit, with memory to match, to parse larger documents.`,
     [OfficeErrorType.ZIP_NO_ENTRIES_FOUND]: `No readable entries found in ZIP data. The input is corrupt, truncated, or not a ZIP archive: every ZIP-based document format requires at least one entry.`,
     [OfficeErrorType.ZIP_TRUNCATED]: `Malformed ZIP data: no End of Central Directory record was found at the end of the input. Either the file was cut off during download or transfer, or extra data follows the archive; in both cases the entries recovered from it cannot be trusted to be the whole document.`,
     [OfficeErrorType.REQUIRED_PART_MISSING]: (info: { fileType: string, part: string }) => `Your ${info.fileType} file is a readable ZIP archive but is missing its required '${info.part}' part, so it cannot be a valid ${info.fileType} document. The file is corrupt, incomplete, or mislabeled. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce the error.`,
     [OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED]: `Document nesting depth exceeded the safe limit (possible denial-of-service input)`,
-    [OfficeErrorType.EMBEDDING_TIMEOUT]: (timeout: number) => `Embedding call timed out after ${timeout}ms`
+    [OfficeErrorType.PDF_PROCESS_FAILED]: (info: { reason?: string; memoryMb?: number } = {}) => `The separate process reading this PDF with pdf.js ended${info.reason ? ` (${info.reason})` : ''}: it most likely needed more memory than pdfParserConfig.processMemoryMb (${info.memoryMb ?? 1024} MB) allows. A few KB of PDF can inflate into gigabytes inside pdf.js; raise the limit for a PDF that legitimately needs more.`,
+    [OfficeErrorType.OUTPUT_TOO_LARGE]: (info?: { repeatedLimit?: number }) => info?.repeatedLimit !== undefined
+        ? `The output is too large to write: the template's values, repeated at its placeholders, add more than decompressionLimits.maxRepeatedContent (${info.repeatedLimit} characters) to the document. Raise the limit for a template that legitimately repeats long values.`
+        : `The output is too large to write: it grew past what a string or array can hold, or the AST shares its nodes along more paths than a writer follows (each shared node is written under every node holding it). Write the content to another format or in parts.`,
+    [OfficeErrorType.EMBEDDING_TIMEOUT]: (timeout: number) => `Embedding call timed out after ${timeout}ms`,
+    [OfficeErrorType.OCR_TERMINATED]: `The OCR workers were terminated (terminateOcr()) before this image was recognized.`
 };
 
 /**
@@ -73,19 +82,46 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
     [OfficeWarningType.FILE_TYPE_DETECTION_FAILED]: `Auto-detection of file type failed. This can happen on older Node.js versions with modern file-type versions. Please provide the 'fileType' hint in the configuration if parsing fails.`,
     [OfficeWarningType.EMPTY_CHUNK_GENERATED]: (strategy: string) => `No chunks generated for document. Check if the document content is compatible with the '${strategy}' strategy.`,
     [OfficeWarningType.WHITESPACE_NODE_SKIPPED]: (nodeType: string) => `Skipped whitespace-only node of type: ${nodeType}`,
-    [OfficeWarningType.TABLE_CELL_LIMIT_EXCEEDED]: (limit: number) => `Table cell limit (${limit}) reached while expanding repeated ODF cells/rows; the remaining cells were not materialized. A few hundred bytes of XML can request an unbounded number of cells via table:number-columns-repeated / table:number-rows-repeated, so this is capped. Raise decompressionLimits.maxTableCells if your documents legitimately exceed it.`,
+    [OfficeWarningType.TABLE_CELL_LIMIT_EXCEEDED]: (limit: number) => `Table cell limit (${limit}: decompressionLimits.maxTableCells, plus one per byte of the document) reached; the remaining cells were not read. A few hundred bytes of ODF can request an unbounded number of cells via table:number-columns-repeated / table:number-rows-repeated, and a small XLSX can hold millions of cells, so the cells a document yields are capped. Raise decompressionLimits.maxTableCells if your documents legitimately exceed it.`,
+    [OfficeWarningType.RAW_CONTENT_LIMIT_EXCEEDED]: (limit: number) => `rawContent limit (${limit} characters) reached; the remaining nodes carry no rawContent. A node's rawContent holds the markup of everything nested in it, so nested tables and repeated cells can multiply a small document's markup many times over. Raise decompressionLimits.maxRawContentLength if you need all of it.`,
+    [OfficeWarningType.REPEATED_CONTENT_LIMIT_EXCEEDED]: (limit: number) => `Repeated content limit (${limit} characters: decompressionLimits.maxRepeatedContent, plus 16 per byte of the document) reached: the document repeats content by reference (ODF repeated cells and rows, XLSX shared strings, style values and link targets) and every writer writes it at each use, so later repeats were not made, show the start of their text, or go without the value. Raise decompressionLimits.maxRepeatedContent if your documents legitimately repeat large content.`,
+    [OfficeWarningType.ALT_CHUNK_NOT_READ]: (reason: string) => `An alternative-format chunk (w:altChunk) of the document was not read: ${reason}. Its content is not in the result; open the document in Word and save it again, which merges chunks into the document.`,
+    [OfficeWarningType.CONTENT_PART_NOT_READ]: (info: { part: string, reason: string }) => `A part of the document (${info.part}) was not read: ${info.reason}. Its content is not in the result.`,
     [OfficeWarningType.INVALID_CONTAINER_WIDTH]: (val: any) => `Invalid HTML containerWidth: ${JSON.stringify(val)}. Falling back to "auto". Width must be a positive number, a valid CSS length string (e.g., "900px", "100%", "50vw"), or "auto".`,
     [OfficeWarningType.METADATA_NOT_REPRESENTABLE]: (info: { keys: string[], format: string }) => `Custom metadata ${info.keys.map(k => `'${k}'`).join(', ')} could not be written to ${info.format} output: the format has a fixed metadata vocabulary with no place for caller-defined keys. The named metadata fields (title, author, etc.) were still applied.`,
+    [OfficeWarningType.TABLE_GRID_LIMIT_EXCEEDED]: (info: { laidOut?: number; unpadded?: boolean; rowsNotFilled?: boolean; unaligned?: boolean; limit: number }) => info.unaligned
+        ? `Plain text stopped lining up table columns and page layout: the spaces to align them passed what one output may add (${info.limit}: 16 million, plus 16 per byte of the document). Later cells and runs are set off by a single space.`
+        : info.laidOut
+        ? `${info.laidOut === 1 ? 'A table' : `${info.laidOut} tables`} held more empty grid positions than one output may fill (${info.limit}: a million, plus 16 per byte of the document), so ${info.laidOut === 1 ? 'its' : 'their'} cells were laid out closer: they no longer stand in the rows and columns the document put them in. A few cells far apart (or spanning far) would otherwise fill billions of positions.`
+        : info.unpadded
+            ? `Short table rows were not padded to their table's width: the document's tables need more empty cells than one output may fill (${info.limit}: a million, plus 16 per byte of the document). A reader takes a short row as ending in empty cells.`
+            : `A sparse sheet's empty rows were not written: the document's tables need more empty positions than one output may fill (${info.limit}: a million, plus 16 per byte of the document), so rows after the gap moved up.`,
     [OfficeWarningType.CONTENT_NOT_REPRESENTABLE]: (info: { feature: string, format: string }) => `The '${info.feature}' content has no faithful representation in ${info.format} output and was written as its plain-text fallback (or omitted where no text was available).`,
-    [OfficeWarningType.IMAGE_NOT_INLINED]: (info: { name?: string, bytes?: number, limit?: number }) => `Image${info.name ? ` '${info.name}'` : ''} (${info.bytes ?? '?'} bytes) exceeds maxInlineImageBytes (${info.limit}); it was emitted as a name reference, not an inline data: URI. Provide the file alongside the output, raise maxInlineImageBytes, or use a self-contained (standalone) HTML document.`,
+    [OfficeWarningType.IMAGE_NOT_INLINED]: (info: { name?: string, bytes?: number, limit?: number, inDocument?: boolean }) => info.inDocument
+        ? `Image${info.name ? ` '${info.name}'` : ''} (${info.bytes ?? '?'} bytes) was emitted as a name reference, not an inline data: URI: the images inlined in this document reached ${info.limit} bytes in all (a picture is inlined at every place that shows it). Provide the file alongside the output.`
+        : `Image${info.name ? ` '${info.name}'` : ''} (${info.bytes ?? '?'} bytes) exceeds maxInlineImageBytes (${info.limit}); it was emitted as a name reference, not an inline data: URI. Provide the file alongside the output, raise maxInlineImageBytes, or use a self-contained (standalone) HTML document.`,
     [OfficeWarningType.NO_WORKSHEETS_FOUND]: `Workbook contains no worksheet parts (xl/worksheets/). If the workbook holds only chartsheets this is expected and there is simply no cell text to extract; otherwise the file may be incomplete.`,
     [OfficeWarningType.NO_SLIDES_FOUND]: `Presentation contains no slides (ppt/slides/). A legitimately empty presentation produces this too, but if you expected content the file may be incomplete.`,
     [OfficeWarningType.INVALID_STYLE_MAP_TAG]: (tag: string) => `styleMap output.tag ${JSON.stringify(tag)} is not an allowed element name and was ignored; the node's default tag was used instead. A tag name is written into both the opening and closing tag, so only a known-safe set of block, heading and inline elements is accepted.`,
     [OfficeWarningType.PDF_STRUCT_TREE_UNRELIABLE]: (reason: string) => `PDF tagged-structure tree was not used${reason ? ` (${reason})` : ''}; recovered structure from page geometry instead.`,
-    [OfficeWarningType.PDF_TEXT_ENCODING_SUSPECT]: (info: string) => `PDF text extraction produced mostly unmappable glyphs${info ? ` (${info})` : ''}; the font is likely missing a usable ToUnicode map, so the extracted text may be garbage. Consider OCR.`,
+    [OfficeWarningType.PDF_TEXT_ENCODING_SUSPECT]: (info: string) => `PDF text extraction produced many unmappable glyphs${info ? ` (${info})` : ''}; the font is likely missing a usable ToUnicode map, so the extracted text may be garbage. Consider OCR.`,
     [OfficeWarningType.PDF_NO_TEXT_EXTRACTED]: (pages: number) => `No text was extracted from this PDF${pages ? ` (${pages} page${pages === 1 ? '' : 's'})` : ''}. It is very likely a scanned or image-only document with no text layer; set 'ocr: true' (with 'extractAttachments: true') to recognize text from the page images.`,
     [OfficeWarningType.PDF_OUTLINE_TRUNCATED]: (reason: string) => `PDF document outline (bookmarks) is incomplete${reason ? ` (${reason})` : ''}; ast.auxiliary.outline holds only what was recovered.`,
+    [OfficeWarningType.PDF_CONTENT_LIMIT_EXCEEDED]: (info: { limit?: 'maxTextItems' | 'maxOperators' | 'maxTimeMs'; pageNumber?: number; budgetMs?: number } = {}) => {
+        const at = info.pageNumber ? ` on page ${info.pageNumber}` : '';
+        if (info.limit === 'maxOperators') return `PDF content limit reached${at}: pdf.js produced more drawing operators than pdfParserConfig.maxOperators allows (plus four per byte of the file), so from there on the document's images, text colours and font styles were not read; its text was. Nested form XObjects can multiply a few KB into millions of operators. Raise the limit if the document legitimately holds more.`;
+        if (info.limit === 'maxTimeMs') return `PDF content limit reached${at}: pdf.js spent more CPU time on this document than pdfParserConfig.maxTimeMs allows (plus 20 ms per KB of the file${info.budgetMs !== undefined ? `: ${Math.round(info.budgetMs)} ms in all` : ''}), so the rest of the document was not read. Nested form XObjects can multiply a few KB into minutes of work. Raise the limit if the document legitimately needs more.`;
+        return `PDF content limit reached${at}: pdf.js produced more text than pdfParserConfig.maxTextItems allows (plus one item per byte of the file, an item counting once more per 64 characters), so the rest of the document was not read. Nested form XObjects can multiply a few KB into millions of items. Raise the limit if the document legitimately holds more.`;
+    },
+    [OfficeWarningType.PDF_SEPARATE_PROCESS_UNAVAILABLE]: `pdf.js could not start in a separate process, so it runs in this one: a hostile PDF can then exhaust this process's memory, and the time pdf.js takes is not bounded (pdfParserConfig.maxTimeMs applies to the separate process; bound the parse with abortSignal). Set pdfParserConfig.separateProcess to false to read in this process without trying.`,
     [OfficeWarningType.OCR_REQUIRES_ATTACHMENTS]: () => `'ocr: true' was set without 'extractAttachments: true'; OCR runs over extracted images, so no OCR was performed. Add 'extractAttachments: true' to recognize text from the document's images.`,
+    [OfficeWarningType.INVALID_CONFIG_VALUE]: (info: { option: string; value: unknown; expected: string; fallback: unknown }) => {
+        // A number JSON cannot write (NaN, -Infinity) is shown as itself, not as null.
+        const shown = (typeof info.value === 'number' ? String(info.value) : JSON.stringify(info.value)) ?? String(info.value);
+        const value = shown.length > 80 ? `${shown.slice(0, 77)}...` : shown;
+        const fallback = info.fallback === '' || info.fallback === undefined ? 'the default is' : `the default (${JSON.stringify(info.fallback)}) is`;
+        return `Invalid ${info.option}: ${value}. Expected ${info.expected}; ${fallback} used instead.`;
+    },
     [OfficeWarningType.UNRECOGNIZED_CONFIG_OPTION]: (info: { keys: string[], renames?: Record<string, string> }) => {
         const detail = info.keys.map(k => {
             const replacement = info.renames?.[k];
@@ -96,7 +132,32 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
             return replacement.startsWith('(') ? `'${k}' ${replacement}` : `'${k}' (use '${replacement}' instead)`;
         }).join(', ');
         return `Unrecognized config option${info.keys.length === 1 ? '' : 's'}: ${detail}. ${info.keys.length === 1 ? 'It was' : 'They were'} ignored and had no effect. Check for a typo or a key renamed in a major release.`;
-    }
+    },
+    [OfficeWarningType.MATH_WRITTEN_AS_TEXT]: (info: { commands?: string[] }) => info.commands && info.commands.length > 0
+        ? `A math expression used ${info.commands.map(c => `'${c}'`).join(', ')}, which can read or write files, run programs, or redefine commands, so it was written to the LaTeX output as literal text instead of typeset math.`
+        : `A math expression had unbalanced braces or \\begin/\\end environments (or an environment that is not valid there), so it was written to the LaTeX output as literal text instead of typeset math.`,
+    [OfficeWarningType.IMAGES_NOT_BUNDLED]: (info: { files: string[]; external?: string[]; fromDataUris?: boolean; embedImages?: boolean }) => {
+        const list = (files: string[]) => files.map(f => `'${f}'`).join(', ');
+        const count = (files: string[]) => `${files.length} image file${files.length === 1 ? '' : 's'}`;
+        const external = info.external ?? [];
+        const parts: string[] = [];
+        if (info.files.length) {
+            const why = info.embedImages === false ? 'texConfig.embedImages is off' : 'a .tex carries only PNG and JPEG images it can read, up to a limit per document';
+            parts.push(`The LaTeX output references ${count(info.files)} (${list(info.files)}) that ${info.files.length === 1 ? 'is' : 'are'} not part of the .tex source (${why}). Place ${info.files.length === 1 ? 'it at that path' : 'them at those paths'}, relative to the .tex (the bytes are in ast.attachments${info.fromDataUris ? ', or in the data: URIs the source embedded images as' : ''}), or set texConfig.bundle: true to get a zip containing the .tex and its images.`);
+        }
+        if (external.length) {
+            parts.push(`The LaTeX output ${info.files.length ? 'also ' : ''}references ${count(external)} (${list(external)}) by the path the source document gave, without the image data, which the source did not contain. Place ${external.length === 1 ? 'it at that path' : 'them at those paths'}, relative to the .tex, before compiling.`);
+        }
+        return parts.join(' ');
+    },
+    [OfficeWarningType.CITATIONS_NOT_RESOLVED]: (info: { keys: string[]; more: number }) => {
+        const n = info.keys.length + info.more;
+        const named = info.keys.map(k => `'${k}'`).join(', ') + (info.more ? ` and ${info.more} more` : '');
+        return `The LaTeX output cites ${n === 1 ? 'a key' : `${n} keys`} (${named}) that ${n === 1 ? 'has' : 'have'} no entry in a bibliography it holds, so \\cite prints [?] for ${n === 1 ? 'it' : 'them'} until one is added: a \\bibliography{file} with a .bib file that has ${n === 1 ? 'it' : 'them'}, or a thebibliography list.`;
+    },
+    [OfficeWarningType.LATEX_CONSTRUCT_NOT_INTERPRETED]: (info: { constructs: string[] }) => `The LaTeX input uses ${info.constructs.map(c => `'${c}'`).join(', ')}, which the parser does not interpret. Text inside ${info.constructs.length === 1 ? 'it' : 'them'} was kept where there was any; drawing environments (such as TikZ pictures) were omitted.`,
+    [OfficeWarningType.LATEX_EXPANSION_LIMIT_REACHED]: (info: { limit: string }) => `The LaTeX input reached the ${info.limit} limit, which bounds how much work a document can demand; macros or included files past it were not expanded.`,
+    [OfficeWarningType.LATEX_FILE_NOT_FOUND]: (info: { files: string[] }) => `The LaTeX input references ${info.files.length === 1 ? 'a file' : 'files'} the parser could not read (${info.files.map(f => `'${f}'`).join(', ')}). A .tex file holds only the files it carries in filecontents blocks; parse the project as a .zip (for example an Overleaf download) to include the others. Images were kept as references to their path.`
 };
 
 /**
@@ -131,7 +192,7 @@ const createOfficeError = (type: OfficeErrorType, info?: any): string => {
  */
 const reportIssue = (
     issue: OfficeIssue,
-    config?: OfficeParserConfig
+    config?: IssueHandler
 ): void => {
     if (config?.onWarning) {
         config.onWarning(issue);
@@ -150,21 +211,29 @@ const reportIssue = (
  * Creates, optionally logs to console, and returns a formatted OfficeParser error.
  * 
  * @param type - The type of error
- * @param config - Optional parser configuration (its `onWarning` handler receives the issue)
+ * @param config - Optional parser or generator configuration (its `onWarning` handler receives the issue)
  * @param info - Optional additional information
  * @returns The Error object to be thrown
  */
-export const getOfficeError = (type: OfficeErrorType, config?: OfficeParserConfig, info?: any): OfficeError => {
-    const message = createOfficeError(type, info);
+export const getOfficeError = (type: OfficeErrorType, config?: IssueHandler, info?: any): OfficeError => {
+    const error = buildOfficeError(type, info);
+    reportIssue(error.officeIssue!, config);
+    return error;
+};
+
+/**
+ * An OfficeParser error, built without reporting it anywhere: for an error that each of its consumers
+ * reports with its own config. (The OCR pool rejects every waiting job with one error when it is
+ * terminated, and each parse reports its job's as OCR_FAILED.)
+ */
+export const buildOfficeError = (type: OfficeErrorType, info?: any): OfficeError => {
     const issue: OfficeIssue = {
         type: 'error',
         code: type,
-        message,
+        message: createOfficeError(type, info),
         details: info
     };
-
-    reportIssue(issue, config);
-    const error: OfficeError = new Error(ERRORHEADER + message);
+    const error: OfficeError = new Error(ERRORHEADER + issue.message);
     // Brand the error with the issue that produced it so getWrappedError can tell an
     // already-reported, already-prefixed OfficeParser error from a raw third-party one.
     error.officeIssue = issue;
@@ -193,6 +262,9 @@ export const getOfficeError = (type: OfficeErrorType, config?: OfficeParserConfi
  */
 export const getWrappedError = (error: any, config: OfficeParserConfig, filePath?: string): Error => {
     if (error?.officeIssue) return error;
+    // A document nested past what the stack holds (elements in their own kind, hundreds deep) is that,
+    // not a corrupt file.
+    if (error instanceof RangeError && /call stack/i.test(error.message)) return getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED, config);
 
     let message = error.message || error;
     let code: OfficeErrorType | OfficeWarningType = OfficeErrorType.FILE_CORRUPTED; // Default for wrapped errors

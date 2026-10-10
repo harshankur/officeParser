@@ -40,10 +40,14 @@
  * @see https://latex2rtf.sourceforge.net/RTF-Spec-1.2.pdf RTF 1.2 Specification
  */
 
-import { FullOfficeParserConfig, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeMimeType, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
+import { CellMetadata, FullOfficeParserConfig, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, TextFormatting } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
-import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
-import { performOcr } from '../utils/ocrUtils.js';
+import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
+import { ocrDuringParse } from '../utils/ocrUtils.js';
+import { lookupTable } from '../utils/lookupUtils.js';
+import { chargeRawContent } from '../utils/xmlUtils.js';
+import { attachmentLookup } from '../utils/repeatUtils.js';
+import { ByteDecoder, textDecoder } from '../utils/encodingUtils.js';
 
 /**
  * Represents an RTF group (content enclosed in braces).
@@ -113,6 +117,9 @@ export interface RtfControl {
      * - For `\u1234`: param = 1234 (Unicode code point)
      */
     param?: number;
+
+    /** For `\u`, the fallback that follows it in the source (see SimpleRtfParser.skip), kept for raw content. */
+    fallback?: string;
 }
 
 /**
@@ -134,7 +141,7 @@ type RtfImageFormat =
  * Lookup table mapping RTF control words to internal formats.
  * Fully typed: if a key maps to an unsupported format, TypeScript throws an error.
  */
-const RTF_BLIP_MAP: Record<string, RtfImageFormat> = {
+const RTF_BLIP_MAP: Record<string, RtfImageFormat> = lookupTable({
     // Raster formats
     pngblip: 'png',
     jpegblip: 'jpeg',
@@ -142,19 +149,19 @@ const RTF_BLIP_MAP: Record<string, RtfImageFormat> = {
     tiffblip: 'tiff',
     dibitmap: 'bmp',
     wbitmap: 'bmp',
-};
+});
 
 /**
  * Lookup table mapping internal formats to MIME types.
  * Again fully typed: if a format is missing from this map, TS errors.
  */
-const IMAGE_MIME_MAP: Record<RtfImageFormat, OfficeMimeType> = {
+const IMAGE_MIME_MAP: Record<RtfImageFormat, OfficeMimeType> = lookupTable({
     png: 'image/png',
     jpeg: 'image/jpeg',
     gif: 'image/gif',
     tiff: 'image/tiff',
     bmp: 'image/bmp',
-};
+});
 
 /**
  * Low-level RTF tokenizer that parses RTF syntax into a tree structure.
@@ -175,6 +182,45 @@ const IMAGE_MIME_MAP: Record<RtfImageFormat, OfficeMimeType> = {
  * // tree.content contains parsed RTF nodes
  * ```
  */
+/**
+ * How deeply groups may nest before the parser refuses the document. The tree is walked recursively,
+ * and a few thousand levels exhaust the stack, at a depth that differs by engine; a fixed limit far
+ * above real documents (Word nests a handful of levels) makes the outcome the typed error everywhere,
+ * as for HTML.
+ */
+const MAX_RTF_GROUP_DEPTH = 256;
+
+/** Bytes as the characters of the same codes, in slices: spread whole, a long run is more arguments than a call takes. */
+const latin1Text = (bytes: Uint8Array): string => {
+    let text = '';
+    for (let i = 0; i < bytes.length; i += 8192) text += String.fromCharCode(...bytes.subarray(i, i + 8192));
+    return text;
+};
+
+/** The most characters a `\ucN` may ask a reader to skip after each `\uN` (see SimpleRtfParser.skip). */
+const MAX_UNICODE_FALLBACK = 16;
+
+/**
+ * The code page of each font character set (`\fcharsetN`) that has one of its own; the others (0 ANSI,
+ * 1 default, 2 symbol) use the document's (`\ansicpgN`).
+ */
+const CHARSET_CODE_PAGES = new Map<number, number>([
+    [77, 10000], [128, 932], [129, 949], [134, 936], [136, 950], [161, 1253], [162, 1254], [163, 1258],
+    [177, 1255], [178, 1256], [186, 1257], [204, 1251], [222, 874], [238, 1250], [254, 437], [255, 437],
+]);
+
+/** Code pages whose TextDecoder label is not `windows-N`. */
+const CODE_PAGE_ENCODINGS = new Map<number, string>([
+    [932, 'shift_jis'], [936, 'gbk'], [949, 'euc-kr'], [950, 'big5'], [10000, 'macintosh'], [20932, 'euc-jp'],
+    [54936, 'gb18030'], [65001, 'utf-8'], [437, 'ibm437'], [850, 'ibm850'],
+]);
+
+/**
+ * Double-byte code pages: bytes in one are that code page's (a UTF-8 reading of them, meant for writers
+ * that put UTF-8 under a single-byte code page, could take a pair for a UTF-8 character).
+ */
+const DOUBLE_BYTE_CODE_PAGES = new Set([932, 936, 949, 950, 1361, 20932, 54936]);
+
 export class SimpleRtfParser {
     /** Current position in the buffer */
     private index: number = 0;
@@ -185,20 +231,48 @@ export class SimpleRtfParser {
     /** Current code page for character decoding (default is Windows-1252) */
     private codePage: number = 1252;
 
+    /**
+     * The document's code page (`\ansicpgN`), each font's (its `\fcharsetN` or `\cpgN` in the font
+     * table), the font whose entry is being read, and the code page of each open group. Text under a
+     * font of its own character set (`{\f1\fcharset204 ...}`, a Russian or Japanese font) is in that
+     * font's code page, until the group ends or another font is chosen: it was read in the document's.
+     */
+    private documentCodePage = 1252;
+    private readonly fontCodePages = new Map<number, number>();
+    private font: number | undefined;
+    private defaultFont: number | undefined;
+    private readonly codePageStack: number[] = [];
+
     /** Cached TextDecoders for different code pages */
-    private decoders: { [key: number]: TextDecoder } = {};
+    private decoders: { [key: number]: ByteDecoder } = {};
 
     /** Buffer for consecutive text bytes to handle multi-byte encodings and UTF-8 detection */
-    private pendingBytes: number[] = [];
+    private pendingBytes = new Uint8Array(1024);
+    /** How many of `pendingBytes` hold text (a byte buffer, grown as needed: an array of numbers took eight bytes a byte, and 200 MB of text inflated from 196 KB of DOCX outgrew what an array holds). */
+    private pendingLength = 0;
 
     /** Total length of the buffer */
     private length: number;
 
     /**
+     * The `\ucN` of each open group (the characters a reader that shows `\uN` skips after it, 1 unless
+     * set), and how many of them are still to skip. Not skipped, every character outside the code page
+     * came out twice: Word writes Cyrillic or Chinese as `\u1055\'3f`, which read as "п?р?и?".
+     */
+    private ucStack: number[] = [1];
+    private skip = 0;
+    /** The `\u` whose fallback is being skipped, and where the fallback started (kept for rawContent). */
+    private skippingFor?: RtfControl;
+    private fallbackStart = 0;
+
+    /**
      * Creates a new RTF parser.
      * @param buffer - The RTF file content as a Buffer
      */
-    constructor(buffer: Buffer) {
+    /**
+     * @param config - The parse's config, whose `onWarning` a refused document is reported to.
+     */
+    constructor(buffer: Buffer, private readonly config?: OfficeParserConfig) {
         this.buffer = buffer;
         this.length = buffer.length;
     }
@@ -211,18 +285,33 @@ export class SimpleRtfParser {
             const char = this.buffer[this.index];
             const currentGroup = stack[stack.length - 1];
 
+            // The fallback after a `\uN`, within its group.
+            if (this.skip > 0 && char !== 0x7B && char !== 0x7D) {
+                this.skipFallbackCharacter();
+                if (this.skip === 0) this.endFallback();
+                continue;
+            }
+            if (this.skip > 0) this.endFallback();
+
             if (char === 0x7B) { // '{'
+                if (stack.length > MAX_RTF_GROUP_DEPTH) throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED, this.config);
                 this.index++;
                 this.flushPendingText(currentGroup);
                 const newGroup: RtfGroup = { type: 'group', content: [] };
                 currentGroup.content.push(newGroup);
                 stack.push(newGroup);
+                this.ucStack.push(this.ucStack[this.ucStack.length - 1]);
+                this.codePageStack.push(this.codePage);
+                this.skip = 0;
             } else if (char === 0x7D) { // '}'
                 this.index++;
                 this.flushPendingText(currentGroup);
                 if (stack.length > 1) {
                     stack.pop();
+                    this.ucStack.pop();
+                    this.codePage = this.codePageStack.pop() ?? this.codePage;
                 }
+                this.skip = 0;
                 // If stack is 1 (root), we ignore extra closing braces or just stop?
                 // RTF should be balanced, but let's be robust.
             } else if (char === 0x5C) { // '\'
@@ -246,7 +335,7 @@ export class SimpleRtfParser {
 
         // Special control symbols
         if (char === 0x7B || char === 0x7D || char === 0x5C) { // \{ \} \\
-            this.pendingBytes.push(char);
+            this.pushBytes(this.index, this.index + 1);
             this.index++;
             return;
         }
@@ -257,7 +346,8 @@ export class SimpleRtfParser {
                 const hex = String.fromCharCode(this.buffer[this.index], this.buffer[this.index + 1]);
                 const code = parseInt(hex, 16);
                 if (!isNaN(code)) {
-                    this.pendingBytes.push(code);
+                    this.reservePending(1);
+                    this.pendingBytes[this.pendingLength++] = code;
                 }
                 this.index += 2;
             }
@@ -265,6 +355,15 @@ export class SimpleRtfParser {
         }
 
         this.flushPendingText(group);
+
+        // A backslash ending a line is a paragraph break (`\par`), as the specification has it, and as
+        // TextEdit writes every line: the lines ran together.
+        if (char === 0x0A || char === 0x0D) {
+            this.index++;
+            if (char === 0x0D && this.buffer[this.index] === 0x0A) this.index++;
+            group.content.push({ type: 'control', value: 'par' });
+            return;
+        }
 
         if (char === 0x2A) { // \* (ignorable destination)
             // We treat this as a control word named '*'
@@ -323,18 +422,42 @@ export class SimpleRtfParser {
 
         // Handle encoding control words
         if (name === 'ansicpg' && param !== undefined) {
-            this.codePage = param;
+            this.codePage = this.documentCodePage = param;
         } else if (name === 'ansi') {
-            this.codePage = 1252;
+            this.codePage = this.documentCodePage = 1252;
         } else if (name === 'mac') {
-            this.codePage = 10000;
+            this.codePage = this.documentCodePage = 10000;
         } else if (name === 'pc') {
-            this.codePage = 437;
+            this.codePage = this.documentCodePage = 437;
         } else if (name === 'pca') {
-            this.codePage = 850;
+            this.codePage = this.documentCodePage = 850;
+        } else if (name === 'f' && param !== undefined) {
+            // A font: its code page (in the font table, the entry's own until its \fcharset says).
+            this.font = param;
+            this.codePage = this.fontCodePages.get(param) ?? this.documentCodePage;
+        } else if ((name === 'fcharset' || name === 'cpg') && param !== undefined && this.font !== undefined) {
+            const codePage = name === 'cpg' ? param : CHARSET_CODE_PAGES.get(param);
+            if (codePage !== undefined && codePage > 0) {
+                this.fontCodePages.set(this.font, codePage);
+                this.codePage = codePage;
+            }
+        } else if (name === 'deff' && param !== undefined) {
+            this.defaultFont = param;
+        } else if (name === 'plain') {
+            // Character formatting back to the default: the default font's code page.
+            this.codePage = (this.defaultFont !== undefined ? this.fontCodePages.get(this.defaultFont) : undefined) ?? this.documentCodePage;
         }
 
-        group.content.push({ type: 'control', value: name, param });
+        const control: RtfControl = { type: 'control', value: name, param };
+        group.content.push(control);
+        // A fallback is a few bytes (Word writes \uc0 to \uc2): a larger count is held to 16, so it cannot
+        // swallow the rest of its group as fallback.
+        if (name === 'uc' && param !== undefined && param >= 0) this.ucStack[this.ucStack.length - 1] = Math.min(param, MAX_UNICODE_FALLBACK);
+        else if (name === 'u' && param !== undefined) {
+            this.skip = this.ucStack[this.ucStack.length - 1];
+            this.skippingFor = control;
+            this.fallbackStart = this.index;
+        }
 
         // If this is the first control word in the group, it might be the destination
         if (group.content.length === 1 && group.type === 'group') {
@@ -345,16 +468,65 @@ export class SimpleRtfParser {
         }
     }
 
+    /**
+     * Passes over one character of a `\uN`'s fallback: a byte, a `\'hh` escape, or a control word or
+     * symbol (each counts as one, as the specification has it). Line breaks in the source are not
+     * characters.
+     */
+    private skipFallbackCharacter() {
+        const char = this.buffer[this.index];
+        if (char === 0x0D || char === 0x0A) { this.index++; return; }
+        this.skip--;
+        const isLetter = (c: number | undefined) => c !== undefined && ((c >= 0x61 && c <= 0x7A) || (c >= 0x41 && c <= 0x5A));
+        const next = this.buffer[this.index + 1];
+        if (char !== 0x5C) this.index++;
+        else if (next === 0x27) this.index = Math.min(this.length, this.index + 4);
+        else if (!isLetter(next)) this.index = Math.min(this.length, this.index + 2);
+        else {
+            let at = this.index + 1;
+            while (isLetter(this.buffer[at])) at++;
+            if (this.buffer[at] === 0x2D) at++;
+            while (at < this.length && this.buffer[at] >= 0x30 && this.buffer[at] <= 0x39) at++;
+            if (this.buffer[at] === 0x20) at++;
+            this.index = at;
+        }
+    }
+
+    /** Ends a `\uN`'s fallback, keeping its source on the `\u` token when raw content is asked for. */
+    private endFallback() {
+        if (this.skippingFor && this.config?.includeRawContent && this.index > this.fallbackStart) {
+            this.skippingFor.fallback = this.buffer.toString('latin1', this.fallbackStart, this.index);
+        }
+        this.skip = 0;
+        this.skippingFor = undefined;
+    }
+
     private parseText(group: RtfGroup) {
+        const start = this.index;
         while (this.index < this.length) {
             const char = this.buffer[this.index];
-            if (char === undefined) break;
             if (char === 0x7B || char === 0x7D || char === 0x5C || char === 0x0D || char === 0x0A) {
                 break;
             }
-            this.pendingBytes.push(char);
             this.index++;
         }
+        this.pushBytes(start, this.index);
+    }
+
+    /** Room in `pendingBytes` for `count` more bytes. */
+    private reservePending(count: number) {
+        if (this.pendingLength + count <= this.pendingBytes.length) return;
+        const grown = new Uint8Array(Math.max(this.pendingBytes.length * 2, this.pendingLength + count));
+        grown.set(this.pendingBytes.subarray(0, this.pendingLength));
+        this.pendingBytes = grown;
+    }
+
+    /** Appends the buffer's bytes from `start` to `end` to the pending text. */
+    private pushBytes(start: number, end: number) {
+        if (end <= start) return;
+        this.reservePending(end - start);
+        this.pendingBytes.set(this.buffer.subarray(start, end), this.pendingLength);
+        this.pendingLength += end - start;
     }
 
     /**
@@ -362,9 +534,11 @@ export class SimpleRtfParser {
      * @param group The group to append the text node to
      */
     private flushPendingText(group: RtfGroup) {
-        if (this.pendingBytes.length > 0) {
-            group.content.push({ type: 'text', value: this.decodeBytes(this.pendingBytes, this.codePage) });
-            this.pendingBytes = [];
+        if (this.pendingLength > 0) {
+            group.content.push({ type: 'text', value: this.decodeBytes(this.pendingBytes.subarray(0, this.pendingLength), this.codePage) });
+            this.pendingLength = 0;
+            // A buffer grown for one long run is not kept for the rest of the document.
+            if (this.pendingBytes.length > 1 << 20) this.pendingBytes = new Uint8Array(1024);
         }
     }
 
@@ -376,13 +550,13 @@ export class SimpleRtfParser {
      * @param codePage The RTF code page ID
      * @returns The decoded string
      */
-    private decodeBytes(bytes: number[], codePage: number): string {
-        const uint8 = new Uint8Array(bytes);
+    private decodeBytes(bytes: Uint8Array, codePage: number): string {
+        const uint8 = bytes;
 
         // Try UTF-8 first if there are any non-ASCII bytes.
         // Many modern RTF generators (like calibre or web-based tools) dump UTF-8 bytes 
         // into the RTF even if the header claims a different code page.
-        if (bytes.some(b => b > 127)) {
+        if (!DOUBLE_BYTE_CODE_PAGES.has(codePage) && bytes.some(b => b > 127)) {
             try {
                 // Use fatal: true to ensure we fall back on invalid UTF-8 sequences
                 const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
@@ -394,22 +568,21 @@ export class SimpleRtfParser {
 
         // Fallback to specified code page
         if (!this.decoders[codePage]) {
-            let encoding = `windows-${codePage}`;
-            if (codePage === 10000) encoding = 'macintosh';
-            else if (codePage === 437) encoding = 'ibm437';
-            else if (codePage === 850) encoding = 'ibm850';
+            // Shift-JIS, GBK, Big5 and the others are not `windows-N` to a TextDecoder: read as such, they
+            // fell back to Windows-1252.
+            const encoding = CODE_PAGE_ENCODINGS.get(codePage) ?? `windows-${codePage}`;
 
             try {
-                this.decoders[codePage] = new TextDecoder(encoding);
+                this.decoders[codePage] = textDecoder(encoding);
             } catch (e) {
                 if (codePage !== 1252) {
                     try {
-                        this.decoders[codePage] = new TextDecoder('windows-1252');
+                        this.decoders[codePage] = textDecoder('windows-1252');
                     } catch (e2) {
-                        return String.fromCharCode(...bytes);
+                        return latin1Text(bytes);
                     }
                 } else {
-                    return String.fromCharCode(...bytes);
+                    return latin1Text(bytes);
                 }
             }
         }
@@ -460,7 +633,7 @@ export class SimpleRtfParser {
  */
 export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
     checkAbortSignal(config.abortSignal);
-    const parser = new SimpleRtfParser(buffer);
+    const parser = new SimpleRtfParser(buffer, config);
     const doc = parser.parse();
 
     // Extract font and color tables
@@ -468,8 +641,15 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     const colorTable = extractColorTable(doc);
 
     const content: OfficeContentNode[] = [];
-    const notes: OfficeContentNode[] = [];
+    // Headers and footers (`\header`, `\headerl`, `\footerf`, ...), for the AST's auxiliary: skipped,
+    // their text was lost, and the left, right and first-page ones were read into the body.
+    const headers: OfficeContentNode[] = [];
+    const footers: OfficeContentNode[] = [];
+    // Who wrote the next annotation (`\annotation`), given in the groups before it.
+    let annotationAuthor: string | undefined;
+    let annotationInitials: string | undefined;
     const attachments: OfficeAttachment[] = [];
+    const attachmentsByName = attachmentLookup(attachments);
 
     // State for paragraph construction
     let currentParagraphTextChunks: string[] = [];
@@ -500,12 +680,38 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // ═══════════════════════════════════════════════════════════════════
     // Table state tracking (Stack-based for nesting)
     // ═══════════════════════════════════════════════════════════════════
+    // Table cell properties tracking: how a cell of the row definition (`\trowd` ... `\cellx`) is merged.
+    interface CellProps {
+        /** `\clmgf` / `\clmrg`: the first of cells merged across, or one merged into the cell before it. */
+        mergeFirst?: boolean;
+        mergeContinues?: boolean;
+        /** `\clvmgf` / `\clvmrg`: the first of cells merged down, or one merged into the cell above it. */
+        verticalFirst?: boolean;
+        verticalContinues?: boolean;
+    }
+
     interface TableContext {
         rows: OfficeContentNode[];
         currentCells: OfficeContentNode[]; // Cells in the current row
         currentCellContent: OfficeContentNode[]; // Content of the currently open cell
         rowIndex: number;
+        /**
+         * The row definition's cells (the latest `\trowd` ... `\cellx` of this table), applied when the row
+         * ends: Word writes it before a row's cells, again after them, and a nested table's only after
+         * them (in `\nesttableprops`).
+         */
+        cellDefinitions: CellProps[];
+        /** The cell a vertical merge started in, and its row, by grid column. */
+        verticalMerges: Map<number, { cell: OfficeContentNode; row: number }>;
     }
+
+    /**
+     * How deeply tables may nest (`\itapN`): past it a paragraph is in the deepest table (real documents
+     * nest a few levels). Each level a paragraph opens is a table, a row and a cell once closed, for the
+     * few bytes of `\itapN`: a stated depth of millions is not millions of them, and a document
+     * alternating between deep and shallow paragraphs makes at most this many levels for each.
+     */
+    const MAX_TABLE_DEPTH = 16;
 
     let tableStack: TableContext[] = [];
     let currentFootnoteId = 0;
@@ -522,29 +728,17 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // Helper to get current table context
     const getCurrentTable = (): TableContext | undefined => tableStack.length > 0 ? tableStack[tableStack.length - 1] : undefined;
 
-    // Helper to ensure a table context exists (for top-level tables)
-    const ensureTableContext = () => {
-        if (tableStack.length === 0) {
-            tableStack.push({
-                rows: [],
-                currentCells: [],
-                currentCellContent: [],
-                rowIndex: 0
-            });
-        }
-    };
-
-    let inTable = false;
-    let paragraphInTable = false;
-    let tableId = 0;
-
-    // Table cell properties tracking
-    interface CellProps {
-        isMergedContinuation: boolean;
-    }
-    let rowCellProps: CellProps[] = [];
-    let currentCellDefinitionProps: CellProps = { isMergedContinuation: false };
-    let cellContentIndex = 0;
+    /**
+     * How deeply in tables the paragraph being read is: 0 outside any, 1 in a table's cell, 2 in a table
+     * nested in one, and so on (`\intbl`, `\itapN`; after `\trowd` a paragraph is in the table until
+     * `\pard`, as many writers leave `\intbl` out).
+     */
+    let paragraphDepth = 0;
+    // The row definition being read (`\trowd` ... `\cellx`), the table it is for, and whether the reader is
+    // in a nested table's `\nesttableprops`, whose `\trowd` defines the nested table's row.
+    let definingTable: TableContext | undefined;
+    let definitionCell: CellProps = {};
+    let nestedPropsDepth = 0;
 
     // ═══════════════════════════════════════════════════════════════════
     // List state tracking (Word 97+ uses \ls for list style ID)
@@ -573,6 +767,155 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // Hyperlink state (RTF uses \field{\*\fldinst HYPERLINK "url"})
     // ═══════════════════════════════════════════════════════════════════
     let currentLinkUrl: string | undefined;
+
+    // Blocks read from a shape's text box (`\shptxt`), placed after the paragraph anchoring the shape:
+    // read in place, the text box's paragraphs split that paragraph and took its first half as theirs.
+    let blocksAfterParagraph: OfficeContentNode[] = [];
+
+    /**
+     * Everything the reading of paragraphs and tables keeps between control words. A destination read
+     * apart from the flow around it (a header or footer, a footnote, an annotation, a shape's text box)
+     * starts from a fresh one and gives the one around it back at its end. Sharing it, the destination's
+     * `\pard` (which Word always writes there) ended the list item, heading or table cell it was
+     * anchored in, and a table left open around it was flushed into the destination: a comment in a
+     * table cell took the table into the comment, and a table ending a section went into the header.
+     */
+    interface FlowState {
+        target: OfficeContentNode[];
+        paragraphTextChunks: string[];
+        paragraphChildren: OfficeContentNode[];
+        paragraphRawChunks: string[];
+        runTextChunks: string[];
+        runFormatting: TextFormatting;
+        indent: number;
+        alignment: 'left' | 'center' | 'right' | 'justify';
+        listItem: boolean;
+        list: 'ordered' | 'unordered' | undefined;
+        heading: number | undefined;
+        listId: string | undefined;
+        anchorIds: string[];
+        knownListId: string | undefined;
+        knownListType: 'ordered' | 'unordered' | undefined;
+        tables: TableContext[];
+        depth: number;
+        definingTable: TableContext | undefined;
+        definitionCell: CellProps;
+        nestedPropsDepth: number;
+        linkUrl: string | undefined;
+        afterParagraph: OfficeContentNode[];
+    }
+
+    /** Sets the flow aside for a destination whose blocks go to `target`, starting it afresh. */
+    const enterDestination = (target: OfficeContentNode[]): FlowState => {
+        const saved: FlowState = {
+            target: currentTarget,
+            paragraphTextChunks: currentParagraphTextChunks,
+            paragraphChildren: currentParagraphChildren,
+            paragraphRawChunks: currentParagraphRawChunks,
+            runTextChunks: currentRunTextChunks,
+            runFormatting: currentFormatting,
+            indent: paragraphIndent,
+            alignment: paragraphAlignment,
+            listItem: isListItem,
+            list: listType,
+            heading: headingLevel,
+            listId: currentListId,
+            anchorIds: currentAnchorIds,
+            knownListId: lastKnownListId,
+            knownListType: lastKnownListType,
+            tables: tableStack,
+            depth: paragraphDepth,
+            definingTable,
+            definitionCell,
+            nestedPropsDepth,
+            linkUrl: currentLinkUrl,
+            afterParagraph: blocksAfterParagraph,
+        };
+        currentTarget = target;
+        currentParagraphTextChunks = [];
+        currentParagraphChildren = [];
+        currentParagraphRawChunks = [];
+        currentRunTextChunks = [];
+        currentFormatting = {};
+        paragraphIndent = 0;
+        paragraphAlignment = 'left';
+        isListItem = false;
+        listType = undefined;
+        headingLevel = undefined;
+        currentListId = undefined;
+        currentAnchorIds = [];
+        lastKnownListId = undefined;
+        lastKnownListType = undefined;
+        tableStack = [];
+        paragraphDepth = 0;
+        definingTable = undefined;
+        definitionCell = {};
+        nestedPropsDepth = 0;
+        currentLinkUrl = undefined;
+        blocksAfterParagraph = [];
+        return saved;
+    };
+
+    /** Ends a destination: its last paragraph and any table still open go to its blocks, then the flow around it is back. */
+    const leaveDestination = (saved: FlowState) => {
+        finishFlow();
+        currentTarget = saved.target;
+        currentParagraphTextChunks = saved.paragraphTextChunks;
+        currentParagraphChildren = saved.paragraphChildren;
+        currentParagraphRawChunks = saved.paragraphRawChunks;
+        currentRunTextChunks = saved.runTextChunks;
+        currentFormatting = saved.runFormatting;
+        paragraphIndent = saved.indent;
+        paragraphAlignment = saved.alignment;
+        isListItem = saved.listItem;
+        listType = saved.list;
+        headingLevel = saved.heading;
+        currentListId = saved.listId;
+        currentAnchorIds = saved.anchorIds;
+        lastKnownListId = saved.knownListId;
+        lastKnownListType = saved.knownListType;
+        tableStack = saved.tables;
+        paragraphDepth = saved.depth;
+        definingTable = saved.definingTable;
+        definitionCell = saved.definitionCell;
+        nestedPropsDepth = saved.nestedPropsDepth;
+        currentLinkUrl = saved.linkUrl;
+        blocksAfterParagraph = saved.afterParagraph;
+    };
+
+    /**
+     * Ends the flow being read (the document's, or a destination's): its last paragraph, then every table
+     * still open. The paragraph first: flushed after the table, a paragraph following a table's last
+     * `\row` without its own `\par` went before the table.
+     */
+    const finishFlow = () => {
+        flushParagraph();
+        closeTablesTo(0);
+        paragraphDepth = 0;
+    };
+
+    /**
+     * Makes the open tables `depth` deep: tables nested deeper are finished (each into the cell of the
+     * table around it, the outermost into the flow's target), and missing levels are opened, each a
+     * table starting in the open cell of the one around it.
+     */
+    const closeTablesTo = (depth: number) => {
+        while (tableStack.length > depth) flushTable();
+    };
+    const openTablesTo = (depth: number) => {
+        closeTablesTo(depth);
+        while (tableStack.length < depth) {
+            tableStack.push({ rows: [], currentCells: [], currentCellContent: [], rowIndex: 0, cellDefinitions: [], verticalMerges: new Map() });
+        }
+        return tableStack[depth - 1];
+    };
+
+    /** Where a finished block goes: the open cell of the table the paragraph is in, else the flow's target (after any table it ends). */
+    const blockContainer = (): OfficeContentNode[] => {
+        if (paragraphDepth > 0) return openTablesTo(paragraphDepth).currentCellContent;
+        closeTablesTo(0);
+        return currentTarget;
+    };
 
     // Helper to check if formatting changed
     const formattingChanged = (a: TextFormatting, b: TextFormatting): boolean => {
@@ -610,37 +953,12 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         }
     };
 
-    let isFlushingTable = false;
-
-    // Helper to flush current paragraph
+    // Helper to flush current paragraph. A paragraph with content outside any table ends the tables
+    // still open, which go before it (see blockContainer).
     const flushParagraph = () => {
         flushRun(); // Ensure last run is added
 
-        // Check if we need to end the table
-        // If we were in a table, but this paragraph is NOT marked as in-table, 
-        // and we have content, then the table has ended.
         const hasContent = currentParagraphTextChunks.length > 0 || currentParagraphChildren.length > 0;
-        if (inTable && !paragraphInTable && !isFlushingTable && hasContent) {
-            // CRITICAL: Save current paragraph content before flushing table
-            // because flushTable() -> flushRow() -> flushCell() -> flushParagraph()
-            // would otherwise process this content during the table flush
-            const savedParagraphTextChunks = [...currentParagraphTextChunks];
-            const savedParagraphChildren = [...currentParagraphChildren];
-            const savedParagraphRawChunks = [...currentParagraphRawChunks];
-
-            // Clear buffers so nested flushParagraph() doesn't process them
-            currentParagraphTextChunks = [];
-            currentParagraphChildren = [];
-            currentParagraphRawChunks = [];
-
-            flushTable();
-
-            // Restore the saved content for processing after the table
-            currentParagraphTextChunks = savedParagraphTextChunks;
-            currentParagraphChildren = savedParagraphChildren;
-            currentParagraphRawChunks = savedParagraphRawChunks;
-        }
-
         if (hasContent) {
             const currentParagraphText = currentParagraphTextChunks.join('');
             let nodeType: string = 'paragraph';
@@ -739,112 +1057,127 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             };
 
             if (config.includeRawContent && currentParagraphRawChunks.length > 0) {
-                node.rawContent = currentParagraphRawChunks.join('');
+                node.rawContent = chargeRawContent(currentParagraphRawChunks.join(''), config);
             }
 
-            // If we're building a table, add to current cell 
+            // If we're building a table, add to current cell
             // but ONLY if this paragraph was actually marked as in-table
-            if (inTable && paragraphInTable) {
-                ensureTableContext();
-                getCurrentTable()!.currentCellContent.push(node);
-            } else {
-                currentTarget.push(node);
-            }
+            blockContainer().push(node);
 
             currentParagraphTextChunks = [];
             currentParagraphChildren = [];
             currentParagraphRawChunks = [];
 
             // Reset paragraph-level state that should NOT persist
-            // Note: list properties (\ls, \ilvl, \li) and alignment (\ql, etc.) 
+            // Note: list properties (\ls, \ilvl, \li) and alignment (\ql, etc.)
             // persist in RTF until \pard or a new value is set.
             currentAnchorIds = []; // Reset anchors
         }
+
+        // The text boxes of shapes anchored in the paragraph, after it.
+        if (blocksAfterParagraph.length > 0) {
+            const container = blockContainer();
+            for (const block of blocksAfterParagraph) container.push(block);
+            blocksAfterParagraph = [];
+        }
     };
 
-    // Helper to flush current cell
-    const flushCell = (tableCtx?: TableContext) => {
-        flushParagraph();
-        const ctx = tableCtx || getCurrentTable();
-        if (!ctx) return undefined;
-
-        // Always return a cell node, even if empty, to preserve table structure (grid)
-        const cellNode: OfficeContentNode = {
+    // Helper to flush current cell: the open cell of `ctx` (empty or not, to keep the grid) is the row's next cell.
+    const flushCell = (ctx: TableContext) => {
+        ctx.currentCells.push({
             type: 'cell',
             text: ctx.currentCellContent.map(c => c.text).join('\n'),
-            children: [...ctx.currentCellContent],
-            metadata: {
-                row: ctx.rowIndex,
-                col: ctx.currentCells.length
-            }
-        };
+            children: ctx.currentCellContent,
+            metadata: { row: ctx.rowIndex, col: 0 } as CellMetadata,
+        });
         ctx.currentCellContent = [];
-        return cellNode;
     };
 
-    // Helper to flush current row - creates a row node from collected cells
-    const flushRow = (tableCtx?: TableContext) => {
-        const ctx = tableCtx || getCurrentTable();
-        if (!ctx) return;
-
-        const cell = flushCell(ctx);
-        // Only add cell if it has content (prevents phantom empty cells during cleanup)
-        if (cell && (cell.children && cell.children.length > 0 || cell.text)) {
-            ctx.currentCells.push(cell);
-        }
-
-        if (ctx.currentCells.length > 0) {
-            const rowNode: OfficeContentNode = {
-                type: 'row',
-                text: ctx.currentCells.map(c => c.text).filter(t => t !== '').join(config.newlineDelimiter),
-                children: [...ctx.currentCells]
-            };
-            ctx.rows.push(rowNode);
-            ctx.currentCells = [];
-            ctx.rowIndex++;
-        }
+    /** Adds a merged-away cell's content (if it has any) to the cell it is merged into. */
+    const foldCell = (into: OfficeContentNode, cell: OfficeContentNode) => {
+        const children = cell.children ?? [];
+        if (!children.some(c => c.type !== 'paragraph' || (c.text ?? '').trim() !== '' || (c.children?.length ?? 0) > 0)) return;
+        for (const child of children) (into.children ??= []).push(child);
+        if (cell.text?.trim()) into.text = into.text ? `${into.text}\n${cell.text}` : cell.text;
     };
 
-    // Helper to flush table
-    const flushTable = () => {
-        if (isFlushingTable) return;
-        isFlushingTable = true;
-
-        const ctx = getCurrentTable();
-        if (!ctx) {
-            isFlushingTable = false;
-            return;
-        }
-
-        flushRow(ctx);
-
-        if (ctx.rows.length > 0) {
-            tableId++;
-            const tableNode: OfficeContentNode = {
-                type: 'table',
-                text: ctx.rows.map(r => r.text).join('\n'), // Aggregate text from rows
-                children: [...ctx.rows]
-            };
-
-            // If we have a parent table, add this table to the parent's current cell
-            if (tableStack.length > 1) {
-                const parentCtx = tableStack[tableStack.length - 2];
-                parentCtx.currentCellContent.push(tableNode);
-            } else {
-                currentTarget.push(tableNode);
+    /**
+     * Helper to flush current row: content left in the open cell is its last cell (a row without it has
+     * none), and the row definition's merges apply. A cell merged across (`\clmrg`) widens the one before
+     * it and one merged down (`\clvmrg`) lengthens the one above it, each taking its content; cells after
+     * it keep their columns. The continuation cell was dropped without the span, so they shifted left.
+     */
+    const flushRow = (ctx: TableContext) => {
+        if (ctx.currentCellContent.length > 0) flushCell(ctx);
+        const cells = ctx.currentCells;
+        ctx.currentCells = [];
+        if (cells.length === 0) return;
+        const kept: OfficeContentNode[] = [];
+        let column = 0;
+        let across: OfficeContentNode | undefined;
+        for (let i = 0; i < cells.length; i++, column++) {
+            const cell = cells[i];
+            const definition = ctx.cellDefinitions[i];
+            if (definition?.mergeContinues && across) {
+                const meta = across.metadata as CellMetadata;
+                meta.colSpan = (meta.colSpan ?? 1) + 1;
+                foldCell(across, cell);
+                continue;
             }
+            const above = definition?.verticalContinues ? ctx.verticalMerges.get(column) : undefined;
+            if (above) {
+                (above.cell.metadata as CellMetadata).rowSpan = ctx.rowIndex - above.row + 1;
+                foldCell(above.cell, cell);
+                across = undefined;
+                continue;
+            }
+            const meta = cell.metadata as CellMetadata;
+            meta.row = ctx.rowIndex;
+            meta.col = column;
+            kept.push(cell);
+            across = cell;
+            if (definition?.verticalFirst) ctx.verticalMerges.set(column, { cell, row: ctx.rowIndex });
+            else ctx.verticalMerges.delete(column);
         }
+        ctx.rows.push({
+            type: 'row',
+            text: kept.map(c => c.text).filter(t => t !== '').join(config.newlineDelimiter),
+            children: kept,
+        });
+        ctx.rowIndex++;
+    };
 
-        // Pop the table from stack
-        tableStack.pop();
+    // Helper to flush table: the innermost open table, into the open cell of the table around it or the flow's target.
+    const flushTable = () => {
+        const ctx = tableStack.pop();
+        if (!ctx) return;
+        flushRow(ctx);
+        if (ctx.rows.length === 0) return;
+        const tableNode: OfficeContentNode = {
+            type: 'table',
+            text: ctx.rows.map(r => r.text).join('\n'), // Aggregate text from rows
+            children: ctx.rows,
+        };
+        const parent = getCurrentTable();
+        if (parent) parent.currentCellContent.push(tableNode);
+        else currentTarget.push(tableNode);
+    };
 
-        // If stack is empty, we are out of table mode
-        if (tableStack.length === 0) {
-            inTable = false;
-            paragraphInTable = false;
-        }
+    /** `\cell` (depth 1) or `\nestcell` (deeper): the paragraph before it is in the cell, which ends. */
+    const cellEnds = (depth: number) => {
+        if (paragraphDepth < depth) paragraphDepth = depth;
+        flushParagraph();
+        flushCell(openTablesTo(depth));
+        paragraphDepth = depth;
+    };
 
-        isFlushingTable = false;
+    /** `\row` (depth 1) or `\nestrow` (deeper): the row of the table that deep ends. */
+    const rowEnds = (depth: number) => {
+        if (paragraphDepth < depth) paragraphDepth = depth;
+        flushParagraph();
+        flushRow(openTablesTo(depth));
+        // Subsequent paragraphs must say they are in the table (\intbl) to be in it.
+        paragraphDepth = depth - 1;
     };
 
     // Extract hyperlink URL from field instruction group
@@ -885,7 +1218,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                         if (urlMatch && foundHyperlink) {
                             foundUrl = urlMatch[1];
                         }
-                    } else if (child.type === 'group') {
+                    } else if (child.type === 'group' && child.destination !== 'field') {
                         const nestedUrl = findUrl(child);
                         if (nestedUrl) {
                             foundUrl = nestedUrl;
@@ -902,9 +1235,11 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             return undefined;
         };
 
-        // Search the field group for fldinst
+        // Search the field's own instructions (`\fldinst`), not its result or a field nested in it: each
+        // of those is read on its own, and searching them here too read nested fields again at every
+        // level (250 levels around 20 MB of text took eight times as long).
         for (const child of group.content) {
-            if (child.type === 'group') {
+            if (child.type === 'group' && child.destination === 'fldinst') {
                 const foundUrl = findUrl(child);
                 if (foundUrl) return foundUrl;
             }
@@ -1047,7 +1382,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         }
         // Add space delimiter for safety
         res += ' ';
-        return res;
+        return node.fallback ? res + node.fallback : res;
     };
 
     // Helper to extract text from a group (for bookmark names, etc.)
@@ -1075,15 +1410,24 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             const ignoreList = [
                 'fonttbl', 'colortbl', 'stylesheet', 'info', 'macpict',
                 'pmmetafile', 'wmetafile', 'dibitmap', 'bitmap', 'object',
-                'nextGenerator', 'header', 'footer', 'nonshppict', 'xml', 'private',
+                'nextGenerator', 'nonshppict', 'xml', 'private',
                 'upnp', 'ud', 'filetbl', 'operator', 'author', 'creatim', 'revtim', 'printim', 'comment',
-                'fldinst', 'listtext', 'pntext' // Ignore list marker text (handled separately)
+                'fldinst', 'listtext', 'pntext', // Ignore list marker text (handled separately)
+                // What a writer puts in place of a nested table for readers without nesting (a `\par`
+                // after each nested cell and row), which this reader has.
+                'nonesttables',
             ];
 
             let isIgnored = false;
             let isFootnote = false;
             let isHyperlinkField = false;
             let isPict = false;
+            // Where a header's or footer's paragraphs go, and whether the group is an annotation (a
+            // comment), a shape whose text box (`\shptxt`) alone is read, or that text box.
+            let redirect: OfficeContentNode[] | undefined;
+            let isAnnotation = false;
+            let isShapeInstance = false;
+            let isShapeText = false;
 
             // Add group start to raw content
             // Note: We don't add ignored groups to rawContent to keep it clean
@@ -1139,6 +1483,20 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     } else {
                         isIgnored = true;
                     }
+                } else if (/^(?:header|footer)[lrf]?$/.test(node.destination)) {
+                    if (config.ignoreHeadersAndFooters) isIgnored = true;
+                    else redirect = node.destination.startsWith('header') ? headers : footers;
+                } else if (node.destination === 'annotation') {
+                    if (config.ignoreComments) isIgnored = true;
+                    else isAnnotation = true;
+                } else if (node.destination === 'atnauthor' || node.destination === 'atnid') {
+                    if (node.destination === 'atnauthor') annotationAuthor = extractGroupText(node) || undefined;
+                    else annotationInitials = extractGroupText(node) || undefined;
+                    isIgnored = true;
+                } else if (node.destination === 'shpinst') {
+                    isShapeInstance = true;
+                } else if (node.destination === 'shptxt') {
+                    isShapeText = true;
                 } else if (ignoreList.includes(node.destination)) {
                     isIgnored = true;
                 } else if (node.content.length > 0 && node.content[0].type === 'control' && node.content[0].value === '*') {
@@ -1214,13 +1572,16 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     // Only add image node to content if this is NOT a list definition picture
                     // List pictures (bullets) should not appear in content, only as attachments
                     if (!parsingListTable && !parsingListDefinition) {
-                        // Also add an image node to the content tree (like DOCX)
+                        // Also add an image node to the content tree (like DOCX), in the cell of a
+                        // paragraph in a table (it went to the body, before the table)
                         flushParagraph();
-                        currentTarget.push({
+                        blockContainer().push({
                             type: 'image',
                             text: '',
                             metadata: {
-                                attachmentName: attachment.name || `image_${attachments.length}`
+                                attachmentName: attachment.name || `image_${attachments.length}`,
+                                // A picture in a HYPERLINK field's result is that link.
+                                ...(currentLinkUrl ? { link: currentLinkUrl, linkType: classifyLinkType(currentLinkUrl) } : {})
                             }
                         });
                     }
@@ -1269,18 +1630,21 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                                 }
                             }
                         };
-                        serializeGroupContent(node);
+                        // The child group, not the whole picture again: serialized for each child group,
+                        // a picture of 8,000 empty groups (16 KB) took 2 GB.
+                        currentParagraphRawChunks.push('{');
+                        serializeGroupContent(child);
+                        currentParagraphRawChunks.push('}');
                     }
                 }
                 currentParagraphRawChunks.push('}');
                 return;
             }
 
-            // Handle footnote: switch target to notes
-            const previousTarget = currentTarget;
-            let savedParagraphTextChunks: string[] | undefined;
-            let savedParagraphChildren: OfficeContentNode[] | undefined;
-            let savedParagraphRawChunks: string[] | undefined;
+            // A footnote, header, footer, annotation or shape text box is read apart from the flow around
+            // it (see FlowState), into the blocks it goes to.
+            let savedFlow: FlowState | undefined;
+            let footnote: OfficeContentNode | undefined;
 
             if (isFootnote) {
                 if (config.ignoreNotes) {
@@ -1323,23 +1687,50 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     emptyTextNode.notes = [noteNode];
                     currentParagraphChildren.push(emptyTextNode);
                 }
-                
-                currentTarget = noteNode.children!;
-                
-                // Save current paragraph state so we don't mix footnote paragraphs with main text
-                savedParagraphTextChunks = [...currentParagraphTextChunks];
-                savedParagraphChildren = [...currentParagraphChildren];
-                savedParagraphRawChunks = [...currentParagraphRawChunks];
-                
-                currentParagraphTextChunks = [];
-                currentParagraphChildren = [];
-                currentParagraphRawChunks = [];
+
+                // The paragraph's state is set aside (kept, not copied: see the table case above), so the
+                // note's paragraphs do not mix with the main text.
+                footnote = noteNode;
+                savedFlow = enterDestination(noteNode.children!);
+            }
+
+            // A header, footer, annotation or shape text box: its paragraphs go to their own list, not the body's.
+            let redirectedComment: OfficeContentNode | undefined;
+            let shapeBlocks: OfficeContentNode[] | undefined;
+            if (isShapeText) redirect = shapeBlocks = [];
+            if (redirect || isAnnotation) {
+                flushRun();
+                if (isAnnotation) {
+                    redirectedComment = {
+                        type: 'comment',
+                        children: [],
+                        ...(annotationAuthor || annotationInitials ? { metadata: { ...(annotationAuthor ? { author: annotationAuthor } : {}), ...(annotationInitials ? { initials: annotationInitials } : {}) } } : {}),
+                    };
+                    annotationAuthor = annotationInitials = undefined;
+                    // When it was written (`{\*\atndate N}`, a DTTM), among the annotation's own groups.
+                    for (const child of node.content) {
+                        if (child.type !== 'group' || child.destination !== 'atndate') continue;
+                        const param = child.content.find((item): item is RtfControl => item.type === 'control' && item.value === 'atndate')?.param;
+                        const date = dateTimeFromDttm(param ?? Number(extractGroupText(child)));
+                        if (date) redirectedComment.metadata = { ...redirectedComment.metadata, date };
+                        break;
+                    }
+                    const holder = currentParagraphChildren.length > 0 ? currentParagraphChildren[currentParagraphChildren.length - 1] : undefined;
+                    if (holder) (holder.comments ??= []).push(redirectedComment);
+                    else currentParagraphChildren.push({ type: 'text', text: '', comments: [redirectedComment] });
+                    redirect = redirectedComment.children!;
+                }
+                savedFlow = enterDestination(redirect!);
             }
 
             // Create a new formatting context for the group
             const groupFormatting = { ...formatting };
+            const isNestedTableProps = node.destination === 'nesttableprops';
+            if (isNestedTableProps) nestedPropsDepth++;
 
             for (const child of node.content) {
+                // A shape's properties (`\sp` name and value pairs) are not text; its text box is.
+                if (isShapeInstance && !(child.type === 'group' && child.destination === 'shptxt')) continue;
                 // Skip fldinst groups (we already extracted the URL)
                 if (child.type === 'group' && child.destination === 'fldinst') {
                     // We still want it in rawContent!
@@ -1371,6 +1762,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 }
                 traverse(child, groupFormatting, depth + 1);
             }
+            if (isNestedTableProps) nestedPropsDepth--;
 
             if (node.destination === 'listtable') {
                 parsingListTable = false;
@@ -1388,14 +1780,13 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 }
             }
 
-            if (isFootnote) {
-                flushParagraph();
-                currentTarget = previousTarget;
-                
-                // Restore the saved paragraph state
-                currentParagraphTextChunks = savedParagraphTextChunks!;
-                currentParagraphChildren = savedParagraphChildren!;
-                currentParagraphRawChunks = savedParagraphRawChunks!;
+            if (savedFlow) leaveDestination(savedFlow);
+            // A text box's blocks follow the paragraph the shape is anchored in.
+            if (shapeBlocks) for (const block of shapeBlocks) blocksAfterParagraph.push(block);
+            // A note's or comment's text is its paragraphs' (a final pass meant to give notes theirs did not
+            // reach them, on the runs' `notes`).
+            for (const holder of [redirectedComment, footnote]) {
+                if (holder) holder.text = (holder.children ?? []).map(n => n.text ?? '').join(' ').trim();
             }
 
             // Clear link URL after processing the field group
@@ -1457,127 +1848,59 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 flushParagraph();
                 currentFormatting = { ...formatting };
             }
-            // Table control words
+            // Table control words. A nested table (Word's form) is paragraphs at a deeper `\itapN`,
+            // cells ended by `\nestcell`, and rows by `\nestrow` in `{\*\nesttableprops \trowd ...
+            // \nestrow}` after the row's cells; `{\nonesttables ...}` is for readers without nesting.
+            // (A \trowd in a cell with content was read as a nested table, and \nestcell and \nestrow as
+            // the outer table's: a nested table's rows became the outer table's.)
             else if (node.value === 'trowd') {
-                // Table row definition - start of a new row
-                // Check if we are starting a nested table
-                // If we are already in a table, and we have content in the current cell, 
-                // then this trowd implies a nested table start.
-                const ctx = getCurrentTable();
-                if (inTable && ctx && ctx.currentCellContent.length > 0) {
-                    // Start nested table
-                    ensureTableContext(); // Should already exist if inTable is true
-                    // Push new table context
-                    tableStack.push({
-                        rows: [],
-                        currentCells: [],
-                        currentCellContent: [],
-                        rowIndex: 0
-                    });
+                // A row definition: a nested table's in \nesttableprops, else the (outermost) table's.
+                if (nestedPropsDepth > 0) {
+                    definingTable = openTablesTo(Math.max(paragraphDepth, 2));
                 } else {
-                    if (!inTable) {
-                        inTable = true;
-                        ensureTableContext();
-                    }
+                    definingTable = openTablesTo(1);
+                    // After \trowd we are inside a table row, so content should go to table cells.
+                    // Many RTF files don't use \intbl, relying solely on \trowd...\cell...\row structure.
+                    if (paragraphDepth < 1) paragraphDepth = 1;
                 }
-
-                // After \trowd we are inside a table row, so content should go to table cells.
-                // Many RTF files don't use \intbl, relying solely on \trowd...\cell...\row structure.
-                paragraphInTable = true;
-
-                // Reset cell properties for the new row definition
-                rowCellProps = [];
-                currentCellDefinitionProps = { isMergedContinuation: false };
-                cellContentIndex = 0;
+                definingTable.cellDefinitions = [];
+                definitionCell = {};
+            } else if (node.value === 'clvmgf') {
+                definitionCell.verticalFirst = true;
             } else if (node.value === 'clvmrg') {
-                // Vertical merge continuation
-                currentCellDefinitionProps.isMergedContinuation = true;
+                definitionCell.verticalContinues = true;
             } else if (node.value === 'clmgf') {
-                // Vertical merge first cell (reset continuation flag if set, though usually mutually exclusive)
-                currentCellDefinitionProps.isMergedContinuation = false;
+                definitionCell.mergeFirst = true;
+            } else if (node.value === 'clmrg') {
+                definitionCell.mergeContinues = true;
             } else if (node.value === 'cellx') {
                 // End of cell definition
-                rowCellProps.push({ ...currentCellDefinitionProps });
-                // Reset for next cell
-                currentCellDefinitionProps = { isMergedContinuation: false };
+                definingTable?.cellDefinitions.push(definitionCell);
+                definitionCell = {};
             } else if (node.value === 'cell') {
-                // End of cell - add it to current row
-                // Force paragraphInTable = true because \cell implies we are in a table cell
-                paragraphInTable = true;
-
-                // Check if this cell is a merged continuation
-                let isMergedContinuation = false;
-                if (cellContentIndex < rowCellProps.length) {
-                    isMergedContinuation = rowCellProps[cellContentIndex].isMergedContinuation;
-                }
-                cellContentIndex++;
-
-                const cell = flushCell();
-                // Only add if not a merged continuation
-                if (cell) {
-                    if (!isMergedContinuation) {
-                        const ctx = getCurrentTable();
-                        if (ctx) ctx.currentCells.push(cell);
-                    }
-                }
+                // \cell implies the paragraph before it is in a table cell, \intbl or not.
+                cellEnds(1);
                 currentFormatting = { ...formatting };
             } else if (node.value === 'nestcell') {
-                // End of cell in outer table (nested context)
-                // If we are in an inner table, we need to close it and return to outer
-
-                // First, flush the current cell of the inner table (if any pending)
-                // Actually, nestcell ends the OUTER cell.
-                // So the inner table should have been finished by now?
-                // Usually inner table ends with \row.
-
-                // If we are in a nested table (stack > 1), we should pop until we are at the outer table?
-                // Or maybe just pop one level?
-                if (tableStack.length > 1) {
-                    // Flush the inner table if it has pending rows
-                    const innerCtx = getCurrentTable();
-                    if (innerCtx && (innerCtx.rows.length > 0 || innerCtx.currentCells.length > 0)) {
-                        flushTable(); // This pops the stack
-                    }
-                }
-
-                // Now we are (hopefully) at the outer table level
-                // Treat as a regular cell end for the outer table
-                paragraphInTable = true;
-                const cell = flushCell();
-                if (cell) {
-                    const ctx = getCurrentTable();
-                    if (ctx) ctx.currentCells.push(cell);
-                }
+                cellEnds(Math.max(paragraphDepth, 2));
                 currentFormatting = { ...formatting };
-
             } else if (node.value === 'row') {
-                // End of row
-                flushRow();
-                currentFormatting = { ...formatting };
-                // Reset content index for safety (though trowd usually does it)
-                cellContentIndex = 0;
-                // Critical: Reset paragraphInTable after row ends.
                 // Subsequent paragraphs must explicitly use \intbl to be part of the table.
                 // Without this, content after the last \row gets incorrectly merged.
-                paragraphInTable = false;
-            } else if (node.value === 'nestrow') {
-                // End of row in outer table
-                // If we are still in inner table context, flush it
-                if (tableStack.length > 1) {
-                    flushTable();
-                }
-
-                flushRow();
+                rowEnds(1);
                 currentFormatting = { ...formatting };
-                cellContentIndex = 0;
+            } else if (node.value === 'nestrow') {
+                rowEnds(Math.max(paragraphDepth, 2));
+                currentFormatting = { ...formatting };
             } else if (node.value === 'intbl') {
                 // Paragraph is in a table
-                inTable = true;
-                paragraphInTable = true;
-                ensureTableContext();
+                if (paragraphDepth < 1) paragraphDepth = 1;
+            } else if (node.value === 'itap') {
+                // How deeply in tables the paragraph is (0 in none, which \pard already says)
+                if (node.param !== undefined && node.param > 0) paragraphDepth = Math.min(node.param, MAX_TABLE_DEPTH);
             } else if (node.value === 'pard') {
                 // Reset paragraph properties
-                paragraphInTable = false;
+                paragraphDepth = 0;
                 // Reset other props...
                 paragraphIndent = 0;
                 paragraphAlignment = 'left';
@@ -1822,28 +2145,17 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
     traverse(doc, {});
 
-    // Flush any remaining table
-    const finalCtx = getCurrentTable();
-    if (inTable || (finalCtx && (finalCtx.rows.length > 0 || finalCtx.currentCells.length > 0))) {
-        flushTable();
-    }
-
-    flushParagraph();
+    // The last paragraph, and any table still open.
+    finishFlow();
 
     // Perform OCR if enabled
     if (config.ocr && config.extractAttachments) {
         for (const attachment of attachments) {
-            checkAbortSignal(config.abortSignal);
             if (attachment.mimeType.startsWith('image/')) {
-                try {
-                    // Convert base64 data back to Buffer for Tesseract.js
-                    // Passing base64 string directly would be interpreted as a file path,
-                    // causing ENAMETOOLONG error for large images.
-                    const imageBuffer = Buffer.from(attachment.data, 'base64');
-                    attachment.ocrText = (await performOcr(imageBuffer, { ...config.ocrConfig })).trim();
-                } catch (e) {
-                    logWarning(OfficeWarningType.OCR_FAILED, config, attachment.name, e);
-                }
+                // A Buffer, not the base64 string: Tesseract.js would take a string for a file path
+                // (ENAMETOOLONG for a large image).
+                const ocrText = await ocrDuringParse(Buffer.from(attachment.data, 'base64'), config, attachment.name);
+                if (ocrText !== undefined) attachment.ocrText = ocrText;
             }
         }
 
@@ -1852,7 +2164,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             for (const node of nodes) {
                 if (node.type === 'image' && node.metadata && 'attachmentName' in node.metadata) {
                     const meta = node.metadata as ImageMetadata;
-                    const attachment = attachments.find(a => a.name === meta.attachmentName);
+                    const attachment = attachmentsByName.get(meta.attachmentName);
                     if (attachment) {
                         // Propagate OCR text to image node
                         if (attachment.ocrText) {
@@ -1872,25 +2184,6 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         assignOcr(content);
     }
 
-    // Final pass to ensure all 'note' nodes have their 'text' property populated so downstream
-    // generators that read node.text (e.g. chunking) see the note's content.
-    const populateNoteText = (nodes: OfficeContentNode[]) => {
-        for (const node of nodes) {
-            if (node.type === 'note' && node.children) {
-                const getText = (n: OfficeContentNode): string => {
-                    if (n.children && n.children.length > 0) return n.children.map(getText).join('');
-                    return n.text || '';
-                };
-                node.text = node.children.map(getText).join('').trim();
-            }
-            if (node.children) {
-                populateNoteText(node.children);
-            }
-        }
-    };
-    populateNoteText(content);
-    populateNoteText(notes);
-
     const result = createAST(
         'rtf',
         {
@@ -1899,11 +2192,25 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         content,
         attachments, // PNG and JPEG images extracted from \\pict groups
         config,
-        undefined,
+        headers.length > 0 || footers.length > 0 ? { ...(headers.length > 0 ? { headers } : {}), ...(footers.length > 0 ? { footers } : {}) } : undefined,
     );
 
     return result;
 };
+
+/**
+ * A DTTM (an annotation's `\atndate`: minute, hour, day, month and year since 1900 packed into a 32-bit
+ * integer) as an ISO date and time without a zone, as Word writes it in local time; undefined for a
+ * value that is not one.
+ */
+function dateTimeFromDttm(value: number): string | undefined {
+    if (!Number.isFinite(value) || value === 0) return undefined;
+    const n = value >>> 0;
+    const minute = n & 63, hour = (n >>> 6) & 31, day = (n >>> 11) & 31, month = (n >>> 16) & 15, year = ((n >>> 20) & 511) + 1900;
+    if (minute > 59 || hour > 23 || day < 1 || day > 31 || month < 1 || month > 12) return undefined;
+    const two = (v: number) => String(v).padStart(2, '0');
+    return `${year}-${two(month)}-${two(day)}T${two(hour)}:${two(minute)}:00`;
+}
 
 // Helper to find an RTF group by destination name
 function findRtfGroup(group: RtfGroup, destination: string): RtfGroup | null {
@@ -1923,8 +2230,22 @@ function extractFontTable(doc: RtfGroup): { [key: number]: string } {
     const tableGroup = findRtfGroup(doc, 'fonttbl');
 
     if (tableGroup) {
+        // A font given in the table itself, not in a group of its own (`{\fonttbl\f0 Times;\f1 Arial;}`, as
+        // TextEdit writes it): its name runs to the `;`.
+        let inlineIndex: number | undefined;
+        let inlineName = '';
         for (const fontNode of tableGroup.content) {
-            if (fontNode.type === 'group') {
+            if (fontNode.type === 'control' && fontNode.value === 'f') {
+                inlineIndex = fontNode.param;
+                inlineName = '';
+            } else if (fontNode.type === 'text' && inlineIndex !== undefined) {
+                const end = fontNode.value.indexOf(';');
+                inlineName += end >= 0 ? fontNode.value.slice(0, end) : fontNode.value;
+                if (end >= 0) {
+                    if (inlineName.trim()) fontTable[inlineIndex] = inlineName.trim();
+                    inlineIndex = undefined;
+                }
+            } else if (fontNode.type === 'group') {
                 let fontIndex: number | undefined;
                 let fontName = '';
 
@@ -1959,11 +2280,16 @@ function extractColorTable(doc: RtfGroup): { [key: number]: string } {
                 if (item.value === 'red' && item.param !== undefined) red = item.param;
                 else if (item.value === 'green' && item.param !== undefined) green = item.param;
                 else if (item.value === 'blue' && item.param !== undefined) blue = item.param;
-            } else if (item.type === 'text' && item.value === ';') {
-                const hex = `#${red.toString(16).padStart(2, '0')}${green.toString(16).padStart(2, '0')}${blue.toString(16).padStart(2, '0')}`;
-                colorTable[colorIndex] = hex;
-                colorIndex++;
-                red = 0; green = 0; blue = 0;
+            } else if (item.type === 'text') {
+                // Each `;` ends a colour (`;;` is two, the second the default colour: taken as one, the
+                // colours after it were one index off).
+                for (let at = item.value.indexOf(';'); at >= 0; at = item.value.indexOf(';', at + 1)) {
+                    const byte = (v: number) => Math.min(255, Math.max(0, v)).toString(16).padStart(2, '0');
+                    const hex = `#${byte(red)}${byte(green)}${byte(blue)}`;
+                    colorTable[colorIndex] = hex;
+                    colorIndex++;
+                    red = 0; green = 0; blue = 0;
+                }
             }
         }
     }

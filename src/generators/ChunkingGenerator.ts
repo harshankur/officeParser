@@ -5,11 +5,13 @@ import {
 } from '../defaults.js';
 import {
     ChunkingConfig,
+    CodeMetadata,
     ConversionResult,
     DeepRequired,
     DocumentStructureChunkingConfig,
     FixedSizeChunkingConfig,
     GeneratorConfig,
+    ImageMetadata,
     OfficeChunk,
     OfficeContentNode,
     OfficeErrorType,
@@ -22,12 +24,26 @@ import {
 } from '../types.js';
 import { getOfficeError, checkAbortSignal } from '../utils/errorUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { appendAll } from '../utils/nodeListUtils.js';
 
 /** Node types whose text is block-level, so a boundary between two of them is a real break. */
 const BLOCK_NODE_TYPES = new Set<string>([
     'paragraph', 'heading', 'list', 'table', 'row', 'cell', 'code', 'note', 'admonition',
     'definitionList', 'definitionTerm', 'definitionDescription', 'sheet', 'slide', 'page', 'embed',
 ]);
+
+/** How much of a heading or sheet name each chunk's metadata repeats. */
+const CONTEXT_LABEL_LENGTH = 256;
+/**
+ * A heading or sheet name as a chunk's context: every chunk under it carries it, so a 1 MB heading over
+ * a thousand chunks made a gigabyte of chunk metadata. Past CONTEXT_LABEL_LENGTH it is cut, marked
+ * with `…`; the heading's full text is in its own chunk.
+ */
+function contextLabel(text: string | undefined): string | undefined {
+    if (text === undefined || text.length <= CONTEXT_LABEL_LENGTH) return text;
+    const code = text.charCodeAt(CONTEXT_LABEL_LENGTH - 1);
+    return text.slice(0, code >= 0xD800 && code <= 0xDBFF ? CONTEXT_LABEL_LENGTH - 1 : CONTEXT_LABEL_LENGTH) + '…';
+}
 
 /**
  * The visible text of a content node: its own `.text` when set, otherwise its descendants' text,
@@ -40,24 +56,43 @@ const BLOCK_NODE_TYPES = new Set<string>([
  * absent from the RAG index. Fold them in here (joined as block content) so a footnote's body is
  * searchable alongside the paragraph that references it.
  */
-function collectNodeText(node: OfficeContentNode): string {
+/** What collectNodeText reads a picture as, and the notes whose text a chunk already holds. */
+interface ChunkTextContext {
+    imageText: (image: OfficeContentNode) => string;
+    /**
+     * Each note's text is in the chunk of its first reference only: a note one parser node shares
+     * among thousands of references was copied into every chunk holding one.
+     */
+    notesIncluded: Set<OfficeContentNode>;
+}
+
+function collectNodeText(node: OfficeContentNode, context: ChunkTextContext): string {
+    // A picture is its alt text and recognized text (see ChunkingGenerator.imageText): its alt text,
+    // kept in its metadata, was in no chunk.
+    if (node.type === 'image') return context.imageText(node);
     let out = '';
     if (typeof node.text === 'string' && node.text.length > 0) {
         out = node.text;
         // The `.text` fast-path above skips the children walk, but DOCX/ODT/RTF set `.text` on the
         // paragraph while the footnote hangs off a nested text child - so its body would be missed.
         // Fold in descendant note bodies (visible text already covered by `.text`, not re-added).
-        const descendantNotes = collectDescendantNoteText(node);
+        const descendantNotes = collectDescendantNoteText(node, context);
         if (descendantNotes) out += '\n' + descendantNotes;
     } else if (node.children && node.children.length > 0) {
+        // A block starts a line, and what follows it starts another; math in a line of text is no block.
+        let afterBlock = false;
         for (const child of node.children) {
-            if (out && BLOCK_NODE_TYPES.has(child.type)) out += '\n';
-            out += collectNodeText(child);
+            const block = BLOCK_NODE_TYPES.has(child.type) && !(child.type === 'code' && (child.metadata as CodeMetadata | undefined)?.math === 'inline');
+            if (out && (block || afterBlock) && !out.endsWith('\n')) out += '\n';
+            out += collectNodeText(child, context);
+            afterBlock = block;
         }
     }
     if (node.notes && node.notes.length > 0) {
         for (const note of node.notes) {
-            const noteText = collectNodeText(note);
+            if (context.notesIncluded.has(note)) continue;
+            context.notesIncluded.add(note);
+            const noteText = collectNodeText(note, context);
             if (noteText) out += (out ? '\n' : '') + noteText;
         }
     }
@@ -69,17 +104,19 @@ function collectNodeText(node: OfficeContentNode): string {
  * text (the caller already has that via `.text`). Only reached from the `.text` fast-path above, to
  * recover notes that office-origin parsers attach to a nested text child of a `.text`-bearing node.
  */
-function collectDescendantNoteText(node: OfficeContentNode): string {
+function collectDescendantNoteText(node: OfficeContentNode, context: ChunkTextContext): string {
     if (!node.children || node.children.length === 0) return '';
     let out = '';
     for (const child of node.children) {
         if (child.notes) {
             for (const note of child.notes) {
-                const t = collectNodeText(note);
+                if (context.notesIncluded.has(note)) continue;
+                context.notesIncluded.add(note);
+                const t = collectNodeText(note, context);
                 if (t) out += (out ? '\n' : '') + t;
             }
         }
-        const deeper = collectDescendantNoteText(child);
+        const deeper = collectDescendantNoteText(child, context);
         if (deeper) out += (out ? '\n' : '') + deeper;
     }
     return out;
@@ -101,6 +138,20 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
         // Track if the user explicitly provided a regex (vs using the library default)
         this.isCustomRegex = !!(config as any)?.chunksConfig?.sentenceBoundaryRegex;
     }
+
+    /**
+     * A picture's text in a chunk: `[Image: alt]` for its alt text, as plain text writes it, and its
+     * recognized text; with images off (`includeImages: 'none'`) or reduced to their recognized text
+     * (`'ocr-text-only'`), no alt text.
+     */
+    private readonly imageText = (image: OfficeContentNode): string => {
+        const mode = this.imageMode();
+        const alt = ((image.metadata as ImageMetadata | undefined)?.altText ?? '').trim();
+        const label = alt && mode !== 'none' && mode !== 'ocr-text-only' ? `[Image: ${alt}]` : '';
+        const recognized = typeof image.text === 'string' ? image.text : '';
+        return label && recognized ? `${label}\n${recognized}` : label || recognized;
+    };
+    private readonly textContext: ChunkTextContext = { imageText: this.imageText, notesIncluded: new Set() };
 
     /**
      * Merges the user's chunking config with the appropriate defaults for the chosen strategy.
@@ -316,9 +367,9 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             contextStack.pageNumber = meta?.pageNumber;
         } else if (node.type === 'sheet') {
             const meta = node.metadata as SheetMetadata;
-            contextStack.sheetName = meta?.sheetName;
+            contextStack.sheetName = contextLabel(meta?.sheetName);
         } else if (node.type === 'heading') {
-            contextStack.heading = node.text;
+            contextStack.heading = contextLabel(node.text);
         }
 
         const isStructuralBoundary = this.isStructuralBoundary(node, splitBy);
@@ -355,10 +406,10 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             return;
         }
 
-        const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'code' || node.type === 'cell' || (node.text && (!node.children || node.children.length === 0));
+        const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'code' || node.type === 'cell' || node.type === 'image' || (node.text && (!node.children || node.children.length === 0));
 
         if (isStructuralBoundary || isContentNode) {
-            const text = typeof override === 'string' ? override : collectNodeText(node);
+            const text = typeof override === 'string' ? override : collectNodeText(node, this.textContext);
             const isWhitespaceOnly = !text.trim() && !text.includes('\u00A0');
 
             if (isWhitespaceOnly && text.length > 0) {
@@ -370,7 +421,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
                 return;
             }
 
-            if (node.type === 'heading') contextStack.heading = text;
+            if (node.type === 'heading') contextStack.heading = contextLabel(text);
 
             const chunk: OfficeChunk = {
                 text,
@@ -431,7 +482,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
 
         if (strategy === 'flatten' || !node.children || node.children.length === 0) {
             // Flatten: treat as plain text (collect from children for HTML/MD-origin tables).
-            const text = collectNodeText(node);
+            const text = collectNodeText(node, this.textContext);
             if (!text.trim()) return;
             chunks.push({
                 text,
@@ -446,27 +497,13 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             return;
         }
 
-        // 'row' strategy: extract header row(s) and chunk remaining rows
-        const rows = node.children; // Each child is a 'row' node
-        const headerRows: OfficeContentNode[] = [];
-        const dataRows: OfficeContentNode[] = [];
-
-        // Heuristic: first row is the header
-        if (rows.length > 0) {
-            const firstRow = rows[0];
-            const override = await this.handleOnNode(firstRow);
-            if (override !== false) {
-                // If overridden, we use the string as header, but we still treat it as a header
-                headerRows.push(firstRow); // We still add the node to get metadata later if needed, but renderRowsAsText will handle it?
-                // Actually renderRowsAsText needs to be updated too.
-            }
-
-            for (let i = 1; i < rows.length; i++) {
-                dataRows.push(rows[i]);
-            }
-        }
-
-        const headerText = await this.renderRowsAsText(headerRows);
+        // 'row' strategy: the first row is the header, which heads the chunks of the rows after it. Each
+        // row's text is made once (onNode asked once): made again to write a chunk after it was measured,
+        // a note in a data row was taken as already written, and was in no chunk.
+        const rows = node.children;
+        const headerOverride = await this.handleOnNode(rows[0]);
+        const headerText = headerOverride === false ? '' : typeof headerOverride === 'string' ? headerOverride : this.rowText(rows[0]);
+        const dataRows = rows.slice(1);
         const baseMetadata = {
             sourceType: this.ast.type,
             closestHeading: contextStack.heading,
@@ -476,15 +513,28 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             isTableChunk: true,
         };
 
+        // Whether a chunk holds the header: a table of one row (its header alone) made none, and its
+        // text reached no chunk.
+        let emitted = false;
+        // The header heads every chunk of the table only when it takes at most half a chunk: larger, each
+        // data row became a chunk of its own under the whole header, and one 100 KB header over 2,000
+        // rows made 213 MB of chunks from 1.6 KB. It is then a chunk (or chunks) of its own, once.
+        const repeatedHeader = headerText && measure(headerText) <= maxChunkSize / 2 ? headerText : '';
+        if (headerText.trim() && !repeatedHeader) {
+            for (const sub of this.splitTextRecursively(headerText, maxChunkSize, 0, ['\n', ' ', ''], measure)) chunks.push({ text: sub.text, metadata: { ...baseMetadata } });
+            emitted = true;
+        }
+
         // Group data rows into chunks
-        let currentRows: OfficeContentNode[] = [];
-        let currentSize = headerText ? measure(headerText) : 0;
+        let currentRows: string[] = [];
+        let currentSize = repeatedHeader ? measure(repeatedHeader) : 0;
 
         const flushCurrentRows = async () => {
             if (currentRows.length === 0) return;
-            const rowText = await this.renderRowsAsText(currentRows);
-            const chunkText = headerText ? `${headerText}\n${rowText}` : rowText;
+            const rowText = currentRows.join('\n');
+            const chunkText = repeatedHeader ? `${repeatedHeader}\n${rowText}` : rowText;
             if (chunkText.trim()) {
+                emitted = true;
                 if (measure(chunkText) > maxChunkSize) {
                     // Fallback to recursive splitting for oversized table chunks
                     const subChunks = this.splitTextRecursively(chunkText, maxChunkSize, 0, ['\n', ' ', ''], measure);
@@ -496,14 +546,14 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
                 }
             }
             currentRows = [];
-            currentSize = headerText ? measure(headerText) : 0;
+            currentSize = repeatedHeader ? measure(repeatedHeader) : 0;
         };
 
         for (const row of dataRows) {
             const override = await this.handleOnNode(row);
             if (override === false) continue;
 
-            const rowText = typeof override === 'string' ? override : await this.renderRowsAsText([row]);
+            const rowText = typeof override === 'string' ? override : this.rowText(row);
             const rowSize = measure(rowText);
             if (currentSize + rowSize > maxChunkSize && currentRows.length > 0) {
                 await flushCurrentRows();
@@ -511,44 +561,32 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             if (typeof override === 'string') {
                 // If row was overridden, we flush current, then add the override as a chunk.
                 await flushCurrentRows();
-                const chunkText = headerText ? `${headerText}\n${override}` : override;
+                const chunkText = repeatedHeader ? `${repeatedHeader}\n${override}` : override;
                 chunks.push({ text: chunkText, metadata: { ...baseMetadata } });
+                emitted = true;
                 continue;
             }
-            currentRows.push(row);
+            currentRows.push(rowText);
             currentSize += rowSize;
         }
         await flushCurrentRows();
+        if (!emitted && headerText.trim()) {
+            if (measure(headerText) > maxChunkSize) {
+                for (const sub of this.splitTextRecursively(headerText, maxChunkSize, 0, ['\n', ' ', ''], measure)) chunks.push({ text: sub.text, metadata: { ...baseMetadata } });
+            } else {
+                chunks.push({ text: headerText, metadata: { ...baseMetadata } });
+            }
+        }
     }
 
     /**
-     * Renders a list of row nodes as a pipe-separated text string.
+     * A row as a line of text, its cells separated by pipes: each cell's text as any content's (its runs
+     * joined as written, its pictures' alt text and its notes included), on one line.
      */
-    private async renderRowsAsText(rows: OfficeContentNode[]): Promise<string> {
-        const renderedRows: string[] = [];
-        for (const row of rows) {
-            const override = await this.handleOnNode(row);
-            if (override === false) continue;
-            if (typeof override === 'string') {
-                renderedRows.push(override);
-                continue;
-            }
-
-            if (!row.children) {
-                renderedRows.push(row.text ?? '');
-                continue;
-            }
-
-            const getCellText = (cell: OfficeContentNode): string => {
-                if (cell.text) return cell.text;
-                if (!cell.children || cell.children.length === 0) return '';
-                return cell.children.map(c => getCellText(c)).join(' ');
-            };
-
-            const cells = row.children.map(cell => getCellText(cell).replace(/\n/g, ' ').trim());
-            renderedRows.push(`| ${cells.join(' | ')} |`);
-        }
-        return renderedRows.join('\n');
+    private rowText(row: OfficeContentNode): string {
+        if (!row.children) return row.text ?? '';
+        const cells = row.children.map(cell => collectNodeText(cell, this.textContext).replace(/\n/g, ' ').trim());
+        return `| ${cells.join(' | ')} |`;
     }
 
     // ─── Strategy 3: Semantic ─────────────────────────────────────────────────
@@ -664,15 +702,15 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             const override = await this.handleOnNode(node);
             if (override === false) return;
 
-            if (node.type === 'heading') currentHeading = node.text;
+            if (node.type === 'heading') currentHeading = contextLabel(node.text);
             if (node.type === 'slide') currentSlide = (node.metadata as SlideMetadata)?.slideNumber;
             if (node.type === 'page') currentPage = (node.metadata as PageMetadata)?.pageNumber;
-            if (node.type === 'sheet') currentSheet = (node.metadata as SheetMetadata)?.sheetName;
+            if (node.type === 'sheet') currentSheet = contextLabel((node.metadata as SheetMetadata)?.sheetName);
 
-            const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'cell' || (node.text && (!node.children || node.children.length === 0));
+            const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'cell' || node.type === 'image' || (node.text && (!node.children || node.children.length === 0));
 
             if (isContentNode) {
-                const text = (typeof override === 'string' ? override : collectNodeText(node)).trim();
+                const text = (typeof override === 'string' ? override : collectNodeText(node, this.textContext)).trim();
                 if (!text) return;
                 // Split paragraph text into individual sentences for finer-grained similarity
                 const sentences = this.splitIntoSentences(text);
@@ -725,15 +763,15 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             const override = await this.handleOnNode(node);
             if (override === false) return;
 
-            if (node.type === 'heading') currentHeading = node.text;
+            if (node.type === 'heading') currentHeading = contextLabel(node.text);
             if (node.type === 'slide') currentSlide = (node.metadata as SlideMetadata)?.slideNumber;
             if (node.type === 'page') currentPage = (node.metadata as PageMetadata)?.pageNumber;
-            if (node.type === 'sheet') currentSheet = (node.metadata as SheetMetadata)?.sheetName;
+            if (node.type === 'sheet') currentSheet = contextLabel((node.metadata as SheetMetadata)?.sheetName);
 
-            const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'code' || node.type === 'cell' || (node.text && (!node.children || node.children.length === 0));
+            const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'code' || node.type === 'cell' || node.type === 'image' || (node.text && (!node.children || node.children.length === 0));
 
             if (isContentNode) {
-                const nodeText = typeof override === 'string' ? override : collectNodeText(node);
+                const nodeText = typeof override === 'string' ? override : collectNodeText(node, this.textContext);
                 const txt = nodeText + '\n';
                 nodeMap.push({ offset, heading: currentHeading, slideNumber: currentSlide, pageNumber: currentPage, sheetName: currentSheet });
                 parts.push(txt);
@@ -824,7 +862,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
                 return call;
             });
             const batchResults = await Promise.all(batchPromises);
-            results.push(...batchResults);
+            appendAll(results, batchResults);
         }
         return results;
     }

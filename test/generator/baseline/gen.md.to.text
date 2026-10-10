@@ -5,8 +5,8 @@ To see the DOCX conversion in action, simply add this file to calibre using the 
 Text Formatting
 Inline formatting
 Here, we demonstrate various types of inline text formatting and the use of embedded fonts.
-Here is some bold, italic, *bold-italic, *underlined and struck out  text. Then, we have a superscript and a subscript. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in inverse video.
-A paragraph with styled text: subtle emphasis  followed by strong text and *intense emphasis*. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.
+Here is some bold, italic, bold-italic, underlined and struck out  text. Then, we have a superscript and a subscript. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in inverse video.
+A paragraph with styled text: subtle emphasis  followed by strong text and intense emphasis. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.
 Fun with fonts
 This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m. Every embedded font will automatically be embedded in the output ebook during conversion.
 Paragraph level formatting
@@ -45,8 +45,7 @@ Next, we see a table with special formatting in various locations. Notice how th
 Source: Fictitious data, for illustration purposes only
 Next, we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged. The table is displayed horizontally centered.
 
-| OneThree | Two | 
-| Four     | 
+| | One Three | Two |  | Four      | | To the left is a table inside a table, with some cells merged. | 
 
 We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.
 

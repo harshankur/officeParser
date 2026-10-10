@@ -12,6 +12,8 @@
  *  - Inject a `/* @vite-ignore *\/` comment before `import(this.workerSrc)`
  *    in the bundled pdfjs-dist code to suppress Vite's unanalyzable dynamic
  *    import warning.
+ *  - Evaluate no code from a string as they load, so a page with a strict
+ *    Content Security Policy can load them (see scripts/loadTimeEval.js).
  */
 
 const esbuild = require('esbuild');
@@ -19,6 +21,7 @@ const { nodeModulesPolyfillPlugin } = require('esbuild-plugins-node-modules-poly
 const fs = require('fs');
 const path = require('path');
 const { annotateDynamicImports } = require('./scripts/dynamicImports.js');
+const { findLoadTimeEvals, replaceLoadTimeEvals } = require('./scripts/loadTimeEval.js');
 
 // ---------------------------------------------------------------------------
 // Config Generator
@@ -89,6 +92,9 @@ if (typeof setImmediate === 'undefined') {
             // Post-process: inject /* @vite-ignore */ into dynamic imports with variables
             // to suppress Vite's unanalyzable dynamic import warning.
             viteIgnoreDynamicImportsPlugin(),
+            // Post-process: what a polyfill evaluates from a string at load is written out in its
+            // place, so the bundle loads under a Content Security Policy without 'unsafe-eval'.
+            loadTimeEvalPlugin(),
         ],
     };
 
@@ -137,6 +143,45 @@ function viteIgnoreDynamicImportsPlugin() {
 
                     fs.writeFileSync(outfile, output, 'utf8');
                     console.log(`  → annotated ${annotated} dynamic import(s) in ${path.basename(outfile)}`);
+                }
+            });
+        },
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Nothing evaluated from a string at load (see scripts/loadTimeEval.js)
+// ---------------------------------------------------------------------------
+
+function loadTimeEvalPlugin() {
+    return {
+        name: 'load-time-eval',
+        setup(build) {
+            build.onEnd(result => {
+                if (result.errors.length > 0) return;
+
+                const outfile = build.initialOptions.outfile;
+                if (!outfile || !fs.existsSync(outfile)) return;
+
+                const { output, replaced } = replaceLoadTimeEvals(fs.readFileSync(outfile, 'utf8'));
+
+                // A probe written another way (a dependency changed) is not one the replacement
+                // knows: fail here rather than ship a bundle that breaks a strict policy again.
+                const left = findLoadTimeEvals(output);
+                if (left.length > 0) {
+                    throw new Error(`${path.basename(outfile)} still evaluates code at load: ${left[0].snippet} (add it to scripts/loadTimeEval.js)`);
+                }
+
+                if (replaced > 0) {
+                    // As for the dynamic imports: an edited bundle is parsed before it is written.
+                    try {
+                        esbuild.transformSync(output, { loader: 'js', format: 'esm' });
+                    } catch (err) {
+                        throw new Error(`Replacing load-time evaluation broke ${path.basename(outfile)}: ${err.message}`);
+                    }
+
+                    fs.writeFileSync(outfile, output, 'utf8');
+                    console.log(`  → replaced ${replaced} load-time evaluation(s) in ${path.basename(outfile)}`);
                 }
             });
         },

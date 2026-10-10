@@ -15,6 +15,7 @@ import { ListMetadata, NodeBounds, OfficeContentNode, TextFormatting, TextMetada
 import { rotateBoundsToRendered, roundBounds, unionAll, unionBounds } from './geometry.js';
 import { PdfLayoutConfig, PdfLine, RawRun, TextFragment } from './pdfTypes.js';
 import { median } from '../../utils/numberUtils.js';
+import { appendAll } from '../../utils/nodeListUtils.js';
 
 // ── small numeric helpers ───────────────────────────────────────────────────
 
@@ -267,7 +268,7 @@ function clusterToLine(clusterRuns: RawRun[], cfg: PdfLayoutConfig): PdfLine {
     const keptFragments = fragments.filter(f => f.text.length > 0);
 
     const bounds = unionAll((keptFragments.length ? keptFragments : fragments).map(f => f.bounds))!;
-    const visible = keptFragments.map(f => f.text).join('').replace(/\s+$/, '');
+    const visible = keptFragments.map(f => f.text).join('').trimEnd();
     const endsWithHyphen = /[-­]$/.test(visible);
 
     return {
@@ -341,7 +342,10 @@ function bestHorizontalGap(lines: PdfLine[]): { gap: number; at: number } | null
 
 /**
  * Widest vertical gutter that fully separates the lines into a left group and a right group.
- * `at` is the x of the split. A gutter only counts if no line straddles it.
+ * `at` is the x of the split. A gutter only counts if no line straddles it, which the sweep already
+ * ensures: the lines before it (by left edge) end by `maxRight`, and the rest start at or after the
+ * next left edge. (Checking every line again at each gap took time in the square of the lines: a PDF
+ * of 2 KB with one line of 32,000 spaced words took minutes.)
  */
 function bestVerticalGutter(lines: PdfLine[]): { gap: number; at: number } | null {
     const intervals = lines.map(l => [l.x, l.x + l.width] as const).sort((a, b) => a[0] - b[0]);
@@ -349,12 +353,7 @@ function bestVerticalGutter(lines: PdfLine[]): { gap: number; at: number } | nul
     let best: { gap: number; at: number } | null = null;
     for (let i = 1; i < intervals.length; i++) {
         const gap = intervals[i][0] - maxRight;
-        if (gap > 0) {
-            // valid only if every line is entirely left of maxRight or entirely right of intervals[i][0]
-            const split = (maxRight + intervals[i][0]) / 2;
-            const straddles = lines.some(l => l.x < split && l.x + l.width > split);
-            if (!straddles && (!best || gap > best.gap)) best = { gap, at: split };
-        }
+        if (gap > 0 && (!best || gap > best.gap)) best = { gap, at: (maxRight + intervals[i][0]) / 2 };
         maxRight = Math.max(maxRight, intervals[i][1]);
     }
     return best;
@@ -746,7 +745,7 @@ export function detectTables(lines: PdfLine[], page: PageContext, doc: DocContex
         if (rows[i].length < 2) { i++; continue; }
         let j = i;
         while (j < rows.length && rows[j].length >= 2) j++;
-        candidates.push(...adjacentRuns(rows.slice(i, j)));
+        appendAll(candidates, adjacentRuns(rows.slice(i, j)));
         i = j;
     }
 
@@ -1145,7 +1144,9 @@ function paragraphNode(group: ParaGroup, page: PageContext, doc: DocContext, for
     const cfg = doc.cfg;
     const children: OfficeContentNode[] = [];
     const boxes: NodeBounds[] = [];
-    let text = '';
+    // The paragraph's text in pieces, joined once at the end: a hyphen dropped at a line join comes off
+    // the last piece, where reading the whole text back at each join made a long paragraph quadratic.
+    const parts: string[] = [];
 
     for (let li = 0; li < group.lines.length; li++) {
         const line = group.lines[li];
@@ -1181,11 +1182,13 @@ function paragraphNode(group: ParaGroup, page: PageContext, doc: DocContext, for
                 // drop the trailing hyphen from the last emitted child and join with no space
                 const lastChild = children[children.length - 1];
                 if (lastChild?.text) { lastChild.text = lastChild.text.replace(/[-­]$/, ''); }
-                text = text.replace(/[-­]$/, '');
+                let last = parts.length - 1;
+                while (last >= 0 && parts[last] === '') last--;
+                if (last >= 0) parts[last] = parts[last].replace(/[-­]$/, '');
             } else if (!glyphStack) {
                 const lastChild = children[children.length - 1];
                 if (lastChild?.text && !lastChild.text.endsWith(' ')) lastChild.text += ' ';
-                text += ' ';
+                parts.push(' ');
             }
         }
         for (const frag of line.fragments) {
@@ -1199,11 +1202,12 @@ function paragraphNode(group: ParaGroup, page: PageContext, doc: DocContext, for
             if (frag.link) child.metadata = frag.link;
             children.push(child);
             boxes.push(frag.bounds);
-            text += frag.text;
+            parts.push(frag.text);
         }
     }
 
     if (!children.length) return null;
+    const text = parts.join('');
     const level = forcedLevel !== undefined ? forcedLevel : (doc.cfg.headingDetection === 'off' ? 0 : headingLevel(group, doc));
     const container = emitBounds(unionAll(boxes)!, page, cfg);
 

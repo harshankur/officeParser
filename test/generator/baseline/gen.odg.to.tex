@@ -1,0 +1,99 @@
+\RequirePackage{iftex}
+% DVI output (latex, uplatex or platex, then dvipdfmx): a global class option gives every package the dvipdfmx driver.
+\def\officeparserdriver{}\ifpdf\else\ifXeTeX\else\def\officeparserdriver{dvipdfmx,}\fi\fi
+\documentclass[\officeparserdriver 11pt]{article}
+\iftutex
+  \usepackage{fontspec}
+\else
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{lmodern}
+\fi
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{parskip}
+\usepackage{graphicx}
+\usepackage{array,longtable}
+\usepackage[hyperfootnotes=false]{hyperref}
+\hypersetup{colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue,
+  pdfcreator={officeParser},
+  pdftitle={ODG Test Drawing},
+  pdfauthor={officeParser},
+  pdfcreationdate={D:20231231230000Z},
+  pdfmoddate={D:20231231230000Z}}
+\setcounter{secnumdepth}{-\maxdimen}
+\title{ODG Test Drawing}
+\author{officeParser}
+\date{2023-12-31}
+
+% The images, carried in this file: each block writes one, as a small PDF, beside the .tex when it
+% compiles. A file of that name already there is kept, so an image can be replaced.
+\begin{filecontents*}{image1-944b146e.pdf}
+%PDF-1.5
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 12 12] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 28 >>
+stream
+q 12 0 0 12 0 0 cm /Im0 Do Q
+endstream
+endobj
+5 0 obj
+<< /Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter [/ASCII85Decode /FlateDecode] /DecodeParms [null << /Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns 16 >>] /Length 26 >>
+stream
+Gar8'5p@/r0WJOuCB+A0g/oE~>
+endstream
+endobj
+6 0 obj
+<< /Type /XRef /Size 7 /W [1 4 2] /Root 1 0 R /Filter /ASCIIHexDecode /Length 105 >>
+stream
+0000000000FFFF
+01000000090000
+010000003A0000
+01000000730000
+01000000F30000
+01000001410000
+01000002640000>
+endstream
+endobj
+startxref
+612
+%%EOF
+\end{filecontents*}
+
+\begin{document}
+
+Flowchart Demonstration Diagram
+
+Start: begin the process here
+
+Decision: is the condition satisfied?
+
+Grouped shape A with a descriptive label
+
+Grouped shape B beside it in the same group
+
+\includegraphics[bb=0 0 12 12,width={\ifdim 12bp>\linewidth\linewidth\else 12bp\fi},height={\ifdim 12bp>0.9\textheight0.9\textheight\else 12bp\fi},keepaspectratio]{image1-944b146e.pdf}
+
+\clearpage
+
+\begin{longtable}{|*{3}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-6\tabcolsep-4\arrayrulewidth)/3\relax}|}}
+\hline
+Name & Value & Description \\
+\hline
+Alpha & 42 & The first data row of the table \\
+\hline
+Beta & 17 & The second data row of the table \\
+\hline
+\end{longtable}
+
+\end{document}

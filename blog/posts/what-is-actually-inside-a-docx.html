@@ -1,0 +1,322 @@
+<p>
+    If you rename any <code>.docx</code> file to <code>.zip</code> and unpack it, you do not find a simple
+    text document. You find a small filesystem governed by ECMA-376 and ISO/IEC 29500, together known as
+    Office Open XML (OOXML).
+</p>
+<p>
+    To read or write these files reliably, you have to look past what the editor shows and understand the
+    data model underneath. Here is a tour of what is actually inside that archive, followed by what
+    officeParser makes of it.
+</p>
+
+<h2>1. The Outer Shell: Open Packaging Conventions (OPC)</h2>
+<p>
+    A <code>.docx</code> file is an <strong>Open Packaging Conventions (OPC)</strong> package: a ZIP archive
+    holding data streams called <strong>parts</strong>, plus XML files called
+    <strong>relationships</strong> that say how the parts refer to each other.
+</p>
+<p>
+    A minimal unpacked Word document looks roughly like this:
+</p>
+
+<pre><code>my-document.docx/
+├── [Content_Types].xml        # Content type of every part
+├── _rels/
+│   └── .rels                  # Package-level relationships
+├── docProps/
+│   ├── core.xml               # Title, author, created, modified
+│   └── app.xml                # Application, page and word counts
+└── word/
+    ├── document.xml           # The main content
+    ├── styles.xml             # Style hierarchy and defaults
+    ├── numbering.xml          # List definitions
+    ├── settings.xml           # Compatibility and editing settings
+    ├── fontTable.xml          # Fonts the document uses
+    ├── theme/
+    │   └── theme1.xml         # Theme fonts and colours
+    └── _rels/
+        └── document.xml.rels  # Images, hyperlinks, headers, footers</code></pre>
+
+<p>
+    Two structural patterns matter here:
+</p>
+<ul>
+    <li><strong>Parts are found by relationship, not by path.</strong> The specification does not say the
+        main text lives in <code>word/document.xml</code>. A strict consumer reads <code>_rels/.rels</code>
+        and follows the relationship whose <code>Type</code> ends in
+        <code>/relationships/officeDocument</code>. In practice Word and LibreOffice both write the main
+        part at <code>word/document.xml</code>, and that is where officeParser looks for it.</li>
+    <li><strong>Content types are declared.</strong> <code>[Content_Types].xml</code> gives the type of
+        every part, by extension or by part name. Leave a part out and Word will usually report the file
+        as corrupt.</li>
+</ul>
+
+<h2>2. The Content Core: WordprocessingML</h2>
+<p>
+    The body of the document lives in <code>word/document.xml</code>. The root element is
+    <code>&lt;w:document&gt;</code>, which holds one <code>&lt;w:body&gt;</code>. Inside the body, content
+    is a sequence of block-level elements, mainly paragraphs (<code>&lt;w:p&gt;</code>) and tables
+    (<code>&lt;w:tbl&gt;</code>).
+</p>
+
+<div class="callout">
+    <div class="callout-title">The Fundamental Primitive: Runs (&lt;w:r&gt;)</div>
+    <p>
+        A paragraph in Word is not a string with markup tags in it. It is a container of
+        <strong>runs</strong> (<code>&lt;w:r&gt;</code>). A run is a stretch of text that shares one set
+        of formatting properties.
+    </p>
+</div>
+
+<p>
+    Consider a sentence as simple as: <em>"The <strong>quick</strong> brown fox."</em> You might expect:
+</p>
+
+<pre><code>&lt;w:p&gt;
+  &lt;w:r&gt;&lt;w:t xml:space="preserve"&gt;The &lt;/w:t&gt;&lt;/w:r&gt;
+  &lt;w:r&gt;
+    &lt;w:rPr&gt;&lt;w:b/&gt;&lt;/w:rPr&gt;
+    &lt;w:t&gt;quick&lt;/w:t&gt;
+  &lt;/w:r&gt;
+  &lt;w:r&gt;&lt;w:t xml:space="preserve"&gt; brown fox.&lt;/w:t&gt;&lt;/w:r&gt;
+&lt;/w:p&gt;</code></pre>
+
+<h3>Run Fragmentation</h3>
+<p>
+    Word often does not produce runs that clean. If the user paused, fixed a typo, ran the spell checker,
+    or moved the cursor away and back, the same sentence can come out in more pieces, with markers
+    between them:
+</p>
+
+<pre><code>&lt;w:p&gt;
+  &lt;w:r&gt;&lt;w:t xml:space="preserve"&gt;The &lt;/w:t&gt;&lt;/w:r&gt;
+  &lt;w:proofErr w:type="spellStart"/&gt;
+  &lt;w:r&gt;&lt;w:rPr&gt;&lt;w:b/&gt;&lt;/w:rPr&gt;&lt;w:t&gt;qui&lt;/w:t&gt;&lt;/w:r&gt;
+  &lt;w:bookmarkStart w:id="0" w:name="_GoBack"/&gt;
+  &lt;w:r&gt;&lt;w:rPr&gt;&lt;w:b/&gt;&lt;/w:rPr&gt;&lt;w:t&gt;ck&lt;/w:t&gt;&lt;/w:r&gt;
+  &lt;w:proofErr w:type="spellEnd"/&gt;
+  &lt;w:r&gt;&lt;w:t xml:space="preserve"&gt; brown &lt;/w:t&gt;&lt;/w:r&gt;
+  &lt;w:r&gt;&lt;w:t&gt;fox.&lt;/w:t&gt;&lt;/w:r&gt;
+&lt;/w:p&gt;</code></pre>
+
+<p>
+    The word "quick" is now two runs. Anything that searches one <code>&lt;w:t&gt;</code> at a time will
+    miss it. This is also why a template placeholder such as <code>{{customer_name}}</code> so often
+    fails to match: Word has stored it as <code>{{cust</code>, <code>omer_</code>, and
+    <code>name}}</code> in three separate runs.
+</p>
+
+<h2>3. Numbering and Lists: The Disconnected Graph</h2>
+<p>
+    Engineers coming from HTML or Markdown are usually surprised by how Word stores lists. In HTML a list
+    is an explicit, self-contained element: <code>&lt;ol&gt;&lt;li&gt;First&lt;/li&gt;&lt;/ol&gt;</code>.
+</p>
+<p>
+    In WordprocessingML, <strong>there is no list element</strong>. Every list item is an ordinary
+    paragraph whose properties (<code>&lt;w:pPr&gt;</code>) point into a separate file,
+    <code>word/numbering.xml</code>.
+</p>
+
+<pre><code>&lt;!-- Inside word/document.xml --&gt;
+&lt;w:p&gt;
+  &lt;w:pPr&gt;
+    &lt;w:numPr&gt;
+      &lt;w:ilvl w:val="0"/&gt;   &lt;!-- Indent level 0 --&gt;
+      &lt;w:numId w:val="2"/&gt;  &lt;!-- Numbering instance 2 --&gt;
+    &lt;/w:numPr&gt;
+  &lt;/w:pPr&gt;
+  &lt;w:r&gt;&lt;w:t&gt;First bullet item&lt;/w:t&gt;&lt;/w:r&gt;
+&lt;/w:p&gt;</code></pre>
+
+<p>
+    To learn what bullet or number goes in front of that paragraph, a reader follows a three-step chain:
+</p>
+<ol>
+    <li>Find <code>&lt;w:num w:numId="2"&gt;</code> in <code>word/numbering.xml</code>.</li>
+    <li>Read its <code>&lt;w:abstractNumId w:val="4"/&gt;</code> pointer.</li>
+    <li>Look up <code>&lt;w:abstractNum w:abstractNumId="4"&gt;</code>, find the level
+        <code>&lt;w:lvl w:ilvl="0"&gt;</code>, and read its <code>&lt;w:numFmt&gt;</code> (for example
+        <code>bullet</code> or <code>decimal</code>) and its <code>&lt;w:lvlText w:val="%1."/&gt;</code>
+        template.</li>
+</ol>
+<p>
+    The file never says "this item is number 3". Items of one list can be separated by other paragraphs
+    or tables, so a reader has to keep its own counters as it walks the document.
+</p>
+
+<h2>4. Tables: Grids, Merges, and Nesting</h2>
+<p>
+    A Word table (<code>&lt;w:tbl&gt;</code>) declares a column grid (<code>&lt;w:tblGrid&gt;</code>),
+    then rows (<code>&lt;w:tr&gt;</code>) of cells (<code>&lt;w:tc&gt;</code>).
+</p>
+<table>
+    <thead>
+        <tr>
+            <th>Concept</th>
+            <th>OOXML markup</th>
+            <th>What it means</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Column spans</td>
+            <td><code>&lt;w:gridSpan w:val="N"/&gt;</code></td>
+            <td>The cell covers N grid columns, like HTML
+                <code>colspan</code>.</td>
+        </tr>
+        <tr>
+            <td>Vertical merges</td>
+            <td><code>&lt;w:vMerge w:val="restart"/&gt;</code>, then
+                <code>&lt;w:vMerge/&gt;</code></td>
+            <td>There is no <code>rowspan="N"</code>. The first
+                row marks <code>restart</code>, and every row below repeats the cell with an empty
+                <code>&lt;w:vMerge/&gt;</code>.</td>
+        </tr>
+        <tr>
+            <td>Unsplittable rows</td>
+            <td><code>&lt;w:cantSplit/&gt;</code></td>
+            <td>The row may not break across pages.</td>
+        </tr>
+        <tr>
+            <td>Nested tables</td>
+            <td><code>&lt;w:tc&gt;&lt;w:tbl&gt;...&lt;/w:tbl&gt;&lt;/w:tc&gt;</code>
+            </td>
+            <td>A cell can hold a whole table.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>5. Text Boxes and Drawings: The Detached Canvas</h2>
+<p>
+    Floating shapes and text boxes are one of the most common sources of missing text in simple
+    extractors. A text box does not sit in the paragraph stream as text.
+</p>
+<p>
+    Word anchors a DrawingML element (<code>&lt;w:drawing&gt;</code>) or a legacy VML element
+    (<code>&lt;w:pict&gt;</code>) inside a run, and the text sits deep inside it:
+</p>
+<pre><code>&lt;w:p&gt;
+  &lt;w:r&gt;
+    &lt;w:drawing&gt;
+      &lt;wp:anchor&gt;
+        &lt;a:graphic&gt;
+          &lt;a:graphicData uri=".../word/2010/wordprocessingShape"&gt;
+            &lt;wps:wsp&gt;
+              &lt;wps:txbx&gt;
+                &lt;w:txbxContent&gt;
+                  &lt;w:p&gt;
+                    &lt;w:r&gt;&lt;w:t&gt;Text inside a floating box&lt;/w:t&gt;&lt;/w:r&gt;
+                  &lt;/w:p&gt;
+                &lt;/w:txbxContent&gt;
+              &lt;/wps:txbx&gt;
+            &lt;/wps:wsp&gt;
+          &lt;/a:graphicData&gt;
+        &lt;/a:graphic&gt;
+      &lt;/wp:anchor&gt;
+    &lt;/w:drawing&gt;
+  &lt;/w:r&gt;
+&lt;/w:p&gt;</code></pre>
+<p>
+    (The full namespace is
+    <code>http://schemas.microsoft.com/office/word/2010/wordprocessingShape</code>.)
+    <code>&lt;w:txbxContent&gt;</code> is a nested document body with its own paragraphs, runs, and
+    tables. An extractor that only walks the paragraphs directly under <code>&lt;w:body&gt;</code> misses
+    every sidebar, callout, and caption drawn this way.
+</p>
+<p>
+    There is a second trap. For older readers, Word usually writes the same text box twice inside an
+    <code>&lt;mc:AlternateContent&gt;</code> element: once as the modern shape, once as a VML fallback.
+    An extractor that reads both branches returns the text twice.
+</p>
+
+<h2>6. Field Codes: The Inline State Machine</h2>
+<p>
+    Page numbers, dates, cross-references, tables of contents, and some hyperlinks are
+    <strong>fields</strong>. Word has two ways to write one:
+</p>
+<ul>
+    <li><strong>Simple fields:</strong> <code>&lt;w:fldSimple w:instr="PAGE"&gt;</code> wraps the cached
+        result in one element.</li>
+    <li><strong>Complex fields:</strong> a sequence of runs marked by <code>&lt;w:fldChar&gt;</code>:
+        <ol>
+            <li><code>&lt;w:fldChar w:fldCharType="begin"/&gt;</code></li>
+            <li><code>&lt;w:instrText&gt;HYPERLINK "https://example.com"&lt;/w:instrText&gt;</code></li>
+            <li><code>&lt;w:fldChar w:fldCharType="separate"/&gt;</code></li>
+            <li>Runs holding the cached visible text:
+                <code>&lt;w:r&gt;&lt;w:t&gt;Visit site&lt;/w:t&gt;&lt;/w:r&gt;</code></li>
+            <li><code>&lt;w:fldChar w:fldCharType="end"/&gt;</code></li>
+        </ol>
+    </li>
+</ul>
+<p>
+    Fields can nest (an <code>IF</code> field can contain a <code>DATE</code> field), so a reader has to
+    track where each one begins and ends. An extractor that simply takes every text node in the XML
+    returns the instruction (<code>HYPERLINK "https://..."</code>) as if it were prose.
+</p>
+
+<hr>
+
+<h2>What officeParser Makes of All This</h2>
+<p>
+    <code>parseOffice</code> reads the package and returns a typed tree, the same shape for every format
+    the library supports:
+</p>
+
+<pre><code>import { parseOffice } from 'officeparser';
+
+const ast = await parseOffice('quarterly-report.docx');
+
+ast.content;   // paragraphs, headings, lists, tables, ...
+ast.metadata;  // title, author, created, modified, ...
+
+const { value: markdown } = await ast.to('markdown');
+const { value: chunks } = await ast.to('chunks');</code></pre>
+
+<p>
+    Here is what the fragmented paragraph from section 2 becomes. This is real output:
+</p>
+
+<pre><code>{
+  "type": "paragraph",
+  "text": "The quick brown fox.",
+  "children": [
+    { "type": "text", "text": "The ", "formatting": {} },
+    { "type": "text", "text": "qui", "formatting": { "bold": true } },
+    { "type": "text", "text": "ck", "formatting": { "bold": true } },
+    { "type": "text", "text": " brown ", "formatting": {} },
+    { "type": "text", "text": "fox.", "formatting": {} }
+  ],
+  "metadata": {}
+}</code></pre>
+
+<p>
+    I keep every run as its own <code>text</code> node, with its formatting, so nothing Word recorded is
+    thrown away. The paragraph's own <code>text</code> is the joined string, so search and extraction
+    never see the fragmentation. And the generators merge neighbours that share formatting:
+    <code>ast.to('markdown')</code> writes that paragraph as <code>The **quick** brown fox.</code>
+</p>
+<p>
+    For the rest of the tour:
+</p>
+<ul>
+    <li><strong>Lists</strong> become <code>list</code> nodes carrying <code>listId</code>,
+        <code>listType</code>, <code>indentation</code>, and <code>itemIndex</code>. The index keeps
+        counting when a list is interrupted by an ordinary paragraph, so numbering stays correct.</li>
+    <li><strong>Tables</strong> follow <code>table</code>, <code>row</code>, <code>cell</code>, with
+        <code>rowSpan</code> and <code>colSpan</code> worked out from <code>vMerge</code> and
+        <code>gridSpan</code>. A cell can hold another table.</li>
+    <li><strong>Text boxes, content controls, and SmartArt</strong> are read where they stand, after the
+        paragraph that draws them. Of the two copies in an <code>AlternateContent</code>, one is read.</li>
+    <li><strong>Headings</strong> come from the paragraph style (<code>Heading1</code>,
+        <code>Title</code>, and so on).</li>
+    <li><strong>Tracked changes:</strong> inserted text is read, text deleted or moved away is not.</li>
+    <li><strong>Templates:</strong> <code>OfficeTemplate.render</code> fills
+        <code>{{placeholders}}</code> even when Word has split one across several runs.</li>
+</ul>
+<p>
+    It does not cover every corner of a specification that runs to more than 6,000 pages. The
+    <a href="https://github.com/harshankur/officeParser#per-format-capability-matrix" target="_blank"
+        rel="noopener">capability matrix in the README</a> lists what each format gives you, and
+    <a href="post:where-officeparser-is-the-wrong-tool">a separate article</a> covers the jobs
+    officeParser is the wrong tool for.
+</p>

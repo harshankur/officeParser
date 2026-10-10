@@ -1,0 +1,210 @@
+<p>
+    In Retrieval-Augmented Generation (RAG), the quality of the answer is bounded by the quality of what
+    was retrieved. If the relevant passage never reaches the context window, no amount of prompt
+    engineering will produce it.
+</p>
+<p>
+    Yet a great many pipelines still ingest documents with some variation of this:
+</p>
+
+<pre><code>// The usual first attempt:
+const text = extractRawText(file);
+const chunks = recursiveTextSplitter(text, {
+    chunkSize: 500,
+    chunkOverlap: 50,
+});</code></pre>
+
+<p>
+    For prose this is tolerable. For office documents, with their tables and nested headings, it loses
+    exactly the parts that matter. Here is why.
+</p>
+
+<h2>The Anatomy of Chunking Failure</h2>
+<p>
+    A window of fixed size sliding over a string is blind to structure. It cuts wherever the count runs
+    out:
+</p>
+
+<h3>1. The Table Shredder</h3>
+<p>
+    Take a financial table with a header row and a row per quarter. The window fills up partway through,
+    and the splitter cuts there:
+</p>
+<ul>
+    <li><strong>Chunk 1</strong> holds the header row and the first three quarters.</li>
+    <li><strong>Chunk 2</strong> starts with: <code>| Q4 | 47,310 | 19.0% |</code>.</li>
+</ul>
+<p>
+    Chunk 2 has lost its column names. When someone asks <em>"What was the operating margin in
+    Q4?"</em>, the words "operating margin" appear only in chunk 1, so chunk 2 is a poor match for the
+    query. And if it is retrieved anyway, the model has no way to know what <code>19.0%</code> measures.
+</p>
+
+<h3>2. The Orphaned Heading</h3>
+<p>
+    A heading is the context for everything under it. A fixed window often leaves the heading at the end
+    of one chunk and its content at the start of the next:
+</p>
+
+<pre><code>[End of chunk 24]
+... in accordance with regional regulations.
+4.2 Data Retention Exceptions
+
+[Start of chunk 25]
+Medical records must be archived for a minimum of 7 years.
+All audit trails must be immutable.</code></pre>
+
+<p>
+    Retrieve chunk 25 alone and nothing says that "7 years" is about <em>data retention exceptions</em>
+    and not about, say, ordinary log storage.
+</p>
+
+<h2>The Fix: Chunk the Structure, Not the String</h2>
+<p>
+    Both failures come from the same place: by the time the splitter runs, the structure is already
+    gone. The fix is to chunk before flattening, while a table is still a table and a heading is still
+    a heading.
+</p>
+
+<div class="callout">
+    <div class="callout-title">Three rules for structural chunking</div>
+    <ol>
+        <li><strong>Cut at structural boundaries.</strong> Between paragraphs, sections, pages, or
+            slides. Never in the middle of a table row.</li>
+        <li><strong>Carry the heading.</strong> Every chunk should know which heading it sits under,
+            ideally the whole path of headings above it.</li>
+        <li><strong>Repeat table headers.</strong> When a table is too big for one chunk, every piece
+            should start with the header row.</li>
+    </ol>
+</div>
+
+<h2>What officeParser's Chunker Does</h2>
+<p>
+    officeParser parses every format into one tree, so its chunker works on nodes, not characters. You
+    reach it with <code>ast.to('chunks')</code>:
+</p>
+
+<pre><code>import { parseOffice } from 'officeparser';
+
+const ast = await parseOffice('service-agreement.docx');
+
+const { value: chunks } = await ast.to('chunks', {
+    chunksConfig: {
+        strategy: 'document-structure',  // the default
+        splitBy: 'heading',  // or 'paragraph', 'page', 'slide', 'sheet'
+        maxChunkSize: 1500,
+        tableSplitStrategy: 'row',       // repeat the header row
+    },
+});</code></pre>
+
+<p>
+    Here is real output for a short Markdown document: a paragraph under the heading "3.2 Uptime
+    Credits", followed by a four-row table that I forced to split by setting a small
+    <code>maxChunkSize</code>. The chunks for the headings themselves are left out:
+</p>
+
+<pre><code>[
+  {
+    "text": "If monthly uptime falls below 99.9%, the customer is
+             entitled to a 10% credit. Below 99.0%, a 25% credit
+             applies.",
+    "metadata": {
+      "sourceType": "md",
+      "closestHeading": "3.2 Uptime Credits"
+    }
+  },
+  {
+    "text": "| Quarter | Revenue | Operating margin |
+             | Q1 | 41,900 | 16.2% |
+             | Q2 | 43,750 | 17.1% |
+             | Q3 | 45,200 | 18.4% |",
+    "metadata": {
+      "sourceType": "md",
+      "closestHeading": "3.2 Uptime Credits",
+      "isTableChunk": true
+    }
+  },
+  {
+    "text": "| Quarter | Revenue | Operating margin |
+             | Q4 | 47,310 | 19.0% |",
+    "metadata": {
+      "sourceType": "md",
+      "closestHeading": "3.2 Uptime Credits",
+      "isTableChunk": true
+    }
+  }
+]</code></pre>
+
+<p>
+    (The long strings are wrapped here to fit the page.) Measured against the three rules:
+</p>
+<ul>
+    <li><strong>Rule 1, boundaries:</strong> done, with one exception. Chunks follow the tree, and a
+        table is cut between rows. A single row longer than <code>maxChunkSize</code> is cut inside,
+        because no chunk could hold it whole.</li>
+    <li><strong>Rule 3, table headers:</strong> done. The second table chunk begins with the header row,
+        so the Q4 figures still have their column names. <code>isTableChunk</code> marks both
+        pieces.</li>
+    <li><strong>Rule 2, headings:</strong> partly. Each chunk records its <code>closestHeading</code>,
+        along with <code>pageNumber</code>, <code>slideNumber</code>, or <code>sheetName</code> where the
+        format has them. But it is the <em>nearest</em> heading only, not the full path above it, and it
+        lives in the metadata, not in the text that gets embedded.</li>
+</ul>
+
+<h3>Putting the Heading Where the Embedding Can See It</h3>
+<p>
+    If the heading is only in metadata, the embedding model never sees it. Prepend it yourself. A
+    heading is also emitted as a chunk of its own, so skip the case where a chunk <em>is</em> its
+    heading:
+</p>
+
+<pre><code>for (const chunk of chunks) {
+    const heading = chunk.metadata.closestHeading;
+    const textToEmbed = heading &amp;&amp; heading !== chunk.text
+        ? `${heading}\n\n${chunk.text}`
+        : chunk.text;
+
+    // Embed textToEmbed. Store chunk.metadata next to the vector,
+    // for filtering and for citations.
+}</code></pre>
+
+<h3>Sizes in Tokens, and Other Strategies</h3>
+<p>
+    Sizes are counted in characters by default. To count tokens, pass a <code>lengthFunction</code>:
+    your tokenizer's counter goes in, and <code>maxChunkSize</code> becomes a token budget.
+</p>
+<p>
+    Two more strategies are there when structure is not what you want. <code>fixed-size</code> is the
+    familiar recursive splitter with overlap. <code>semantic</code> cuts where the topic shifts, using
+    an embedding function that you supply.
+</p>
+
+<h2>Measure It on Your Own Documents</h2>
+<p>
+    I am not going to quote a benchmark here. Retrieval numbers do not travel well between corpora, and
+    the only result that matters is the one on your documents. What I can offer is the experiment worth
+    running on your own files:
+</p>
+<ol>
+    <li>Collect a few dozen real questions, and make sure some can only be answered from a table.</li>
+    <li>For each question, note which passage of which document holds the answer.</li>
+    <li>Index the documents twice: once with a fixed-size splitter, once with structural chunks.</li>
+    <li>For each index, count how often the right passage shows up in the top results.</li>
+</ol>
+<p>
+    Pay attention to the table questions. That is where the two approaches differ most, and where a
+    wrong answer is hardest to notice.
+</p>
+
+<hr>
+
+<h2>Summary</h2>
+<p>
+    Stop treating documents as strings of characters. The structure an author put into a document is
+    information, and a retrieval pipeline that flattens it first is working with less than it was
+    given.
+</p>
+<p>
+    Cut at boundaries, keep tables whole or repeat their headers, and make sure every chunk knows where
+    in the document it came from.
+</p>

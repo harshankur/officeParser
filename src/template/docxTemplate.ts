@@ -61,7 +61,7 @@ function valueToRunXml(value: TemplateValue): string {
  * tags). `resolve` returns the run-XML to substitute for a key, or `null` to leave the placeholder
  * text as-is (the `onMissing: 'keep'` case).
  */
-function replaceInChunk(chunk: string, phRe: RegExp, resolve: (key: string) => string | null): string {
+function replaceInChunk(chunk: string, phRe: RegExp, resolve: (key: string, placeholderLength: number) => string | null): string {
     // A `<w:t>` is either self-closing (`<w:t/>`, emitted by the OpenXML SDK / POI / docx4j for an
     // empty run) or a normal `<w:t ...>text</w:t>`; capture the inner text of the latter.
     //
@@ -93,11 +93,6 @@ function replaceInChunk(chunk: string, phRe: RegExp, resolve: (key: string) => s
     phRe.lastIndex = 0;
     if (!phRe.test(joined)) return chunk; // no placeholder here: leave it exactly as-is
 
-    // Map each character position in the joined text back to the <w:t> segment it came from.
-    const posSeg = new Int32Array(joined.length);
-    let ci = 0;
-    segs.forEach((s, si) => { for (let k = 0; k < s.inner.length; k++) posSeg[ci++] = si; });
-
     phRe.lastIndex = 0;
     const matches: { start: number; end: number; key: string }[] = [];
     let m: RegExpExecArray | null;
@@ -105,28 +100,40 @@ function replaceInChunk(chunk: string, phRe: RegExp, resolve: (key: string) => s
 
     // Rebuild each segment's inner text. Ordinary characters stay in their own segment; a resolved
     // placeholder's value is attributed wholesale to the segment where its opening delimiter began.
-    const newInner = segs.map(() => '');
-    let mi = 0;
-    for (let p = 0; p < joined.length;) {
-        if (mi < matches.length && p === matches[mi].start) {
-            const mt = matches[mi];
-            const val = resolve(mt.key);
-            mi++;
-            if (val === null) {
-                // 'keep': leave the placeholder text where it is, one character at a time, so a
-                // placeholder split across runs keeps each run's original formatting instead of
-                // collapsing the whole thing into the run where it started.
-                newInner[posSeg[p]] += joined[p];
-                p++;
-            } else {
-                newInner[posSeg[p]] += val;
-                p = mt.end;
-            }
-        } else {
-            newInner[posSeg[p]] += joined[p];
-            p++;
+    // Built from slices of the joined text, cut where segments end: a character at a time (with a
+    // segment index per character), one paragraph of 300 million characters ended the process out of
+    // memory.
+    const offsets: number[] = [0];
+    for (const seg of segs) offsets.push(offsets[offsets.length - 1] + seg.inner.length);
+    const pieces: string[][] = segs.map(() => []);
+    // The segment holding position `at` of the joined text; asked of positions that never decrease.
+    let segment = 0;
+    const segmentAt = (at: number): number => {
+        while (segment < segs.length - 1 && offsets[segment + 1] <= at) segment++;
+        return segment;
+    };
+    // The joined text from `from` to `to`, each part to the segment it came from.
+    const copy = (from: number, to: number): void => {
+        for (let at = from; at < to;) {
+            const si = segmentAt(at);
+            const end = Math.min(to, offsets[si + 1]);
+            pieces[si].push(joined.slice(at, end));
+            at = end;
         }
+    };
+    let copied = 0;
+    for (const mt of matches) {
+        const val = resolve(mt.key, mt.end - mt.start);
+        // 'keep': the placeholder's text stays where it is, copied with the text around it, so a
+        // placeholder split across runs keeps each run's original formatting instead of collapsing
+        // into the run where it started.
+        if (val === null) continue;
+        copy(copied, mt.start);
+        pieces[segmentAt(mt.start)].push(val);
+        copied = mt.end;
     }
+    copy(copied, joined.length);
+    const newInner = pieces.map(parts => parts.join(''));
 
     // Rebuild the chunk in a single forward pass: copy the text between `<w:t>` segments verbatim and
     // drop each rewritten segment in place. Splicing last-to-first would recopy the growing tail on
@@ -142,13 +149,39 @@ function replaceInChunk(chunk: string, phRe: RegExp, resolve: (key: string) => s
 }
 
 /**
- * Applies placeholder replacement to one XML part. The part is split at every paragraph-boundary tag
- * (`<w:p ...>`, `</w:p>`, `<w:p/>`); each piece between boundaries is one paragraph's own run content
- * (nested paragraphs, e.g. text boxes, become their own pieces), so joining a piece's `<w:t>` never
- * crosses a paragraph boundary. This is linear (no `[\s\S]*?`-to-`</w:p>` backtracking).
+ * `xml` split at every paragraph-boundary tag (`<w:p ...>`, `</w:p>`, `<w:p/>`), the tags kept as their
+ * own pieces, found by a forward scan: a pattern reading a tag to its `>` read the rest of the part from
+ * every `<w:p` that has none, so 570 bytes of zipped `<w:p ` took 24 seconds.
  */
-function replaceInPart(xml: string, phRe: RegExp, resolve: (key: string) => string | null): string {
-    const pieces = xml.split(/(<w:p\b[^>]*\/>|<w:p\b[^>]*>|<\/w:p>)/g);
+function paragraphPieces(xml: string): string[] {
+    const pieces: string[] = [];
+    let pieceStart = 0;
+    for (let at = xml.indexOf('<', 0); at !== -1; at = xml.indexOf('<', at + 1)) {
+        let tagEnd = -1;
+        if (xml.startsWith('</w:p>', at)) tagEnd = at + 6;
+        else if (xml.startsWith('<w:p', at) && !/[\w]/.test(xml.charAt(at + 4))) {
+            const gt = xml.indexOf('>', at + 4);
+            // No `>` left: no tag can end in the rest of the part.
+            if (gt === -1) break;
+            tagEnd = gt + 1;
+        }
+        if (tagEnd === -1) continue;
+        pieces.push(xml.slice(pieceStart, at), xml.slice(at, tagEnd));
+        pieceStart = tagEnd;
+        at = tagEnd - 1;
+    }
+    pieces.push(xml.slice(pieceStart));
+    return pieces;
+}
+
+/**
+ * Applies placeholder replacement to one XML part. The part is split at every paragraph-boundary tag
+ * (see paragraphPieces); each piece between boundaries is one paragraph's own run content (nested
+ * paragraphs, e.g. text boxes, become their own pieces), so joining a piece's `<w:t>` never crosses a
+ * paragraph boundary.
+ */
+function replaceInPart(xml: string, phRe: RegExp, resolve: (key: string, placeholderLength: number) => string | null): string {
+    const pieces = paragraphPieces(xml);
     for (let i = 0; i < pieces.length; i++) {
         // Boundary tags (odd indices) have no `<w:t>`, so processing them is a harmless no-op; process
         // every piece uniformly rather than tracking parity.
@@ -164,7 +197,11 @@ function replaceInPart(xml: string, phRe: RegExp, resolve: (key: string) => stri
 export function renderDocxTemplate(
     entries: Record<string, Uint8Array>,
     data: TemplateData,
-    opts: { start: string; end: string; onMissing: 'keep' | 'empty' | 'error'; mtime: Date; onFieldMissing: (key: string) => never },
+    opts: {
+        start: string; end: string; onMissing: 'keep' | 'empty' | 'error'; mtime: Date; onFieldMissing: (key: string) => never;
+        /** What the document's values may add by repetition (see resolve), and what to throw past it. */
+        maxRepeatedContent: number; onRepeatLimit: () => never;
+    },
 ): Uint8Array {
     // Match delimiters against the raw XML inner text, where Word stores e.g. `<<` as `&lt;&lt;` but a
     // literal `"` as `"`; so build the pattern from the text-node escaping Word uses (& < > only).
@@ -172,11 +209,30 @@ export function renderDocxTemplate(
     const start = escapeRegex(escapeXmlText(opts.start));
     const end = escapeRegex(escapeXmlText(opts.end));
     const phRe = new RegExp(`${start}\\s*([\\p{L}\\p{N}_.\\-]+)\\s*${end}`, 'gu');
-    const resolve = (key: string): string | null => {
-        if (Object.prototype.hasOwnProperty.call(data, key)) return valueToRunXml(data[key]);
-        if (opts.onMissing === 'empty') return '';
-        if (opts.onMissing === 'error') opts.onFieldMissing(key);
-        return null; // 'keep'
+    // Each key's run-XML, made once; and what repeating values has added so far. A value's first use is
+    // the caller's own data; each later use adds what it outgrows its placeholder by, within
+    // `maxRepeatedContent`, as a parse repeats a document's shared content: 1,000,000 placeholders of one
+    // 100-character value (9.6 KB of template) made 450 MB of XML, and a longer value failed untyped.
+    const values = new Map<string, string | null>();
+    const used = new Set<string>();
+    let repeatLeft = opts.maxRepeatedContent;
+    const resolve = (key: string, placeholderLength: number): string | null => {
+        let value = values.get(key);
+        if (value === undefined && !values.has(key)) {
+            if (Object.prototype.hasOwnProperty.call(data, key)) value = valueToRunXml(data[key]);
+            else if (opts.onMissing === 'empty') value = '';
+            else if (opts.onMissing === 'error') opts.onFieldMissing(key);
+            else value = null; // 'keep'
+            values.set(key, value ?? null);
+        }
+        if (value == null) return null;
+        if (used.has(key)) {
+            const growth = value.length - placeholderLength;
+            if (growth > 0 && (repeatLeft -= growth) < 0) opts.onRepeatLimit();
+        } else {
+            used.add(key);
+        }
+        return value;
     };
 
     const out: Zippable = {};

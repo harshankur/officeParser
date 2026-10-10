@@ -15,6 +15,7 @@ import { unionAll } from './geometry.js';
 import { RawRun } from './pdfTypes.js';
 import { median } from '../../utils/numberUtils.js';
 import { DocContext, PageContext, runsToParagraph } from './textLayout.js';
+import { appendAll } from '../../utils/nodeListUtils.js';
 
 interface StructNode {
     role?: string;
@@ -106,7 +107,7 @@ export function buildTaggedNodes(
 
 function walkChildren(node: StructNode, ctx: WalkCtx, sectionDepth: number): OfficeContentNode[] {
     const out: OfficeContentNode[] = [];
-    for (const child of node.children || []) out.push(...walkNode(child, ctx, sectionDepth));
+    for (const child of node.children || []) appendAll(out, walkNode(child, ctx, sectionDepth));
     return out;
 }
 
@@ -164,7 +165,7 @@ function collectRuns(node: StructNode, ctx: WalkCtx, skip?: Set<string>): RawRun
     const recurse = (n: StructNode) => {
         if (n.type === 'content' && n.id) {
             const runs = ctx.runsByMcid.get(n.id);
-            if (runs) { out.push(...runs); ctx.covered.add(n.id); }
+            if (runs) { appendAll(out, runs); ctx.covered.add(n.id); }
             return;
         }
         for (const c of n.children || []) {
@@ -192,7 +193,7 @@ function blockWithNotes(node: StructNode, ctx: WalkCtx, level: number | undefine
         // convention WordParser uses); fall back to trailing sibling nodes when there is no text run.
         const anchor = p ? lastTextChild(p) : undefined;
         if (anchor) anchor.notes = [...(anchor.notes || []), ...notes];
-        else out.push(...notes);
+        else appendAll(out, notes);
     }
     return out;
 }
@@ -250,7 +251,7 @@ function collectRows(node: StructNode, depth = 0): StructNode[] {
     for (const c of node.children || []) {
         const r = role(c);
         if (r === 'TR') out.push(c);
-        else if (r === 'THead' || r === 'TBody' || r === 'TFoot' || TRANSPARENT_GROUP.has(r)) out.push(...collectRows(c, depth + 1));
+        else if (r === 'THead' || r === 'TBody' || r === 'TFoot' || TRANSPARENT_GROUP.has(r)) appendAll(out, collectRows(c, depth + 1));
     }
     return out;
 }
@@ -262,7 +263,7 @@ function collectCells(tr: StructNode, depth = 0): StructNode[] {
     for (const c of tr.children || []) {
         const r = role(c);
         if (r === 'TH' || r === 'TD') out.push(c);
-        else if (TRANSPARENT_GROUP.has(r)) out.push(...collectCells(c, depth + 1));
+        else if (TRANSPARENT_GROUP.has(r)) appendAll(out, collectCells(c, depth + 1));
     }
     return out;
 }
@@ -450,7 +451,10 @@ function classifyListType(label: string): 'ordered' | 'unordered' {
 
 /** Collapses TOC dot-leaders ("Title ...... 3" -> "Title 3") in a node's text and text-run children. */
 function stripDotLeaders(node: OfficeContentNode): void {
-    const clean = (s: string | undefined) => (s || '').replace(/\s*\.{4,}\s*/g, ' ');
+    // One leader, however many runs of dots it is split into ("Scope .... .... 12"), is one space. A
+    // match starts where whitespace does, not at each space of a run (each read to its end); once its
+    // first dots are found nothing after them can fail, so it never goes back over what it read.
+    const clean = (s: string | undefined) => (s || '').replace(/(?<!\s)\s*\.{4,}(?:\s*\.{4,})*\s*/g, ' ');
     if (node.text) node.text = clean(node.text).trim();
     for (const c of node.children || []) {
         if (c.type === 'text') c.text = clean(c.text);
@@ -485,7 +489,7 @@ function parseListNumber(label: string): number | null {
         const parts = t.match(/\d+/g);
         if (parts && parts.length) return parseInt(parts[parts.length - 1], 10);
     }
-    const core = t.replace(/^[(\[]+/, '').replace(/[.)\]\s]+$/, '');
+    const core = t.replace(/^[(\[]+/, '').replace(/(?<![.)\]\s])[.)\]\s]+$/, '');
     if (/^[ivxlcdm]+$/i.test(core)) { const n = romanToInt(core); return n > 0 ? n : null; }
     if (/^[a-z]$/i.test(core)) return core.toLowerCase().charCodeAt(0) - 96; // a -> 1
     return null;
@@ -501,7 +505,7 @@ function buildList(node: StructNode, ctx: WalkCtx, indent: number): OfficeConten
     for (const li of (node.children || [])) {
         if (role(li) !== 'LI') {
             // Some producers nest content directly; recurse transparently.
-            if (role(li) === 'L') items.push(...buildList(li, ctx, indent + 1));
+            if (role(li) === 'L') appendAll(items, buildList(li, ctx, indent + 1));
             continue;
         }
         let label = '';
@@ -513,7 +517,7 @@ function buildList(node: StructNode, ctx: WalkCtx, indent: number): OfficeConten
             if (pr === 'Lbl') {
                 label = collectRuns(part, ctx).map(r => r.text).join('').trim();
             } else if (pr === 'L') {
-                nested.push(...buildList(part, ctx, indent + 1));
+                appendAll(nested, buildList(part, ctx, indent + 1));
             } else {
                 // The item body: an LBody wrapper, OR the body placed directly under LI (a P/Span with
                 // no LBody, which some producers emit). Treat any non-Lbl/non-L child as body so its
@@ -532,7 +536,7 @@ function buildList(node: StructNode, ctx: WalkCtx, indent: number): OfficeConten
                 }
                 for (const b of part.children || []) {
                     const br = role(b);
-                    if (br === 'L') nested.push(...buildList(b, ctx, indent + 1));
+                    if (br === 'L') appendAll(nested, buildList(b, ctx, indent + 1));
                     else if (br === 'Table') { const t = buildTable(b, ctx); if (t) bodyNodes.push(t); }
                 }
             }
@@ -574,7 +578,7 @@ function buildList(node: StructNode, ctx: WalkCtx, indent: number): OfficeConten
         // leaves its (uncovered) marker looking like text outside the tag tree. Any nested sublist is
         // still emitted.
         if (bodyNodes.length || itemNotes.length) { items.push(item); idx++; }
-        items.push(...nested);
+        appendAll(items, nested);
     }
     return items;
 }

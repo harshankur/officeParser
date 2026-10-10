@@ -1,7 +1,29 @@
 import { OfficeGenerator } from './OfficeGenerator.js';
 import { OfficeParser } from './OfficeParser.js';
-import { BlobLike, ConversionResult, GeneratorConfig, OfficeConverterConfig, OfficeParserConfig, SupportedDestination, SupportedFileType } from './types.js';
+import { BlobLike, CanonicalFormat, ConversionResult, GeneratorConfig, OfficeConverterConfig, OfficeIssue, OfficeParserConfig, OfficeWarningType, SupportedDestination, SupportedFileType } from './types.js';
+import { PROTOTYPE_POLLUTION_KEYS, RECOGNIZED_GENERATOR_KEYS, RECOGNIZED_PARSER_KEYS } from './utils/configUtils.js';
+import { logWarning } from './utils/errorUtils.js';
 import { resolveImageMode } from './utils/officeGenUtils.js';
+
+/** The keys `convert()` itself reads; parser and generator options go inside the first two. */
+const CONVERTER_KEYS = new Set(['parseConfig', 'generatorConfig', 'onWarning']);
+
+/**
+ * A `convert()` config's top-level keys it does not read, each with where it belongs when it is a
+ * parser or generator option (`{ texConfig }` belongs in `generatorConfig`), as the
+ * UNRECOGNIZED_CONFIG_OPTION warning reports them.
+ */
+function misplacedConverterKeys(config: object | undefined): { keys: string[]; renames: Record<string, string> } {
+    const keys = Object.keys(config ?? {}).filter(k => !CONVERTER_KEYS.has(k) && !PROTOTYPE_POLLUTION_KEYS.has(k));
+    const renames: Record<string, string> = {};
+    for (const key of keys) {
+        const parser = RECOGNIZED_PARSER_KEYS.has(key), generator = RECOGNIZED_GENERATOR_KEYS.has(key);
+        if (parser && generator) renames[key] = '(it goes under parseConfig or generatorConfig)';
+        else if (parser) renames[key] = `parseConfig.${key}`;
+        else if (generator) renames[key] = `generatorConfig.${key}`;
+    }
+    return { keys, renames };
+}
 
 /**
  * Utility type to infer the file type from a file path string literal.
@@ -57,7 +79,7 @@ export class OfficeConverter {
         file: F,
         destination: D,
         config?: OfficeConverterConfig<D, T>
-    ): Promise<ConversionResult<D>> {
+    ): Promise<ConversionResult<CanonicalFormat<D>>> {
         // 1. Prepare Parser Configuration
         // We prioritize the top-level onWarning if provided.
         const parserConfig: OfficeParserConfig = {
@@ -90,8 +112,19 @@ export class OfficeConverter {
             parserConfig.extractAttachments = wantsImageOrText || (config?.generatorConfig?.includeCharts !== false) || !!parserConfig.ocr;
         }
 
+        // A parser or generator option at the top level is not read; say where it belongs.
+        const misplaced = misplacedConverterKeys(config);
+        const configIssues: OfficeIssue[] = [];
+        if (misplaced.keys.length) {
+            const onWarning = config?.onWarning;
+            logWarning(OfficeWarningType.UNRECOGNIZED_CONFIG_OPTION, { onWarning: (issue: OfficeIssue) => { configIssues.push(issue); onWarning?.(issue); } }, misplaced);
+        }
+
         // 2. Parse the source document into the universal AST
         const ast = await OfficeParser.parseOffice(file, parserConfig);
+        // The parse's own warnings, taken now: the AST goes on collecting the generator's too, which
+        // the generation result already lists.
+        const parseWarnings = [...(ast.warnings || [])];
 
         // 3. Generate the destination document from the AST
         const generatorConfig = {
@@ -103,7 +136,7 @@ export class OfficeConverter {
         // construction (config.generatorConfig is already typed for D, and onWarning is common to
         // every destination), so the cast restates what the types otherwise lose.
         const result = await OfficeGenerator.generate(ast, destination, generatorConfig as GeneratorConfig<D>);
-        result.messages = [...(ast.warnings || []), ...result.messages];
+        result.messages = [...configIssues, ...parseWarnings, ...result.messages];
         return result;
     }
 }

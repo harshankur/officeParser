@@ -1,5 +1,6 @@
+import { boundRepeatedValues } from './repeatUtils.js';
 import { OfficeGenerator } from '../OfficeGenerator.js';
-import { ConversionResult, GeneratorConfig, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeParserConfig, SupportedDestination, SupportedFileType } from '../types.js';
+import { CanonicalFormat, ConversionResult, GeneratorConfig, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeParserConfig, SupportedDestination, SupportedFileType } from '../types.js';
 
 /**
  * Creates a fully-featured OfficeParserAST object with conversion methods.
@@ -22,6 +23,8 @@ export function createAST(
     config: OfficeParserConfig,
     auxiliary: OfficeAuxiliaryContent | undefined,
 ): OfficeParserAST {
+    // Last, over everything the parser built: values a definition gave many nodes are bounded in all.
+    boundRepeatedValues([content, auxiliary?.headers, auxiliary?.footers, auxiliary?.slideMasters, auxiliary?.outline], attachments, config);
     return {
         config,
         type,
@@ -34,8 +37,8 @@ export function createAST(
             this: T,
             destination: D,
             genConfig?: GeneratorConfig<D>
-        ): Promise<ConversionResult<D>> {
-            return OfficeGenerator.generate(this as any, destination, genConfig) as Promise<ConversionResult<D>>;
+        ): Promise<ConversionResult<CanonicalFormat<D>>> {
+            return OfficeGenerator.generate(this as any, destination, genConfig) as Promise<ConversionResult<CanonicalFormat<D>>>;
         }
     };
 }
