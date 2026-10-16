@@ -24,12 +24,8 @@
     <meta property="og:site_name" content="officeParser">
     <meta property="article:published_time" content="2026-10-04">
 
-    <!-- Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@600;700;800&display=swap"
-        rel="stylesheet">
+    <!-- Fonts: the site's own copies (docs/fonts), shared with the home page. -->
+    <link rel="stylesheet" href="../fonts/fonts.css">
 
     <link rel="stylesheet" href="./blog.css">
     <!-- In the head and not deferred: it sets the theme before the page is first painted. -->
@@ -425,6 +421,12 @@ const { value: chunks } = await ast.to('chunks');</code></pre>
                 <a href="./feed.xml">RSS</a>
             </div>
         </div>
+        <div class="footer-legal">
+            <a href="https://harshankur.com/impressum" target="_blank" rel="noopener">Impressum</a>
+            <a href="https://harshankur.com/datenschutz#officeparser" target="_blank" rel="noopener">Datenschutz</a>
+        </div>
+        <p class="footer-copyright">officeParser © 2026 <a href="https://harshankur.com" target="_blank"
+                rel="noopener">Harsh Ankur</a></p>
     </footer>
 </body>
 

@@ -771,6 +771,34 @@ a.author-name:hover,
     color: var(--text-primary);
 }
 
+/* Under the footer's links: the legal links, then the copyright as the page's last line. */
+.footer-legal {
+    max-width: 1140px;
+    margin: 2rem auto 0;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.5rem 1.25rem;
+}
+
+.footer-legal a:hover,
+.footer-copyright a:hover {
+    color: var(--text-primary);
+}
+
+.footer-copyright {
+    max-width: 1140px;
+    margin: 0.75rem auto 0;
+    text-align: center;
+}
+
+.footer-copyright a {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
 /* ==========================================================================
    Responsive
    ========================================================================== */
