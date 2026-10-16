@@ -1,0 +1,24 @@
+Third-party files the site serves itself, each at a pinned version beside its licence. They are
+copies, unchanged, of the files named here; nothing in this folder is fetched from these sources
+when a page is opened.
+
+marked-15.0.12/                 npm marked@15.0.12 (marked.min.js), MIT: LICENSE.md
+highlight.js-11.9.0/            highlight.js 11.9.0 as cdnjs serves it (highlight.min.js,
+                                languages/latex.min.js, styles/atom-one-dark.min.css,
+                                styles/atom-one-light.min.css), BSD-3-Clause: LICENSE
+chart.js-4.5.1/                 npm chart.js@4.5.1 (dist/chart.umd.min.js), MIT: LICENSE.md.
+                                The charts script of the HTML the visualizer generates.
+katex-0.19.0/                   npm katex@0.19.0 (dist/katex.min.js, dist/katex.min.css,
+                                dist/fonts/), MIT: LICENSE. The LaTeX preview's formulas.
+latex.css-1.14.0/               npm latex.css@1.14.0 (fonts/LM-*.woff2): Latin Modern Roman, by
+                                GUST e-foundry, under the GUST Font License (GUST-FONT-LICENSE.txt,
+                                which is the LaTeX Project Public License 1.3c, LPPL-1.3c.txt);
+                                latex.css's own MIT licence: LICENSE. Original fonts:
+                                https://www.gust.org.pl/projects/e-foundry/latin-modern
+computer-modern-0.1.3/          npm computer-modern@0.1.3 (fonts/cmu-*.woff2, the ones the LaTeX
+                                preview uses): Computer Modern Unicode, SIL Open Font License 1.1:
+                                OFL.txt
+pdfjs-dist-6.2.108/             npm pdfjs-dist@6.2.108 (build/pdf.worker.min.mjs), the version the
+                                browser bundle is built with, Apache-2.0: LICENSE
+
+The site's text fonts (Inter, Outfit, JetBrains Mono) are in ../fonts, with their licences.

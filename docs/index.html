@@ -81,17 +81,14 @@
             opacity: 1;
         }
     </style>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link
-        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;500&display=swap"
-        rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Everything the page loads by itself comes from this site: the fonts (docs/fonts) and the
+         libraries (docs/vendor, each at a pinned version beside its licence). -->
+    <link href="./fonts/fonts.css" rel="stylesheet">
+    <script src="./vendor/marked-15.0.12/marked.min.js"></script>
     <link id="hljs-theme" rel="stylesheet"
-        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/latex.min.js"></script>
+        href="./vendor/highlight.js-11.9.0/styles/atom-one-dark.min.css">
+    <script src="./vendor/highlight.js-11.9.0/highlight.min.js"></script>
+    <script src="./vendor/highlight.js-11.9.0/languages/latex.min.js"></script>
     <script>
         // Pre-load theme to avoid flash
         (function () {
@@ -107,7 +104,7 @@
             // Set initial HLJS theme to avoid flash
             const hljsLink = document.getElementById('hljs-theme');
             if (hljsLink) {
-                hljsLink.href = `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-${activeTheme === 'dark' ? 'dark' : 'light'}.min.css`;
+                hljsLink.href = `./vendor/highlight.js-11.9.0/styles/atom-one-${activeTheme === 'dark' ? 'dark' : 'light'}.min.css`;
             }
         })();
     </script>
@@ -1826,6 +1823,41 @@
             font-size: 0.85rem;
         }
 
+        .footer-legal {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem 1.5rem;
+        }
+
+        .footer-legal a {
+            color: var(--text-dim);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .footer-legal a:hover {
+            color: var(--primary);
+        }
+
+        /* The last line of the page: the copyright, under the legal links. */
+        .footer-copyright {
+            max-width: 1200px;
+            margin: 1.5rem auto 0;
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+        }
+
+        .footer-copyright a {
+            color: inherit;
+            text-decoration: underline;
+            text-underline-offset: 2px;
+        }
+
+        .footer-copyright a:hover {
+            color: var(--primary);
+        }
+
         @media (max-width: 1200px) {
             .footer-grid {
                 grid-template-columns: 1.5fr 1fr 1fr;
@@ -1865,6 +1897,10 @@
                 flex-direction: column;
                 gap: 1rem;
                 text-align: center;
+            }
+
+            .footer-legal {
+                justify-content: center;
             }
         }
 
@@ -3334,12 +3370,23 @@
          */
         window.FORMAT_WINDOWS = ['html', 'md', 'chunks', 'csv', 'rtf', 'tex', 'text', 'ast'];
 
+        /**
+         * The copies of the pdf.js worker and of Chart.js this site serves (docs/vendor), by their full
+         * address on the site the page is opened from: the pdf.js worker is loaded from it, and a
+         * downloaded HTML file names its charts script by it, so the address works outside the site too.
+         */
+        window.SITE_PDF_WORKER_SRC = new URL('vendor/pdfjs-dist-6.2.108/pdf.worker.min.mjs', document.baseURI).href;
+        window.SITE_CHART_JS_SRC = new URL('vendor/chart.js-4.5.1/chart.umd.min.js', document.baseURI).href;
+
+        // A setting may say `persist: false` (never kept in this browser: a secret, held for this visit
+        // only) or `replaces` (the values an earlier version of the site had as its default, which give
+        // way to today's default when a visitor's browser still holds one).
         window.CONFIG_SCHEMAS = {
             parser: [
                 // General Parser Settings - Everyday / Primary (First 2 rows when collapsed)
                 { id: 'cfg_fileType', label: 'File Type Hint', type: 'select', options: ['', 'docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp', 'odg', 'epub', 'tex'], names: ['Auto', 'DOCX', 'XLSX', 'PPTX', 'PDF', 'RTF', 'CSV', 'Markdown', 'HTML', 'ODT', 'ODS', 'ODP', 'ODG', 'EPUB', 'LaTeX'], width: '100px' },
                 { id: 'cfg_extractAttachments', label: 'Extract Attachments', type: 'switch', default: true },
-                { id: 'cfg_password', label: 'Password', type: 'text', default: '', width: '160px', placeholder: 'PDF, OOXML, ODF' },
+                { id: 'cfg_password', label: 'Password', type: 'text', default: '', width: '160px', placeholder: 'PDF, OOXML, ODF', persist: false },
                 { id: 'cfg_ocr', label: 'Enable OCR', type: 'switch', default: false },
                 { id: 'cfg_ocrLanguage', label: 'OCR Language', type: 'text', default: 'eng', width: '60px' },
                 { id: 'cfg_ignoreHeadersAndFooters', label: 'Ignore Headers/Footers', type: 'switch', default: false },
@@ -3374,7 +3421,7 @@
                 { id: 'cfg_pdfNormalizeText', label: 'PDF Normalize Text', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfExtractTextColor', label: 'PDF Extract Text Color', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_ignorePageGeometry', label: 'Ignore Page Geometry', type: 'switch', default: false, formatGroup: 'pdf', formats: ['pdf'] },
-                { id: 'cfg_pdfWorkerSrc', label: 'PDF Worker URL', type: 'text', default: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.worker.min.mjs', fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfWorkerSrc', label: 'PDF Worker URL', type: 'text', default: window.SITE_PDF_WORKER_SRC, replaces: /^https:\/\/cdn\.jsdelivr\.net\/npm\/pdfjs-dist@[^/]+\/build\/pdf\.worker\.min\.mjs$/, fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
 
                 // HTML / EPUB Options
                 { id: 'cfg_preserveAttributes', label: 'Preserve HTML Attributes', type: 'switch', default: false, formatGroup: 'html', formats: ['html', 'epub', 'md'] },
@@ -3403,7 +3450,7 @@
             ],
             html: [
                 { id: 'cfg_html_containerWidth', label: 'Width', type: 'inline-text', default: 'auto', width: '100px' },
-                { id: 'cfg_html_chartJsSrc', label: 'Charts URL', type: 'inline-text', default: 'https://cdn.jsdelivr.net/npm/chart.js', width: '180px' },
+                { id: 'cfg_html_chartJsSrc', label: 'Charts URL', type: 'inline-text', default: window.SITE_CHART_JS_SRC, replaces: /^https:\/\/cdn\.jsdelivr\.net\/npm\/chart\.js$/, width: '180px' },
                 { id: 'cfg_html_customCss', label: 'Custom CSS', type: 'inline-popover-textarea', default: '', height: '120px', placeholder: '.my-class { color: red; }' },
                 { id: 'cfg_html_inj_headStart', label: 'Inj Head Start', type: 'inline-popover-textarea', default: '', height: '100px' },
                 { id: 'cfg_html_inj_headEnd', label: 'Inj Head End', type: 'inline-popover-textarea', default: '', height: '100px' },
@@ -3451,8 +3498,23 @@
             { id: 'pptx', title: 'Presentation Options', icon: '📽️', formats: 'pptx,odp' }
         ];
 
-        function renderSingleConfigItem(item) {
+        /** What this browser has kept for a setting, or null: see `persist` and `replaces` above. */
+        function storedConfigValue(item) {
+            if (item.persist === false) {
+                // Removes what an earlier version of the page kept (it stored the password as typed).
+                localStorage.removeItem(item.id);
+                return null;
+            }
             const saved = localStorage.getItem(item.id);
+            if (saved !== null && item.replaces && item.replaces.test(saved)) {
+                localStorage.removeItem(item.id);
+                return null;
+            }
+            return saved;
+        }
+
+        function renderSingleConfigItem(item) {
+            const saved = storedConfigValue(item);
             const value = saved !== null ? (item.type.includes('switch') ? saved === 'true' : saved) : item.default;
             const isInline = item.type.startsWith('inline-');
             const cfgAttr = `data-cfg-id="${item.id}"` +
@@ -3604,10 +3666,10 @@
                     </a>
                     <a href="https://www.buymeacoffee.com/harshankur" class="bmc-nav-btn" target="_blank">
                         <div class="bmc-full-btn">
-                            <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee">
+                            <img src="./images/buymeacoffee-button.png" alt="Buy Me A Coffee">
                         </div>
                         <div class="bmc-icon-btn">
-                            <img src="https://www.buymeacoffee.com/assets/img/guidelines/logo-mark-1.svg"
+                            <img src="./images/buymeacoffee-logo.svg"
                                 alt="BMC Icon">
                         </div>
                     </a>
@@ -3668,7 +3730,7 @@
                     </a>
                     <!-- package-version:end -->
                     <a id="weekly-badge-link"
-                        href="https://api.npmjs.org/downloads/point/2026-05-05:2026-05-11/officeparser" target="_blank"
+                        href="https://www.npmjs.com/package/officeparser" target="_blank"
                         class="badge-link">
                         <div class="badge shimmer" id="weekly-badge">--- Weekly Downloads</div>
                     </a>
@@ -3690,7 +3752,7 @@
             <div class="stats-grid">
                 <div class="stat-item">
                     <a id="weekly-stats-link"
-                        href="https://api.npmjs.org/downloads/point/2026-05-05:2026-05-11/officeparser" target="_blank"
+                        href="https://www.npmjs.com/package/officeparser" target="_blank"
                         style="text-decoration: none;">
                         <h3 id="weekly-stats-count" class="shimmer">---</h3>
                         <p>Weekly Downloads*</p>
@@ -3698,7 +3760,7 @@
                 </div>
                 <div class="stat-item">
                     <a id="total-stats-link"
-                        href="https://api.npmjs.org/downloads/point/2019-04-15:2026-05-12/officeparser" target="_blank"
+                        href="https://www.npmjs.com/package/officeparser" target="_blank"
                         style="text-decoration: none;">
                         <h3 id="total-stats-count" class="shimmer">---</h3>
                         <p>Total Downloads</p>
@@ -4924,12 +4986,16 @@
         </div>
 
         <div class="footer-bottom">
-            <p class="copyright">© 2026 officeParser. Built with ❤️ for the Open Source community.</p>
+            <p>Built with ❤️ for the Open Source community.</p>
             <div class="footer-legal">
+                <a href="https://harshankur.com/impressum" target="_blank" rel="noopener">Impressum</a>
+                <a href="https://harshankur.com/datenschutz#officeparser" target="_blank" rel="noopener">Datenschutz</a>
                 <a href="https://github.com/harshankur/officeParser/blob/master/LICENSE" target="_blank"
-                    style="color: var(--text-dim); text-decoration: none; margin-left: 1.5rem;">MIT License</a>
+                    rel="noopener">MIT License</a>
             </div>
         </div>
+        <p class="footer-copyright">officeParser © 2026 <a href="https://harshankur.com" target="_blank"
+                rel="noopener">Harsh Ankur</a></p>
     </footer>
 
     <!-- Fullscreen Preview Overlay Modal -->
@@ -5155,7 +5221,7 @@
                 // Update HLJS theme
                 const hljsLink = document.getElementById('hljs-theme');
                 if (hljsLink) {
-                    hljsLink.href = `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-${activeTheme === 'dark' ? 'dark' : 'light'}.min.css`;
+                    hljsLink.href = `./vendor/highlight.js-11.9.0/styles/atom-one-${activeTheme === 'dark' ? 'dark' : 'light'}.min.css`;
                 }
 
                 // Re-render active format windows if window.currentAst exists
@@ -5519,6 +5585,7 @@
             Object.values(window.CONFIG_SCHEMAS).flat().forEach(item => {
                 const el = document.getElementById(item.id);
                 if (!el) return;
+                if (item.persist === false) return; // held in the page for this visit, never stored
 
                 el.addEventListener('change', () => {
                     localStorage.setItem(item.id, el.type === 'checkbox' ? el.checked : el.value);
@@ -5839,7 +5906,7 @@
                     },
                     texParserConfig: { today: document.getElementById('cfg_texToday').value },
                     csvDelimiter: document.getElementById('cfg_csvDelimiter').value,
-                    pdfWorkerSrc: document.getElementById('cfg_pdfWorkerSrc').value,
+                    pdfWorkerSrc: document.getElementById('cfg_pdfWorkerSrc').value.trim() || window.SITE_PDF_WORKER_SRC,
                     decompressionLimits: {
                         maxUncompressedBytes: parseInt(document.getElementById('cfg_maxUncompressedBytes').value, 10) * 1024 * 1024,
                         maxZipEntries: parseInt(document.getElementById('cfg_maxZipEntries').value, 10),
@@ -6512,12 +6579,18 @@
                 ...['Subtitle', 'Author', 'Institute', 'Date', 'Caption'].map(style => (
                     { selector: { nodeType: 'paragraph', attributes: { style } }, output: { tag: 'p', classes: [`tex-${style.toLowerCase()}`], fresh: true } })),
             ];
-            /** The typesetter for formulas, whose fonts are Computer Modern's: loaded when a document has one. */
-            const TEX_MATH = 'https://cdn.jsdelivr.net/npm/katex@0.19.0/dist/katex.min';
-            /** Where the fonts are loaded from when the reader's machine has no TeX fonts of its own. */
+            /**
+             * The typesetter for formulas, whose fonts are Computer Modern's: loaded when a document has one.
+             * The site's own copies (docs/vendor), by their full address, since the preview is a document of its own.
+             */
+            const TEX_MATH = new URL('vendor/katex-0.19.0/katex.min', document.baseURI).href;
+            /**
+             * Where the fonts are loaded from when the reader's machine has no TeX fonts of its own: Latin
+             * Modern as latex.css packs it, and Computer Modern Unicode, both served by the site.
+             */
             const TEX_FONTS = {
-                roman: 'https://cdn.jsdelivr.net/npm/latex.css@1.14.0/fonts/LM-',
-                modern: 'https://cdn.jsdelivr.net/npm/computer-modern@0.1.3/fonts/cmu-',
+                roman: new URL('vendor/latex.css-1.14.0/LM-', document.baseURI).href,
+                modern: new URL('vendor/computer-modern-0.1.3/cmu-', document.baseURI).href,
             };
 
             /**
@@ -6823,6 +6896,57 @@ ${sectioning.filter(Boolean).join('\n')}
             }
 
             /**
+             * A preview contacts no other site by itself: a video or another page framed in a document
+             * (a live `<iframe>`, or the generator's gated `data-embed-gated` placeholder) is shown as a
+             * button, and only a click on it loads the page, a YouTube video from youtube-nocookie.com.
+             * Only what the site shows is changed: a copy or a download keeps the generator's output.
+             */
+            function gatePreviewEmbeds(html) {
+                const decode = value => { const area = document.createElement('textarea'); area.innerHTML = value; return area.value; };
+                const attr = (attributes, name) => {
+                    const match = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(attributes);
+                    return match ? decode(match[1] ?? match[2]) : '';
+                };
+                const esc = value => String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                const gate = (src, width, height) => {
+                    let url;
+                    try { url = new URL(src, location.href); } catch { return ''; }
+                    if (url.protocol !== 'https:' && url.protocol !== 'http:') return '';
+                    const video = /(^|\.)youtube(-nocookie)?\.com$/i.test(url.hostname) && /^\/embed\/([\w-]{6,})/.exec(url.pathname);
+                    const target = video ? `https://www.youtube-nocookie.com/embed/${video[1]}` : url.href;
+                    const label = video ? 'Play the YouTube video' : 'Load the embedded page';
+                    const note = video ? 'Loads it from youtube-nocookie.com' : `Loads it from ${url.hostname}`;
+                    const size = /^\d+$/.test(width) ? `max-width: ${width}px;` : '';
+                    const ratio = /^\d+$/.test(width) && /^\d+$/.test(height) ? `${width} / ${height}` : '16 / 9';
+                    return `<button type="button" data-op-embed-src="${esc(target)}" data-op-embed-kind="${video ? 'youtube' : 'page'}" data-op-embed-ratio="${esc(ratio)}"`
+                        + ` style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.35rem; width: 100%; ${size} aspect-ratio: ${ratio}; margin: 1rem auto; padding: 1rem;`
+                        + ` border: 1px dashed #94a3b8; border-radius: 8px; background: #f1f5f9; color: #0f172a; font: 15px/1.4 sans-serif; cursor: pointer;">`
+                        + `<strong>&#9654; ${label}</strong><span style="font-size: 13px; color: #475569;">${esc(note)}</span></button>`;
+                };
+                return html
+                    .replace(/<iframe\b([^>]*)>(?:[\s\S]*?<\/iframe>)?/gi, (_, attributes) => gate(attr(attributes, 'src'), attr(attributes, 'width'), attr(attributes, 'height')))
+                    .replace(/<div\b([^>]*\bdata-embed-gated\b[^>]*)>\s*<\/div>/gi, (_, attributes) => gate(attr(attributes, 'data-embed-src'), attr(attributes, 'data-embed-width'), attr(attributes, 'data-embed-height')));
+            }
+
+            /** Gives the buttons gatePreviewEmbeds left in `root` (a preview's document or element) their click. */
+            function wirePreviewEmbeds(root) {
+                const doc = root.ownerDocument || root;
+                for (const button of root.querySelectorAll('button[data-op-embed-src]')) {
+                    button.addEventListener('click', () => {
+                        const frame = doc.createElement('iframe');
+                        frame.src = button.dataset.opEmbedSrc;
+                        frame.title = button.dataset.opEmbedKind === 'youtube' ? 'YouTube video player' : 'Embedded page';
+                        if (button.dataset.opEmbedKind === 'youtube') {
+                            frame.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+                            frame.allowFullscreen = true;
+                        }
+                        frame.style.cssText = `display: block; width: 100%; max-width: ${button.style.maxWidth || '100%'}; aspect-ratio: ${button.dataset.opEmbedRatio}; margin: 1rem auto; border: 0;`;
+                        button.replaceWith(frame);
+                    }, { once: true });
+                }
+            }
+
+            /**
              * Parse generated source (RTF or LaTeX) back into an AST and render that AST as HTML in an
              * iframe inside `container`. Used by the windows whose output has no browser renderer. Given
              * the LaTeX itself (`tex`), the document is set as LaTeX would typeset it (see texLayoutOf).
@@ -6832,7 +6956,9 @@ ${sectioning.filter(Boolean).join('\n')}
                 const bytes = typeof source === 'string' ? new TextEncoder().encode(source) : source;
                 const reparsed = await window.officeParser.parseOffice(bytes, { fileType, extractAttachments: true });
                 const layout = typeof tex === 'string' ? texLayoutOf(tex) : null;
-                const htmlResult = await reparsed.to('html', layout ? { htmlConfig: { standalone: { styles: 'none' } }, styleMap: TEX_STYLE_MAP } : undefined);
+                // Charts from the site's own Chart.js, and embeds as placeholders the preview turns into buttons.
+                const htmlConfig = { chartJsSrc: window.SITE_CHART_JS_SRC, gatedEmbeds: true, ...(layout ? { standalone: { styles: 'none' } } : {}) };
+                const htmlResult = await reparsed.to('html', layout ? { htmlConfig, styleMap: TEX_STYLE_MAP } : { htmlConfig });
 
                 const contentFrame = document.createElement('iframe');
                 contentFrame.className = 'html-iframe';
@@ -6857,8 +6983,9 @@ ${sectioning.filter(Boolean).join('\n')}
                     : /<body/i.test(htmlResult.value)
                     ? htmlResult.value.replace(/<body[^>]*>/i, `<body style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">`)
                     : `<div style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">${htmlResult.value}</div>`;
-                doc.write(styledHtml);
+                doc.write(gatePreviewEmbeds(styledHtml));
                 doc.close();
+                wirePreviewEmbeds(doc);
                 // Once the document is all read: a script it loads (the charts') holds the reading up
                 // the first time, and the page is not there to mark until it has come.
                 if (layout) {
@@ -6921,7 +7048,9 @@ ${sectioning.filter(Boolean).join('\n')}
                         };
                         window.resetWarnings(format);
                         if (format === 'html') {
-                            genConfig.htmlConfig = readHtmlPanelConfigInputs();
+                            // The preview asks for embeds as gated placeholders, which it shows as buttons
+                            // (gatePreviewEmbeds); the source view shows the output the panel's options give.
+                            genConfig.htmlConfig = { ...readHtmlPanelConfigInputs(), ...(window.viewerStates['html'] === 'preview' ? { gatedEmbeds: true } : {}) };
                         } else if (format === 'md') {
                             genConfig.mdConfig = { dialect: getMdDialect(), fallbackToHtml: getMdFallbackToHtml() };
                         } else if (format === 'chunks') {
@@ -6998,8 +7127,9 @@ ${sectioning.filter(Boolean).join('\n')}
                                 ? result.value.replace(/<body[^>]*>/i, `<body style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">`)
                                 : `<div style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">${result.value}</div>`;
                         }
-                        doc.write(styledHtml);
+                        doc.write(gatePreviewEmbeds(styledHtml));
                         doc.close();
+                        wirePreviewEmbeds(doc);
 
                         contentFrame.style.height = '100%';
                         contentFrame.style.display = 'block';
@@ -7036,7 +7166,8 @@ ${sectioning.filter(Boolean).join('\n')}
                     if (window.viewerStates['md'] === 'preview') {
                         const preview = document.createElement('div');
                         preview.className = 'md-preview';
-                        preview.innerHTML = window.marked ? marked.parse(result.value) : `<pre>${result.value}</pre>`;
+                        preview.innerHTML = window.marked ? gatePreviewEmbeds(marked.parse(result.value)) : `<pre>${result.value}</pre>`;
+                        wirePreviewEmbeds(preview);
                         container.appendChild(preview);
                     } else {
                         renderRawCode(result.value, 'language-markdown', container);
@@ -7383,7 +7514,7 @@ ${sectioning.filter(Boolean).join('\n')}
                         headInjections: document.getElementById('cfg_html_standalone_headInjections').checked,
                         bodyInjections: document.getElementById('cfg_html_standalone_bodyInjections').checked,
                     },
-                    chartJsSrc: document.getElementById('cfg_html_chartJsSrc').value || undefined,
+                    chartJsSrc: document.getElementById('cfg_html_chartJsSrc').value.trim() || window.SITE_CHART_JS_SRC,
                     containerWidth: document.getElementById('cfg_html_containerWidth').value || 'auto',
                     customCss: document.getElementById('cfg_html_customCss').value || undefined,
                     injections: {
@@ -7614,7 +7745,7 @@ ${sectioning.filter(Boolean).join('\n')}
                                 throw new Error("Pop-up blocked! Please allow pop-ups for this site to export PDF.");
                             }
                             printWindow.document.open();
-                            printWindow.document.write(result.value);
+                            printWindow.document.write(gatePreviewEmbeds(result.value));
                             printWindow.document.close();
                             // Wait for assets (like Chart.js) to load before printing.
                             printWindow.onload = () => printWindow.print();
@@ -7751,49 +7882,24 @@ ${sectioning.filter(Boolean).join('\n')}
             };
 
             // --- Live Download Stats ---
+            // The counts come from harshankur.com, which asks npm and keeps the answer for a while, so the
+            // visitor's browser asks no one else for them. `week` is the last week's downloads and `total`
+            // every download since the package was first published; either may be missing.
             async function updateDownloadStats() {
-                const yesterday = new Date();
-                yesterday.setDate(yesterday.getDate() - 1);
-                const formatDate = (date) => date.toISOString().split('T')[0];
-
-                const toStr = formatDate(yesterday);
-                const lastWeek = new Date(yesterday);
-                lastWeek.setDate(lastWeek.getDate() - 6);
-                const fromWeeklyStr = formatDate(lastWeek);
-
-                const weeklyUrl = `https://api.npmjs.org/downloads/point/${fromWeeklyStr}:${toStr}/officeparser`;
-                const totalUrl = `https://api.npmjs.org/downloads/point/2019-04-15:${toStr}/officeparser`;
-
-                // Update links in HTML to match dynamic dates
-                const weeklyLinks = ['weekly-badge-link', 'weekly-stats-link'];
-                const totalLinks = ['total-stats-link'];
-
-                weeklyLinks.forEach(id => {
-                    const el = document.getElementById(id);
-                    if (el) el.href = weeklyUrl;
-                });
-                totalLinks.forEach(id => {
-                    const el = document.getElementById(id);
-                    if (el) el.href = totalUrl;
-                });
-
                 const formatNumber = (num) => {
                     if (num >= 1000000) return (Math.floor(num / 100000) / 10) + 'M+';
                     if (num >= 1000) return Math.floor(num / 1000) + 'k+';
                     return num;
                 };
-
-
+                const isCount = (value) => typeof value === 'number' && Number.isFinite(value) && value > 0;
 
                 try {
-                    const [weeklyRes, totalRes] = await Promise.all([
-                        fetch(weeklyUrl).then(r => r.json()),
-                        fetch(totalUrl).then(r => r.json())
-                    ]);
+                    const response = await fetch('https://harshankur.com/api/downloads/officeparser');
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    const stats = await response.json();
 
-                    if (weeklyRes.downloads) {
-                        const weeklyCount = weeklyRes.downloads;
-                        const formattedWeekly = formatNumber(weeklyCount);
+                    if (isCount(stats.week)) {
+                        const formattedWeekly = formatNumber(stats.week);
                         const weeklyBadge = document.getElementById('weekly-badge');
                         const weeklyStatsCount = document.getElementById('weekly-stats-count');
 
@@ -7807,19 +7913,19 @@ ${sectioning.filter(Boolean).join('\n')}
                         }
                     }
 
-                    if (totalRes.downloads) {
-                        const totalCount = totalRes.downloads;
+                    if (isCount(stats.total)) {
                         const totalStatsCount = document.getElementById('total-stats-count');
 
                         if (totalStatsCount) {
-                            totalStatsCount.textContent = formatNumber(totalCount);
+                            totalStatsCount.textContent = formatNumber(stats.total);
                             totalStatsCount.classList.remove('shimmer');
                         }
                     }
                 } catch (err) {
                     console.error('Failed to fetch download stats', err);
-                    // Remove shimmer even on error to avoid infinite pulsing on broken states
-                    document.querySelectorAll('.shimmer').forEach(el => el.classList.remove('shimmer'));
+                } finally {
+                    // A count that did not come stops pulsing and keeps its placeholder.
+                    ['weekly-badge', 'weekly-stats-count', 'total-stats-count'].forEach(id => document.getElementById(id)?.classList.remove('shimmer'));
                 }
             }
 
