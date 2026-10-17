@@ -7,14 +7,19 @@
     <title>officeParser | The Most Versatile Office Parser & Generator for Node.js & Browser</title>
     <link rel="icon" type="image/png" href="./favicon.png">
 
-    <!-- Page views, counted by the self-hosted viewcounter (views.harshankur.com) with its tracker
-         script: each view, how long the page was visible and how far it was scrolled, and clicks on
-         links out and downloads. It is deferred, so it never blocks rendering; it stores nothing on
-         the device and sends nothing personal. data-hosts keeps it to the production site, so dev
-         servers and preview deploys never count. data-hash makes a spec document (#spec/<name>) its
-         own page, counted when it is opened. -->
-    <script defer src="https://views.harshankur.com/tracker.js" data-app="officeparser"
-        data-hosts="officeparser.harshankur.com" data-hash="#spec/"></script>
+    <!-- Page views, counted by the self-hosted viewcounter (views.harshankur.com): every page at the
+         edge, without consent and with nothing running here, and in more detail only once the visitor
+         allows it in the counter's prompt (consent.js). Only then does it load the tracker script,
+         which also counts how long the page was visible and how far it was scrolled, and clicks on
+         links out and downloads. It is deferred, so it never blocks rendering; the answer is the one
+         thing it keeps on the device, under one key for the home page and the blog
+         (data-consent-key), so one answer covers the site, and "Datenschutz-Einstellungen" in the
+         footer opens the prompt again. data-hosts keeps it to the production site, so dev servers
+         and preview deploys neither ask nor count. data-hash makes a spec document (#spec/<name>)
+         its own page, counted when it is opened. -->
+    <script defer src="https://views.harshankur.com/consent.js" data-app="officeparser"
+        data-hosts="officeparser.harshankur.com" data-hash="#spec/" data-consent-key="officeparser"
+        data-privacy-url="https://harshankur.com/datenschutz#officeparser"></script>
 
     <meta name="description"
         content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 14 formats (including EPUB and LaTeX) and generate DOCX, ODT, LaTeX, RAG-ready Markdown, HTML, EPUB, and high-fidelity PDF with native document awareness.">
@@ -1856,6 +1861,25 @@
 
         .footer-copyright a:hover {
             color: var(--primary);
+        }
+
+        /* The view counter's consent prompt (consent.js) draws itself in a closed shadow root; these
+           custom properties dress it in the page's theme, following data-theme rather than the system
+           setting it would otherwise go by. It stays below the header, the mobile menu, the preview
+           modal and the visualizer's popovers (1000 and up), so it never hides their controls. */
+        viewcounter-consent {
+            --viewcounter-consent-font: 'Outfit', sans-serif;
+            --viewcounter-consent-background: var(--bg-card);
+            --viewcounter-consent-color: var(--text-main);
+            --viewcounter-consent-border: var(--border);
+            --viewcounter-consent-radius: 16px;
+            --viewcounter-consent-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
+            --viewcounter-consent-button-background: var(--bg-card-hover);
+            --viewcounter-consent-button-color: var(--text-main);
+            --viewcounter-consent-button-border: var(--border);
+            --viewcounter-consent-link: var(--text-dim);
+            --viewcounter-consent-focus: var(--primary);
+            --viewcounter-consent-z-index: 900;
         }
 
         @media (max-width: 1200px) {
@@ -4990,6 +5014,8 @@
             <div class="footer-legal">
                 <a href="https://harshankur.com/impressum" target="_blank" rel="noopener">Impressum</a>
                 <a href="https://harshankur.com/datenschutz#officeparser" target="_blank" rel="noopener">Datenschutz</a>
+                <!-- Opens the view counter's consent prompt again, to change the answer (consent.js, in the head). -->
+                <a href="#" data-viewcounter-consent>Datenschutz-Einstellungen</a>
                 <a href="https://github.com/harshankur/officeParser/blob/master/LICENSE" target="_blank"
                     rel="noopener">MIT License</a>
             </div>

@@ -799,6 +799,24 @@ a.author-name:hover,
     text-underline-offset: 2px;
 }
 
+/* The view counter's consent prompt (consent.js) draws itself in a closed shadow root; these custom
+   properties dress it in the blog's theme, following data-theme rather than the system setting it
+   would otherwise go by. It stays below the sticky header (100). */
+viewcounter-consent {
+    --viewcounter-consent-font: var(--font-sans);
+    --viewcounter-consent-background: var(--bg-surface);
+    --viewcounter-consent-color: var(--text-primary);
+    --viewcounter-consent-border: var(--border-color);
+    --viewcounter-consent-radius: 12px;
+    --viewcounter-consent-shadow: var(--shadow-hover);
+    --viewcounter-consent-button-background: var(--bg-subtle);
+    --viewcounter-consent-button-color: var(--text-primary);
+    --viewcounter-consent-button-border: var(--border-color);
+    --viewcounter-consent-link: var(--text-secondary);
+    --viewcounter-consent-focus: var(--accent);
+    --viewcounter-consent-z-index: 90;
+}
+
 /* ==========================================================================
    Responsive
    ========================================================================== */

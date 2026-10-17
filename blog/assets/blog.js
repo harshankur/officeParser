@@ -2,7 +2,7 @@
  * What the blog's pages do once they are loaded: keep the reader's theme, and filter the list by
  * topic and by the words searched for. The pages themselves are built (scripts/build-blog.js) and
  * are complete without this script: every post is in its page, and the list shows every post.
- * Views are counted by the viewcounter's tracker script, which the layout loads.
+ * Views are counted by the viewcounter, whose consent prompt the layout loads.
  */
 (() => {
     'use strict';
