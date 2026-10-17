@@ -1198,7 +1198,7 @@ async function testExcelDates(): Promise<void> {
 
     const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <numFmts count="16">
+  <numFmts count="21">
     <numFmt numFmtId="164" formatCode="yyyy-mm-dd"/>
     <numFmt numFmtId="165" formatCode="yyyy-mm-dd h:mm:ss"/>
     <numFmt numFmtId="166" formatCode="0.00"/>
@@ -1215,13 +1215,19 @@ async function testExcelDates(): Promise<void> {
     <numFmt numFmtId="177" formatCode="[mm]:ss"/>
     <numFmt numFmtId="178" formatCode="[ss]"/>
     <numFmt numFmtId="179" formatCode="0 &quot;min&quot;"/>
+    <numFmt numFmtId="180" formatCode="0.00;yyyy-mm-dd"/>
+    <numFmt numFmtId="181" formatCode="&quot;[h]&quot;0"/>
+    <numFmt numFmtId="182" formatCode="AM/PM"/>
+    <numFmt numFmtId="183" formatCode="0*d"/>
+    <numFmt numFmtId="184" formatCode="0_y"/>
   </numFmts>
-  <cellXfs count="21">
+  <cellXfs count="26">
     <xf numFmtId="0"/><xf numFmtId="164"/><xf numFmtId="165"/><xf numFmtId="20"/><xf numFmtId="46"/>
     <xf numFmtId="14"/><xf numFmtId="22"/><xf numFmtId="166"/><xf numFmtId="167"/><xf numFmtId="168"/>
     <xf numFmtId="169"/><xf numFmtId="170"/><xf numFmtId="171"/><xf numFmtId="172"/><xf numFmtId="173"/>
     <xf numFmtId="174"/><xf numFmtId="175"/><xf numFmtId="176"/><xf numFmtId="177"/><xf numFmtId="178"/>
-    <xf numFmtId="179"/>
+    <xf numFmtId="179"/><xf numFmtId="180"/><xf numFmtId="181"/><xf numFmtId="182"/><xf numFmtId="183"/>
+    <xf numFmtId="184"/>
   </cellXfs>
 </styleSheet>`;
     const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -1259,6 +1265,19 @@ async function testExcelDates(): Promise<void> {
       <c r="L2" s="1"><v>-1</v></c>
       <c r="M2" s="1"><v></v></c>
       <c r="N2" s="1" t="str"><f>TEXT(A1,"yyyy")</f><v>2024</v></c>
+    </row>
+    <row r="3">
+      <c r="A3" s="21"><v>45565</v></c>
+      <c r="B3" s="22"><v>45565</v></c>
+      <c r="C3" s="23"><v>0.75</v></c>
+      <c r="D3" s="24"><v>45565</v></c>
+      <c r="E3" s="25"><v>45565</v></c>
+      <c r="F3" s="1"><v>60</v></c>
+      <c r="G3" s="2"><v>59.9999999</v></c>
+      <c r="H3" s="1"><v>2958465</v></c>
+      <c r="I3" s="2"><v>2958465.9999999</v></c>
+      <c r="J3" s="1"><v>2957003</v></c>
+      <c r="K3" s="1"><v>2957004</v></c>
     </row>
   </sheetData>
 </worksheet>`;
@@ -1311,12 +1330,19 @@ async function testExcelDates(): Promise<void> {
         // serial, and a text formula result in a date style. The empty value makes no cell.
         '12.5', '3.5', '12:00:00', '1900-02-28', '1900-03-01', '3000000', 'not a date', '2.5',
         '45565', '7.5', '-1', '2024',
+        // Only the first section counts; a quoted [h], padding (_x) and fill (*x) characters are
+        // literals; a bare AM/PM is a time; the fictitious 1900-02-29, also reached by rounding;
+        // the last day a workbook holds, and the same day rounded past it; two serials around the
+        // last day of the 1904 system, which are ordinary days in the 1900 system
+        '45565', '45565', '18:00:00', '45565', '45565', '1900-02-29', '1900-02-29 00:00:00',
+        '9999-12-31', '2958465.9999999', '9995-12-30', '9995-12-31',
     ], 'Excel: cells read as the sheet shows them');
 
     for (const date1904 of ['1', 'true']) {
         const cells = await parseCells(date1904);
         assert.strictEqual(cells[0], '2028-10-01', `Excel: date1904="${date1904}" counts from 1904-01-01`);
         assert.strictEqual(cells[2], '06:00:00', 'Excel: a time of day does not depend on the date system');
+        assert.deepStrictEqual(cells.slice(-2), ['9999-12-31', '2957004'], 'Excel: the 1904 system ends on 9999-12-31 too');
     }
 
     console.log('  Excel date/time cells: All assertions passed ✓');

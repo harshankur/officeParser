@@ -2617,6 +2617,13 @@ async function parserHardeningTests() {
     await timed('xlsx: 160k unclosed rows parse', () => parseQuiet(withSheetData('<row r="1"><c r="A1"><v>1</v></c>'.repeat(160000)), 'xlsx'));
     await timed('xlsx: a row of 160k unclosed cells parses', () => parseQuiet(withSheetData('<row r="1">' + '<c r="A1"><v>1</v>'.repeat(160000) + '</row>'), 'xlsx'));
     await timed('xlsx: a cell of 160k unclosed values parses', () => parseQuiet(withSheetData('<row r="1"><c r="A1" t="inlineStr"><is>' + '<t>1'.repeat(160000) + '</is></c></row>'), 'xlsx'));
+    // A number format is classified once per format with one forward pass. At 100k `[` the old
+    // backtracking strip took 4.5 s, so 200k keeps it well past the limit.
+    const withStyles = (formatCode: string, cellFormats: number) => repack('test.xlsx', z => {
+        z['xl/styles.xml'] = enc(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="${formatCode}"/></numFmts><cellXfs count="${cellFormats}">${'<xf numFmtId="164"/>'.repeat(cellFormats)}</cellXfs></styleSheet>`);
+    });
+    await timed('xlsx: a number format of 200k [ parses', () => parseQuiet(withStyles('['.repeat(200000), 1), 'xlsx'));
+    await timed('xlsx: 60k cell formats sharing a number format of 2k [ parse', () => parseQuiet(withStyles('['.repeat(2000), 60000), 'xlsx'));
     const unclosedRows = await parseQuiet(withSheetData('<row r="1"><c r="A1"><v>1</v></c><row r="2"><c r="A2"><v>2</v></c>'), 'xlsx');
     check('xlsx: unclosed rows keep their cells', JSON.stringify(unclosedRows.ast?.content).includes('"2"'), unclosedRows.error);
     await timed('md: a block whose second line is 300 KB, then 150k lines, parses', () => parseQuiet(Buffer.from('a\n|' + ' '.repeat(300000) + '-x\n' + 'a\n'.repeat(150000)), 'md'));
