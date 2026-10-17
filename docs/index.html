@@ -6898,7 +6898,9 @@ ${sectioning.filter(Boolean).join('\n')}
             /**
              * A preview contacts no other site by itself: a video or another page framed in a document
              * (a live `<iframe>`, or the generator's gated `data-embed-gated` placeholder) is shown as a
-             * button, and only a click on it loads the page, a YouTube video from youtube-nocookie.com.
+             * button, and only a click on it loads the page. A YouTube video asks for consent the way news
+             * sites do: the button says what loading it sends to YouTube, and the click is the consent, for
+             * that video only. It then plays from YouTube itself (www.youtube.com).
              * Only what the site shows is changed: a copy or a download keeps the generator's output.
              */
             function gatePreviewEmbeds(html) {
@@ -6913,9 +6915,11 @@ ${sectioning.filter(Boolean).join('\n')}
                     try { url = new URL(src, location.href); } catch { return ''; }
                     if (url.protocol !== 'https:' && url.protocol !== 'http:') return '';
                     const video = /(^|\.)youtube(-nocookie)?\.com$/i.test(url.hostname) && /^\/embed\/([\w-]{6,})/.exec(url.pathname);
-                    const target = video ? `https://www.youtube-nocookie.com/embed/${video[1]}` : url.href;
-                    const label = video ? 'Play the YouTube video' : 'Load the embedded page';
-                    const note = video ? 'Loads it from youtube-nocookie.com' : `Loads it from ${url.hostname}`;
+                    const target = video ? `https://www.youtube.com/embed/${video[1]}` : url.href;
+                    const label = video ? 'Load the YouTube video' : 'Load the embedded page';
+                    const note = video
+                        ? 'Playing this video loads it from YouTube. YouTube (Google) then receives data such as your IP address and may set cookies.'
+                        : `Loads it from ${url.hostname}, which then receives data such as your IP address.`;
                     const size = /^\d+$/.test(width) ? `max-width: ${width}px;` : '';
                     const ratio = /^\d+$/.test(width) && /^\d+$/.test(height) ? `${width} / ${height}` : '16 / 9';
                     return `<button type="button" data-op-embed-src="${esc(target)}" data-op-embed-kind="${video ? 'youtube' : 'page'}" data-op-embed-ratio="${esc(ratio)}"`
