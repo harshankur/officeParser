@@ -18,6 +18,9 @@ import { textDecoder } from '../utils/encodingUtils.js';
  */
 const MAX_HTML_NESTING_DEPTH = 256;
 
+/** How many nodes one spread or push.apply moves at a time: well under the engine's argument limit. */
+const ADD_LIST_CHUNK = 32768;
+
 interface HtmlNode {
     /** `comment` = an HTML comment, kept only under `HtmlParserConfig.preserveComments`; `text` is its body. */
     type: 'element' | 'text' | 'comment';
@@ -1372,11 +1375,21 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                             const node = nodes[bulkFrom++];
                             if (add(node) && !isAnchorMark(node)) break;
                         }
-                        for (let from = bulkFrom; from < nodes.length; from += 32768) {
-                            Array.prototype.push.apply(kids, nodes.slice(from, from + 32768));
-                        }
                     }
                     for (let j = nodes.length - 1; j >= bulkFrom; j--) if (!isAnchorMark(nodes[j])) { previous = nodes[j]; break; }
+                    if (kids === nodes || bulkFrom >= nodes.length) return;
+                    if (kids.length <= ADD_LIST_CHUNK && nodes.length - bulkFrom > kids.length) {
+                        // The longer list keeps its storage and the few nodes before it go in at its front:
+                        // one move of its elements, where copying it behind them read it again at every
+                        // wrapper (a list under 250 divs that each hold a paragraph first was copied 250
+                        // times). Nesting is bounded (MAX_HTML_NESTING_DEPTH), and so are these moves.
+                        nodes.splice(0, bulkFrom, ...kids);
+                        kids = nodes;
+                        return;
+                    }
+                    for (let from = bulkFrom; from < nodes.length; from += ADD_LIST_CHUNK) {
+                        Array.prototype.push.apply(kids, nodes.slice(from, from + ADD_LIST_CHUNK));
+                    }
                 };
                 for (let i = 0; i < n.children.length; i++) {
                     const child = n.children[i];
