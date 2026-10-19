@@ -4547,6 +4547,15 @@ async function testRtfHeaderRows(): Promise<void> {
 }
 
 /**
+ * A line break alone in a Markdown table cell, or at its edge, survives.
+ */
+async function testMarkdownCellBreaks(): Promise<void> {
+    const md = (src: string, cfg: any = {}) => OfficeParser.parseOffice(Buffer.from(src), { fileType: 'md', onWarning: () => { }, ...cfg } as any) as Promise<OfficeParserAST>;
+    const breaks = (await (await md('| <br> | h |\n|---|---|\n| x<br> | <br>y |\n')).to('md')).value as string;
+    assert.strictEqual(breaks, '| <br> | h |\n| --- | --- |\n| x<br> | <br>y |', 'a line break alone in a cell, or at its edge, survives');
+}
+
+/**
  * Configuration consistency: every option means the same on every surface, a mistake in a config is
  * reported rather than silently ignored, and a value an option does not accept falls back visibly.
  */
@@ -6145,6 +6154,7 @@ async function runTests(): Promise<void> {
         ['Chart scripts', testChartScripts],
         ['Markdown header rows', testMarkdownHeaderRows],
         ['RTF header rows', testRtfHeaderRows],
+        ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Cancellation', testCancellation],
     ];
 

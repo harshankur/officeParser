@@ -1033,6 +1033,10 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // `<hr>` survives a save instead of collapsing to whitespace. Every other breakType -
                     // notably 'page', which Markdown has no syntax for - keeps emitting a bare newline.
                     const meta = node.metadata as BreakMetadata | undefined;
+                    // In a pipe-table cell (one line of Markdown) a line break is written as the `<br>` it
+                    // becomes there, not as a hard break turned into one later: trimming the cell's edges
+                    // dropped a break that began or ended the cell, and a cell holding only one came back empty.
+                    if (isLineBreakType(meta?.breakType) && this.inPipeTableCell) return this.resolvedFallbackToHtml.cellLineBreaks ? '<br>' : ' ';
                     // Where the break starts a line (after another break), two trailing spaces would
                     // make a whitespace-only line, which ends the paragraph: a backslash does not.
                     // Among blocks (no line of text around it) a line break is nothing Markdown can show.
