@@ -3,7 +3,7 @@ import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
-import { base64ByteLength, decodeBase64, embedUrl, hexColor } from '../utils/officeGenUtils.js';
+import { base64ByteLength, decodeBase64, embedUrl, hexColor, isHeaderRow } from '../utils/officeGenUtils.js';
 
 /** Each byte's two hex digits. */
 const HEX_BYTES = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
@@ -42,6 +42,8 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
     private tableDepth = 0;
     /** The width in twips each table being written takes (the page's, or its cell's), then each row's cell width. */
     private widths: number[] = [];
+    /** The tables open around the node being written, innermost last (a row asks whether it is its table's first). */
+    private openTables: OfficeContentNode[] = [];
     /** The types of the nodes being written, outermost first, so a row knows whether a table holds it. */
     private readonly openTypes: string[] = [];
     /**
@@ -142,6 +144,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         }
         if (node.type === 'row') this.widths.push(Math.max(1, Math.floor(this.widths[this.widths.length - 1] / (node.children?.length || 1))));
         this.openTypes.push(node.type);
+        if (node.type === 'table') this.openTables.push(node);
         const wasInHeading = this.inHeading;
         const wasHeadingSize = this.headingUniformSize;
         if (node.type === 'heading') {
@@ -156,6 +159,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         } finally {
             if (holdsLine) this.lineDepth--;
             this.openTypes.pop();
+            if (node.type === 'table') this.openTables.pop();
             this.widths.length = wasWidths;
             this.tableDepth = wasTableDepth;
         }
@@ -180,6 +184,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         let body = '';
         this.tableDepth = 0;
         this.widths = [];
+        this.openTables = [];
 
         const render = async (node: OfficeContentNode, childrenOutput: string): Promise<string> => {
             const mapping = this.getSemanticMapping(node);
@@ -317,8 +322,11 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     // A nested table's row as Word writes it: its cells, then its definition in
                     // \nesttableprops ending in \nestrow, and a paragraph for readers without nesting.
                     // Written with \cell and \row, its cells and rows became the outer table's.
-                    if (this.tableDepth > 1) return `${childrenOutput}${this.pard()} {\\*\\nesttableprops\\trowd\\trgaph108\\trleft-108${cellDefs}\\nestrow}{\\nonesttables\\par}\n`;
-                    return `\\trowd\\trgaph108\\trleft-108${cellDefs}\n${childrenOutput}\\row\n`;
+                    // A header row (as DOCX's w:tblHeader) repeats on every page, and reads back as one.
+                    const table = this.openTables[this.openTables.length - 1];
+                    const header = isHeaderRow(node, table?.children?.find(c => c.type === 'row') === node) ? '\\trhdr' : '';
+                    if (this.tableDepth > 1) return `${childrenOutput}${this.pard()} {\\*\\nesttableprops\\trowd\\trgaph108\\trleft-108${header}${cellDefs}\\nestrow}{\\nonesttables\\par}\n`;
+                    return `\\trowd\\trgaph108\\trleft-108${header}${cellDefs}\n${childrenOutput}\\row\n`;
                 }
 
                 case 'cell': {
@@ -500,9 +508,10 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
      * formatting is not theirs.
      */
     private async renderApart(nodes: OfficeContentNode[]): Promise<string> {
-        const saved = { tableDepth: this.tableDepth, widths: this.widths, inHeading: this.inHeading, headingUniformSize: this.headingUniformSize, lineDepth: this.lineDepth };
+        const saved = { tableDepth: this.tableDepth, widths: this.widths, openTables: this.openTables, inHeading: this.inHeading, headingUniformSize: this.headingUniformSize, lineDepth: this.lineDepth };
         this.tableDepth = 0;
         this.widths = [];
+        this.openTables = [];
         this.inHeading = false;
         this.headingUniformSize = false;
         this.lineDepth = 0;
@@ -512,6 +521,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         } finally {
             this.tableDepth = saved.tableDepth;
             this.widths = saved.widths;
+            this.openTables = saved.openTables;
             this.inHeading = saved.inHeading;
             this.headingUniformSize = saved.headingUniformSize;
             this.lineDepth = saved.lineDepth;

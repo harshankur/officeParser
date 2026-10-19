@@ -4535,6 +4535,18 @@ async function testMarkdownHeaderRows(): Promise<void> {
 }
 
 /**
+ * RTF writes a header row with `\trhdr`, and reads a `\trhdr` row as the header.
+ */
+async function testRtfHeaderRows(): Promise<void> {
+    const md = (src: string, cfg: any = {}) => OfficeParser.parseOffice(Buffer.from(src), { fileType: 'md', onWarning: () => { }, ...cfg } as any) as Promise<OfficeParserAST>;
+    const headerAst = await md('| H1 | H2 |\n|---|---|\n| a | b |\n');
+    const rtf = String((await headerAst.to('rtf')).value);
+    assert.ok(/\\trhdr/.test(rtf) && !/\\b[\s\\{]/.test(rtf.slice(rtf.indexOf('\\trowd'))), 'RTF: a Markdown header row is a header row, without added bold');
+    const rtfBack = await OfficeParser.parseOffice(Buffer.from(rtf), { fileType: 'rtf' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(rtfBack.content[0].children!.map(row => row.children!.map(c => (c.metadata as any)?.style ?? null)), [['header', 'header'], [null, null]], 'RTF: a \\trhdr row reads back as the header row');
+}
+
+/**
  * Configuration consistency: every option means the same on every surface, a mistake in a config is
  * reported rather than silently ignored, and a value an option does not accept falls back visibly.
  */
@@ -6132,6 +6144,7 @@ async function runTests(): Promise<void> {
         ['Template blocks', testTemplateBlocks],
         ['Chart scripts', testChartScripts],
         ['Markdown header rows', testMarkdownHeaderRows],
+        ['RTF header rows', testRtfHeaderRows],
         ['Cancellation', testCancellation],
     ];
 

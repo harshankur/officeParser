@@ -701,6 +701,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
          * them (in `\nesttableprops`).
          */
         cellDefinitions: CellProps[];
+        /** `\trhdr` in the row definition: the row repeats as the table's header on every page. */
+        headerRow?: boolean;
         /** The cell a vertical merge started in, and its row, by grid column. */
         verticalMerges: Map<number, { cell: OfficeContentNode; row: number }>;
     }
@@ -1132,6 +1134,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 continue;
             }
             const meta = cell.metadata as CellMetadata;
+            // A row cannot carry metadata of its own: a header row's flag rides on its cells, as Word's does.
+            if (ctx.headerRow) meta.style = 'header';
             meta.row = ctx.rowIndex;
             meta.col = column;
             kept.push(cell);
@@ -1864,7 +1868,10 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     if (paragraphDepth < 1) paragraphDepth = 1;
                 }
                 definingTable.cellDefinitions = [];
+                definingTable.headerRow = false;
                 definitionCell = {};
+            } else if (node.value === 'trhdr') {
+                if (definingTable) definingTable.headerRow = node.param !== 0;
             } else if (node.value === 'clvmgf') {
                 definitionCell.verticalFirst = true;
             } else if (node.value === 'clvmrg') {
