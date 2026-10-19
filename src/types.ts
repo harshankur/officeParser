@@ -532,7 +532,8 @@ export interface CommonOfficeParserConfig {
     csvDelimiter?: string;
     /**
      * Limits and checks applied during ZIP extraction to protect against excessive
-     * memory and resource usage.
+     * memory and resource usage. A value that is not an object of limits is reported
+     * (`INVALID_CONFIG_VALUE`) and the defaults used.
      */
     decompressionLimits?: DecompressionLimits;
     /**
@@ -2452,7 +2453,8 @@ export interface TemplateDateNames {
 /**
  * Options for {@link OfficeTemplate.render}. `data` is the only required field: a single
  * {@link TemplateData} produces one document, an array of them produces one document per entry
- * (a mail-merge).
+ * (a mail-merge). An option render does not take, at the top or inside `delimiters`,
+ * `numberSeparators`, `dateNames` or `decompressionLimits`, is reported (`UNRECOGNIZED_CONFIG_OPTION`).
  */
 export interface TemplateConfig {
     /** The field values. One object -> one rendered document; an array -> one document per entry. */
@@ -2460,6 +2462,7 @@ export interface TemplateConfig {
     /**
      * Tag delimiters. Defaults to `{{` and `}}`, so `{{name}}` is a field and `{{ if paid }}` a block
      * tag. A tag is matched even when the source splits it across several runs (a common Word quirk).
+     * Delimiters that are not an object, or one that is not text, are refused (`IMPROPER_ARGUMENTS`).
      */
     delimiters?: { start: string; end: string };
     /**
@@ -2470,17 +2473,21 @@ export interface TemplateConfig {
      *   is `null`; a loop over it repeats nothing.
      * - `'error'`: reject with `TEMPLATE_FIELD_MISSING`.
      * A key that is present but `null`/`undefined` is not missing: it renders as empty, is `null` in a
-     * condition, and a loop over it repeats nothing.
+     * condition, and a loop over it repeats nothing. Another value is reported (`INVALID_CONFIG_VALUE`)
+     * and `'keep'` used.
      */
     onMissing?: 'keep' | 'empty' | 'error';
     /**
      * The separators a number picture (`{{ total | format "#,##0.00" }}`) writes. A picture is always
      * written with `,` for groups and `.` for the decimal point, as in Word; these are what appear in
      * the document. Default `{ decimal: '.', group: ',' }` (`{ decimal: ',', group: '.' }` writes
-     * `1.250,50`).
+     * `1.250,50`). A value that is not an object of text is refused (`IMPROPER_ARGUMENTS`).
      */
     numberSeparators?: { decimal?: string; group?: string };
-    /** The month and day names and AM/PM markers a date picture writes. Default English. */
+    /**
+     * The month and day names and AM/PM markers a date picture writes. Default English. A value that is
+     * not an object of names, or a list of the wrong length, is refused (`IMPROPER_ARGUMENTS`).
+     */
     dateNames?: TemplateDateNames;
     /**
      * Minutes added to UTC before a date picture writes a date: 0 (the default) writes dates in UTC, 330

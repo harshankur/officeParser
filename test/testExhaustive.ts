@@ -4469,9 +4469,25 @@ async function testTemplateBlocks(): Promise<void> {
         for (const bad of ['{{ v | format "[Red]0.00" }}', '{{ v | format "0;0;0;0" }}', '{{ v | format "" }}', '{{ v | format "plain" }}', '{{ v | format 5 }}', '{{ v | format "0" "1" }}', '{{ v | upper "x" }}', '{{ v | format "0 \'open" }}']) {
             await rejects(p(r(bad.replace(/'/g, '\''))), { v: 1 }, 'TEMPLATE_SYNTAX', 'unreadable');
         }
-        for (const cfg of [{ utcOffsetMinutes: 2000 }, { utcOffsetMinutes: 1.5 }, { dateNames: { months: ['a'] } }, { numberSeparators: { decimal: 1 } }, { formatters: { format: () => 1 } }, { formatters: { 'bad name': () => 1 } }, { formatters: { x: 'nope' } }]) {
+        for (const cfg of [{ utcOffsetMinutes: 2000 }, { utcOffsetMinutes: 1.5 }, { dateNames: { months: ['a'] } }, { numberSeparators: { decimal: 1 } }, { numberSeparators: 'x' }, { numberSeparators: [',', '.'] }, { dateNames: 'x' }, { delimiters: 'abc' }, { delimiters: ['[[', ']]'] }, { delimiters: { start: 5, end: ']]' } }, { formatters: [() => 1] }, { formatters: { format: () => 1 } }, { formatters: { 'bad name': () => 1 } }, { formatters: { x: 'nope' } }]) {
             await rejects(p(r('{{ v }}')), { v: 1 }, 'IMPROPER_ARGUMENTS', undefined, cfg);
         }
+        // An option render does not take, or a value onMissing does not, is reported: a misspelt one
+        // left its default in place without a word, and 'skip' emptied fields but kept blocks as typed.
+        const warnings: any[] = [];
+        const rendered = await text(p(r('{{ v }} {{ w }}{{ if w }}x{{ endif }}')), { v: 1 }, {
+            colour: 1, delimiters: { start: '{{', end: '}}', middle: '|' }, numberSeparators: { decimals: ',' }, dateNames: { monthz: [] },
+            decompressionLimits: { maxZipEntries: 10_000, maxZipEntrys: 5 }, onMissing: 'skip', onWarning: (w: any) => warnings.push(w),
+        });
+        const unknownKeys = warnings.filter(w => w.code === 'UNRECOGNIZED_CONFIG_OPTION').flatMap(w => w.details?.keys ?? []);
+        assert.deepStrictEqual(unknownKeys.sort(), ['colour', 'dateNames.monthz', 'decompressionLimits.maxZipEntrys', 'delimiters.middle', 'numberSeparators.decimals'], `every unknown template option is reported; got ${JSON.stringify(unknownKeys)}`);
+        assert.ok(warnings.some(w => w.code === 'INVALID_CONFIG_VALUE' && w.details?.option === 'onMissing'), 'an onMissing it does not take is reported');
+        assert.strictEqual(rendered, '1 {{ w }}{{ if w }}x{{ endif }}', `and 'keep' used: a missing field and its block are kept as typed; got ${rendered}`);
+        // Limits that are not an object of limits are reported, by a render and by a parse, and the defaults used.
+        const limitWarnings: any[] = [];
+        await text(p(r('{{ v }}')), { v: 1 }, { decompressionLimits: 'x', onWarning: (w: any) => limitWarnings.push(w) });
+        await OfficeParser.parseOffice(Buffer.from('# a'), { fileType: 'md', decompressionLimits: ['x'], onWarning: (w: any) => limitWarnings.push(w) } as any);
+        assert.strictEqual(limitWarnings.filter(w => w.code === 'INVALID_CONFIG_VALUE' && w.details?.option === 'decompressionLimits').length, 2, `decompressionLimits that are not an object are reported; got ${JSON.stringify(limitWarnings.map(w => w.message))}`);
     }
 
     // A field kept as typed (missing, 'keep') keeps each piece in its own run, as before.
@@ -4571,6 +4587,39 @@ async function testConfigConsistency(): Promise<void> {
     const overridden = String((await german.to('html', { metadataOverrides: { language: 'fr-CA' } } as any)).value);
     assert.ok(overridden.includes('<html lang="fr-CA">'), 'Language: metadataOverrides.language wins');
     assert.ok(String((await md.to('html')).value).includes('<html lang="en">'), 'Language: English when the source states none');
+    // maxPasswordAttempts that is not a whole number of 0 or more is reported, by the parser and by templates.
+    {
+        const agile = path.join(__dirname, 'files', 'encrypted', 'agile.docx');
+        const seen: any[] = [];
+        let asked = 0;
+        await OfficeParser.parseOffice(agile, { maxPasswordAttempts: -1, onPassword: () => { asked++; return 'wrong'; }, onWarning: (w: any) => seen.push(w) } as any).catch(() => undefined);
+        assert.ok(asked === 3 && seen.some(w => w.code === 'INVALID_CONFIG_VALUE' && /maxPasswordAttempts/.test(w.message)), `Config: an invalid maxPasswordAttempts is reported and 3 used (asked ${asked})`);
+        const templateSeen: any[] = [];
+        await OfficeTemplate.render(agile, { data: {}, maxPasswordAttempts: 1.5, onPassword: () => 'wrong', onWarning: (w: any) => templateSeen.push(w) } as any).catch(() => undefined);
+        assert.ok(templateSeen.some(w => w.code === 'INVALID_CONFIG_VALUE'), 'Config: a template reports an invalid maxPasswordAttempts too');
+    }
+    // A decompression limit that is not a number of 0 or more is reported and its default used: compared
+    // with NaN or text, a bound never fired.
+    {
+        const seen: any[] = [];
+        await OfficeParser.parseOffice(Buffer.from('# T'), { fileType: 'md', decompressionLimits: { maxXmlElements: 'x' }, onWarning: (w: any) => seen.push(w) } as any);
+        assert.ok(seen.some(w => w.code === 'INVALID_CONFIG_VALUE' && /decompressionLimits\.maxXmlElements/.test(w.message)), 'Config: an invalid decompression limit is reported by the parser');
+        // A partial config naming some OCR options (as one avoiding a CDN does) is merged with the defaults and checked,
+        // not taken for a resolved one: it kept no default (an RTF row's text joined with commas) and no check.
+        const partial: any[] = [];
+        const ocrNamed = { ocrConfig: { language: 'eng', workerPath: 'w.js', corePath: 'c', langPath: 'l' }, decompressionLimits: { maxXmlElements: NaN }, onWarning: (w: any) => partial.push(w) };
+        const rtfAst = await OfficeParser.parseOffice(path.join(__dirname, 'files', 'test.rtf'), ocrNamed as any) as OfficeParserAST;
+        const firstRow = collectAllNodes(rtfAst).find(n => n.type === 'row');
+        assert.ok(partial.some(w => w.code === 'INVALID_CONFIG_VALUE') && firstRow?.text === 'ITEM\nNEEDED', `Config: a partial config naming OCR options is merged and checked (row ${JSON.stringify(firstRow?.text)})`);
+        const loops = zipSync({ '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+            'word/document.xml': strToU8('<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>{{ for a in xs }}{{ for b in xs }}{{ for c in xs }}{{ endfor }}{{ endfor }}{{ endfor }}</w:t></w:r></w:p></w:body></w:document>') });
+        for (const bad of ['x', NaN, -1]) {
+            const warned: any[] = [];
+            let code = 'rendered';
+            await OfficeTemplate.render(loops, { data: { xs: Array(300).fill(0) }, decompressionLimits: { maxRepeatedContent: bad }, onWarning: (w: any) => warned.push(w) } as any).catch((e: any) => { code = e?.officeIssue?.code; });
+            assert.ok(code === 'OUTPUT_TOO_LARGE' && warned.some(w => w.code === 'INVALID_CONFIG_VALUE'), `Config: a template with maxRepeatedContent ${String(bad)} reports it and keeps the default bound (${code})`);
+        }
+    }
     console.log('  Config consistency: All assertions passed ✓');
 }
 

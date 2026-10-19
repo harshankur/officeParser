@@ -886,6 +886,24 @@ async function runTests() {
     const badFontOk = res50bad.status === 1 && res50bad.stderr.includes('--pdfConfig.fonts.regular');
     results.push({ name: 'CLI: an unreadable font file ends the run, naming the option', status: badFontOk ? 'PASS' : 'FAIL', details: badFontOk ? 'exit 1 naming the option' : `exit ${res50bad.status}, stderr: ${res50bad.stderr.slice(0, 160)}`, duration: 0 });
 
+    // 51. Options added in 8.2.0: headingDetection=tags keeps only tagged headings; a value an option does not
+    //     take is reported and the default used; allowRemoteAssets=false refuses a parse that would fetch
+    //     OCR files from a CDN, naming the option to set.
+    console.log('Test 51: --pdfParserConfig.headingDetection / --ocrConfig.cacheMethod / --allowRemoteAssets');
+    const t51 = Date.now();
+    const taggedPdf = fsPath.join(ROOT, 'test', 'files', 'pdf', 'tagged_headings.pdf');
+    const headingLines = (r: CliResult) => r.stdout.split('\n').filter(l => l.startsWith('#')).length;
+    const res51auto = runCliRaw([taggedPdf, '--to=md']);
+    const res51tags = runCliRaw([taggedPdf, '--to=md', '--pdfParserConfig.headingDetection=tags']);
+    const tagsOk = res51auto.status === 0 && res51tags.status === 0 && headingLines(res51tags) > 0 && headingLines(res51tags) < headingLines(res51auto);
+    results.push({ name: 'CLI: headingDetection=tags keeps only tagged headings', status: tagsOk ? 'PASS' : 'FAIL', details: `auto ${headingLines(res51auto)} headings, tags ${headingLines(res51tags)}`, duration: Date.now() - t51 });
+    const res51bad = runCliRaw([taggedPdf, '--to=text', '--pdfParserConfig.headingDetection=bogus', '--ocrConfig.cacheMethod=bogus', '--verbose']);
+    const badOk = res51bad.status === 0 && res51bad.stderr.includes('pdfParserConfig.headingDetection') && res51bad.stderr.includes('ocrConfig.cacheMethod') && res51bad.stderr.includes('INVALID_CONFIG_VALUE');
+    results.push({ name: 'CLI: a value an option does not take is reported, and the default used', status: badOk ? 'PASS' : 'FAIL', details: badOk ? 'both options named with INVALID_CONFIG_VALUE' : `exit ${res51bad.status}, stderr: ${res51bad.stderr.slice(0, 200)}`, duration: 0 });
+    const res51remote = runCliRaw([fsPath.join(ROOT, 'test', 'files', 'test.docx'), '--ocr=true', '--extractAttachments=true', '--allowRemoteAssets=false', '--to=text']);
+    const remoteOk = res51remote.status === 1 && res51remote.stderr.includes('allowRemoteAssets') && res51remote.stderr.includes('ocrConfig.langPath');
+    results.push({ name: 'CLI: allowRemoteAssets=false refuses fetching OCR files from a CDN', status: remoteOk ? 'PASS' : 'FAIL', details: remoteOk ? 'exit 1 naming ocrConfig.langPath' : `exit ${res51remote.status}, stderr: ${res51remote.stderr.slice(0, 200)}`, duration: 0 });
+
     // Print summary report
     const logger = new DualLogger();
     const failedCount = generateReport(results, logger);
