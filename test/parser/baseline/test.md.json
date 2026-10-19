@@ -448,25 +448,25 @@
           "children": [
             {
               "type": "cell",
+              "metadata": {
+                "style": "header"
+              },
               "children": [
                 {
                   "type": "text",
-                  "text": "ITEM",
-                  "formatting": {
-                    "bold": true
-                  }
+                  "text": "ITEM"
                 }
               ]
             },
             {
               "type": "cell",
+              "metadata": {
+                "style": "header"
+              },
               "children": [
                 {
                   "type": "text",
-                  "text": "NEEDED",
-                  "formatting": {
-                    "bold": true
-                  }
+                  "text": "NEEDED"
                 }
               ]
             }
@@ -617,18 +617,21 @@
           "children": [
             {
               "type": "cell",
+              "metadata": {
+                "style": "header"
+              },
               "children": [
                 {
                   "type": "text",
-                  "text": "City or Town",
-                  "formatting": {
-                    "bold": true
-                  }
+                  "text": "City or Town"
                 }
               ]
             },
             {
               "type": "cell",
+              "metadata": {
+                "style": "header"
+              },
               "children": [
                 {
                   "type": "paragraph",
@@ -638,10 +641,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Point A",
-                      "formatting": {
-                        "bold": true
-                      }
+                      "text": "Point A"
                     }
                   ]
                 }
@@ -649,6 +649,9 @@
             },
             {
               "type": "cell",
+              "metadata": {
+                "style": "header"
+              },
               "children": [
                 {
                   "type": "paragraph",
@@ -658,10 +661,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Point B",
-                      "formatting": {
-                        "bold": true
-                      }
+                      "text": "Point B"
                     }
                   ]
                 }
@@ -669,6 +669,9 @@
             },
             {
               "type": "cell",
+              "metadata": {
+                "style": "header"
+              },
               "children": [
                 {
                   "type": "paragraph",
@@ -678,10 +681,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Point C",
-                      "formatting": {
-                        "bold": true
-                      }
+                      "text": "Point C"
                     }
                   ]
                 }
@@ -689,6 +689,9 @@
             },
             {
               "type": "cell",
+              "metadata": {
+                "style": "header"
+              },
               "children": [
                 {
                   "type": "paragraph",
@@ -698,10 +701,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Point D",
-                      "formatting": {
-                        "bold": true
-                      }
+                      "text": "Point D"
                     }
                   ]
                 }
@@ -709,6 +709,9 @@
             },
             {
               "type": "cell",
+              "metadata": {
+                "style": "header"
+              },
               "children": [
                 {
                   "type": "paragraph",
@@ -718,10 +721,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Point E",
-                      "formatting": {
-                        "bold": true
-                      }
+                      "text": "Point E"
                     }
                   ]
                 }
@@ -1114,49 +1114,49 @@
           "children": [
             {
               "type": "cell",
+              "metadata": {
+                "style": "header"
+              },
               "children": [
                 {
                   "type": "text",
-                  "text": "College",
-                  "formatting": {
-                    "bold": true
-                  }
+                  "text": "College"
                 }
               ]
             },
             {
               "type": "cell",
+              "metadata": {
+                "style": "header"
+              },
               "children": [
                 {
                   "type": "text",
-                  "text": "New students",
-                  "formatting": {
-                    "bold": true
-                  }
+                  "text": "New students"
                 }
               ]
             },
             {
               "type": "cell",
+              "metadata": {
+                "style": "header"
+              },
               "children": [
                 {
                   "type": "text",
-                  "text": "Graduating students",
-                  "formatting": {
-                    "bold": true
-                  }
+                  "text": "Graduating students"
                 }
               ]
             },
             {
               "type": "cell",
+              "metadata": {
+                "style": "header"
+              },
               "children": [
                 {
                   "type": "text",
-                  "text": "Change",
-                  "formatting": {
-                    "bold": true
-                  }
+                  "text": "Change"
                 }
               ]
             }

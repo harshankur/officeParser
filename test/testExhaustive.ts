@@ -4514,6 +4514,27 @@ async function testChartScripts(): Promise<void> {
 }
 
 /**
+ * A Markdown table's header row is a header (`<th>`) keeping only its author's marks, and a header row, not bold, in DOCX and LaTeX.
+ */
+async function testMarkdownHeaderRows(): Promise<void> {
+    const md = (src: string, cfg: any = {}) => OfficeParser.parseOffice(Buffer.from(src), { fileType: 'md', onWarning: () => { }, ...cfg } as any) as Promise<OfficeParserAST>;
+    const table = await md('| **b** | x<br>y |\n|---|---|\n| **c** | p<br>q |\n');
+    const header = table.content[0].children![0].children!;
+    assert.ok(header.every(c => (c.metadata as any)?.style === 'header'), 'header cells are marked as header cells');
+    assert.ok(!header[1].children!.some(n => (n.formatting as any)?.bold), 'a header cell keeps only the marks its author wrote');
+    const html = ((await table.to('html', { htmlConfig: { standalone: false } } as any)).value as string).replace(/\s+/g, ' ');
+    assert.ok(/<thead><tr><th><b>b<\/b><\/th><th>x<br> y<\/th><\/tr><\/thead>/.test(html), `the header row is written as <th> in <thead>; got ${html}`);
+    const back = (await (await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' } as any)).to('md')).value as string;
+    assert.ok(back.startsWith('| **b** | x<br>y |'), `a header cell's own bold survives HTML and back; got ${JSON.stringify(back)}`);
+    // A header row is a structural header, with no bold of its own, in every writer that keeps it.
+    const headerAst = await md('| H1 | H2 |\n|---|---|\n| a | b |\n');
+    const docxDoc = strFromU8(unzipSync((await headerAst.to('docx')).value as Uint8Array)['word/document.xml']);
+    assert.ok(/<w:tblHeader\/>/.test(docxDoc) && !/<w:b\/>/.test(docxDoc), 'DOCX: a Markdown header row repeats as a header, without added bold');
+    const tex = String((await headerAst.to('tex')).value);
+    assert.ok(!/\\textbf\{H1\}/.test(tex), 'LaTeX: a Markdown header cell is not made bold');
+}
+
+/**
  * Configuration consistency: every option means the same on every surface, a mistake in a config is
  * reported rather than silently ignored, and a value an option does not accept falls back visibly.
  */
@@ -6110,6 +6131,7 @@ async function runTests(): Promise<void> {
         ['Template', testTemplate],
         ['Template blocks', testTemplateBlocks],
         ['Chart scripts', testChartScripts],
+        ['Markdown header rows', testMarkdownHeaderRows],
         ['Cancellation', testCancellation],
     ];
 

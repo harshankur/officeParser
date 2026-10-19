@@ -2762,9 +2762,17 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                         // paragraph so it round-trips as alignment instead of being escaped to
                         // visible text on regeneration. Unwrap wherever it sits (e.g. inside **…**).
                         const { text: cellText, align: cellAlign } = unwrapAlignDivs(trimAsciiWhitespace(c));
-                        const inline = parseInline(cellText, i === 0 ? { bold: true } : {});
+                        // The row before the delimiter row is the header. Its cells are marked as header
+                        // cells, as the Word, ODF, HTML and PDF readers mark theirs (`style: 'header'`), and
+                        // keep only the marks the author wrote: made bold instead, a header cell's own
+                        // `**b**` could not be told from the header, and a cell holding only `<br>` made
+                        // the row no header at all.
+                        const isHeader = i === 0 && sepIndex >= 1;
+                        const inline = parseInline(cellText, i === 0 && !isHeader ? { bold: true } : {});
                         const colAlign = columnAligns[colIdx] ?? undefined;
-                        const cellMeta = colAlign ? { col: colIdx, align: colAlign } as any : undefined;
+                        const cellMeta = colAlign || isHeader
+                            ? { ...(colAlign ? { col: colIdx, align: colAlign } : {}), ...(isHeader ? { style: 'header' } : {}) } as any
+                            : undefined;
                         if (cellAlign && cellAlign !== 'left') {
                             return {
                                 type: 'cell',
