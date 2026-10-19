@@ -10,6 +10,7 @@
  *   - columns_untagged.pdf : two text columns, no structure tree, for reading-order tests.
  *   - rotated.pdf          : the same content on a /Rotate 90 page.
  *   - encrypted.pdf        : single page, RC4 40-bit standard security, user password "test123".
+ *   - tagged_headings.pdf  : tagged headings beside headings guessed from font size, for headingDetection.
  *
  * The encryption is the PDF standard security handler, revision 2 (RC4, 40-bit). RC4 is implemented
  * inline because modern OpenSSL/Node no longer expose it, and qpdf is not assumed to be installed.
@@ -362,6 +363,55 @@ function buildTaggedListsPdf() {
     return serialize(o, '', '30313233343536373839414243444546');
 }
 
+/**
+ * A tagged, two-page document where tagged headings and guessed ones meet, for `headingDetection`.
+ *
+ * Page one is read from its tags: an `H1` and an `H2` set in body-size type (only a tag makes them
+ * headings), three `P`s, and one short 30pt line outside the tags, which is spliced in from geometry
+ * and is a heading by its size alone. Page two's tree names one of its four marked-content sequences,
+ * too little to trust, so the whole page is read from geometry and its 24pt line is a guessed heading.
+ */
+function buildTaggedHeadingsPdf() {
+    const page1 = Buffer.from([
+        '/H1 << /MCID 0 >> BDC BT /F1 12 Tf 1 0 0 1 72 700 Tm (Purpose) Tj ET EMC',
+        '/P << /MCID 1 >> BDC BT /F1 12 Tf 1 0 0 1 72 670 Tm (This paragraph is tagged body text under the first heading.) Tj ET EMC',
+        '/H2 << /MCID 2 >> BDC BT /F1 12 Tf 1 0 0 1 72 630 Tm (Scope) Tj ET EMC',
+        '/P << /MCID 3 >> BDC BT /F1 12 Tf 1 0 0 1 72 600 Tm (A second tagged paragraph follows the second heading.) Tj ET EMC',
+        '/P << /MCID 4 >> BDC BT /F1 12 Tf 1 0 0 1 72 570 Tm (A third tagged paragraph keeps twelve points the body size.) Tj ET EMC',
+        'BT /F1 30 Tf 1 0 0 1 72 760 Tm (2024) Tj ET',
+        '',
+    ].join('\n'), 'latin1');
+    const page2 = Buffer.from([
+        '/P << /MCID 0 >> BDC BT /F1 24 Tf 1 0 0 1 72 700 Tm (Annual Report) Tj ET EMC',
+        '/P << /MCID 1 >> BDC BT /F1 12 Tf 1 0 0 1 72 660 Tm (The tree of this page names one of its four sequences.) Tj ET EMC',
+        '/P << /MCID 2 >> BDC BT /F1 12 Tf 1 0 0 1 72 630 Tm (So the page is read from its geometry instead.) Tj ET EMC',
+        '/P << /MCID 3 >> BDC BT /F1 12 Tf 1 0 0 1 72 600 Tm (Its large first line is a heading by size alone.) Tj ET EMC',
+        '',
+    ].join('\n'), 'latin1');
+
+    const o = [];
+    const put = (n, body) => { o[n - 1] = Buffer.from(body, 'latin1'); };
+    put(1, '<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 8 0 R /MarkInfo << /Marked true >> >>');
+    put(2, '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>');
+    put(3, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> ' +
+        '/Contents 5 0 R /StructParents 0 >>');
+    put(4, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> ' +
+        '/Contents 6 0 R /StructParents 1 >>');
+    o[4] = streamObject('', page1);
+    o[5] = streamObject('', page2);
+    put(7, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+    put(8, '<< /Type /StructTreeRoot /K [9 0 R] /ParentTree 10 0 R /ParentTreeNextKey 2 >>');
+    put(9, '<< /Type /StructElem /S /Document /P 8 0 R /K [11 0 R 12 0 R 13 0 R 14 0 R 15 0 R 16 0 R] >>');
+    put(10, '<< /Nums [0 [11 0 R 12 0 R 13 0 R 14 0 R 15 0 R] 1 [null 16 0 R]] >>');
+    put(11, '<< /Type /StructElem /S /H1 /P 9 0 R /Pg 3 0 R /K 0 >>');
+    put(12, '<< /Type /StructElem /S /P /P 9 0 R /Pg 3 0 R /K 1 >>');
+    put(13, '<< /Type /StructElem /S /H2 /P 9 0 R /Pg 3 0 R /K 2 >>');
+    put(14, '<< /Type /StructElem /S /P /P 9 0 R /Pg 3 0 R /K 3 >>');
+    put(15, '<< /Type /StructElem /S /P /P 9 0 R /Pg 3 0 R /K 4 >>');
+    put(16, '<< /Type /StructElem /S /P /P 9 0 R /Pg 4 0 R /K 1 >>');
+    return serialize(o, '', '30313233343536373839414243444547');
+}
+
 function main() {
     fs.mkdirSync(OUT_DIR, { recursive: true });
 
@@ -387,6 +437,7 @@ function main() {
         { extra: deepOutlineObjects(200), catalog: ` /Outlines ${FIRST_EXTRA_OBJ} 0 R` }));
 
     fs.writeFileSync(path.join(OUT_DIR, 'tagged_lists.pdf'), buildTaggedListsPdf());
+    fs.writeFileSync(path.join(OUT_DIR, 'tagged_headings.pdf'), buildTaggedHeadingsPdf());
 
     console.log('Wrote fixtures to', OUT_DIR);
 }

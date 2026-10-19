@@ -1208,11 +1208,13 @@ function paragraphNode(group: ParaGroup, page: PageContext, doc: DocContext, for
 
     if (!children.length) return null;
     const text = parts.join('');
-    const level = forcedLevel !== undefined ? forcedLevel : (doc.cfg.headingDetection === 'off' ? 0 : headingLevel(group, doc));
+    // A forced level is the tag's own (see `taggedHeadingLevel`); anything else is the heuristic's.
+    const level = forcedLevel !== undefined ? forcedLevel : headingLevel(group, doc);
     const container = emitBounds(unionAll(boxes)!, page, cfg);
 
     if (level > 0) {
-        const node: OfficeContentNode = { type: 'heading', text, children, metadata: { level } };
+        const levelSource = forcedLevel !== undefined ? 'tags' : 'font-size';
+        const node: OfficeContentNode = { type: 'heading', text, children, metadata: { level, levelSource } };
         if (container) node.bounds = container;
         return node;
     }
@@ -1221,8 +1223,12 @@ function paragraphNode(group: ParaGroup, page: PageContext, doc: DocContext, for
     return node;
 }
 
+/**
+ * The heading level the font-size and weight heuristic gives a group (0 = paragraph). Under
+ * `headingDetection: 'tags'` only a tagged heading is a heading, so the heuristic gives none.
+ */
 function headingLevel(group: ParaGroup, doc: DocContext): number {
-    if (doc.cfg.headingDetection === 'off') return 0;
+    if (doc.cfg.headingDetection === 'off' || doc.cfg.headingDetection === 'tags') return 0;
     const size = group.fontSize;
     if (size < 1.2 * doc.bodyFontSize) return 0;
     const chars = group.lines.reduce((s, l) => s + l.fragments.reduce((t, f) => t + f.text.length, 0), 0);

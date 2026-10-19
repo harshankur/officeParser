@@ -120,7 +120,7 @@ export interface PdfLayoutConfig {
     mergeHyphenatedWords: boolean;
     lineToleranceFactor: number;
     spaceToleranceFactor: number;
-    headingDetection: 'auto' | 'font-size' | 'off';
+    headingDetection: 'auto' | 'font-size' | 'tags' | 'off';
     normalizeText: boolean;
     /** Extract per-run fill color from the operator list into `formatting.color` (costs an op-list fetch per page). */
     extractTextColor: boolean;

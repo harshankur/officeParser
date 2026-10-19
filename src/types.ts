@@ -585,11 +585,19 @@ export interface PdfParserConfig {
      *   font size (and demoted to a paragraph when it is not visually heading-like); a block the tags
      *   call a plain paragraph is left as one. Use this when a PDF's heading tags are present but wrong
      *   or flat.
+     * - 'tags': only a heading the document itself tags is a heading. On the tagged path a heading
+     *   keeps its tagged level, as under 'auto'; text assembled from geometry (an untagged PDF, a page
+     *   whose tag tree covers too little of its text, text outside the tags on a tagged page, or every
+     *   page under `useTags: false`) is never a heading. The text is the same as under 'auto': only
+     *   whether a block is a `heading` or a `paragraph` differs.
      * - 'off': never emit headings; every block is a paragraph.
+     *
+     * Under 'auto', a heading says which of the two decided its level in
+     * `HeadingMetadata.levelSource`.
      *
      * Default is 'auto'.
      */
-    headingDetection?: 'auto' | 'font-size' | 'off';
+    headingDetection?: 'auto' | 'font-size' | 'tags' | 'off';
     /**
      * Restrict parsing to a subset of pages, e.g. '1-3,7' or '2,4,6'. Pages are 1-based and the
      * output keeps their original page numbers. An empty string parses all pages; an unparseable or
@@ -2640,6 +2648,14 @@ export interface IndentationMetadata {
 export interface HeadingMetadata {
     /** The heading level (e.g., 1 for H1). */
     level: number;
+    /**
+     * What decided that this block is a heading and at which level, where a format has more than one
+     * way to decide it. Set on PDF headings only:
+     * - 'tags': the document's own structure tree tags it as a heading (`H`, `H1`..`H6`).
+     * - 'font-size': the font-size and weight heuristic made it one. That is every heading of text
+     *   assembled from geometry, and a tagged heading re-leveled under `headingDetection: 'font-size'`.
+     */
+    levelSource?: 'tags' | 'font-size';
     /** The alignment of the heading. */
     alignment?: TextAlignment;
     /** The style of the heading. */

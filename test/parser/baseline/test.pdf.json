@@ -145,6 +145,7 @@
           ],
           "metadata": {
             "level": 1,
+            "levelSource": "tags",
             "anchorIds": [
               "demonstration-of-docx-support-in-calibre"
             ]
@@ -425,6 +426,7 @@
           ],
           "metadata": {
             "level": 1,
+            "levelSource": "tags",
             "anchorIds": [
               "text-formatting"
             ]
@@ -459,6 +461,7 @@
           ],
           "metadata": {
             "level": 2,
+            "levelSource": "tags",
             "anchorIds": [
               "inline-formatting"
             ]
@@ -862,6 +865,7 @@
           ],
           "metadata": {
             "level": 2,
+            "levelSource": "tags",
             "anchorIds": [
               "fun-with-fonts"
             ]
@@ -992,6 +996,7 @@
           ],
           "metadata": {
             "level": 2,
+            "levelSource": "tags",
             "anchorIds": [
               "paragraph-level-formatting"
             ]
@@ -1173,6 +1178,7 @@
           ],
           "metadata": {
             "level": 1,
+            "levelSource": "tags",
             "anchorIds": [
               "tables"
             ]
@@ -6715,6 +6721,7 @@
           ],
           "metadata": {
             "level": 1,
+            "levelSource": "tags",
             "anchorIds": [
               "structural-elements"
             ]
@@ -6789,6 +6796,7 @@
           ],
           "metadata": {
             "level": 2,
+            "levelSource": "tags",
             "anchorIds": [
               "footnotes-endnotes"
             ]
@@ -7015,6 +7023,7 @@
           ],
           "metadata": {
             "level": 2,
+            "levelSource": "tags",
             "anchorIds": [
               "dropcaps"
             ]
@@ -7129,6 +7138,7 @@
           ],
           "metadata": {
             "level": 2,
+            "levelSource": "tags",
             "anchorIds": [
               "links"
             ]
@@ -7333,6 +7343,7 @@
           ],
           "metadata": {
             "level": 2,
+            "levelSource": "tags",
             "anchorIds": [
               "table-of-contents"
             ]
@@ -7956,6 +7967,7 @@
           ],
           "metadata": {
             "level": 1,
+            "levelSource": "tags",
             "anchorIds": [
               "images"
             ]
@@ -8248,6 +8260,7 @@
           ],
           "metadata": {
             "level": 1,
+            "levelSource": "tags",
             "anchorIds": [
               "lists"
             ]
@@ -8322,6 +8335,7 @@
           ],
           "metadata": {
             "level": 2,
+            "levelSource": "tags",
             "anchorIds": [
               "bulleted-list"
             ]
@@ -8446,6 +8460,7 @@
           ],
           "metadata": {
             "level": 2,
+            "levelSource": "tags",
             "anchorIds": [
               "numbered-list"
             ]
@@ -8584,6 +8599,7 @@
           ],
           "metadata": {
             "level": 2,
+            "levelSource": "tags",
             "anchorIds": [
               "multi-level-lists"
             ]
@@ -9153,6 +9169,7 @@
           ],
           "metadata": {
             "level": 2,
+            "levelSource": "tags",
             "anchorIds": [
               "continued-lists"
             ]

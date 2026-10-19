@@ -391,7 +391,7 @@ if (fileArg && !showHelp) {
     console.log('  --pdfParserConfig.useTags=false             Ignore the tagged-structure tree, use geometry only (default: true)');
     console.log('  --pdfParserConfig.detectColumns=false       Disable multi-column reading-order detection (default: true)');
     console.log('  --pdfParserConfig.pageRange=1-3,7           Parse only the given pages (default: all)');
-    console.log('  --pdfParserConfig.headingDetection=off      Heading detection: auto | font-size | off (default: auto)');
+    console.log('  --pdfParserConfig.headingDetection=off      Heading detection: auto | font-size | tags | off (default: auto)');
     console.log('  --pdfParserConfig.mergeHyphenatedWords=false Keep words hyphenated across line breaks (default: true)');
     console.log('  --pdfParserConfig.normalizeText=false       Skip Unicode/ligature normalization of PDF text (default: true)');
     console.log('  --pdfParserConfig.extractTextColor          Record each PDF run\'s fill colour in formatting.color (default: true; set false to skip)');

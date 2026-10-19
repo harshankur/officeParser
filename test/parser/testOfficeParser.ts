@@ -3403,6 +3403,37 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
         add("headingDetection font-size", false, 'ran', e?.message || String(e));
     }
 
+    // --- headingDetection:'tags' keeps only tagged headings, and every heading names what decided it ---
+    // tagged_headings.pdf: page one is read from its tags (H1 "Purpose" and H2 "Scope" in body-size
+    // type) with one 30pt line ("2024") outside them; page two's tree covers too little of it, so the
+    // page is read from geometry and its 24pt first line ("Annual Report") is a heading by size alone.
+    try {
+        const file = path.join(pdfDir, 'tagged_headings.pdf');
+        const read = async (pdfParserConfig: any) => {
+            const ast = await OfficeParser.parseOffice(file, { ocr: false, pdfParserConfig });
+            const hs: string[] = [], blocks: string[] = [];
+            ast.content.forEach((p: any) => walk(p, (n: any) => {
+                if (n.type === 'heading') hs.push(`${n.text}:${n.metadata?.level}:${n.metadata?.levelSource}`);
+                if (n.type === 'heading' || n.type === 'paragraph') blocks.push(String(n.text));
+            }));
+            return { hs: hs.join(' | '), text: blocks.join('\n') };
+        };
+        const auto = await read({ headingDetection: 'auto' });
+        const tags = await read({ headingDetection: 'tags' });
+        const fontSize = await read({ headingDetection: 'font-size' });
+        const untagged = await read({ headingDetection: 'tags', useTags: false });
+        const expectAuto = '2024:1:font-size | Purpose:1:tags | Scope:2:tags | Annual Report:2:font-size';
+        add("headingDetection:'auto' marks each heading's levelSource", auto.hs === expectAuto, expectAuto, auto.hs);
+        const expectTags = 'Purpose:1:tags | Scope:2:tags';
+        add("headingDetection:'tags' keeps only the tagged headings", tags.hs === expectTags, expectTags, tags.hs);
+        add("headingDetection:'tags' reads the same text as 'auto'", tags.text === auto.text && tags.text.includes('2024') && tags.text.includes('Annual Report'), 'identical block text', tags.text === auto.text ? 'identical' : 'differs');
+        const expectFontSize = '2024:1:font-size | Annual Report:2:font-size';
+        add("headingDetection:'font-size' headings are marked font-size", fontSize.hs === expectFontSize, expectFontSize, fontSize.hs);
+        add("headingDetection:'tags' with useTags:false gives no headings", untagged.hs === '', 'no headings', untagged.hs || 'none');
+    } catch (e: any) {
+        add("headingDetection tags", false, 'ran', e?.message || String(e));
+    }
+
     // --- layout-faithful .to('text') ---
     try {
         const ast = await OfficeParser.parseOffice(getFilePath('pdf'), { ocr: false });

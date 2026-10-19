@@ -61,7 +61,7 @@ const role = (n: StructNode): string => n.role || n.type || '';
  * - `'font-size'`: `undefined` - ignore the tag's own level and let the geometric font-size/weight
  *                  heuristic in {@link runsToParagraph} decide (which may also demote it to a
  *                  paragraph), i.e. "always use the heuristic, even on tagged PDFs".
- * - `'auto'`:      the tag's declared level (`tagLevel`), trusting the document's own structure.
+ * - `'auto'`, `'tags'`: the tag's declared level (`tagLevel`), trusting the document's own structure.
  */
 function taggedHeadingLevel(cfg: DocContext['cfg'], tagLevel: number): number | undefined {
     if (cfg.headingDetection === 'off') return 0;
