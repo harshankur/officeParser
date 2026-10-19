@@ -4498,6 +4498,22 @@ async function testTemplateBlocks(): Promise<void> {
 }
 
 /**
+ * A page with no chart loads no Chart.js, and with no chart script to draw with a chart is written as its data.
+ */
+async function testChartScripts(): Promise<void> {
+    const md = (src: string, cfg: any = {}) => OfficeParser.parseOffice(Buffer.from(src), { fileType: 'md', onWarning: () => { }, ...cfg } as any) as Promise<OfficeParserAST>;
+    const note = await md('# Title\n\nA paragraph.\n');
+    assert.ok(!((await note.to('html')).value as string).includes('<script'), 'a page with no chart loads no script');
+    const withChart = await OfficeParser.parseOffice(path.join(__dirname, 'files', 'test.pptx'), { extractAttachments: true, onWarning: () => { } } as any) as OfficeParserAST;
+    const chartHtml = (await withChart.to('html')).value as string;
+    assert.ok(chartHtml.includes('<canvas') && chartHtml.includes('chart.js'), 'a page that draws a chart loads Chart.js');
+    const tableWarnings: any[] = [];
+    const tableHtml = (await withChart.to('html', { htmlConfig: { chartJsSrc: '' }, onWarning: (w: any) => tableWarnings.push(w) } as any)).value as string;
+    assert.ok(!tableHtml.includes('<script') && !tableHtml.includes('<canvas') && /<table[\s>]/.test(tableHtml), 'with no chart script to draw with, a chart is written as its data table');
+    assert.ok(tableWarnings.some(w => w.code === 'CONTENT_NOT_REPRESENTABLE'), 'a chart written as a table is reported');
+}
+
+/**
  * Configuration consistency: every option means the same on every surface, a mistake in a config is
  * reported rather than silently ignored, and a value an option does not accept falls back visibly.
  */
@@ -6093,6 +6109,7 @@ async function runTests(): Promise<void> {
         ['NativePdfEngine', testNativePdfEngine],
         ['Template', testTemplate],
         ['Template blocks', testTemplateBlocks],
+        ['Chart scripts', testChartScripts],
         ['Cancellation', testCancellation],
     ];
 

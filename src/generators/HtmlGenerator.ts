@@ -188,6 +188,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
      */
     imageSourceFor?: (attachment: OfficeAttachment) => string | undefined;
     private chartCounter = 0;
+    /** Charts drawn with Chart.js: the page loads the Chart.js script only when it draws one. */
+    private chartsDrawn = 0;
     /** Each top-level sheet's place among the document's sheets, found once (see sheetIndex). */
     private sheetIndexes: Map<OfficeContentNode, number> | undefined;
     /**
@@ -480,7 +482,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
         const inj = this.config.htmlConfig.injections;
         const headInjectionsOn = sa.document && sa.headInjections;
-        const chartScriptTag = (sa.scripts && this.config.includeCharts) ? `<script src="${this.config.htmlConfig.chartJsSrc}"></script>` : '';
+        // Chart.js is loaded only for a page that draws a chart: one without fetches and runs no script.
+        const chartScriptTag = (sa.scripts && this.config.includeCharts && this.chartsDrawn > 0) ? `<script src="${this.config.htmlConfig.chartJsSrc}"></script>` : '';
         const spreadsheetScriptOut = sa.scripts ? spreadsheetScript : '';
 
         const value = sa.document ? `<!DOCTYPE html>
@@ -1206,6 +1209,16 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 const chartAttName = meta?.attachmentName;
                 const chartAttachment = this.getAttachment(chartAttName);
 
+                if (chartAttachment && (chartAttachment as any).chartData && !this.config.htmlConfig.chartJsSrc) {
+                    // No chart script to draw with (allowRemoteAssets: false, or chartJsSrc set to ''): the
+                    // chart is written as its data, a table as DOCX writes it, and reported. Drawn on a
+                    // canvas with no script, it showed nothing and its data sat hidden in the page.
+                    const data = (chartAttachment as any).chartData;
+                    this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'html', feature: 'chart', reason: 'chart' });
+                    const cell = (text: string): OfficeContentNode => ({ type: 'cell', children: [{ type: 'text', text } as OfficeContentNode] } as OfficeContentNode);
+                    const caption = data.title ? `<p><strong>${this.escape(String(data.title))}</strong></p>` : '';
+                    return `${extraAnchors}${caption}${await this.processNodeRecursive(this.chartTable(data, cell), this.boundNodeProcessor)}`;
+                }
                 if (chartAttachment && (chartAttachment as any).chartData) {
                     const chartData = (chartAttachment as any).chartData;
                     let dataId = this.chartDataIds.get(chartAttachment);
@@ -1281,6 +1294,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 </script>`;
                     // The data after the chart's container, beside its script: placed before it, the container
                     // laid out with no width in a slide and the chart drew nothing.
+                    this.chartsDrawn++;
                     return `${extraAnchors}${canvas}${data}${script}`;
                 }
                 return '';
