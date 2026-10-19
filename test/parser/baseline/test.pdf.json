@@ -45,6 +45,7 @@
     },
     "ignorePageGeometry": false,
     "password": "",
+    "maxPasswordAttempts": 3,
     "pdfParserConfig": {
       "useTags": true,
       "detectColumns": true,

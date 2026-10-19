@@ -86,6 +86,7 @@ export const DEFAULT_OFFICE_PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     // No-op default returns undefined, i.e. "no password to offer", so an encrypted document without
     // a valid `password` throws exactly as it would with the callback unset.
     onPassword: () => undefined,
+    maxPasswordAttempts: 3,
     newlineDelimiter: '\n',
     ignoreNotes: false,
     ignoreComments: false,

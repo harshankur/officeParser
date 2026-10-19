@@ -140,6 +140,7 @@ const FULL_CONFIG: DeepRequired<OfficeParserConfig> = {
     ignorePageGeometry: false,
     password: '',
     onPassword: () => undefined,
+    maxPasswordAttempts: 3,
     pdfParserConfig: {
         useTags: true,
         detectColumns: true,
@@ -3744,6 +3745,18 @@ async function testCryptoSmoke(): Promise<FeatureTest[]> {
             add(`${label}: onPassword supplies it`, text.includes(marker), 'marker', text.trim().slice(0, 24), type);
         } catch (e: any) {
             add(`${label}: onPassword supplies it`, false, 'marker', e?.officeIssue?.code || e?.message, type);
+        }
+    }
+
+    // onPassword is asked `maxPasswordAttempts` times (3 unless set), for containers and PDF alike.
+    for (const [file, type] of [['agile.docx', 'docx'], ['encrypted.odt', 'odt'], [path.join('..', 'pdf', 'encrypted.pdf'), 'pdf']] as const) {
+        for (const [limit, expected] of [[undefined, 3], [5, 5], [0, 0], [-1, 3]] as const) {
+            let asked = 0;
+            let code = 'parsed';
+            try {
+                await OfficeParser.parseOffice(path.join(dir, file), { ocr: false, onPassword: () => { asked++; return 'wrong'; }, ...(limit === undefined ? {} : { maxPasswordAttempts: limit }) });
+            } catch (e: any) { code = e?.officeIssue?.code || e?.message; }
+            add(`${type}: onPassword is asked ${expected} times with maxPasswordAttempts ${limit}`, asked === expected && /^PASSWORD_/.test(code), `${expected} asks, a PASSWORD_ error`, `${asked} asks, ${code}`, type);
         }
     }
 

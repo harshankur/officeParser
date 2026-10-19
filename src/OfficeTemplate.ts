@@ -128,6 +128,7 @@ export class OfficeTemplate {
             onWarning: config.onWarning,
             password: config.password,
             onPassword: config.onPassword,
+            maxPasswordAttempts: config.maxPasswordAttempts,
             decompressionLimits: config.decompressionLimits,
         });
 

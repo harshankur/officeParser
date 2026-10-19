@@ -345,15 +345,23 @@ export interface CommonOfficeParserConfig {
      * Called with `'required'` when the document is encrypted and no password was given, or
      * `'incorrect'` when the last attempt was wrong. Return a password (sync or async) to retry;
      * return `undefined`/`''` to stop, in which case parsing rejects with `PASSWORD_REQUIRED` or
-     * `PASSWORD_INCORRECT` as it would with no callback. The callback is asked at most 3 times in total
-     * (shared across `'required'`/`'incorrect'`), so one that keeps returning a wrong password cannot
-     * loop forever.
+     * `PASSWORD_INCORRECT` as it would with no callback. The callback is asked at most
+     * `maxPasswordAttempts` times in total (shared across `'required'`/`'incorrect'`), so one that keeps
+     * returning a wrong password cannot loop forever.
      *
      * By default this is unset, so an encrypted document without a valid `password` simply throws:
      * an undecryptable document is unrecoverable for that call, so it is an error rather than a
      * warning. The callback is the escape hatch for handling it gracefully.
      */
     onPassword?: (reason: 'required' | 'incorrect') => string | undefined | Promise<string | undefined>;
+    /**
+     * How many times `onPassword` is asked for one document before the parse rejects with
+     * `PASSWORD_REQUIRED` or `PASSWORD_INCORRECT`. A whole number of 0 or more; anything else is read
+     * as the default. Applies to every encryptable format (PDF/OOXML/ODF).
+     *
+     * Default is 3.
+     */
+    maxPasswordAttempts?: number;
     /**
      * The delimiter used for every new line in places that allow multiline text like word.
      * Default is \n.
@@ -2464,10 +2472,12 @@ export interface TemplateConfig {
      * parser's `onPassword`. Called with `'required'` when the template is encrypted and no password
      * was given, or `'incorrect'` when the last attempt was wrong. Return a password (sync or async) to
      * retry, or `undefined` to give up (rejecting with `PASSWORD_REQUIRED`/`PASSWORD_INCORRECT`).
-     * The callback is asked at most 3 times in total, so one that keeps returning a wrong password
-     * cannot loop forever.
+     * The callback is asked at most `maxPasswordAttempts` times in total, so one that keeps returning a
+     * wrong password cannot loop forever.
      */
     onPassword?: (reason: 'required' | 'incorrect') => string | undefined | Promise<string | undefined>;
+    /** How many times `onPassword` is asked before the render rejects, as the parser's option of the same name. Default is 3. */
+    maxPasswordAttempts?: number;
     /**
      * Optional hint for the template's format. DOCX is the only supported template format today, and the
      * format is always detected from the bytes, so this hint does not influence detection: it only

@@ -2,13 +2,19 @@ import { OfficeErrorType, OfficeParserConfig } from '../types.js';
 import { getOfficeError } from '../utils/errorUtils.js';
 import { isCfb, isEncryptedOoxml, decryptOoxml, isEncryptedOdf, decryptOdf, WRONG_PASSWORD } from './index.js';
 
-/** How many times an `onPassword` callback may be re-asked before decryption gives up. */
+/** How many times an `onPassword` callback may be re-asked before decryption gives up, unless `maxPasswordAttempts` says otherwise. */
 export const MAX_PASSWORD_ATTEMPTS = 3;
+
+/** The `maxPasswordAttempts` a config asks for: a whole number of 0 or more, else the default. */
+export function passwordAttemptLimit(config: { maxPasswordAttempts?: number }): number {
+    const limit = config.maxPasswordAttempts;
+    return typeof limit === 'number' && Number.isInteger(limit) && limit >= 0 ? limit : MAX_PASSWORD_ATTEMPTS;
+}
 
 /**
  * Decrypts a password-protected OOXML or ODF container, returning the plaintext bytes; a buffer that
  * is not an encrypted container is returned unchanged. Uses the top-level `password`, then retries
- * through `onPassword` (capped at {@link MAX_PASSWORD_ATTEMPTS}), and rejects with
+ * through `onPassword` (capped at `maxPasswordAttempts`, see {@link passwordAttemptLimit}), and rejects with
  * `PASSWORD_REQUIRED`/`PASSWORD_INCORRECT` exactly as the PDF path does. PDF encryption is not handled
  * here (pdf.js does it inside the PDF parser).
  *
@@ -34,10 +40,11 @@ export const decryptIfNeeded = async (buffer: Buffer, config: OfficeParserConfig
 
     const onPassword = config.onPassword;
     let password = config.password || '';
+    const maxAttempts = passwordAttemptLimit(config);
     let attempts = 0;
     while (true) {
         if (!password) {
-            if (onPassword && attempts < MAX_PASSWORD_ATTEMPTS) {
+            if (onPassword && attempts < maxAttempts) {
                 attempts++;
                 const supplied = await onPassword('required');
                 if (supplied) { password = supplied; continue; }
@@ -57,7 +64,7 @@ export const decryptIfNeeded = async (buffer: Buffer, config: OfficeParserConfig
                 throw getOfficeError(OfficeErrorType.DOCUMENT_DECRYPTION_FAILED, config, e instanceof Error ? e.message : String(e));
             }
             password = '';
-            if (onPassword && attempts < MAX_PASSWORD_ATTEMPTS) {
+            if (onPassword && attempts < maxAttempts) {
                 attempts++;
                 const supplied = await onPassword('incorrect');
                 if (supplied) { password = supplied; continue; }

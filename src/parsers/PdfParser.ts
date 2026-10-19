@@ -31,6 +31,7 @@
 
 import { zlibSync } from 'fflate';
 import { DEFAULT_OFFICE_PARSER_CONFIG } from '../defaults.js';
+import { passwordAttemptLimit } from '../crypto/decryptContainer.js';
 import { FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { parseOfficeDate } from '../utils/dateUtils.js';
@@ -1389,7 +1390,7 @@ async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfi
     // the same way the OOXML/ODF decryptors do.
     const onPassword = config.onPassword;
     // Cap callback-driven retries so an onPassword that keeps returning a wrong password can't loop.
-    const MAX_PASSWORD_ATTEMPTS = 3;
+    const MAX_PASSWORD_ATTEMPTS = passwordAttemptLimit(config);
     let password: string | undefined = config.password || undefined;
     let passwordAttempts = 0;
     // The separate process ending while in use (out of memory, above all) fails the parse, and

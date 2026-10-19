@@ -98,6 +98,7 @@ const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     ignorePageGeometry: false,
     password: '',
     onPassword: () => undefined,
+    maxPasswordAttempts: 3,
     pdfParserConfig: {
         useTags: true,
         detectColumns: true,
