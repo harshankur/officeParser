@@ -444,6 +444,13 @@ export function resolveGeneratorConfig<D extends string>(
     // 3. Inherit from AST config if not explicitly provided
     const refusedDelimiters: { option: string; value: unknown; expected: string; fallback: string }[] = [];
     if (astConfig) {
+        // A parse told to use none of the library's built-in addresses writes none either: the chart
+        // script's CDN address is left out of HTML (and of the HTML a PDF is printed from) unless the
+        // caller names one.
+        if (astConfig.allowRemoteAssets === false && (userConfig as any)?.htmlConfig?.chartJsSrc === undefined) {
+            config.htmlConfig.chartJsSrc = '';
+        }
+
         if (userConfig?.onWarning === undefined) {
             config.onWarning = astConfig.onWarning || config.onWarning;
         }

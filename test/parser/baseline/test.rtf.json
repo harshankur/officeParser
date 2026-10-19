@@ -46,6 +46,7 @@
     "ignorePageGeometry": false,
     "password": "",
     "maxPasswordAttempts": 3,
+    "allowRemoteAssets": true,
     "pdfParserConfig": {
       "useTags": true,
       "detectColumns": true,

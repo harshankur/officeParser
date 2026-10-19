@@ -1,7 +1,8 @@
 import { ChunkingConfig, CsvGeneratorConfig, DeepRequired, DocumentStructureChunkingConfig, DocxGeneratorConfig, FixedSizeChunkingConfig, FullGeneratorConfig, HtmlGeneratorConfig, HtmlParserConfig, MdGeneratorConfig, OcrConfig, OcrTimeoutConfig, OdtGeneratorConfig, OfficeParserConfig, PdfGeneratorConfig, PdfParserConfig, SemanticChunkingConfig, TemplateConfig, TemplateDateNames, TexGeneratorConfig, TexParserConfig, TextGeneratorConfig } from './types.js';
 
 const PDFJS_VERSION = '6.2.108';
-const DEFAULT_PDF_WORKER_SRC = typeof __SLIM__ !== 'undefined' && __SLIM__ ? '' : `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
+/** The pdf.js worker address the non-slim builds fall back to (see `allowRemoteAssets`). Empty in the slim builds. */
+export const DEFAULT_PDF_WORKER_SRC = typeof __SLIM__ !== 'undefined' && __SLIM__ ? '' : `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
 
 /**
  * The default regex used for identifying sentence boundaries.
@@ -87,6 +88,7 @@ export const DEFAULT_OFFICE_PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     // a valid `password` throws exactly as it would with the callback unset.
     onPassword: () => undefined,
     maxPasswordAttempts: 3,
+    allowRemoteAssets: true,
     newlineDelimiter: '\n',
     ignoreNotes: false,
     ignoreComments: false,

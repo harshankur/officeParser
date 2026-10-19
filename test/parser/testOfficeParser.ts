@@ -141,6 +141,7 @@ const FULL_CONFIG: DeepRequired<OfficeParserConfig> = {
     password: '',
     onPassword: () => undefined,
     maxPasswordAttempts: 3,
+    allowRemoteAssets: true,
     pdfParserConfig: {
         useTags: true,
         detectColumns: true,
@@ -3758,6 +3759,21 @@ async function testCryptoSmoke(): Promise<FeatureTest[]> {
             } catch (e: any) { code = e?.officeIssue?.code || e?.message; }
             add(`${type}: onPassword is asked ${expected} times with maxPasswordAttempts ${limit}`, asked === expected && /^PASSWORD_/.test(code), `${expected} asks, a PASSWORD_ error`, `${asked} asks, ${code}`, type);
         }
+    }
+
+    // allowRemoteAssets: false turns a fall back to a CDN address into an error naming what to set.
+    try {
+        await OfficeParser.parseOffice(getFilePath('docx'), { ocr: true, extractAttachments: true, allowRemoteAssets: false });
+        add('allowRemoteAssets:false blocks OCR with no langPath', false, 'REMOTE_ASSET_BLOCKED', 'parsed', 'docx');
+    } catch (e: any) {
+        add('allowRemoteAssets:false blocks OCR with no langPath', e?.officeIssue?.code === 'REMOTE_ASSET_BLOCKED' && String(e?.message).includes('ocrConfig.langPath'), 'REMOTE_ASSET_BLOCKED naming ocrConfig.langPath', `${e?.officeIssue?.code}: ${e?.message}`, 'docx');
+    }
+    try {
+        const ast: any = await OfficeParser.parseOffice(getFilePath('docx'), { ocr: false, allowRemoteAssets: false });
+        const html = String((await ast.to('html')).value);
+        add('allowRemoteAssets:false parses with OCR off and writes no CDN address', ast.content.length > 0 && !html.includes('cdn.jsdelivr.net'), 'parsed, no CDN address in HTML', html.includes('cdn.jsdelivr.net') ? 'CDN address written' : 'parsed', 'docx');
+    } catch (e: any) {
+        add('allowRemoteAssets:false parses with OCR off and writes no CDN address', false, 'parsed', e?.officeIssue?.code || e?.message, 'docx');
     }
 
     // Regression: an ordinary (unencrypted) zip document is untouched by the decryption pre-pass.

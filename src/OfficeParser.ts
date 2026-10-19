@@ -51,7 +51,7 @@ import { parseWord } from './parsers/WordParser.js';
 import { BlobLike, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeParserConfig, OfficeWarningType, SupportedFileType } from './types.js';
 import { resolveParserConfig } from './utils/configUtils.js';
 import { noteDocumentBytes } from './utils/budgetUtils.js';
-import { assertNode } from './utils/envUtils.js';
+import { assertNode, isBrowser } from './utils/envUtils.js';
 import { checkAbortSignal, getOfficeError, getWrappedError, logWarning } from './utils/errorUtils.js';
 import { decryptIfNeeded } from './crypto/decryptContainer.js';
 import { loadFileType } from './utils/moduleLoader.js';
@@ -303,6 +303,16 @@ export class OfficeParser {
             // never silent regardless of format (previously only the PDF parser warned).
             if (internalConfig.ocr && !internalConfig.extractAttachments) {
                 logWarning(OfficeWarningType.OCR_REQUIRES_ATTACHMENTS, internalConfig);
+            }
+
+            // Tesseract loads its worker, core and language data from a CDN unless told where they
+            // are (in Node the first two are the installed package's own files). When the caller has
+            // said no remote assets, an OCR parse missing one of those paths fails here, before
+            // anything is fetched, naming what to set.
+            if (internalConfig.ocr && internalConfig.extractAttachments && internalConfig.allowRemoteAssets === false) {
+                const needed: (keyof typeof internalConfig.ocrConfig)[] = isBrowser ? ['workerPath', 'corePath', 'langPath'] : ['langPath'];
+                const missing = needed.filter(key => !internalConfig.ocrConfig[key]).map(key => `ocrConfig.${key}`);
+                if (missing.length) throw getOfficeError(OfficeErrorType.REMOTE_ASSET_BLOCKED, internalConfig, { asset: "Tesseract's files for OCR", options: missing });
             }
 
             // The budgets that grow with the document's size (see budgetUtils) read it from the config.

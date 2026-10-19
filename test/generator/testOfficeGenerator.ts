@@ -99,6 +99,7 @@ const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     password: '',
     onPassword: () => undefined,
     maxPasswordAttempts: 3,
+    allowRemoteAssets: true,
     pdfParserConfig: {
         useTags: true,
         detectColumns: true,

@@ -62,7 +62,7 @@ const knownParserBooleans = new Set([
     'ocr', 'extractAttachments', 'ignoreNotes', 'ignoreComments',
     'ignoreHeadersAndFooters', 'ignoreSlideMasters', 'ignoreInternalLinks',
     'includeRawContent', 'serializeRawContent', 'preserveXmlWhitespace', 'includeBreakNodes',
-    'ignorePageGeometry',
+    'ignorePageGeometry', 'allowRemoteAssets',
     // Dotted boolean keys are listed so a bare `--group.flag` does not swallow the following file
     // argument as its value (the isKnownBoolean check keys off the full dotted name).
     'htmlParserConfig.preserveAttributes', 'htmlParserConfig.preserveIframes', 'htmlParserConfig.embedFolkForms',
@@ -408,6 +408,7 @@ if (fileArg && !showHelp) {
     console.log('  --csvDelimiter=char                         Custom CSV delimiter (default: ,)');
     console.log('  --password=secret                           Password for an encrypted document (PDF, OOXML, or ODF)');
     console.log('                                              (or set OFFICEPARSER_PASSWORD to keep it out of the process list)');
+    console.log('  --allowRemoteAssets=false                   Fail, not fetch, where the pdf.js worker or OCR files would come from a CDN (default: true)');
     console.log('  --htmlParserConfig.preserveIframes          Keep non-YouTube <iframe> embeds (dropped by default)');
     console.log('  --htmlParserConfig.preserveComments         Keep HTML/EPUB <!-- --> comments as comment nodes (default: false)');
     console.log('  --texParserConfig.today="May 1, 2024"       What \\today prints in LaTeX input (default: the date of the parse)');

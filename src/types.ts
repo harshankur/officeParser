@@ -21,6 +21,8 @@ export enum OfficeErrorType {
     INVALID_INPUT = 'INVALID_INPUT',
     /** PDF worker source is missing (required in browser) */
     PDF_WORKER_MISSING = 'PDF_WORKER_MISSING',
+    /** A file the parse needs would have been fetched from the library's default CDN address, and `allowRemoteAssets` is false */
+    REMOTE_ASSET_BLOCKED = 'REMOTE_ASSET_BLOCKED',
     /** The document is encrypted (PDF, or a password-protected OOXML/ODF) and no password was supplied */
     PASSWORD_REQUIRED = 'PASSWORD_REQUIRED',
     /** The supplied password did not decrypt the document */
@@ -362,6 +364,21 @@ export interface CommonOfficeParserConfig {
      * Default is 3.
      */
     maxPasswordAttempts?: number;
+    /**
+     * Whether the library may fall back to the addresses it has built in for files it loads at run
+     * time: the pdf.js worker (`pdfWorkerSrc`, in the browser, and in Node when the installed worker
+     * cannot be found) and Tesseract's worker, core and language data (`ocrConfig.workerPath`,
+     * `corePath`, `langPath`), all on a public CDN.
+     *
+     * Set false for an application that must make no request to another site: a parse that would use
+     * one of those defaults rejects with `REMOTE_ASSET_BLOCKED`, naming the option to set, in place of
+     * fetching it. An address you pass yourself is used as given, wherever it points. HTML and PDF
+     * written from an AST parsed with false also name no chart script address unless
+     * `htmlConfig.chartJsSrc` is set.
+     *
+     * Default is true.
+     */
+    allowRemoteAssets?: boolean;
     /**
      * The delimiter used for every new line in places that allow multiline text like word.
      * Default is \n.

@@ -59,6 +59,7 @@ const ERROR_MESSAGES: Record<OfficeErrorType, string | ((...args: any[]) => stri
     [OfficeErrorType.IMPROPER_BUFFERS]: `Auto-detection of file type from buffer failed. This can happen if the format lacks magic bytes (like md, html, or csv) or if the detection library is incompatible with your Node.js version. Please provide the 'fileType' hint in your configuration (e.g., { fileType: 'docx' }) to proceed.`,
     [OfficeErrorType.INVALID_INPUT]: `Invalid input type: Expected a Buffer or a valid file path`,
     [OfficeErrorType.PDF_WORKER_MISSING]: `Missing PDF worker configuration. PDF parsing in browser environments requires a worker source. Please provide "pdfWorkerSrc" in your configuration.`,
+    [OfficeErrorType.REMOTE_ASSET_BLOCKED]: (info: { asset: string, options: string[] }) => `${info.asset} would have been fetched from the library's default CDN address, and allowRemoteAssets is false. Set ${info.options.join(', ')} to ${info.options.length > 1 ? 'copies' : 'a copy'} you host, or leave allowRemoteAssets on.`,
     [OfficeErrorType.PDF_GENERATION_FAILED]: (msg: string) => `PDF generation failed: ${msg}.`,
     [OfficeErrorType.PASSWORD_REQUIRED]: `This document is password-protected. Provide the password via the 'password' config option (or an 'onPassword' callback) to parse it.`,
     [OfficeErrorType.PASSWORD_INCORRECT]: `The password provided is incorrect for this document.`,
