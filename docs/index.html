@@ -6965,10 +6965,129 @@ ${sectioning.filter(Boolean).join('\n')}
              * (a live `<iframe>`, or the generator's gated `data-embed-gated` placeholder) is shown as a
              * button, and only a click on it loads the page. A YouTube video asks for consent the way news
              * sites do: the button says what loading it sends to YouTube, and the click is the consent, for
-             * that video only. It then plays from YouTube itself (www.youtube.com).
-             * Only what the site shows is changed: a copy or a download keeps the generator's output.
+             * that video only. It then plays from YouTube itself (www.youtube.com). Pictures, audio and video
+             * a document takes from another site wait behind a button too, and its stylesheets and CSS
+             * images from another site are left out (see gatePreviewMedia).
+             * Only what the site shows is changed: a copy or a download keeps the generator's output. The
+             * print window (`{ media: false }`) keeps a document's pictures: printing is the visitor's own act.
              */
-            function gatePreviewEmbeds(html) {
+            function gatePreviewEmbeds(html, { media = true } = {}) {
+                html = gatePreviewFrames(html);
+                return media ? gatePreviewMedia(html) : html;
+            }
+
+            /**
+             * A document's pictures, audio and video from another site, behind a button that names the site
+             * (the button keeps the element, and a click puts it back); its stylesheets and CSS images from
+             * another site dropped. Read with DOMParser, which loads nothing, and written back.
+             */
+            function gatePreviewMedia(html) {
+                // An address is read as the browser will read it (entities decoded by DOMParser, and
+                // `https:host` or `https:\\host` resolved by URL), so no spelling of one passes unseen.
+                const remoteHost = value => {
+                    try {
+                        const url = new URL(String(value).trim(), location.href);
+                        return (url.protocol === 'http:' || url.protocol === 'https:') && url.origin !== location.origin ? url.hostname : null;
+                    } catch { return null; }
+                };
+                const remoteIn = (el, names) => {
+                    for (const name of names) {
+                        const value = el.getAttribute(name);
+                        if (!value) continue;
+                        const urls = name === 'srcset' ? value.split(',').map(part => part.trim().split(/\s+/)[0]) : [value];
+                        for (const url of urls) { const host = url && remoteHost(url); if (host) return host; }
+                    }
+                    return null;
+                };
+                // CSS is read by the browser's own parser, and its values checked as the browser writes
+                // them back: every address as url("...") or a string, its escapes undone, whatever the
+                // document wrote (image-set(), unpaired quotes, \75rl() all come out the same).
+                const cssStrings = /url\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^)\s]*))\s*\)|"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'/gi;
+                const remoteValue = value => [...value.matchAll(cssStrings)].some(m => remoteHost((m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? '').replace(/\\(.)/g, '$1')));
+                // Only url() values: a rule's text also holds its selector, whose quoted strings name nothing to load.
+                const remoteUrl = text => [...text.matchAll(/url\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^)\s]*))\s*\)/gi)].some(m => remoteHost((m[1] ?? m[2] ?? m[3] ?? '').replace(/\\(.)/g, '$1')));
+                const cleanStyle = style => {
+                    let changed = false;
+                    for (let i = style.length - 1; i >= 0; i--) {
+                        const property = style[i];
+                        if (remoteValue(style.getPropertyValue(property))) { style.removeProperty(property); changed = true; }
+                    }
+                    return changed;
+                };
+                // A rule still naming another site once its declarations are cleaned (an @property's
+                // initial-value, an @font-face's src, any rule with no declarations to clean) is left out.
+                const cleanRules = (owner, rules) => {
+                    let changed = false;
+                    for (let i = rules.length - 1; i >= 0; i--) {
+                        const rule = rules[i];
+                        if (rule.style && cleanStyle(rule.style)) changed = true;
+                        if (rule.cssRules) { if (cleanRules(rule, rule.cssRules)) changed = true; continue; }
+                        if (!rule.style && remoteUrl(rule.cssText)) { owner.deleteRule(i); changed = true; }
+                    }
+                    return changed;
+                };
+                const full = /^\s*(?:<!doctype|<html[\s>])/i.test(html);
+                const doc = new DOMParser().parseFromString(html, 'text/html');
+                let changed = false;
+                const button = (el, host, kind) => {
+                    const b = doc.createElement('button');
+                    b.type = 'button';
+                    b.dataset.opMedia = el.outerHTML;
+                    b.setAttribute('style', 'display: inline-flex; flex-direction: column; align-items: center; gap: 0.25rem; max-width: 100%; margin: 0.5rem 0; padding: 0.75rem 1rem;'
+                        + ' border: 1px dashed #94a3b8; border-radius: 8px; background: #f1f5f9; color: #0f172a; font: 14px/1.4 sans-serif; cursor: pointer;');
+                    const label = doc.createElement('strong');
+                    label.textContent = `Load the ${kind} from ${host}`;
+                    const note = doc.createElement('span');
+                    note.setAttribute('style', 'font-size: 12px; color: #475569;');
+                    note.textContent = `${host} then receives data such as your IP address.`;
+                    b.append(label, note);
+                    el.replaceWith(b);
+                    changed = true;
+                };
+                for (const el of [...doc.querySelectorAll('img, input[type=image], picture, video, audio, object, embed, svg image, svg feImage, svg use')]) {
+                    if (!el.isConnected) continue;
+                    const sources = [el, ...el.querySelectorAll('source, track')];
+                    const host = sources.map(s => remoteIn(s, ['src', 'srcset', 'poster', 'data', 'href', 'xlink:href'])).find(Boolean);
+                    if (!host) continue;
+                    const kind = el.matches('video') ? 'video' : el.matches('audio') ? 'audio' : el.matches('object, embed') ? 'embedded content' : 'picture';
+                    button(el.closest('svg') ?? el, host, kind);
+                }
+                const drop = el => { el.remove(); changed = true; };
+                // Stylesheets and scripts from another site, a base address that would send every relative
+                // one there, and a refresh that would take the preview there: left out.
+                for (const link of [...doc.querySelectorAll('link')]) if (remoteIn(link, ['href', 'imagesrcset'])) drop(link);
+                for (const script of [...doc.querySelectorAll('script')]) if (remoteIn(script, ['src', 'href', 'xlink:href'])) drop(script);
+                for (const base of [...doc.querySelectorAll('base')]) drop(base);
+                for (const meta of [...doc.querySelectorAll('meta[http-equiv]')]) if (/refresh/i.test(meta.getAttribute('http-equiv'))) drop(meta);
+                // A table's, a cell's or the page's background picture (the HTML attribute): left out.
+                for (const el of [...doc.querySelectorAll('[background]')]) {
+                    if (remoteHost(el.getAttribute('background'))) { el.removeAttribute('background'); changed = true; }
+                }
+                for (const el of [...doc.querySelectorAll('[style]')]) if (cleanStyle(el.style)) changed = true;
+                // Any other attribute holding a CSS address of another site (SVG's fill, mask, filter,
+                // clip-path, marker): left out.
+                for (const el of [...doc.querySelectorAll('*')]) {
+                    for (const attribute of [...el.attributes]) {
+                        if (attribute.name !== 'style' && /url\(/i.test(attribute.value) && remoteValue(attribute.value)) { el.removeAttribute(attribute.name); changed = true; }
+                    }
+                }
+                for (const style of [...doc.querySelectorAll('style')]) {
+                    const text = style.textContent;
+                    let sheet = null;
+                    try { sheet = new CSSStyleSheet(); sheet.replaceSync(text); } catch { sheet = null; }
+                    if (!sheet) { if (/url|image|@|\\/i.test(text)) { style.textContent = ''; changed = true; } continue; }
+                    // replaceSync leaves out @import rules, so a sheet holding one is written back without it.
+                    if (cleanRules(sheet, sheet.cssRules) || /@(?:import|\\)/i.test(text)) {
+                        style.textContent = [...sheet.cssRules].map(rule => rule.cssText).join('\n');
+                        changed = true;
+                    }
+                }
+                if (!changed) return html;
+                return full ? '<!DOCTYPE html>\n' + doc.documentElement.outerHTML : doc.head.innerHTML + doc.body.innerHTML;
+            }
+
+            /** A document's iframes and gated embeds as buttons (see gatePreviewEmbeds). */
+            function gatePreviewFrames(html) {
                 const decode = value => { const area = document.createElement('textarea'); area.innerHTML = value; return area.value; };
                 const attr = (attributes, name) => {
                     const match = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(attributes);
@@ -7031,6 +7150,13 @@ ${sectioning.filter(Boolean).join('\n')}
             /** Gives the buttons gatePreviewEmbeds left in `root` (a preview's document or element) their click. */
             function wirePreviewEmbeds(root) {
                 const doc = root.ownerDocument || root;
+                for (const button of root.querySelectorAll('button[data-op-media]')) {
+                    button.addEventListener('click', () => {
+                        const template = doc.createElement('template');
+                        template.innerHTML = button.dataset.opMedia;
+                        button.replaceWith(template.content);
+                    }, { once: true });
+                }
                 for (const button of root.querySelectorAll('button[data-op-embed-src]')) {
                     button.addEventListener('click', () => {
                         const frame = doc.createElement('iframe');
@@ -7848,7 +7974,7 @@ ${sectioning.filter(Boolean).join('\n')}
                                 throw new Error("Pop-up blocked! Please allow pop-ups for this site to export PDF.");
                             }
                             printWindow.document.open();
-                            printWindow.document.write(gatePreviewEmbeds(result.value));
+                            printWindow.document.write(gatePreviewEmbeds(result.value, { media: false }));
                             printWindow.document.close();
                             // Wait for assets (like Chart.js) to load before printing.
                             printWindow.onload = () => printWindow.print();
