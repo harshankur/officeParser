@@ -7183,7 +7183,8 @@ ${sectioning.filter(Boolean).join('\n')}
             async function renderReparsedPreview(source, fileType, container, tex) {
                 // A string is the generated source; bytes are a LaTeX bundle (main.tex plus its images).
                 const bytes = typeof source === 'string' ? new TextEncoder().encode(source) : source;
-                const reparsed = await window.officeParser.parseOffice(bytes, { fileType, extractAttachments: true });
+                // The site's own pdf.js worker, never the library's CDN default (allowRemoteAssets: false).
+                const reparsed = await window.officeParser.parseOffice(bytes, { fileType, extractAttachments: true, pdfWorkerSrc: window.SITE_PDF_WORKER_SRC, allowRemoteAssets: false });
                 const layout = typeof tex === 'string' ? texLayoutOf(tex) : null;
                 // Charts from the site's own Chart.js, and embeds as placeholders the preview turns into buttons.
                 const htmlConfig = { chartJsSrc: window.SITE_CHART_JS_SRC, gatedEmbeds: true, ...(layout ? { standalone: { styles: 'none' } } : {}) };
@@ -8364,7 +8365,9 @@ ${sectioning.filter(Boolean).join('\n')}
             // the body, so they are otherwise invisible in both the preview and the summary, yet the
             // template feature fills placeholders there too, so we surface them explicitly.
             async function inspect(bytes) {
-                const ast = await window.officeParser.parseOffice(bytes, { onWarning: () => { } });
+                // Any file can be dropped here, a PDF too: the site's own pdf.js worker, never the library's
+                // CDN default (allowRemoteAssets: false), as for every parse on this page.
+                const ast = await window.officeParser.parseOffice(bytes, { onWarning: () => { }, pdfWorkerSrc: window.SITE_PDF_WORKER_SRC, allowRemoteAssets: false });
                 // Gated as the visualizer's previews are: a video or page an uploaded document frames loads only on a click.
                 const html = window.gatePreviewEmbeds((((await ast.to('html', { htmlConfig: { standalone: false, gatedEmbeds: true } })).value) || ''));
                 const text = ((((await ast.to('text')).value) || '')).toString();
