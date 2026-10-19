@@ -31,6 +31,7 @@ const DEFAULT_OCR_CONFIG: DeepRequired<OcrConfig> = {
     workerPath: '',
     corePath: '',
     langPath: '',
+    cacheMethod: 'write',
     preserveLayout: true,
     timeout: DEFAULT_OCR_TIMEOUT,
     abortSignal: null,

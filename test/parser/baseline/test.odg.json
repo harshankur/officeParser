@@ -7,6 +7,7 @@
       "workerPath": "",
       "corePath": "",
       "langPath": "",
+      "cacheMethod": "write",
       "preserveLayout": true,
       "timeout": {
         "autoTerminate": 10000,

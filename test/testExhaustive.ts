@@ -4693,6 +4693,25 @@ async function testCancellation(): Promise<void> {
             ocrTestHooks.createWorker = undefined;
         }
 
+        // A worker keeps the paths and cache method it was created with: a job asking for others is not
+        // given it, but a worker of its own.
+        const made: string[] = [];
+        ocrTestHooks.createWorker = async (language: string) => {
+            made.push(language);
+            return { recognize: async () => ({ data: { text: 'x' } }), reinitialize: async () => { }, terminate: async () => { } };
+        };
+        try {
+            await performOcr(Buffer.from('x'), { language: 'eng', langPath: '/one' } as any);
+            await performOcr(Buffer.from('x'), { language: 'eng', langPath: '/one' } as any);
+            assert.strictEqual(made.length, 1, 'OCR: a job with the same options reuses the idle worker');
+            await performOcr(Buffer.from('x'), { language: 'eng', langPath: '/two' } as any);
+            await performOcr(Buffer.from('x'), { language: 'eng', langPath: '/two', cacheMethod: 'none' } as any);
+            assert.strictEqual(made.length, 3, 'OCR: a job with other paths or another cache method gets a worker of its own');
+        } finally {
+            ocrTestHooks.createWorker = undefined;
+            await terminateOcr();
+        }
+
         // A recognition outlasting the idle period is not cut short: the pool is idle only when no job is left.
         const idleCodes: string[] = [];
         const idle = await OfficeParser.parseOffice(file('docx'), { ocr: true, extractAttachments: true, ocrConfig: { timeout: { autoTerminate: 1 } }, onWarning: (w: any) => idleCodes.push(w.code) } as any);

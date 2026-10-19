@@ -409,6 +409,7 @@ if (fileArg && !showHelp) {
     console.log('  --password=secret                           Password for an encrypted document (PDF, OOXML, or ODF)');
     console.log('                                              (or set OFFICEPARSER_PASSWORD to keep it out of the process list)');
     console.log('  --allowRemoteAssets=false                   Fail, not fetch, where the pdf.js worker or OCR files would come from a CDN (default: true)');
+    console.log('  --ocrConfig.cacheMethod=none                Where OCR keeps language data: write | readOnly | refresh | none (default: write)');
     console.log('  --htmlParserConfig.preserveIframes          Keep non-YouTube <iframe> embeds (dropped by default)');
     console.log('  --htmlParserConfig.preserveComments         Keep HTML/EPUB <!-- --> comments as comment nodes (default: false)');
     console.log('  --texParserConfig.today="May 1, 2024"       What \\today prints in LaTeX input (default: the date of the parse)');

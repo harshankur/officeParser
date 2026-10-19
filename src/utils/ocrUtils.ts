@@ -39,6 +39,8 @@ interface OcrJob {
 interface ManagedWorker {
     worker: any;
     language: string;
+    /** The options the worker was created with (see {@link workerOptionsKey}): fixed for its life. */
+    optionsKey: string;
     lastUsed: number;
     isBusy: boolean;
     activeJob?: OcrJob;
@@ -177,6 +179,16 @@ function withTimeout<T>(promise: Promise<T>, ms: number, errMsg: string): Promis
         (res) => { clearTimeout(id); return res; },
         (err) => { clearTimeout(id); throw err; }
     );
+}
+
+/**
+ * The options a Tesseract worker is created with and keeps for its life (where its worker, core and
+ * language data come from, and how it caches the data). A job runs only on a worker created with the
+ * same ones: matched by language alone, a `cacheMethod: 'none'` parse could run on a worker that
+ * stores language data, or one told to load from its own paths on a worker loading from a CDN.
+ */
+function workerOptionsKey(config: OcrJob['config']): string {
+    return JSON.stringify([config.workerPath ?? '', config.corePath ?? '', config.langPath ?? '', config.cacheMethod ?? '']);
 }
 
 /**
@@ -362,9 +374,10 @@ class OcrSchedulerManager {
                     continue;
                 }
                 const requestedLanguage = nextJob.config.language || 'eng';
+                const optionsKey = workerOptionsKey(nextJob.config);
 
-                // 1. Find an idle worker with the EXACT language affinity
-                let managed = this.pool.find(mw => !mw.isBusy && mw.language === requestedLanguage);
+                // 1. Find an idle worker with the EXACT language affinity, created with the job's options
+                let managed = this.pool.find(mw => !mw.isBusy && mw.language === requestedLanguage && mw.optionsKey === optionsKey);
 
                 // 2. If not found and we have room, create a new worker
                 if (!managed && this.pool.length < this.MAX_WORKERS) {
@@ -383,7 +396,16 @@ class OcrSchedulerManager {
                         if (!job) continue;
 
                         managed = idleWorkers.reduce((prev, curr) => (prev.lastUsed < curr.lastUsed ? prev : curr));
-                        this.reinitializeAndRunWorker(managed, job, requestedLanguage);
+                        if (managed.optionsKey === optionsKey) {
+                            this.reinitializeAndRunWorker(managed, job, requestedLanguage);
+                        } else {
+                            // Re-initializing changes only the language: a worker created with other
+                            // options is ended, and one is created with the job's.
+                            const stale = managed;
+                            this.pool.splice(this.pool.indexOf(stale), 1);
+                            Promise.resolve().then(() => stale.worker.terminate()).catch(() => { });
+                            this.createAndRunWorker(job, requestedLanguage);
+                        }
                         continue;
                     }
                 }
@@ -419,6 +441,7 @@ class OcrSchedulerManager {
             if (job.config.workerPath) options.workerPath = job.config.workerPath;
             if (job.config.corePath) options.corePath = job.config.corePath;
             if (job.config.langPath) options.langPath = job.config.langPath;
+            if (job.config.cacheMethod) options.cacheMethod = job.config.cacheMethod;
 
             const workerPromise = ocrTestHooks.createWorker ? ocrTestHooks.createWorker(requestedLanguage) : createWorker(requestedLanguage, 1, options);
 
@@ -456,6 +479,7 @@ class OcrSchedulerManager {
             managed = {
                 worker,
                 language: requestedLanguage,
+                optionsKey: workerOptionsKey(job.config),
                 lastUsed: Date.now(),
                 isBusy: false
             };

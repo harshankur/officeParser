@@ -101,6 +101,7 @@ const FULL_CONFIG: DeepRequired<OfficeParserConfig> = {
         workerPath: '',
         corePath: '',
         langPath: '',
+        cacheMethod: 'write',
         preserveLayout: true,
         // Generous (0 = unlimited) for workerLoad/recognition so the real-file tests are never
         // killed by the timeout machinery.  C8/C9 permutation tests override these to 1 ms.

@@ -286,6 +286,17 @@ export interface OcrConfig {
      */
     langPath?: string;
     /**
+     * Where Tesseract keeps the language data it has loaded, so the next parse does not load it again
+     * (IndexedDB in the browser, a file in the working directory in Node):
+     * - 'write': read it from there when present, and store it after loading.
+     * - 'readOnly': read it from there when present, never store.
+     * - 'refresh': load it again and store it.
+     * - 'none': neither read nor store, for an application that must write nothing to the device.
+     *
+     * Default is 'write'.
+     */
+    cacheMethod?: 'write' | 'readOnly' | 'refresh' | 'none';
+    /**
      * Reconstruct the recognized text's two-dimensional page layout from Tesseract's per-word
      * bounding boxes, instead of returning the flat, linearized string. Words keep their relative
      * horizontal position (right-hand text stays on the right, columns line up) and lines/blocks keep

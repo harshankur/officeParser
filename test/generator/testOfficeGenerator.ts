@@ -70,7 +70,7 @@ const activeFormats = <T extends string>(formats: readonly T[]): T[] =>
 const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     extractAttachments: true,
     ocr: false,
-    ocrConfig: { language: 'eng', workerPath: '', corePath: '', langPath: '', preserveLayout: true, timeout: { autoTerminate: 10000, workerLoad: 60000, recognition: 30000 }, abortSignal: null },
+    ocrConfig: { language: 'eng', workerPath: '', corePath: '', langPath: '', cacheMethod: 'write', preserveLayout: true, timeout: { autoTerminate: 10000, workerLoad: 60000, recognition: 30000 }, abortSignal: null },
     includeRawContent: false,
     ignoreNotes: false,
     newlineDelimiter: '\n',
