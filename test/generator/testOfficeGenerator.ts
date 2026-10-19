@@ -2088,6 +2088,134 @@ async function runNativePdfEngineTests(): Promise<GenFeatureTest[]> {
         missingOut.text.includes('Missing picture alt') && missingOut.messages.some((m: any) => m.code === OfficeWarningType.IMAGE_PROCESSING_FAILED),
         'an unresolvable attachment name is the other half of the same silent-drop path'));
 
+    // --- Fonts: what the Standard-14 fonts cannot draw is counted, and drawn once fonts are given ---
+    // Liberation Sans ships with pdfjs-dist (a dependency), and has Greek and Cyrillic.
+    const fontDir = path.join(path.dirname(require.resolve('pdfjs-dist/package.json')), 'standard_fonts');
+    const liberation = new Uint8Array(fs.readFileSync(path.join(fontDir, 'LiberationSans-Regular.ttf')));
+    const liberationBold = new Uint8Array(fs.readFileSync(path.join(fontDir, 'LiberationSans-Bold.ttf')));
+    const native = async (ast: any, pdfConfig: any = {}, config: any = {}): Promise<{ text: string; messages: any[]; outline: any[]; bytes: Uint8Array }> => {
+        const res = await OfficeGenerator.generate(ast, 'pdf' as any, { ...config, pdfConfig: { engine: 'native', ...pdfConfig } } as any);
+        const back: any = await OfficeParser.parseOffice(Buffer.from(res.value as Uint8Array), { ...PARSER_CONFIG, ocr: false });
+        return { text: String((await back.to('text')).value), messages: (res as any).messages || [], outline: back.auxiliary?.outline || [], bytes: res.value as Uint8Array };
+    };
+    const lossOf = (messages: any[]) => messages.find((m: any) => m.code === OfficeWarningType.CONTENT_NOT_REPRESENTABLE && m.details?.reason === 'unencodable-text');
+    const scriptsAst = synthAst('md', [
+        { type: 'heading', metadata: { level: 1 }, children: [{ type: 'text', text: 'Title Καλημέρα' }] },
+        { type: 'paragraph', children: [{ type: 'text', text: 'Latin, ' }, { type: 'text', text: 'Привет', formatting: { bold: true } }, { type: 'text', text: ' and ΩΜΕΓΑ.' }] },
+        { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [{ type: 'text', text: 'κόσμε' }] }, { type: 'cell', children: [{ type: 'text', text: 'мир' }] }] }] },
+        { type: 'code', text: 'код = 1' },
+    ] as OfficeContentNode[]);
+    const scriptWords = ['Καλημέρα', 'Привет', 'ΩΜΕΓΑ', 'κόσμε', 'мир', 'код'];
+
+    const plain = await native(scriptsAst);
+    const plainLoss = lossOf(plain.messages);
+    results.push(mk('without fonts, the characters lost are counted and sampled',
+        "reason 'unencodable-text', count 30, a sample", JSON.stringify(plainLoss?.details),
+        !!plainLoss && plainLoss.details.count === 30 && typeof plainLoss.details.sample === 'string' && plainLoss.details.sample.startsWith('Καλημέρ')
+        && plain.messages.filter((m: any) => m.details?.reason === 'unencodable-text').length === 1 && !scriptWords.some(w => plain.text.includes(w)),
+        'one stray bullet and a whole document in another script raised the same warning, with only prose to tell them apart'));
+
+    const withFonts = await native(scriptsAst, { fonts: { regular: liberation, bold: liberationBold } });
+    results.push(mk('pdfConfig.fonts draws what the Standard-14 fonts cannot',
+        'every word read back, no loss warning', `${scriptWords.filter(w => withFonts.text.includes(w)).length}/6, ${JSON.stringify(lossOf(withFonts.messages)?.details)}`,
+        scriptWords.every(w => withFonts.text.includes(w)) && !lossOf(withFonts.messages),
+        'a Greek or Cyrillic document converted to a PDF of question marks'));
+
+    const withFallback = await native(scriptsAst, { fallbackFonts: [liberation] });
+    results.push(mk('pdfConfig.fallbackFonts draws only what the Standard-14 fonts lack',
+        'every word read back, Latin still there', `${scriptWords.filter(w => withFallback.text.includes(w)).length}/6`,
+        scriptWords.every(w => withFallback.text.includes(w)) && withFallback.text.includes('Latin') && !lossOf(withFallback.messages),
+        'a fallback font is tried for each character the fonts before it lack'));
+
+    // A character no given font has is still counted (Liberation Sans has no Chinese).
+    const partial = await native(synthAst('md', [{ type: 'paragraph', children: [{ type: 'text', text: 'Привет 你好' }] } as OfficeContentNode]), { fallbackFonts: [liberation] });
+    results.push(mk('a character none of the fonts has is counted, the rest are drawn',
+        'count 2, sample 你好, Привет drawn', `${JSON.stringify(lossOf(partial.messages)?.details)}, ${JSON.stringify(partial.text.trim())}`,
+        lossOf(partial.messages)?.details.count === 2 && lossOf(partial.messages)?.details.sample === '你好' && partial.text.includes('Привет'),
+        'the count is of what was lost, not of what a font had to be found for'));
+
+    // A space of another width, a soft hyphen and a control character are not losses.
+    const spaces = await native(synthAst('md', [{ type: 'paragraph', children: [{ type: 'text', text: 'em\u2003space thin\u2009space ideo\u3000graphic soft\u00ADhyphen vertical\u000Btab bell\u0007.' }] } as OfficeContentNode]));
+    results.push(mk('a space the fonts lack is drawn as a space, not counted as lost',
+        'no loss warning, no "?", words apart', `${JSON.stringify(lossOf(spaces.messages)?.details)}, ${JSON.stringify(spaces.text.trim())}`,
+        !lossOf(spaces.messages) && !spaces.text.includes('?') && /em space thin space ideo graphic softhyphen vertical tab bell\./.test(spaces.text.replace(/\s+/g, ' ')),
+        'an em space (PowerPoint writes them) was drawn as "?" and reported as text that could not be drawn'));
+
+    // Subsetting keeps the PDF near the size of its text, not of the font files (139 kB each).
+    const whole = await native(scriptsAst, { fonts: { regular: liberation, bold: liberationBold }, subsetFonts: false });
+    results.push(mk('fonts are subset unless subsetFonts is false',
+        'subset under 60 kB, whole over 150 kB', `${withFonts.bytes.length} / ${whole.bytes.length}`,
+        withFonts.bytes.length < 60_000 && whole.bytes.length > 150_000 && scriptWords.every(w => whole.text.includes(w)),
+        'a document of ten words carried two whole font files'));
+
+    // One ArrayBuffer given for two styles is one font: each style views it anew, and was embedded again.
+    const sharedBuffer = liberation.buffer.slice(liberation.byteOffset, liberation.byteOffset + liberation.byteLength);
+    const shared = await native(scriptsAst, { fonts: { regular: sharedBuffer, bold: sharedBuffer }, subsetFonts: false });
+    results.push(mk('one ArrayBuffer given for two styles is embedded once',
+        'whole font embedded once: under 1.5x one font file', `${shared.bytes.length} for a ${liberation.byteLength}-byte font`,
+        shared.bytes.length < liberation.byteLength * 1.5 && scriptWords.every(w => shared.text.includes(w)),
+        'the same font bytes, passed as an ArrayBuffer, were written into the PDF once per style'));
+
+    // A value that is not a font's bytes (a file name, an empty file, a lone font for the list) is reported.
+    const misgiven = await native(scriptsAst, { fonts: { regular: 'LiberationSans-Regular.ttf', bold: new Uint8Array(0) }, fallbackFonts: liberation });
+    const misgivenOptions = misgiven.messages.filter((m: any) => m.code === OfficeWarningType.INVALID_CONFIG_VALUE).map((m: any) => String(m.message).match(/Invalid (pdfConfig\.[\w.\[\]]+)/)?.[1]);
+    results.push(mk('a font value that is not font bytes is reported, naming the option',
+        'INVALID_CONFIG_VALUE for fonts.regular, fonts.bold and fallbackFonts; Standard-14 text kept', JSON.stringify(misgivenOptions),
+        ['pdfConfig.fonts.regular', 'pdfConfig.fonts.bold', 'pdfConfig.fallbackFonts'].every(o => misgivenOptions.includes(o)) && misgiven.text.includes('Latin') && !!lossOf(misgiven.messages),
+        'a font named by its file, not given as bytes, was passed over without a word'));
+
+    // `fonts` given as one font's bytes, not an object of styles, and a style name it does not know.
+    const fontsAlone = await native(scriptsAst, { fonts: liberation });
+    const fontsTypo = await native(scriptsAst, { fonts: { Regular: liberation } });
+    const optionsOf = (messages: any[]) => messages.filter((m: any) => m.code === OfficeWarningType.INVALID_CONFIG_VALUE || m.code === OfficeWarningType.UNRECOGNIZED_CONFIG_OPTION)
+        .map((m: any) => `${m.code}: ${String(m.message).match(/pdfConfig\.[\w.\[\]]+/)?.[0]}`);
+    results.push(mk('pdfConfig.fonts that is not an object of styles, or names an unknown style, is reported',
+        'INVALID_CONFIG_VALUE for pdfConfig.fonts; UNRECOGNIZED_CONFIG_OPTION for pdfConfig.fonts.Regular', JSON.stringify([optionsOf(fontsAlone.messages), optionsOf(fontsTypo.messages)]),
+        optionsOf(fontsAlone.messages).includes('INVALID_CONFIG_VALUE: pdfConfig.fonts') && optionsOf(fontsTypo.messages).includes('UNRECOGNIZED_CONFIG_OPTION: pdfConfig.fonts.Regular'),
+        'a font given as fonts itself, or under a misspelt style, was passed over without a word'));
+
+    let badFontCode = 'generated';
+    try { await native(scriptsAst, { fonts: { regular: new Uint8Array([1, 2, 3, 4]) } }); } catch (e: any) { badFontCode = `${e?.officeIssue?.code}: ${e?.message}`; }
+    results.push(mk('bytes that are not a font fail the conversion, naming the option',
+        'PDF_GENERATION_FAILED naming pdfConfig.fonts.regular', badFontCode,
+        badFontCode.startsWith('PDF_GENERATION_FAILED') && badFontCode.includes('pdfConfig.fonts.regular'),
+        'drawing in another font without a word would be a different document'));
+
+    results.push(mk('a conversion with fonts leaves no global behind',
+        'no regeneratorRuntime', typeof (globalThis as any).regeneratorRuntime,
+        (globalThis as any).regeneratorRuntime === undefined,
+        'fontkit is lent the generator runtime it calls for the length of a conversion only'));
+
+    // --- Outline: the native engine writes bookmarks from the headings ---
+    const outlineAst = synthAst('md', [
+        { type: 'heading', metadata: { level: 1 }, children: [{ type: 'text', text: 'Chapter One' }] },
+        { type: 'paragraph', children: [{ type: 'text', text: 'Body.' }] },
+        { type: 'heading', metadata: { level: 2 }, children: [{ type: 'text', text: 'Section Ünï' }] },
+        { type: 'heading', metadata: { level: 1 }, children: [{ type: 'text', text: 'Chapter Two' }] },
+    ] as OfficeContentNode[]);
+    const outlined = await native(outlineAst, { outline: true });
+    const titles = (nodes: any[]): any[] => nodes.map(n => { const kids = (n.children || []).filter((c: any) => c.type === 'list'); return kids.length ? [String(n.text).trim(), titles(kids)] : String(n.text).trim(); });
+    const outlineShape = JSON.stringify(titles(outlined.outline));
+    results.push(mk('pdfConfig.outline writes a nested bookmark outline',
+        '[["Chapter One",["Section Ünï"]],"Chapter Two"]', outlineShape,
+        outlineShape === '[["Chapter One",["Section Ünï"]],"Chapter Two"]',
+        'outline was an HTML-engine option only; the native engine wrote no bookmarks'));
+    const notOutlined = await native(outlineAst);
+    results.push(mk('no outline is written unless asked for',
+        'none', String(notOutlined.outline.length), notOutlined.outline.length === 0, 'outline defaults to false'));
+
+    // --- Each kind of loss names itself in details.reason ---
+    const reasonsAst = synthAst('docx', [
+        { type: 'chart', text: 'Sales: 1, 2, 3' },
+        { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [{ type: 'image', metadata: { attachmentName: 'a.png', altText: 'Cell picture' } }] }] }] },
+        { type: 'list', metadata: { listType: 'unordered', indentation: 0 }, children: [{ type: 'image', metadata: { attachmentName: 'a.png', altText: 'Item picture' } }] },
+    ] as OfficeContentNode[]);
+    const reasons = (await native(reasonsAst)).messages.filter((m: any) => m.code === OfficeWarningType.CONTENT_NOT_REPRESENTABLE).map((m: any) => m.details?.reason).sort();
+    results.push(mk('a not-representable warning carries a stable details.reason',
+        'chart, image-in-table-cell, image-in-text-line', reasons.join(', '),
+        reasons.join(',') === 'chart,image-in-table-cell,image-in-text-line',
+        'a caller told the cases apart by searching the message for a phrase'));
+
     return results;
 }
 

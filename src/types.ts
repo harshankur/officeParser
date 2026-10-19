@@ -1296,7 +1296,7 @@ export type OfficeConverterConfig<D extends string = string, T extends Supported
 /**
  * Deeply required type helper.
  */
-export type DeepRequired<T> = T extends Function | Date | Buffer | RegExp
+export type DeepRequired<T> = T extends Function | Date | Buffer | RegExp | Uint8Array | ArrayBuffer
     ? T
     : T extends Array<infer U>
     ? Array<DeepRequired<U>>
@@ -1484,13 +1484,59 @@ export interface PdfGeneratorConfig {
      *   only hand back HTML rather than PDF bytes.
      * - `'native'`: lay the AST out directly with `pdf-lib` (an optional peer dependency) - no
      *   browser required, works identically in Node and the browser (so it can produce real PDF bytes
-     *   client-side), and is much lighter. The trade-off is fidelity: it draws in the Standard-14
-     *   Helvetica and Courier fonts rather than the document's own and performs a clean reflow rather
-     *   than matching the HTML renderer pixel for pixel. `tagged`/`outline` do not apply to it.
+     *   client-side), and is much lighter. The trade-off is fidelity: it draws in the fonts given in
+     *   `fonts` and `fallbackFonts` (the Standard-14 Helvetica and Courier fonts when none are given)
+     *   rather than the document's own, and performs a clean reflow rather than matching the HTML
+     *   renderer pixel for pixel. `tagged` does not apply to it.
      *
      * Defaults to `'html'`.
      */
     engine?: 'html' | 'native';
+    /**
+     * Fonts the `'native'` engine draws in, each the bytes of a TrueType or OpenType file (`.ttf`,
+     * `.otf`), one per style. Without them the engine draws in the Standard-14 Helvetica and Courier
+     * fonts, which have Western European characters only: every other character is drawn as `?` and
+     * reported in one `CONTENT_NOT_REPRESENTABLE` warning. A style given no font is drawn in `regular`
+     * when that is given (so bold text is not bold unless `bold` is given too); code stays in Courier
+     * unless `mono` is given. A character a style's font lacks is looked for in `regular`, then in
+     * `fallbackFonts`, then in the Standard-14 font of the style.
+     *
+     * Embedding a font needs the optional peer dependency `@pdf-lib/fontkit`. A file that cannot be
+     * read as a font fails the conversion with `PDF_GENERATION_FAILED`; a value that is not a file's
+     * bytes (a file name, an empty file), or `fonts` given as anything but an object of styles, is
+     * reported (`INVALID_CONFIG_VALUE`) and the style drawn as if none were given, and a style name not
+     * listed here is reported as `UNRECOGNIZED_CONFIG_OPTION`. Ignored by the `'html'` engine.
+     *
+     * Defaults to no fonts.
+     */
+    fonts?: {
+        regular?: Uint8Array | ArrayBuffer | null;
+        bold?: Uint8Array | ArrayBuffer | null;
+        italic?: Uint8Array | ArrayBuffer | null;
+        boldItalic?: Uint8Array | ArrayBuffer | null;
+        mono?: Uint8Array | ArrayBuffer | null;
+    };
+    /**
+     * More fonts for the `'native'` engine, tried in order for each character the style's own font and
+     * `fonts.regular` lack, so one document can mix scripts (Latin, Devanagari, Chinese) by listing a
+     * font for each. Each is the bytes of a TrueType or OpenType file. Given with no `fonts`, text
+     * stays in the Standard-14 fonts (bold and italic included) and these draw only the characters
+     * those lack.
+     *
+     * Words are shaped by the font (ligatures, Arabic joining, Indic conjuncts) and a right-to-left
+     * line is laid out from the right edge, its words in visual order. Marks a font places with its
+     * positioning table (`GPOS`) are drawn at their default offsets.
+     *
+     * A value that is not a list, or an entry that is not a file's bytes, is reported
+     * (`INVALID_CONFIG_VALUE`) and left out. Defaults to none.
+     */
+    fallbackFonts?: (Uint8Array | ArrayBuffer)[];
+    /**
+     * Embed only the glyphs the document uses of each font given in `fonts` and `fallbackFonts`
+     * (`'native'` engine). Set false to embed whole font files, for a font whose subset a viewer does
+     * not draw. Defaults to true.
+     */
+    subsetFonts?: boolean;
     /**
      * Emit a tagged (accessible / PDF-UA-friendly) PDF, so screen readers can follow the document
      * structure. Passed through to the rendering engine; ignored by engines that do not support it.
@@ -1498,8 +1544,8 @@ export interface PdfGeneratorConfig {
      */
     tagged?: boolean;
     /**
-     * Emit a bookmark outline built from the document's headings (experimental in the rendering
-     * engine). Defaults to false.
+     * Emit a bookmark outline built from the document's headings, nested by heading level. Both
+     * engines write one (it is experimental in the `'html'` engine's browser). Defaults to false.
      */
     outline?: boolean;
     /** Paper format. Defaults to 'A4'. See {@link PaperFormat}. */

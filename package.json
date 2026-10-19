@@ -141,10 +141,14 @@
     "tesseract.js": "^7.0.0"
   },
   "peerDependencies": {
-    "pdf-lib": "^1.17.1",
+    "@pdf-lib/fontkit": "^1.1.1 || ^2.0.0",
+    "pdf-lib": "^1.17.1 || ^2.0.0",
     "puppeteer": ">=22"
   },
   "peerDependenciesMeta": {
+    "@pdf-lib/fontkit": {
+      "optional": true
+    },
     "puppeteer": {
       "optional": true
     },
@@ -153,6 +157,7 @@
     }
   },
   "devDependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
     "@types/node": "^26.4.0",
     "@typescript-eslint/eslint-plugin": "^8.70.0",
     "@typescript-eslint/parser": "^8.70.0",

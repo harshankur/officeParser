@@ -6,13 +6,13 @@
  * headings, lists (bulleted and numbered, nested), grid tables with borders, embedded images, page
  * breaks and horizontal rules - handling word wrapping and pagination as it goes. It needs no browser
  * and runs unchanged in Node and the browser, so it is the way to produce a real PDF client-side (the
- * browser Puppeteer path can only hand back HTML). Its trade-off is fidelity: it uses the Standard-14
- * Standard-14 fonts (the Helvetica and Courier faces; Times is not embedded) rather than the
- * document's own, and its layout is a clean reflow, not a pixel match of the HTML renderer. Choose it
- * with `pdfConfig.engine: 'native'`.
+ * browser Puppeteer path can only hand back HTML). Its trade-off is fidelity: it draws in the fonts it
+ * is given (`pdfConfig.fonts`, `pdfConfig.fallbackFonts`) or, given none, in the Standard-14 Helvetica
+ * and Courier faces, never in the document's own, and its layout is a clean reflow, not a pixel match
+ * of the HTML renderer. Choose it with `pdfConfig.engine: 'native'`.
  *
  * `pdf-lib` is an optional peer dependency, imported lazily so it is only required when this engine
- * is selected.
+ * is selected; `@pdf-lib/fontkit` is another, required only when fonts are given.
  *
  * @module generators/pdf/nativePdfEngine
  */
@@ -35,20 +35,139 @@ const MAX_IMAGE_PIXELS = 40_000_000;
  */
 const CP1252_EXTRA = new Set([0x20AC, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x017D, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x017E, 0x0178]);
 
-/** Maps a string to the WinAnsi-encodable subset the Standard-14 fonts can draw, flagging any loss. */
-function toWinAnsi(text: string): { text: string; changed: boolean } {
-    let out = '', changed = false;
+/** Whether a Standard-14 font can draw a code point: the WinAnsi-encodable subset. */
+function winAnsiCovers(cp: number): boolean {
+    return (cp >= 0x20 && cp <= 0x7E) || (cp >= 0xA0 && cp <= 0xFF) || CP1252_EXTRA.has(cp);
+}
+
+/**
+ * Characters that draw nothing of their own: zero-width spaces and joiners, the word joiner, the BOM,
+ * the bidi marks and embeddings, and the variation selectors. A font that has one keeps it (a joiner
+ * changes how its neighbours are shaped); otherwise it is dropped, and is no loss to report.
+ */
+function isInvisible(cp: number): boolean {
+    return cp === 0x200B || cp === 0x200C || cp === 0x200D || cp === 0x2060 || cp === 0xFEFF
+        || cp === 0x200E || cp === 0x200F || (cp >= 0x202A && cp <= 0x202E) || (cp >= 0x2066 && cp <= 0x2069)
+        || (cp >= 0xFE00 && cp <= 0xFE0F);
+}
+
+/** Hebrew, Arabic and the other right-to-left blocks of the Basic Multilingual Plane. */
+function isRtlChar(cp: number): boolean {
+    return (cp >= 0x0590 && cp <= 0x08FF) || (cp >= 0xFB1D && cp <= 0xFDFF) || (cp >= 0xFE70 && cp <= 0xFEFF);
+}
+
+const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
+const OTHER_SPACE = /[\p{Zs}\u000B\u000C\u2028\u2029]/u;
+const CONTROL = /\p{Cc}/u;
+/** The most code points shaped as one string (see NativeLayout.segments). */
+const MAX_SHAPED = 256;
+
+const COMBINING_MARK = /\p{M}/u;
+
+/** The direction a stretch of text is read in: right-to-left when it has any such letter, else left-to-right when it has a letter or digit. */
+function directionOf(text: string): 'ltr' | 'rtl' | 'neutral' {
+    let dir: 'ltr' | 'neutral' = 'neutral';
     for (const ch of text) {
-        const cp = ch.codePointAt(0)!;
-        if ((cp >= 0x20 && cp <= 0x7E) || (cp >= 0xA0 && cp <= 0xFF) || CP1252_EXTRA.has(cp)) out += ch;
-        else if (cp === 0x09) out += '    ';                          // tab -> spaces
-        else if (cp === 0x0A || cp === 0x0D) out += ' ';             // stray newline in a single line
-        // Zero-width and formatting characters (ZWSP/ZWNJ/ZWJ/word-joiner/BOM) carry no glyph; drop them
-        // silently rather than drawing a visible "?" mid-word and flagging a spurious loss.
-        else if (cp === 0x200B || cp === 0x200C || cp === 0x200D || cp === 0x2060 || cp === 0xFEFF) { /* drop */ }
-        else { out += '?'; changed = true; }
+        if (isRtlChar(ch.codePointAt(0)!)) return 'rtl';
+        if (dir === 'neutral' && LETTER_OR_DIGIT.test(ch)) dir = 'ltr';
     }
-    return { text: out, changed };
+    return dir;
+}
+
+/** Whether text is a right-to-left paragraph: its first letter is a right-to-left one. */
+function startsRtl(text: string): boolean {
+    for (const ch of text) {
+        if (isRtlChar(ch.codePointAt(0)!)) return true;
+        if (LETTER_OR_DIGIT.test(ch)) return false;
+    }
+    return false;
+}
+
+/** One thing on a line, for ordering: a word (or part of one) or the gap after it. */
+interface LineItem { w: number; dir: 'ltr' | 'rtl' | 'neutral'; }
+
+/**
+ * The order a line's items are drawn in, left to right, given the order they are read in. This is the
+ * Unicode bidirectional algorithm reduced to what a line of words needs: a right-to-left word has an
+ * odd level, a left-to-right one an even level, and a gap or a word of punctuation takes the level of
+ * its neighbours when they agree and the paragraph's otherwise; then each run at or above a level is
+ * reversed, from the highest level down. A line with no right-to-left word is returned as it is.
+ */
+function visualOrder<T extends LineItem>(items: T[], baseRtl: boolean): T[] {
+    if (!baseRtl && !items.some(it => it.dir === 'rtl')) return items;
+    const base = baseRtl ? 1 : 0;
+    const strong = (it: LineItem) => it.dir === 'rtl' ? 1 : it.dir === 'ltr' ? (baseRtl ? 2 : 0) : -1;
+    const levels = items.map(strong);
+    for (let i = 0; i < levels.length; i++) {
+        if (levels[i] !== -1) continue;
+        let j = i;
+        while (j < levels.length && levels[j] === -1) j++;
+        const before = i > 0 ? levels[i - 1] : base, after = j < levels.length ? levels[j] : base;
+        for (let k = i; k < j; k++) levels[k] = before === after ? before : base;
+        i = j - 1;
+    }
+    const order = items.map((_, i) => i);
+    for (let level = Math.max(...levels); level >= 1; level--) {
+        for (let i = 0; i < order.length; i++) {
+            if (levels[order[i]] < level) continue;
+            let j = i;
+            while (j < order.length && levels[order[j]] >= level) j++;
+            for (let a = i, b = j - 1; a < b; a++, b--) { const t = order[a]; order[a] = order[b]; order[b] = t; }
+            i = j - 1;
+        }
+    }
+    return order.map(i => items[i]);
+}
+
+/** Lazily loads `@pdf-lib/fontkit`, which pdf-lib embeds a font file with, throwing a typed, actionable error when it is not installed. */
+async function loadFontkit(config: OfficeParserAST['config']): Promise<any> {
+    try {
+        // @ts-ignore - optional peer dependency, resolved at runtime
+        const mod = await import('@pdf-lib/fontkit');
+        return mod.default || mod;
+    } catch (e) {
+        throw getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, config,
+            "Embedding fonts in the native PDF engine (pdfConfig.fonts, pdfConfig.fallbackFonts) requires the optional peer dependency '@pdf-lib/fontkit'. Install it with `npm install @pdf-lib/fontkit`, or pass no fonts to draw in the Standard-14 ones.");
+    }
+}
+
+/** How many conversions are drawing with embedded fonts right now (see {@link borrowGeneratorRuntime}). */
+let generatorRuntimeUsers = 0;
+
+/**
+ * `@pdf-lib/fontkit` 1.x shapes Indic scripts with a generator that was compiled to call a global
+ * `regeneratorRuntime`, which the package does not bring: shaping a word of Hindi threw
+ * "regeneratorRuntime is not defined". When the page has none, one is lent for as long as a conversion
+ * draws with embedded fonts, and taken back when the last such conversion ends. It is the part of the
+ * runtime that generator uses (a context with `prev`, `next` and `stop()`), not a general one, which is
+ * why it does not stay. Returns the function that gives it back.
+ */
+function borrowGeneratorRuntime(): () => void {
+    const scope = globalThis as any;
+    if (generatorRuntimeUsers === 0 && scope.regeneratorRuntime !== undefined) return () => { /* the page has its own */ };
+    if (generatorRuntimeUsers++ === 0) {
+        scope.regeneratorRuntime = {
+            mark: (fn: unknown) => fn,
+            wrap: (step: (context: any) => unknown) => {
+                const context = { prev: 0, next: 0, done: false, stop() { this.done = true; return undefined; } };
+                const iterator = {
+                    next() {
+                        if (context.done) return { value: undefined, done: true };
+                        const value = step(context);
+                        return context.done ? { value: undefined, done: true } : { value, done: false };
+                    },
+                    [Symbol.iterator]() { return iterator; },
+                };
+                return iterator;
+            },
+        };
+    }
+    let returned = false;
+    return () => {
+        if (returned) return;
+        returned = true;
+        if (--generatorRuntimeUsers === 0) delete scope.regeneratorRuntime;
+    };
 }
 
 /** Lazily loads `pdf-lib`, throwing a typed, actionable error when it is not installed. */
@@ -81,11 +200,24 @@ function toPoints(v: string | number | undefined, fallback: number): number {
     return fallback;
 }
 
-/** A single word ready to place, carrying the font/size/color it should be drawn with. */
-interface Piece { text: string; font: any; size: number; color: any; underline: boolean; }
+/** The styles text is drawn in. */
+type FaceKey = 'regular' | 'bold' | 'italic' | 'boldItalic' | 'mono';
 
-/** The embedded Standard-14 fonts the engine draws with. */
-interface Fonts { regular: any; bold: any; italic: any; boldItalic: any; mono: any; }
+/** A single word ready to place, carrying the style/size/color it should be drawn with. */
+interface Piece { text: string; face: FaceKey; size: number; color: any; underline: boolean; }
+
+/** One embedded font and the code points it has a glyph for. */
+interface Face { font: any; covers: (cp: number) => boolean; }
+
+/**
+ * The fonts each style is drawn in, in the order they are tried for a character: the style's own font,
+ * the regular one, the fallback fonts, then the Standard-14 font of the style (which comes first when
+ * the style has no font given, see `embedFonts`).
+ */
+type Fonts = Record<FaceKey, Face[]>;
+
+/** A heading, as the bookmark outline needs it. */
+interface OutlineEntry { title: string; level: number; page: any; top: number; }
 
 /**
  * Stateful layout cursor: owns the pdf-lib document, the current page and the y position, and knows
@@ -117,6 +249,8 @@ class NativeLayout {
         // Reports a warning through the generator's own channel, so it lands in `result.messages`
         // (and reaches onWarning) rather than only firing onWarning directly.
         private readonly reportWarning: (type: OfficeWarningType, info?: any) => void,
+        /** Whether any font was given: the Standard-14 ones are then the last resort, not the only fonts. */
+        private readonly customFonts: boolean,
     ) {
         this.imageMode = resolveImageMode(this.config.includeImages);
         for (const a of this.ast.attachments || []) {
@@ -144,14 +278,14 @@ class NativeLayout {
         if (this.y + h > this.bottom && this.y > this.margin.top) this.newPage();
     }
 
-    /** Picks the font matching a run's formatting (mono for code, bold/italic variants otherwise). */
-    private fontFor(fmt: TextFormatting | undefined, mono: boolean): any {
-        if (mono) return this.fonts.mono;
+    /** Picks the style matching a run's formatting (mono for code, bold/italic variants otherwise). */
+    private faceFor(fmt: TextFormatting | undefined, mono: boolean): FaceKey {
+        if (mono) return 'mono';
         const bold = !!fmt?.bold, italic = !!fmt?.italic;
-        if (bold && italic) return this.fonts.boldItalic;
-        if (bold) return this.fonts.bold;
-        if (italic) return this.fonts.italic;
-        return this.fonts.regular;
+        if (bold && italic) return 'boldItalic';
+        if (bold) return 'bold';
+        if (italic) return 'italic';
+        return 'regular';
     }
 
     /** Parses a `#rrggbb` (or `#rgb`) hex color into a pdf-lib rgb color, or null. */
@@ -164,18 +298,111 @@ class NativeLayout {
         return this.lib.rgb(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255);
     }
 
-    private winAnsiWarned = false;
     /** Whether the embed-as-link warning was given (once per document). */
     private embedWarned = false;
-    /** WinAnsi-sanitizes text before it is measured or drawn, warning once if any character is lost. */
-    private enc(text: string): string {
-        const r = toWinAnsi(text);
-        if (r.changed && !this.winAnsiWarned) {
-            this.winAnsiWarned = true;
-            const info = { format: 'pdf', feature: 'non-WinAnsi characters (native engine)' };
-            this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, info);
+    /** Whether the chart-as-text warning was given (once per document). */
+    private chartWarned = false;
+    /** How many characters no font could draw, and the first few distinct ones. */
+    private lostCharacters = 0;
+    private readonly lostSample: string[] = [];
+    /** The headings drawn, for the bookmark outline. */
+    readonly outlineEntries: OutlineEntry[] = [];
+
+    /**
+     * Makes text drawable in a style before it is measured or drawn: a tab is four spaces, a line break
+     * or a space the fonts lack a plain space (a drawn string cannot hold a line break), and any other
+     * character none of the style's fonts has is a `?`, counted for the one warning
+     * {@link reportLostCharacters} gives.
+     */
+    private enc(text: string, key: FaceKey = 'regular'): string {
+        const chain = this.fonts[key];
+        let out = '';
+        for (const ch of text) {
+            const cp = ch.codePointAt(0)!;
+            if (cp === 0x09) out += '    ';
+            else if (cp === 0x0A || cp === 0x0D) out += ' ';
+            else if (cp === 0xAD) { /* a soft hyphen shows only where a line is broken at it, and none is */ }
+            else if (chain.some(face => face.covers(cp))) out += ch;
+            else if (isInvisible(cp)) { /* draws nothing: no loss */ }
+            // A space of another width (an em space, a thin space, an ideographic space) or a line
+            // separator the fonts lack is a space; any other control character draws nothing.
+            else if (OTHER_SPACE.test(ch)) out += ' ';
+            else if (CONTROL.test(ch)) { /* no glyph: no loss */ }
+            else {
+                out += '?';
+                this.lostCharacters++;
+                if (this.lostSample.length < 8 && !this.lostSample.includes(ch)) this.lostSample.push(ch);
+            }
         }
-        return r.text;
+        return out;
+    }
+
+    /** Warns, once, of the characters no font could draw: how many, and the first few distinct ones. */
+    reportLostCharacters(): void {
+        if (!this.lostCharacters) return;
+        const feature = this.customFonts ? 'characters none of the given fonts has (native engine)' : 'non-WinAnsi characters (native engine)';
+        this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature, reason: 'unencodable-text', count: this.lostCharacters, sample: this.lostSample.join('') });
+    }
+
+    /**
+     * Splits drawable text into stretches of one font each: every character goes to the first font of
+     * the style that has it. A combining mark or a joiner stays with the font of the character before
+     * it when that font has it, since a mark drawn in another font is not attached to its letter.
+     */
+    private segments(text: string, key: FaceKey): { text: string; face: Face }[] {
+        const chain = this.fonts[key];
+        const out: { text: string; face: Face }[] = [];
+        let current: { text: string; face: Face; length: number } | undefined;
+        for (const ch of text) {
+            const cp = ch.codePointAt(0)!;
+            const attached = isInvisible(cp) || COMBINING_MARK.test(ch);
+            let face: Face | undefined;
+            if (chain.length === 1) face = chain[0];
+            else if (current && attached && current.face.covers(cp)) face = current.face;
+            else face = chain.find(f => f.covers(cp));
+            if (!face) { if (isInvisible(cp)) continue; face = chain[chain.length - 1]; }
+            const drawn = chain.length === 1 || face.covers(cp) ? ch : '?';
+            // A stretch is shaped as one string, in time that grows with the square of its length on a run
+            // of marks (fontkit), so it is cut at MAX_SHAPED code points: before a character that starts a
+            // cluster, or, in a cluster longer than that (a letter under thousands of marks), anywhere.
+            const full = current !== undefined && current.length >= MAX_SHAPED && (!attached || current.length >= 2 * MAX_SHAPED);
+            if (current && current.face === face && !full) { current.text += drawn; current.length++; }
+            else { current = { text: drawn, face, length: 1 }; out.push(current); }
+        }
+        return out;
+    }
+
+    /** The width of drawable text in a style, each stretch measured in the font it is drawn in. */
+    private widthOf(text: string, key: FaceKey, size: number): number {
+        let w = 0;
+        for (const seg of this.segments(text, key)) w += seg.face.font.widthOfTextAtSize(seg.text, size);
+        return w;
+    }
+
+    /** Draws drawable text with its left edge at `x`, each stretch in its font. A right-to-left word's stretches are drawn last first. */
+    private drawText(text: string, key: FaceKey, x: number, y: number, size: number, color: any): void {
+        const segs = this.segments(text, key);
+        if (segs.length > 1 && directionOf(text) === 'rtl') segs.reverse();
+        for (const seg of segs) {
+            this.page.drawText(seg.text, { x, y, size, font: seg.face.font, color });
+            x += seg.face.font.widthOfTextAtSize(seg.text, size);
+        }
+    }
+
+    /**
+     * Draws one line of drawable text (a table cell's line, a line of code) inside `[x, x + width]`,
+     * its words in the order they are seen: a right-to-left line starts at the right edge.
+     */
+    private drawLine(text: string, key: FaceKey, x: number, y: number, size: number, color: any, width: number): void {
+        const dir = directionOf(text);
+        if (dir !== 'rtl') { this.drawText(text, key, x, y, size, color); return; }
+        const baseRtl = startsRtl(text);
+        const items = text.split(/(\s+)/).filter(t => t !== '').map(t => ({ text: t, w: this.widthOf(t, key, size), dir: /^\s+$/.test(t) ? 'neutral' as const : directionOf(t) }));
+        let cx = baseRtl ? x + Math.max(0, width - items.reduce((s, it) => s + it.w, 0)) : x;
+        for (const it of visualOrder(items, baseRtl)) {
+            if (it.text.trim()) this.drawText(it.text, key, cx, y, size, color);
+            cx += it.w;
+        }
     }
 
     /**
@@ -261,7 +488,7 @@ class NativeLayout {
         const text = this.imageMode === 'ocr-text-only' ? ocr : (((node.metadata as any)?.altText || '').trim() || ocr);
         if (text && !this.inlineImageWarned) {
             this.inlineImageWarned = true;
-            this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature: 'image inside a list item, heading or note (native engine renders its alt/OCR text)' });
+            this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature: 'image inside a list item, heading or note (native engine renders its alt/OCR text)', reason: 'image-in-text-line' });
         }
         return text;
     }
@@ -272,7 +499,7 @@ class NativeLayout {
     private cellImageText(node: OfficeContentNode): string {
         if (!this.cellImageWarned) {
             this.cellImageWarned = true;
-            this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature: 'image inside a table cell (native engine renders its alt/OCR text)' });
+            this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature: 'image inside a table cell (native engine renders its alt/OCR text)', reason: 'image-in-table-cell' });
         }
         return ((node.metadata as any)?.altText || node.text || '').trim();
     }
@@ -284,25 +511,27 @@ class NativeLayout {
     private drawRuns(runs: { text: string; fmt: TextFormatting; link: boolean }[], left: number, width: number, mono = false): void {
         // Expand runs into per-word pieces (a trailing-space flag lets us re-insert inter-word gaps).
         const pieces: { p: Piece; space: boolean }[] = [];
+        // A paragraph whose first letter is a right-to-left one is read from the right edge.
+        const baseRtl = startsRtl(runs.map(r => r.text).join(''));
         for (const run of runs) {
-            const font = this.fontFor(run.fmt, mono);
+            const face = this.faceFor(run.fmt, mono);
             const size = parseFontSize(run.fmt.size) ?? (mono ? 10 : 11);
             const color = run.link ? this.lib.rgb(0.1, 0.32, 0.72) : (this.color(run.fmt.color) ?? this.lib.rgb(0.12, 0.12, 0.12));
             const underline = !!(run.fmt.underline || run.link);
-            const words = this.enc(run.text).split(/(\s+)/);
+            const words = this.enc(run.text, face).split(/(\s+)/);
             for (const w of words) {
                 if (w === '') continue;
                 if (/^\s+$/.test(w)) { if (pieces.length) pieces[pieces.length - 1].space = true; continue; }
                 // Split a word wider than the whole line at character boundaries so it wraps instead
                 // of running off the page (a long URL, a hash, a base64 token).
-                for (const chunk of splitToWidth(w, font, size, width)) {
-                    pieces.push({ p: { text: chunk, font, size, color, underline }, space: false });
+                for (const chunk of splitToWidth(w, t => this.widthOf(t, face, size), width)) {
+                    pieces.push({ p: { text: chunk, face, size, color, underline }, space: false });
                 }
             }
         }
         if (!pieces.length) return;
 
-        const spaceWidth = (p: Piece) => p.font.widthOfTextAtSize(' ', p.size);
+        const spaceWidth = (p: Piece) => this.widthOf(' ', p.face, p.size);
         let line: { p: Piece; space: boolean; w: number }[] = [];
         let lineWidth = 0;
 
@@ -310,14 +539,22 @@ class NativeLayout {
             if (!line.length) return;
             const lh = Math.max(...line.map(it => it.p.size)) * 1.35;
             this.ensureSpace(lh);
-            let x = left;
             const baseline = this.pageH - this.y - Math.max(...line.map(it => it.p.size));
-            for (const it of line) {
-                this.page.drawText(it.p.text, { x, y: baseline, size: it.p.size, font: it.p.font, color: it.p.color });
-                if (it.p.underline) {
-                    this.page.drawLine({ start: { x, y: baseline - 1.5 }, end: { x: x + it.w, y: baseline - 1.5 }, thickness: 0.5, color: it.p.color });
+            // Words and the gaps between them, in reading order, then in the order they are seen.
+            const items: { p?: Piece; w: number; dir: 'ltr' | 'rtl' | 'neutral' }[] = [];
+            line.forEach((it, i) => {
+                items.push({ p: it.p, w: it.w, dir: directionOf(it.p.text) });
+                if (it.space && i < line.length - 1) items.push({ w: spaceWidth(it.p), dir: 'neutral' });
+            });
+            let x = baseRtl ? left + Math.max(0, width - items.reduce((s, it) => s + it.w, 0)) : left;
+            for (const it of visualOrder(items, baseRtl)) {
+                if (it.p) {
+                    this.drawText(it.p.text, it.p.face, x, baseline, it.p.size, it.p.color);
+                    if (it.p.underline) {
+                        this.page.drawLine({ start: { x, y: baseline - 1.5 }, end: { x: x + it.w, y: baseline - 1.5 }, thickness: 0.5, color: it.p.color });
+                    }
                 }
-                x += it.w + (it.space ? spaceWidth(it.p) : 0);
+                x += it.w;
             }
             this.y += lh;
             line = [];
@@ -325,7 +562,7 @@ class NativeLayout {
         };
 
         for (const piece of pieces) {
-            const w = piece.p.font.widthOfTextAtSize(piece.p.text, piece.p.size);
+            const w = this.widthOf(piece.p.text, piece.p.face, piece.p.size);
             // Only the previous piece's OWN trailing space counts toward width: a word split across two
             // runs (or a splitToWidth chunk) has space:false and draws with no gap, so measuring one
             // there wrapped such lines slightly early and disagreed with what flush() draws.
@@ -366,7 +603,7 @@ class NativeLayout {
         if (typeof override === 'string') {
             if (!this.onNodeWarned) {
                 this.onNodeWarned = true;
-                const info = { format: 'pdf', feature: 'onNode string override (native engine draws it as plain text)' };
+                const info = { format: 'pdf', feature: 'onNode string override (native engine draws it as plain text)', reason: 'onnode-string-override' };
                 this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, info);
             }
             if (override) this.drawRuns([{ text: override, fmt: {}, link: false }], this.margin.left, this.contentWidth);
@@ -427,7 +664,7 @@ class NativeLayout {
                 if (!text) return;
                 if (!this.embedWarned) {
                     this.embedWarned = true;
-                    this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature: 'embed' });
+                    this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature: 'embed', reason: 'embed' });
                 }
                 this.drawRuns([{ text, fmt: {}, link: !!url }], this.margin.left, this.contentWidth);
                 this.y += 6;
@@ -437,7 +674,13 @@ class NativeLayout {
                 // includeCharts: false omits charts in every generator. The native engine cannot draw a
                 // chart, so it otherwise renders the chart's data text (in node.text); skip it when off.
                 if (this.config.includeCharts === false) return;
-                if (node.text) await this.paragraph(node);
+                if (node.text) {
+                    if (!this.chartWarned) {
+                        this.chartWarned = true;
+                        this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature: 'chart (native engine renders its data as text)', reason: 'chart' });
+                    }
+                    await this.paragraph(node);
+                }
                 return;
             default:
                 if (node.children?.length) { for (const c of node.children) await this.render(c); }
@@ -458,6 +701,8 @@ class NativeLayout {
         // was just pushed onto by the reservation above): a gap there would float it below the margin.
         if (this.y > this.margin.top) this.y += size * 0.6;
         const runs = (await this.collectRuns(node)).map(r => ({ ...r, fmt: { ...r.fmt, bold: true, size: `${size}pt` } }));
+        const title = (runs.length ? runs.map(r => r.text).join('') : node.text || '').replace(/\s+/g, ' ').trim();
+        if (title) this.outlineEntries.push({ title, level, page: this.page, top: this.pageH - this.y });
         this.drawRuns(runs.length ? runs : [{ text: node.text || '', fmt: { bold: true, size: `${size}pt` }, link: false }], this.margin.left, this.contentWidth);
         this.y += size * 0.35;
     }
@@ -515,7 +760,7 @@ class NativeLayout {
         // drawRuns' first line stays on this page and draws at the same baseline as the marker.
         const markerX = this.margin.left + indent - 14;
         const baseline = this.pageH - this.y - size;
-        this.page.drawText(this.enc(marker), { x: markerX, y: baseline, size, font: this.fonts.regular, color: this.lib.rgb(0.12, 0.12, 0.12) });
+        this.drawText(this.enc(marker), 'regular', markerX, baseline, size, this.lib.rgb(0.12, 0.12, 0.12));
         // Advance for the marker line unless the body has real text to draw: a whitespace-only body
         // makes drawRuns place nothing and never advance `this.y`, so the next item would overprint.
         if (bodyRuns.some(r => r.text && r.text.trim())) this.drawRuns(bodyRuns, this.margin.left + indent, this.contentWidth - indent);
@@ -540,11 +785,11 @@ class NativeLayout {
     private drawMonospace(text: string): void {
         const size = 10, lh = size * 1.35;
         for (const raw of text.split(/\r\n|\r|\n/)) {
-            const expanded = this.enc(raw.replace(/\t/g, '    '));
-            const chunks = splitToWidth(expanded || ' ', this.fonts.mono, size, this.contentWidth - 12);
+            const expanded = this.enc(raw.replace(/\t/g, '    '), 'mono');
+            const chunks = splitToWidth(expanded || ' ', t => this.widthOf(t, 'mono', size), this.contentWidth - 12);
             for (const chunk of (chunks.length ? chunks : [' '])) {
                 this.ensureSpace(lh);
-                this.page.drawText(chunk, { x: this.margin.left + 6, y: this.pageH - this.y - size, size, font: this.fonts.mono, color: this.lib.rgb(0.12, 0.12, 0.12) });
+                this.drawLine(chunk, 'mono', this.margin.left + 6, this.pageH - this.y - size, size, this.lib.rgb(0.12, 0.12, 0.12), this.contentWidth - 12);
                 this.y += lh;
             }
         }
@@ -702,7 +947,11 @@ class NativeLayout {
 
         this.y += 2;
         /** Wraps a cell's (un-encoded) text to the width of the columns it spans. */
-        const wrap = (text: string, span: number) => wrapPlain(text, this.fonts.regular, size, Math.max(10, colW * span - 2 * pad), t => this.enc(t));
+        // A header cell is drawn bold, so it is wrapped at the bold font's widths.
+        const wrap = (text: string, span: number, header = false) => {
+            const face: FaceKey = header ? 'bold' : 'regular';
+            return wrapPlain(text, t => this.widthOf(t, face, size), Math.max(10, colW * span - 2 * pad), t => this.enc(t, face));
+        };
         // Grid occupancy: column -> rows still covered by a rowspan from above, so a spanning cell
         // reserves its column(s) below instead of letting later rows slide left under it.
         const carry = new Map<number, number>();
@@ -720,7 +969,7 @@ class NativeLayout {
             if (typeof rowOverride === 'string') {
                 // An onNode string for a whole row: paint it across the full grid width, since the
                 // engine has no markup to splice a replacement row into.
-                placed.push({ col: 0, span: cols, rowSpan: 1, lines: wrap(rowOverride, cols), header: rowIsHeader });
+                placed.push({ col: 0, span: cols, rowSpan: 1, lines: wrap(rowOverride, cols, rowIsHeader), header: rowIsHeader });
             }
             for (const cell of typeof rowOverride === 'string' ? [] : cells) {
                 const override = await this.onNodeValue(cell);
@@ -732,7 +981,8 @@ class NativeLayout {
                 // Cells built by the markup parsers carry their text only in `children`; reading
                 // `cell.text` alone rendered every Markdown/HTML table as an empty grid.
                 const text = typeof override === 'string' ? override : await this.flatText(cell);
-                placed.push({ col, span, rowSpan: Math.max(1, meta?.rowSpan || 1), lines: wrap(text, span), header: rowIsHeader || meta?.style === 'header' });
+                const header = rowIsHeader || meta?.style === 'header';
+                placed.push({ col, span, rowSpan: Math.max(1, meta?.rowSpan || 1), lines: wrap(text, span, header), header });
                 cursor = col + span;
             }
             const lineH = size * 1.35;
@@ -763,10 +1013,10 @@ class NativeLayout {
                 for (const p of placed) {
                     const x = this.margin.left + p.col * colW;
                     this.page.drawRectangle({ x, y: topY - bandH, width: colW * p.span, height: bandH, borderColor: border, borderWidth: 0.5, color: undefined });
-                    const font = p.header ? this.fonts.bold : this.fonts.regular;
+                    const face: FaceKey = p.header ? 'bold' : 'regular';
                     let ty = topY - pad - size;
                     for (let li = lineOffset; li < lineOffset + bandLines && li < p.lines.length; li++) {
-                        this.page.drawText(p.lines[li], { x: x + pad, y: ty, size, font, color: this.lib.rgb(0.12, 0.12, 0.12) }); ty -= lineH;
+                        this.drawLine(p.lines[li], face, x + pad, ty, size, this.lib.rgb(0.12, 0.12, 0.12), colW * p.span - 2 * pad); ty -= lineH;
                     }
                 }
                 this.y += bandH;
@@ -825,14 +1075,19 @@ function parseFontSize(size: string | undefined): number | null {
  * word longer than the whole line (a long URL, hash or base64 blob) wraps instead of overflowing the
  * page. Returns the token unchanged when it already fits.
  */
-function splitToWidth(text: string, font: any, size: number, width: number): string[] {
-    text = toWinAnsi(text).text; // defensive: callers enc first, but never measure raw (pdf-lib throws)
-    if (width <= 0 || font.widthOfTextAtSize(text, size) <= width) return [text];
+function splitToWidth(text: string, measure: (text: string) => number, width: number): string[] {
+    if (width <= 0 || measure(text) <= width) return [text];
     const chunks: string[] = [];
     let cur = '';
+    // A running width, each character measured once: measuring the chunk so far again at every
+    // character took time quadratic in its length, and zero-width characters (combining marks) never
+    // fill a line, so 16 KB of them took seconds. A word broken at character boundaries is unshaped
+    // across the break anyway, so the sum of its characters' widths is as exact as the split can be.
+    let curWidth = 0;
     for (const ch of text) {
-        if (cur && font.widthOfTextAtSize(cur + ch, size) > width) { chunks.push(cur); cur = ch; }
-        else cur += ch;
+        const chWidth = measure(ch);
+        if (cur && curWidth + chWidth > width) { chunks.push(cur); cur = ch; curWidth = chWidth; }
+        else { cur += ch; curWidth += chWidth; }
     }
     if (cur) chunks.push(cur);
     return chunks.length ? chunks : [text];
@@ -840,11 +1095,11 @@ function splitToWidth(text: string, font: any, size: number, width: number): str
 
 /**
  * Greedy word-wrap of plain, UN-ENCODED text to a pixel width, returning the wrapped lines. The text
- * is split into source lines first and encoded one line at a time: `toWinAnsi` maps every newline to
+ * is split into source lines first and encoded one line at a time: `enc` maps every newline to
  * a space (a drawn string cannot contain one), so encoding up front would collapse a multi-line cell
- * onto a single line. `enc` defaults to the bare mapping for callers with no warning channel.
+ * onto a single line. `measure` gives the width of encoded text in the font it will be drawn in.
  */
-function wrapPlain(text: string, font: any, size: number, width: number, enc: (s: string) => string = t => toWinAnsi(t).text): string[] {
+function wrapPlain(text: string, measure: (text: string) => number, width: number, enc: (s: string) => string): string[] {
     const out: string[] = [];
     for (const raw of String(text ?? '').split(/\r\n|\r|\n/)) {
         const para = enc(raw);
@@ -853,10 +1108,10 @@ function wrapPlain(text: string, font: any, size: number, width: number, enc: (s
         for (const w of words) {
             // A single word wider than the whole column (a URL, hash, long identifier) is broken at
             // character boundaries so it wraps instead of overflowing into the next cell or off the page.
-            const pieces = width > 0 && font.widthOfTextAtSize(w, size) > width ? splitToWidth(w, font, size, width) : [w];
+            const pieces = width > 0 && measure(w) > width ? splitToWidth(w, measure, width) : [w];
             for (const piece of pieces) {
                 const cand = line ? line + ' ' + piece : piece;
-                if (line && font.widthOfTextAtSize(cand, size) > width) { out.push(line); line = piece; }
+                if (line && measure(cand) > width) { out.push(line); line = piece; }
                 else line = cand;
             }
         }
@@ -898,6 +1153,140 @@ function applyMetadata(pdf: any, m: OfficeMetadata): void {
 }
 
 /**
+ * A font as a caller gives it: the bytes of a TrueType or OpenType file. Anything else given (a file
+ * name, an empty file) is reported and the default font used, rather than passed over without a word.
+ */
+function fontBytes(value: unknown, name: string, reportWarning: (type: OfficeWarningType, info?: any) => void): Uint8Array | null {
+    if (value === undefined || value === null) return null;
+    if (value instanceof Uint8Array && value.byteLength) return value;
+    if (value instanceof ArrayBuffer && value.byteLength) return new Uint8Array(value);
+    const shown = value instanceof Uint8Array || value instanceof ArrayBuffer ? 'an empty file' : typeof value === 'string' ? value : Object.prototype.toString.call(value);
+    reportWarning(OfficeWarningType.INVALID_CONFIG_VALUE, { option: `pdfConfig.${name}`, value: shown, expected: 'the bytes of a TrueType or OpenType font file (a Uint8Array or ArrayBuffer)', fallback: undefined });
+    return null;
+}
+
+/**
+ * Embeds the fonts text is drawn in: the Standard-14 Helvetica and Courier faces, and before them the
+ * fonts given in `pdfConfig.fonts` and `pdfConfig.fallbackFonts`. A style with no font of its own is
+ * drawn in the regular one given, or in its Standard-14 font when that is not given either, the
+ * fallback fonts drawing what it lacks; code keeps Courier unless a `mono` font is given. A font file that
+ * cannot be read fails the conversion, naming which one: drawing in another font without a word would
+ * be a different document.
+ */
+async function embedFonts(pdf: any, lib: any, pc: FullGeneratorConfig['pdfConfig'], config: OfficeParserAST['config'], reportWarning: (type: OfficeWarningType, info?: any) => void): Promise<{ fonts: Fonts; custom: boolean }> {
+    const standard = (font: any): Face => ({ font, covers: winAnsiCovers });
+    const std: Record<FaceKey, Face> = {
+        regular: standard(await pdf.embedFont(lib.StandardFonts.Helvetica)),
+        bold: standard(await pdf.embedFont(lib.StandardFonts.HelveticaBold)),
+        italic: standard(await pdf.embedFont(lib.StandardFonts.HelveticaOblique)),
+        boldItalic: standard(await pdf.embedFont(lib.StandardFonts.HelveticaBoldOblique)),
+        mono: standard(await pdf.embedFont(lib.StandardFonts.Courier)),
+    };
+    const keys: FaceKey[] = ['regular', 'bold', 'italic', 'boldItalic', 'mono'];
+    // `fonts` names a file for each style. Given as anything else (a font's bytes alone, a file name) it is
+    // reported and no style has one; a style is read only as the object's own key.
+    const fontMap: unknown = pc.fonts;
+    const isMap = !!fontMap && typeof fontMap === 'object' && !Array.isArray(fontMap) && !ArrayBuffer.isView(fontMap) && !(fontMap instanceof ArrayBuffer);
+    if (!isMap && fontMap !== undefined && fontMap !== null) {
+        const shown = typeof fontMap === 'string' ? fontMap : Object.prototype.toString.call(fontMap);
+        reportWarning(OfficeWarningType.INVALID_CONFIG_VALUE, { option: 'pdfConfig.fonts', value: shown, expected: 'an object giving a font file for each style it names (regular, bold, italic, boldItalic, mono)', fallback: undefined });
+    }
+    const styleFont = (key: FaceKey): unknown => isMap && Object.prototype.hasOwnProperty.call(fontMap, key) ? (fontMap as Record<string, unknown>)[key] : undefined;
+    const given = keys.map(key => ({ name: `fonts.${key}`, key, bytes: fontBytes(styleFont(key), `fonts.${key}`, reportWarning) }));
+    const fallbackList: unknown[] = Array.isArray(pc.fallbackFonts) ? pc.fallbackFonts : [];
+    if (!Array.isArray(pc.fallbackFonts) && pc.fallbackFonts !== undefined && pc.fallbackFonts !== null) {
+        reportWarning(OfficeWarningType.INVALID_CONFIG_VALUE, { option: 'pdfConfig.fallbackFonts', value: Object.prototype.toString.call(pc.fallbackFonts), expected: 'a list of font files (an array)', fallback: undefined });
+    }
+    const fallbackGiven = fallbackList.map((value, i) => ({ name: `fallbackFonts[${i}]`, bytes: fontBytes(value, `fallbackFonts[${i}]`, reportWarning) }));
+    const custom = given.some(g => g.bytes) || fallbackGiven.some(g => g.bytes);
+    if (!custom) {
+        return { fonts: { regular: [std.regular], bold: [std.bold], italic: [std.italic], boldItalic: [std.boldItalic], mono: [std.mono] }, custom };
+    }
+
+    pdf.registerFontkit(await loadFontkit(config));
+    // The same bytes given for two styles are embedded once: the same view, or views of the same part of
+    // one buffer (an ArrayBuffer given twice is viewed anew each time).
+    const embedded = new Map<ArrayBufferLike, Map<string, Face>>();
+    const embed = async (name: string, bytes: Uint8Array | null): Promise<Face | undefined> => {
+        if (!bytes) return undefined;
+        const span = `${bytes.byteOffset}:${bytes.byteLength}`;
+        let inBuffer = embedded.get(bytes.buffer);
+        if (!inBuffer) embedded.set(bytes.buffer, inBuffer = new Map());
+        let face = inBuffer.get(span);
+        if (face) return face;
+        try {
+            const font = await pdf.embedFont(bytes, { subset: pc.subsetFonts !== false });
+            const set = new Set<number>(font.getCharacterSet());
+            face = { font, covers: cp => set.has(cp) };
+        } catch (e: any) {
+            throw getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, config, `pdfConfig.${name} could not be read as a TrueType or OpenType font (${e?.message || String(e)})`);
+        }
+        inBuffer.set(span, face);
+        return face;
+    };
+    const own = {} as Record<FaceKey, Face | undefined>;
+    for (const g of given) own[g.key] = await embed(g.name, g.bytes);
+    const fallbacks: Face[] = [];
+    for (const g of fallbackGiven) { const face = await embed(g.name, g.bytes); if (face) fallbacks.push(face); }
+
+    const chain = (key: FaceKey): Face[] => {
+        // A style is drawn in its own font, or in the regular one given. With neither (and for code,
+        // which stays in a fixed-width font unless a `mono` font is given) the Standard-14 font of the
+        // style comes first, and the fonts given draw only what it lacks.
+        const primary = key === 'mono' ? own.mono : (own[key] ?? own.regular);
+        const order = primary ? [primary, own.regular, ...fallbacks, std[key]] : [std[key], own.regular, ...fallbacks];
+        return order.filter((face, i): face is Face => !!face && order.indexOf(face) === i);
+    };
+    return { fonts: { regular: chain('regular'), bold: chain('bold'), italic: chain('italic'), boldItalic: chain('boldItalic'), mono: chain('mono') }, custom };
+}
+
+/**
+ * Writes the bookmark outline: one entry per heading, nested by heading level, each pointing at the
+ * place on its page where the heading starts.
+ */
+function writeOutline(pdf: any, lib: any, entries: OutlineEntry[]): void {
+    if (!entries.length) return;
+    interface Item { entry?: OutlineEntry; ref: any; children: Item[]; }
+    const context = pdf.context;
+    const root: Item = { ref: context.nextRef(), children: [] };
+    const open: { item: Item; level: number }[] = [{ item: root, level: 0 }];
+    for (const entry of entries) {
+        while (open[open.length - 1].level >= entry.level) open.pop();
+        const item: Item = { entry, ref: context.nextRef(), children: [] };
+        open[open.length - 1].item.children.push(item);
+        open.push({ item, level: entry.level });
+    }
+    const descendants = (item: Item): number => item.children.reduce((n, child) => n + 1 + descendants(child), 0);
+    const write = (parent: Item): void => {
+        parent.children.forEach((item, i) => {
+            const entry = item.entry!;
+            const dict: Record<string, any> = {
+                Title: lib.PDFHexString.fromText(entry.title),
+                Parent: parent.ref,
+                Dest: [entry.page.ref, 'XYZ', null, entry.top, null],
+            };
+            if (i > 0) dict.Prev = parent.children[i - 1].ref;
+            if (i < parent.children.length - 1) dict.Next = parent.children[i + 1].ref;
+            if (item.children.length) {
+                dict.First = item.children[0].ref;
+                dict.Last = item.children[item.children.length - 1].ref;
+                dict.Count = descendants(item);
+            }
+            context.assign(item.ref, context.obj(dict));
+            write(item);
+        });
+    };
+    write(root);
+    context.assign(root.ref, context.obj({
+        Type: 'Outlines',
+        First: root.children[0].ref,
+        Last: root.children[root.children.length - 1].ref,
+        Count: descendants(root),
+    }));
+    pdf.catalog.set(lib.PDFName.of('Outlines'), root.ref);
+}
+
+/**
  * Renders an AST to a PDF using the native pdf-lib layout engine.
  *
  * @returns the PDF as bytes.
@@ -910,14 +1299,18 @@ export async function renderNativePdf(ast: OfficeParserAST, config: FullGenerato
     const pdf = await lib.PDFDocument.create({ updateMetadata: false });
     applyMetadata(pdf, metadata);
 
-    const fonts: Fonts = {
-        regular: await pdf.embedFont(lib.StandardFonts.Helvetica),
-        bold: await pdf.embedFont(lib.StandardFonts.HelveticaBold),
-        italic: await pdf.embedFont(lib.StandardFonts.HelveticaOblique),
-        boldItalic: await pdf.embedFont(lib.StandardFonts.HelveticaBoldOblique),
-        mono: await pdf.embedFont(lib.StandardFonts.Courier),
-    };
+    const pc = config.pdfConfig;
+    const { fonts, custom: customFonts } = await embedFonts(pdf, lib, pc, ast.config, reportWarning);
+    const returnGeneratorRuntime = customFonts ? borrowGeneratorRuntime() : () => { /* nothing lent */ };
+    try {
+        return await drawDocument(pdf, lib, fonts, customFonts, ast, config, reportWarning);
+    } finally {
+        returnGeneratorRuntime();
+    }
+}
 
+/** Lays the document out on the pages of `pdf` and returns its bytes. */
+async function drawDocument(pdf: any, lib: any, fonts: Fonts, customFonts: boolean, ast: OfficeParserAST, config: FullGeneratorConfig, reportWarning: (type: OfficeWarningType, info?: any) => void): Promise<Uint8Array> {
     const pc = config.pdfConfig;
     const paper = paperSizePt(pc.format);
     // Orient the FORMAT by swapping its dimensions when landscape (the same `landscape ? h : w` the
@@ -937,7 +1330,7 @@ export async function renderNativePdf(ast: OfficeParserAST, config: FullGenerato
     const mv = (v: string | number | undefined) => toPoints(v, mdef);
     const margin = { top: mv(pc.margin?.top), right: mv(pc.margin?.right), bottom: mv(pc.margin?.bottom), left: mv(pc.margin?.left) };
 
-    const layout = new NativeLayout(pdf, lib, fonts, w, h, margin, config, ast, reportWarning);
+    const layout = new NativeLayout(pdf, lib, fonts, w, h, margin, config, ast, reportWarning, customFonts);
     // The native engine reflows a single stream and has no running page furniture, so master-page
     // headers/footers (ast.auxiliary, present only when parsing kept them) are drawn once - headers
     // before the body, footers after - rather than dropped. Footnote/endnote bodies gathered during the
@@ -949,6 +1342,8 @@ export async function renderNativePdf(ast: OfficeParserAST, config: FullGenerato
     for (const node of ast.content) await layout.render(node, true);
     for (const n of ast.auxiliary?.footers || []) await layout.render(n);
     await layout.flushNotes();
+    layout.reportLostCharacters();
+    if (pc.outline) writeOutline(pdf, lib, layout.outlineEntries);
 
     return await pdf.save();
 }

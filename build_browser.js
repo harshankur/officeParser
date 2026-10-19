@@ -44,6 +44,8 @@ function getBrowserConfig(isSlim, externalPdfLib = false) {
             // pdf-lib (native PDF engine) is an optional peer dep: keep it out of the prebuilt
             // bundle. A self-bundling consumer with pdf-lib installed resolves the real package.
             'pdf-lib': path.resolve(__dirname, 'scripts/browser-stubs/pdf-lib.js'),
+            // fontkit (the native PDF engine's font embedding) is another, kept out the same way.
+            '@pdf-lib/fontkit': path.resolve(__dirname, 'scripts/browser-stubs/fontkit.js'),
             // Left unresolved, this reaches the output as a bare Node built-in and a consumer's
             // bundler reports it as missing, even though the only code path that imports it is
             // gated on running under Node.
@@ -102,13 +104,15 @@ if (typeof setImmediate === 'undefined') {
         config.alias['tesseract.js'] = path.resolve(__dirname, 'scripts/browser-stubs/tesseract.js');
     }
 
-    // Dedicated native-PDF entry: leave pdf-lib EXTERNAL instead of aliasing it to the throwing stub,
-    // so a self-bundling consumer that installs pdf-lib gets the real native PDF engine in the browser
-    // (the dynamic `import('pdf-lib')` survives for their bundler to resolve). The default bundles keep
+    // Dedicated native-PDF entry: leave pdf-lib (and fontkit, which embeds the fonts it is given)
+    // EXTERNAL instead of aliasing it to the throwing stub, so a self-bundling consumer that installs
+    // pdf-lib gets the real native PDF engine in the browser (the dynamic `import('pdf-lib')` survives
+    // for their bundler to resolve; `import('@pdf-lib/fontkit')` is reached only when fonts are given). The default bundles keep
     // the stub so they stay self-contained and never force pdf-lib on a consumer that does not want it.
     if (externalPdfLib) {
         delete config.alias['pdf-lib'];
-        config.external = ['pdf-lib'];
+        delete config.alias['@pdf-lib/fontkit'];
+        config.external = ['pdf-lib', '@pdf-lib/fontkit'];
     }
 
     return config;

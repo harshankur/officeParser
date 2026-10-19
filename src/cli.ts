@@ -75,7 +75,7 @@ const knownParserBooleans = new Set([
 const knownGeneratorBooleans = new Set([
     'includeFormatting', 'generateIds', 'renderMetadata', 'includeImages', 'includeCharts', 'ignoreInternalLinks',
     // Dotted generator booleans, same rationale as the parser set above.
-    'pdfConfig.tagged', 'pdfConfig.outline', 'pdfConfig.landscape', 'pdfConfig.printBackground', 'pdfConfig.displayHeaderFooter',
+    'pdfConfig.tagged', 'pdfConfig.outline', 'pdfConfig.subsetFonts', 'pdfConfig.landscape', 'pdfConfig.printBackground', 'pdfConfig.displayHeaderFooter',
     'docxConfig.landscape', 'odtConfig.landscape',
     'texConfig.standalone', 'texConfig.bundle', 'texConfig.embedImages', 'texConfig.numberSections', 'texConfig.landscape',
     'textConfig.preserveLayout', 'textConfig.renderNotes',
@@ -246,9 +246,35 @@ function numbersAsNumbers(target: Record<string, any>, defaults: unknown): void 
     }
 }
 
+/**
+ * The native PDF engine's fonts are given on the command line as paths to font files
+ * (`--pdfConfig.fonts.regular=NotoSans-Regular.ttf`, `--pdfConfig.fallbackFonts=a.ttf,b.otf`); the
+ * generator takes their bytes. A path that cannot be read ends the run, naming the option.
+ */
+function fontPathsAsBytes(pdfConfig: Record<string, any> | undefined): void {
+    if (!pdfConfig) return;
+    const read = (option: string, file: unknown): Uint8Array => {
+        try {
+            return new Uint8Array(fs.readFileSync(String(file)));
+        } catch (e: any) {
+            console.error(`Could not read the font file given as --pdfConfig.${option}: ${file} (${e?.code || e?.message})`);
+            process.exit(1);
+        }
+    };
+    if (pdfConfig.fonts && typeof pdfConfig.fonts === 'object') {
+        for (const style of Object.keys(pdfConfig.fonts)) {
+            if (typeof pdfConfig.fonts[style] === 'string') pdfConfig.fonts[style] = read(`fonts.${style}`, pdfConfig.fonts[style]);
+        }
+    }
+    if (typeof pdfConfig.fallbackFonts === 'string') {
+        pdfConfig.fallbackFonts = pdfConfig.fallbackFonts.split(',').map((file: string) => file.trim()).filter(Boolean).map((file: string) => read('fallbackFonts', file));
+    }
+}
+
 if (fileArg && !showHelp) {
     numbersAsNumbers(config, DEFAULT_OFFICE_PARSER_CONFIG);
     numbersAsNumbers(generatorConfig, DEFAULT_GENERATOR_CONFIG);
+    fontPathsAsBytes(generatorConfig.pdfConfig);
     // Resolve output format prioritizing: --to > --format
     let outputFormat: string | undefined;
     if (toFlagOption) {
@@ -413,6 +439,10 @@ if (fileArg && !showHelp) {
     console.log('');
     console.log('Advanced Nested Config Examples:');
     console.log('  --pdfConfig.engine=native                   PDF engine: html (Puppeteer) | native (pdf-lib, no browser) (default: html)');
+    console.log('  --pdfConfig.fonts.regular=Sans.ttf          Font file the native engine draws in; also .bold, .italic, .boldItalic, .mono');
+    console.log('  --pdfConfig.fallbackFonts=a.ttf,b.otf       Font files tried, in order, for characters the fonts before them lack (native engine)');
+    console.log('  --pdfConfig.subsetFonts=false               Embed whole font files, not only the glyphs used (default: true)');
+    console.log('  --pdfConfig.outline                         Write a bookmark outline from the headings (default: false)');
     console.log('  --pdfConfig.format=Letter                   PDF paper format (A4 | Letter | Legal | A3 ...), both engines');
     console.log('  --chunksConfig.strategy=fixed-size          Chunking strategy (fixed-size | document-structure | semantic)');
     console.log('  --mdConfig.dialect=github                   Markdown dialect (extended | github | gitlab | obsidian | pandoc | commonmark)');

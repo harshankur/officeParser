@@ -163,6 +163,9 @@ const DEFAULT_HTML_GENERATOR_CONFIG: DeepRequired<HtmlGeneratorConfig> = {
  */
 const DEFAULT_PDF_GENERATOR_CONFIG: DeepRequired<PdfGeneratorConfig> = {
     engine: 'html',
+    fonts: { regular: null, bold: null, italic: null, boldItalic: null, mono: null },
+    fallbackFonts: [],
+    subsetFonts: true,
     tagged: true,
     outline: false,
     format: 'A4',

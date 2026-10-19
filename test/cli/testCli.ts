@@ -869,6 +869,23 @@ async function runTests() {
     const inlineOk = res49b.status === 0 && !res49b.stdout.includes('data:image') && !res49b.stderr.includes('UNRECOGNIZED_CONFIG_OPTION');
     results.push({ name: 'CLI: --maxInlineImageBytes reaches the generator', status: inlineOk ? 'PASS' : 'FAIL', details: inlineOk ? 'no picture inlined' : `exit ${res49b.status}, stderr: ${res49b.stderr.slice(0, 160)}`, duration: 0 });
 
+    // 50. The native PDF engine's fonts are font file paths on the command line, read to bytes for the
+    //     generator; an outline is asked for with a bare flag; a path that cannot be read ends the run.
+    console.log('Test 50: --pdfConfig.fonts.* / --pdfConfig.fallbackFonts / --pdfConfig.outline');
+    const t50 = Date.now();
+    const greekMd = fsPath.join(RESULTS_DIR, 'greek.md');
+    fs.writeFileSync(greekMd, '# Τίτλος\n\nΚαλημέρα, Привет.\n');
+    const fontFile = fsPath.join(ROOT, 'node_modules', 'pdfjs-dist', 'standard_fonts', 'LiberationSans-Regular.ttf');
+    const fontPdf = fsPath.join(RESULTS_DIR, 'fonts.pdf');
+    if (fs.existsSync(fontPdf)) fs.unlinkSync(fontPdf);
+    const res50 = runCliRaw([greekMd, '--to=pdf', '--pdfConfig.engine=native', `--pdfConfig.fonts.regular=${fontFile}`, `--pdfConfig.fallbackFonts=${fontFile}`, '--pdfConfig.outline', `--output=${fontPdf}`, '--verbose']);
+    const res50back = fs.existsSync(fontPdf) ? runCliRaw([fontPdf, '--to=text']) : { status: 1, stdout: '', stderr: 'no PDF written' };
+    const fontsOk = res50.status === 0 && res50back.status === 0 && res50back.stdout.includes('Καλημέρα') && res50back.stdout.includes('Привет') && !res50.stderr.includes('CONTENT_NOT_REPRESENTABLE');
+    results.push({ name: 'CLI: font files reach the native PDF engine', status: fontsOk ? 'PASS' : 'FAIL', details: fontsOk ? 'Greek and Cyrillic read back from the PDF' : `exit ${res50.status}/${res50back.status}, text: ${res50back.stdout.slice(0, 60)}, stderr: ${res50.stderr.slice(0, 160)}`, duration: Date.now() - t50 });
+    const res50bad = runCliRaw([greekMd, '--to=pdf', '--pdfConfig.engine=native', '--pdfConfig.fonts.regular=/no/such/font.ttf', `--output=${fontPdf}`]);
+    const badFontOk = res50bad.status === 1 && res50bad.stderr.includes('--pdfConfig.fonts.regular');
+    results.push({ name: 'CLI: an unreadable font file ends the run, naming the option', status: badFontOk ? 'PASS' : 'FAIL', details: badFontOk ? 'exit 1 naming the option' : `exit ${res50bad.status}, stderr: ${res50bad.stderr.slice(0, 160)}`, duration: 0 });
+
     // Print summary report
     const logger = new DualLogger();
     const failedCount = generateReport(results, logger);

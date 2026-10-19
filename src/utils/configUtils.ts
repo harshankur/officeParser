@@ -308,6 +308,8 @@ const RECOGNIZED_NESTED_GENERATOR_KEYS: Record<string, Set<string>> = lookupTabl
         ...Object.keys(DEFAULT_SEMANTIC_CHUNKING_CONFIG), 'embeddingFunction',
     ]),
     metadataOverrides: new Set(['title', 'author', 'description', 'subject', 'keywords', 'lastModifiedBy', 'created', 'modified', 'language', 'custom']),
+    // A container inside one: its keys are checked as well.
+    'pdfConfig.fonts': new Set(Object.keys(DEFAULT_GENERATOR_CONFIG.pdfConfig.fonts)),
 });
 
 /**
@@ -323,7 +325,14 @@ function unknownGeneratorKeys(userConfig: Record<string, any>): string[] {
         const container = userConfig[key];
         if (!recognized || !container || typeof container !== 'object' || Array.isArray(container)) continue;
         for (const inner of Object.keys(container)) {
-            if (!PROTOTYPE_POLLUTION_KEYS.has(inner) && !recognized.has(inner)) unknown.push(`${key}.${inner}`);
+            if (PROTOTYPE_POLLUTION_KEYS.has(inner)) continue;
+            if (!recognized.has(inner)) { unknown.push(`${key}.${inner}`); continue; }
+            const deeper = RECOGNIZED_NESTED_GENERATOR_KEYS[`${key}.${inner}`];
+            const nested = container[inner];
+            if (!deeper || !nested || typeof nested !== 'object' || Array.isArray(nested) || ArrayBuffer.isView(nested)) continue;
+            for (const leaf of Object.keys(nested)) {
+                if (!PROTOTYPE_POLLUTION_KEYS.has(leaf) && !deeper.has(leaf)) unknown.push(`${key}.${inner}.${leaf}`);
+            }
         }
     }
     return unknown;
@@ -404,7 +413,9 @@ export function resolveGeneratorConfig<D extends string>(
                         !(source[key] instanceof Function) &&
                         !(source[key] instanceof Date) &&
                         !(source[key] instanceof RegExp) &&
-                        !(source[key] instanceof Buffer)
+                        // A font's bytes are a value, not a container to merge key by key.
+                        !ArrayBuffer.isView(source[key]) &&
+                        !(source[key] instanceof ArrayBuffer)
                     ) {
                         if (!target[key] || typeof target[key] !== 'object') {
                             target[key] = {};

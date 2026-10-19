@@ -4163,6 +4163,15 @@ async function htmlReadingTests() {
     await scalesLinearly('epub: paragraphs holding tables holding paragraphs, repeated,', n => epubOf('<p>a<table><tr><td><p>b</p></td></tr></table>c</p>'.repeat(n)), 5000);
     await scalesLinearly('epub: paragraphs nested 200 deep, repeated,', n => epubOf(('<p>'.repeat(200) + 'x' + '</p>'.repeat(200)).repeat(n)), 100);
     await scalesLinearly('epub: unclosed comments before paragraphs', n => epubOf('<!--<p>'.repeat(n)), 20000);
+    // A word wider than the line is split by a running width: each character measured once, so a long
+    // word, or one of combining marks that add no width, does not take time quadratic in its length.
+    const nativeWord = (word: string) => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'text', text: word }] }]), 'pdf', { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any);
+    await scalesLinearly('pdf (native): one long word', n => nativeWord('x'.repeat(n)), 5000);
+    await scalesLinearly('pdf (native): a word of combining marks', n => nativeWord('e' + '\u0301'.repeat(n)), 5000);
+    // With a font given, a stretch is shaped (fontkit), which grows with the square of its length on marks.
+    const liberation = new Uint8Array(fs.readFileSync(path.join(path.dirname(require.resolve('pdfjs-dist/package.json')), 'standard_fonts', 'LiberationSans-Regular.ttf')));
+    await scalesLinearly('pdf (native, a font given): a letter under thousands of combining marks', n => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'e' + '\u0301'.repeat(n) }] }]), 'pdf', { pdfConfig: { engine: 'native', fonts: { regular: liberation } }, onWarning: () => {} } as any), 5000);
+    await scalesLinearly('pdf (native): a long word in a code block', n => OfficeGenerator.generate(astWith([{ type: 'code', text: 'x'.repeat(n), children: [{ type: 'text', text: 'x'.repeat(n) }] }]), 'pdf', { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any), 5000);
 }
 
 async function main() {
