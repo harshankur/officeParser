@@ -3622,6 +3622,104 @@ async function parserHardeningTests() {
     check('template: a 100-character value at 200,000 placeholders is refused', repeatError?.officeIssue?.code === 'OUTPUT_TOO_LARGE' && Date.now() - repeatStarted < 5000, `${Date.now() - repeatStarted}ms ${repeatError}`);
     const fewRepeats = await OfficeTemplate.render(docxOf(`<w:p><w:r><w:t>${'{{a}} '.repeat(10)}</w:t></w:r></w:p>`), { data: { a: 'x'.repeat(1000) } });
     check('template: a long value at ten placeholders renders', fewRepeats instanceof Uint8Array && fewRepeats.length > 0, String(fewRepeats));
+    // Templates with block tags: every scan is forward-only, nesting is bounded, repetition is charged.
+    const renderQuiet = async (body: string, data: any, cfg: any = {}, parts: Record<string, string> = {}) => {
+        try { return { out: await OfficeTemplate.render(docxOf(body, parts), { data, onWarning: () => { }, ...cfg }) as Uint8Array, code: undefined }; }
+        catch (e: any) { return { out: undefined, code: e?.officeIssue?.code ?? String(e) }; }
+    };
+    const tplPara = (t: string) => `<w:p><w:r><w:t>${t}</w:t></w:r></w:p>`;
+    for (const [label, body, data, wanted, parts, cfg] of [
+        ['200,000 unclosed if tags in one paragraph', tplPara('{{ if x }}'.repeat(200000)), { x: 1 }, 'MAX_NESTING_DEPTH_EXCEEDED'],
+        ['200,000 closing tags with no block', tplPara('{{ endif }}'.repeat(200000)), {}, 'TEMPLATE_SYNTAX'],
+        ['60,000 sibling inline blocks', tplPara('{{ if x }}a{{ endif }}'.repeat(60000)), { x: 1 }, undefined],
+        ['30,000 paragraph blocks', (tplPara('{{ if x }}') + tplPara('a') + tplPara('{{ endif }}')).repeat(30000), { x: 0 }, undefined],
+        ['a table of 30,000 rows each in a row loop', `<w:tbl>${`<w:tr><w:tc>${tplPara('{{ for v in vs }}{{ v }}')}</w:tc><w:tc>${tplPara('{{ endfor }}')}</w:tc></w:tr>`.repeat(30000)}</w:tbl>`, { vs: [1] }, undefined],
+        ['a condition of 100,000 ands', tplPara(`{{ if ${'a and '.repeat(100000)}a }}y{{ endif }}`), { a: true }, undefined],
+        ['a condition of 100,000 open parentheses', tplPara(`{{ if ${'('.repeat(100000)}a }}y{{ endif }}`), { a: true }, 'TEMPLATE_SYNTAX'],
+        ['a condition of 100,000 nots', tplPara(`{{ if ${'not '.repeat(100000)}a }}y{{ endif }}`), { a: true }, 'TEMPLATE_SYNTAX'],
+        ['a condition with an unclosed 100,000-character string', tplPara(`{{ if a == ${'"'.repeat(1)}${'x'.repeat(100000)} }}y{{ endif }}`), { a: 'x' }, 'TEMPLATE_SYNTAX'],
+        ['a path of 50,000 steps', tplPara(`{{ if ${'a.'.repeat(50000)}a }}y{{ endif }}`), { a: 1 }, undefined],
+        ['a block before 160,000 unclosed <w:p', tplPara('{{ if a }}x{{ endif }}') + '<w:p '.repeat(160000), { a: 1 }, 'TEMPLATE_SYNTAX'],
+        ['a block before 100,000 start tags with an unclosed quote', tplPara('{{ if a }}x{{ endif }}') + '<w:x a="'.repeat(100000), { a: 1 }, 'TEMPLATE_SYNTAX'],
+        ['a block before 100,000 unclosed elements', tplPara('{{ if a }}x{{ endif }}') + '<w:x>'.repeat(100000), { a: 1 }, 'TEMPLATE_SYNTAX'],
+        ['a block among 200,000 fields in one paragraph', tplPara('{{ if a }}' + '{{a}}'.repeat(200000) + '{{ endif }}'), { a: 1 }, undefined],
+        ['three nested loops over 1,000 items with nothing to write', tplPara('{{ for a in xs }}{{ for b in xs }}{{ for c in xs }}{{ endfor }}{{ endfor }}{{ endfor }}'), { xs: Array(1000).fill(0) }, 'OUTPUT_TOO_LARGE'],
+        ['two nested loops over 3,000 items writing a paragraph each', tplPara('{{ for a in xs }}') + tplPara('{{ for b in xs }}') + tplPara('row') + tplPara('{{ endfor }}') + tplPara('{{ endfor }}'), { xs: Array(3000).fill(0) }, 'OUTPUT_TOO_LARGE'],
+        ['a loop over 1,000,000 items', tplPara('{{ for a in xs }}{{ endfor }}'), { xs: Array(1000000).fill(0) }, undefined],
+        ['an if with 48,000 else ifs over paragraphs', tplPara('x {{ if c }}') + Array.from({ length: 48000 }, (_, i) => tplPara(`{{ else if c${i} }}`) + tplPara('y')).join('') + tplPara('{{ endif }}'), { c: true }, undefined],
+        ['8,000 tags in 8,000 nested smart tags', '<w:p><w:r><w:t>{{ if a }}A</w:t></w:r>' + '<w:smartTag>'.repeat(8000) + Array.from({ length: 8000 }, (_, i) => `<w:r><w:t>{{ else if c${i} }}x</w:t></w:r>`).join('') + '</w:smartTag>'.repeat(8000) + '<w:r><w:t>{{ endif }}</w:t></w:r></w:p>', { a: 1 }, 'TEMPLATE_SYNTAX'],
+        ['two nested loops over 400 items evaluating 1,000 empty fields', tplPara('{{ for a in xs }}{{ for b in xs }}' + '{{ v }}'.repeat(1000) + '{{ endfor }}{{ endfor }}'), { xs: Array(400).fill(0), v: '' }, 'OUTPUT_TOO_LARGE'],
+        ['two nested loops over 300 items evaluating 1,000 empty branches', tplPara('{{ for a in xs }}{{ for b in xs }}' + '{{ if f }}{{ endif }}'.repeat(1000) + '{{ endfor }}{{ endfor }}'), { xs: Array(300).fill(0), f: false }, 'OUTPUT_TOO_LARGE'],
+        ['a loop referring 2,000 times to a 300 KB footnote', tplPara('{{ for i in xs }}') + '<w:p><w:r><w:footnoteReference w:id="1"/></w:r></w:p>' + tplPara('{{ endfor }}'), { xs: Array(2000).fill(0) }, 'OUTPUT_TOO_LARGE',
+            { 'word/footnotes.xml': `<?xml version="1.0"?><w:footnotes ${W}><w:footnote w:id="1">${tplPara('x'.repeat(300000))}</w:footnote></w:footnotes>` }],
+        ['a missing 100,000-character field kept as typed in 1,000 passes', tplPara(`{{ for i in xs }}{{ ${'z'.repeat(100000)} }}{{ endfor }}`), { xs: Array(1000).fill(0) }, 'OUTPUT_TOO_LARGE'],
+        ['a block with a missing 100,000-character condition kept as typed in 1,000 passes', tplPara(`{{ for i in xs }}{{ if ${'z'.repeat(100000)} }}x{{ endif }}{{ endfor }}`), { xs: Array(1000).fill(0) }, 'OUTPUT_TOO_LARGE'],
+        ['a 10,000-operand condition tested in nested loops over 300 items', tplPara(`{{ for x in xs }}{{ for y in xs }}{{ if ${'a and '.repeat(9999)}a }}{{ endif }}{{ endfor }}{{ endfor }}`), { xs: Array(300).fill(0), a: true }, 'OUTPUT_TOO_LARGE'],
+        ['16,000 tags in one run with 16 KB of run properties', `<w:p><w:r><w:rPr><w:rFonts w:ascii="${'A'.repeat(16000)}"/></w:rPr><w:t>${'{{ if a }}x{{ endif }}'.repeat(16000)}</w:t></w:r></w:p>`, { a: true }, 'OUTPUT_TOO_LARGE'],
+        ['a kept block passing 50,000 else ifs in each of 20,000 passes', tplPara('{{ for o in xs }}') + tplPara('{{ if a }}') + tplPara('{{ for y in nope }}') + tplPara('B') + tplPara('{{ endfor }}' + Array.from({ length: 50000 }, (_, i) => `{{ else if b${i} }}`).join('')) + tplPara('{{ endif }}') + tplPara('{{ endfor }}'), { xs: Array(20000).fill(0), a: true }, 'OUTPUT_TOO_LARGE'],
+        ['two 10 MB strings compared in 10,000 passes', tplPara('{{ for i in xs }}{{ if a == b }}Y{{ endif }}{{ endfor }}'), { xs: Array(10000).fill(0), a: 'x'.repeat(10_000_000) + 'a', b: 'x'.repeat(10_000_000) + 'b' }, 'OUTPUT_TOO_LARGE'],
+        ['200,000 paragraphs before one block', tplPara('a').repeat(200000) + tplPara('{{ if x }}y{{ endif }}'), { x: true }, undefined],
+        ['400,000 comments before one block', '<!---->'.repeat(400000) + tplPara('{{ if x }}y{{ endif }}'), { x: true }, undefined],
+        ['a 1,000,000-character loop name read 10 times in each of 100,000 passes', tplPara(`{{ for ${'n'.repeat(1000000)} in xs }}${`{{ ${'n'.repeat(1000000)} }}`.repeat(10)}{{ endfor }}`), { xs: Array(100000).fill(0) }, 'OUTPUT_TOO_LARGE'],
+        ['a row 10,000 wrappers deep repeated 100,000 times', '<w:customXml w:element="e">'.repeat(10000) + '<w:p><w:r><w:t>{{ for x in xs }}</w:t></w:r><w:tr/><w:r><w:t>{{ endfor }}</w:t></w:r></w:p>' + '</w:customXml>'.repeat(10000), { xs: Array(100000).fill(0) }, undefined],
+        ['60 nested blocks around 1 MB, each kept on its own pass', tplPara('{{ for x in xs }}') + Array.from({ length: 60 }, (_, i) => tplPara(`{{ if x.c${i} }}`)).join('') + tplPara('Z'.repeat(1000000)) + tplPara('{{ endif }}').repeat(60) + tplPara('{{ endfor }}'), { xs: Array.from({ length: 60 }, (_, i) => Object.fromEntries(Array.from({ length: i }, (_, j) => [`c${j}`, true]))) }, 'OUTPUT_TOO_LARGE'],
+        ['a quoted string holding 80,000 no-break spaces inside guillemets', tplPara(`{{ if x == \u00ABa${'\u00A0'.repeat(80000)}b\u00BB }}Y{{ endif }}`), { x: 'a' }, undefined],
+        ['16 headers each copying run properties into 1,900 cuts', tplPara('body'), { a: true }, 'OUTPUT_TOO_LARGE',
+            Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`word/header${i + 1}.xml`, `<?xml version="1.0"?><w:hdr ${W}><w:p><w:r><w:rPr><w:rFonts w:ascii="${'A'.repeat(4000)}"/></w:rPr><w:t>${'{{ if a }}x{{ endif }}y'.repeat(1900)}</w:t></w:r></w:p></w:hdr>`]))],
+        ['a value of 15,000,000 line breaks', tplPara('{{ v }}'), { v: '\n'.repeat(15_000_000) }, 'OUTPUT_TOO_LARGE'],
+        ['3,000,000 empty text runs beside a field', '<w:p><w:r><w:t>{{ a }}</w:t></w:r>' + '<w:r><w:t/></w:r>'.repeat(3_000_000) + '</w:p>', { a: 1 }, 'XML_ELEMENT_LIMIT_EXCEEDED'],
+        ['a 100,000-placeholder number picture written in 1,000 passes', tplPara(`{{ for i in xs }}{{ v | format "${'0'.repeat(100000)}" }}{{ endfor }}`), { xs: Array(1000).fill(0), v: 1 }, 'OUTPUT_TOO_LARGE'],
+        ['a date picture of 100,000 parts', tplPara(`{{ v | format "${'d M y '.repeat(20000)}" }}`), { v: '2026-11-01' }, undefined],
+        ['a chain of 10,000 filters', tplPara(`{{ v ${'| upper '.repeat(10000)}}}`), { v: 'abc' }, undefined],
+        ['upper on 1 MB of text in 1,000 passes', tplPara('{{ for i in xs }}{{ v | upper }}{{ endfor }}'), { xs: Array(1000).fill(0), v: 'x'.repeat(1_000_000) }, 'OUTPUT_TOO_LARGE'],
+        ['a 1,000,000-digit text that is no number given to a number picture', tplPara('{{ v | format "0" }}'), { v: '1'.repeat(1_000_000) + 'x' }, 'TEMPLATE_DATA_INVALID'],
+        ['prose of 100,000 pipes between delimiters', tplPara(`{{ a ${'| '.repeat(100000)}}} {{ b }}`), { b: 1 }, undefined],
+        ['a picture with 100,000 unclosed quotes', tplPara(`{{ v | format "0${"'".repeat(1)}${'x'.repeat(100000)}" }}`), { v: 1 }, 'TEMPLATE_SYNTAX'],
+        ['the smallest number through a number picture in 400,000 passes', tplPara('{{ for i in xs }}{{ v | format "0" }}{{ endfor }}'), { xs: Array(400000).fill(0), v: 5e-324 }, 'OUTPUT_TOO_LARGE'],
+        ['a text of a tiny number through a number picture in 100,000 passes', tplPara('{{ for i in xs }}{{ v | format "#,##0.00" }}{{ endfor }}'), { xs: Array(100000).fill(0), v: '1.2345e-300' }, undefined],
+        ['an if with 32,000 else ifs 32,000 elements deep, closed outside them', '<w:customXml w:element="e">'.repeat(32000) + tplPara('{{ if a }}' + '{{ else if a }}'.repeat(32000)) + '</w:customXml>'.repeat(32000) + tplPara('{{ endif }}'), { a: true }, 'TEMPLATE_SYNTAX'],
+        ['32,000 else-if paragraphs 32,000 elements deep, closed outside them', '<w:customXml w:element="e">'.repeat(32000) + tplPara('{{ if a }}') + tplPara('{{ else if a }}').repeat(32000) + '</w:customXml>'.repeat(32000) + tplPara('{{ endif }}'), { a: true }, 'TEMPLATE_SYNTAX'],
+        ['64,000 nested elements with paragraph ids in a loop', tplPara('{{ for a in xs }}') + '<w:p>' + '<w:customXml w:element="e" w14:paraId="00000001">'.repeat(64000) + '<w:r><w:t>x</w:t></w:r>' + '</w:customXml>'.repeat(64000) + '</w:p>' + tplPara('{{ endfor }}'), { xs: [1] }, undefined],
+        ['64,000 nested bookmark ends of a range crossing a loop, around a field', '<w:p><w:bookmarkStart w:id="5" w:name="bm"/></w:p>' + tplPara('{{ for a in xs }}') + '<w:p>' + '<w:bookmarkEnd w:id="5">'.repeat(64000) + '<w:r><w:t>{{ a }}</w:t></w:r>' + '</w:bookmarkEnd>'.repeat(64000) + '</w:p>' + tplPara('{{ endfor }}'), { xs: [1] }, undefined],
+        ['16,000,000 fields in one run (117 KB of zip)', tplPara('{{a}}'.repeat(16_000_000)), { a: 1 }, 'XML_ELEMENT_LIMIT_EXCEEDED'],
+        ['4,000,000 inline blocks in one run', tplPara('{{ if a }}k{{ endif }}'.repeat(4_000_000)), { a: 1 }, 'XML_ELEMENT_LIMIT_EXCEEDED'],
+        ['one condition of 4,000,000 operands', tplPara(`{{ if a${' and a'.repeat(4_000_000)} }}x{{ endif }}`), { a: 1 }, 'XML_ELEMENT_LIMIT_EXCEEDED'],
+        ['one field through 3,000,000 filters', tplPara(`{{ a${' | upper'.repeat(3_000_000)} }}`), { a: 'x' }, 'XML_ELEMENT_LIMIT_EXCEEDED'],
+        ['one filter given 3,000,000 arguments', tplPara(`{{ a | upper${' 1'.repeat(3_000_000)} }}`), { a: 'x' }, 'XML_ELEMENT_LIMIT_EXCEEDED'],
+        ['one date picture of 4,000,000 parts', tplPara(`{{ a | format "${'dM'.repeat(2_000_000)}" }}`), { a: '2026-01-01' }, 'XML_ELEMENT_LIMIT_EXCEEDED'],
+        ['one 1 MB number text through a number picture in 50,000 passes', tplPara('{{ for i in xs }}{{ v | format "0" }}{{ endfor }}'), { xs: Array(50000).fill(0), v: '1' + ' '.repeat(1_000_000) }, undefined],
+        ['a list of 1 MB number texts through a number picture', tplPara('{{ for i in xs }}{{ i | format "0" }}{{ endfor }}'), { xs: Array(2000).fill('1' + ' '.repeat(1_000_000)) }, 'OUTPUT_TOO_LARGE'],
+        ['a list of dates each followed by 1 MB of spaces through a date picture', tplPara('{{ for i in xs }}{{ i | format "d" }}{{ endfor }}'), { xs: Array(2000).fill('2026-01-01' + ' '.repeat(1_000_000)) }, 'OUTPUT_TOO_LARGE'],
+        ['an if, then 40,000 else ifs in a run 40,000 links deep', `<w:p><w:r><w:t>{{ if a }}</w:t></w:r>${'<w:hyperlink>'.repeat(40000)}<w:r><w:t>${'{{ else if a }}'.repeat(40000)}{{ endif }}</w:t></w:r>${'</w:hyperlink>'.repeat(40000)}</w:p>`, { a: false }, 'TEMPLATE_SYNTAX'],
+        ['an if, then 40,000 else-if paragraphs 40,000 content controls deep', tplPara('{{ if a }}') + '<w:sdt><w:sdtContent>'.repeat(40000) + tplPara('{{ else if a }}').repeat(40000) + '</w:sdtContent></w:sdt>'.repeat(40000) + tplPara('{{ endif }}'), { a: false }, 'TEMPLATE_SYNTAX'],
+        ['40,000 inline blocks 40,000 content controls deep', '<w:sdt><w:sdtContent>'.repeat(40000) + tplPara('{{ if a }}x{{ endif }}').repeat(40000) + '</w:sdtContent></w:sdt>'.repeat(40000), { a: 1 }, undefined],
+        ['20,000 paragraph blocks 20,000 content controls deep', '<w:sdt><w:sdtContent>'.repeat(20000) + (tplPara('{{ if a }}') + tplPara('x') + tplPara('{{ endif }}')).repeat(20000) + '</w:sdtContent></w:sdt>'.repeat(20000), { a: 1 }, undefined],
+        ['3,000,000 nested text runs beside a block', tplPara('{{ if a }}x{{ endif }}') + '<w:t>'.repeat(3_000_000) + '</w:t>'.repeat(3_000_000), { a: 1 }, 'XML_ELEMENT_LIMIT_EXCEEDED'],
+        ['3,000,000 nested text runs in a header without a tag (copied, never read)', tplPara('{{ a }}'), { a: 1 }, undefined, { 'word/header1.xml': `<?xml version="1.0"?><w:hdr ${W}><w:p><w:r>${'<w:t>'.repeat(3_000_000)}${'</w:t>'.repeat(3_000_000)}</w:r></w:p></w:hdr>` }],
+        ['a loop repeating an id beside a header of 300,000 paragraph ids, the bound 200,000', tplPara('{{ for x in xs }}') + '<w:p><w:r><w:drawing><wp:inline><wp:docPr id="1" name="p"/></wp:inline></w:drawing></w:r></w:p>' + tplPara('{{ endfor }}'), { xs: [1, 2] }, 'XML_ELEMENT_LIMIT_EXCEEDED',
+            { 'word/header1.xml': `<?xml version="1.0"?><w:hdr ${W} xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">${'<w:p w14:paraId="0000000A"/>'.repeat(300_000)}</w:hdr>` }, { decompressionLimits: { maxXmlElements: 200_000 } }],
+        ['a loop repeating an id beside a header of one field and 300,000 distinct paragraph ids, the bound 200,000', tplPara('{{ for x in xs }}') + '<w:p><w:r><w:drawing><wp:inline><wp:docPr id="1" name="p"/></wp:inline></w:drawing></w:r></w:p>' + tplPara('{{ endfor }}'), { xs: [1, 2], a: 1 }, 'XML_ELEMENT_LIMIT_EXCEEDED',
+            { 'word/header1.xml': `<?xml version="1.0"?><w:hdr ${W} xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">${tplPara('{{ a }}')}${Array.from({ length: 300_000 }, (_, i) => `<w:p w14:paraId="${(i + 1).toString(16).toUpperCase().padStart(8, '0')}"/>`).join('')}</w:hdr>` }, { decompressionLimits: { maxXmlElements: 200_000 } }],
+        ['a loop repeating an id beside 300,000 footnotes without a tag, the bound 200,000', tplPara('{{ for x in xs }}') + '<w:p><w:r><w:drawing><wp:inline><wp:docPr id="1" name="p"/></wp:inline></w:drawing></w:r></w:p>' + tplPara('{{ endfor }}'), { xs: [1, 2] }, 'XML_ELEMENT_LIMIT_EXCEEDED',
+            { 'word/footnotes.xml': `<?xml version="1.0"?><w:footnotes ${W}>${Array.from({ length: 300_000 }, (_, i) => `<w:footnote w:id="${i + 1}"/>`).join('')}</w:footnotes>` }, { decompressionLimits: { maxXmlElements: 200_000 } }],
+        ['a loop repeating an id beside a paragraph of 3,000,000 distinct attributes', tplPara('{{ for x in xs }}') + '<w:p><w:r><w:drawing><wp:inline><wp:docPr id="1" name="p"/></wp:inline></w:drawing></w:r></w:p>' + tplPara('{{ endfor }}'), { xs: [1, 2] }, undefined,
+            { 'word/header1.xml': `<?xml version="1.0"?><w:hdr ${W}><w:p ${Array.from({ length: 3_000_000 }, (_, i) => `a${i.toString(36)}=""`).join(' ')}/></w:hdr>` }],
+        ['64,000 tags with a quote outside their values, holding paragraph ids, in a loop', tplPara('{{ for x in xs }}') + `<w:p>${'<w:proofErr \'b w14:paraId="0000000A" \'/>'.repeat(64000)}<w:r><w:t>{{ x }}</w:t></w:r></w:p>` + tplPara('{{ endfor }}'), { xs: [1] }, undefined],
+        ['400,000 comments before a field in one run', `<w:p><w:r>${'<!---->'.repeat(400000)}<w:t>{{ a }}</w:t></w:r></w:p>`, { a: 1 }, undefined],
+        ['400,000 processing instructions before a field in one run', `<w:p><w:r>${'<?a?>'.repeat(400000)}<w:t>{{ a }}</w:t></w:r></w:p>`, { a: 1 }, undefined],
+        ['200,000 comments among runs, one processing instruction at the end', `<w:p>${'<w:r><!----><w:t>{</w:t></w:r>'.repeat(200000)}<w:r><w:t>{{ a }}</w:t></w:r><?a?></w:p>`, { a: 1 }, undefined],
+        ['a loop copying 50,000 pictures twice', tplPara('{{ for a in xs }}') + '<w:p><w:r><w:drawing><wp:docPr id="1"/></w:drawing></w:r></w:p>'.repeat(50000) + tplPara('{{ endfor }}'), { xs: [0, 1] }, undefined],
+    ] as [string, string, any, string | undefined, Record<string, string>?, any?][]) {
+        let result: { out: Uint8Array | undefined; code: string | undefined } = { out: undefined, code: undefined };
+        await heapBudget(`template: ${label}`, () => timed(`template: ${label}`, async () => { result = await renderQuiet(body, data, cfg ?? {}, parts); }));
+        check(`template: ${label} ${wanted ? `is refused with ${wanted}` : 'renders'}`, result.code === wanted && (wanted !== undefined || result.out instanceof Uint8Array), String(result.code));
+    }
+    // Prototype keys in a template's paths are never read from the prototype; a data key named
+    // __proto__ (as JSON.parse makes it) is the data's own.
+    const protoList = await renderQuiet(tplPara('{{ for x in __proto__ }}[{{ x }}]{{ endfor }}{{ if constructor }}C{{ endif }}{{ if toString }}T{{ endif }}'), {}, { onMissing: 'empty' });
+    check('template: __proto__, constructor and toString are missing fields, not the prototype', !protoList.code && !strFromU8(unzipSync(protoList.out!)['word/document.xml']).match(/\[|C<|T</), String(protoList.code));
+    const ownProto = await renderQuiet(tplPara('{{ for x in __proto__ }}[{{ x }}]{{ endfor }}'), JSON.parse('{"__proto__": ["own"]}'));
+    check('template: a data key named __proto__ is the data\'s own list', !ownProto.code && strFromU8(unzipSync(ownProto.out!)['word/document.xml']).includes('[own]'), String(ownProto.code));
     // HTML: a tag whose '>' stands between quotes is scanned for to the end at most three times.
     await timed('html: 120,000 tags each closed only inside quotes parse', () => parseQuiet(Buffer.from('<p>' + '<br ">"'.repeat(120000)), 'html'));
     await timed('html: 120,000 end tags each closed only inside quotes parse', () => parseQuiet(Buffer.from('<p>' + '</b ">"'.repeat(120000)), 'html'));

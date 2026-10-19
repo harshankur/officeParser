@@ -6,7 +6,7 @@
  * consistent error reporting across all parsers and the main entry point.
  */
 
-import { OfficeError, OfficeErrorType, OfficeIssue, OfficeParserConfig, OfficeWarningType } from '../types.js';
+import { OfficeError, OfficeErrorType, OfficeIssue, OfficeParserConfig, OfficeWarningType, TemplateDataDetails, TemplateSyntaxDetails } from '../types.js';
 
 /** Error header prefix for all error messages */
 const ERRORHEADER = "[OfficeParser]: ";
@@ -20,6 +20,31 @@ type IssueHandler = { onWarning?: (issue: OfficeIssue) => void };
 // getWrappedError recognizes an error it has already reported and prefixed, so it neither
 // reports it twice nor prepends a second header.
 
+/** The end of a TEMPLATE_SYNTAX message: what is wrong with the tag. */
+function templateSyntaxReason(info: TemplateSyntaxDetails): string {
+    switch (info.reason) {
+        case 'unreadable': return `cannot be read: it ${info.detail}`;
+        case 'unclosed': return `has no closing ${info.detail} tag`;
+        case 'unopened': return `has no block to belong to${info.detail ? `: it needs an earlier ${info.detail}` : ''}`;
+        case 'mismatched': return `closes a block that is not open: the open block needs ${info.detail} first`;
+        case 'else-after-else': return 'follows its block\'s else; else comes last, before endif';
+        case 'crossing': return `and the other tags of its block do not enclose content together: ${info.detail}`;
+        case 'row-branch': return 'shares a table row with another tag of its block; in a table, each branch of an if starts a row of its own';
+        case 'overlap': return 'opens a block that overlaps another block without holding it or lying inside it';
+        case 'malformed-xml': return `is in a part whose XML is not well-formed${info.detail ? ` (${info.detail})` : ''}, so its blocks cannot be found`;
+    }
+}
+
+/** The end of a TEMPLATE_DATA_INVALID message: how the data does not fit the tag. */
+function templateDataReason(info: TemplateDataDetails): string {
+    switch (info.reason) {
+        case 'not-a-list': return `loops over a value that is ${info.kind}, not a list`;
+        case 'not-text': return `fills in a value that is a${info.kind === 'object' ? 'n' : ''} ${info.kind}, which has no text of its own; loop over a list with for, or name a field inside an object with a path`;
+        case 'incomparable': return `compares a value that is ${info.kind} with one that is ${info.otherKind}; a comparison takes two values of the same kind (or empty)`;
+        case 'unformattable': return `formats a value that is ${info.kind} with ${info.filter}, which takes ${info.takes === 'date' ? 'a date, or text that is one in ISO 8601 form (2026-11-01)' : info.takes === 'number' ? 'a number, or text that is one' : 'text, a number, true/false or a date'}`;
+    }
+}
+
 /**
  * Lookup table for error messages.
  * Some entries are functions that take parameters to build dynamic messages.
@@ -30,7 +55,7 @@ const ERROR_MESSAGES: Record<OfficeErrorType, string | ((...args: any[]) => stri
     [OfficeErrorType.FILE_CORRUPTED]: (filepath: string) => `Your file ${filepath} seems to be corrupted. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce error.`,
     [OfficeErrorType.FILE_DOES_NOT_EXIST]: (filepath: string) => `File ${filepath} could not be found! Check if the file exists or verify if the relative path to the file is correct from your terminal's location.`,
     [OfficeErrorType.LOCATION_NOT_FOUND]: (location: string) => `Entered location ${location} is not reachable! Please make sure that the entered directory location exists. Check relative paths and reenter.`,
-    [OfficeErrorType.IMPROPER_ARGUMENTS]: `Improper arguments`,
+    [OfficeErrorType.IMPROPER_ARGUMENTS]: (detail?: string) => typeof detail === 'string' && detail ? `Improper arguments: ${detail}` : `Improper arguments`,
     [OfficeErrorType.IMPROPER_BUFFERS]: `Auto-detection of file type from buffer failed. This can happen if the format lacks magic bytes (like md, html, or csv) or if the detection library is incompatible with your Node.js version. Please provide the 'fileType' hint in your configuration (e.g., { fileType: 'docx' }) to proceed.`,
     [OfficeErrorType.INVALID_INPUT]: `Invalid input type: Expected a Buffer or a valid file path`,
     [OfficeErrorType.PDF_WORKER_MISSING]: `Missing PDF worker configuration. PDF parsing in browser environments requires a worker source. Please provide "pdfWorkerSrc" in your configuration.`,
@@ -39,7 +64,9 @@ const ERROR_MESSAGES: Record<OfficeErrorType, string | ((...args: any[]) => stri
     [OfficeErrorType.PASSWORD_INCORRECT]: `The password provided is incorrect for this document.`,
     [OfficeErrorType.DOCUMENT_DECRYPTION_FAILED]: (detail: string) => `Could not decrypt this document${detail ? `: ${detail}` : ''}.`,
     [OfficeErrorType.TEMPLATE_UNSUPPORTED_FORMAT]: (detail: string) => `This document type cannot be used as a template${detail ? `: ${detail}` : ''}. Template rendering currently supports DOCX (.docx).`,
-    [OfficeErrorType.TEMPLATE_FIELD_MISSING]: (field: string) => `Template placeholder '${field}' has no matching field in the data, and onMissing is 'error'. Provide the field, or set onMissing to 'keep' or 'empty'.`,
+    [OfficeErrorType.TEMPLATE_FIELD_MISSING]: (field: string) => `Template field '${field}' has no matching value in the data, and onMissing is 'error'. Provide the field, or set onMissing to 'keep' or 'empty'.`,
+    [OfficeErrorType.TEMPLATE_SYNTAX]: (info: TemplateSyntaxDetails) => `Template tag '${info.tag}' in ${info.part} ${templateSyntaxReason(info)}.`,
+    [OfficeErrorType.TEMPLATE_DATA_INVALID]: (info: TemplateDataDetails) => `Template tag '${info.tag}' in ${info.part} ${templateDataReason(info)}.`,
     [OfficeErrorType.FEATURE_NOT_SUPPORTED_IN_BROWSER]: (feature: string) => `'${feature}' is not supported in the browser. Browser users must pass file content as Buffer or ArrayBuffer directly.`,
     [OfficeErrorType.INVALID_STYLE_MAPPING]: (mapping: string) => `Invalid style mapping string: ${mapping}`,
     [OfficeErrorType.INVALID_SELECTOR]: (selector: string) => `Invalid selector: ${selector}`,
@@ -56,7 +83,7 @@ const ERROR_MESSAGES: Record<OfficeErrorType, string | ((...args: any[]) => stri
     [OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED]: `Document nesting depth exceeded the safe limit (possible denial-of-service input)`,
     [OfficeErrorType.PDF_PROCESS_FAILED]: (info: { reason?: string; memoryMb?: number } = {}) => `The separate process reading this PDF with pdf.js ended${info.reason ? ` (${info.reason})` : ''}: it most likely needed more memory than pdfParserConfig.processMemoryMb (${info.memoryMb ?? 1024} MB) allows. A few KB of PDF can inflate into gigabytes inside pdf.js; raise the limit for a PDF that legitimately needs more.`,
     [OfficeErrorType.OUTPUT_TOO_LARGE]: (info?: { repeatedLimit?: number }) => info?.repeatedLimit !== undefined
-        ? `The output is too large to write: the template's values, repeated at its placeholders, add more than decompressionLimits.maxRepeatedContent (${info.repeatedLimit} characters) to the document. Raise the limit for a template that legitimately repeats long values.`
+        ? `The output is too large to write: the template's loops and values, repeated, add more than decompressionLimits.maxRepeatedContent (${info.repeatedLimit} characters) to the document. Raise the limit for a template that legitimately repeats a lot of content.`
         : `The output is too large to write: it grew past what a string or array can hold, or the AST shares its nodes along more paths than a writer follows (each shared node is written under every node holding it). Write the content to another format or in parts.`,
     [OfficeErrorType.EMBEDDING_TIMEOUT]: (timeout: number) => `Embedding call timed out after ${timeout}ms`,
     [OfficeErrorType.OCR_TERMINATED]: `The OCR workers were terminated (terminateOcr()) before this image was recognized.`

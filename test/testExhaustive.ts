@@ -3760,7 +3760,8 @@ async function testNativePdfEngine(): Promise<void> {
  */
 async function testTemplate(): Promise<void> {
     const tpl = path.join(__dirname, 'files', 'template', 'invoice.docx');
-    const data = { name: 'Acme Corp', amount: '$1,250.00', date: '2026-10-01', item: 'Widget', note: 'Line one\nLine two', company: 'GLOBEX' };
+    // The fixture's blocks (testTemplateBlocks) get data too, so only `{{missing}}` is missing here.
+    const data = { name: 'Acme Corp', amount: '$1,250.00', date: '2026-10-01', item: 'Widget', note: 'Line one\nLine two', company: 'GLOBEX', paid: true, lines: [], discount: null, contacts: [], total: 1250.5, dueDate: '2026-11-01' };
     const walk = (n: OfficeContentNode, fn: (x: OfficeContentNode) => void) => { fn(n); (n.children || []).forEach(c => walk(c, fn)); };
     const astText = (ast: OfficeParserAST) => ast.content.map(p => p.text).join('\n');
 
@@ -3884,6 +3885,599 @@ async function testTemplate(): Promise<void> {
         } finally {
             try { fs.unlinkSync(scriptPath); } catch { /* best effort */ }
         }
+    }
+}
+
+/**
+ * DOCX templating with block tags: `if`/`else if`/`else`/`endif` and `for`/`endfor`, in each of their
+ * scopes (inline, paragraphs, table rows), their conditions, the data they read, the errors they raise,
+ * and the document they leave (balanced XML, unique ids, every cell ending in a paragraph).
+ */
+async function testTemplateBlocks(): Promise<void> {
+    const tpl = path.join(__dirname, 'files', 'template', 'invoice.docx');
+    const base = { name: 'Acme Corp', amount: '$1,250.00', date: '2026-10-01', item: 'Widget', note: 'Line one\nLine two', company: 'GLOBEX', missing: 'R-1' };
+    const lines = [{ description: 'Bolts', qty: 2, price: '$500.00' }, { description: 'Nuts', qty: 1, price: '$250.00' }];
+    const full = { ...base, paid: false, due: '2026-11-01', lines, discount: '$50.00', contacts: [{ name: 'Ann' }, { name: 'Bo' }, { name: 'Cy' }], total: 1250.5, dueDate: '2026-11-01' };
+    const documentXml = (bytes: Uint8Array): string => {
+        const xml = strFromU8(unzipSync(bytes)['word/document.xml']);
+        assert.doesNotThrow(() => parseXmlString(xml), 'rendered document.xml is well-formed XML');
+        return xml;
+    };
+    const astText = async (bytes: Uint8Array) => (await OfficeParser.parseOffice(Buffer.from(bytes), { fileType: 'docx' }) as OfficeParserAST).content.map(p => p.text).join('\n');
+    const tableRows = (xml: string, marker: string) => {
+        const table = xml.split('<w:tbl>').find(t => t.includes(marker)) ?? '';
+        return (table.split('</w:tbl>')[0].match(/<w:tr>[\s\S]*?<\/w:tr>/g) ?? []).map(row => (row.match(/<w:tc>[\s\S]*?<\/w:tc>/g) ?? []).map(c => c.replace(/<[^>]+>/g, '')));
+    };
+
+    // --- the fixture: every scope at once ---
+    {
+        const bytes = await OfficeTemplate.render(tpl, { data: full });
+        const xml = documentXml(bytes);
+        const text = await astText(bytes);
+        assert.ok(text.includes('Please pay $1,250.00 by 2026-11-01.') && !text.includes('Paid in full'), 'paragraph if/else: the else branch, filled');
+        assert.ok(!/\{\{/.test(text), `no tag is left once every field has data; got: ${text.match(/\{\{[^}]*\}\}/)}`);
+        const ast = await OfficeParser.parseOffice(Buffer.from(bytes), { fileType: 'docx' }) as OfficeParserAST;
+        assert.ok(ast.content.every(n => n.type !== 'paragraph' || String(n.text).trim()), 'the paragraphs that held only a tag are removed with it (no blank lines)');
+        assert.deepStrictEqual(tableRows(xml, 'Description'), [['Description', 'Qty', 'Price'], ['Bolts', '2', '$500.00'], ['Nuts', '1', '$250.00'], ['Discount', '', '-$50.00']], 'row loop: one row per line item; row if keeps the discount row');
+        assert.ok(text.includes('Contacts: Ann, Bo, Cy'), `inline loop with a condition on loop.last; got: ${text.match(/Contacts:.*/)}`);
+        assert.ok(text.includes('Total due: $1,250.50 by November 1, 2026.'), `values formatted with pictures; got: ${text.match(/Total due:.*/)}`);
+
+        const paid = await OfficeTemplate.render(tpl, { data: { ...full, paid: true, discount: null, lines: [] } });
+        const paidXml = documentXml(paid);
+        const paidText = await astText(paid);
+        assert.ok(paidText.includes('Paid in full. Thank you!') && !paidText.includes('Please pay'), 'paragraph if: the if branch');
+        assert.deepStrictEqual(tableRows(paidXml, 'Description'), [['Description', 'Qty', 'Price']], 'an empty list repeats no row, and a null discount drops its row');
+        let bold = false;
+        const walk = (n: OfficeContentNode) => { if (n.type === 'text' && String(n.text).includes('Paid in full') && (n.formatting as any)?.bold) bold = true; (n.children || []).forEach(walk); };
+        (await OfficeParser.parseOffice(Buffer.from(paid), { fileType: 'docx' }) as OfficeParserAST).content.forEach(walk);
+        assert.ok(bold, 'content kept by a branch keeps its formatting');
+
+        const again = await OfficeTemplate.render(tpl, { data: full });
+        assert.ok(Buffer.from(bytes).equals(Buffer.from(again)), 'rendering with blocks is deterministic');
+        const batch = await OfficeTemplate.render(tpl, { data: [{ ...full, lines: lines.slice(0, 1) }, { ...full, lines }] });
+        assert.deepStrictEqual(batch.map(d => tableRows(documentXml(d), 'Description').length), [3, 4], 'batch: each document repeats its own list');
+
+        // onMissing 'keep' (default) leaves a block whose field is missing exactly as typed.
+        const kept = await OfficeTemplate.render(tpl, { data: base });
+        const keptXml = documentXml(kept);
+        const keptText = await astText(kept);
+        assert.ok(keptText.includes('{{ if paid }}') && keptText.includes('{{ endif }}') && keptText.includes('Paid in full'), "onMissing 'keep': a block with a missing condition is left as typed");
+        assert.ok(tableRows(keptXml, 'Description')[1][0].includes('{{ for line in lines }}{{ line.description }}'), "onMissing 'keep': a row loop over a missing list is left as typed");
+        const emptied = await astText(await OfficeTemplate.render(tpl, { data: base, onMissing: 'empty' }));
+        assert.ok(emptied.includes('Please pay') && !emptied.includes('{{'), "onMissing 'empty': a missing condition is false and a missing list repeats nothing");
+        await assert.rejects(() => OfficeTemplate.render(tpl, { data: { ...base, paid: true }, onMissing: 'error' }) as Promise<any>, (e: any) => e?.officeIssue?.code === 'TEMPLATE_FIELD_MISSING', "onMissing 'error': a missing list rejects");
+    }
+
+    // --- tiny documents around one construct each ---
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"';
+    const buildDocx = (bodyXml: string, extra: Record<string, string> = {}): Buffer => Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        'word/document.xml': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W}><w:body>${bodyXml}</w:body></w:document>`),
+        ...Object.fromEntries(Object.entries(extra).map(([k, v]) => [k, strToU8(v)])),
+    }));
+    const r = (t: string, bold = false) => `<w:r>${bold ? '<w:rPr><w:b/></w:rPr>' : ''}<w:t xml:space="preserve">${t}</w:t></w:r>`;
+    const p = (...runs: string[]) => `<w:p>${runs.join('')}</w:p>`;
+    const tc = (...ps: string[]) => `<w:tc>${ps.join('')}</w:tc>`;
+    const tr = (...cells: string[]) => `<w:tr>${cells.join('')}</w:tr>`;
+    const tbl = (...rows: string[]) => `<w:tbl>${rows.join('')}</w:tbl>`;
+    const body = async (bodyXml: string, data: any, cfg: any = {}) => {
+        const xml = documentXml(await OfficeTemplate.render(buildDocx(bodyXml), { data, ...cfg }) as Uint8Array);
+        return xml.slice(xml.indexOf('<w:body>') + 8, xml.indexOf('</w:body>'));
+    };
+    const text = async (bodyXml: string, data: any, cfg: any = {}) => (await body(bodyXml, data, cfg)).replace(/<\/w:p>/g, '\n').replace(/<[^>]+>/g, '').trim();
+    const rejects = async (bodyXml: string, data: any, code: string, reason?: string, cfg: any = {}) => {
+        let error: any;
+        try { await OfficeTemplate.render(buildDocx(bodyXml), { data, ...cfg }); } catch (e) { error = e; }
+        assert.strictEqual(error?.officeIssue?.code, code, `${bodyXml.slice(0, 80)} rejects with ${code}; got ${error}`);
+        if (reason) assert.strictEqual(error.officeIssue.details?.reason, reason, `${bodyXml.slice(0, 80)}: reason ${reason}; got ${error.officeIssue.details?.reason}`);
+        return error;
+    };
+
+    // Conditions.
+    const chain = p(r('{{ if n &gt;= 10 }}big{{ else if n &gt;= 5 }}mid{{ else }}small{{ endif }}'));
+    assert.deepStrictEqual([await text(chain, { n: 12 }), await text(chain, { n: 7 }), await text(chain, { n: 1 })], ['big', 'mid', 'small'], 'else if chain picks the first branch that holds');
+    const cond = async (condition: string, data: any) => text(p(r(`{{ if ${condition} }}T{{ else }}F{{ endif }}`)), data);
+    const cases: [string, any, string][] = [
+        ['tier == "gold"', { tier: 'gold' }, 'T'],
+        ['tier == \u201Cgold\u201D', { tier: 'gold' }, 'T'],
+        ['tier == \u201Dgold\u201D', { tier: 'gold' }, 'T'],
+        ['tier == \u2018gold\u2019', { tier: 'gold' }, 'T'],
+        ['tier == \u00AB\u00A0gold\u00A0\u00BB', { tier: 'gold' }, 'T'],
+        ['tier != "gold"', { tier: 'silver' }, 'T'],
+        ['total &gt; 100 and not overdue', { total: 150, overdue: false }, 'T'],
+        ['total &gt; 100 and not overdue', { total: 150, overdue: true }, 'F'],
+        ['(a or b) and c', { a: false, b: true, c: true }, 'T'],
+        ['a &lt;= 3', { a: 3 }, 'T'],
+        ['a \u2264 3', { a: 4 }, 'F'],
+        ['due &lt; start', { due: new Date('2026-01-01'), start: new Date('2026-02-01') }, 'T'],
+        ['x == null', { x: null }, 'T'],
+        ['x != null', { x: 0 }, 'T'],
+        ['x &gt; 1', { x: null }, 'F'],
+        ['items', { items: [] }, 'F'],
+        ['items', { items: [1] }, 'T'],
+        ['s', { s: '' }, 'F'],
+        ['s', { s: '0' }, 'T'],
+        ['n', { n: 0 }, 'F'],
+        ['flag == true', { flag: true }, 'T'],
+        ['items.length &gt; 1', { items: [1, 2] }, 'T'],
+        ['a.b.c == 5', { a: { b: { c: 5 } } }, 'T'],
+        ['\u{1D49C}x == 1', { '\u{1D49C}x': 1 }, 'T'],
+    ];
+    for (const [c, data, want] of cases) assert.strictEqual(await cond(c, data), want, `condition ${c} with ${JSON.stringify(data)}`);
+    assert.strictEqual(await text(p(r('{{ IF x }}A{{ Else If y }}B{{ ELSE }}C{{ EndIf }}')), { x: false, y: true }), 'B', 'keywords are case-insensitive');
+    assert.strictEqual(await text(p(r('&lt;&lt; if x &gt;&gt;yes&lt;&lt; endif &gt;&gt; &lt;&lt;name&gt;&gt;')), { x: true, name: 'N' }, { delimiters: { start: '<<', end: '>>' } }), 'yes N', 'block tags use the configured delimiters');
+    assert.strictEqual(await text(p(r('{{ i'), r('f x }}Y{{ en'), r('dif }}')), { x: 1 }), 'Y', 'a block tag split across runs is read');
+    // With delimiters whose end can begin a start, text that is not a tag leaves its end delimiter to the next tag.
+    assert.strictEqual(await text(p(r('Total $5 for $name$')), { name: 'Bob' }, { delimiters: { start: '$', end: '$' } }), 'Total $5 for Bob', 'stray $ text before a $field$ leaves the field to be filled');
+    assert.strictEqual(await text(p(r('Save 50% now, %name%')), { name: 'Bob' }, { delimiters: { start: '%', end: '%' } }), 'Save 50% now, Bob', 'stray % text before a %field% leaves the field to be filled');
+    assert.strictEqual(await text(p(r('Ref @@ x @@ and @@if a@@yes@@endif@@')), { a: true }, { delimiters: { start: '@@', end: '@@' } }), 'Ref @@ x @@ and yes', 'symmetric delimiters pair blocks after stray text');
+    assert.strictEqual(await text(p(r('{{ hello world }} {{ endif }}x')), {}).catch(e => e.officeIssue?.code), 'TEMPLATE_SYNTAX', 'a closing tag with no block is rejected');
+    assert.strictEqual(await text(p(r('{{ hello world }}')), {}), '{{ hello world }}', 'prose between braces stays literal text');
+
+    // Loops: items, scalars, loop details, nesting, shadowing.
+    assert.strictEqual(await text(p(r('{{ for t in tags }}[{{ loop.index }}/{{ loop.number }}/{{ loop.length }}:{{ t }}{{ if loop.first }}^{{ endif }}{{ if loop.last }}${{ endif }}]{{ endfor }}')), { tags: ['a', 'b'] }), '[0/1/2:a^][1/2/2:b$]', 'loop over plain values with loop details');
+    const nested = p(r('{{ for g in groups }}')) + p(r('{{ g.name }}:')) + p(r('{{ for m in g.members }}')) + p(r('- {{ m }} of {{ g.name }} ({{ loop.number }})')) + p(r('{{ endfor }}')) + p(r('{{ endfor }}'));
+    assert.strictEqual(await text(nested, { groups: [{ name: 'A', members: ['x', 'y'] }, { name: 'B', members: ['z'] }] }), 'A:\n- x of A (1)\n- y of A (2)\nB:\n- z of B (1)', 'nested loops: the inner loop reads the outer item, loop is the innermost');
+    assert.strictEqual(await text(p(r('{{ for name in names }}{{ name }} {{ endfor }}{{ name }}')), { names: ['a', 'b'], name: 'outer' }), 'a b outer', 'a loop item shadows a field of the same name only inside its loop');
+    assert.strictEqual(await text(p(r('{{ invoice.total }} {{ items.0.name }} {{ items.length }}')), { 'invoice.total': 'flat', invoice: { total: 'nested' }, items: [{ name: 'first' }] }), 'flat first 1', 'a dotted key is read as typed before the path; list indexes and length');
+    assert.strictEqual(await text(p(r('{{ for t in tags }}{{ t }}{{ endfor }}')), { tags: null }), '', 'a null list repeats nothing');
+    {
+        const xml = await body(p(r('{{ for t in tags }}'), r('{{ t }}', true), r(' {{ endfor }}')), { tags: ['a', 'b'] });
+        assert.strictEqual((xml.match(/<w:b\/><\/w:rPr><w:t xml:space="preserve">[ab]</g) ?? []).length, 2, 'each copy of a bold run stays bold');
+    }
+
+    // Scopes: paragraphs across, rows, row groups, branches over rows, a text box, a header.
+    assert.strictEqual(await text(p(r('Hello {{ if x }}there')) + p(r('world{{ endif }}!')), { x: false }), 'Hello !', 'tags mid-paragraph in two paragraphs drop the content between them, joining what is left');
+    assert.strictEqual(await text(p(r('Keep')) + p(r('{{ if x }}')) + p(r('Gone')) + p(r('{{ endif }}')) + p(r('After')), { x: false }), 'Keep\nAfter', 'tag-only paragraphs go with their tags');
+    const group = tbl(tr(tc(p(r('{{ for q in qs }}{{ q.a }}'))), tc(p(r('x')))), tr(tc(p(r('{{ q.b }}'))), tc(p(r('y{{ endfor }}')))));
+    assert.deepStrictEqual(tableRows(await body(group, { qs: [{ a: 1, b: 2 }, { a: 3, b: 4 }] }), 'x'), [['1', 'x'], ['2', 'y'], ['3', 'x'], ['4', 'y']], 'tags in two rows repeat the rows as a group');
+    const branchRows = tbl(tr(tc(p(r('{{ if vip }}VIP'))), tc(p(r('a')))), tr(tc(p(r('{{ else }}Std'))), tc(p(r('b{{ endif }}')))));
+    assert.deepStrictEqual([tableRows(await body(branchRows, { vip: true }), 'a'), tableRows(await body(branchRows, { vip: false }), 'b')], [[['VIP', 'a']], [['Std', 'b']]], 'if/else over rows keeps one branch of rows');
+    assert.ok(!(await body(tbl(tr(tc(p(r('{{ for q in qs }}{{ q }}'))), tc(p(r('{{ endfor }}'))))), { qs: [] })).includes('<w:tbl>'), 'a table whose only row repeats nothing is removed');
+    assert.ok(/<w:tbl><w:tr><w:tc><w:p>/.test(await body(tbl(tr(tc(p(r('{{ for q in qs }}{{ q }}{{ endfor }}'))))), { qs: [] })), 'a loop inside one cell is inline: its row stays');
+    {
+        const xml = await body(tbl(tr(tc(p(r('{{ if x }}')), p(r('text')), p(r('{{ endif }}'))))), { x: false });
+        assert.ok(/<w:tc><w:p\/><\/w:tc>/.test(xml), `a cell a branch emptied gets an empty paragraph, as Word requires; got ${xml}`);
+    }
+    {
+        const textBox = `<w:p><w:r><w:t>Before</w:t></w:r><w:r><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="wps"><w:drawing><w:txbxContent>${p(r('{{ for t in ts }}{{ t }}{{ endfor }}'))}</w:txbxContent></w:drawing></mc:Choice><mc:Fallback><w:pict><w:txbxContent>${p(r('{{ for t in ts }}{{ t }}{{ endfor }}'))}</w:txbxContent></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>`;
+        assert.strictEqual((await text(textBox, { ts: ['a', 'b'] })).match(/ab/g)?.length, 2, 'a loop in a text box fills both its Choice and Fallback copies');
+        // A block opened outside a text box and closed inside it is a crossing, though the box holds its closing tag twice.
+        const box = (inner: string) => `<w:r><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="wps"><w:drawing><w:txbxContent>${inner}</w:txbxContent></w:drawing></mc:Choice><mc:Fallback><w:pict><w:txbxContent>${inner}</w:txbxContent></w:pict></mc:Fallback></mc:AlternateContent></w:r>`;
+        const straddle = await rejects(`<w:p>${r('A {{ if a }}')}${box(p(r('{{ endif }}')))}</w:p>`, { a: true }, 'TEMPLATE_SYNTAX', 'crossing');
+        assert.ok(/text box/.test(straddle.message), `the crossing names the text box; got ${straddle.message}`);
+    }
+    {
+        const hdr = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr ${W}>${p(r('{{ if draft }}DRAFT{{ endif }} {{ company }}'))}</w:hdr>`;
+        const out = await OfficeTemplate.render(buildDocx(p(r('body')), { 'word/header1.xml': hdr }), { data: { draft: true, company: 'Co' } });
+        assert.ok(strFromU8(unzipSync(out)['word/header1.xml']).includes('DRAFT</w:t></w:r><w:r><w:t xml:space="preserve"> Co'), 'blocks in a header part are rendered');
+    }
+
+    // Repeated content gets fresh ids where Word needs unique ones.
+    {
+        const pic = (id: number) => `<w:r><w:drawing><wp:inline><wp:docPr id="${id}" name="Picture ${id}"/></wp:inline></w:drawing></w:r>`;
+        const loop = p(r('{{ for a in xs }}')) + `<w:p w14:paraId="0000AAAA" w14:textId="0000BBBB">${pic(7)}<w:bookmarkStart w:id="3" w:name="bm"/>${r('{{ a }}')}<w:bookmarkEnd w:id="3"/></w:p>` + p(r('{{ endfor }}')) + `<w:p>${pic(9)}<w:bookmarkStart w:id="12" w:name="other"/><w:bookmarkEnd w:id="12"/></w:p>`;
+        const xml = await body(loop, { xs: ['one', 'two', 'three'] });
+        const values = (re: RegExp) => [...xml.matchAll(re)].map(m => m[1]);
+        const docPr = values(/docPr id="(\d+)"/g);
+        assert.strictEqual(new Set(docPr).size, docPr.length, `picture ids are unique across copies; got ${docPr}`);
+        assert.deepStrictEqual(values(/bookmarkStart w:id="(\d+)"/g), values(/bookmarkEnd w:id="(\d+)"/g), 'each copy of a bookmark ends with its own id');
+        assert.strictEqual(new Set(values(/bookmarkStart w:id="(\d+)"/g)).size, 4, 'bookmark ids are unique, past every id the document has');
+        const paraIds = values(/paraId="(\w+)"/g);
+        assert.strictEqual(new Set(paraIds).size, 3, `paragraph ids are unique across copies; got ${paraIds}`);
+        assert.ok(paraIds.every(id => parseInt(id, 16) < 0x80000000), 'fresh paragraph ids stay below 0x80000000');
+    }
+
+    // Data that does not fit its tag.
+    await rejects(p(r('{{ for a in s }}x{{ endfor }}')), { s: 'abc' }, 'TEMPLATE_DATA_INVALID', 'not-a-list');
+    await rejects(p(r('{{ c }}')), { c: { a: 1 } }, 'TEMPLATE_DATA_INVALID', 'not-text');
+    await rejects(p(r('{{ c }}')), { c: [1, 2] }, 'TEMPLATE_DATA_INVALID', 'not-text');
+    const incomparable = await rejects(p(r('{{ if total &gt; 100 }}x{{ endif }}')), { total: '150' }, 'TEMPLATE_DATA_INVALID', 'incomparable');
+    assert.ok(incomparable.message.includes('{{ if total > 100 }}') && incomparable.officeIssue.details.kind === 'text' && incomparable.officeIssue.details.otherKind === 'number', 'an incomparable error names the tag and both kinds');
+    await rejects(p(r('{{ constructor }}{{ __proto__ }}')), {}, 'TEMPLATE_FIELD_MISSING', undefined, { onMissing: 'error' });
+    await rejects(p(r('{{ for x in toString }}{{ endfor }}')), {}, 'TEMPLATE_FIELD_MISSING', undefined, { onMissing: 'error' });
+
+    // Tags that cannot be read or cannot enclose content together.
+    await rejects(p(r('{{ if vip }}V')), {}, 'TEMPLATE_SYNTAX', 'unclosed');
+    await rejects(p(r('V{{ endfor }}')), {}, 'TEMPLATE_SYNTAX', 'unopened');
+    await rejects(p(r('{{ for a in xs }}{{ else }}{{ endfor }}')), {}, 'TEMPLATE_SYNTAX', 'unopened');
+    await rejects(p(r('{{ if x }}a{{ endfor }}')), {}, 'TEMPLATE_SYNTAX', 'mismatched');
+    await rejects(p(r('{{ if x }}a{{ else }}b{{ else if y }}c{{ endif }}')), {}, 'TEMPLATE_SYNTAX', 'else-after-else');
+    // Each unreadable tag beside the partner it would have paired with: the error names it.
+    for (const bad of ['{{ if a = 1 }}x{{ endif }}', '{{ if }}x{{ endif }}', '{{ if (a }}x{{ endif }}', '{{ if a == }}x{{ endif }}', '{{ if a &lt; b &lt; c }}x{{ endif }}', '{{ if "open }}x{{ endif }}',
+        '{{ if a &amp;&amp; b }}x{{ endif }}', '{{ for x of xs }}x{{ endfor }}', '{{ for loop in xs }}x{{ endfor }}', '{{ for if in xs }}x{{ endfor }}', '{{ if a }}x{{ endif x }}', '{{ for x in xs }}x{{ endfor x }}',
+`{{ if ${'('.repeat(40)}a${')'.repeat(40)} }}x{{ endif }}`]) {
+        const error = await rejects(p(r(bad)), { a: 1, xs: [] }, 'TEMPLATE_SYNTAX', 'unreadable');
+        assert.ok(!error.officeIssue.details.tag.match(/^\{\{ (endif|endfor) \}\}$/), `the unreadable tag is named, not its partner: ${bad}`);
+    }
+    assert.strictEqual(await text(p(r('{{ if a }}x{{ else y }}z{{ endif }}')), { a: 1 }), 'x{{ else y }}z', 'an unreadable tag inside blocks that pair stays visible text');
+    await rejects(p(r('{{ if x }}')) + tbl(tr(tc(p(r('{{ endif }}'))))), { x: 1 }, 'TEMPLATE_SYNTAX', 'crossing');
+    await rejects(tbl(tr(tc(p(r('{{ if x }}'))))) + tbl(tr(tc(p(r('{{ endif }}'))))), { x: 1 }, 'TEMPLATE_SYNTAX', 'crossing');
+    await rejects(p(r('{{ if x }}a')) + p('<w:ins w:id="1">' + r('b{{ endif }}') + '</w:ins>'), { x: 1 }, 'TEMPLATE_SYNTAX', 'crossing');
+    await rejects(`<w:p>${r('{{ if x }}')}<w:r><w:txbxContent>${p(r('{{ endif }}'))}</w:txbxContent></w:r></w:p>`, { x: 1 }, 'TEMPLATE_SYNTAX', 'crossing');
+    await rejects(tbl(tr(tc(p(r('{{ if v }}A'))), tc(p(r('{{ else }}B'))), tc(p(r('{{ endif }}'))))), { v: 1 }, 'TEMPLATE_SYNTAX', 'row-branch');
+    await rejects(p(r('{{ if x }}')) + '<w:p><w:r></w:p>', { x: 1 }, 'TEMPLATE_SYNTAX', 'malformed-xml');
+    await rejects(p(r('{{ if x }}'.repeat(65) + '{{ endif }}'.repeat(65))), { x: 1 }, 'MAX_NESTING_DEPTH_EXCEEDED');
+    assert.strictEqual(await text(p(r('{{ if x }}'.repeat(64) + 'deep' + '{{ endif }}'.repeat(64))), { x: 1 }), 'deep', 'blocks nest 64 deep');
+
+    // What repetition adds is bounded.
+    await rejects(p(r('{{ for a in xs }}{{ for b in xs }}{{ for c in xs }}{{ endfor }}{{ endfor }}{{ endfor }}')), { xs: Array(1000).fill(0) }, 'OUTPUT_TOO_LARGE');
+    await rejects(p(r('{{ for a in xs }}' + 'x'.repeat(1000) + '{{ endfor }}')), { xs: Array(100).fill(0) }, 'OUTPUT_TOO_LARGE', undefined, { decompressionLimits: { maxRepeatedContent: 10000 } });
+    assert.ok((await text(p(r('{{ for a in xs }}' + 'x'.repeat(1000) + '{{ endfor }}')), { xs: Array(100).fill(0) })).length === 100000, 'a loop well within the limit renders');
+
+    // Kept as typed: a tag split across runs is written whole; a shared tag-only paragraph shows each block's own tag.
+    assert.strictEqual(await text(p(r('A{{ if x }}B{{ end'), r('if }}C')), {}), 'A{{ if x }}B{{ endif }}C', 'a kept block writes its split closing tag whole');
+    assert.strictEqual(await text(p(r('{{ if x }}')) + p(r('B')) + p(r('{{ end'), r('if }}')), {}), '{{ if x }}\nB\n{{ endif }}', 'a kept paragraph block writes its split closing tag whole');
+    const shared = p(r('{{ if x }}')) + p(r('X')) + p(r('{{ endif }}{{ if y }}')) + p(r('Y')) + p(r('{{ endif }}'));
+    assert.strictEqual(await text(shared, {}), '{{ if x }}\nX\n{{ endif }}\n{{ if y }}\nY\n{{ endif }}', 'two kept blocks sharing a tag paragraph each show their own tag');
+    assert.strictEqual(await text(shared, { x: true }), 'X\n{{ if y }}\nY\n{{ endif }}', 'a rendered block\'s tag does not show in the kept block beside it');
+    assert.strictEqual(await text(shared, { x: true, y: false }), 'X', 'blocks sharing a tag paragraph render as they should');
+
+    // Prose that starts like a block tag stays text; a block tag that cannot be read is named when its blocks fail to pair.
+    assert.strictEqual(await text(p(r('Note: {{ If you have questions, call us }} {{ For details see below }}')), {}), 'Note: {{ If you have questions, call us }} {{ For details see below }}', 'prose starting with If or For stays literal text');
+    const unread = await rejects(p(r('{{ if a = 1 }}x{{ endif }}')), { a: 1 }, 'TEMPLATE_SYNTAX', 'unreadable');
+    assert.ok(unread.message.includes('{{ if a = 1 }}') && unread.officeIssue.details.detail.includes('=='), 'the error names the tag that could not be read, and why');
+    await rejects(p(r('{{ if a }}x{{ endif a }}')), { a: 1 }, 'TEMPLATE_SYNTAX', 'unreadable');
+
+    // Text boxes hold paragraph and row blocks of their own.
+    {
+        const box = (inner: string) => `<w:p><w:r><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="wps"><w:drawing><w:txbxContent>${inner}</w:txbxContent></w:drawing></mc:Choice><mc:Fallback><w:pict><w:txbxContent>${inner}</w:txbxContent></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>`;
+        assert.strictEqual(await text(box(p(r('{{ for a in xs }}')) + p(r('[{{ a }}]')) + p(r('{{ endfor }}'))), { xs: [1, 2] }), '[1]\n[2]\n[1]\n[2]', 'a paragraph loop inside a text box');
+        assert.deepStrictEqual(tableRows(await body(box(tbl(tr(tc(p(r('{{ for a in xs }}{{ a }}'))), tc(p(r('x{{ endfor }}')))))), { xs: [1, 2] }), '>x<'), [['1', 'x'], ['2', 'x']], 'a row loop in a table inside a text box');
+    }
+
+    // The repair touches only what a block changed: rows in nested content controls and nested inline controls stay as they are.
+    {
+        const rowsInControls = tbl('<w:sdt><w:sdtPr><w:id w:val="10"/></w:sdtPr><w:sdtContent><w:sdt><w:sdtPr><w:id w:val="11"/></w:sdtPr><w:sdtContent>' + tr(tc(p(r('Static')))) + '</w:sdtContent></w:sdt></w:sdtContent></w:sdt>');
+        const inlineControls = '<w:p><w:sdt><w:sdtPr><w:id w:val="1"/></w:sdtPr><w:sdtContent><w:sdt><w:sdtPr><w:id w:val="2"/></w:sdtPr><w:sdtContent>' + r('Name') + '</w:sdtContent></w:sdt></w:sdtContent></w:sdt></w:p>';
+        const out = await body(p(r('Hi {{ if vip }}VIP {{ endif }}there')) + rowsInControls + inlineControls, { vip: true });
+        assert.ok(out.includes(rowsInControls) && out.includes(inlineControls), `content controls the blocks did not touch are unchanged; got ${out}`);
+        const blockControl = '<w:sdt><w:sdtPr><w:id w:val="5"/></w:sdtPr><w:sdtContent>' + p(r('{{ if x }}')) + p(r('gone')) + p(r('{{ endif }}')) + '</w:sdtContent></w:sdt>';
+        assert.ok((await body(blockControl, { x: false })).includes('<w:sdtContent><w:p/></w:sdtContent>'), 'a block-level content control a branch emptied keeps an empty paragraph');
+    }
+
+    // Loop copies: bookmark names, notes and comments of their own; id attributes in any order.
+    {
+        const loop = (inner: string) => p(r('{{ for a in xs }}')) + inner + p(r('{{ endfor }}'));
+        const names = [...(await body(loop('<w:p><w:bookmarkStart w:id="3" w:name="Ref1"/>' + r('{{ a }}') + '<w:bookmarkEnd w:id="3"/></w:p>'), { xs: [1, 2, 3] })).matchAll(/w:name="([^"]+)"/g)].map(m => m[1]);
+        assert.deepStrictEqual(names, ['Ref1', 'Ref1_2', 'Ref1_3'], 'each copy of a bookmark has a name of its own');
+        const footnotes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:footnotes ${W}><w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote><w:footnote w:id="1"><w:p w14:paraId="00000101">${r('Note on {{ title }}')}</w:p></w:footnote></w:footnotes>`;
+        const comments = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments ${W}><w:comment w:id="7" w:author="A"><w:p>${r('Check')}</w:p></w:comment></w:comments>`;
+        const doc = loop('<w:p><w:commentRangeStart w:id="7"/>' + r('{{ a }}') + '<w:r><w:footnoteReference w:id="1"/></w:r><w:commentRangeEnd w:id="7"/><w:r><w:commentReference w:id="7"/></w:r></w:p>');
+        const out = unzipSync(await OfficeTemplate.render(buildDocx(doc, { 'word/footnotes.xml': footnotes, 'word/comments.xml': comments }), { data: { xs: [1, 2], title: 'T' } }) as Uint8Array);
+        const docXml = strFromU8(out['word/document.xml']);
+        assert.doesNotThrow(() => parseXmlString(docXml), 'document.xml stays well-formed');
+        const refs = [...docXml.matchAll(/footnoteReference w:id="(\d+)"/g)].map(m => m[1]);
+        const notesXml = strFromU8(out['word/footnotes.xml']);
+        assert.doesNotThrow(() => parseXmlString(notesXml), 'footnotes.xml stays well-formed');
+        assert.strictEqual(new Set(refs).size, 2, `each copy refers to a footnote of its own; got ${refs}`);
+        assert.ok(refs.every(id => notesXml.includes(`<w:footnote w:id="${id}">`)) && (notesXml.match(/Note on T/g) ?? []).length === 2, 'each referred footnote exists, filled');
+        assert.strictEqual(new Set([...notesXml.matchAll(/paraId="(\w+)"/g)].map(m => m[1])).size, 2, 'a copied footnote gets fresh paragraph ids');
+        const commentIds = [...docXml.matchAll(/comment(?:RangeStart|RangeEnd|Reference) w:id="(\d+)"/g)].map(m => m[1]);
+        assert.deepStrictEqual([new Set(commentIds.slice(0, 3)).size, new Set(commentIds.slice(3)).size, commentIds[0] !== commentIds[3], commentIds.includes('7')], [1, 1, true, false], `a comment's range and reference share an id in each copy, each pass its own; got ${commentIds}`);
+        const commentsXml = strFromU8(out['word/comments.xml']);
+        assert.ok([commentIds[0], commentIds[3]].every(id => commentsXml.includes(`<w:comment w:id="${id}" w:author="A">`)) && !commentsXml.includes('w:id="7"'), `each pass's comment exists under its own id, and the original only the loop referred to is gone; got ${commentsXml}`);
+        const alt = await body(loop('<w:p><w:r><w:drawing><wp:inline><wp:docPr descr="Badge id=" id="1" name="Pic"/></wp:inline></w:drawing></w:r>' + r('{{ a }}') + '</w:p>'), { xs: [1, 2] });
+        assert.deepStrictEqual([...alt.matchAll(/<wp:docPr descr="([^"]*)" id="(\d+)"/g)].map(m => [m[1], m[2]]), [['Badge id=', '1'], ['Badge id=', '2']], `an id is found by its attribute's name, not by text in another attribute's value; got ${alt}`);
+        const reordered = await body(loop('<w:p w14:textId="0000BBBB" w14:paraId="0000AAAA">' + r('{{ a }}') + '</w:p>'), { xs: [1, 2] });
+        assert.doesNotThrow(() => parseXmlString(`<w:document ${W}><w:body>${reordered}</w:body></w:document>`), 'ids written in any attribute order keep the tag whole');
+        assert.strictEqual(new Set([...reordered.matchAll(/paraId="(\w+)"/g)].map(m => m[1])).size, 2, 'paragraph ids are unique with textId written first');
+    }
+
+    // A misspelled block keyword is reported where it is, with the spelling to use, even where it would pair nothing.
+    for (const [tag, says] of [['{{ elseif b }}', 'else if'], ['{{ elif b }}', 'else if'], ['{{ end if }}', 'endif'], ['{{ end for }}', 'endfor']] as const) {
+        const error = await rejects(p(r(`{{ if a }}x${tag}y`)), { a: true, b: true }, 'TEMPLATE_SYNTAX', 'unreadable');
+        assert.ok(error.officeIssue.details.tag === tag && error.message.includes(says), `${tag} is blamed, naming ${says}; got ${error.message}`);
+    }
+    assert.strictEqual(await text(p(r('The end if any, the end for now.')), {}), 'The end if any, the end for now.', 'prose that only starts like a keyword is left alone');
+    assert.strictEqual(await text(p(r('{{ constructor of the house }} and {{ toString me }}')), {}), '{{ constructor of the house }} and {{ toString me }}', 'prose starting with a name Object has is left alone too');
+
+    // A complex field (fldChar begin, separate, end) is runs: a block may hold a whole field, or sit in its result,
+    // but one crossing a field's end (or from its instruction to its result) is a crossing, not a field cut apart.
+    {
+        const fc = (type: string) => `<w:r><w:fldChar w:fldCharType="${type}"/></w:r>`;
+        const field = (result: string) => fc('begin') + '<w:r><w:instrText>HYPERLINK "https://example.com"</w:instrText></w:r>' + fc('separate') + result + fc('end');
+        const whole = await body(`<w:p>${r('{{ if c }}')}${field(r('link'))}${r('{{ endif }}')}</w:p>`, { c: false });
+        assert.ok(!/fldChar/.test(whole), `a block holding a whole field removes it whole; got ${whole}`);
+        const inside = await body(`<w:p>${field(r('{{ if c }}A{{ else }}B{{ endif }}'))}</w:p>`, { c: false });
+        assert.ok((inside.match(/<w:fldChar /g) ?? []).length === 3 && inside.includes('>B<'), `a block in a field's result keeps the field; got ${inside}`);
+        const crossing = await rejects(`<w:p>${field(r('{{ if c }}t'))}${r('{{ endif }}')}</w:p>`, { c: false }, 'TEMPLATE_SYNTAX', 'crossing');
+        assert.ok(/field/.test(crossing.message), `a block crossing a field's end names the field; got ${crossing.message}`);
+    }
+
+    // A tag that could not be read is blamed only where it would have made the blocks pair; other prose is not.
+    {
+        const blamed = async (bodyXml: string) => (await rejects(bodyXml, {}, 'TEMPLATE_SYNTAX')).officeIssue.details;
+        assert.strictEqual((await blamed(p(r('{{ If you have questions, call us }} {{ for x in xs }}{{ x }}{{ endif }}')))).reason, 'mismatched', 'earlier prose is not blamed for a mismatched closing tag');
+        assert.strictEqual((await blamed(p(r('{{ For more info see page 3 }} {{ endfor }}')))).tag, '{{ For more info see page 3 }}', 'an unreadable for before an unopened endfor is blamed');
+        assert.strictEqual((await blamed(p(r('{{ if a }}x {{ If you call, ok }}')))).reason, 'unclosed', 'prose after an unclosed if is not blamed');
+        assert.strictEqual((await blamed(p(r('{{ if a }}x {{ endif a }}')))).tag, '{{ endif a }}', 'an unreadable endif after an unclosed if is blamed');
+    }
+    // A note referred to inside a loop is rendered once per pass, in that pass's scope; one only loops refer
+    // to is written only as those copies, so a field reading the item does not trip onMissing at the top level.
+    {
+        const notes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:footnotes ${W}><w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote><w:footnote w:id="1">${p(r('Note for {{ i }}'))}</w:footnote><w:footnote w:id="2">${p(r('Shared {{ t }}'))}</w:footnote></w:footnotes>`;
+        const ref = (id: number) => `<w:r><w:footnoteReference w:id="${id}"/></w:r>`;
+        const doc = p(r('{{ for i in xs }}')) + p(r('Row {{ i }}') + ref(1) + ref(2)) + p(r('{{ endfor }}')) + p(r('Tail') + ref(2));
+        for (const onMissing of ['error', 'keep'] as const) {
+            const out = unzipSync(await OfficeTemplate.render(buildDocx(doc, { 'word/footnotes.xml': notes }), { data: { xs: ['a', 'b'], t: 'T' }, onMissing }) as Uint8Array);
+            const docXml = strFromU8(out['word/document.xml']);
+            const notesXml = strFromU8(out['word/footnotes.xml']);
+            assert.doesNotThrow(() => parseXmlString(notesXml), 'footnotes.xml stays well-formed');
+            const text = (id: string) => notesXml.match(new RegExp(`<w:footnote w:id="${id}">.*?<w:t[^>]*>([^<]*)`))?.[1];
+            const refs = [...docXml.matchAll(/footnoteReference w:id="(\d+)"/g)].map(m => m[1]);
+            assert.deepStrictEqual([text(refs[0]), text(refs[2]), refs[4], text('2')], ['Note for a', 'Note for b', '2', 'Shared T'], `${onMissing}: each pass's note reads its item; a note also referred to outside the loop keeps its original; got ${refs} in ${notesXml}`);
+            assert.ok(!notesXml.includes('<w:footnote w:id="1">') && notesXml.includes('w:type="separator" w:id="-1"'), `${onMissing}: the note only the loop refers to is written only as copies; the separator stays`);
+        }
+        // A loop kept as typed (its list missing, or inside a block whose condition is) writes its notes as typed too.
+        for (const [label, kept] of [['a loop over a missing list', p(r('{{ for i in nope }}')) + p(r('see') + ref(1)) + p(r('{{ endfor }}'))],
+            ['a loop in an if whose condition is missing', p(r('{{ if nope }}')) + p(r('{{ for i in xs }}')) + p(r('see') + ref(1)) + p(r('{{ endfor }}')) + p(r('{{ endif }}'))]] as const) {
+            const out = unzipSync(await OfficeTemplate.render(buildDocx(kept, { 'word/footnotes.xml': notes }), { data: { xs: ['a'] } }) as Uint8Array);
+            const notesXml = strFromU8(out['word/footnotes.xml']);
+            assert.ok(strFromU8(out['word/document.xml']).includes('footnoteReference w:id="1"') && notesXml.includes('<w:footnote w:id="1">') && notesXml.includes('Note for {{ i }}'),
+                `${label}: the note it refers to is written as typed under its own id; got ${notesXml}`);
+        }
+        // A note a kept loop writes back as typed brings the comment it anchors (cut with it) back too.
+        for (const [part, element, refTag] of [['word/footnotes.xml', 'footnote', 'footnoteReference'], ['word/endnotes.xml', 'endnote', 'endnoteReference']] as const) {
+            const notesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:${element}s ${W}><w:${element} w:id="1"><w:p><w:commentRangeStart w:id="7"/>${r('F')}<w:commentRangeEnd w:id="7"/><w:r><w:commentReference w:id="7"/></w:r></w:p></w:${element}></w:${element}s>`;
+            const comments = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments ${W}><w:comment w:id="7" w:author="A">${p(r('Reviewer remark'))}</w:comment></w:comments>`;
+            const out = unzipSync(await OfficeTemplate.render(buildDocx(p(r('{{ for i in items }}')) + p(`<w:r><w:${refTag} w:id="1"/></w:r>`) + p(r('{{ endfor }}')), { [part]: notesXml, 'word/comments.xml': comments }), { data: {} }) as Uint8Array);
+            assert.ok(strFromU8(out[part]).includes('commentReference w:id="7"') && strFromU8(out['word/comments.xml']).includes('<w:comment w:id="7" w:author="A">') && strFromU8(out['word/comments.xml']).includes('Reviewer remark'),
+                `a ${element} a kept loop writes as typed keeps the comment it anchors; got ${strFromU8(out['word/comments.xml'])}`);
+        }
+        // A note's id, and a field character's type, are read quoted either way and after any space.
+        for (const open of [`<w:footnote w:id='1'>`, `<w:footnote\nw:id="1">`]) {
+            const notesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:footnotes ${W}>${open}${p(r('Note {{ i }}'))}</w:footnote></w:footnotes>`;
+            const out = unzipSync(await OfficeTemplate.render(buildDocx(p(r('{{ for i in xs }}')) + p(r('Row {{ i }}') + '<w:r><w:footnoteReference w:id="1"/></w:r>') + p(r('{{ endfor }}')), { 'word/footnotes.xml': notesXml }), { data: { xs: ['a', 'b'] } }) as Uint8Array);
+            const refs = [...strFromU8(out['word/document.xml']).matchAll(/footnoteReference w:id="(\d+)"/g)].map(m => m[1]);
+            const notesOut = strFromU8(out['word/footnotes.xml']);
+            assert.ok(refs.length === 2 && refs.every(id => new RegExp(`<w:footnote\\s+w:id=["']${id}["']`).test(notesOut)) && notesOut.includes('Note a') && notesOut.includes('Note b') && !notesOut.includes('{{ i }}'),
+                `${JSON.stringify(open)}: each pass refers to its own filled copy; got ${refs} in ${notesOut}`);
+        }
+        const fieldCrossed = `<w:p>${r('{{ if a }}')}<w:r><w:fldChar w:fldCharType='begin'/></w:r><w:r><w:instrText> MERGEFIELD x </w:instrText></w:r><w:r><w:fldChar w:fldCharType='separate'/></w:r>${r('res {{ endif }}')}<w:r><w:fldChar w:fldCharType='end'/></w:r></w:p>`;
+        await rejects(fieldCrossed, { a: false }, 'TEMPLATE_SYNTAX');
+        // A raw `>` in another attribute's value is not the end of a range's tag left out after a loop's first pass.
+        const rawGt = await body(`<w:p><w:bookmarkStart w:id="25" w:name="edge"/>${r('a')}</w:p>` + p(r('{{ for i in xs }}')) + `<w:p>${r('{{ i }}')}<w:bookmarkEnd w:id="25" w:x="a/>b"/></w:p>` + p(r('{{ endfor }}')), { xs: [1, 2, 3] });
+        assert.ok((rawGt.match(/b"\/>/g) ?? []).length === 1 && (rawGt.match(/<w:bookmarkEnd /g) ?? []).length === 1, `the range end is written once and left out whole after; got ${rawGt}`);
+        // Tag-like text in an XML comment does not stop the id scan.
+        const commented = await body(p(r('{{ for i in xs }}')) + `<w:p><!-- see <x a='b --><w:bookmarkStart w:id="1" w:name="b"/>${r('{{ i }}')}<w:bookmarkEnd w:id="1"/></w:p>` + p(r('{{ endfor }}')), { xs: ['1', '2'] });
+        const commentedIds = [...commented.matchAll(/<w:bookmarkStart w:id="(\d+)" w:name="([^"]+)"/g)].map(m => `${m[1]} ${m[2]}`);
+        assert.strictEqual(new Set(commentedIds).size, 2, `bookmarks after a comment holding tag-like text get fresh ids and names; got ${commentedIds}`);
+        // A range opened before a loop and closed in it is closed where it opens when the loop makes no pass,
+        // or a branch not taken held its end.
+        for (const [label, inner, data] of [['a loop of no passes', (x: string) => p(r('{{ for i in xs }}')) + x + p(r('{{ endfor }}')), { xs: [] }],
+            ['a branch not taken', (x: string) => p(r('{{ if a }}')) + x + p(r('{{ endif }}')), { a: false }]] as const) {
+            const out = await body(`<w:p><w:bookmarkStart w:id="25" w:name="edge"/><w:commentRangeStart w:id="7"/>${r('a')}</w:p>` + inner(`<w:p>${r('x')}<w:bookmarkEnd w:id="25"/><w:commentRangeEnd w:id="7"/></w:p>`), data);
+            assert.ok(out.includes('<w:bookmarkStart w:id="25" w:name="edge"/><w:bookmarkEnd w:id="25"/>') && out.includes('<w:commentRangeStart w:id="7"/><w:commentRangeEnd w:id="7"/>'),
+                `${label}: each range is closed where it opens; got ${out}`);
+        }
+        // A quote or tag-like text in an XML comment does not hide the tags after it.
+        assert.strictEqual(await text(`<w:p><w:r><!-- <w:t " --><w:t>Hi {{name}}</w:t></w:r></w:p><!-- a <w:p " here -->${p(r('Bye {{name}}'))}`, { name: 'N' }), 'Hi N\nBye N', 'tags after a comment holding a quote are filled');
+        // An end or reference in a pass whose branch skipped the range's start closes nothing of another pass.
+        const skipped = await body(p(r('{{ for x in xs }}')) + p(r('{{ if x }}')) + `<w:p><w:commentRangeStart w:id="3"/>${r('{{ x }}')}</w:p>` + p(r('{{ endif }}')) + `<w:p><w:commentRangeEnd w:id="3"/><w:r><w:commentReference w:id="3"/></w:r></w:p>` + p(r('{{ endfor }}')), { xs: [1, 0, 2] },
+            { }).catch(() => '');
+        const ends = [...skipped.matchAll(/commentRangeEnd w:id="(\d+)"/g)].map(m => m[1]);
+        const references = [...skipped.matchAll(/commentReference w:id="(\d+)"/g)].map(m => m[1]);
+        assert.ok(ends.length === 3 && new Set(ends).size === 3 && new Set(references).size === 3, `each pass's end and reference have ids of their own; got ends ${ends}, references ${references}`);
+        // A range closed where it opens is written with its id quoted safely.
+        const quotedId = await body(`<w:p><w:bookmarkStart w:id='5"' w:name="q"/>${r('a')}</w:p>` + p(r('{{ if a }}')) + `<w:p><w:bookmarkEnd w:id='5"'/>${r('b')}</w:p>` + p(r('{{ endif }}')), { a: false });
+        assert.doesNotThrow(() => parseXmlString(`<w:document ${W}><w:body>${quotedId}</w:body></w:document>`), `the closing end stays well-formed; got ${quotedId}`);
+        // A comment whose range starts in one loop and ends in another is written once, under its own id:
+        // it was cut as referred to only in loops, and the range across loops made no copy of it.
+        {
+            const comments = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments ${W}><w:comment w:id="5" w:author="A">${p(r('Check this'))}</w:comment></w:comments>`;
+            const doc = p(r('{{ for a in xs }}')) + `<w:p>${r('A{{ a }}')}<w:commentRangeStart w:id="5"/></w:p>` + p(r('{{ endfor }}')) + p(r('{{ for b in ys }}')) + `<w:p>${r('B{{ b }}')}<w:commentRangeEnd w:id="5"/><w:r><w:commentReference w:id="5"/></w:r></w:p>` + p(r('{{ endfor }}'));
+            const out = unzipSync(await OfficeTemplate.render(buildDocx(doc, { 'word/comments.xml': comments }), { data: { xs: [1], ys: [1] } }) as Uint8Array);
+            assert.ok(strFromU8(out['word/document.xml']).includes('commentReference w:id="5"') && strFromU8(out['word/comments.xml']).includes('Check this'), `the comment of a range across two loops is kept; got ${strFromU8(out['word/comments.xml'])}`);
+        }
+        // A note's start tag in an XML comment is not a note.
+        {
+            const notesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:footnotes ${W}><!-- old: <w:footnote w:id="3"> --><w:footnote w:id="3">${p(r('Note {{ a }}'))}</w:footnote></w:footnotes><!-- </w:footnotes> -->`;
+            const out = unzipSync(await OfficeTemplate.render(buildDocx(p(r('{{ for a in xs }}')) + p('<w:r><w:footnoteReference w:id="3"/></w:r>') + p(r('{{ endfor }}')), { 'word/footnotes.xml': notesXml }), { data: { xs: [1, 2] } }) as Uint8Array);
+            const notesOut = strFromU8(out['word/footnotes.xml']);
+            assert.doesNotThrow(() => parseXmlString(notesOut), `footnotes.xml stays well-formed; got ${notesOut}`);
+            assert.ok(notesOut.includes('<!-- old: <w:footnote w:id="3"> -->') && notesOut.includes('Note 1') && notesOut.includes('Note 2') && notesOut.endsWith('</w:footnotes><!-- </w:footnotes> -->'), `the comments are left as they are; got ${notesOut}`);
+        }
+        // A range across a loop inside a note written per reference: each copy writes its range once, under
+        // ids of its own, its comment anchored; a loop of no passes leaves the copy's range closed.
+        for (const [label, alsoOutside] of [['a footnote referred to only in a loop', false], ['a footnote referred to in a loop and outside', true]] as const) {
+            for (const kind of ['comment', 'bookmark'] as const) {
+                const start = kind === 'comment' ? '<w:commentRangeStart w:id="7"/>' : '<w:bookmarkStart w:id="7" w:name="bm"/>';
+                const end = kind === 'comment' ? '<w:commentRangeEnd w:id="7"/><w:r><w:commentReference w:id="7"/></w:r>' : '<w:bookmarkEnd w:id="7"/>';
+                const note = `<w:p>${start}${r('a')}</w:p>` + p(r('{{ for j in ys }}')) + `<w:p>${r('{{ j }}')}${end}</w:p>` + p(r('{{ endfor }}'));
+                const notesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:footnotes ${W}><w:footnote w:id="1">${note}</w:footnote></w:footnotes>`;
+                const comments = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments ${W}><w:comment w:id="7" w:author="A">${p(r('C7'))}</w:comment></w:comments>`;
+                const doc = p(r('{{ for i in xs }}')) + p(r('{{ i }}') + '<w:r><w:footnoteReference w:id="1"/></w:r>') + p(r('{{ endfor }}')) + (alsoOutside ? p(r('z') + '<w:r><w:footnoteReference w:id="1"/></w:r>') : '');
+                for (const ys of [[5, 6], []]) {
+                    const out = unzipSync(await OfficeTemplate.render(buildDocx(doc, { 'word/footnotes.xml': notesXml, ...(kind === 'comment' ? { 'word/comments.xml': comments } : {}) }), { data: { xs: [1, 2], ys } }) as Uint8Array);
+                    const notesOut = strFromU8(out['word/footnotes.xml']);
+                    const ids = (re: RegExp) => [...notesOut.matchAll(re)].map(m => m[1]);
+                    const starts = ids(kind === 'comment' ? /commentRangeStart w:id="(\d+)"/g : /bookmarkStart w:id="(\d+)"/g);
+                    const ends = ids(kind === 'comment' ? /commentRangeEnd w:id="(\d+)"/g : /bookmarkEnd w:id="(\d+)"/g);
+                    const where = `${label}, a ${kind} range, ys ${JSON.stringify(ys)}`;
+                    assert.ok(starts.length === (alsoOutside ? 3 : 2) && new Set(starts).size === starts.length && starts.every(id => ends.filter(e => e === id).length === 1), `${where}: each note closes its own range once; got starts ${starts}, ends ${ends}`);
+                    if (kind === 'comment' && ys.length) {
+                        const references = ids(/commentReference w:id="(\d+)"/g);
+                        const written = [...strFromU8(out['word/comments.xml']).matchAll(/<w:comment w:id="(\d+)"/g)].map(m => m[1]);
+                        assert.ok(starts.every(id => references.includes(id) && written.includes(id)) && written.every(id => starts.includes(id)), `${where}: each copy's comment is written and anchored; got starts ${starts}, references ${references}, comments ${written}`);
+                    }
+                }
+            }
+        }
+        // `<!-->` opens a comment: a field after it, inside the comment, is not filled.
+        assert.ok((await body(`<w:p><w:r><!--><w:t>{{ a }}</w:t>--><w:t>b</w:t></w:r></w:p>` + p(r('{{ if c }}y{{ endif }}')), { a: 'x--y', c: true })).includes('<!--><w:t>{{ a }}</w:t>-->'), 'a field inside a comment opened by <!--> is left as typed');
+        // Fresh ids start past every id the template has, quoted either way.
+        const singleQuoted = await body(p(r('{{ for x in xs }}')) + `<w:p><w:bookmarkStart w:id='3' w:name='bm'/>${r('{{ x }}')}<w:bookmarkEnd w:id='3'/></w:p>` + p(r('{{ endfor }}')), { xs: [1, 2, 3, 4, 5] });
+        const bookmarkIds = [...singleQuoted.matchAll(/<w:bookmarkStart w:id=['"](\d+)/g)].map(m => m[1]);
+        assert.strictEqual(new Set(bookmarkIds).size, 5, `bookmark ids written with single quotes are not reused; got ${bookmarkIds}`);
+        const commentOut = unzipSync(await OfficeTemplate.render(buildDocx(p(r('{{ for i in nope }}')) + `<w:p><w:commentRangeStart w:id="5"/>${r('x')}<w:commentRangeEnd w:id="5"/><w:r><w:commentReference w:id="5"/></w:r></w:p>` + p(r('{{ endfor }}')),
+            { 'word/comments.xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments ${W}><w:comment w:id="5" w:author="A">${p(r('C {{ i }}'))}</w:comment></w:comments>` }), { data: {} }) as Uint8Array);
+        assert.ok(strFromU8(commentOut['word/comments.xml']).includes('<w:comment w:id="5" w:author="A">'), 'a comment in a kept loop is written with it');
+        // A comment anchored only in a footnote only the loop refers to goes with the footnote's copies: its
+        // original was left in comments.xml with no anchor, its field unfilled.
+        {
+            const footnotes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:footnotes ${W}><w:footnote w:id="1"><w:p><w:commentRangeStart w:id="7"/>${r('F')}<w:commentRangeEnd w:id="7"/><w:r><w:commentReference w:id="7"/></w:r></w:p></w:footnote></w:footnotes>`;
+            const comments = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments ${W}><w:comment w:id="7" w:author="A">${p(r('C {{ i }}'))}</w:comment></w:comments>`;
+            const out = unzipSync(await OfficeTemplate.render(buildDocx(p(r('{{ for i in xs }}')) + p(ref(1)) + p(r('{{ endfor }}')), { 'word/footnotes.xml': footnotes, 'word/comments.xml': comments }), { data: { xs: ['a', 'b'] } }) as Uint8Array);
+            const footnotesXml = strFromU8(out['word/footnotes.xml']);
+            const commentsXml = strFromU8(out['word/comments.xml']);
+            const anchored = [...footnotesXml.matchAll(/commentReference w:id="(\d+)"/g)].map(m => m[1]);
+            const written = [...commentsXml.matchAll(/<w:comment w:id="(\d+)"/g)].map(m => m[1]);
+            assert.ok(anchored.length === 2 && !written.includes('7') && anchored.every(id => written.includes(id)) && commentsXml.includes('C a') && commentsXml.includes('C b') && !commentsXml.includes('{{ i }}'),
+                `each pass's footnote anchors its own filled comment, and the original is not left unanchored; got ${anchored} in ${commentsXml}`);
+        }
+        // A comment in a loop of the note's own: that loop gives each pass's comment a copy, which the
+        // note's copy keeps (renumbered again, its anchors named a comment that did not exist).
+        for (const [label, part, element, refTag, inner] of [
+            ['a footnote with a paragraph loop', 'word/footnotes.xml', 'footnote', 'footnoteReference', (x: string) => p(r('{{ for j in ys }}')) + x + p(r('{{ endfor }}'))],
+            ['an endnote with a paragraph loop', 'word/endnotes.xml', 'endnote', 'endnoteReference', (x: string) => p(r('{{ for j in ys }}')) + x + p(r('{{ endfor }}'))],
+            ['a footnote with an inline loop', 'word/footnotes.xml', 'footnote', 'footnoteReference', (x: string) => x.replace('<w:p>', `<w:p>${r('{{ for j in ys }}')}`).replace('</w:p>', `${r('{{ endfor }}')}</w:p>`)],
+        ] as const) {
+            const anchoredPara = `<w:p><w:commentRangeStart w:id="7"/>${r('F {{ j }}')}<w:commentRangeEnd w:id="7"/><w:r><w:commentReference w:id="7"/></w:r></w:p>`;
+            const notesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:${element}s ${W}><w:${element} w:id="1">${inner(anchoredPara)}</w:${element}></w:${element}s>`;
+            const comments = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments ${W}><w:comment w:id="7" w:author="A">${p(r('C {{ i }}{{ j }}'))}</w:comment></w:comments>`;
+            const doc = p(r('{{ for i in xs }}')) + p(`<w:r><w:${refTag} w:id="1"/></w:r>`) + p(r('{{ endfor }}'));
+            const out = unzipSync(await OfficeTemplate.render(buildDocx(doc, { [part]: notesXml, 'word/comments.xml': comments }), { data: { xs: ['a', 'b'], ys: [1, 2] } }) as Uint8Array);
+            const noteOut = strFromU8(out[part]);
+            const commentsOut = strFromU8(out['word/comments.xml']);
+            const anchors = [...new Set([...noteOut.matchAll(/comment(?:RangeStart|RangeEnd|Reference) w:id="(\d+)"/g)].map(m => m[1]))];
+            const written = [...commentsOut.matchAll(/<w:comment w:id="(\d+)"/g)].map(m => m[1]);
+            assert.ok(anchors.length === 4 && anchors.every(id => written.includes(id)) && written.every(id => anchors.includes(id)) && ['C a1', 'C a2', 'C b1', 'C b2'].every(t => commentsOut.includes(t)),
+                `${label}: every pass's comment is written and anchored under one id; got anchors ${anchors}, comments ${written}`);
+        }
+        let missing: any;
+        try { await OfficeTemplate.render(buildDocx(p(r('{{ for i in xs }}')) + p(ref(1)) + p(r('{{ endfor }}')), { 'word/footnotes.xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:footnotes ${W}><w:footnote w:id="1">${p(r('{{ i }} {{ nope }}'))}</w:footnote></w:footnotes>` }), { data: { xs: [1] }, onMissing: 'error' }); } catch (e) { missing = e; }
+        assert.ok(missing?.officeIssue?.code === 'TEMPLATE_FIELD_MISSING' && /nope/.test(missing.message), `a field a copied note cannot read still errors under onMissing 'error'; got ${missing}`);
+    }
+    // A bookmark or comment range across a loop's edge is written once, under its own ids: no end or start repeated.
+    {
+        const ids = (xml: string) => [...xml.matchAll(/<w:(bookmarkStart|bookmarkEnd|commentRangeStart|commentRangeEnd|commentReference) w:id="(\d+)"/g)].map(m => `${m[1]} ${m[2]}`);
+        const loop = (inner: string) => p(r('{{ for x in xs }}')) + inner + p(r('{{ endfor }}'));
+        assert.deepStrictEqual(ids(await body(`<w:p><w:bookmarkStart w:id="1" w:name="S"/>${r('a')}</w:p>` + loop(`<w:p>${r('{{ x }}')}<w:bookmarkEnd w:id="1"/></w:p>`), { xs: [1, 2, 3] })),
+            ['bookmarkStart 1', 'bookmarkEnd 1'], 'a bookmark opened before a loop and closed in it is closed once');
+        assert.deepStrictEqual(ids(await body(loop(`<w:p><w:bookmarkStart w:id="1" w:name="S"/>${r('{{ x }}')}</w:p>`) + `<w:p><w:bookmarkEnd w:id="1"/>${r('z')}</w:p>`, { xs: [1, 2, 3] })),
+            ['bookmarkStart 1', 'bookmarkEnd 1'], 'a bookmark opened in a loop and closed after it is opened once');
+        const nameFirst = await body(loop(`<w:p><w:bookmarkStart w:name="S" w:id="1"/>${r('{{ x }}')}</w:p>`) + `<w:p><w:bookmarkEnd w:id="1"/>${r('z')}</w:p>`, { xs: [1, 2, 3] });
+        assert.doesNotThrow(() => parseXmlString(`<w:document ${W}><w:body>${nameFirst}</w:body></w:document>`), `a bookmark written name first stays whole; got ${nameFirst}`);
+        assert.strictEqual((nameFirst.match(/<w:bookmarkStart /g) ?? []).length, 1, 'and is opened once');
+        const emptyPair = await body(`<w:p><w:bookmarkStart w:id="1" w:name="S"/>${r('a')}</w:p>` + loop(`<w:p>${r('{{ x }}')}<w:bookmarkEnd w:id="1"></w:bookmarkEnd></w:p>`), { xs: [1, 2, 3] });
+        assert.strictEqual((emptyPair.match(/<w:bookmarkEnd /g) ?? []).length, 1, `an end written as an empty pair is left out whole; got ${emptyPair}`);
+        const holding = await body(`<w:p><w:bookmarkStart w:id="1" w:name="S"/>${r('a')}</w:p>` + loop(`<w:p><w:bookmarkEnd w:id="1">${r('{{ x }}')}</w:bookmarkEnd></w:p>`), { xs: [1, 2] });
+        assert.doesNotThrow(() => parseXmlString(`<w:document ${W}><w:body>${holding}</w:body></w:document>`), `an end holding content is written whole, never cut open; got ${holding}`);
+        const comments = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments ${W}><w:comment w:id="7" w:author="A">${p(r('c'))}</w:comment></w:comments>`;
+        const out = unzipSync(await OfficeTemplate.render(buildDocx(`<w:p><w:commentRangeStart w:id="7"/>${r('a')}</w:p>` + loop(`<w:p>${r('{{ x }}')}<w:commentRangeEnd w:id="7"/><w:r><w:commentReference w:id="7"/></w:r></w:p>`), { 'word/comments.xml': comments }), { data: { xs: [1, 2] } }) as Uint8Array);
+        assert.deepStrictEqual(ids(strFromU8(out['word/document.xml'])), ['commentRangeStart 7', 'commentRangeEnd 7', 'commentReference 7'], 'a comment opened before a loop and closed in it is one comment');
+        assert.deepStrictEqual(strFromU8(out['word/comments.xml']).match(/<w:comment w:id="\d+"/g), ['<w:comment w:id="7"'], 'and comments.xml holds it once');
+    }
+    // Ranges pair with the nearest start; a copied note's own ids are renumbered; names are cut as characters.
+    {
+        const comments = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments ${W}><w:comment w:id="0" w:author="A">${p(r('c'))}</w:comment></w:comments>`;
+        const loop = p(r('{{ for i in xs }}')) + `<w:p><w:commentRangeStart w:id="0"/>${r('{{ i }}')}</w:p>` + p(r('{{ if i == 1 or i == 3 }}')) + '<w:p><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p>' + p(r('{{ endif }}')) + p(r('{{ endfor }}'));
+        const out = unzipSync(await OfficeTemplate.render(buildDocx(loop, { 'word/comments.xml': comments }), { data: { xs: [1, 2, 3] } }) as Uint8Array);
+        const kind: Record<string, string> = { RangeStart: 'S', RangeEnd: 'E', Reference: 'R' };
+        const seq = [...strFromU8(out['word/document.xml']).matchAll(/comment(RangeStart|RangeEnd|Reference) w:id="(\d+)"/g)].map(m => kind[m[1]] + m[2]);
+        const third = seq.filter(x => x.startsWith('S'))[2].slice(1);
+        assert.deepStrictEqual(seq.slice(-2), [`E${third}`, `R${third}`], `the last pass's range end and reference follow its own start; got ${seq}`);
+        assert.ok(!seq.some(x => x.slice(1) === '0'), `every pass refers to a copy, not the original only the loop refers to; got ${seq}`);
+        const note = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:footnotes ${W}><w:footnote w:id="1"><w:p><w:bookmarkStart w:id="7" w:name="inNote"/>${r('F')}<w:bookmarkEnd w:id="7"/><w:sdt><w:sdtPr><w:id w:val="99"/></w:sdtPr><w:sdtContent>${r('s')}</w:sdtContent></w:sdt></w:p></w:footnote></w:footnotes>`;
+        const copied = strFromU8(unzipSync(await OfficeTemplate.render(buildDocx(p(r('{{ for i in xs }}')) + p('<w:r><w:footnoteReference w:id="1"/></w:r>') + p(r('{{ endfor }}')), { 'word/footnotes.xml': note }), { data: { xs: [1, 2] } }) as Uint8Array)['word/footnotes.xml']);
+        assert.deepStrictEqual([new Set([...copied.matchAll(/bookmarkStart w:id="(\d+)"/g)].map(m => m[1])).size, new Set([...copied.matchAll(/w:name="([^"]+)"/g)].map(m => m[1])).size, new Set([...copied.matchAll(/<w:id w:val="(\d+)"/g)].map(m => m[1])).size], [2, 2, 2], 'a copied note gets fresh bookmark ids and names and content control ids');
+        const longName = 'a'.repeat(37) + '&amp;bc'; // 40 characters: the copy's must be cut to make room for _2
+        const named = await body(p(r('{{ for i in xs }}')) + `<w:p><w:bookmarkStart w:id="1" w:name="${longName}"/>${r('{{ i }}')}<w:bookmarkEnd w:id="1"/></w:p>` + p(r('{{ endfor }}')), { xs: [1, 2] });
+        assert.ok(named.includes(`w:name="${'a'.repeat(37)}&amp;_2"`), `a long name is cut as characters and written escaped; got ${named.match(/w:name="[^"]+"/g)}`);
+    }
+    // Structure repair: custom XML holding a cell's paragraphs, and a row-level content control left without rows.
+    {
+        assert.ok((await body(tbl(tr(tc('<w:customXml w:element="x">' + p(r('A')) + '</w:customXml>'))) + p(r('{{ if x }}y{{ endif }}')), { x: 1 })).includes('<w:tc><w:customXml w:element="x"><w:p>'), 'custom XML holding a cell\'s paragraph is a block: no paragraph is added after it');
+        const emptied = await body(tbl(tr(tc(p(r('h')))), '<w:sdt><w:sdtContent>' + tr(tc(p(r('{{ for q in qs }}{{ q }}'))), tc(p(r('{{ endfor }}')))) + '</w:sdtContent></w:sdt>'), { qs: [] });
+        assert.ok(!emptied.includes('<w:sdt>') && emptied.includes('>h<'), `a row-level content control a loop left without rows is removed; got ${emptied}`);
+    }
+    // Evaluating fields and blocks is charged, so loops over empty work stay bounded.
+    await rejects(p(r('{{ for a in xs }}{{ for b in xs }}' + '{{ v }}'.repeat(1000) + '{{ endfor }}{{ endfor }}')), { xs: Array(400).fill(0), v: '' }, 'OUTPUT_TOO_LARGE');
+    {
+        const big = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:footnotes ${W}><w:footnote w:id="1">${p(r('x'.repeat(300000)))}</w:footnote></w:footnotes>`;
+        let error: any;
+        try { await OfficeTemplate.render(buildDocx(p(r('{{ for i in xs }}')) + p('<w:r><w:footnoteReference w:id="1"/></w:r>') + p(r('{{ endfor }}')), { 'word/footnotes.xml': big }), { data: { xs: Array(2000).fill(0) } }); } catch (e) { error = e; }
+        assert.strictEqual(error?.officeIssue?.code, 'OUTPUT_TOO_LARGE', 'copies of a long note are charged before they are made');
+    }
+
+    // Self-closing containers a branch leaves empty are filled from the inside; the element bound holds for templates.
+    {
+        const out = await body(p(r('{{ if a }}x{{ endif }}')) + '<w:sdt><w:sdtPr/><w:sdtContent/></w:sdt>' + tbl(tr('<w:tc/>')), { a: true });
+        assert.ok(out.includes('<w:sdtContent><w:p/></w:sdtContent></w:sdt>') && out.includes('<w:tr><w:tc><w:p/></w:tc></w:tr>'), `self-closing containers get their paragraph inside; got ${out}`);
+        await rejects(p(r('{{ a }}') + '<w:r><w:t/></w:r>'.repeat(3000)), { a: 1 }, 'XML_ELEMENT_LIMIT_EXCEEDED', undefined, { decompressionLimits: { maxXmlElements: 1000 } });
+        assert.strictEqual(await text(p(r('{{ a }}') + '<w:r><w:t/></w:r>'.repeat(3000)), { a: 'ok' }), 'ok', 'within the element bound the same template renders');
+    }
+
+    // A <w:t> inside an XML comment is not content: it is written back as it was.
+    assert.ok((await body('<!-- <w:t>{{ hidden }}</w:t> -->' + p(r('{{ if x }}y{{ endif }}')), { x: true })).includes('<!-- <w:t>{{ hidden }}</w:t> -->'), 'a tag in an XML comment is left exactly as it was');
+
+    // Formatting with pictures: Word's number and date pictures, written by this library, the same everywhere.
+    {
+        const fmt = (picture: string, value: any, cfg: any = {}) => text(p(r(`{{ v | format "${picture}" }}`)), { v: value }, cfg);
+        const numbers: [string, any, string][] = [
+            ['$#,##0.00', 1250.5, '$1,250.50'], ['$#,##0.00', -1250.5, '-$1,250.50'], ['$#,##0.00;($#,##0.00)', -320, '($320.00)'],
+            ['$#,##0.00;($#,##0.00);\'nil\'', 0, 'nil'], ['#,##0', 1234567.891, '1,234,568'], ['0.00', 1.005, '1.01'], ['0.00', 0.1 + 0.2, '0.30'],
+            ['0.0%', 0.125, '12.5%'], ['#,##0.00 \'€\'', 1250.5, '1,250.50 €'], ['000-00-0000', 123456789, '123-45-6789'], ['#', 0, ''],
+            ['.00', 12.5, '12.50'], ['0.##', 12, '12'], ['0.##', 12.5, '12.5'], ['0.00', -0.001, '0.00'], ['00000', 42, '00042'],
+            ['#,##0.00', '1250.5', '1,250.50'], ['#,##0', ' -3e3 ', '-3,000'], ['#,##0', 12345678901234567890n, '12,345,678,901,234,600,000'],
+        ];
+        for (const [picture, value, want] of numbers) assert.strictEqual(await fmt(picture, value), want, `number picture ${picture} of ${String(value)}`);
+        assert.strictEqual(await fmt('#,##0.00', 1250.5, { numberSeparators: { decimal: ',', group: '.' } }), '1.250,50', 'numberSeparators sets what the separators write');
+        const dates: [string, any, string, any?][] = [
+            ['MMMM d, yyyy', '2026-11-01', 'November 1, 2026'], ['dddd, d MMM yy', new Date(Date.UTC(2026, 10, 1)), 'Sunday, 1 Nov 26'],
+            ['yyyy', (() => { const d = new Date(Date.UTC(2000, 0, 1)); d.setUTCFullYear(-5); return d; })(), '-0005'],
+            ['dd/MM/yyyy HH:mm', '2026-11-01T09:05:00Z', '01/11/2026 09:05'], ['h:mm AM/PM', '2026-11-01T21:07:00+05:30', '3:37 PM'],
+            ['h:mm am/pm', '2026-11-01T09:07', '9:07 am'], ['yyyy-MM-dd', '2026-11-01T23:30:00-02:00', '2026-11-02'], ["'Week of' MMMM d", '2026-11-01', 'Week of November 1'],
+            ['d MMMM yyyy HH:mm', '2026-11-01T23:30:00Z', '2 November 2026 05:00', { utcOffsetMinutes: 330 }],
+            ['dddd d MMMM', '2026-11-02', 'lundi 2 novembre', { dateNames: { months: ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'], days: ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'] } }],
+        ];
+        for (const [picture, value, want, cfg] of dates) assert.strictEqual(await fmt(picture, value, cfg), want, `date picture ${picture} of ${String(value)}`);
+        assert.strictEqual(await text(p(r('{{ n | upper }} {{ n | lower }} {{ n | lower | upper }}')), { n: 'Ada Lovelace' }), 'ADA LOVELACE ada lovelace ADA LOVELACE', 'upper and lower, chained');
+        assert.strictEqual(await text(p(r('{{ tags | join ", " | upper }} {{ x | round 1 }}')), { tags: ['a', 'b'], x: 2.46 }, { formatters: { join: (v: any, sep: any) => v.join(sep), round: (v: any, places: any) => Number(v).toFixed(places) } }), 'A, B 2.5', 'formatters of the caller\'s own take the value as the data holds it, and their arguments');
+        assert.strictEqual(await text(p(r('[{{ v | format "0.00" }}]')), { v: null }), '[]', 'an empty value stays empty through a picture');
+        assert.strictEqual(await text(p(r('{{ v | format "0.00" }}')), {}), '{{ v | format "0.00" }}', "a missing field with a picture is kept as typed under onMissing 'keep'");
+        assert.strictEqual(await text(p(r('{{ total | currency }} {{ yes | no }}')), { total: 1 }), '{{ total | currency }} {{ yes | no }}', 'a pipe before a word that is no filter is prose, left as text');
+        assert.strictEqual(await text(p(r('{{ v | format \u201C#,##0.00\u201D }}')), { v: 3 }), '3.00', 'a picture in curly quotes, as Word writes them');
+        assert.strictEqual(await text(p(r('{{ v | format "0.00" }} {{ v }} {{ v | format "0" }}')), { v: 2.5 }), '2.50 2.5 3', 'one value written with different pictures in one paragraph');
+        for (const [picture, value, kind] of [['0.00', 'abc', 'text'], ['MMMM', 5, 'number'], ['0.00', true, 'true/false'], ['0.00', [1], 'list'], ['MMMM', '2026-02-30', 'text']] as [string, any, string][]) {
+            const error = await rejects(p(r(`{{ v | format "${picture}" }}`)), { v: value }, 'TEMPLATE_DATA_INVALID', 'unformattable');
+            assert.strictEqual(error.officeIssue.details.kind, kind, `the error names the value's kind for ${picture}`);
+        }
+        await rejects(p(r('{{ v | upper }}')), { v: { a: 1 } }, 'TEMPLATE_DATA_INVALID', 'unformattable');
+        // A section of literal text only writes just that; curly quotes inside a picture are quotes too;
+        // a value past a double's range, an early year and an offset out of range are read right.
+        assert.deepStrictEqual([await fmt("0;'negative'", -5), await fmt('0;;0', -5), await fmt("'none';0", 5)], ['negative', '', 'none'], 'sections of literal text only');
+        assert.strictEqual(await text(p(r('{{ v | format \u201Cd \u2018de\u2019 MMMM\u201D }}')), { v: '2026-05-05' }), '5 de May', 'curly quotes inside a picture mark its literal text');
+        assert.strictEqual(await fmt('yyyy-MM-dd', '0050-03-04'), '0050-03-04', 'a year below 100 is that year');
+        for (const value of ['1e400', '9'.repeat(400), 10n ** 400n]) await rejects(p(r('{{ v | format "#,##0" }}')), { v: value }, 'TEMPLATE_DATA_INVALID', 'unformattable');
+        await rejects(p(r('{{ v | format "#,##0%%%%%%" }}')), { v: 1e300 }, 'TEMPLATE_DATA_INVALID', 'unformattable');
+        await rejects(p(r('{{ v | format "yyyy" }}')), { v: '2026-01-01T00:00:00+99:99' }, 'TEMPLATE_DATA_INVALID', 'unformattable');
+        await rejects(p(r('{{ v | format "0.00E+00" }}')), { v: 1 }, 'TEMPLATE_SYNTAX', 'unreadable');
+        await rejects(p(r('{{ v | join }}')), { v: [1] }, 'TEMPLATE_DATA_INVALID', 'not-text', { formatters: { join: (v: any) => v } });
+        await rejects(p(r('{{ v | format "yyyy-MM-dd" }}')), { v: new Date(8.64e15) }, 'TEMPLATE_DATA_INVALID', 'unformattable', { utcOffsetMinutes: 60 });
+        for (const picture of ['0,,', '#,##0,K', '0,.00', '#,##0.00,,', '0.0,', '0.,']) await rejects(p(r(`{{ v | format "${picture}" }}`)), { v: 1234567 }, 'TEMPLATE_SYNTAX', 'unreadable');
+        await rejects(p(r('{{ f }}')), { f: function secret() { return 42; } }, 'TEMPLATE_DATA_INVALID', 'not-text');
+        await rejects(p(r('{{ f }}')), { f: Symbol('x') }, 'TEMPLATE_DATA_INVALID', 'not-text');
+        await rejects(p(r('{{ f | upper }}')), { f: function secret() { return 'x'; } }, 'TEMPLATE_DATA_INVALID', 'unformattable');
+        await rejects(p(r('{{ s | lower }}')), { s: Symbol('x') }, 'TEMPLATE_DATA_INVALID', 'unformattable');
+        await rejects(p(r('{{ if a &lt; b }}y{{ endif }}')), { a: Symbol('a'), b: Symbol('b') }, 'TEMPLATE_DATA_INVALID', 'incomparable');
+        assert.strictEqual(await text(p(r('{{ if a == 1 }}yes{{ else }}no{{ endif }} {{ if a != 1 }}x{{ endif }}')), { a: 1n }), 'yes', 'a bigint equals the number of its value');
+        let calls = 0;
+        assert.strictEqual(await text(p(r('[{{ x | seq }}][{{ x | seq }}]{{ for i in xs }}({{ x | seq }}){{ endfor }}')), { x: 1, xs: [1, 2] }, { formatters: { seq: () => ++calls } }), '[1][2](3)(4)',
+            'each use of a formatter of the caller\'s own writes its own answer, not the first one again');
+        for (const bad of ['{{ v | format "[Red]0.00" }}', '{{ v | format "0;0;0;0" }}', '{{ v | format "" }}', '{{ v | format "plain" }}', '{{ v | format 5 }}', '{{ v | format "0" "1" }}', '{{ v | upper "x" }}', '{{ v | format "0 \'open" }}']) {
+            await rejects(p(r(bad.replace(/'/g, '\''))), { v: 1 }, 'TEMPLATE_SYNTAX', 'unreadable');
+        }
+        for (const cfg of [{ utcOffsetMinutes: 2000 }, { utcOffsetMinutes: 1.5 }, { dateNames: { months: ['a'] } }, { numberSeparators: { decimal: 1 } }, { formatters: { format: () => 1 } }, { formatters: { 'bad name': () => 1 } }, { formatters: { x: 'nope' } }]) {
+            await rejects(p(r('{{ v }}')), { v: 1 }, 'IMPROPER_ARGUMENTS', undefined, cfg);
+        }
+    }
+
+    // A field kept as typed (missing, 'keep') keeps each piece in its own run, as before.
+    {
+        const xml = await body(p(r('{{na', true), r('me}} x')), {});
+        assert.ok(xml.includes('<w:b/></w:rPr><w:t xml:space="preserve">{{na</w:t>') && xml.includes('me}} x'), 'a missing field split across runs keeps each run\'s text and formatting');
     }
 }
 
@@ -5430,6 +6024,7 @@ async function runTests(): Promise<void> {
         ['OfficeGenUtils', testOfficeGenUtils],
         ['NativePdfEngine', testNativePdfEngine],
         ['Template', testTemplate],
+        ['Template blocks', testTemplateBlocks],
         ['Cancellation', testCancellation],
     ];
 

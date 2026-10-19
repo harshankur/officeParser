@@ -32,8 +32,10 @@
  */
 
 import { decryptIfNeeded } from './crypto/decryptContainer.js';
-import { openDocx, renderDocxTemplate } from './template/docxTemplate.js';
-import { BlobLike, OfficeErrorType, OfficeParserConfig, TemplateConfig, TemplateData } from './types.js';
+import { DEFAULT_OFFICE_PARSER_CONFIG, DEFAULT_TEMPLATE_CONFIG } from './defaults.js';
+import { compileDocxTemplate, DocxTemplateOptions, openDocx, renderDocxTemplate } from './template/docxTemplate.js';
+import { BlobLike, OfficeErrorType, OfficeParserConfig, TemplateConfig, TemplateData, TemplateDataDetails, TemplateFormatter, TemplateSyntaxDetails } from './types.js';
+import { PictureSettings } from './template/templateFormat.js';
 import { assertNode } from './utils/envUtils.js';
 import { getOfficeError } from './utils/errorUtils.js';
 
@@ -55,6 +57,44 @@ async function readInput(input: TemplateInput, errCfg: OfficeParserConfig): Prom
     throw getOfficeError(OfficeErrorType.INVALID_INPUT, errCfg);
 }
 
+/** The names a filter of the caller's own may have: a word, not one of the built-in filters. */
+const FORMATTER_NAME = /^[\p{L}_][\p{L}\p{N}_]*$/u;
+const BUILT_IN_FILTER_NAMES = new Set(['format', 'upper', 'lower']);
+
+/** What a picture writes, from the config and the defaults; a setting of the wrong shape is refused, typed. */
+function pictureSettings(config: TemplateConfig, errCfg: OfficeParserConfig): PictureSettings {
+    const separators = { ...DEFAULT_TEMPLATE_CONFIG.numberSeparators, ...config.numberSeparators };
+    const names = { ...DEFAULT_TEMPLATE_CONFIG.dateNames, ...config.dateNames };
+    const offset = config.utcOffsetMinutes ?? DEFAULT_TEMPLATE_CONFIG.utcOffsetMinutes;
+    const strings = (list: unknown, length: number): boolean => Array.isArray(list) && list.length === length && list.every(x => typeof x === 'string');
+    const refuse = (detail: string): never => { throw getOfficeError(OfficeErrorType.IMPROPER_ARGUMENTS, errCfg, detail); };
+    if (typeof separators.decimal !== 'string' || typeof separators.group !== 'string') refuse('numberSeparators.decimal and .group are text');
+    if (!strings(names.months, 12) || !strings(names.monthsShort, 12)) refuse('dateNames.months and .monthsShort are twelve names each');
+    if (!strings(names.days, 7) || !strings(names.daysShort, 7)) refuse('dateNames.days and .daysShort are seven names each, Sunday first');
+    if (typeof names.am !== 'string' || typeof names.pm !== 'string') refuse('dateNames.am and .pm are text');
+    if (!Number.isInteger(offset) || Math.abs(offset) > MAX_UTC_OFFSET_MINUTES) refuse(`utcOffsetMinutes is a whole number of minutes, at most ${MAX_UTC_OFFSET_MINUTES} either way`);
+    return {
+        decimal: separators.decimal, group: separators.group, months: names.months, monthsShort: names.monthsShort,
+        days: names.days, daysShort: names.daysShort, am: names.am, pm: names.pm, utcOffsetMinutes: offset,
+    };
+}
+
+/** The most a UTC offset can be: a day, either way. */
+const MAX_UTC_OFFSET_MINUTES = 24 * 60;
+
+/** The caller's own filters: functions, named as words, none named as a built-in filter. */
+function templateFormatters(config: TemplateConfig, errCfg: OfficeParserConfig): Record<string, TemplateFormatter> {
+    const formatters = config.formatters ?? {};
+    if (typeof formatters !== 'object' || formatters === null) throw getOfficeError(OfficeErrorType.IMPROPER_ARGUMENTS, errCfg, 'formatters is an object of functions by name');
+    const own: Record<string, TemplateFormatter> = Object.create(null);
+    for (const [name, run] of Object.entries(formatters)) {
+        if (typeof run !== 'function') throw getOfficeError(OfficeErrorType.IMPROPER_ARGUMENTS, errCfg, `formatters.${name} is not a function`);
+        if (!FORMATTER_NAME.test(name) || BUILT_IN_FILTER_NAMES.has(name)) throw getOfficeError(OfficeErrorType.IMPROPER_ARGUMENTS, errCfg, `formatters.${name} is not a word, or is the name of a built-in filter (format, upper, lower)`);
+        own[name] = run;
+    }
+    return own;
+}
+
 /** A single data entry must be a plain object (not null/array/primitive). */
 function isDataObject(d: unknown): d is TemplateData {
     return typeof d === 'object' && d !== null && !Array.isArray(d);
@@ -74,11 +114,11 @@ export class OfficeTemplate {
         // A config object (even without onWarning) suppresses errorUtils' console fallback, so a thrown
         // rejection is not also printed to stderr; a caller-supplied onWarning is still honored.
         const errCfg: OfficeParserConfig = { onWarning: config?.onWarning };
-        if (!config || config.data == null) throw getOfficeError(OfficeErrorType.IMPROPER_ARGUMENTS, errCfg);
+        if (!config || config.data == null) throw getOfficeError(OfficeErrorType.IMPROPER_ARGUMENTS, errCfg, 'data is required: an object, or an array of objects');
         // Validate the data up front: one object, or an array of objects. Rejects a null/primitive
         // batch entry with a typed error instead of a raw TypeError mid-render.
         const rows = Array.isArray(config.data) ? config.data : [config.data];
-        if (!rows.every(isDataObject)) throw getOfficeError(OfficeErrorType.IMPROPER_ARGUMENTS, errCfg);
+        if (!rows.every(isDataObject)) throw getOfficeError(OfficeErrorType.IMPROPER_ARGUMENTS, errCfg, 'data is an object, or an array of objects');
 
         let bytes = await readInput(template, errCfg);
 
@@ -97,19 +137,31 @@ export class OfficeTemplate {
             throw getOfficeError(OfficeErrorType.TEMPLATE_UNSUPPORTED_FORMAT, errCfg, hint);
         }
 
-        const start = config.delimiters?.start || '{{';
-        const end = config.delimiters?.end || '}}';
-        const onMissing = config.onMissing || 'keep';
-        // A fixed local-time instant: fflate stamps zip entries from local-time fields, so building the
-        // date from local fields makes the DOS timestamp identical in every timezone (deterministic
-        // output cross-machine) and safely inside fflate's 1980-2099 range everywhere.
-        const mtime = new Date(2001, 0, 1, 0, 0, 0);
-        const onFieldMissing = (key: string): never => { throw getOfficeError(OfficeErrorType.TEMPLATE_FIELD_MISSING, errCfg, key); };
-        const maxRepeatedContent = config.decompressionLimits?.maxRepeatedContent ?? 16 * 1024 * 1024;
-        const onRepeatLimit = (): never => { throw getOfficeError(OfficeErrorType.OUTPUT_TOO_LARGE, errCfg, { repeatedLimit: maxRepeatedContent }); };
+        const options: DocxTemplateOptions = {
+            start: config.delimiters?.start || DEFAULT_TEMPLATE_CONFIG.delimiters.start,
+            end: config.delimiters?.end || DEFAULT_TEMPLATE_CONFIG.delimiters.end,
+            onMissing: config.onMissing || DEFAULT_TEMPLATE_CONFIG.onMissing,
+            // A fixed local-time instant: fflate stamps zip entries from local-time fields, so building the
+            // date from local fields makes the DOS timestamp identical in every timezone (deterministic
+            // output cross-machine) and safely inside fflate's 1980-2099 range everywhere.
+            mtime: new Date(2001, 0, 1, 0, 0, 0),
+            onFieldMissing: (key: string): never => { throw getOfficeError(OfficeErrorType.TEMPLATE_FIELD_MISSING, errCfg, key); },
+            maxRepeatedContent: config.decompressionLimits?.maxRepeatedContent ?? DEFAULT_TEMPLATE_CONFIG.maxRepeatedContent,
+            onRepeatLimit: (): never => { throw getOfficeError(OfficeErrorType.OUTPUT_TOO_LARGE, errCfg, { repeatedLimit: options.maxRepeatedContent }); },
+            onSyntax: (details: TemplateSyntaxDetails): never => { throw getOfficeError(OfficeErrorType.TEMPLATE_SYNTAX, errCfg, details); },
+            onDataInvalid: (details: TemplateDataDetails): never => { throw getOfficeError(OfficeErrorType.TEMPLATE_DATA_INVALID, errCfg, details); },
+            onNestingLimit: (): never => { throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED, errCfg); },
+            onOutputLimit: (): never => { throw getOfficeError(OfficeErrorType.OUTPUT_TOO_LARGE, errCfg); },
+            pictures: pictureSettings(config, errCfg),
+            formatters: templateFormatters(config, errCfg),
+            maxXmlElements: config.decompressionLimits?.maxXmlElements ?? DEFAULT_OFFICE_PARSER_CONFIG.decompressionLimits.maxXmlElements,
+            onElementLimit: (): never => { throw getOfficeError(OfficeErrorType.XML_ELEMENT_LIMIT_EXCEEDED, errCfg, options.maxXmlElements); },
+        };
 
-        const renderOne = (data: TemplateData): Uint8Array =>
-            renderDocxTemplate(entries, data, { start, end, onMissing, mtime, onFieldMissing, maxRepeatedContent, onRepeatLimit });
+        // Compiled once: the tags are read, their blocks paired and scoped, and every tag error raised
+        // before any document is rendered; then each data entry renders from the same compiled template.
+        const compiled = compileDocxTemplate(entries, options);
+        const renderOne = (data: TemplateData): Uint8Array => renderDocxTemplate(compiled, data, options);
 
         return Array.isArray(config.data) ? rows.map(renderOne) : renderOne(config.data);
     }

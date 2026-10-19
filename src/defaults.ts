@@ -1,4 +1,4 @@
-import { ChunkingConfig, CsvGeneratorConfig, DeepRequired, DocumentStructureChunkingConfig, DocxGeneratorConfig, FixedSizeChunkingConfig, FullGeneratorConfig, HtmlGeneratorConfig, HtmlParserConfig, MdGeneratorConfig, OcrConfig, OcrTimeoutConfig, OdtGeneratorConfig, OfficeParserConfig, PdfGeneratorConfig, PdfParserConfig, SemanticChunkingConfig, TexGeneratorConfig, TexParserConfig, TextGeneratorConfig } from './types.js';
+import { ChunkingConfig, CsvGeneratorConfig, DeepRequired, DocumentStructureChunkingConfig, DocxGeneratorConfig, FixedSizeChunkingConfig, FullGeneratorConfig, HtmlGeneratorConfig, HtmlParserConfig, MdGeneratorConfig, OcrConfig, OcrTimeoutConfig, OdtGeneratorConfig, OfficeParserConfig, PdfGeneratorConfig, PdfParserConfig, SemanticChunkingConfig, TemplateConfig, TemplateDateNames, TexGeneratorConfig, TexParserConfig, TextGeneratorConfig } from './types.js';
 
 const PDFJS_VERSION = '6.2.108';
 const DEFAULT_PDF_WORKER_SRC = typeof __SLIM__ !== 'undefined' && __SLIM__ ? '' : `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
@@ -115,6 +115,28 @@ export const DEFAULT_OFFICE_PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     htmlParserConfig: DEFAULT_HTML_PARSER_CONFIG,
     pdfParserConfig: DEFAULT_PDF_PARSER_CONFIG,
     texParserConfig: DEFAULT_TEX_PARSER_CONFIG,
+};
+
+/**
+ * Defaults for {@link OfficeTemplate.render}: the tag delimiters, what a missing field does, what a
+ * picture writes (separators, English month and day names, dates in UTC), and what a render may add by
+ * repetition (the parser's own `maxRepeatedContent`, so the two never drift).
+ */
+export const DEFAULT_TEMPLATE_CONFIG: Required<Pick<TemplateConfig, 'delimiters' | 'onMissing' | 'utcOffsetMinutes'>>
+    & { numberSeparators: Required<NonNullable<TemplateConfig['numberSeparators']>>; dateNames: Required<TemplateDateNames>; maxRepeatedContent: number } = {
+    delimiters: { start: '{{', end: '}}' },
+    onMissing: 'keep',
+    numberSeparators: { decimal: '.', group: ',' },
+    dateNames: {
+        months: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'],
+        monthsShort: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+        days: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
+        daysShort: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+        am: 'AM',
+        pm: 'PM',
+    },
+    utcOffsetMinutes: 0,
+    maxRepeatedContent: DEFAULT_OFFICE_PARSER_CONFIG.decompressionLimits.maxRepeatedContent,
 };
 
 /**

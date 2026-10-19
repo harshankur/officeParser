@@ -31,6 +31,10 @@ export enum OfficeErrorType {
     TEMPLATE_UNSUPPORTED_FORMAT = 'TEMPLATE_UNSUPPORTED_FORMAT',
     /** A template placeholder had no matching data field and `onMissing: 'error'` was set */
     TEMPLATE_FIELD_MISSING = 'TEMPLATE_FIELD_MISSING',
+    /** A template's block tags cannot be read or do not enclose content (see {@link TemplateSyntaxDetails}) */
+    TEMPLATE_SYNTAX = 'TEMPLATE_SYNTAX',
+    /** A template's data does not fit how a tag uses it (see {@link TemplateDataDetails}) */
+    TEMPLATE_DATA_INVALID = 'TEMPLATE_DATA_INVALID',
     /** PDF generation failed (e.g. the puppeteer engine is unavailable or rendering errored) */
     PDF_GENERATION_FAILED = 'PDF_GENERATION_FAILED',
     /** Attempted to use Node.js-only features in a browser environment */
@@ -2253,14 +2257,107 @@ export interface OfficeChunk {
 
 // ─── End Chunking Types ────────────────────────────────────────────────────────
 
-/** A single value substituted for a template placeholder. `null`/`undefined` render as empty text. */
-export type TemplateValue = string | number | boolean | Date | null | undefined;
+/**
+ * A value in a template's data. Text, numbers, true/false and dates fill a field (`null`/`undefined`
+ * render as empty text); a list is what `{{ for item in list }}` repeats over; an object holds named
+ * values reached by a path (`{{ customer.address.city }}`).
+ */
+export type TemplateValue = string | number | boolean | Date | null | undefined | readonly TemplateValue[] | { readonly [key: string]: TemplateValue };
 
 /**
- * A flat map of placeholder name to value for {@link OfficeTemplate.render}. A key `name` fills the
- * placeholder `{{name}}` (see `delimiters`). Keys absent from the map are governed by `onMissing`.
+ * The data for one document from {@link OfficeTemplate.render}. A key `name` fills the field
+ * `{{name}}` (see `delimiters`), and a path `{{ a.b }}` reads `b` of the object at `a`; a key that
+ * itself holds a dot (`"invoice.total"`) is read as typed before it is read as a path. Fields absent
+ * from the data are governed by `onMissing`.
  */
 export type TemplateData = Record<string, TemplateValue>;
+
+/** Why a template's tags were rejected with `TEMPLATE_SYNTAX`. */
+export type TemplateSyntaxReason =
+    /**
+     * A tag cannot be read; `detail` says why. Text that only starts like a block tag (`{{ If you call }}`)
+     * stays text, and is named so only when the blocks around it fail to pair. Named at once: a block
+     * keyword spelt as other template languages spell it (`elseif`, `elif`, `end if`), and a filter
+     * given what it does not take (`format` with a picture that cannot be read, `upper "x"`).
+     */
+    | 'unreadable'
+    /** A block's opening tag has no closing tag. */
+    | 'unclosed'
+    /** A closing tag, or an `else`, has no block to belong to. */
+    | 'unopened'
+    /** A closing tag closes a different kind of block than the one open (`endfor` for an `if`). */
+    | 'mismatched'
+    /** An `else` or `else if` follows the block's `else`. */
+    | 'else-after-else'
+    /** A block's tags sit where no content lies between them as a whole: in different tables, cells across tables, a text box and the text around it, different parts, or inside an element a block cannot be cut at; `detail` names it. */
+    | 'crossing'
+    /** An `else` or `else if` in a table shares a row with another of the block's tags; in a table each branch is its own rows. */
+    | 'row-branch'
+    /** Two blocks overlap without one holding the other. */
+    | 'overlap'
+    /** The part holding block tags is not well-formed XML. */
+    | 'malformed-xml';
+
+/** The `details` of a `TEMPLATE_SYNTAX` error. */
+export interface TemplateSyntaxDetails {
+    reason: TemplateSyntaxReason;
+    /** The tag as typed, delimiters included. */
+    tag: string;
+    /** The document part holding it, e.g. `word/document.xml`. */
+    part: string;
+    /** More about the reason, where there is more to say. */
+    detail?: string;
+}
+
+/** Why a template's data was rejected with `TEMPLATE_DATA_INVALID`. */
+export type TemplateDataReason =
+    /** A `for` tag's list is not a list. */
+    | 'not-a-list'
+    /** A field's value (or the value a case filter changes) is a list, an object, a function or a symbol, which has no text of its own. */
+    | 'not-text'
+    /** A condition compares two values of different kinds (text with a number), or a list or object. */
+    | 'incomparable'
+    /** A filter cannot write the value: a number picture given text that is not a number, a date picture given one that is not a date. */
+    | 'unformattable';
+
+/** The `details` of a `TEMPLATE_DATA_INVALID` error. */
+export interface TemplateDataDetails {
+    reason: TemplateDataReason;
+    /** The tag as typed, delimiters included. */
+    tag: string;
+    /** The document part holding it. */
+    part: string;
+    /** The kind of the value (`text`, `number`, `true/false`, `date`, `list`, `object`, `function`, `symbol`, `empty`). */
+    kind: string;
+    /** For `incomparable`, the kind of the other value. */
+    otherKind?: string;
+    /** For `unformattable`, the filter, and what it takes (`number` or `date` for `format`). */
+    filter?: string;
+    takes?: string;
+}
+
+/**
+ * A filter of the caller's own, named in `TemplateConfig.formatters` and written in a tag after `|`
+ * (`{{ name | initials }}`, `{{ total | round 2 }}`). It is given the field's value as the data holds it
+ * (a list or an object too) and the strings and numbers written after its name, and returns the value
+ * to write (or to pass to the next filter).
+ */
+export type TemplateFormatter = (value: TemplateValue, ...args: (string | number)[]) => TemplateValue;
+
+/** The words a date picture writes: month and day names, in full and short, and the AM/PM markers. */
+export interface TemplateDateNames {
+    /** Twelve names, January first (`MMMM`). */
+    months?: string[];
+    /** Twelve short names (`MMM`). */
+    monthsShort?: string[];
+    /** Seven names, Sunday first (`dddd`). */
+    days?: string[];
+    /** Seven short names (`ddd`). */
+    daysShort?: string[];
+    /** The markers `AM/PM` writes (`am/pm` writes them in lower case, `A/P` their first letter). */
+    am?: string;
+    pm?: string;
+}
 
 /**
  * Options for {@link OfficeTemplate.render}. `data` is the only required field: a single
@@ -2271,18 +2368,38 @@ export interface TemplateConfig {
     /** The field values. One object -> one rendered document; an array -> one document per entry. */
     data: TemplateData | TemplateData[];
     /**
-     * Placeholder delimiters. Defaults to `{{` and `}}`, so `{{name}}` is a placeholder. A placeholder
-     * name is matched even when the source splits it across several runs (a common Word quirk).
+     * Tag delimiters. Defaults to `{{` and `}}`, so `{{name}}` is a field and `{{ if paid }}` a block
+     * tag. A tag is matched even when the source splits it across several runs (a common Word quirk).
      */
     delimiters?: { start: string; end: string };
     /**
-     * What to do with a placeholder whose name is absent from `data`:
-     * - `'keep'` (default): leave the placeholder text untouched.
-     * - `'empty'`: replace it with nothing.
+     * What to do with a field the data does not have, in a placeholder, a condition or a loop's list:
+     * - `'keep'` (default): leave it as typed. A placeholder keeps its text; a block (`if` or `for`)
+     *   whose condition or list uses the field is left exactly as typed, tags and content included.
+     * - `'empty'`: treat it as empty. A placeholder is replaced with nothing; in a condition the field
+     *   is `null`; a loop over it repeats nothing.
      * - `'error'`: reject with `TEMPLATE_FIELD_MISSING`.
-     * A key that is present but `null`/`undefined` always renders as empty (it is not "missing").
+     * A key that is present but `null`/`undefined` is not missing: it renders as empty, is `null` in a
+     * condition, and a loop over it repeats nothing.
      */
     onMissing?: 'keep' | 'empty' | 'error';
+    /**
+     * The separators a number picture (`{{ total | format "#,##0.00" }}`) writes. A picture is always
+     * written with `,` for groups and `.` for the decimal point, as in Word; these are what appear in
+     * the document. Default `{ decimal: '.', group: ',' }` (`{ decimal: ',', group: '.' }` writes
+     * `1.250,50`).
+     */
+    numberSeparators?: { decimal?: string; group?: string };
+    /** The month and day names and AM/PM markers a date picture writes. Default English. */
+    dateNames?: TemplateDateNames;
+    /**
+     * Minutes added to UTC before a date picture writes a date: 0 (the default) writes dates in UTC, 330
+     * in India's time, -300 in New York's in winter. A fixed offset, the same on every machine, unlike
+     * the machine's own time zone.
+     */
+    utcOffsetMinutes?: number;
+    /** Filters of the caller's own, by name, beside the built-in `format`, `upper` and `lower` (see {@link TemplateFormatter}). */
+    formatters?: Record<string, TemplateFormatter>;
     /**
      * Password, if the template document is itself encrypted; it is decrypted before rendering. Note
      * the rendered output is the plain (unencrypted) document.
@@ -2306,10 +2423,14 @@ export interface TemplateConfig {
     fileType?: 'docx';
     /**
      * Limits on decompressing the (untrusted) template zip, same shape and defaults as the parser's.
-     * Guards against zip-bomb templates. Defaults to 512 MiB / 10000 entries. `maxRepeatedContent`
-     * (16 MiB) bounds what a document's values add by repetition: each use of a value after its first
-     * adds what the value outgrows its placeholder by, and past the limit the render rejects with
-     * `OUTPUT_TOO_LARGE` (a million placeholders of one value would otherwise write a copy at each).
+     * Guards against zip-bomb templates. Defaults to 512 MiB / 10000 entries. `maxXmlElements` (2,000,000)
+     * bounds the elements the template's parts hold, as for parsing, and its tags and their tokens with them (`XML_ELEMENT_LIMIT_EXCEEDED`). `maxRepeatedContent`
+     * (16 MiB) bounds what a document adds by repetition: each copy of a loop's content after its first,
+     * each copy of a note a repeated reference points at, each use of a value after its first (what the
+     * value outgrows its placeholder by), each block or field written again as typed, and each field, loop
+     * or branch evaluated (a few characters, plus its condition's size). Past the
+     * limit the render rejects with `OUTPUT_TOO_LARGE` (nested loops over a long list, or a million
+     * placeholders of one value, would otherwise write without bound).
      */
     decompressionLimits?: DecompressionLimits;
     /**
