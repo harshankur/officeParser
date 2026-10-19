@@ -4556,6 +4556,44 @@ async function testMarkdownCellBreaks(): Promise<void> {
 }
 
 /**
+ * Directive and attribute-list values may be quoted, and a size or video id is taken only as what it is.
+ */
+async function testMarkdownAttributes(): Promise<void> {
+    const md = (src: string, cfg: any = {}) => OfficeParser.parseOffice(Buffer.from(src), { fileType: 'md', onWarning: () => { }, ...cfg } as any) as Promise<OfficeParserAST>;
+    for (const directive of ['::youtube{id="dQw4w9WgXcQ"}', "::youtube{id='dQw4w9WgXcQ'}", '::youtube{id=dQw4w9WgXcQ}', '::youtube{#dQw4w9WgXcQ}']) {
+        const embed = (await md(directive + '\n')).content[0] as OfficeContentNode;
+        assert.strictEqual((embed.metadata as any)?.videoId, 'dQw4w9WgXcQ', `${directive} names the video without quotes`);
+    }
+    const iframe = (await md('::embed{src="https://example.com/x" width="400" align=\'center\'}\n', { htmlParserConfig: { preserveIframes: true } })).content[0] as OfficeContentNode;
+    assert.deepStrictEqual([iframe.type, (iframe.metadata as any)?.url, (iframe.metadata as any)?.width, (iframe.metadata as any)?.align], ['embed', 'https://example.com/x', '400', 'center'], 'quoted embed attributes');
+    const image = (await md('![alt](a.png){width="50%" .centered}\n')).content[0].children![0];
+    assert.deepStrictEqual([(image.metadata as any)?.width, (image.metadata as any)?.align], ['50%', 'center'], 'quoted image attributes');
+    // A size or id that is not one is not read, and a value that is not one is not written back.
+    const hostile = (await md('::embed{src="https://example.com/x" width="100%;background:url(//x)" height=\'3"><b>\'}\n', { htmlParserConfig: { preserveIframes: true } })).content[0] as OfficeContentNode;
+    assert.deepStrictEqual([(hostile.metadata as any)?.width, (hostile.metadata as any)?.height], [undefined, undefined], 'an embed size that is not a CSS length is not read');
+    const metric = (await md('::embed{src="https://example.com/x" width="10cm" height=\'4.5in\'}\n', { htmlParserConfig: { preserveIframes: true } })).content[0] as OfficeContentNode;
+    assert.deepStrictEqual([(metric.metadata as any)?.width, (metric.metadata as any)?.height], ['10cm', '4.5in'], 'an embed size in any unit a picture takes is read');
+    assert.notStrictEqual(((await md('::youtube{id="a b<c"}\n')).content[0]?.metadata as any)?.videoId, 'a b<c', 'an id that is not a video id is not read');
+    // The HTML forms too: a YouTube div or iframe naming no video id is not a video, and a size that is
+    // not a CSS length is none.
+    const html = (src: string, cfg: any = {}) => OfficeParser.parseOffice(Buffer.from(src), { fileType: 'html', onWarning: () => { }, ...cfg } as any) as Promise<OfficeParserAST>;
+    const embedsOf = (ast: OfficeParserAST): any[] => { const found: any[] = []; const walk = (nodes: OfficeContentNode[] = []) => { for (const n of nodes) { if (n.type === 'embed') found.push(n.metadata); walk(n.children); } }; walk(ast.content); return found; };
+    for (const [label, ast] of [['an HTML div', await html('<div data-youtube-video="../x?y=1 z" data-width="1px;background:red"></div>')],
+        ['a Markdown HTML block', await md('<div data-youtube-video="../x?y=1 &amp;z" data-width="1px;background:red"></div>\n')],
+        ['an iframe', await html('<iframe src="https://www.youtube.com/embed/a&quot;b"></iframe>')],
+        ['a Markdown HTML-block iframe', await md('<iframe src="https://www.youtube.com/embed/a&quot;b"></iframe>\n')]] as const) {
+        assert.ok(!embedsOf(ast).some(e => e?.embedType === 'youtube'), `${label} naming no video id is not read as a video; got ${JSON.stringify(embedsOf(ast))}`);
+    }
+    const sized = embedsOf(await html('<div data-youtube-video="dQw4w9WgXcQ" data-width="1px;x"></div><iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ" width="9;x" height="200"></iframe><div data-embed-gated data-embed-src="https://example.com/p" data-embed-width="calc(1px)" data-embed-height="50%"></div>', { htmlParserConfig: { preserveIframes: true } }));
+    assert.deepStrictEqual(sized.map(e => [e?.width, e?.height]), [[undefined, undefined], [undefined, '200'], [undefined, '50%']], `an HTML embed size that is not a CSS length is not read; got ${JSON.stringify(sized)}`);
+    const mdSized = embedsOf(await md('<iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ" width="1;color:red" height="200"></iframe>\n\n<iframe src="https://example.com/p" width="50%" height="&lt;b&gt;"></iframe>\n', { htmlParserConfig: { preserveIframes: true } }));
+    assert.deepStrictEqual(mdSized.map(e => [e?.embedType, e?.width, e?.height]), [['youtube', undefined, '200'], ['iframe', '50%', undefined]], `a Markdown HTML-block iframe size that is not a CSS length is not read; got ${JSON.stringify(mdSized)}`);
+    const handBuilt = { type: 'document', content: [{ type: 'embed', text: '', metadata: { embedType: 'iframe', url: 'https://example.com/x', width: '1px} <script>', align: 'middle"', height: '240' } }], metadata: {}, attachments: [] } as any;
+    const written = String((await OfficeGenerator.generate(handBuilt, 'md', { mdConfig: { dialect: { embeds: 'directive' } } } as any)).value);
+    assert.ok(!/script|middle/.test(written) && written.includes('height=240'), `only attribute values that are what they claim are written; got ${written}`);
+}
+
+/**
  * Configuration consistency: every option means the same on every surface, a mistake in a config is
  * reported rather than silently ignored, and a value an option does not accept falls back visibly.
  */
@@ -6155,6 +6193,7 @@ async function runTests(): Promise<void> {
         ['Markdown header rows', testMarkdownHeaderRows],
         ['RTF header rows', testRtfHeaderRows],
         ['Markdown cell breaks', testMarkdownCellBreaks],
+        ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],
     ];
 

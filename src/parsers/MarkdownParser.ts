@@ -5,7 +5,7 @@ import { parseHtml } from './HtmlParser.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { decodeCharacterReference, decodeCharacterReferences } from '../utils/htmlEntities.js';
-import { iframeAllowed } from '../utils/sanitize.js';
+import { iframeAllowed, isCssLength, isVideoId } from '../utils/sanitize.js';
 import { ASCII_WHITESPACE, trimAsciiWhitespace, trimEndChars, trimStartChars } from '../utils/textUtils.js';
 import { lookupTable, setOwn } from '../utils/lookupUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
@@ -1311,6 +1311,45 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         textStr = kept.join('\n');
     }
 
+    // The attributes inside `{...}`, as remark-directive and Pandoc write them: `key=value`, with the
+    // value bare, `"double"` or `'single'` quoted (the quotes removed; no escapes inside), a bare `key`,
+    // `#id` (the key `id`) and `.class` (the key `class`). One forward pass. Read as split at spaces, a
+    // quoted value kept its quotes (`id="abc"` made a video address with the quotes in it) and one
+    // holding a space was cut there.
+    const readAttributes = (attrStr: string): { key: string; value: string }[] => {
+        const attrs: { key: string; value: string }[] = [];
+        const text = attrStr;
+        let at = 0;
+        const readValue = (): string => {
+            const quote = text[at];
+            if (quote === '"' || quote === '\'') {
+                const close = text.indexOf(quote, at + 1);
+                const end = close < 0 ? text.length : close;
+                const value = text.slice(at + 1, end);
+                at = close < 0 ? text.length : close + 1;
+                return value;
+            }
+            const start = at;
+            while (at < text.length && !/\s/.test(text[at])) at++;
+            return text.slice(start, at);
+        };
+        while (at < text.length) {
+            if (/\s/.test(text[at])) { at++; continue; }
+            if (text[at] === '#' || text[at] === '.') {
+                const key = text[at] === '#' ? 'id' : 'class';
+                at++;
+                attrs.push({ key, value: readValue() });
+                continue;
+            }
+            const start = at;
+            while (at < text.length && !/[\s=]/.test(text[at])) at++;
+            const key = text.slice(start, at);
+            if (text[at] === '=') { at++; attrs.push({ key, value: readValue() }); }
+            else if (key) attrs.push({ key, value: '' });
+        }
+        return attrs;
+    };
+
     // Parses a Pandoc-style attribute list body (the part inside `{...}`), e.g.
     // `width=50% .centered` or `align=right`. Per MARKDOWN_DIALECT.md §15's Decisions,
     // the vocabulary matches ImageMetadata/TableMetadata's own width/align fields;
@@ -1318,13 +1357,11 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // hand-written content, but the generator only ever emits canonical `align=value`.
     const parseAttributeList = (attrStr: string): { width?: string; align?: 'left' | 'center' | 'right' } => {
         const result: { width?: string; align?: 'left' | 'center' | 'right' } = {};
-        for (const token of attrStr.trim().split(/\s+/).filter(Boolean)) {
-            const kv = token.match(/^([a-zA-Z-]+)=(.+)$/);
-            if (kv) {
-                if (kv[1] === 'width') result.width = kv[2];
-                else if (kv[1] === 'align' && ['left', 'center', 'right'].includes(kv[2])) result.align = kv[2] as any;
-            } else if (token.startsWith('.')) {
-                const cls = token.slice(1).toLowerCase();
+        for (const { key, value } of readAttributes(attrStr)) {
+            if (key === 'width' && isCssLength(value)) result.width = value;
+            else if (key === 'align' && ['left', 'center', 'right'].includes(value)) result.align = value as any;
+            else if (key === 'class') {
+                const cls = value.toLowerCase();
                 if (cls === 'left' || cls === 'align-left') result.align = 'left';
                 else if (cls === 'center' || cls === 'centered' || cls === 'align-center') result.align = 'center';
                 else if (cls === 'right' || cls === 'align-right') result.align = 'right';
@@ -1334,17 +1371,17 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     };
 
     // Attribute list for an embed leaf directive `{id=... src=... width=... height=... align=...}`.
-    // Superset of parseAttributeList (adds id/src/height); space-separated `k=v` tokens.
+    // Superset of parseAttributeList (adds id/src/height), read with readAttributes.
     const parseEmbedDirectiveAttrs = (attrStr: string): { id?: string; src?: string; width?: string; height?: string; align?: 'left' | 'center' | 'right' } => {
         const result: { id?: string; src?: string; width?: string; height?: string; align?: 'left' | 'center' | 'right' } = {};
-        for (const token of attrStr.trim().split(/\s+/).filter(Boolean)) {
-            const kv = token.match(/^([a-zA-Z-]+)=(.+)$/);
-            if (!kv) continue;
-            const [, key, val] = kv;
-            if (key === 'id') result.id = val;
+        for (const { key, value: val } of readAttributes(attrStr)) {
+            if (!val) continue;
+            // A size is taken only as a CSS length, a video id only as an id: anything else is no value
+            // of theirs, and was written back out as raw markup.
+            if (key === 'id') { if (isVideoId(val)) result.id = val; }
             else if (key === 'src') result.src = val;
-            else if (key === 'width') result.width = val;
-            else if (key === 'height') result.height = val;
+            else if (key === 'width') { if (isCssLength(val)) result.width = val; }
+            else if (key === 'height') { if (isCssLength(val)) result.height = val; }
             else if (key === 'align' && ['left', 'center', 'right'].includes(val)) result.align = val as 'left' | 'center' | 'right';
         }
         return result;
@@ -2311,15 +2348,17 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // YouTube embed fallback: MarkdownGenerator's 'embed' case emits a single-line
         // <div data-youtube-video="ID" data-width="…" data-align="…"></div> when fallbackToHtml
         // is on; recognise it here so a saved-then-reopened .md keeps the video.
+        // A video id only as an id (anything else is read as the HTML it is), a size only as a CSS length.
         const youtubeMatch = block.match(/^<div\s+data-youtube-video="([^"]*)"([^>]*)>\s*<\/div>$/i);
-        if (youtubeMatch) {
-            const videoId = youtubeMatch[1];
+        if (youtubeMatch && isVideoId(decodeCharacterReferences(youtubeMatch[1]))) {
+            const videoId = decodeCharacterReferences(youtubeMatch[1]);
             const attrsStr = youtubeMatch[2];
             const widthMatch = attrsStr.match(/data-width="([^"]*)"/i);
             const youtubeAlignMatch = attrsStr.match(/data-align="([^"]*)"/i);
             const youtubeLabelMatch = attrsStr.match(/data-embed-label="([^"]*)"/i);
             const embedAlign = youtubeAlignMatch && (['left', 'center', 'right'] as const).includes(youtubeAlignMatch[1] as any) ? youtubeAlignMatch[1] as 'left' | 'center' | 'right' : undefined;
-            const embedUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : undefined;
+            const embedUrl = `https://www.youtube.com/watch?v=${videoId}`;
+            const width = widthMatch ? decodeCharacterReferences(widthMatch[1]) : undefined;
             content.push({
                 type: 'embed',
                 // Childless nodes need .text so generic AST consumers (text/chunking generators)
@@ -2330,7 +2369,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     videoId,
                     url: embedUrl,
                     // Attribute values, HTML-escaped by the generator.
-                    width: widthMatch ? decodeCharacterReferences(widthMatch[1]) : undefined,
+                    width: isCssLength(width) ? width : undefined,
                     align: embedAlign,
                     label: youtubeLabelMatch ? decodeCharacterReferences(youtubeLabelMatch[1]) : undefined
                 } as EmbedMetadata
@@ -2350,14 +2389,19 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             // inverse of that escaping, so a genuinely double-escaped value unwinds one level per parse.
             const decodeAttr = (s: string | undefined) => decodeCharacterReferences(s || '');
             const src = decodeAttr(attrsStr.match(/\bsrc="([^"]*)"/i)?.[1]);
-            const width = attrsStr.match(/\bwidth="([^"]*)"/i)?.[1];
-            const height = attrsStr.match(/\bheight="([^"]*)"/i)?.[1];
+            // A size only as a CSS length, and a video id only as an id, as the HTML parser reads them.
+            const length = (value: string | undefined): string | undefined => {
+                const decoded = value === undefined ? undefined : decodeAttr(value);
+                return isCssLength(decoded) ? decoded : undefined;
+            };
+            const width = length(attrsStr.match(/\bwidth="([^"]*)"/i)?.[1]);
+            const height = length(attrsStr.match(/\bheight="([^"]*)"/i)?.[1]);
             // A YouTube iframe is recognised the same way the HTML parser does it (host + id
             // capture), BEFORE and INDEPENDENT of the preserveIframes gate, so the same iframe
             // yields the same 'youtube' embed whichever parser sees it. Only a generic (non-YouTube)
             // iframe is gated behind preserveIframes and kept as an 'iframe' embed.
             const ytMatch = src && /youtube(?:-nocookie)?\.com/.test(src) ? src.match(/(?:embed\/|v=)([^&?/\s]+)/) : null;
-            if (ytMatch) {
+            if (ytMatch && isVideoId(ytMatch[1])) {
                 const embedUrl = `https://www.youtube.com/watch?v=${ytMatch[1]}`;
                 content.push({
                     type: 'embed',
@@ -2366,8 +2410,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                         embedType: 'youtube',
                         videoId: ytMatch[1],
                         url: embedUrl,
-                        width: width !== undefined ? decodeAttr(width) : undefined,
-                        height: height !== undefined ? decodeAttr(height) : undefined
+                        width,
+                        height
                     } as EmbedMetadata
                 });
                 continue;
@@ -2379,8 +2423,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     metadata: {
                         embedType: 'iframe',
                         url: src,
-                        width: width !== undefined ? decodeAttr(width) : undefined,
-                        height: height !== undefined ? decodeAttr(height) : undefined
+                        width,
+                        height
                     } as EmbedMetadata
                 });
                 continue;

@@ -53,6 +53,25 @@ export function isSafeStyleMapTag(tag: unknown): tag is string {
 }
 
 /**
+ * A CSS length as an embed's or picture's size is written: `400`, `400px`, `50%`, `12.5em`, `10cm`. The
+ * units are those a Markdown picture's size takes (MarkdownGenerator's MD_LENGTH_PATTERN).
+ */
+const CSS_LENGTH = /^\d{1,6}(?:\.\d{1,4})?(?:px|%|em|rem|pt|pc|in|cm|mm|ex|ch|vw|vh)?$/;
+
+/** Whether a size is a plain CSS length, safe to write bare into an attribute list or an attribute. */
+export function isCssLength(value: string | undefined): value is string {
+    return typeof value === 'string' && CSS_LENGTH.test(value);
+}
+
+/** A YouTube video id: letters, digits, `_` and `-`. */
+const VIDEO_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Whether text is a YouTube video id (anything else is no id, and must not be written as one). */
+export function isVideoId(value: string | undefined): value is string {
+    return typeof value === 'string' && VIDEO_ID.test(value);
+}
+
+/**
  * Escapes text for an HTML text node or a double-quoted attribute value.
  * Includes the single quote so the result is also safe inside single-quoted
  * attributes.

@@ -5,7 +5,7 @@ import { isSourceComment } from '../utils/commentUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { CHARACTER_REFERENCE, decodeCharacterReference } from '../utils/htmlEntities.js';
 import { isEmptyMath, MathNode, mathmlTreeToLatex } from '../utils/mathUtils.js';
-import { isSafeHtmlAttributeName, iframeAllowed } from '../utils/sanitize.js';
+import { iframeAllowed, isCssLength, isSafeHtmlAttributeName, isVideoId } from '../utils/sanitize.js';
 import { setOwn } from '../utils/lookupUtils.js';
 import { cellSpan, MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
@@ -1458,8 +1458,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     metadata: {
                         embedType: 'iframe',
                         url: gatedSrc,
-                        width: node.attributes?.['data-embed-width'],
-                        height: node.attributes?.['data-embed-height'],
+                        // A size only as a CSS length: anything else is none, not markup to carry on.
+                        width: isCssLength(node.attributes?.['data-embed-width']) ? node.attributes['data-embed-width'] : undefined,
+                        height: isCssLength(node.attributes?.['data-embed-height']) ? node.attributes['data-embed-height'] : undefined,
                         align: gatedAlign,
                         label: node.attributes?.['data-embed-label']
                     } as EmbedMetadata
@@ -1472,12 +1473,14 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
             // <div data-youtube-video="ID" data-width="…" data-align="…">…<iframe…></div>.
             // Recognise both the wrapper div and a bare iframe so externally-authored HTML
             // (and a saved-then-reopened .md that fell back to raw HTML) both round-trip.
-            if (tagName === 'div' && node.attributes?.['data-youtube-video'] !== undefined) {
-                const videoId = node.attributes['data-youtube-video'] || '';
-                const width = node.attributes?.['data-width'];
+            // A video id only as an id: a div naming anything else is read as the div it is.
+            if (tagName === 'div' && isVideoId(node.attributes?.['data-youtube-video'])) {
+                const videoId = node.attributes['data-youtube-video'];
+                // A size only as a CSS length: anything else is none, not markup to carry on.
+                const width = isCssLength(node.attributes?.['data-width']) ? node.attributes['data-width'] : undefined;
                 const embedAlignAttr = node.attributes?.['data-align'];
                 const embedAlign = (['left', 'center', 'right'] as const).includes(embedAlignAttr as any) ? embedAlignAttr as 'left' | 'center' | 'right' : undefined;
-                const embedUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : undefined;
+                const embedUrl = `https://www.youtube.com/watch?v=${videoId}`;
                 const embedNode: OfficeContentNode = {
                     type: 'embed',
                     // Childless nodes need .text so generic AST consumers (text/chunking generators)
@@ -1498,7 +1501,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
             if (tagName === 'iframe') {
                 const src = node.attributes?.src || '';
                 const ytMatch = /youtube(?:-nocookie)?\.com/.test(src) ? src.match(/(?:embed\/|v=)([^&?/\s]+)/) : null;
-                if (ytMatch) {
+                if (ytMatch && isVideoId(ytMatch[1])) {
                     const embedUrl = `https://www.youtube.com/watch?v=${ytMatch[1]}`;
                     const embedNode: OfficeContentNode = {
                         type: 'embed',
@@ -1509,8 +1512,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                             embedType: 'youtube',
                             videoId: ytMatch[1],
                             url: embedUrl,
-                            width: node.attributes?.width,
-                            height: node.attributes?.height
+                            width: isCssLength(node.attributes?.width) ? node.attributes.width : undefined,
+                            height: isCssLength(node.attributes?.height) ? node.attributes.height : undefined
                         } as EmbedMetadata
                     };
                     if (config.includeRawContent) embedNode.rawContent = '<iframe>...</iframe>';
@@ -1529,8 +1532,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         metadata: {
                             embedType: 'iframe',
                             url: decodedSrc,
-                            width: node.attributes?.width,
-                            height: node.attributes?.height
+                            width: isCssLength(node.attributes?.width) ? node.attributes.width : undefined,
+                            height: isCssLength(node.attributes?.height) ? node.attributes.height : undefined
                         } as EmbedMetadata
                     };
                     if (config.includeRawContent) iframeNode.rawContent = '<iframe>...</iframe>';
