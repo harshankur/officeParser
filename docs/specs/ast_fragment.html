@@ -191,6 +191,13 @@
         beamer), with any <code>\thanks</code> as footnotes. The LaTeX generator typesets such a block with
         <code>\maketitle</code>. The same values also stay in <code>ast.metadata</code>.</p>
 
+    <p><strong>PDF headings.</strong> A PDF <code>heading</code> says what decided it in
+        <code>metadata.levelSource</code>: <code>'tags'</code> when the document's own structure tree tags it as a
+        heading (<code>H</code>, <code>H1</code>..<code>H6</code>), <code>'font-size'</code> when the font-size and
+        weight heuristic made it one (text read from geometry, or a tagged heading re-leveled under
+        <code>headingDetection: 'font-size'</code>). To get only the tagged ones, filter on it or parse with
+        <code>pdfParserConfig.headingDetection: 'tags'</code>. No other format sets it.</p>
+
     <h3>4a. Layout &amp; Template Nodes (Auxiliary)</h3>
     <p>These nodes are <em>not</em> part of the main <code>content</code> tree. They live under
         <code>ast.auxiliary</code>:</p>

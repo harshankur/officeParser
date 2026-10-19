@@ -3428,6 +3428,8 @@
                 { id: 'cfg_ocrAutoTerminate', label: 'OCR Auto Terminate (s)', type: 'number', default: 10, width: '70px', min: 0, advanced: true },
                 { id: 'cfg_ocrWorkerLoad', label: 'OCR Worker Load (s)', type: 'number', default: 60, width: '70px', min: 0, advanced: true },
                 { id: 'cfg_ocrRecognition', label: 'OCR Recog (s)', type: 'number', default: 30, width: '70px', min: 0, advanced: true },
+                { id: 'cfg_ocrCacheMethod', label: 'OCR Language Cache', type: 'select', options: ['write', 'readOnly', 'refresh', 'none'], names: ['Write', 'Read Only', 'Refresh', 'None'], default: 'write', width: '100px', advanced: true },
+                { id: 'cfg_allowRemoteAssets', label: 'Allow Remote Assets', type: 'switch', default: true, advanced: true },
 
                 { id: 'cfg_maxUncompressedBytes', label: 'Max Uncompressed (MB)', type: 'number', default: 512, width: '80px', min: 0, advanced: true },
                 { id: 'cfg_maxZipEntries', label: 'Max ZIP Entries', type: 'number', default: 10000, width: '80px', min: 0, advanced: true },
@@ -3438,7 +3440,7 @@
                 // Format-Specific Parser Settings (Separated in dedicated format sections when expanded)
                 // PDF Options
                 { id: 'cfg_pdfPageRange', label: 'PDF Page Range', type: 'text', default: '', width: '80px', formatGroup: 'pdf', formats: ['pdf'] },
-                { id: 'cfg_pdfHeadingDetection', label: 'PDF Heading Detection', type: 'select', options: ['auto', 'font-size', 'off'], names: ['Auto', 'Font Size', 'Off'], default: 'auto', width: '100px', formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfHeadingDetection', label: 'PDF Heading Detection', type: 'select', options: ['auto', 'font-size', 'tags', 'off'], names: ['Auto', 'Font Size', 'Tags Only', 'Off'], default: 'auto', width: '100px', formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfDetectColumns', label: 'PDF Detect Columns', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfUseTags', label: 'PDF Use Tags', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfMergeHyphenatedWords', label: 'PDF Merge Hyphens', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
@@ -3749,8 +3751,8 @@
                 <div class="hero-badges">
                     <!-- package-version:start (written from package.json by scripts/sync-site-version.js: do not edit) -->
                     <a class="badge-link" href="https://github.com/harshankur/officeParser/blob/master/CHANGELOG.md" target="_blank"
-                        rel="noopener" aria-label="officeParser version 8.1.1: see what changed">
-                        <div class="badge badge-version" id="version-badge">v8.1.1</div>
+                        rel="noopener" aria-label="officeParser version 8.2.0: see what changed">
+                        <div class="badge badge-version" id="version-badge">v8.2.0</div>
                     </a>
                     <!-- package-version:end -->
                     <a id="weekly-badge-link"
@@ -4115,7 +4117,7 @@
                 </div>
                 <div class="spec-card" id="card-template" onclick="location.hash='#spec/template'">
                     <h3>OfficeTemplate</h3>
-                    <p>Mail-merge / document generation: fill a DOCX template's {{placeholders}} from data, batch-ready.</p>
+                    <p>Mail-merge / document generation: fill a DOCX template's {{placeholders}}, conditions and loops from data, batch-ready.</p>
                     <div class="spec-link-hint">Read Template Spec →</div>
                 </div>
                 <div class="spec-card" id="card-ast" onclick="location.hash='#spec/ast'">
@@ -4872,13 +4874,14 @@
             <div class="visualizer-container">
                 <div class="section-title">
                     <h2>Template Studio</h2>
-                    <p>Fill a DOCX template's <code>{{placeholders}}</code> from your own data, right here in the browser,
-                        and see it happen: the template with its tags, and the finished document, side by side.</p>
+                    <p>Fill a DOCX template's <code>{{placeholders}}</code>, <code>{{ if }}</code> conditions and
+                        <code>{{ for }}</code> loops from your own data, right here in the browser, and see it happen: the
+                        template with its tags, and the finished document, side by side.</p>
                 </div>
 
                 <div class="ts-intro">
                     Powered by <code>OfficeTemplate.render()</code>. The template's formatting, tables, headers and layout
-                    are preserved; only the placeholders change.
+                    are preserved; only the tags change.
                     <div class="privacy-note" style="justify-content:center; margin-top: 0.75rem;">
                         <span>🔒</span> <span><strong>Private:</strong> the template, your data, and the result never leave
                             your browser.</span>
@@ -4901,7 +4904,11 @@
                         </div>
                         <button class="btn btn-outline ts-sample-btn" id="ts-load-sample" type="button">↓ Load sample invoice template</button>
                         <div class="ts-hint">Make your own: type <code>{{name}}</code>, <code>{{amount}}</code>, style them
-                            however you like in Word, and save as <code>.docx</code>.</div>
+                            however you like in Word, and save as <code>.docx</code>. Show or hide content with
+                            <code>{{ if paid }}</code> ... <code>{{ endif }}</code>, and repeat it with
+                            <code>{{ for line in lines }}</code> ... <code>{{ endfor }}</code>: in a table row's first and
+                            last cells, one row per item. Format a value as Word does:
+                            <code>{{ total | format "$#,##0.00" }}</code>, <code>{{ due | format "MMMM d, yyyy" }}</code>.</div>
                     </div>
 
                     <div class="ts-panel">
@@ -4918,6 +4925,13 @@
                                     <option value="empty">leave blank</option>
                                     <option value="error">throw error</option>
                                 </select>
+                            </label>
+                            <label title="What a number picture such as {{ total | format &quot;#,##0.00&quot; }} writes for the decimal point and between groups of thousands">Separators
+                                <input id="ts-sep-decimal" class="ts-mini" value="." maxlength="4" aria-label="decimal separator">
+                                <input id="ts-sep-group" class="ts-mini" value="," maxlength="4" aria-label="group separator">
+                            </label>
+                            <label title="Minutes from UTC that a date picture writes dates in; a date without an offset is read as UTC">UTC offset (min)
+                                <input id="ts-utc-offset" class="ts-mini" type="number" value="0" min="-1080" max="1080" step="1" style="width: 4.5rem;" aria-label="UTC offset in minutes">
                             </label>
                             <span class="ts-hint" id="ts-batch-hint" style="margin-top:0;"></span>
                         </div>
@@ -5904,6 +5918,7 @@
                     fileType: document.getElementById('cfg_fileType').value || null,
                     extractAttachments: document.getElementById('cfg_extractAttachments').checked,
                     ocr: document.getElementById('cfg_ocr').checked,
+                    allowRemoteAssets: document.getElementById('cfg_allowRemoteAssets').checked,
                     ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_parser').checked,
                     ignorePageGeometry: document.getElementById('cfg_ignorePageGeometry').checked,
                     password: document.getElementById('cfg_password').value,
@@ -5943,6 +5958,7 @@
                     ocrConfig: {
                         language: document.getElementById('cfg_ocrLanguage').value || undefined,
                         preserveLayout: document.getElementById('cfg_ocrPreserveLayout').checked,
+                        cacheMethod: document.getElementById('cfg_ocrCacheMethod').value,
                         timeout: {
                             autoTerminate: parseInt(document.getElementById('cfg_ocrAutoTerminate').value, 10) * 1000,
                             workerLoad: parseInt(document.getElementById('cfg_ocrWorkerLoad').value, 10) * 1000,
@@ -6953,9 +6969,40 @@ ${sectioning.filter(Boolean).join('\n')}
                         + ` border: 1px dashed #94a3b8; border-radius: 8px; background: #f1f5f9; color: #0f172a; font: 15px/1.4 sans-serif; cursor: pointer;">`
                         + `<strong>&#9654; ${label}</strong><span style="font-size: 13px; color: #475569;">${esc(note)}</span></button>`;
                 };
-                return html
-                    .replace(/<iframe\b([^>]*)>(?:[\s\S]*?<\/iframe>)?/gi, (_, attributes) => gate(attr(attributes, 'src'), attr(attributes, 'width'), attr(attributes, 'height')))
-                    .replace(/<div\b([^>]*\bdata-embed-gated\b[^>]*)>\s*<\/div>/gi, (_, attributes) => gate(attr(attributes, 'data-embed-src'), attr(attributes, 'data-embed-width'), attr(attributes, 'data-embed-height')));
+                // One forward pass per kind of element: each start tag is read to its `>` once, and the
+                // next close tag is found by a cursor that only moves on. Patterns did this before, and
+                // retried from every unclosed <iframe (or every repeated word in a tag) to the end of the
+                // page, in time quadratic in its length: a crafted file froze the tab.
+                const replaceElements = (source, name, wholeIf, replace) => {
+                    const lower = source.toLowerCase();
+                    const open = `<${name}`, close = `</${name}>`;
+                    let out = '', copied = 0, from = 0, closeAt = lower.indexOf(close);
+                    for (;;) {
+                        const start = lower.indexOf(open, from);
+                        if (start < 0) break;
+                        const next = lower.charAt(start + open.length);
+                        if (next && !/[\s>/]/.test(next)) { from = start + open.length; continue; }
+                        const tagEnd = lower.indexOf('>', start + open.length);
+                        if (tagEnd < 0) break;
+                        const attributes = source.slice(start + open.length, tagEnd);
+                        while (closeAt >= 0 && closeAt < tagEnd) closeAt = lower.indexOf(close, closeAt + close.length);
+                        const end = wholeIf(lower, tagEnd + 1, closeAt, attributes);
+                        if (end < 0) { from = tagEnd + 1; continue; }
+                        out += source.slice(copied, start) + replace(attributes);
+                        copied = from = end;
+                    }
+                    return copied ? out + source.slice(copied) : source;
+                };
+                // An iframe: its start tag, and its content and close tag when it has them.
+                const iframes = replaceElements(html, 'iframe', (lower, after, closeAt) => closeAt >= 0 ? closeAt + '</iframe>'.length : after,
+                    attributes => gate(attr(attributes, 'src'), attr(attributes, 'width'), attr(attributes, 'height')));
+                // A gated embed: an empty div marked data-embed-gated.
+                return replaceElements(iframes, 'div', (lower, after, closeAt, attributes) => {
+                    if (!/\bdata-embed-gated\b/i.test(attributes)) return -1;
+                    let at = after;
+                    while (at < lower.length && /\s/.test(lower[at])) at++;
+                    return closeAt === at ? at + '</div>'.length : -1;
+                }, attributes => gate(attr(attributes, 'data-embed-src'), attr(attributes, 'data-embed-width'), attr(attributes, 'data-embed-height')));
             }
 
             /** Gives the buttons gatePreviewEmbeds left in `root` (a preview's document or element) their click. */
@@ -6975,6 +7022,9 @@ ${sectioning.filter(Boolean).join('\n')}
                     }, { once: true });
                 }
             }
+            // Template Studio's previews (a script of their own) show uploaded documents too.
+            window.gatePreviewEmbeds = gatePreviewEmbeds;
+            window.wirePreviewEmbeds = wirePreviewEmbeds;
 
             /**
              * Parse generated source (RTF or LaTeX) back into an AST and render that AST as HTML in an
@@ -8097,22 +8147,31 @@ ${sectioning.filter(Boolean).join('\n')}
                 filename: $('ts-filename'), fileInput: $('ts-file-input'), loadSample: $('ts-load-sample'),
                 data: $('ts-data'), delimStart: $('ts-delim-start'), delimEnd: $('ts-delim-end'),
                 onMissing: $('ts-onmissing'), batchHint: $('ts-batch-hint'),
+                sepDecimal: $('ts-sep-decimal'), sepGroup: $('ts-sep-group'), utcOffset: $('ts-utc-offset'),
                 render: $('ts-render'), download: $('ts-download'), toVisualizer: $('ts-to-visualizer'),
                 status: $('ts-status'), summary: $('ts-summary'),
                 compare: $('ts-compare'), before: $('ts-before'), after: $('ts-after'), batchTabs: $('ts-batch-tabs'),
             };
             if (!els.render) return; // section not present
 
-            const SAMPLE_DATA = [
-                '{',
-                '  "name": "Acme Corp",',
-                '  "amount": "$1,250.00",',
-                '  "date": "2026-10-01",',
-                '  "item": "Premium Widgets",',
-                '  "company": "Globex",',
-                '  "note": "First line\\nSecond line"',
-                '}'
-            ].join('\n');
+            const SAMPLE_DATA = JSON.stringify({
+                name: 'Acme Corp',
+                amount: '$1,250.00',
+                date: '2026-10-01',
+                item: 'Premium Widgets',
+                company: 'Globex',
+                note: 'First line\nSecond line',
+                paid: false,
+                due: '2026-11-01',
+                total: 1250.5,
+                dueDate: '2026-11-01',
+                lines: [
+                    { description: 'Premium Widgets', qty: 2, price: '$1,000.00' },
+                    { description: 'Setup', qty: 1, price: '$300.00' },
+                ],
+                discount: '$50.00',
+                contacts: [{ name: 'Ann Lee' }, { name: 'Bo Chen' }],
+            }, null, 2);
 
             const state = { buffer: null, name: '', outputs: [], rows: [], active: 0 };
 
@@ -8157,7 +8216,8 @@ ${sectioning.filter(Boolean).join('\n')}
             // template feature fills placeholders there too, so we surface them explicitly.
             async function inspect(bytes) {
                 const ast = await window.officeParser.parseOffice(bytes, { onWarning: () => { } });
-                const html = (((await ast.to('html', { htmlConfig: { standalone: false } })).value) || '');
+                // Gated as the visualizer's previews are: a video or page an uploaded document frames loads only on a click.
+                const html = window.gatePreviewEmbeds((((await ast.to('html', { htmlConfig: { standalone: false, gatedEmbeds: true } })).value) || ''));
                 const text = ((((await ast.to('text')).value) || '')).toString();
                 const parts = [];
                 const walk = (n) => { if (!n) return; if (n.text) parts.push(n.text); (n.children || []).forEach(walk); };
@@ -8191,25 +8251,55 @@ ${sectioning.filter(Boolean).join('\n')}
                     t.parentNode.replaceChild(frag, t);
                 }
             }
-            const placeholderRe = (start, end) => new RegExp(escRe(start) + '\\s*[\\p{L}\\p{N}_.\\-]+\\s*' + escRe(end), 'gu');
+            // Every tag between the delimiters (fields and block tags alike), for highlighting.
+            // A tag never spans another start delimiter: `[^\n]*?` alone retried from every unclosed `{{`
+            // to the end of its line, in time quadratic in the line.
+            const tagBody = (start) => '(?:(?!' + escRe(start) + ')[^\\n])*?';
+            const placeholderRe = (start, end) => new RegExp(escRe(start) + tagBody(start) + escRe(end), 'gu');
+            // The data's top-level fields a template uses: a field's first step, a loop's list, and the paths in
+            // a condition; not the items loops name, nor `loop`. (The library reads the tags itself; this only
+            // lists them for the summary.)
+            const KEYWORDS = new Set(['if', 'else', 'endif', 'for', 'in', 'endfor', 'and', 'or', 'not', 'true', 'false', 'null']);
+            const NAME_RE = /[\p{L}\p{N}_\-]+(?:\.[\p{L}\p{N}_\-]+)*/gu;
+            const QUOTED_RE = /["\u201C\u201D\u201E\u201F\u00AB\u00BB][^"\u201C\u201D\u201E\u201F\u00AB\u00BB]*["\u201C\u201D\u201E\u201F\u00AB\u00BB]|['\u2018\u2019\u201A\u201B\u2039\u203A][^'\u2018\u2019\u201A\u201B\u2039\u203A]*['\u2018\u2019\u201A\u201B\u2039\u203A]/g;
             function extractKeys(text, start, end) {
-                const re = new RegExp(escRe(start) + '\\s*([\\p{L}\\p{N}_.\\-]+)\\s*' + escRe(end), 'gu');
-                const keys = []; let m; while ((m = re.exec(text))) if (!keys.includes(m[1])) keys.push(m[1]);
-                return keys;
+                const re = new RegExp(escRe(start) + '(' + tagBody(start) + ')' + escRe(end), 'gu');
+                const keys = [], loopNames = new Set(['loop']);
+                const add = (path) => { const first = path.split('.')[0]; if (first && !KEYWORDS.has(first.toLowerCase()) && !/^-?\d/.test(first) && !keys.includes(first)) keys.push(first); };
+                let m;
+                while ((m = re.exec(text))) {
+                    const inner = m[1].trim();
+                    const loop = /^for\s+(\S+)\s+in\s+(\S+)$/iu.exec(inner);
+                    if (loop) { loopNames.add(loop[1]); add(loop[2]); continue; }
+                    if (/^(else\s+)?if\s/iu.test(inner)) { (inner.replace(QUOTED_RE, ' ').match(NAME_RE) || []).forEach(add); continue; }
+                    const field = inner.split('|')[0].trim();
+                    if (/^[\p{L}\p{N}_.\-]+$/u.test(field)) add(field);
+                }
+                return keys.filter(k => !loopNames.has(k));
             }
             const valStr = (v) => v == null ? '' : (v instanceof Object && !(v instanceof Date) ? JSON.stringify(v) : String(v));
+            // The text values in a data value, nested lists and objects included: what the filled document shows.
+            const leafStrings = (v, out = []) => {
+                if (v == null) return out;
+                if (Array.isArray(v)) v.forEach(x => leafStrings(x, out));
+                else if (typeof v === 'object' && !(v instanceof Date)) Object.values(v).forEach(x => leafStrings(x, out));
+                else out.push(String(v));
+                return out;
+            };
 
             function renderBefore(html, auxText, start, end) {
                 els.before.innerHTML = html + auxBlock(auxText);
+                window.wirePreviewEmbeds(els.before);
                 highlight(els.before, placeholderRe(start, end), 'ts-ph');
             }
             function renderAfter(html, auxText, row) {
                 els.after.innerHTML = html + auxBlock(auxText);
+                window.wirePreviewEmbeds(els.after);
                 // Highlight the substituted values. Multiline values render as separate lines (a <w:br/>
                 // per newline), so split on newlines and highlight each part; skip very short parts.
                 const terms = [];
-                for (const v of Object.values(row || {})) {
-                    for (const part of valStr(v).split(/\r?\n|[\u2028\u2029]/)) { if (part.trim().length >= 2) terms.push(part); }
+                for (const v of leafStrings(Object.values(row || {}))) {
+                    for (const part of v.split(/\r?\n|[\u2028\u2029]/)) { if (part.trim().length >= 2) terms.push(part); }
                 }
                 if (terms.length) {
                     terms.sort((a, b) => b.length - a.length);
@@ -8230,13 +8320,13 @@ ${sectioning.filter(Boolean).join('\n')}
                     if (inTemplate && hasData) { status = '<span class="ts-ok">✓ filled</span>'; val = '<code>' + escapeHtml(valStr(row0[k])) + '</code>'; }
                     else if (inTemplate && !hasData) { status = '<span class="ts-warn">no data → ' + missingBehavior + '</span>'; val = '(none)'; }
                     else { status = '<span class="ts-warn">unused (not in template)</span>'; val = '<code>' + escapeHtml(valStr(row0[k])) + '</code>'; }
-                    return '<tr><td><code>' + escapeHtml(start + k + end) + '</code></td><td>' + val + '</td><td>' + (inTemplate ? 'yes' : 'no') + '</td><td>' + status + '</td></tr>';
+                    return '<tr><td><code>' + escapeHtml(k) + '</code></td><td>' + val + '</td><td>' + (inTemplate ? 'yes' : 'no') + '</td><td>' + status + '</td></tr>';
                 }).join('');
                 els.summary.innerHTML =
                     '<div style="margin-bottom:0.75rem; font-weight:600;">' + filled + ' of ' + templateKeys.length +
-                    ' placeholder' + (templateKeys.length === 1 ? '' : 's') + ' in the template have data' +
+                    ' field' + (templateKeys.length === 1 ? '' : 's') + ' in the template have data' +
                     (rows.length > 1 ? ' &middot; batch of ' + rows.length + ' rows (summary shows row 1)' : '') + '.</div>' +
-                    '<table><thead><tr><th>Placeholder</th><th>Value (row 1)</th><th>In template</th><th>Status</th></tr></thead><tbody>' +
+                    '<table><thead><tr><th>Field</th><th>Value (row 1)</th><th>In template</th><th>Status</th></tr></thead><tbody>' +
                     rowsHtml + '</tbody></table>';
                 els.summary.classList.remove('hidden');
             }
@@ -8285,7 +8375,9 @@ ${sectioning.filter(Boolean).join('\n')}
                     els.compare.classList.remove('hidden');
 
                     // AFTER: run the actual template fill.
-                    const result = await window.officeParser.OfficeTemplate.render(tmpl, { data, delimiters: { start, end }, onMissing });
+                    const numberSeparators = { decimal: els.sepDecimal.value, group: els.sepGroup.value };
+                    const utcOffsetMinutes = Number(els.utcOffset.value || 0);
+                    const result = await window.officeParser.OfficeTemplate.render(tmpl, { data, delimiters: { start, end }, onMissing, numberSeparators, utcOffsetMinutes });
                     state.outputs = Array.isArray(result) ? result : [result];
                     renderBatchTabs();
                     const after0 = await inspect(state.outputs[0]);

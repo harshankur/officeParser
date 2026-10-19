@@ -133,10 +133,40 @@
                 <td>What <code>\today</code> prints in LaTeX input, e.g. <code>--texParserConfig.today="May 1, 2024"</code>.</td>
             </tr>
             <tr>
+                <td><code>--allowRemoteAssets</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td><code>false</code> fails with <code>REMOTE_ASSET_BLOCKED</code> where the pdf.js worker or Tesseract's files would come from the library's default CDN address.</td>
+            </tr>
+            <tr>
+                <td><code>--pdfConfig.fonts.regular</code></td>
+                <td>file path</td>
+                <td>(none)</td>
+                <td>Font file the native PDF engine draws in (also <code>.bold</code>, <code>.italic</code>, <code>.boldItalic</code>, <code>.mono</code>). <code>--pdfConfig.fallbackFonts=a.ttf,b.otf</code> lists more, tried in order for the characters the fonts before them lack.</td>
+            </tr>
+            <tr>
+                <td><code>--pdfConfig.outline</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Write a bookmark outline from the headings (both PDF engines).</td>
+            </tr>
+            <tr>
+                <td><code>--pdfConfig.subsetFonts</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td><code>false</code> embeds whole font files in the native PDF engine, not only the glyphs used.</td>
+            </tr>
+            <tr>
+                <td><code>--ocrConfig.cacheMethod</code></td>
+                <td><code>write | readOnly | refresh | none</code></td>
+                <td><code>write</code></td>
+                <td>Where OCR keeps the language data it loads: <code>none</code> neither reads nor stores it.</td>
+            </tr>
+            <tr>
                 <td><code>--pdfParserConfig.headingDetection</code></td>
-                <td><code>auto | font-size | off</code></td>
+                <td><code>auto | font-size | tags | off</code></td>
                 <td><code>auto</code></td>
-                <td>How heading levels are decided for PDF content.</td>
+                <td>How heading levels are decided for PDF content. <code>tags</code> keeps only the headings the document itself tags.</td>
             </tr>
             <tr>
                 <td><code>--newlineDelimiter</code></td>

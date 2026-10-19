@@ -35,7 +35,10 @@ const { value: csv } = await OfficeGenerator.generate(ast, 'csv');</code></pre>
         [!IMPORTANT]
         <strong>PDF generation</strong> with the default <code>'html'</code> engine requires the optional
         <code>puppeteer</code> peer dependency: <code>npm install puppeteer</code>. The <code>pdfConfig.engine: 'native'</code>
-        engine instead uses <code>pdf-lib</code> and needs no browser.
+        engine instead uses <code>pdf-lib</code> and needs no browser. It draws in the font files given as
+        <code>pdfConfig.fonts</code> and <code>pdfConfig.fallbackFonts</code> (with <code>@pdf-lib/fontkit</code>
+        installed), so text the Standard-14 fonts lack (Greek, Cyrillic, Hindi, Arabic, Chinese) is drawn and not
+        replaced by <code>?</code>, and writes a bookmark outline with <code>pdfConfig.outline</code>.
     </blockquote>
 
     <blockquote>

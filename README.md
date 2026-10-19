@@ -32,7 +32,7 @@ A robust, strictly-typed **Node.js and Browser** library for parsing office file
 - **Rebuilt PDF text extraction.** PDF is no longer treated as a page of flat lines. Tagged PDFs now yield real `heading` (with correct levels), `table`/`row`/`cell`, `list` and footnote/endnote `note` nodes, and one `paragraph` per paragraph. Untagged PDFs recover the same structure geometrically. Multi-column and float-beside-text pages are read in the correct order (recursive XY-cut), broken and glued words are fixed from inter-fragment spacing, super/subscripts and hyphenated line-breaks are rejoined, rotated text is recovered, and internal links resolve to the target section. `.to('text')` is **layout-faithful by default**, rendering each page as a spatial grid so columns and tables line up like the source. Per-run color/highlight extraction (on by default; set `pdfParserConfig.extractTextColor: false` to skip it) and merged-cell (`colSpan`/`rowSpan`) recovery round it out, and every node carries page geometry (`bounds`).
 - **Password-protected documents.** Encrypted PDF, OOXML (`docx`/`xlsx`/`pptx`) and ODF (`odt`/`ods`/`odp`/`odg`) open through one unified `password` / `onPassword` option, across parsing, conversion and templating.
 - **Native DOCX & ODT generation**, plus a **native PDF engine** (`pdfConfig.engine: 'native'`, built on `pdf-lib`) that produces real PDF bytes with no headless browser, in Node and the browser alike.
-- **Templates / mail-merge** via `OfficeTemplate.render` (fill a DOCX template's `{{placeholders}}`, single or batch), and **ODG parsing** (LibreOffice Draw).
+- **Templates / mail-merge** via `OfficeTemplate.render` (fill a DOCX template's `{{placeholders}}`, `{{ if }}` conditions and `{{ for }}` loops, down to one table row per item, values formatted with Word-style pictures, single or batch), and **ODG parsing** (LibreOffice Draw).
 - **LaTeX in both directions** (8.1): `.tex` files and Overleaf project zips parse into the same AST as every other format (sections, lists, tables with merged cells, figures, math, footnotes, citations, cross-references, user macros, `beamer` slides), so LaTeX converts to DOCX, ODT, HTML, Markdown and the rest. And `to('tex')` turns any parsed document into LaTeX source that compiles unmodified with pdfLaTeX, XeLaTeX, LuaLaTeX, upLaTeX, pLaTeX and `latex` (the last three through dvipdfmx), presentations included (as `beamer` frames), carrying its images inside the one `.tex` file (or, in bundle mode, as files in a zip). See [LaTeX Support](#latex-support).
 
 See the [full changelog](CHANGELOG.md) for the complete list, including breaking changes.
@@ -156,6 +156,8 @@ npx officeparser my_document --fileType=docx --to=json
 | `--ocrConfig.language` | string | `eng` | Tesseract language(s), e.g. `deu` or `eng+fra` |
 | `--ocrConfig.preserveLayout` | boolean | `true` | Keep the line layout of recognized text |
 | `--password` | string | (none) | Password for an encrypted document (PDF, OOXML, or ODF) |
+| `--allowRemoteAssets` | boolean | `true` | `false` fails with `REMOTE_ASSET_BLOCKED` where the pdf.js worker or Tesseract's files would come from the library's default CDN address |
+| `--ocrConfig.cacheMethod` | `write\|readOnly\|refresh\|none` | `write` | Where OCR keeps the language data it loads (`none` stores nothing) |
 | `--extractAttachments` | boolean | `false` | Extract images/charts as Base64 |
 | `--ignoreNotes` | boolean | `false` | Ignore footnotes/endnotes/speaker notes |
 | `--ignoreComments` | boolean | `false` | Ignore inline comments |
@@ -174,7 +176,7 @@ npx officeparser my_document --fileType=docx --to=json
 | `--pdfParserConfig.pageRange` | string | all | Parse only the given pages, e.g. `1-3,7` |
 | `--htmlParserConfig.preserveComments` | boolean | `false` | Keep HTML/EPUB `<!-- -->` comments as `comment` nodes |
 | `--texParserConfig.today` | string | the date of the parse | What `\today` prints in LaTeX input, e.g. `--texParserConfig.today="May 1, 2024"` |
-| `--pdfParserConfig.headingDetection` | `auto\|font-size\|off` | `auto` | How headings are inferred on the geometry path |
+| `--pdfParserConfig.headingDetection` | `auto\|font-size\|tags\|off` | `auto` | How PDF headings are decided: from tags and a font-size heuristic, the heuristic alone, tags alone, or never |
 | `--pdfParserConfig.mergeHyphenatedWords` | boolean | `true` | Rejoin words hyphenated across line breaks |
 | `--pdfParserConfig.normalizeText` | boolean | `true` | Unicode/ligature normalization of extracted text |
 | `--pdfParserConfig.extractTextColor` | boolean | `true` | Record each run's fill colour in `formatting.color` (set `false` to skip for speed) |
@@ -192,6 +194,10 @@ npx officeparser my_document --fileType=docx --to=json
 | `--htmlConfig.containerWidth` | string \| number | `auto` | HTML output container width (e.g. `900px`, `100%`) |
 | `--textConfig.pageSeparator` | string | `\n` | Separator written between pages in text output |
 | `--pdfConfig.engine` | `html\|native` | `html` | PDF engine: Puppeteer (`html`) or pdf-lib (`native`, no browser) |
+| `--pdfConfig.fonts.regular` | file path | (none) | Font file (`.ttf`/`.otf`) the native engine draws in; also `.bold`, `.italic`, `.boldItalic`, `.mono` |
+| `--pdfConfig.fallbackFonts` | file paths, comma-separated | (none) | Font files tried in order for the characters the fonts before them lack (native engine) |
+| `--pdfConfig.subsetFonts` | boolean | `true` | `false` embeds whole font files, not only the glyphs used |
+| `--pdfConfig.outline` | boolean | `false` | Write a bookmark outline from the headings |
 | `--texConfig.bundle` | boolean | `false` | LaTeX: write a zip of `main.tex` plus its `images/` instead of the `.tex` alone |
 | `--texConfig.embedImages` | boolean | `true` | LaTeX: `false` refers to `images/` files instead of carrying PNG and JPEG images inside the `.tex` |
 | `--texConfig.documentClass` | `auto\|article\|report\|book\|beamer` | `auto` | LaTeX document class (`auto` = `beamer` for presentations, `article` otherwise) |
@@ -468,7 +474,9 @@ const { value: csv } = await OfficeGenerator.generate(ast, 'csv');
 > ```
 > Or choose `pdfConfig.engine: 'native'` to lay the document out directly with `pdf-lib`
 > (`npm install pdf-lib`): no browser, and the only engine that produces a real PDF in the browser
-> (import from `officeparser/browser-native-pdf` for the client-side path).
+> (import from `officeparser/browser-native-pdf` for the client-side path). To draw text the
+> Standard-14 fonts cannot (Greek, Cyrillic, Hindi, Arabic, Chinese, ...), give it fonts and
+> `npm install @pdf-lib/fontkit`.
 > See [PdfGeneratorConfig](#pdfgeneratorconfig).
 >
 > **EPUB generation with images** requires `extractAttachments: true` on the parse step that
@@ -515,7 +523,7 @@ const { value: html, messages } = await OfficeConverter.convert('data.xlsx', 'ht
 
 ## OfficeTemplate: Mail-Merge / Document Generation
 
-`OfficeTemplate.render()` (alias `renderTemplate`) fills a **DOCX template**'s `{{placeholder}}` tags from your data and returns a new `.docx`. It is not parsing or conversion: the template is copied and only the placeholders are substituted, so **all of the template's formatting, layout and structure are preserved**. Give it one data object for one document, or an array for a batch (one document per entry, a classic mail-merge). Think of it as a zero-dependency take on Adobe's Document Generation API.
+`OfficeTemplate.render()` (alias `renderTemplate`) fills a **DOCX template**'s tags from your data and returns a new `.docx`: `{{placeholder}}` fields, `{{ if }}` conditions that keep or drop content, and `{{ for }}` loops that repeat it, down to one table row per item. It is not parsing or conversion: the template is copied and only its tags change, so **all of the template's formatting, layout and structure are preserved**. Give it one data object for one document, or an array for a batch (one document per entry, a classic mail-merge). Think of it as a zero-dependency take on Adobe's Document Generation API.
 
 ```ts
 import { OfficeTemplate } from 'officeparser';
@@ -523,7 +531,13 @@ import { writeFileSync } from 'fs';
 
 // One document.
 const bytes = await OfficeTemplate.render('invoice-template.docx', {
-    data: { name: 'Acme Corp', amount: '$1,250.00', due: '2026-10-01' },
+    data: {
+        name: 'Acme Corp', amount: '$1,250.00', due: '2026-10-01', paid: false,
+        lines: [
+            { description: 'Widgets', qty: 2, price: '$1,000.00' },
+            { description: 'Support', qty: 1, price: '$250.00' },
+        ],
+    },
 });
 writeFileSync('invoice-acme.docx', bytes); // Uint8Array
 
@@ -537,17 +551,72 @@ const docs = await OfficeTemplate.render('invoice-template.docx', {
 docs.forEach((d, i) => writeFileSync(`invoice-${i}.docx`, d));
 ```
 
-- **Run-aware.** Word often splits a typed `{{name}}` across several runs (`{{`, `na`, `me}}`); it is filled anyway, and a value takes the **formatting of the run its placeholder sat in** (a bold `{{amount}}` renders bold).
-- **Everywhere text lives.** Placeholders in the body, headers, footers, footnotes/endnotes and comments are all filled. Values may contain `\n` (rendered as line breaks).
-- **Placeholder names** are Unicode letters and digits plus `_`, `.`, `-` (e.g. `{{invoice.total}}`, `{{customer-name}}`). A name containing a space or other punctuation is not recognized and is left as literal text, so surrounding prose between the delimiters is never mistaken for a field.
+### Conditions and loops
+
+Type the tags in Word, as ordinary text:
+
+```text
+{{ if paid }}
+Paid in full. Thank you!
+{{ else if total > 1000 }}
+Please pay {{ amount }} by {{ due }}. Large invoices may be paid in instalments.
+{{ else }}
+Please pay {{ amount }} by {{ due }}.
+{{ endif }}
+
+{{ for line in lines }}
+{{ line.description }} x {{ line.qty }}: {{ line.price }}
+{{ endfor }}
+```
+
+- **Where the tags sit decides what they cover.** Both tags in one paragraph: the text between them. Tags in separate paragraphs: the paragraphs between them; when every tag of the block has a paragraph of its own, those paragraphs are removed with the tags, so no blank line is left (a tag beside text cuts its paragraph where it stands, and the block's other tag paragraphs then stay, empty). Tags in different cells of one table: whole rows. Put `{{ for line in lines }}` in a row's first cell and `{{ endfor }}` in its last, and the row repeats once per item; close it in a later row and that group of rows repeats. `{{ if }}` keeps or drops rows the same way, each branch starting a row of its own.
+- **Conditions** take a field (`{{ if paid }}`) or a comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`, joined with `and`, `or`, `not` and parentheses, against numbers, quoted strings, `true`, `false` and `null`. `false`, `null`, `""`, `0` and an empty list count as false. A comparison takes two values of the same kind (two numbers, two strings, two dates) or an empty one: comparing the text `"150"` with the number `100` rejects with `TEMPLATE_DATA_INVALID` rather than silently picking a branch. Keywords are case-insensitive, and quotes may be straight or curly, as Word's AutoCorrect writes them.
+- **Loops** name their item: `{{ line.price }}` in a list of objects, `{{ t }}` in a list of plain values. Inside a loop, `loop.index` (from 0), `loop.number` (from 1), `loop.first`, `loop.last` and `loop.length` describe the current pass, so `{{ for t in tags }}{{ t }}{{ if not loop.last }}, {{ endif }}{{ endfor }}` writes `red, blue`. Loops and conditions nest.
+- **Data can be nested.** `{{ customer.address.city }}` follows a path and `{{ items.0.name }}` reads an item of a list. A top-level key that itself holds a dot (`"invoice.total"`) is read as typed before it is read as a path. Only the data's own keys are read, never `__proto__` or `constructor`.
+- **Mistakes are typed errors.** A block that is never closed, a closing tag with no block, or tags that cannot enclose content together (one in a table and the other outside it, one inside a tracked change, one in a Word field and the other outside it) reject with `TEMPLATE_SYNTAX`, naming the tag and the part. Text that starts like a block tag but is not one (`{{ If you have questions, call us }}`) stays text, as prose between the delimiters always has; when the blocks around it then fail to pair, the error names it and why it could not be read (`{{ if a = 1 }}`: use `==` to compare). A value that does not fit its tag (a loop over text, a list placed as a field) rejects with `TEMPLATE_DATA_INVALID`.
+- **Output Word opens.** Copies of pictures, bookmarks (their names too), paragraphs and content controls get fresh ids, a footnote, endnote or comment in a copy gets a copy of its own, filled in for that pass (its fields read the pass's item), a table left with no row is removed, and a cell a branch emptied keeps an empty paragraph.
+
+### Formatting values
+
+A field can be written through filters, after `|`. `format` takes a picture, as Word's own mail merge does (its `\#` and `\@` switches; Excel's number formats read number pictures the same way, apart from its thousands scaling, a comma after the last digit, which a picture rejects):
+
+```text
+{{ total | format "$#,##0.00" }}              $1,250.50
+{{ total | format "#,##0.00 '€'" }}           1,250.50 €
+{{ loss | format "$#,##0.00;($#,##0.00)" }}   ($320.00)
+{{ rate | format "0.0%" }}                    12.5%
+{{ due | format "MMMM d, yyyy" }}             November 1, 2026
+{{ due | format "dd/MM/yyyy HH:mm" }}         01/11/2026 09:05
+{{ name | upper }}                            ADA LOVELACE
+```
+
+- **Number pictures** use `0` (a digit, always written), `#` (a digit, written when there is one), `,` (groups of three), `.` (the decimal point) and `%` (a percentage); up to three sections, `positive;negative;zero`; text in `'quotes'` or after `\` is written as is. Values are rounded half away from zero, as Word and Excel round, and text that is a number (`"1250.5"`, as form data carries it) is taken too.
+- **Date pictures** use `d` `dd` `ddd` `dddd` (day), `M` `MM` `MMM` `MMMM` (month), `yy` `yyyy`, `h` `hh` (12-hour), `H` `HH` (24-hour), `m` `mm` (minutes), `s` `ss`, and `AM/PM` (`am/pm`, `A/P`). As in Word, `M` is the month and `m` the minute: Excel's `dd/mm/yyyy` is `dd/MM/yyyy` here. A value is a `Date` or ISO 8601 text (`"2026-11-01"`, `"2026-11-01T09:05:00Z"`; without an offset it is UTC).
+- **The same on every machine.** The formatting is officeParser's own, not the runtime's `Intl`, so a template renders the same in every Node version and browser. What it writes is yours to set: `numberSeparators` (`{ decimal: ',', group: '.' }` writes `1.250,50`), `dateNames` (month and day names, AM/PM), and `utcOffsetMinutes` (dates are written in UTC unless you move them).
+- **`upper` and `lower`** change case; filters chain left to right (`{{ code | lower | upper }}`).
+- **Your own filters:** `formatters: { initials: (v) => ..., round: (v, places) => ... }`, used as `{{ name | initials }}` or `{{ x | round 2 }}`. Each gets the value as the data holds it (a list or an object too) and the strings and numbers written after its name.
+- A picture given the wrong kind of value (a date picture on a number, a number picture on text that is no number) rejects with `TEMPLATE_DATA_INVALID`; a picture that cannot be read rejects with `TEMPLATE_SYNTAX`. A word after `|` that is no filter leaves the whole tag as text, like other prose between the delimiters. An empty value stays empty, and a missing one follows `onMissing`.
+
+### Fields
+
+- **Run-aware.** Word often splits a typed `{{name}}` across several runs (`{{`, `na`, `me}}`); it is filled anyway, and a value takes the **formatting of the run its placeholder sat in** (a bold `{{amount}}` renders bold). Block tags are found the same way.
+- **Everywhere text lives.** Tags in the body, headers, footers, footnotes/endnotes and comments are all filled. Values may contain `\n` (rendered as line breaks).
+- **Field names** are Unicode letters and digits plus `_`, `.`, `-` (e.g. `{{invoice.total}}`, `{{customer-name}}`). `if`, `else`, `endif`, `for` and `endfor` are the block tags' own words. Other text between the delimiters, such as prose with spaces, is left as literal text, so it is never mistaken for a field.
 - **Deterministic** output (pinned zip timestamps): the same template + data always renders byte-identical bytes.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `data` | `TemplateData \| TemplateData[]` | (required) | Field values. One object is one document; an array is one document per entry |
-| `delimiters` | `{ start: string; end: string }` | `{{ }}` | Placeholder delimiters |
-| `onMissing` | `'keep' \| 'empty' \| 'error'` | `'keep'` | A placeholder with no matching field: leave it, blank it, or reject with `TEMPLATE_FIELD_MISSING`. A field present but `null`/`undefined` always renders empty |
+| `data` | `TemplateData \| TemplateData[]` | (required) | Field values, which may be nested objects and lists. One object is one document; an array is one document per entry |
+| `delimiters` | `{ start: string; end: string }` | `{{ }}` | Tag delimiters, for fields and block tags alike |
+| `numberSeparators` | `{ decimal?, group? }` | `{ decimal: '.', group: ',' }` | What a number picture writes for its point and groups |
+| `dateNames` | `TemplateDateNames` | English | Month and day names (full and short) and AM/PM markers a date picture writes |
+| `utcOffsetMinutes` | `number` | `0` | Minutes added to UTC before a date picture writes a date (330 for India); a fixed offset, the same on every machine |
+| `formatters` | `Record<string, TemplateFormatter>` | (none) | Filters of your own, used after `\|` in a tag |
+| `onMissing` | `'keep' \| 'empty' \| 'error'` | `'keep'` | A field the data does not have: leave it as typed (a block whose condition or list uses it is left as typed, tags included), treat it as empty (blank text, a false condition, a loop of nothing), or reject with `TEMPLATE_FIELD_MISSING`. A field present but `null`/`undefined` always renders empty |
 | `password` | `string` | (none) | Decrypt the template first, if it is itself password-protected |
+| `onPassword` | `(reason) => string \| undefined \| Promise<...>` | (none) | Supplies a password when `password` did not decrypt the template, as the parser's `onPassword` does |
+| `maxPasswordAttempts` | `number` | `3` | How many times `onPassword` is asked before the render rejects |
+| `decompressionLimits` | `DecompressionLimits` | parser's | Bounds unzipping an untrusted template; `maxXmlElements` (2,000,000) bounds its elements, its tags and the tokens they hold together (`XML_ELEMENT_LIMIT_EXCEEDED`), and `maxRepeatedContent` (16 MiB) what loops and repeated values add, past which the render rejects with `OUTPUT_TOO_LARGE` |
 
 Only DOCX is supported today (other OOXML/ODF formats will follow); a non-DOCX template rejects with `TEMPLATE_UNSUPPORTED_FORMAT`.
 
@@ -727,6 +796,7 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `PDF_TEXT_ENCODING_SUSPECT` | parse | A fifth or more of a PDF's characters (of at least 50) are unmappable glyphs (broken ToUnicode); text may be garbage. Consider OCR. |
 | `PDF_OUTLINE_TRUNCATED` | parse | Bookmark outline hit the depth/size cap; `ast.auxiliary.outline` is partial. |
 | `PDF_WORKER_MISSING` / `PDF_WORKER_FALLBACK` | parse | The pdf.js worker could not be loaded / a fallback was used (set `pdfWorkerSrc`). |
+| `REMOTE_ASSET_BLOCKED` | parse (error) | `allowRemoteAssets` is `false` and the parse would have fetched the pdf.js worker or Tesseract's files from the library's default CDN address. The message names the options to set (`pdfWorkerSrc`, `ocrConfig.workerPath`/`corePath`/`langPath`). |
 | `NO_WORKSHEETS_FOUND` / `NO_SLIDES_FOUND` | parse | A legitimately empty workbook/presentation. |
 | `TABLE_CELL_LIMIT_EXCEEDED` | parse | The cells an ODF or XLSX document yields passed `decompressionLimits.maxTableCells` plus one per byte of the document; the rest were not read. |
 | `REPEATED_CONTENT_LIMIT_EXCEEDED` | parse | The document repeated `decompressionLimits.maxRepeatedContent` (plus 16 characters per byte of the document) of content by reference (ODF repeated cells and chart values, XLSX shared strings, style values, link targets, chart text per frame, LaTeX titles per reference); later repeats were not made, shortened or went without the value. |
@@ -745,7 +815,7 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `PASSWORD_REQUIRED` / `PASSWORD_INCORRECT` | parse | Encrypted input; supply `password`/`onPassword` (these also throw when parsing cannot continue). |
 | `UNRECOGNIZED_CONFIG_OPTION` | config | A config key this version does not know (often a typo or a removed/renamed option); it had no effect. Raised for parser and generator configs, and for a `convert()` option placed at the top level instead of under `parseConfig`/`generatorConfig` (the message says where it belongs). |
 | `INVALID_CONFIG_VALUE` | config | A generator option got a value it does not accept (a `documentClass`, paper `format` or margin, `pdfConfig.engine`, `htmlConfig.standalone.styles`, a Markdown dialect preset, a chunking strategy/`splitBy`/`tableSplitStrategy`) or `texParserConfig.today` is not a string; the option's default was used, and the message names the option, the value and what it accepts. |
-| `CONTENT_NOT_REPRESENTABLE` | generate | A node type has no faithful form in the target format and was downgraded or omitted (e.g. math/embeds in DOCX/ODT, a table-less document to CSV). |
+| `CONTENT_NOT_REPRESENTABLE` | generate | A node type has no faithful form in the target format and was downgraded or omitted (e.g. math/embeds in DOCX/ODT, a table-less document to CSV). From the native PDF engine, `details.reason` says which, as a value to branch on: `'unencodable-text'` (characters no font given could draw, with `details.count` and a `details.sample` of the first few), `'image-in-table-cell'`, `'image-in-text-line'`, `'chart'`, `'embed'`, `'onnode-string-override'`. Each is raised once per conversion. HTML raises it with `details.reason: 'chart'` for a chart written as its data table because there is no chart script to draw it with (`htmlConfig.chartJsSrc: ''`). |
 | `METADATA_NOT_REPRESENTABLE` | generate | A metadata field could not be represented in the target format. |
 | `TABLE_GRID_LIMIT_EXCEEDED` | generate | The document's tables needed more empty grid positions than one output fills (a million, plus 16 per byte of the document): a table's cells were laid out closer, short rows were not padded to the table's width, or a sparse sheet's empty rows were not written; or plain text stopped lining columns up (16 million spaces, plus 16 per byte). |
 | `IMAGE_NOT_INLINED` | generate | An image was referenced by name instead of inlined: it is over `maxInlineImageBytes` (Markdown / fragment HTML), or the pictures inlined in the document reached 128 MB in all (Markdown, HTML of either kind, RTF; a picture is inlined at every place that shows it). |
@@ -755,6 +825,8 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `PDF_GENERATION_FAILED` | generate | PDF generation failed (e.g. Puppeteer missing for `engine: 'html'`). |
 | `INVALID_STYLE_MAPPING` / `INVALID_STYLE_MAP_TAG` | generate | A `styleMap` entry/tag was invalid and ignored. |
 | `TEMPLATE_UNSUPPORTED_FORMAT` / `TEMPLATE_FIELD_MISSING` | template | The template format is unsupported / a `{{field}}` had no value under `onMissing: 'error'`. |
+| `TEMPLATE_SYNTAX` | template | Blocks do not pair (a tag that could not be read is named, where that is why), or a block's tags cannot enclose content together; `details` holds the `reason` (`'unreadable'`, `'unclosed'`, `'unopened'`, `'mismatched'`, `'else-after-else'`, `'crossing'`, `'row-branch'`, `'overlap'`, `'malformed-xml'`; see `TemplateSyntaxReason`), the `tag` as typed and the `part`. |
+| `TEMPLATE_DATA_INVALID` | template | A value does not fit its tag: a loop over something that is not a list, a list, object, function or symbol placed as a field, a comparison of two kinds of value, or a picture given the wrong kind of value; `details` holds the `reason` (`'not-a-list'`, `'not-text'`, `'incomparable'`, `'unformattable'`; see `TemplateDataReason`), the `tag`, the `part` and the value's `kind`. |
 | `PAGE_LOAD_FAILED` | parse | A PDF page could not be processed and was skipped (partial content). |
 | `SHEET_RANGE_NOT_FOUND` | generate | A `csvConfig.sheets` range matched no sheet, so CSV output is empty. |
 | `EMPTY_CHUNK_GENERATED` / `WHITESPACE_NODE_SKIPPED` / `BROWSER_GENERATION_LIMITATION` / `PERFORMANCE_TIP` / `DEPENDENCY_LOAD_FAILED` | generate | Diagnostic/informational notes from the chunking and PDF generators. |
@@ -857,8 +929,8 @@ Table Node (type: 'table')
 
 > [!NOTE]
 > **Header rows.** A header row is flagged on its cells' metadata (`style: 'header'`, or `isHeader`),
-> set by the parsers that mark one (DOCX `w:tblHeader`, ODF `table:table-header-rows`, HTML `<th>`/
-> `<thead>`, tagged-PDF `TH`); generators read it through one shared heuristic (a marked row, or an
+> set by the parsers that mark one (DOCX `w:tblHeader`, ODF `table:table-header-rows`, RTF `\trhdr`,
+> HTML `<th>`/`<thead>`, the row above a Markdown table's `| --- |` line, tagged-PDF `TH`); generators read it through one shared heuristic (a marked row, or an
 > all-bold first row). One format-imposed asymmetry: a **Markdown** table always renders a header row
 > (the GFM `| --- |` separator is mandatory syntax), whereas **HTML** emits `<thead>` only for a
 > detected header. So a table with no real header prints a header in Markdown output but not in HTML.
@@ -1345,7 +1417,9 @@ Pass as the second argument to `parseOffice(file, config)`.
 |--------|------|---------|-------------|
 | `newlineDelimiter` | `string` | `'\n'` | Joins multi-line text inside the AST's pre-flattened `.text` (RTF table cells, chart text, PDF page text); also the default for `textConfig.newlineDelimiter` in `.to('text')` when that is not set explicitly. Not read by the Word parser |
 | `password` | `string` | `''` | Password for a password-protected document. Applies to every encryptable format: PDF, encrypted OOXML (`.docx`/`.xlsx`/`.pptx`, ECMA-376 agile or standard AES), and encrypted ODF (`.odt`/`.ods`/`.odp`/`.odg`, AES-CBC with PBKDF2). A missing password rejects with `PASSWORD_REQUIRED`, a wrong one with `PASSWORD_INCORRECT`. Ignored for unencrypted files. *ODF note:* LibreOffice 24.8+ defaults to AES-256-GCM with Argon2id key derivation ("wholesome encryption"), which is not supported and rejects with `DOCUMENT_DECRYPTION_FAILED`; re-save with the classic AES-CBC/PBKDF2 scheme (or an earlier LibreOffice) to parse it |
-| `onPassword` | `(reason: 'required' \| 'incorrect') => string \| undefined \| Promise<...>` | (none) | Called when an encrypted document needs a password `password` did not satisfy, so it can be supplied lazily or interactively (prompt, vault). Return a password to retry (capped), or `undefined` to reject as above. Works for every encryptable format (PDF/OOXML/ODF); mirrors pdf.js's `onPassword` |
+| `onPassword` | `(reason: 'required' \| 'incorrect') => string \| undefined \| Promise<...>` | (none) | Called when an encrypted document needs a password `password` did not satisfy, so it can be supplied lazily or interactively (prompt, vault). Return a password to retry (asked at most `maxPasswordAttempts` times), or `undefined` to reject as above. Works for every encryptable format (PDF/OOXML/ODF); mirrors pdf.js's `onPassword` |
+| `maxPasswordAttempts` | `number` | `3` | How many times `onPassword` is asked for one document before the parse rejects. A whole number of 0 or more |
+| `allowRemoteAssets` | `boolean` | `true` | Whether the library may fall back to its built-in CDN addresses for the pdf.js worker (`pdfWorkerSrc`) and Tesseract's worker, core and language data (`ocrConfig.workerPath`/`corePath`/`langPath`). `false` makes a parse that would use one reject with `REMOTE_ASSET_BLOCKED`, naming the option to set, for an application that must make no request to another site. An address you pass yourself is used as given. Output written from such a parse names no chart script address unless `htmlConfig.chartJsSrc` is set |
 | `ignoreNotes` | `boolean` | `false` | Ignore footnotes/endnotes (DOCX, ODT, RTF, PDF, HTML, Markdown, EPUB, LaTeX) and speaker notes (PPTX/ODP, LaTeX `beamer` `\note`). See the [capability matrix](#per-format-capability-matrix) |
 | `ignoreComments` | `boolean` | `false` | Ignore comments/annotations, attached by default via `node.comments[]`. Applies to DOCX, XLSX, PPTX, every ODF type (ODT/ODS/ODP/ODG), RTF (`\annotation`) and LaTeX (`% Comment (Author, date): text` lines). Source-level comments (CSV `#` rows, Markdown/HTML `<!-- -->`, LaTeX `% <!-- -->` lines) are not governed by it. See the [capability matrix](#per-format-capability-matrix) |
 | `ignoreHeadersAndFooters` | `boolean` | `false` | Skip headers & footers (populated in `ast.auxiliary.headers/footers` by default). Extracted for DOCX, PDF, ODT, RTF and LaTeX (`fancyhdr`) only; a no-op for ODS/ODP/ODG, XLSX and PPTX. See the [capability matrix](#per-format-capability-matrix) |
@@ -1382,7 +1456,7 @@ PDF-specific options, passed as `pdfParserConfig` on the parser config.
 | `mergeHyphenatedWords` | `boolean` | `true` | Join words split across a line break by a trailing hyphen |
 | `lineToleranceFactor` | `number` | `0.35` | Baseline tolerance (fraction of font size) for grouping fragments onto one line |
 | `spaceToleranceFactor` | `number` | `0.25` | Gap threshold (fraction of font size) for inserting a space between fragments |
-| `headingDetection` | `'auto' \| 'font-size' \| 'off'` | `'auto'` | How heading levels are decided. `'auto'`: from tags when tagged, else a size/weight heuristic. `'font-size'`: re-level headings by the heuristic even on a tagged PDF (tables/lists stay tagged; a tagged heading is re-leveled by size and may be demoted). `'off'`: never emit headings |
+| `headingDetection` | `'auto' \| 'font-size' \| 'tags' \| 'off'` | `'auto'` | How heading levels are decided. `'auto'`: from tags when tagged, else a size/weight heuristic. `'font-size'`: re-level headings by the heuristic even on a tagged PDF (tables/lists stay tagged; a tagged heading is re-leveled by size and may be demoted). `'tags'`: only a heading the document tags (`H`, `H1`..`H6`) is a heading; text assembled from geometry (an untagged PDF, a page its tags cover too little of, text outside the tags, or `useTags: false`) never is, and the text is the same as under `'auto'`. `'off'`: never emit headings. A PDF heading says what decided it in `metadata.levelSource` (`'tags'` or `'font-size'`) |
 | `pageRange` | `string` | `''` (all) | Restrict to given pages, e.g. `'1-3,7'`. Output keeps original page numbers |
 | `normalizeText` | `boolean` | `true` | Unicode-normalize extracted text (expand ligatures, compose combining marks, regularize whitespace). Set `false` to preserve the raw source glyphs verbatim |
 | `extractTextColor` | `boolean` | `true` | Extract each run's fill color into `formatting.color`. Recovered from the operator list; on by default (color is content like bold/font). Costs about 1.6x parse time on a text-heavy PDF, near-free when `extractAttachments`/`ocr` already fetch the operator list; set `false` to skip it. Pure black is left unset. Highlight annotations set `formatting.backgroundColor` regardless of this flag |
@@ -1407,13 +1481,13 @@ Options shared by all generator formats. Pass to `OfficeGenerator.generate(ast, 
 | `metadataOverrides` | `MetadataOverrides` | `{}` | Override the metadata embedded in the output, merged per field over `ast.metadata` |
 | `includeImages` | `boolean \| 'image-only' \| 'image+ocr-text' \| 'ocr-text-only' \| 'none'` | `true` | How to render an image node. `true`=`'image-only'` (embed the image, no OCR text); `'image+ocr-text'` (image then its recognized/OCR text); `'ocr-text-only'` (OCR text, no image); `false`=`'none'` (omit). In plain-text output an image becomes an `[Image: name]` placeholder (plus OCR text for `'image+ocr-text'`), or just the OCR text for `'ocr-text-only'`. In chunks a picture is `[Image: alt]` for its alt text, with its OCR text, except under `'none'` and `'ocr-text-only'` (OCR text only) |
 | `maxInlineImageBytes` | `number` | `1500000` | Max decoded image size, in bytes, that is inlined as a `data:` URI (HTML/Markdown); the base64 URI itself is ~1/3 larger, so a scanned page cannot emit a multi-megabyte line that breaks downstream parsers. Under the default `image-only` mode an image over the cap renders its recognized/OCR text when it has any (multi-line OCR as a fenced block in Markdown), otherwise a compact name reference; Markdown still emits the `IMAGE_NOT_INLINED` warning. Plain text follows the same rule. **Standalone HTML inlines whatever the cap**: a self-contained document has nowhere else to resolve the image from. In every mode (standalone HTML and `Infinity` included), the pictures one document writes inline stop at 128 MB in all (a picture is inlined at every place showing it); the rest are name references, with `IMAGE_NOT_INLINED`. `0` never inlines, `Infinity` inlines every picture within those 128 MB |
-| `includeCharts` | `boolean` | `true` | Include charts: HTML renders an interactive Chart.js canvas, DOCX/ODT/LaTeX render the chart's data as a table, plain text and the native PDF engine render the chart's data text; Markdown and RTF render nothing for a chart. `false` omits charts in every generator |
+| `includeCharts` | `boolean` | `true` | Include charts: HTML renders an interactive Chart.js canvas (or, with no `chartJsSrc`, the chart's data as a table), DOCX/ODT/LaTeX render the chart's data as a table, plain text and the native PDF engine render the chart's data text; Markdown and RTF render nothing for a chart. `false` omits charts in every generator |
 | `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal anchors from output (HTML, Markdown, DOCX, ODT, LaTeX, RTF) |
 | `ignoreDefaultStyleMap` | `boolean` | `false` | Disable built-in style mappings (e.g., "Heading 1" → h1) |
 | `styleMap` | `string[] \| StructuredStyleMapping[]` | `[]` | Custom semantic style mappings |
 | `onNode` | `(node) => string \| false \| void` | (none) | Per-node callback for filtering, overriding, or mutating |
 | `onWarning` | `(issue: OfficeIssue) => void` | (none) | Callback for non-fatal generation issues |
-| `abortSignal` | `AbortSignal \| null` | `null` | Optional signal to cancel the generation operation (rejects with AbortError). Checked between steps by the HTML, Markdown, RTF, DOCX, ODT, EPUB, LaTeX, PDF and chunking generators; text and CSV generation run to completion |
+| `abortSignal` | `AbortSignal \| null` | `null` | Optional signal to cancel the generation operation (rejects with AbortError). Checked between steps by the HTML, Markdown, RTF, DOCX, ODT, EPUB, LaTeX, PDF and chunking generators (both PDF engines: the native one checks before each node it draws); text and CSV generation run to completion |
 
 ---
 
@@ -1491,7 +1565,7 @@ Pass as `htmlConfig` inside `GeneratorConfig`.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `standalone` | `boolean \| StandaloneConfig` | `true` | Controls the HTML "document envelope" (see below) |
-| `chartJsSrc` | `string` | jsDelivr CDN | URL for the Chart.js library |
+| `chartJsSrc` | `string` | jsDelivr CDN | URL for the Chart.js library, loaded only by a page that draws a chart. `''` loads none: a chart is then written as a table of its values, with a `CONTENT_NOT_REPRESENTABLE` warning. Under `allowRemoteAssets: false` it is `''` unless set |
 | `containerWidth` | `string \| number` | `'auto'` | Max width of the content container. Positive number (px), CSS length string (`'900px'`, `'100%'`, `'60vw'`), or `'auto'`. Invalid values fall back to `'auto'` with an `INVALID_CONTAINER_WIDTH` warning |
 | `customCss` | `string` | `''` | Raw CSS injected into the `<style>` block; use this to override built-in styles |
 | `injections.headStart` | `string` | `''` | Raw HTML injected after `<head>` |
@@ -1555,13 +1629,43 @@ Pass as `mdConfig` inside `GeneratorConfig`.
 
 ### PdfGeneratorConfig
 
-Pass as `pdfConfig` inside `GeneratorConfig`. The default `'html'` engine requires the optional `puppeteer` peer dependency; the `'native'` engine requires the optional `pdf-lib` peer dependency instead. In the **prebuilt browser bundle** `pdf-lib` is stubbed so the bundle stays self-contained, so client-side native PDF export means importing from the dedicated entry **`officeparser/browser-native-pdf`** and installing `pdf-lib` (a consumer that bundles officeParser from source resolves `pdf-lib` normally).
+Pass as `pdfConfig` inside `GeneratorConfig`. The default `'html'` engine requires the optional `puppeteer` peer dependency; the `'native'` engine requires the optional `pdf-lib` peer dependency instead, and `@pdf-lib/fontkit` as well when it is given fonts. In the **prebuilt browser bundle** `pdf-lib` and `@pdf-lib/fontkit` are stubbed so the bundle stays self-contained, so client-side native PDF export means importing from the dedicated entry **`officeparser/browser-native-pdf`** and installing `pdf-lib` (a consumer that bundles officeParser from source resolves both normally).
+
+**Fonts in the native engine.** Without fonts the native engine draws in the Standard-14 Helvetica and Courier fonts, which have Western European characters only: anything else is drawn as `?` and reported once (`CONTENT_NOT_REPRESENTABLE`, `details.reason: 'unencodable-text'`, with how many characters and a sample). Give it font files to draw the rest:
+
+```js
+const noto = new Uint8Array(await (await fetch('/fonts/NotoSans-Regular.ttf')).arrayBuffer());
+const notoBold = new Uint8Array(await (await fetch('/fonts/NotoSans-Bold.ttf')).arrayBuffer());
+const devanagari = new Uint8Array(await (await fetch('/fonts/NotoSansDevanagari-Regular.ttf')).arrayBuffer());
+
+const { value: pdf } = await ast.to('pdf', {
+    pdfConfig: {
+        engine: 'native',
+        fonts: { regular: noto, bold: notoBold },   // also italic, boldItalic, mono
+        fallbackFonts: [devanagari],                // tried in order for what the fonts above lack
+    },
+});
+```
+
+Each character is drawn in the first font that has it, so one document can mix scripts. Words are shaped by the font (ligatures, Arabic joining, Indic conjuncts), and a right-to-left line starts at the right edge with its words in visual order; marks a font places through its positioning table (`GPOS`) are drawn at their default offsets. Fonts are subset to the glyphs used.
+
+**The maintained pdf-lib fork.** `@cantoo/pdf-lib` 2.x (the same API, with encryption) is supported in place of `pdf-lib`, installed under its name, with the fork's own fontkit under `@pdf-lib/fontkit` when fonts are used (each pdf-lib subsets fonts only with its own fontkit):
+
+```json
+"dependencies": {
+    "pdf-lib": "npm:@cantoo/pdf-lib@^2.11.1",
+    "@pdf-lib/fontkit": "npm:@cantoo/fontkit@^2.0.12"
+}
+```
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `engine` | `'html' \| 'native'` | `'html'` | `'html'`: render through a headless browser (Puppeteer in Node; native print in the browser) for maximum fidelity. `'native'`: lay the AST out directly with `pdf-lib` - no browser, runs in Node and the browser (real PDF bytes client-side), much lighter, but uses Standard-14 fonts and reflows rather than pixel-matching |
+| `engine` | `'html' \| 'native'` | `'html'` | `'html'`: render through a headless browser (Puppeteer in Node; native print in the browser) for maximum fidelity. `'native'`: lay the AST out directly with `pdf-lib` - no browser, runs in Node and the browser (real PDF bytes client-side), much lighter, but draws in the fonts it is given (the Standard-14 fonts when given none) and reflows rather than pixel-matching |
+| `fonts` | `{ regular?, bold?, italic?, boldItalic?, mono? }` of `Uint8Array \| ArrayBuffer` | none | Native engine: the font file (`.ttf`/`.otf` bytes) each style is drawn in. A style given none is drawn in `regular`; code stays in Courier unless `mono` is given. Needs `@pdf-lib/fontkit`. Bytes that are not a font fail the conversion (`PDF_GENERATION_FAILED`) |
+| `fallbackFonts` | `(Uint8Array \| ArrayBuffer)[]` | `[]` | Native engine: more font files, tried in order for each character the fonts before them lack. Given without `fonts`, text stays in the Standard-14 fonts and these draw only what those lack |
+| `subsetFonts` | `boolean` | `true` | Native engine: embed only the glyphs used of each font given. `false` embeds the whole files |
 | `tagged` | `boolean` | `true` | Emit a tagged, PDF/UA-accessible PDF (structure tree). HTML engine only; the native engine ignores it |
-| `outline` | `boolean` | `false` | Emit a heading-based bookmark outline. HTML engine only; the native engine ignores it |
+| `outline` | `boolean` | `false` | Emit a bookmark outline from the document's headings, nested by heading level. Both engines |
 | `format` | `string` | `'A4'` | Paper format (`'A4'`, `'Letter'`, `'Legal'`, etc.) |
 | `width` | `string \| number` | `''` | Paper width (e.g., `'5in'`, `'3cm'`) or pixels |
 | `height` | `string \| number` | `''` | Paper height (e.g., `'5in'`, `'3cm'`) or pixels |
@@ -1576,8 +1680,8 @@ Pass as `pdfConfig` inside `GeneratorConfig`. The default `'html'` engine requir
 | `timeout` | `number` | `30000` | PDF rendering timeout in milliseconds. Set to `0` to disable. **HTML engine only** |
 
 > **Native engine (`engine: 'native'`) differences beyond fidelity:** it ignores the Puppeteer-only
-> options above (and `tagged`/`outline`), uses a non-zero default `margin`, does not render charts,
-> and does not apply `renderMetadata`. Choose it to avoid the headless browser; choose `'html'` for
+> options above (and `tagged`), uses a non-zero default `margin`, writes a chart as its data in text
+> (with a `CONTENT_NOT_REPRESENTABLE` warning), and does not apply `renderMetadata`. Choose it to avoid the headless browser; choose `'html'` for
 > pixel-matching fidelity, charts, print headers/footers and PDF/UA tags.
 
 ### DocxGeneratorConfig
@@ -1812,6 +1916,7 @@ When `ocr: true` is set, `officeParser` maintains an intelligent **Smart Worker 
 | `workerPath` | `string` | `''` | Custom path to Tesseract worker script |
 | `corePath` | `string` | `''` | Custom path to Tesseract core script |
 | `langPath` | `string` | `''` | Custom path for language data files |
+| `cacheMethod` | `'write' \| 'readOnly' \| 'refresh' \| 'none'` | `'write'` | Where Tesseract keeps the language data it loads (IndexedDB in the browser, a file in the working directory in Node). `'none'` neither reads nor stores it, for an application that must write nothing to the device |
 | `preserveLayout` | `boolean` | `true` | Reconstruct the recognized text's 2-D page layout from Tesseract's per-word boxes (columns line up, right-hand text stays right), instead of flat reading-order text. Set `false` for the flat string |
 | `timeout` | `OcrTimeoutConfig` | `{}` | Consolidated timeouts: `autoTerminate`, `workerLoad`, `recognition` |
 
@@ -1848,7 +1953,7 @@ Five bundles are available in the `dist/` directory:
 | `officeparser.browser.iife.js` | IIFE | Standard UMD bundle for direct `<script>` inclusion (exposes global `officeParser`). |
 | `officeparser.browser.slim.mjs` | ESM | Slim ESM bundle with Tesseract.js (OCR) stubbed out and remote CDN URLs removed. |
 | `officeparser.browser.slim.iife.js` | IIFE | Slim UMD bundle with Tesseract.js (OCR) stubbed out and remote CDN URLs removed. |
-| `officeparser.browser.native-pdf.mjs` | ESM | ESM bundle (the `officeparser/browser-native-pdf` subpath export) that leaves `pdf-lib` external, for client-side native PDF generation. |
+| `officeparser.browser.native-pdf.mjs` | ESM | ESM bundle (the `officeparser/browser-native-pdf` subpath export) that leaves `pdf-lib` and `@pdf-lib/fontkit` external, for client-side native PDF generation. |
 
 ### Manifest V3 & Extension Compliance (Slim Bundles)
 For strict browser environments like **Chrome/Edge Manifest V3 extensions**, remotely hosted code is forbidden. Use the **slim** bundles (`officeparser.browser.slim.mjs` or `officeparser.browser.slim.iife.js`) as they do not include default remote CDN urls or the Tesseract OCR engine.

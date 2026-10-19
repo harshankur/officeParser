@@ -5,10 +5,11 @@
         <a href="#spec/converter">OfficeConverter</a></p>
     <h1>OfficeTemplate Specification</h1>
     <p><code>OfficeTemplate.render()</code> (alias <code>renderTemplate</code>) fills a <strong>DOCX template</strong>'s
-        <code>{{placeholder}}</code> tags from your data and returns a new <code>.docx</code>. It is a lightweight
-        mail-merge / document-generation entry point: a zero-dependency take on Adobe's Document Generation API,
-        built on the bundled <code>fflate</code>.</p>
-    <p>It is <strong>not</strong> parsing or conversion: the template is copied and only its placeholders are substituted,
+        tags from your data and returns a new <code>.docx</code>: <code>{{placeholder}}</code> fields,
+        <code>{{ if }}</code> conditions that keep or drop content, and <code>{{ for }}</code> loops that repeat it, down
+        to one table row per item. It is a lightweight mail-merge / document-generation entry point: a zero-dependency
+        take on Adobe's Document Generation API, built on the bundled <code>fflate</code>.</p>
+    <p>It is <strong>not</strong> parsing or conversion: the template is copied and only its tags change,
         so <strong>every bit of the original formatting, layout and structure is preserved</strong>. Give it one data
         object for one document, or an array for a batch (one document per entry, a classic mail-merge).</p>
 
@@ -69,8 +70,9 @@ docs.forEach((d, i) => writeFileSync(`invoice-${i}.docx`, d));</code></pre>
                 <td><code>TemplateData | TemplateData[]</code></td>
                 <td><em>required</em></td>
                 <td>Field values. One object &rarr; one document; an array &rarr; one document per entry. A value may be a
-                    string, number, boolean, <code>Date</code> (rendered as ISO), or <code>null</code>/<code>undefined</code>
-                    (rendered empty).</td>
+                    string, number, boolean, <code>Date</code> (rendered as ISO), <code>null</code>/<code>undefined</code>
+                    (rendered empty), a list (what a <code>for</code> loop repeats over) or an object (whose fields a path
+                    reads).</td>
             </tr>
             <tr>
                 <td><code>fileType</code></td>
@@ -83,17 +85,46 @@ docs.forEach((d, i) => writeFileSync(`invoice-${i}.docx`, d));</code></pre>
                 <td><code>delimiters</code></td>
                 <td><code>{ start: string; end: string }</code></td>
                 <td><code>{{ }}</code></td>
-                <td>Placeholder delimiters. Custom delimiters may contain any characters, including quotes (e.g.
-                    <code>{ start: '[[', end: ']]' }</code>).</td>
+                <td>Tag delimiters, for fields and block tags alike. Custom delimiters may contain any characters,
+                    including quotes (e.g. <code>{ start: '[[', end: ']]' }</code> makes <code>[[ if paid ]]</code> a block
+                    tag).</td>
             </tr>
             <tr>
                 <td><code>onMissing</code></td>
                 <td><code>'keep' | 'empty' | 'error'</code></td>
                 <td><code>'keep'</code></td>
-                <td>A placeholder with no matching field: <code>'keep'</code> leaves the tag text in place (formatting of
-                    its runs preserved), <code>'empty'</code> blanks it, <code>'error'</code> rejects with
-                    <code>TEMPLATE_FIELD_MISSING</code>. A field that is present but <code>null</code>/<code>undefined</code>
-                    always renders empty.</td>
+                <td>A field the data does not have, in a placeholder, a condition or a loop's list: <code>'keep'</code>
+                    leaves it as typed (a placeholder's text stays, formatting of its runs preserved; a block whose
+                    condition or list uses the field is left exactly as typed, tags and content included),
+                    <code>'empty'</code> treats it as empty (blank text, <code>null</code> in a condition, a loop of
+                    nothing), <code>'error'</code> rejects with <code>TEMPLATE_FIELD_MISSING</code>. A field that is present
+                    but <code>null</code>/<code>undefined</code> always renders empty.</td>
+            </tr>
+            <tr>
+                <td><code>numberSeparators</code></td>
+                <td><code>{ decimal?: string; group?: string }</code></td>
+                <td><code>{ decimal: '.', group: ',' }</code></td>
+                <td>What a number picture writes for its point and groups (<code>{ decimal: ',', group: '.' }</code> writes
+                    <code>1.250,50</code>).</td>
+            </tr>
+            <tr>
+                <td><code>dateNames</code></td>
+                <td><code>TemplateDateNames</code></td>
+                <td>English</td>
+                <td>The month and day names (full and short) and the AM/PM markers a date picture writes.</td>
+            </tr>
+            <tr>
+                <td><code>utcOffsetMinutes</code></td>
+                <td><code>number</code></td>
+                <td><code>0</code></td>
+                <td>Minutes added to UTC before a date picture writes a date (330 for India). A fixed offset, the same on
+                    every machine.</td>
+            </tr>
+            <tr>
+                <td><code>formatters</code></td>
+                <td><code>Record&lt;string, TemplateFormatter&gt;</code></td>
+                <td><code>(none)</code></td>
+                <td>Filters of your own, used after <code>|</code> in a tag (<code>{{ name | initials }}</code>).</td>
             </tr>
             <tr>
                 <td><code>password</code></td>
@@ -111,6 +142,13 @@ docs.forEach((d, i) => writeFileSync(`invoice-${i}.docx`, d));</code></pre>
                     up. Same capped-retry behaviour as the parser's <code>onPassword</code>.</td>
             </tr>
             <tr>
+                <td><code>maxPasswordAttempts</code></td>
+                <td><code>number</code></td>
+                <td><code>3</code></td>
+                <td>How many times <code>onPassword</code> is asked before the render rejects with
+                    <code>PASSWORD_REQUIRED</code>/<code>PASSWORD_INCORRECT</code>, as the parser's option of the same name.</td>
+            </tr>
+            <tr>
                 <td><code>onWarning</code></td>
                 <td><code>function</code></td>
                 <td><code>undefined</code></td>
@@ -123,9 +161,169 @@ docs.forEach((d, i) => writeFileSync(`invoice-${i}.docx`, d));</code></pre>
                 <td><code>(none)</code></td>
                 <td>Bounds unzipping of an untrusted template exactly as parsing does; a zip-bomb template rejects with a
                     typed <code>ZIP_*</code> error rather than being mistaken for a non-DOCX file. Its
-                    <code>maxRepeatedContent</code> (16 MiB) bounds what values add by repetition: each use of a value
-                    after its first adds what the value outgrows its placeholder by, and past it the render rejects with
-                    <code>OUTPUT_TOO_LARGE</code>.</td>
+                    <code>maxXmlElements</code> (2,000,000) bounds the elements the template's parts hold, as for parsing, and its tags and the tokens they hold (operands, filters, picture parts) with them.
+                    Its
+                    <code>maxRepeatedContent</code> (16 MiB) bounds what a document adds by repetition: each copy of a
+                    loop's content after its first, each copy of a note a repeated reference points at, each use of a
+                    value after its first (what the value outgrows its placeholder by), each block or field written again
+                    as typed, and each field, loop or branch evaluated (a few characters, plus its condition's size). Past
+                    it the render rejects with <code>OUTPUT_TOO_LARGE</code>.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>Conditions and loops</h2>
+    <p>Block tags are typed in Word as ordinary text, between the same delimiters as fields:</p>
+    <pre><code>{{ if paid }}
+Paid in full. Thank you!
+{{ else if total &gt; 1000 }}
+Please pay {{ amount }} by {{ due }}. Large invoices may be paid in instalments.
+{{ else }}
+Please pay {{ amount }} by {{ due }}.
+{{ endif }}
+
+{{ for line in lines }}
+{{ line.description }} x {{ line.qty }}: {{ line.price }}
+{{ endfor }}</code></pre>
+    <h3>What a block covers</h3>
+    <p>Where its tags sit decides what a block covers. A block is exactly the content between its tags:</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Tags</th>
+                <th>The block covers</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>In one paragraph</td>
+                <td>The text between them: <code>{{ for t in tags }}{{ t }}{{ if not loop.last }}, {{ endif }}{{ endfor }}</code>
+                    writes <code>red, blue</code>.</td>
+            </tr>
+            <tr>
+                <td>In separate paragraphs</td>
+                <td>The paragraphs between them. When every tag of the block has a paragraph of its own, those paragraphs
+                    are removed with the tags, so no blank line is left; a tag sharing its paragraph with text cuts the
+                    paragraph where it stands, and the block's other tag paragraphs then stay, empty.</td>
+            </tr>
+            <tr>
+                <td>In different cells of one table</td>
+                <td>Whole rows, from the row of the opening tag to the row of the closing tag. A row with
+                    <code>{{ for line in lines }}</code> in its first cell and <code>{{ endfor }}</code> in its last repeats
+                    once per line; tags in two rows repeat the two as a group. An <code>{{ if }}</code> keeps or drops rows
+                    the same way, each <code>else</code> starting a row of its own.</td>
+            </tr>
+        </tbody>
+    </table>
+    <p>Tags that cannot enclose content together (one in a table and the other outside it, one in a text box and the other
+        not, one inside a tracked change, one in a Word field and the other outside it) reject with <code>TEMPLATE_SYNTAX</code> rather than writing broken XML. A text
+        box holds blocks of its own, in any of the three scopes.</p>
+    <p>Text that starts like a block tag but is not one (<code>{{ If you have questions, call us }}</code>) stays text, as
+        prose between the delimiters always has. When the blocks around it then fail to pair, the error names it and why it
+        could not be read: <code>{{ if a = 1 }}x{{ endif }}</code> rejects naming <code>{{ if a = 1 }}</code>, which
+        compares with a single <code>=</code>.</p>
+    <h3>Conditions</h3>
+    <ul>
+        <li>A condition is a field (<code>{{ if paid }}</code>) or a comparison: <code>==</code>, <code>!=</code>,
+            <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code>, joined with <code>and</code>,
+            <code>or</code>, <code>not</code> and parentheses, against numbers, quoted strings, <code>true</code>,
+            <code>false</code> and <code>null</code>.</li>
+        <li><code>false</code>, <code>null</code>, <code>""</code>, <code>0</code>, an empty list and an invalid date count as
+            false; everything else, the text <code>"0"</code> included, as true.</li>
+        <li>A comparison takes two values of the same kind (two numbers, two strings, two dates, two booleans) or an empty
+            one, which equals only another empty one and is never less or greater. Comparing the text <code>"150"</code>
+            with the number <code>100</code> rejects with <code>TEMPLATE_DATA_INVALID</code> rather than silently picking a
+            branch.</li>
+        <li>Keywords are case-insensitive (<code>{{ If paid }}</code>, as AutoCorrect may capitalize it), and a string may
+            be quoted with straight or curly quotes, which AutoCorrect writes in Word.</li>
+    </ul>
+    <h3>Loops and data</h3>
+    <ul>
+        <li>A loop names its item: <code>{{ line.price }}</code> in a list of objects, <code>{{ t }}</code> in a list of plain
+            values. Inside a loop, <code>loop.index</code> (from 0), <code>loop.number</code> (from 1),
+            <code>loop.first</code>, <code>loop.last</code> and <code>loop.length</code> describe the current pass, for the
+            innermost loop. The item's name hides a field of the same name inside the loop.</li>
+        <li>Loops and conditions nest, up to 64 blocks deep.</li>
+        <li>A path reads nested data: <code>{{ customer.address.city }}</code>, <code>{{ items.0.name }}</code>,
+            <code>{{ items.length }}</code>. A top-level key that itself holds a dot (<code>"invoice.total"</code>) is read as typed
+            before it is read as a path. Only the data's own keys are read, never <code>__proto__</code>,
+            <code>constructor</code> or <code>toString</code>.</li>
+        <li>Copies of pictures, bookmarks (their names too), paragraphs and content controls get fresh ids, as Word
+            requires unique ones, and a footnote, endnote or comment in a copy gets a copy of its own in its part, filled in for that pass, so a
+            field in it reads the pass's item. A table a
+            loop or a branch left with no row is removed, and a cell or content control left without a paragraph gets an
+            empty one.</li>
+    </ul>
+    <h3>Formatting values</h3>
+    <p>A field can be written through filters after <code>|</code>. <code>format</code> takes a picture, as Word's own
+        mail merge does (its <code>\#</code> and <code>\@</code> switches; Excel's number formats read number pictures the same way, apart from its thousands scaling, a comma after
+        the last digit, which a picture rejects):</p>
+    <pre><code>{{ total | format "$#,##0.00" }}              $1,250.50
+{{ total | format "#,##0.00 '€'" }}           1,250.50 €
+{{ loss | format "$#,##0.00;($#,##0.00)" }}   ($320.00)
+{{ rate | format "0.0%" }}                    12.5%
+{{ due | format "MMMM d, yyyy" }}             November 1, 2026
+{{ name | upper }}                            ADA LOVELACE</code></pre>
+    <ul>
+        <li><strong>Number pictures:</strong> <code>0</code> (a digit, always written), <code>#</code> (a digit, written when
+            there is one), <code>,</code> (groups of three), <code>.</code> (the point), <code>%</code> (a percentage); up to
+            three sections, <code>positive;negative;zero</code>; text in <code>'quotes'</code> or after <code>\</code> is
+            written as is. Values are rounded half away from zero, as Word and Excel do; text that is a number is taken
+            too.</li>
+        <li><strong>Date pictures:</strong> <code>d</code>&ndash;<code>dddd</code>, <code>M</code>&ndash;<code>MMMM</code>,
+            <code>yy</code>, <code>yyyy</code>, <code>h</code>/<code>hh</code> (12-hour), <code>H</code>/<code>HH</code>,
+            <code>m</code>/<code>mm</code>, <code>s</code>/<code>ss</code>, <code>AM/PM</code> (<code>am/pm</code>,
+            <code>A/P</code>). As in Word, <code>M</code> is the month and <code>m</code> the minute: Excel's
+            <code>dd/mm/yyyy</code> is <code>dd/MM/yyyy</code> here. A value is a <code>Date</code> or ISO 8601 text (UTC
+            when it has no offset).</li>
+        <li><strong>The same on every machine:</strong> the formatting is officeParser's own, not the runtime's
+            <code>Intl</code>. <code>numberSeparators</code>, <code>dateNames</code> and <code>utcOffsetMinutes</code> set
+            what it writes.</li>
+        <li><code>upper</code> and <code>lower</code> change case; filters chain left to right; <code>formatters</code>
+            adds filters of your own, each given the value as the data holds it and the strings and numbers after its
+            name.</li>
+        <li>A picture given the wrong kind of value rejects with <code>TEMPLATE_DATA_INVALID</code>
+            (<code>unformattable</code>); a picture that cannot be read with <code>TEMPLATE_SYNTAX</code>. A word after
+            <code>|</code> that is no filter leaves the tag as text. An empty value stays empty; a missing one follows
+            <code>onMissing</code>.</li>
+    </ul>
+
+    <h3>Errors</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Code</th>
+                <th><code>details.reason</code></th>
+                <th>When</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>TEMPLATE_SYNTAX</code></td>
+                <td><code>unreadable</code>, <code>unclosed</code>, <code>unopened</code>, <code>mismatched</code>,
+                    <code>else-after-else</code>, <code>crossing</code>, <code>row-branch</code>, <code>overlap</code>,
+                    <code>malformed-xml</code></td>
+                <td>Blocks do not pair: a block is never closed, a closing tag or <code>else</code> has no block, or a
+                    closing tag closes another kind of block (where a tag that could not be read is why, it is named, with
+                    <code>unreadable</code>); or a block's tags cannot enclose content together. <code>details.tag</code> is
+                    the tag as typed and <code>details.part</code> the part holding it.</td>
+            </tr>
+            <tr>
+                <td><code>TEMPLATE_DATA_INVALID</code></td>
+                <td><code>not-a-list</code>, <code>not-text</code>, <code>incomparable</code>, <code>unformattable</code></td>
+                <td>A value does not fit its tag: a loop over something that is not a list, a list or object placed as a
+                    field, a comparison of two kinds of value. <code>details.kind</code> (and <code>otherKind</code>) name
+                    the values' kinds.</td>
+            </tr>
+            <tr>
+                <td><code>TEMPLATE_FIELD_MISSING</code></td>
+                <td></td>
+                <td>A field the data does not have, under <code>onMissing: 'error'</code>.</td>
+            </tr>
+            <tr>
+                <td><code>MAX_NESTING_DEPTH_EXCEEDED</code></td>
+                <td></td>
+                <td>Blocks nest more than 64 deep.</td>
             </tr>
         </tbody>
     </table>
@@ -134,13 +332,15 @@ docs.forEach((d, i) => writeFileSync(`invoice-${i}.docx`, d));</code></pre>
     <ul>
         <li><strong>Run-aware.</strong> Word often splits a typed <code>{{name}}</code> across several runs
             (<code>{{</code>, <code>na</code>, <code>me}}</code>); it is filled anyway, and a value adopts the
-            <strong>formatting of the run its placeholder began in</strong> (a bold <code>{{amount}}</code> renders bold).</li>
-        <li><strong>Everywhere text lives.</strong> Placeholders in the body, headers, footers, footnotes/endnotes and
-            comments are all filled.</li>
-        <li><strong>Placeholder names</strong> are Unicode letters and digits plus <code>_</code>, <code>.</code>,
-            <code>-</code> (e.g. <code>{{invoice.total}}</code>, <code>{{customer-name}}</code>). A name containing a space
-            or other punctuation is not recognized and is left as literal text, so ordinary prose between the delimiters is
-            never mistaken for a field.</li>
+            <strong>formatting of the run its placeholder began in</strong> (a bold <code>{{amount}}</code> renders bold).
+            Block tags are found the same way.</li>
+        <li><strong>Everywhere text lives.</strong> Tags in the body, headers, footers, footnotes/endnotes and comments are
+            all filled.</li>
+        <li><strong>Field names</strong> are Unicode letters and digits plus <code>_</code>, <code>.</code>,
+            <code>-</code> (e.g. <code>{{invoice.total}}</code>, <code>{{customer-name}}</code>). <code>if</code>,
+            <code>else</code>, <code>endif</code>, <code>for</code> and <code>endfor</code> are the block tags' own words.
+            Other text between the delimiters, such as prose with spaces, is left as literal text, so it is never mistaken
+            for a field.</li>
         <li><strong>Values</strong> are XML-escaped; a newline (<code>\n</code>, <code>\r\n</code>, a lone <code>\r</code>,
             or the Unicode line/paragraph separators) becomes a real line break; XML-illegal control characters are stripped.</li>
         <li><strong>Deterministic.</strong> The same template + data renders byte-identical output (pinned zip timestamps),
@@ -156,7 +356,8 @@ docs.forEach((d, i) => writeFileSync(`invoice-${i}.docx`, d));</code></pre>
 
     <blockquote>
         [!TIP]
-        Reuse one template across a batch by passing an array to <code>data</code>: the template is unzipped and parsed
-        once, then each row is rendered from the shared copy.
+        Reuse one template across a batch by passing an array to <code>data</code>: the template is unzipped and its tags
+        read once (every tag error is raised before any document is rendered), then each row is rendered from the shared
+        copy.
     </blockquote>
 </div>

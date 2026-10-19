@@ -88,7 +88,10 @@
                 <td><code>includeCharts</code></td>
                 <td><code>boolean</code></td>
                 <td><code>true</code></td>
-                <td><strong>Visuals</strong>: (HTML Only) Whether to render interactive charts. Requires Chart.js.</td>
+                <td><strong>Visuals</strong>: Whether to include charts. HTML draws an interactive Chart.js canvas (or, with no
+                    <code>chartJsSrc</code>, the chart's data as a table); DOCX, ODT and LaTeX write the chart's data as a
+                    table; plain text and the native PDF engine write its data as text; Markdown and RTF write nothing for a
+                    chart. <code>false</code> omits charts in every generator.</td>
             </tr>
             <tr>
                 <td><code>ignoreInternalLinks</code></td>
@@ -163,7 +166,10 @@
                 <td><code>chartJsSrc</code></td>
                 <td><code>string</code></td>
                 <td>(CDN)</td>
-                <td>URL for the Chart.js script.</td>
+                <td>URL for the Chart.js script, loaded only by a page that draws a chart. <code>''</code> loads none: a chart
+                    is then written as a table of its values, with a <code>CONTENT_NOT_REPRESENTABLE</code> warning
+                    (<code>details.reason: 'chart'</code>). Under <code>allowRemoteAssets: false</code> it is
+                    <code>''</code> unless set.</td>
             </tr>
             <tr>
                 <td><code>containerWidth</code></td>
@@ -438,7 +444,8 @@ await ast.to('md', {
         browser's own print engine in-page) for maximum fidelity. The <code>'native'</code> engine lays the AST out directly
         with <code>pdf-lib</code> (an optional peer dependency), no browser required, so it runs unchanged in Node and the
         browser and is the only way to produce a real PDF client-side. It honors the shared <code>includeImages</code>/​<code>onNode</code>
-        options and the page options below, but draws with the Standard-14 fonts and a clean reflow rather than a pixel match.
+        options and the page options below, and draws a clean reflow rather than a pixel match: in the Standard-14 fonts, or in
+        font files you give it (<code>fonts</code>, <code>fallbackFonts</code>), which any script needs past Latin.
         In the prebuilt browser bundle <code>pdf-lib</code> is stubbed so the bundle stays self-contained; for client-side native
         PDF, import from the dedicated entry <code>officeparser/browser-native-pdf</code> and install <code>pdf-lib</code>.
     </blockquote>
@@ -458,7 +465,30 @@ await ast.to('md', {
                 <td><code>'html'</code></td>
                 <td>Rendering engine. <code>'html'</code> uses a headless browser (Puppeteer in Node, in-page print in the
                     browser) for fidelity; <code>'native'</code> lays out directly with <code>pdf-lib</code>, no browser, runs
-                    in Node and the browser, using the Standard-14 font families.</td>
+                    in Node and the browser, drawing in the Standard-14 font families or the font files given below.</td>
+            </tr>
+            <tr>
+                <td><code>fonts</code></td>
+                <td><code>{ regular?, bold?, italic?, boldItalic?, mono? }</code> of <code>Uint8Array | ArrayBuffer</code></td>
+                <td><code>(none)</code></td>
+                <td>Native engine: the font file (<code>.ttf</code>/<code>.otf</code> bytes) each style is drawn in. A style given
+                    none is drawn in <code>regular</code>; code stays in Courier unless <code>mono</code> is given. Words are shaped
+                    by the font (ligatures, Arabic joining, Indic conjuncts), and a right-to-left line starts at the right edge.
+                    Needs the optional peer dependency <code>@pdf-lib/fontkit</code>.</td>
+            </tr>
+            <tr>
+                <td><code>fallbackFonts</code></td>
+                <td><code>(Uint8Array | ArrayBuffer)[]</code></td>
+                <td><code>[]</code></td>
+                <td>Native engine: more font files, tried in order for each character the fonts before them lack, so one
+                    document can mix scripts. Given without <code>fonts</code>, text stays in the Standard-14 fonts and these
+                    draw only what those lack.</td>
+            </tr>
+            <tr>
+                <td><code>subsetFonts</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>Native engine: embed only the glyphs used of each font given; <code>false</code> embeds the whole files.</td>
             </tr>
             <tr>
                 <td><code>tagged</code></td>
@@ -470,7 +500,7 @@ await ast.to('md', {
                 <td><code>outline</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td>Emit a heading-based bookmark outline. HTML engine only; the native engine ignores it.</td>
+                <td>Emit a bookmark outline from the document's headings, nested by heading level. Both engines.</td>
             </tr>
             <tr>
                 <td><code>format</code></td>
