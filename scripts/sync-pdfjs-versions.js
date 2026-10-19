@@ -96,6 +96,26 @@ function syncVersions() {
         }
     });
 
+    // The site loads the pdf.js worker from a copy vendored under docs/vendor/pdfjs-dist-<version>/: the
+    // page names that folder, and pdf.js refuses a worker of another version than its own. So the page is
+    // pointed at the folder for this version, and the build stops when that folder is not vendored yet.
+    const vendored = path.join(__dirname, '..', 'docs', 'vendor', `pdfjs-dist-${pdfJsVersion}`, 'pdf.worker.min.mjs');
+    const sitePage = path.join(__dirname, '..', 'docs', 'index.html');
+    if (fs.existsSync(sitePage)) {
+        const page = fs.readFileSync(sitePage, 'utf8');
+        const pointed = page.replace(/vendor\/pdfjs-dist-[\d.]+\//g, `vendor/pdfjs-dist-${pdfJsVersion}/`);
+        if (pointed !== page) {
+            fs.writeFileSync(sitePage, pointed, 'utf8');
+            console.log(`  ✓ Pointed docs/index.html at vendor/pdfjs-dist-${pdfJsVersion}/`);
+            updatedCount++;
+        }
+    }
+    if (!fs.existsSync(vendored)) {
+        console.error(`\n[!] docs/vendor/pdfjs-dist-${pdfJsVersion}/pdf.worker.min.mjs is missing: copy node_modules/pdfjs-dist/build/pdf.worker.min.mjs`
+            + ` (and its LICENSE) there, and remove the old version's folder. The site would otherwise load a worker of another version.`);
+        process.exitCode = 1;
+    }
+
     // 2. Scan for unhandled occurrences
     console.log('\nScanning for unhandled PDF.js version occurrences...');
     const rootDir = path.join(__dirname, '..');
