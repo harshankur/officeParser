@@ -31,3 +31,4 @@ repro
 /.codex
 /.claude
 *.ignore*
+/.tessdata

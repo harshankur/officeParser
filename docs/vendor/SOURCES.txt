@@ -20,5 +20,14 @@ computer-modern-0.1.3/          npm computer-modern@0.1.3 (fonts/cmu-*.woff2, th
                                 OFL.txt
 pdfjs-dist-6.2.108/             npm pdfjs-dist@6.2.108 (build/pdf.worker.min.mjs), the version the
                                 browser bundle is built with, Apache-2.0: LICENSE
+tesseract.js-7.0.0/             npm tesseract.js@7.0.0 (dist/worker.min.js), the OCR worker of the
+                                version the browser bundle is built with, Apache-2.0: LICENSE.md
+tesseract.js-core-7.0.0/        npm tesseract.js-core@7.0.0 (tesseract-core-lstm.wasm.js,
+                                tesseract-core-simd-lstm.wasm.js, tesseract-core-relaxedsimd-lstm.wasm.js:
+                                the LSTM engine officeParser asks for, in the build each browser's
+                                WebAssembly support picks), Apache-2.0: LICENSE
+
+OCR's language data (@tesseract.js-data, Apache-2.0) is too large for this repository: it is served
+from the owner's own storage (scripts/upload-tessdata.mjs), never from a CDN.
 
 The site's text fonts (Inter, Outfit, JetBrains Mono) are in ../fonts, with their licences.

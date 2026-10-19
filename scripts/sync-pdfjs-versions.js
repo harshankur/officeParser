@@ -116,6 +116,39 @@ function syncVersions() {
         process.exitCode = 1;
     }
 
+    // OCR on the site: Tesseract's worker and engine are vendored too, at the versions the browser bundle
+    // is built with (the installed ones: the worker must match the bundle's tesseract.js). The page is
+    // pointed at their folders, and the build stops when a folder is missing. Its language data is not
+    // in the repo: scripts/upload-tessdata.mjs puts it in the owner's storage.
+    const installed = (name) => require(path.join(__dirname, '..', 'node_modules', name, 'package.json')).version;
+    // Every file the site can load (a browser picks the core build its WebAssembly support allows: nearly
+    // all take a SIMD one), and the licence beside them.
+    const ocrFiles = {
+        'tesseract.js': ['worker.min.js', 'LICENSE.md'],
+        'tesseract.js-core': ['tesseract-core-lstm.wasm.js', 'tesseract-core-simd-lstm.wasm.js', 'tesseract-core-relaxedsimd-lstm.wasm.js', 'LICENSE'],
+    };
+    for (const [name, files] of Object.entries(ocrFiles)) {
+        let version;
+        try { version = installed(name); } catch { continue; } // not installed: nothing to keep in step
+        const folder = `${name}-${version}`;
+        if (fs.existsSync(sitePage)) {
+            const page = fs.readFileSync(sitePage, 'utf8');
+            const pointed = page.replace(new RegExp(`vendor/${name.replace('.', '\\.')}-[\\d.]+/`, 'g'), `vendor/${folder}/`);
+            if (pointed !== page) {
+                fs.writeFileSync(sitePage, pointed, 'utf8');
+                console.log(`  ✓ Pointed docs/index.html at vendor/${folder}/`);
+                updatedCount++;
+            }
+        }
+        const missing = files.filter(file => !fs.existsSync(path.join(__dirname, '..', 'docs', 'vendor', folder, file)));
+        if (missing.length) {
+            console.error(`\n[!] docs/vendor/${folder}/ lacks ${missing.join(', ')}: copy ${name === 'tesseract.js' ? 'node_modules/tesseract.js/dist/worker.min.js and LICENSE.md'
+                : 'node_modules/tesseract.js-core/tesseract-core-{lstm,simd-lstm,relaxedsimd-lstm}.wasm.js and LICENSE'} there, record them in`
+                + ` docs/vendor/SOURCES.txt, and remove the old version's folder. The site's OCR would otherwise fail, or run another version.`);
+            process.exitCode = 1;
+        }
+    }
+
     // 2. Scan for unhandled occurrences
     console.log('\nScanning for unhandled PDF.js version occurrences...');
     const rootDir = path.join(__dirname, '..');
@@ -124,7 +157,9 @@ function syncVersions() {
     // records the version shipped with each release as a historical fact, so rewriting it on a future
     // bump would falsify past entries. (release_assets/ and scratch/ are excluded wholesale above:
     // the former are frozen release artifacts pinned to a past release's pdfjs, the latter is scratch.)
-    const ignoreFiles = new Set(['CHANGELOG.md'].map(f => path.normalize(f)));
+    // docs/vendor/SOURCES.txt records the versions vendored there, updated by hand with the copies (the
+    // check above stops the build until they are).
+    const ignoreFiles = new Set(['CHANGELOG.md', 'docs/vendor/SOURCES.txt'].map(f => path.normalize(f)));
     const unhandledFiles = [];
 
     function scanDir(currentDir) {

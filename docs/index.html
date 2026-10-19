@@ -3412,6 +3412,14 @@
          */
         window.SITE_PDF_WORKER_SRC = new URL('vendor/pdfjs-dist-6.2.108/pdf.worker.min.mjs', document.baseURI).href;
         window.SITE_CHART_JS_SRC = new URL('vendor/chart.js-4.5.1/chart.umd.min.js', document.baseURI).href;
+        /**
+         * OCR's worker and engine, served by this site too (absolute, as Tesseract starts its worker from a
+         * blob), and its language data from the owner's own storage (every language is too much for the
+         * site): loaded only when a visitor switches OCR on, and never from a CDN.
+         */
+        window.SITE_OCR_WORKER_PATH = new URL('vendor/tesseract.js-7.0.0/worker.min.js', document.baseURI).href;
+        window.SITE_OCR_CORE_PATH = new URL('vendor/tesseract.js-core-7.0.0/', document.baseURI).href;
+        window.SITE_OCR_LANG_PATH = 'https://tessdata.harshankur.com/4.0.0_best_int';
 
         // A setting may say `persist: false` (never kept in this browser: a secret, held for this visit
         // only) or `replaces` (the values an earlier version of the site had as its default, which give
@@ -5968,6 +5976,9 @@
                         maxRepeatedContent: parseInt(document.getElementById('cfg_maxRepeatedContent').value, 10)
                     },
                     ocrConfig: {
+                        workerPath: window.SITE_OCR_WORKER_PATH,
+                        corePath: window.SITE_OCR_CORE_PATH,
+                        langPath: window.SITE_OCR_LANG_PATH,
                         language: document.getElementById('cfg_ocrLanguage').value || undefined,
                         preserveLayout: document.getElementById('cfg_ocrPreserveLayout').checked,
                         cacheMethod: document.getElementById('cfg_ocrCacheMethod').value,
