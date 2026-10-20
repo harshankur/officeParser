@@ -38,6 +38,26 @@ const CFG: PdfLayoutConfig = {
 
 const PAGE: PageContext = { pageNumber: 1, authoredW: 612, authoredH: 792, rotation: 0 };
 
+/**
+ * Linear time, checked by how time grows rather than against a clock (as the security suite does): a
+ * case runs at a quarter of its size and then at full size, and the full run may take at most eight
+ * times as long, plus a quarter of a second for fixed costs (linear work takes four times as long,
+ * quadratic sixteen). A case past that runs at both sizes once more, the faster time of each kept, so a pause of
+ * the machine is not taken for the code's. `run` gets the share of its size to build (0.25 or 1); its
+ * last run is the full one.
+ */
+function scalesLinearly(run: (share: number) => void): { linear: boolean; detail: string } {
+    const time = (share: number): number => { const t0 = performance.now(); run(share); return performance.now() - t0; };
+    let small = time(0.25);
+    let large = time(1);
+    const within = () => large <= 8 * small + 250;
+    if (!within()) {
+        small = Math.min(small, time(0.25));
+        large = Math.min(large, time(1));
+    }
+    return { linear: within(), detail: `${Math.round(small)}ms at a quarter of the size, ${Math.round(large)}ms at full size` };
+}
+
 interface RunOpts { bold?: boolean; width?: number }
 
 /** Builds one run at (x, baseline). Width defaults to a rough 0.5em per character. */
@@ -168,32 +188,45 @@ export async function testTextLayout(): Promise<LayoutTest[]> {
     {
         // A hostile PDF can put a run under an enormous text matrix; the colour lookup must stay bounded
         // regardless of the reported font size (its y-window is capped independent of fontSize).
+        // Measured against the same lookups at 12pt, on this machine and now, the faster of two tries each.
         const lk = makeColorLookup([{ x: 105, y: 500, color: '#ff0000' }]);
-        const t0 = performance.now();
-        for (let i = 0; i < 2000; i++) lk(100, 500, 1e9, 50);
-        const ms = performance.now() - t0;
+        const lookups = (fontSize: number): number => {
+            let best = Infinity;
+            for (let attempt = 0; attempt < 2; attempt++) {
+                const t0 = performance.now();
+                for (let i = 0; i < 2000; i++) lk(100, 500, fontSize, 50);
+                best = Math.min(best, performance.now() - t0);
+            }
+            return best;
+        };
+        const atTwelve = lookups(12);
+        const hostile = lookups(1e9);
         const normal = lk(100, 500, 12, 50);
-        add('Colour lookup is bounded under a hostile font size', ms < 100 && normal === '#ff0000',
-            'fast at fontSize 1e9 and still matches at 12pt', `${ms.toFixed(1)}ms, normal=${normal}`);
+        add('Colour lookup is bounded under a hostile font size', hostile <= 4 * atTwelve + 50 && normal === '#ff0000',
+            'as fast at fontSize 1e9 as at 12pt, and still matches at 12pt', `${hostile.toFixed(1)}ms at 1e9, ${atTwelve.toFixed(1)}ms at 12pt, normal=${normal}`);
     }
     {
         // A crafted page can crowd N colour marks and N runs on one baseline. The lookup must stay near
         // linear (binary-searched bucket), not O(N x marks). Correctness: a uniform-colour window returns
         // that colour, a mixed one returns undefined, and over the mark cap it degrades to no colour.
         const N = 200_000;
-        const marks = [];
-        for (let i = 0; i < N; i++) marks.push({ x: i % 1000, y: 100, color: '#ff0000' });
-        const t0 = performance.now();
-        const lk = makeColorLookup(marks);
         let hits = 0;
-        for (let i = 0; i < N; i++) if (lk(0, 100, 12, 1000)) hits++;
-        const ms = performance.now() - t0;
+        let wanted = 0;
+        const grows = scalesLinearly(share => {
+            const count = Math.round(N * share);
+            const marks = [];
+            for (let i = 0; i < count; i++) marks.push({ x: i % 1000, y: 100, color: '#ff0000' });
+            const lk = makeColorLookup(marks);
+            hits = 0;
+            wanted = count;
+            for (let i = 0; i < count; i++) if (lk(0, 100, 12, 1000)) hits++;
+        });
         const mixed = makeColorLookup([{ x: 10, y: 50, color: '#00ff00' }, { x: 20, y: 50, color: '#0000ff' }])(5, 50, 12, 30);
         const overCap = makeColorLookup(new Array(300_001).fill({ x: 1, y: 1, color: '#111111' }))(0, 1, 12, 5);
         add('Colour lookup stays near-linear with many marks on one baseline',
-            ms < 2000 && hits === N && mixed === undefined && overCap === undefined,
-            'build + N queries over N marks is fast; uniform hit, mixed undefined, over-cap undefined',
-            `${ms.toFixed(0)}ms, hits=${hits}, mixed=${mixed}, overCap=${overCap}`);
+            grows.linear && hits === wanted && wanted === N && mixed === undefined && overCap === undefined,
+            'build + N queries over N marks grows linearly; uniform hit, mixed undefined, over-cap undefined',
+            `${grows.detail}, hits=${hits}, mixed=${mixed}, overCap=${overCap}`);
     }
     {
         // Two bibliography entries, each wrapping under a hanging indent.
@@ -361,15 +394,16 @@ export async function testTextLayout(): Promise<LayoutTest[]> {
 
     // ── H7: line building stays linear in the number of runs ────────────────
     {
-        const runs: RawRun[] = [];
-        for (let i = 0; i < 40000; i++) runs.push(run(`w${i}`, 72 + (i % 7) * 30, 100 + i * 3, 10));
-        const t0 = Date.now();
-        const lines = buildLines(runs, CFG);
-        const ms = Date.now() - t0;
+        let lines: ReturnType<typeof buildLines> = [];
+        const grows = scalesLinearly(share => {
+            const runs: RawRun[] = [];
+            for (let i = 0, count = Math.round(40000 * share); i < count; i++) runs.push(run(`w${i}`, 72 + (i % 7) * 30, 100 + i * 3, 10));
+            lines = buildLines(runs, CFG);
+        });
         // Scanning every cluster for every run took ~3.5 s here (and ~20 s at 100k runs, all of it
         // synchronous, with the abort signal only checked between pages); the bounded scan takes tens
         // of milliseconds. The line count is the one the old code produced, so nothing else changed.
-        add('40k runs build in linear time', ms < 2000 && lines.length === 22861, '< 2000 ms, 22861 lines', `${ms} ms, ${lines.length} lines`);
+        add('40k runs build in linear time', grows.linear && lines.length === 22861, 'linear growth, 22861 lines', `${grows.detail}, ${lines.length} lines`);
     }
 
     // ── L-OCR: layout padding is clamped, Blob type follows the bytes ───────
