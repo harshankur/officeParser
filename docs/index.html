@@ -16,10 +16,12 @@
          (data-consent-key), so one answer covers the site, and "Privacy settings" in the
          footer opens the prompt again. data-hosts keeps it to the production site, so dev servers
          and preview deploys neither ask nor count. data-hash makes a spec document (#spec/<name>)
-         its own page, counted when it is opened. -->
+         its own page, counted when it is opened. data-operator names who runs the site in the
+         prompt, so the visitor knows who is asking. -->
     <script defer src="https://views.harshankur.com/consent.js" data-app="officeparser"
         data-hosts="officeparser.harshankur.com" data-hash="#spec/" data-consent-key="officeparser"
-        data-privacy-url="https://harshankur.com/datenschutz#en-officeparser"></script>
+        data-privacy-url="https://harshankur.com/datenschutz#en-officeparser"
+        data-operator="Harsh Ankur"></script>
 
     <meta name="description"
         content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 14 formats (including EPUB and LaTeX) and generate DOCX, ODT, LaTeX, RAG-ready Markdown, HTML, EPUB, and high-fidelity PDF with native document awareness.">
