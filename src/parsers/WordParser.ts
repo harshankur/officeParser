@@ -68,6 +68,7 @@ import { createAttachment, renameAttachments } from '../utils/imageUtils.js';
 import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { getAllElementsByTagName, getChildElements, getDirectChildren, getElementsByTagName, getOutermostElements, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, takeNodes, takeXmlElements, countByte } from '../utils/xmlUtils.js';
+import { bulletCharacter, formatListNumber, wordNumberFormat } from '../utils/listMarkers.js';
 import { extractFiles, findRequiredPart, maxUncompressedBytesOf, resolvePartPath } from '../utils/zipUtils.js';
 import { lookupTable, plainRecord, setOwn } from '../utils/lookupUtils.js';
 import { cellSpan, MAX_COL_SPAN } from '../utils/numberUtils.js';
@@ -320,6 +321,28 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         const out: ParagraphSpacing = { ...spacing };
         if (out.lineMultiple === 1) delete out.lineMultiple;
         return Object.keys(out).length ? out : undefined;
+    };
+
+    /**
+     * A list item's marker as Word shows it (see ListMetadata.marker): its level's `w:lvlText` with each
+     * `%n` the count of level n in that level's format, or its bullet's character. Undefined when it is
+     * the item's number and a dot, or a round bullet.
+     */
+    const wordListMarker = (numId: string, ilvl: number, listType: 'ordered' | 'unordered'): string | undefined => {
+        const level = numberingMap[numId]?.[String(ilvl)];
+        if (!level) return undefined;
+        let marker: string;
+        if (level.numFmt === 'bullet') marker = bulletCharacter(level.lvlText, level.font);
+        else {
+            marker = level.lvlText.replace(/%([1-9])/g, (whole, n: string) => {
+                const at = Number(n) - 1;
+                const count = listCounters[numId]?.[String(at)];
+                const format = numberingMap[numId][String(at)]?.numFmt;
+                return count === undefined || format === undefined ? '' : formatListNumber(count + 1, wordNumberFormat(format));
+            });
+        }
+        const plain = listType === 'ordered' ? `${(listCounters[numId]?.[String(ilvl)] ?? 0) + 1}.` : '•';
+        return marker === plain ? undefined : marker;
     };
 
     const extractIndentationFromXml = (pPr: Element): IndentationMetadata | undefined => {
@@ -700,7 +723,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
     // `numId="__proto__"` read `Object.prototype` (truthy) and, two levels down, write onto it -
     // global prototype pollution from one crafted .docx. With no prototype, `map["__proto__"]` is a
     // normal absent key and the numbering guard simply skips the undefined definition.
-    const numberingMap: { [key: string]: { [key: string]: { numFmt: string, lvlText: string, start: number } } } = Object.create(null);
+    const numberingMap: { [key: string]: { [key: string]: { numFmt: string, lvlText: string, start: number, font?: string } } } = Object.create(null);
 
     if (numberingFile) {
         const numberingXml = parseXmlString(numberingFile.content.toString(), { config });
@@ -718,18 +741,20 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         }
 
         // Each abstract numbering's levels, read once.
-        const abstractLevelTables = new Map<string, { [key: string]: { numFmt: string, lvlText: string, start: number } }>();
+        const abstractLevelTables = new Map<string, { [key: string]: { numFmt: string, lvlText: string, start: number, font?: string } }>();
         const abstractLevels = (abstractNumId: string) => {
             let table = abstractLevelTables.get(abstractNumId);
             if (!table) {
-                table = Object.create(null) as { [key: string]: { numFmt: string, lvlText: string, start: number } };
+                table = Object.create(null) as { [key: string]: { numFmt: string, lvlText: string, start: number, font?: string } };
                 for (const lvl of getChildElements(abstractNumMap[abstractNumId], "w:lvl")) {
                     const ilvl = lvl.getAttribute("w:ilvl");
                     if (!ilvl) continue;
                     setOwn(table, ilvl, {
                         numFmt: getChildElements(lvl, "w:numFmt")[0]?.getAttribute("w:val") || 'decimal',
                         lvlText: getChildElements(lvl, "w:lvlText")[0]?.getAttribute("w:val") || '',
-                        start: parseInt(getChildElements(lvl, "w:start")[0]?.getAttribute("w:val") || '1', 10)
+                        start: parseInt(getChildElements(lvl, "w:start")[0]?.getAttribute("w:val") || '1', 10),
+                        // The bullet's font: a symbol font's bullet is a private-use character in it.
+                        font: getFirstElementByTagName(getChildElements(lvl, "w:rPr")[0] ?? lvl, "w:rFonts")?.getAttribute("w:ascii") || undefined,
                     });
                 }
                 abstractLevelTables.set(abstractNumId, table);
@@ -1347,6 +1372,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
 
             let listType: 'ordered' | 'unordered' = 'ordered';
             let itemIndex = 0;
+            let marker: string | undefined;
             if (numId && numberingMap[numId]) {
                 const ilvlStr = ilvl.toString();
                 if (!numberingState[numId]) numberingState[numId] = Object.create(null);
@@ -1366,6 +1392,9 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     listCounters[numId][ilvlStr]++;
                 }
                 itemIndex = listCounters[numId][ilvlStr];
+                // A deeper level counts afresh after an item of this one, as Word restarts it.
+                for (let k = ilvl + 1; k < 10; k++) delete listCounters[numId][String(k)];
+                marker = wordListMarker(numId, ilvl, listType);
             }
 
             const listNode: OfficeContentNode = {
@@ -1381,6 +1410,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     alignment: (alignment || 'left') as 'left' | 'center' | 'right' | 'justify',
                     listId: numId,
                     itemIndex: itemIndex,
+                    ...(marker !== undefined ? { marker } : {}),
                     style: pStyleVal,
                     ...commonMetadata
                 } as ListMetadata

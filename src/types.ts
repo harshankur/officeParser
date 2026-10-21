@@ -2876,6 +2876,14 @@ export interface ListMetadata {
     /** Unique anchor IDs for internal linking. */
     anchorIds?: string[];
 
+    /**
+     * The item's marker as the document shows it, where that is other than its number and a dot (an
+     * ordered item) or a round bullet: a number in another format or with other punctuation (`a)`,
+     * `iv.`, `(3)`, `2.1.`), another bullet (`◦`, `▪`, `➢`), or none (`''`). Read from DOCX numbering,
+     * ODF list styles and HTML's `<ol type>` and `list-style-type`; PDF output prints it.
+     * @example 'b)'
+     */
+    marker?: string;
     /** True when this list item is a GFM task-list item (checkbox), regardless of checked state. */
     isTask?: boolean;
     /** Checked state for a task-list item. Only meaningful when isTask is true. */

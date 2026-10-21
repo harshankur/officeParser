@@ -1213,6 +1213,9 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                 this.uses.math = true;
                 this.uses.amssymb = true;
                 label = meta.checked ? '[$\\boxtimes$]' : '[$\\square$]';
+            } else if (typeof meta?.marker === 'string') {
+                // The document's own marker (`a)`, `iv.`, `◦`), braced so a `]` in it does not end the label.
+                label = `[{${escapeLatex(meta.marker)}}]`;
             }
             const comments = this.commentsBefore(item);
             const anchors = this.anchorsFor(item, true);

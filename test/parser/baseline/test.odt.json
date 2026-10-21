@@ -12012,6 +12012,7 @@
         "indentation": 1,
         "itemIndex": 0,
         "listId": "LFO3",
+        "marker": "1.1.",
         "alignment": "left",
         "style": "P611"
       },
@@ -12035,6 +12036,7 @@
         "indentation": 2,
         "itemIndex": 0,
         "listId": "LFO3",
+        "marker": "1.1.1.",
         "alignment": "left",
         "style": "P612"
       },
@@ -12058,6 +12060,7 @@
         "indentation": 2,
         "itemIndex": 1,
         "listId": "LFO3",
+        "marker": "1.1.2.",
         "alignment": "left",
         "style": "P613"
       },
@@ -12081,6 +12084,7 @@
         "indentation": 2,
         "itemIndex": 2,
         "listId": "LFO3",
+        "marker": "1.1.3.",
         "alignment": "left",
         "style": "P614"
       },
@@ -12148,6 +12152,7 @@
         "indentation": 0,
         "itemIndex": 0,
         "listId": "LFO4",
+        "marker": "▪",
         "alignment": "left",
         "style": "P617"
       },
@@ -12217,6 +12222,7 @@
         "indentation": 3,
         "itemIndex": 0,
         "listId": "LFO4",
+        "marker": "◦",
         "alignment": "left",
         "style": "P620"
       },
@@ -12240,6 +12246,7 @@
         "indentation": 0,
         "itemIndex": 1,
         "listId": "LFO4",
+        "marker": "▪",
         "alignment": "left",
         "style": "P621"
       },
@@ -12292,6 +12299,7 @@
         "indentation": 0,
         "itemIndex": 0,
         "listId": "LFO7",
+        "marker": "i.",
         "alignment": "left",
         "style": "P622"
       },
@@ -12315,6 +12323,7 @@
         "indentation": 0,
         "itemIndex": 1,
         "listId": "LFO7",
+        "marker": "ii.",
         "alignment": "left",
         "style": "P623"
       },
@@ -12356,6 +12365,7 @@
         "indentation": 0,
         "itemIndex": 2,
         "listId": "LFO7",
+        "marker": "iii.",
         "alignment": "left",
         "style": "P625"
       },
@@ -12379,6 +12389,7 @@
         "indentation": 0,
         "itemIndex": 3,
         "listId": "LFO7",
+        "marker": "iv.",
         "alignment": "left",
         "style": "P626"
       },

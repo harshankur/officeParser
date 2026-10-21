@@ -30,6 +30,7 @@ import { cellSpan, clampRepeat, MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numb
 import { TextBuilder } from '../utils/textUtils.js';
 import { lookupTable, plainRecord } from '../utils/lookupUtils.js';
 import { lengthToPt } from '../utils/officeGenUtils.js';
+import { bulletCharacter, formatListNumber, odfNumberFormat } from '../utils/listMarkers.js';
 
 /**
  * Tracks how many table cells a single document has been allowed to materialize.
@@ -391,7 +392,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     const listStyleIndex = new Map<Element, Map<string, Element>>();
     const listStyleKinds = new Map<Element, { listType: 'ordered' | 'unordered'; isVisible: boolean } | undefined>();
     let officeStylesElement: Element | null | undefined;
-    const listStyleKind = (styles: Element, name: string, withImages: boolean): { listType: 'ordered' | 'unordered'; isVisible: boolean } | undefined => {
+    const listStyleNamed = (styles: Element, name: string): Element | undefined => {
         let index = listStyleIndex.get(styles);
         if (!index) {
             index = new Map();
@@ -401,7 +402,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             }
             listStyleIndex.set(styles, index);
         }
-        const listStyle = index.get(name);
+        return index.get(name);
+    };
+    const listStyleKind = (styles: Element, name: string, withImages: boolean): { listType: 'ordered' | 'unordered'; isVisible: boolean } | undefined => {
+        const listStyle = listStyleNamed(styles, name);
         if (!listStyle) return undefined;
         // (A style is read by one of the two lookups only: automatic styles with pictures, office styles without.)
         if (listStyleKinds.has(listStyle)) return listStyleKinds.get(listStyle);
@@ -413,6 +417,53 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         else if (withImages && getElementsByTagName(listStyle, "text:list-level-style-image").length > 0) kind = { listType: 'unordered', isVisible: true };
         listStyleKinds.set(listStyle, kind);
         return kind;
+    };
+
+    /** A list style's levels by `text:level` (1-based), from the automatic styles or else the office ones. */
+    const odfListLevelsCache = new Map<Element | undefined, Map<string, Map<number, Element> | undefined>>();
+    const odfListLevels = (automaticStyles: Element | undefined, name: string): Map<number, Element> | undefined => {
+        let cache = odfListLevelsCache.get(automaticStyles);
+        if (!cache) odfListLevelsCache.set(automaticStyles, cache = new Map());
+        if (cache.has(name)) return cache.get(name);
+        if (stylesDom) officeStylesElement ??= getFirstElementByTagName(stylesDom, "office:styles") ?? null;
+        const listStyle = (automaticStyles ? listStyleNamed(automaticStyles, name) : undefined)
+            ?? (officeStylesElement ? listStyleNamed(officeStylesElement, name) : undefined);
+        let levels: Map<number, Element> | undefined;
+        if (listStyle) {
+            levels = new Map();
+            for (const level of Array.from(listStyle.childNodes).filter(isElement)) {
+                const n = Number(level.getAttribute("text:level"));
+                if (Number.isInteger(n) && n >= 1 && n <= 10 && !levels.has(n)) levels.set(n, level);
+            }
+        }
+        cache.set(name, levels);
+        return levels;
+    };
+
+    /**
+     * A list item's marker as LibreOffice shows it (see ListMetadata.marker): its level's prefix, the
+     * numbers of as many levels as it displays (each in its level's format, joined by dots), and suffix;
+     * or its bullet's character. Undefined when it is the item's number and a dot, or a round bullet.
+     */
+    const odfListMarker = (levels: Map<number, Element>, depth: number, counters: Record<string, number>, listType: 'ordered' | 'unordered', itemIndex: number): string | undefined => {
+        const level = levels.get(depth + 1);
+        if (!level) return undefined;
+        let marker: string;
+        if (level.tagName === 'text:list-level-style-bullet') {
+            const font = getDirectChildren(level, "style:text-properties")[0];
+            marker = bulletCharacter(level.getAttribute("text:bullet-char") || '', font?.getAttribute("fo:font-family") || font?.getAttribute("style:font-name") || undefined);
+        } else if (level.tagName === 'text:list-level-style-number') {
+            const shown = Math.min(Math.max(Number(level.getAttribute("text:display-levels")) || 1, 1), depth + 1);
+            const numbers: string[] = [];
+            for (let d = depth + 1 - shown; d <= depth; d++) {
+                const style = levels.get(d + 1);
+                const start = Number(style?.getAttribute("text:start-value")) || 1;
+                numbers.push(formatListNumber(start + Math.max(0, counters[String(d)] ?? 0), odfNumberFormat(style?.getAttribute("style:num-format"))));
+            }
+            marker = (level.getAttribute("style:num-prefix") || '') + numbers.join('.') + (level.getAttribute("style:num-suffix") || '');
+        } else return undefined;
+        const plain = listType === 'ordered' ? `${itemIndex + 1}.` : '•';
+        return marker === plain ? undefined : marker;
     };
 
     // 1. Determine File Type
@@ -1557,6 +1608,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     }
                 }
 
+                // This level's own style (a numbered list's nested level may be bulleted, and the
+                // reverse), for its items' kind and marker.
+                let depth = 0;
+                for (let parent = node.parentNode; parent; parent = parent.parentNode) if (parent.nodeName === 'text:list') depth++;
+                const levels = styleNameToCheck ? odfListLevels(automaticStyles ?? undefined, styleNameToCheck) : undefined;
+                const ownLevel = levels?.get(depth + 1);
+                if (isVisible && ownLevel) listType = ownLevel.tagName === 'text:list-level-style-number' ? 'ordered' : 'unordered';
+
                 // If the list is not visible, it's likely a layout list used by Impress.
                 // We should traverse its items and treat their content as regular nodes.
                 if (!isVisible) {
@@ -1642,6 +1701,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                         }
                                     }
                                     const itemIndex = listCounters[listId][indentKey];
+                                    const marker = levels ? odfListMarker(levels, indentation, listCounters[listId], listType, itemIndex) : undefined;
                                     const pContent = parseParagraphContent(element, paragraphStyleMap, styleMap, config, sourceXml);
                                     const segments = splitParagraphByBreaks(pContent);
 
@@ -1661,6 +1721,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                                 indentation,
                                                 itemIndex,
                                                 listId,
+                                                ...(marker !== undefined ? { marker } : {}),
                                                 alignment: pContent.alignment || 'left',
                                                 style: pContent.style
                                             } as ListMetadata : {

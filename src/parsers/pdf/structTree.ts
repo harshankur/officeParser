@@ -558,6 +558,9 @@ function buildList(node: StructNode, ctx: WalkCtx, indent: number): OfficeConten
             listId,
             itemIndex,
         };
+        // The label as printed, where it is other than the item's number and a dot or a round bullet.
+        const printed = label.trim();
+        if (printed && printed !== (listType === 'ordered' ? `${itemIndex + 1}.` : '•')) meta.marker = printed;
         const item: OfficeContentNode = {
             type: 'list',
             text: bodyNodes.map(n => n.text || '').join(' ').trim(),

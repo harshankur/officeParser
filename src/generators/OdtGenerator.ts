@@ -5,6 +5,7 @@ import { ConversionResult, GeneratorConfig, ImageMode, OdtGeneratorConfig, Offic
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
+import { markerPattern, MarkerPattern, odfNumFormat } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 
@@ -113,7 +114,7 @@ class StyleRegistry {
 }
 
 interface MediaPart { name: string; bytes: Uint8Array; ext: string; contentType: string; }
-interface ListDef { name: string; registry: StyleRegistry; levels: Map<number, 'ordered' | 'unordered'>; startAt: Map<number, number>; }
+interface ListDef { name: string; registry: StyleRegistry; levels: Map<number, MarkerPattern>; startAt: Map<number, number>; }
 
 /**
  * Generates an OpenDocument Text (`.odt`) document from any AST, as a `Uint8Array`.
@@ -594,7 +595,8 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     private registerListLevel(listId: string, lvl: number, meta: any): void {
         const def = this.listDefs.get(listId)!;
         if (!def.levels.has(lvl)) {
-            def.levels.set(lvl, meta?.listType === 'ordered' ? 'ordered' : 'unordered');
+            // The level numbers or bullets as its first item's marker does (`a)`, `1.1.`, `▪`).
+            def.levels.set(lvl, markerPattern(meta, lvl));
             if (typeof meta?.itemIndex === 'number') def.startAt.set(lvl, meta.itemIndex + 1);
         }
     }
@@ -640,13 +642,16 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     private buildListStyleXml(def: ListDef): string {
         let levels = '';
         for (let l = 0; l <= 9; l++) {
-            const type = def.levels.get(l) ?? def.levels.get(0) ?? 'unordered';
+            const type = def.levels.get(l) ?? def.levels.get(0) ?? markerPattern(undefined, 0);
             const props = `<style:list-level-properties text:space-before="${fmtIn(0.25 * l)}" text:min-label-width="0.25in"/>`;
-            if (type === 'ordered') {
+            if (type.kind === 'ordered') {
                 const start = def.startAt.get(l) ?? 1;
-                levels += `<text:list-level-style-number text:level="${l + 1}" style:num-format="1" style:num-suffix="." text:start-value="${start}">${props}</text:list-level-style-number>`;
+                const prefix = type.prefix ? ` style:num-prefix="${xmlText(type.prefix)}"` : '';
+                const shown = type.withParents ? ` text:display-levels="${l + 1}"` : '';
+                levels += `<text:list-level-style-number text:level="${l + 1}"${prefix} style:num-format="${odfNumFormat(type.format)}" style:num-suffix="${xmlText(type.suffix)}"${shown} text:start-value="${start}">${props}</text:list-level-style-number>`;
             } else {
-                levels += `<text:list-level-style-bullet text:level="${l + 1}" text:bullet-char="•">${props}</text:list-level-style-bullet>`;
+                // A bullet of none is a space: ODF's bullet is one character.
+                levels += `<text:list-level-style-bullet text:level="${l + 1}" text:bullet-char="${xmlText([...type.bullet][0] ?? ' ')}">${props}</text:list-level-style-bullet>`;
             }
         }
         return `<text:list-style style:name="${def.name}">${levels}</text:list-style>`;

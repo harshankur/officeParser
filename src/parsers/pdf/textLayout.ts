@@ -566,6 +566,8 @@ interface ListMarker {
     number: number | null;
     /** True for a real bullet glyph (•, ◦, ▪ …) rather than the ambiguous "-"/"*" forms. */
     strongBullet: boolean;
+    /** The marker as printed (`a)`, `1.1.1.`, `◦`), for ListMetadata.marker. */
+    text: string;
 }
 
 const BULLET_GLYPHS = '•◦▪‣·○●■□∙-';
@@ -598,7 +600,7 @@ function detectLineMarker(text: string): ListMarker | null {
     const first = text.replace(/^\s+/, '');
     if (!first) return null;
     const u = UNORDERED_RE.exec(first);
-    if (u) return { type: 'unordered', raw: u[0], number: null, strongBullet: u[1] !== '-' && u[1] !== '*' };
+    if (u) return { type: 'unordered', raw: u[0], number: null, strongBullet: u[1] !== '-' && u[1] !== '*', text: u[1] };
     const o = ORDERED_RE.exec(first);
     if (o) {
         const core = o[1];
@@ -606,7 +608,7 @@ function detectLineMarker(text: string): ListMarker | null {
         if (/^[0-9]+$/.test(core)) n = parseInt(core, 10);
         else if (/^[ivxlcdm]+$/i.test(core)) { const r = romanValue(core); n = r > 0 ? r : null; }
         else if (/^[a-z]$/i.test(core)) n = core.toLowerCase().charCodeAt(0) - 96;
-        return { type: 'ordered', raw: o[0], number: n, strongBullet: false };
+        return { type: 'ordered', raw: o[0], number: n, strongBullet: false, text: o[0].trim() };
     }
     return null;
 }
@@ -997,7 +999,7 @@ const STANDALONE_MARKER_RE = /^(?:[•◦▪‣·○●■□∙]|\(?(?:\d+(?:\.
 
 /** Parses a standalone marker token into a {@link ListMarker} (raw empty - nothing to strip). */
 function parseStandaloneMarker(t: string): ListMarker | null {
-    if (/^[•◦▪‣·○●■□∙]$/.test(t)) return { type: 'unordered', raw: '', number: null, strongBullet: true };
+    if (/^[•◦▪‣·○●■□∙]$/.test(t)) return { type: 'unordered', raw: '', number: null, strongBullet: true, text: t };
     const m = /^\(?(\d+(?:\.\d+)*|[a-zA-Z]|[ivxlcdmIVXLCDM]{1,7})[.)]$/.exec(t);
     if (!m) return null;
     const core = m[1];
@@ -1006,7 +1008,7 @@ function parseStandaloneMarker(t: string): ListMarker | null {
     if (/^\d+$/.test(last)) num = parseInt(last, 10);
     else if (/^[ivxlcdm]+$/i.test(last)) { const r = romanValue(last); num = r > 0 ? r : null; }
     else if (/^[a-z]$/i.test(last)) num = last.toLowerCase().charCodeAt(0) - 96;
-    return { type: 'ordered', raw: '', number: num, strongBullet: false };
+    return { type: 'ordered', raw: '', number: num, strongBullet: false, text: t };
 }
 
 /** All the visible text of a paragraph group, concatenated and trimmed. */
@@ -1118,6 +1120,8 @@ export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContex
             // fall back to the running position within this list.
             itemIndex: marker.type === 'ordered' && marker.number != null && marker.number >= 1 ? marker.number - 1 : itemInList,
         };
+        // The marker as printed, where it is other than the item's number and a dot or a round bullet.
+        if (marker.text && marker.text !== (marker.type === 'ordered' ? `${meta.itemIndex + 1}.` : '•')) meta.marker = marker.text;
         itemInList++;
         prevWasItem = true;
         const item: OfficeContentNode = { type: 'list', text: p.text, children: p.children, metadata: meta };

@@ -9,6 +9,7 @@
   \usepackage[utf8]{inputenc}
   \usepackage{lmodern}
 \fi
+\usepackage{amsmath,amssymb}
 \usepackage{newunicodechar}
 \usepackage{array,multirow}
 \usepackage[normalem]{ulem}
@@ -37,8 +38,12 @@
 \definecolor{hexFFFFFF}{HTML}{FFFFFF}
 \iftutex
   \newunicodechar{ }{\quad}
+  \newunicodechar{▪}{\ensuremath{\blacksquare}}
+  \newunicodechar{○}{\ensuremath{\circ}}
 \else
   \DeclareUnicodeCharacter{2003}{\quad}
+  \DeclareUnicodeCharacter{25AA}{\ensuremath{\blacksquare}}
+  \DeclareUnicodeCharacter{25CB}{\ensuremath{\circ}}
 \fi
 
 % The images, carried in this file: each block writes one, as a small PDF, beside the .tex when it
@@ -604,30 +609,30 @@ Three~} & Two~ \\
 \textcolor{hex000000}{A~Multi-level~list with bullets:}
 
 \begin{itemize}
-\item \textcolor{hex000000}{One}
+\item[{▪}] \textcolor{hex000000}{One}
 \begin{itemize}
 \item \textcolor{hex000000}{Two}
 \begin{itemize}
 \item \textcolor{hex000000}{This bullet uses an image as the bullet item}
-\item \textcolor{hex000000}{Four}
+\item[{○}] \textcolor{hex000000}{Four}
 \end{itemize}
 \end{itemize}
-\item \textcolor{hex000000}{Five}
+\item[{▪}] \textcolor{hex000000}{Five}
 \end{itemize}
 
 \textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Continued Lists}}}
 
 \begin{enumerate}
-\item \textcolor{hex000000}{One}
-\item \textcolor{hex000000}{Two}
+\item[{i.}] \textcolor{hex000000}{One}
+\item[{ii.}] \textcolor{hex000000}{Two}
 \end{enumerate}
 
 \textcolor{hex000000}{An interruption in our regularly scheduled listing, for this essential and~very relevant~public service announcement.}
 
 \begin{enumerate}
 \setcounter{enumi}{2}
-\item \textcolor{hex000000}{We now resume our normal programming}
-\item \textcolor{hex000000}{Four}
+\item[{iii.}] \textcolor{hex000000}{We now resume our normal programming}
+\item[{iv.}] \textcolor{hex000000}{Four}
 \end{enumerate}
 \end{frame}
 

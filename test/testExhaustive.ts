@@ -6,6 +6,7 @@
 
 import { OfficeParser } from '../src/OfficeParser';
 import { OfficeGenerator } from '../src/OfficeGenerator';
+import { bulletCharacter, formatListNumber } from '../src/utils/listMarkers';
 import { decodeBmp, decodeGif } from '../src/utils/rasterUtils';
 import { excelShownText } from '../src/utils/excelFormat';
 import { OfficeTemplate } from '../src/OfficeTemplate';
@@ -4733,6 +4734,42 @@ async function testNativePdfFontKinds(): Promise<void> {
 }
 
 /**
+ * A list item records its marker where the document shows other than its number and a dot or a round
+ * bullet (`a)`, `1.1.1.`, `iv.`, `▪`, `◦`), read from Word numbering, ODF list styles and HTML's list
+ * styles, and PDF output prints it: nested numbering printed as 1. 2. and every bullet as a round one.
+ * A nested Word level counts afresh under each item of the level above, as Word numbers it.
+ */
+async function testListMarkers(): Promise<void> {
+    assert.deepStrictEqual([1, 2, 26, 27, 4, 1994].map((n, i) => formatListNumber(n, (['lowerLetter', 'lowerLetter', 'upperLetter', 'lowerLetter', 'lowerRoman', 'upperRoman'] as const)[i])),
+        ['a', 'b', 'Z', 'aa', 'iv', 'MCMXCIV'], 'numbers are written in their formats');
+    assert.deepStrictEqual([bulletCharacter('\uF0B7', 'Symbol'), bulletCharacter('\uF0A7', 'Wingdings'), bulletCharacter('o', 'Courier New'), bulletCharacter('◦', 'OpenSymbol'), bulletCharacter('\uE000')],
+        ['•', '▪', '◦', '◦', '•'], 'symbol-font bullets are the characters they draw');
+    const markersOf = (ast: OfficeParserAST) => collectAllNodes(ast).filter(n => n.type === 'list').map(n => (n.metadata as any).marker ?? `${(n.metadata as any).listType === 'ordered' ? (n.metadata as any).itemIndex + 1 + '.' : '•'}`);
+    const expected = ['•', '•', '1.', '2.', '1.', '1.1.', '1.1.1.', '1.1.2.', '1.1.3.', '2.', '▪', '•', '•', '◦', '▪', 'i.', 'ii.', 'iii.', 'iv.'];
+    for (const format of ['docx', 'odt'] as const) {
+        const ast = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', `test.${format}`)), { fileType: format } as any) as OfficeParserAST;
+        assert.deepStrictEqual(markersOf(ast), expected, `${format} list markers`);
+    }
+    const html = await OfficeParser.parseOffice(Buffer.from('<ol type="a"><li>x</li><li>y</li></ol><ol style="list-style-type: upper-roman" start="3"><li>z</li></ol><ul style="list-style: square inside"><li>s</li></ul><ol><li>plain</li></ol>'), { fileType: 'html' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(markersOf(html), ['a.', 'b.', 'III.', '▪', '1.'], 'HTML list styles are read');
+
+    const docx = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.docx')), { fileType: 'docx' } as any) as OfficeParserAST;
+    for (const format of ['docx', 'odt', 'html'] as const) {
+        const out = (await docx.to(format, { includeFormatting: true } as any)).value;
+        const back = await OfficeParser.parseOffice(Buffer.from(out as any), { fileType: format } as any) as OfficeParserAST;
+        assert.deepStrictEqual(markersOf(back), expected, `${format} output keeps the list markers`);
+    }
+    const text = String((await docx.to('text')).value);
+    assert.ok(['1.1.1. Three', '▪ One', 'iv. Four'].every(line => text.includes(line)), 'text output writes the markers');
+    assert.ok(String((await docx.to('tex')).value).includes('\\item[{1.1.1.}]'), 'LaTeX output writes the markers as item labels');
+    const result = await docx.to('pdf', { pdfConfig: { engine: 'native' } } as any);
+    assert.ok(!(result.messages || []).some((m: any) => m.details?.reason === 'unencodable-text'), 'a square or circle bullet is drawn, not lost');
+    const back = await OfficeParser.parseOffice(Buffer.from(result.value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const printed = String((await back.to('text')).value);
+    assert.ok(['1.1.1. Three', '1.1.2. Four', 'iii. We now', 'iv. Four'].every(m => printed.includes(m)), `PDF output prints the markers, and reading it back keeps them; got ${JSON.stringify(printed.slice(printed.lastIndexOf('Multi-level'), printed.lastIndexOf('Multi-level') + 400))}`);
+}
+
+/**
  * The native PDF engine draws GIF (its first frame) and uncompressed BMP pictures, turned into PNG: a PDF
  * holds neither, and both were dropped with IMAGE_PROCESSING_FAILED.
  */
@@ -6572,6 +6609,7 @@ async function runTests(): Promise<void> {
         ['Paragraph layout', testParagraphLayout],
         ['Paragraph spacing', testParagraphSpacing],
         ['Native PDF font kinds', testNativePdfFontKinds],
+        ['List markers', testListMarkers],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

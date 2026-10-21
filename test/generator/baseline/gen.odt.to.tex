@@ -11,6 +11,8 @@
 \fi
 \usepackage[a4paper,margin=1in]{geometry}
 \usepackage{parskip}
+\usepackage{amsmath,amssymb}
+\usepackage{newunicodechar}
 \usepackage{graphicx}
 \usepackage{array,longtable,multirow}
 \usepackage[normalem]{ulem}
@@ -43,6 +45,11 @@
 \definecolor{hexFF0000}{HTML}{FF0000}
 \definecolor{hexFFFF00}{HTML}{FFFF00}
 \definecolor{hexFFFFFF}{HTML}{FFFFFF}
+\iftutex
+  \newunicodechar{▪}{\ensuremath{\blacksquare}}
+\else
+  \DeclareUnicodeCharacter{25AA}{\ensuremath{\blacksquare}}
+\fi
 \title{DOCX Demo}
 \author{Harsh Ankur}
 \date{2025-11-29}
@@ -1553,11 +1560,11 @@ We end with a fancy calendar, note how much of the original formatting is preser
 \begin{enumerate}
 \item One
 \begin{enumerate}
-\item Two
+\item[{1.1.}] Two
 \begin{enumerate}
-\item Three
-\item Four with a very long line to demonstrate that the hanging indent for the list is working correctly.
-\item Five
+\item[{1.1.1.}] Three
+\item[{1.1.2.}] Four with a very long line to demonstrate that the hanging indent for the list is working correctly.
+\item[{1.1.3.}] Five
 \end{enumerate}
 \end{enumerate}
 \item Six
@@ -1566,32 +1573,32 @@ We end with a fancy calendar, note how much of the original formatting is preser
 {\leftskip=18bp A Multi-level list with bullets:\par}
 
 \begin{itemize}
-\item One
+\item[{▪}] One
 \begin{itemize}
 \item Two
 \begin{itemize}
 \item This bullet uses an image as the bullet item
 \begin{itemize}
-\item Four
+\item[{◦}] Four
 \end{itemize}
 \end{itemize}
 \end{itemize}
-\item Five
+\item[{▪}] Five
 \end{itemize}
 
 \subsection[{Continued Lists}]{\protect\textcolor{hex4F81BD}{Continued Lists}}\label{_Toc1471533984}\label{continued-lists}
 
 \begin{enumerate}
-\item One
-\item Two
+\item[{i.}] One
+\item[{ii.}] Two
 \end{enumerate}
 
 An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.
 
 \begin{enumerate}
 \setcounter{enumi}{2}
-\item We now resume our normal programming
-\item Four
+\item[{iii.}] We now resume our normal programming
+\item[{iv.}] Four
 \end{enumerate}
 
 \theendnotes

@@ -23865,6 +23865,7 @@
             "indentation": 0,
             "itemIndex": 0,
             "listId": "a2026",
+            "marker": "▪",
             "alignment": "left",
             "style": "a2025"
           },
@@ -23946,6 +23947,7 @@
             "indentation": 3,
             "itemIndex": 0,
             "listId": "a2026",
+            "marker": "○",
             "alignment": "left",
             "style": "a2034"
           },
@@ -23973,6 +23975,7 @@
             "indentation": 0,
             "itemIndex": 1,
             "listId": "a2026",
+            "marker": "▪",
             "alignment": "left",
             "style": "a2037"
           },
@@ -24028,6 +24031,7 @@
             "indentation": 0,
             "itemIndex": 0,
             "listId": "a2044",
+            "marker": "i.",
             "alignment": "left",
             "style": "a2043"
           },
@@ -24055,6 +24059,7 @@
             "indentation": 0,
             "itemIndex": 1,
             "listId": "a2044",
+            "marker": "ii.",
             "alignment": "left",
             "style": "a2046"
           },
@@ -24105,6 +24110,7 @@
             "indentation": 0,
             "itemIndex": 2,
             "listId": "a2044",
+            "marker": "iii.",
             "alignment": "left",
             "style": "a2049"
           },
@@ -24132,6 +24138,7 @@
             "indentation": 0,
             "itemIndex": 3,
             "listId": "a2044",
+            "marker": "iv.",
             "alignment": "left",
             "style": "a2052"
           },

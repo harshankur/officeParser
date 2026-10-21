@@ -1917,6 +1917,12 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             // so `HtmlParser` reads it back and the pipe-table markers survive AST -> HTML -> AST.
             // An unaligned cell (no `align`) adds nothing, keeping its HTML byte-identical.
             if (node.type === 'cell' && meta.align) pushSafe('text-align', meta.align);
+            // A list item's own marker (`a)`, `iv.`, `◦`) as a CSS string, every character but a letter,
+            // a digit or a space escaped, so nothing in it can end the string or the attribute.
+            if (node.type === 'list' && typeof meta.marker === 'string' && !meta.isTask) {
+                const escaped = [...meta.marker.slice(0, 32)].map(ch => /^[\p{L}\p{N} ]$/u.test(ch) ? ch : `\\${ch.codePointAt(0)!.toString(16)} `).join('');
+                styles.push(`list-style-type: '${escaped}${meta.marker ? ' ' : ''}'`);
+            }
             if (meta.backgroundColor) pushSafe('background-color', meta.backgroundColor);
             if (meta.verticalAlign) pushSafe('vertical-align', meta.verticalAlign);
             if (meta.paragraphIndentation) {

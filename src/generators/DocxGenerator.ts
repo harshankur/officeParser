@@ -5,6 +5,7 @@ import { ConversionResult, DocxGeneratorConfig, GeneratorConfig, ImageMode, Offi
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
+import { markerPattern, MarkerPattern } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 
@@ -77,7 +78,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     private endnotes: NoteEntry[] = [];
     private comments: CommentEntry[] = [];
     private commentCounter = 0;
-    private numbering: { listId: string; numId: number; levels: Map<number, 'ordered' | 'unordered'>; startAt: Map<number, number> }[] = [];
+    private numbering: { listId: string; numId: number; levels: Map<number, MarkerPattern>; startAt: Map<number, number> }[] = [];
     private numByListId = new Map<string, number>();
     private needsNumbering = false;
     private syntheticListRun = 0; // per-run id counter for lists that carry no listId
@@ -608,7 +609,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     private ensureNumbering(meta: any, bareListId?: string): number {
         const listId = String(meta?.listId ?? bareListId ?? 'pdf-list');
         let numId = this.numByListId.get(listId);
-        let entry: { listId: string; numId: number; levels: Map<number, 'ordered' | 'unordered'>; startAt: Map<number, number> };
+        let entry: { listId: string; numId: number; levels: Map<number, MarkerPattern>; startAt: Map<number, number> };
         if (numId === undefined) {
             numId = this.numbering.length + 1;
             entry = { listId, numId, levels: new Map(), startAt: new Map() };
@@ -621,7 +622,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         }
         const lvl = Math.max(0, Math.min(8, meta?.indentation | 0));
         if (!entry.levels.has(lvl)) {
-            entry.levels.set(lvl, meta?.listType === 'ordered' ? 'ordered' : 'unordered');
+            // The level numbers or bullets as its first item's marker does (`a)`, `1.1.`, `▪`).
+            entry.levels.set(lvl, markerPattern(meta, lvl));
             if (typeof meta?.itemIndex === 'number') entry.startAt.set(lvl, meta.itemIndex + 1);
         }
         return numId;
@@ -648,25 +650,29 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         const abstractIds = new Map<string, number>();
         let abstracts = '', nums = '';
         for (const entry of this.numbering) {
-            const types = Array.from({ length: 9 }, (_, l) => entry.levels.get(l) ?? entry.levels.get(0) ?? 'unordered');
-            const signature = types.join(',');
+            const unordered = markerPattern(undefined, 0);
+            const types = Array.from({ length: 9 }, (_, l) => entry.levels.get(l) ?? entry.levels.get(0) ?? unordered);
+            const signature = JSON.stringify(types);
             let aId = abstractIds.get(signature);
             if (aId === undefined) {
                 aId = abstractIds.size;
                 abstractIds.set(signature, aId);
                 let levels = '';
                 types.forEach((type, l) => {
-                    const fmt = type === 'ordered' ? 'decimal' : 'bullet';
-                    const text = type === 'ordered' ? `%${l + 1}.` : '•';
+                    const fmt = type.kind === 'ordered' ? type.format : 'bullet';
+                    // A literal `%` in Word's level text would read as a field: it is left out.
+                    const literal = (t: string) => t.replace(/%/g, '');
+                    const parents = type.withParents ? Array.from({ length: l }, (_, k) => `%${k + 1}.`).join('') : '';
+                    const text = type.kind === 'ordered' ? `${literal(type.prefix)}${parents}${type.format === 'none' ? '' : `%${l + 1}`}${literal(type.suffix)}` : literal(type.bullet);
                     levels += `<w:lvl w:ilvl="${l}"><w:start w:val="1"/><w:numFmt w:val="${fmt}"/>`
-                        + `<w:lvlText w:val="${escapeXml(text)}"/><w:lvlJc w:val="left"/>`
+                        + `<w:lvlText w:val="${xmlText(text)}"/><w:lvlJc w:val="left"/>`
                         + `<w:pPr><w:ind w:left="${720 * (l + 1)}" w:hanging="360"/></w:pPr></w:lvl>`;
                 });
                 abstracts += `<w:abstractNum w:abstractNumId="${aId}"><w:multiLevelType w:val="multilevel"/>${levels}</w:abstractNum>`;
             }
             let overrides = '';
             for (const lvl of [...entry.levels.keys()].sort((a, b) => a - b)) {
-                if (types[lvl] !== 'ordered') continue;
+                if (types[lvl].kind !== 'ordered') continue;
                 overrides += `<w:lvlOverride w:ilvl="${lvl}"><w:startOverride w:val="${Math.max(1, entry.startAt.get(lvl) ?? 1)}"/></w:lvlOverride>`;
             }
             nums += `<w:num w:numId="${entry.numId}"><w:abstractNumId w:val="${aId}"/>${overrides}</w:num>`;

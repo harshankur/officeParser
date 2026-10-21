@@ -311,7 +311,9 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     const level = clampInt(meta?.indentation, 0, 64, 0);
                     const indent = (level + 1) * 360;
                     const isOrdered = meta?.listType === 'ordered';
-                    const marker = isOrdered ? `${clampInt(meta.itemIndex, 0, 999_999_998, 0) + 1}. ` : '\\bullet ';
+                    // The document's own marker (`a)`, `◦`), else the item's number or a bullet.
+                    const marker = typeof meta?.marker === 'string' ? (meta.marker ? `${this.escapeRtf(meta.marker)} ` : '')
+                        : isOrdered ? `${clampInt(meta.itemIndex, 0, 999_999_998, 0) + 1}. ` : '\\bullet ';
                     const listControl = isOrdered ? '\\pndec' : '\\pnbullet';
                     const pPr = this.pard();
                     return `${pPr}\\li${indent}\\fi-360\\ilvl${level}${listControl} ${marker}${childrenOutput}\\par\n`;

@@ -11,6 +11,7 @@ import { cellSpan, MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
 import { textDecoder } from '../utils/encodingUtils.js';
 import { lengthToPt } from '../utils/officeGenUtils.js';
+import { cssListStyle, formatListNumber, NumberFormat } from '../utils/listMarkers.js';
 
 /**
  * Maximum element nesting depth accepted from an HTML/XHTML source before the parser gives up
@@ -1117,7 +1118,23 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
         level: number;
         counters: Record<number, number>;
         isTask?: boolean;
+        /** How the list numbers or bullets its items, where its `type` or `list-style-type` says. */
+        markerStyle?: { format: NumberFormat } | { bullet: string };
     }
+
+    /** An `<ol>`'s, `<ul>`'s or `<li>`'s marker style: its `list-style-type` (or `list-style`), else its `type`. */
+    const markerStyleOf = (node: HtmlNode): { format: NumberFormat } | { bullet: string } | undefined => {
+        const decls = node.attributes?.style ? parseStyleDeclarations(node.attributes.style) : undefined;
+        // A string (an item's own marker, `'a) '`) is read as written; a keyword in any case.
+        const type = decls?.get('list-style-type')?.trim();
+        const fromType = type ? cssListStyle(type) ?? cssListStyle(type.toLowerCase()) : undefined;
+        if (fromType) return fromType;
+        const fromShorthand = decls?.get('list-style')?.split(/\s+/).map(t => cssListStyle(t.toLowerCase())).find(Boolean);
+        if (fromShorthand) return fromShorthand;
+        // `type` is case-sensitive (`a` and `A` differ), so it is read as written.
+        const attribute = node.attributes?.type?.trim();
+        return attribute ? cssListStyle(attribute) ?? cssListStyle(attribute.toLowerCase()) : undefined;
+    };
 
     // Finds the checked state from a nested <input type="checkbox"> (GFM task-list items
     // nest it inside a <label>, so it isn't a direct child of the <li>).
@@ -1872,7 +1889,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     type: tagName === 'ol' ? 'ordered' : 'unordered',
                     level: isNewTopLevel ? 0 : listContext!.level + 1,
                     counters: isNewTopLevel ? {} : { ...listContext!.counters }, // Clone to avoid side effects on parent levels
-                    isTask: node.attributes?.['data-type'] === 'taskList'
+                    isTask: node.attributes?.['data-type'] === 'taskList',
+                    markerStyle: markerStyleOf(node),
                 };
 
                 // Initialize counter for this level
@@ -1919,6 +1937,15 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     checked = dataChecked !== undefined ? dataChecked === 'true' : (findNestedCheckboxChecked(node) ?? false);
                 }
 
+                // The item's marker, where the list (or the item) styles it as other than `1.` or a disc.
+                let marker: string | undefined;
+                const markerStyle = markerStyleOf(node) ?? listContext?.markerStyle;
+                if (markerStyle && listContext) {
+                    const count = listContext.counters[listContext.level] ?? 1;
+                    marker = 'bullet' in markerStyle ? markerStyle.bullet : `${formatListNumber(count, markerStyle.format)}.`;
+                    if (marker === (listContext.type === 'ordered' ? `${count}.` : '•')) marker = undefined;
+                }
+
                 const selfNode: OfficeContentNode = {
                     type: 'list',
                     text: plainTextOf(selfChildren),
@@ -1928,6 +1955,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         alignment: newFormatting.alignment || 'left',
                         listId: listContext?.listId || 'html-list-none',
                         itemIndex: (listContext?.counters[listContext.level] ?? 1) - 1,
+                        ...(marker !== undefined ? { marker } : {}),
                         anchorIds: anchorIds.length > 0 ? anchorIds : undefined,
                         isTask,
                         checked

@@ -949,7 +949,8 @@ class NativeLayout {
         const level = Math.max(0, meta?.indentation || 0);
         const indent = 18 + level * 18;
         const ordered = meta?.listType === 'ordered';
-        const marker = ordered ? `${(meta?.itemIndex ?? 0) + 1}.` : '•';
+        // The document's own marker (`a)`, `iv.`, `◦`), or the item's number and a dot, or a bullet.
+        const marker = typeof meta?.marker === 'string' ? meta.marker : ordered ? `${(meta?.itemIndex ?? 0) + 1}.` : '•';
         // Body: the item's own text runs (its non-list children); nested list children render after.
         const bodyRuns = await this.collectRuns({ ...node, children: (node.children || []).filter(c => c.type !== 'list') });
         // Size the marker to the body text so their baselines line up (a body larger than the old fixed
@@ -963,14 +964,53 @@ class NativeLayout {
         // drawRuns' first line stays on this page and draws at the same baseline as the marker.
         const markerX = this.margin.left + indent - 14;
         const baseline = this.pageH - this.y - size;
-        this.drawText(this.enc(marker), 'regular', markerX, baseline, size, this.lib.rgb(0.12, 0.12, 0.12));
+        if (marker && !this.drawBulletShape(marker, markerX, baseline, size)) this.drawText(this.enc(marker), 'regular', markerX, baseline, size, this.lib.rgb(0.12, 0.12, 0.12));
+        // The body starts past a marker wider than the usual gap (`1.1.1.`, `(iii)`), as a tab stop
+        // past it would set it.
+        const markerWidth = marker ? this.widthOf(this.enc(marker, 'regular', false), 'regular', size) : 0;
+        const bodyIndent = Math.min(Math.max(indent, indent - 14 + markerWidth + 4), this.contentWidth / 2);
         // Advance for the marker line unless the body has real text to draw: a whitespace-only body
         // makes drawRuns place nothing and never advance `this.y`, so the next item would overprint.
-        if (bodyRuns.some(r => r.text && r.text.trim())) this.drawRuns(bodyRuns, this.margin.left + indent, this.contentWidth - indent);
+        if (bodyRuns.some(r => r.text && r.text.trim())) this.drawRuns(bodyRuns, this.margin.left + bodyIndent, this.contentWidth - bodyIndent);
         else this.y += size * 1.35;
         // Route nested list items through render() (not listItem() directly) so the onNode hook and the
         // abort check see them like every other node.
         for (const c of (node.children || []).filter(c => c.type === 'list')) await this.render(c);
+    }
+
+    /**
+     * Draws a bullet no font given has as the shape it is (a circle, a square, a diamond), the
+     * Standard-14 fonts having none but the round bullet. False when the marker is not such a bullet,
+     * or a font draws it.
+     */
+    private drawBulletShape(marker: string, x: number, baseline: number, size: number): boolean {
+        const cp = marker.codePointAt(0)!;
+        if ([...marker].length !== 1 || this.fonts.regular.some(face => face.covers(cp))) return false;
+        const color = this.lib.rgb(0.12, 0.12, 0.12);
+        const r = size * 0.18, cx = x + r + 1, cy = baseline + size * 0.3;
+        switch (marker) {
+            case '◦': case '○': case '❍':
+                this.page.drawCircle({ x: cx, y: cy, size: r, borderColor: color, borderWidth: 0.6 });
+                return true;
+            case '●': case '⚫':
+                this.page.drawCircle({ x: cx, y: cy, size: r, color });
+                return true;
+            case '▪': case '■': case '◼': case '▫': case '□': case '◻': case '❑': {
+                const filled = '▪■◼'.includes(marker);
+                this.page.drawRectangle({ x: cx - r, y: cy - r, width: 2 * r, height: 2 * r, ...(filled ? { color } : { borderColor: color, borderWidth: 0.6 }) });
+                return true;
+            }
+            case '◆': case '♦': case '❖': case '◇': {
+                const d = r * 1.3;
+                // Drawn about its centre: an SVG path's y runs down the page, which a diamond does not mind.
+                this.page.drawSvgPath(`M 0 ${-d} L ${d} 0 L 0 ${d} L ${-d} 0 Z`, { x: cx, y: cy, ...(marker === '◇' ? { borderColor: color, borderWidth: 0.6 } : { color }) });
+                return true;
+            }
+            default:
+                // Another symbol (an arrow, a check mark): a round bullet, as the item is still one.
+                if (/\p{So}|\p{Sm}/u.test(marker) || (cp >= 0x2190 && cp <= 0x27BF)) { this.drawText('•', 'regular', x, baseline, size, color); return true; }
+                return false;
+        }
     }
 
     private code(node: OfficeContentNode): void {

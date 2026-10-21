@@ -138,7 +138,7 @@ export class TextGenerator extends BaseGenerator<'text'> {
                 // Clamp the nesting depth: `indentation` derives from an uncapped document `ilvl`, so a
                 // hostile value would otherwise repeat the indent into a multi-GB string.
                 const indent = indentSpaces.repeat(clampRepeat(meta?.indentation || 0, 64));
-                const marker = meta?.listType === 'ordered' ? `${(meta.itemIndex ?? 0) + 1}. ` : '- ';
+                const marker = listMarkerText(meta);
                 return `${indent}${marker}${childrenOutput.trimStart()}` + (childrenOutput.endsWith(newline) ? '' : newline);
             }
 
@@ -336,7 +336,7 @@ export class TextGenerator extends BaseGenerator<'text'> {
                 for (const c of n.children || []) first = firstRead(first, await collect(c));
                 if (first >= 0) {
                     const meta = n.metadata as any;
-                    const marker = meta?.listType === 'ordered' ? `${(meta.itemIndex ?? 0) + 1}. ` : '- ';
+                    const marker = listMarkerText(meta);
                     const f = atoms[first];
                     const perChar = f.text.length ? f.w / f.text.length : 6;
                     f.text = marker + f.text;
@@ -500,4 +500,10 @@ export class TextGenerator extends BaseGenerator<'text'> {
         }
         return tableOutput + newline;
     }
+}
+
+/** A list item's marker in plain text and the space after it: the document's own, else `1.` or `-`. */
+function listMarkerText(meta: { listType?: string; itemIndex?: number; marker?: unknown } | undefined): string {
+    if (typeof meta?.marker === 'string') return meta.marker ? `${meta.marker.replace(/\s+/g, ' ').trim()} ` : '';
+    return meta?.listType === 'ordered' ? `${(meta.itemIndex ?? 0) + 1}. ` : '- ';
 }
