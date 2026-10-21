@@ -1586,6 +1586,12 @@ export interface PdfGeneratorConfig {
      */
     printHidden?: boolean;
     /**
+     * Print each slide's speaker notes under it. A PDF of slides leaves them out, as PowerPoint's and
+     * LibreOffice's do, and so does PDF output by default (both engines); every other format keeps them
+     * after their slide. Defaults to false.
+     */
+    printSpeakerNotes?: boolean;
+    /**
      * Emit a tagged (accessible / PDF-UA-friendly) PDF, so screen readers can follow the document
      * structure. Passed through to the rendering engine; ignored by engines that do not support it.
      * Defaults to true.

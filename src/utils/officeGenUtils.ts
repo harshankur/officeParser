@@ -366,6 +366,15 @@ export function embedUrl(meta: EmbedMetadata | undefined): string {
 }
 
 /**
+ * A presentation as its printout shows it: the slides without their speaker notes (a slide's own
+ * `notes`). The AST as given when no slide has any; otherwise a copy, sharing every other node.
+ */
+export function withoutSpeakerNotes(ast: OfficeParserAST): OfficeParserAST {
+    if (!ast.content.some(n => n.type === 'slide' && n.notes?.length)) return ast;
+    return { ...ast, content: ast.content.map(n => n.type === 'slide' && n.notes?.length ? { ...n, notes: undefined } : n) };
+}
+
+/**
  * A spreadsheet's content as a printout shows it: hidden sheets, rows and cells (SheetMetadata.hidden,
  * RowMetadata.hidden, CellMetadata.hidden) left out, and the rows and columns that remain numbered
  * without the gaps, a span across hidden columns shortened by them. The AST as given when nothing in

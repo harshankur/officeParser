@@ -171,6 +171,7 @@ const DEFAULT_PDF_GENERATOR_CONFIG: DeepRequired<PdfGeneratorConfig> = {
     fallbackFonts: [],
     subsetFonts: true,
     printHidden: false,
+    printSpeakerNotes: false,
     tagged: true,
     outline: false,
     format: 'A4',

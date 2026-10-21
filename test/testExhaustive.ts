@@ -4547,6 +4547,29 @@ async function testRtfHeaderRows(): Promise<void> {
 }
 
 /**
+ * A PDF of slides leaves their speaker notes out, as PowerPoint's and LibreOffice's do: they were printed,
+ * and at the end of the document, on the last slide's page. pdfConfig.printSpeakerNotes prints each
+ * under its own slide; every other format keeps them.
+ */
+async function testSpeakerNotesInPdf(): Promise<void> {
+    for (const file of ['test.pptx', 'test.odp']) {
+        const ast = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', file)), { fileType: file.split('.')[1] } as any) as OfficeParserAST;
+        const pagesOf = async (printSpeakerNotes: boolean) => {
+            const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native', printSpeakerNotes } } as any)).value as Uint8Array;
+            const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+            return back.content.map(page => JSON.stringify(page));
+        };
+        const without = (await pagesOf(false)).join('\n');
+        assert.ok(!without.includes('Slide Note 1') && !without.includes('Slide Note 2'), `${file}: speaker notes are not printed by default`);
+        const withNotes = await pagesOf(true);
+        const notePage = withNotes.findIndex(p => p.includes('Slide Note 2'));
+        const slidePage = withNotes.findIndex(p => p.includes('Slide Note 1'));
+        assert.ok(slidePage >= 0 && notePage >= slidePage && notePage < withNotes.length - 1, `${file}: kept, each note is drawn under its own slide, not at the end (pages ${slidePage}, ${notePage} of ${withNotes.length})`);
+        assert.ok(String((await ast.to('text')).value).includes('Slide Note 1'), `${file}: text output keeps the speaker notes`);
+    }
+}
+
+/**
  * A spreadsheet's hidden columns, rows and sheets are read and marked, kept as data by every output, and
  * left out of PDF output, as a spreadsheet's printout leaves them (pdfConfig.printHidden prints them).
  */
@@ -6323,6 +6346,7 @@ async function runTests(): Promise<void> {
         ['Text table cells apart', testTextTableCellsApart],
         ['CSV delimiter detection', testCsvDelimiterDetection],
         ['Hidden sheet content', testHiddenSheetContent],
+        ['Speaker notes in PDF', testSpeakerNotesInPdf],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

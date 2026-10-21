@@ -75,7 +75,7 @@ const knownParserBooleans = new Set([
 const knownGeneratorBooleans = new Set([
     'includeFormatting', 'generateIds', 'renderMetadata', 'includeImages', 'includeCharts', 'ignoreInternalLinks',
     // Dotted generator booleans, same rationale as the parser set above.
-    'pdfConfig.tagged', 'pdfConfig.outline', 'pdfConfig.subsetFonts', 'pdfConfig.printHidden', 'pdfConfig.landscape', 'pdfConfig.printBackground', 'pdfConfig.displayHeaderFooter',
+    'pdfConfig.tagged', 'pdfConfig.outline', 'pdfConfig.subsetFonts', 'pdfConfig.printHidden', 'pdfConfig.printSpeakerNotes', 'pdfConfig.landscape', 'pdfConfig.printBackground', 'pdfConfig.displayHeaderFooter',
     'docxConfig.landscape', 'odtConfig.landscape',
     'texConfig.standalone', 'texConfig.bundle', 'texConfig.embedImages', 'texConfig.numberSections', 'texConfig.landscape',
     'textConfig.preserveLayout', 'textConfig.renderNotes',
@@ -445,6 +445,7 @@ if (fileArg && !showHelp) {
     console.log('  --pdfConfig.fallbackFonts=a.ttf,b.otf       Font files tried, in order, for characters the fonts before them lack (native engine)');
     console.log('  --pdfConfig.subsetFonts=false               Embed whole font files, not only the glyphs used (default: true)');
     console.log('  --pdfConfig.printHidden                     Print a spreadsheet\'s hidden sheets, rows and columns (default: false)');
+    console.log('  --pdfConfig.printSpeakerNotes               Print each slide\'s speaker notes under it (default: false)');
     console.log('  --pdfConfig.outline                         Write a bookmark outline from the headings (default: false)');
     console.log('  --pdfConfig.format=Letter                   PDF paper format (A4 | Letter | Legal | A3 ...), both engines');
     console.log('  --chunksConfig.strategy=fixed-size          Chunking strategy (fixed-size | document-structure | semantic)');

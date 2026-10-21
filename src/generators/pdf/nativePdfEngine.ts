@@ -656,6 +656,11 @@ class NativeLayout {
         switch (node.type) {
             case 'page':
             case 'slide':
+                for (const c of node.children || []) await this.render(c);
+                // Speaker notes, when the PDF keeps them (pdfConfig.printSpeakerNotes), under their slide.
+                for (const n of node.notes || []) await this.note(n);
+                this.y += 4;
+                return;
             case 'header':
             case 'footer':
                 for (const c of node.children || []) await this.render(c);
@@ -929,6 +934,9 @@ class NativeLayout {
      */
     collectNotes(node: OfficeContentNode): void {
         if (!node) return;
+        // A slide's notes are its speaker's: drawn under the slide (see render), never at the end of the
+        // document, where they printed on the last slide's page.
+        if (node.type === 'slide') { for (const c of node.children || []) this.collectNotes(c); return; }
         // The notes a note's own text refers to follow it (they were left out); each note once.
         for (const note of node.notes || []) {
             if (this.collectedNoteSet.has(note)) continue;
