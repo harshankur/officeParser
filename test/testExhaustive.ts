@@ -4612,6 +4612,28 @@ async function testSheetTablesInPdf(): Promise<void> {
 }
 
 /**
+ * The native PDF engine's links are clickable: a web address opens, a `#id` goes to its anchor (on a later
+ * page here), and a script or a relative path stays drawn as a link that goes nowhere. They were only
+ * coloured and underlined. The words of a link share it, formatted or not.
+ */
+async function testNativePdfLinks(): Promise<void> {
+    const html = '<h1 id="top">Title</h1><p>See <a href="https://example.com/a(b)">the <b>bold</b> site</a>, <a href="#end">the end</a>, '
+        + '<a href="javascript:alert(1)">script</a> and <a href="notes.html">notes</a>.</p>' + '<p>filler</p>'.repeat(80) + '<h2 id="end">End</h2><p><a href="#top">back</a></p>';
+    const ast = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' } as any) as OfficeParserAST;
+    const read = async (config: any) => {
+        const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' }, ...config } as any)).value as Uint8Array;
+        const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+        return new Set(collectAllNodes(back).map(n => (n.metadata as any)?.link).filter(Boolean));
+    };
+    const links = await read({});
+    assert.ok(links.has('https://example.com/a%28b%29'), `a web link opens its address; got ${JSON.stringify([...links])}`);
+    assert.ok([...links].filter(l => l.startsWith('#')).length === 2, `both links into the document go somewhere; got ${JSON.stringify([...links])}`);
+    assert.ok(![...links].some(l => /javascript|notes/.test(l)), `a script or relative link is not clickable; got ${JSON.stringify([...links])}`);
+    const external = await read({ ignoreInternalLinks: true });
+    assert.deepStrictEqual([...external], ['https://example.com/a%28b%29'], 'ignoreInternalLinks leaves the links into the document unclickable');
+}
+
+/**
  * The native PDF engine draws GIF (its first frame) and uncompressed BMP pictures, turned into PNG: a PDF
  * holds neither, and both were dropped with IMAGE_PROCESSING_FAILED.
  */
@@ -6447,6 +6469,7 @@ async function runTests(): Promise<void> {
         ['Native PDF GIF and BMP', testNativePdfGifAndBmp],
         ['XLSX shown text', testXlsxShownText],
         ['Sheet tables in PDF', testSheetTablesInPdf],
+        ['Native PDF links', testNativePdfLinks],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

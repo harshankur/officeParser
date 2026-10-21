@@ -1249,7 +1249,7 @@ export interface CommonGeneratorConfig {
      * Whether to ignore all internal (anchor) links and anchor IDs during generation.
      * When true, all bookmarks, cross-references, and internal document jumps are stripped.
      * Specifically for Markdown, this removes the {#id} block from headings.
-     * Applies to HTML, Markdown, DOCX, ODT and RTF. Defaults to false.
+     * Applies to HTML, Markdown, DOCX, ODT, RTF and the native PDF engine. Defaults to false.
      */
     ignoreInternalLinks?: boolean;
     /**

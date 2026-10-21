@@ -21,6 +21,7 @@ import { EmbedMetadata, FullGeneratorConfig, ImageMode, OfficeContentNode, Offic
 import { getAbortError, getOfficeError } from '../../utils/errorUtils.js';
 import { documentLanguage, embedUrl, isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize } from '../../utils/officeGenUtils.js';
 import { decodeBmp, decodeGif, encodePng } from '../../utils/rasterUtils.js';
+import { sanitizeOfficePackageUrl } from '../../utils/sanitize.js';
 
 /**
  * Megapixel ceiling for an embedded image. `embedPng`/`embedJpg` decode the full bitmap, so a
@@ -205,7 +206,10 @@ function toPoints(v: string | number | undefined, fallback: number): number {
 type FaceKey = 'regular' | 'bold' | 'italic' | 'boldItalic' | 'mono';
 
 /** A single word ready to place, carrying the style/size/color it should be drawn with. */
-interface Piece { text: string; face: FaceKey; size: number; color: any; underline: boolean; }
+interface Piece { text: string; face: FaceKey; size: number; color: any; underline: boolean; link?: string; }
+
+/** A stretch of inline text in one formatting, and the target it links to, if any. */
+type Run = { text: string; fmt: TextFormatting; link?: string };
 
 /** One embedded font and the code points it has a glyph for. */
 interface Face { font: any; covers: (cp: number) => boolean; }
@@ -265,6 +269,70 @@ class NativeLayout {
     private get contentWidth(): number { return this.pageW - this.margin.left - this.margin.right; }
     private get bottom(): number { return this.pageH - this.margin.bottom; }
 
+    /** Where each anchor id is (its page and the height on it), for the links into the document. */
+    private readonly anchors = new Map<string, { page: any; top: number }>();
+    /** Anchor ids met but not placed yet: they take the place of what is drawn next. */
+    private pendingAnchors: string[] = [];
+    /** The links drawn: a box on a page, and where it goes. */
+    private readonly linkBoxes: { page: any; rect: [number, number, number, number]; target: string }[] = [];
+
+    /** Notes a node's anchor ids, placed where the next thing drawn is (see placeAnchors). */
+    private markAnchors(node: OfficeContentNode): void {
+        if (this.config.ignoreInternalLinks) return;
+        const ids = (node.metadata as { anchorIds?: unknown } | undefined)?.anchorIds;
+        if (Array.isArray(ids)) for (const id of ids) if (typeof id === 'string' && id && !this.anchors.has(id)) this.pendingAnchors.push(id);
+    }
+
+    /** Places the anchors met so far at the cursor: called once the page the next thing goes on is known. */
+    private placeAnchors(): void {
+        for (const id of this.pendingAnchors) if (!this.anchors.has(id)) this.anchors.set(id, { page: this.page, top: this.pageH - this.y });
+        this.pendingAnchors = [];
+    }
+
+    /** Records a link's box, joined to the box before it when that is the same link on the same line. */
+    private addLinkBox(target: string, x: number, bottom: number, width: number, height: number): void {
+        const last = this.linkBoxes[this.linkBoxes.length - 1];
+        if (last && last.target === target && last.page === this.page && last.rect[1] === bottom && x >= last.rect[2] - 0.01) {
+            last.rect[2] = x + width;
+            last.rect[3] = Math.max(last.rect[3], bottom + height);
+            return;
+        }
+        this.linkBoxes.push({ page: this.page, rect: [x, bottom, x + width, bottom + height], target });
+    }
+
+    /**
+     * Makes the links drawn clickable: a web, mail or phone address opens it, a `#id` goes to that anchor
+     * in the document. Another target (a relative path, a script) stays drawn as a link that goes nowhere.
+     */
+    writeLinks(): void {
+        this.placeAnchors();
+        const context = this.pdf.context;
+        for (const box of this.linkBoxes) {
+            let action: Record<string, any> | undefined;
+            let dest: any[] | undefined;
+            if (box.target.startsWith('#')) {
+                if (this.config.ignoreInternalLinks) continue;
+                let id = box.target.slice(1);
+                try { id = decodeURIComponent(id); } catch { /* kept as written */ }
+                const anchor = this.anchors.get(id) ?? this.anchors.get(box.target.slice(1));
+                if (!anchor) continue;
+                dest = [anchor.page.ref, 'XYZ', null, anchor.top, null];
+            } else {
+                const url = sanitizeOfficePackageUrl(box.target);
+                if (!/^(https?|mailto|tel):/i.test(url)) continue;
+                // A URI is 7-bit text: anything else, and the string's own delimiters, percent-encoded.
+                let ascii = '';
+                for (const ch of url) ascii += /^[\x21-\x7E]$/.test(ch) && !'()\\'.includes(ch) ? ch : encodeURIComponent(ch).replace(/[()]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+                action = { Type: 'Action', S: 'URI', URI: this.lib.PDFString.of(ascii) };
+            }
+            const annotation = context.register(context.obj({
+                Type: 'Annot', Subtype: 'Link', Rect: box.rect, Border: [0, 0, 0],
+                ...(action ? { A: action } : { Dest: dest }),
+            }));
+            box.page.node.addAnnot(annotation);
+        }
+    }
+
     /** Starts a fresh page and resets the cursor to the top margin. */
     private newPage(): void {
         this.page = this.pdf.addPage([this.pageW, this.pageH]);
@@ -279,6 +347,7 @@ class NativeLayout {
      */
     private ensureSpace(h: number): void {
         if (this.y + h > this.bottom && this.y > this.margin.top) this.newPage();
+        if (this.pendingAnchors.length) this.placeAnchors();
     }
 
     /** Picks the style matching a run's formatting (mono for code, bold/italic variants otherwise). */
@@ -418,9 +487,9 @@ class NativeLayout {
      * whoever passes it here (render(), or the table/cell walk) has already applied the hook to it, so
      * hooking it again would fire twice for the same node.
      */
-    private async collectRuns(node: OfficeContentNode): Promise<{ text: string; fmt: TextFormatting; link: boolean }[]> {
-        const out: { text: string; fmt: TextFormatting; link: boolean }[] = [];
-        const walk = async (n: OfficeContentNode, inherited: TextFormatting, isRoot: boolean): Promise<void> => {
+    private async collectRuns(node: OfficeContentNode): Promise<Run[]> {
+        const out: Run[] = [];
+        const walk = async (n: OfficeContentNode, inherited: TextFormatting, inheritedLink: string | undefined, isRoot: boolean): Promise<void> => {
             let text = n.text;
             let override: string | false | void = undefined;
             if (!isRoot) {
@@ -429,7 +498,11 @@ class NativeLayout {
                 if (typeof override === 'string') text = override;
             }
             const fmt = { ...inherited, ...(n.formatting || {}) };
-            const link = !!(n.metadata as any)?.link;
+            // A link's target, which the words inside it share: a link around formatted runs linked only
+            // the run that carried it.
+            const own = (n.metadata as { link?: unknown } | undefined)?.link;
+            const link = typeof own === 'string' && own ? own : inheritedLink;
+            if (!isRoot) this.markAnchors(n);
             // A picture in a line the engine draws as text (a list item, heading or note; a paragraph
             // draws its pictures itself) is its alt or recognized text: it was dropped.
             if (n.type === 'image' && !isRoot) {
@@ -441,18 +514,18 @@ class NativeLayout {
             // break inside a paragraph a new page; they were dropped, gluing the lines together.
             if (n.type === 'break' && !isRoot && typeof override !== 'string') {
                 const kind = (n.metadata as any)?.breakType;
-                if (kind === 'page') out.push({ text: '\f', fmt, link: false });
-                else if (kind !== 'lastRenderedPage' && kind !== 'thematic') out.push({ text: '\n', fmt, link: false });
+                if (kind === 'page') out.push({ text: '\f', fmt });
+                else if (kind !== 'lastRenderedPage' && kind !== 'thematic') out.push({ text: '\n', fmt });
                 return;
             }
             if (n.type === 'text' || (!n.children?.length && text)) {
                 if (text) out.push({ text, fmt, link });
                 return;
             }
-            for (const c of n.children || []) await walk(c, fmt, false);
+            for (const c of n.children || []) await walk(c, fmt, link, false);
         };
-        await walk(node, {}, true);
-        if (!out.length && node.text) out.push({ text: node.text, fmt: node.formatting || {}, link: false });
+        await walk(node, {}, undefined, true);
+        if (!out.length && node.text) out.push({ text: node.text, fmt: node.formatting || {} });
         return out;
     }
 
@@ -521,7 +594,7 @@ class NativeLayout {
      * Wraps a set of inline runs into lines within `[left, left+width]` and draws them, paginating as
      * needed. Returns nothing; advances the cursor to just below the last line.
      */
-    private drawRuns(runs: { text: string; fmt: TextFormatting; link: boolean }[], left: number, width: number, mono = false): void {
+    private drawRuns(runs: Run[], left: number, width: number, mono = false): void {
         // Expand runs into per-word pieces (a trailing-space flag lets us re-insert inter-word gaps).
         // A piece is a word, or (`brk`) a forced break: a new line, or a new page.
         const pieces: { p: Piece; space: boolean; brk?: 'line' | 'page' }[] = [];
@@ -542,7 +615,7 @@ class NativeLayout {
                     // Split a word wider than the whole line at character boundaries so it wraps instead
                     // of running off the page (a long URL, a hash, a base64 token).
                     for (const chunk of splitToWidth(w, t => this.widthOf(t, face, size), width)) {
-                        pieces.push({ p: { text: chunk, face, size, color, underline }, space: false });
+                        pieces.push({ p: { text: chunk, face, size, color, underline, link: run.link }, space: false });
                     }
                 }
             });
@@ -573,6 +646,7 @@ class NativeLayout {
                     if (it.p.underline) {
                         this.page.drawLine({ start: { x, y: baseline - 1.5 }, end: { x: x + it.w, y: baseline - 1.5 }, thickness: 0.5, color: it.p.color });
                     }
+                    if (it.p.link) this.addLinkBox(it.p.link, x, baseline - it.p.size * 0.25, it.w, it.p.size * 1.15);
                 }
                 x += it.w;
             }
@@ -633,7 +707,7 @@ class NativeLayout {
                 const info = { format: 'pdf', feature: 'onNode string override (native engine draws it as plain text)', reason: 'onnode-string-override' };
                 this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, info);
             }
-            if (override) this.drawRuns([{ text: override, fmt: {}, link: false }], this.margin.left, this.contentWidth);
+            if (override) this.drawRuns([{ text: override, fmt: {} }], this.margin.left, this.contentWidth);
             this.y += 6;
             return true;
         }
@@ -657,6 +731,7 @@ class NativeLayout {
         // The caller's onNode hook can skip a node/subtree or replace its output, exactly as the
         // text-based generators honor it; applied before any default rendering.
         if (await this.applyOnNode(node)) return;
+        this.markAnchors(node);
         switch (node.type) {
             case 'page':
             case 'slide':
@@ -705,7 +780,7 @@ class NativeLayout {
                     this.embedWarned = true;
                     this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature: 'embed', reason: 'embed' });
                 }
-                this.drawRuns([{ text, fmt: {}, link: !!url }], this.margin.left, this.contentWidth);
+                this.drawRuns([{ text, fmt: {}, link: url || undefined }], this.margin.left, this.contentWidth);
                 this.y += 6;
                 return;
             }
@@ -742,7 +817,7 @@ class NativeLayout {
         const runs = (await this.collectRuns(node)).map(r => ({ ...r, fmt: { ...r.fmt, bold: true, size: `${size}pt` } }));
         const title = (runs.length ? runs.map(r => r.text).join('') : node.text || '').replace(/\s+/g, ' ').trim();
         if (title) this.outlineEntries.push({ title, level, page: this.page, top: this.pageH - this.y });
-        this.drawRuns(runs.length ? runs : [{ text: node.text || '', fmt: { bold: true, size: `${size}pt` }, link: false }], this.margin.left, this.contentWidth);
+        this.drawRuns(runs.length ? runs : [{ text: node.text || '', fmt: { bold: true, size: `${size}pt` } }], this.margin.left, this.contentWidth);
         this.y += size * 0.35;
     }
 
@@ -776,7 +851,7 @@ class NativeLayout {
     /** Draws one already-known plain string as a paragraph (an image's alt text, a note marker). */
     private plainParagraph(text: string): void {
         if (!text) return;
-        this.drawRuns([{ text, fmt: {}, link: false }], this.margin.left, this.contentWidth);
+        this.drawRuns([{ text, fmt: {} }], this.margin.left, this.contentWidth);
         this.y += 6;
     }
 
@@ -938,6 +1013,8 @@ class NativeLayout {
             if (h > this.bottom - this.margin.top) { const s = (this.bottom - this.margin.top) / h; w *= s; h *= s; }
             this.ensureSpace(h + 6);
             this.page.drawImage(img, { x: this.margin.left, y: this.pageH - this.y - h, width: w, height: h });
+            const target = (node.metadata as { link?: unknown } | undefined)?.link;
+            if (typeof target === 'string' && target) this.addLinkBox(target, this.margin.left, this.pageH - this.y - h, w, h);
             this.y += h + 6;
         } catch {
             // pdf-lib embeds PNG and JPEG (and a GIF or BMP is turned into PNG), so a WebP, TIFF or SVG
@@ -1097,6 +1174,7 @@ class NativeLayout {
                 else bandLines = Math.min(remaining, fullBand);                  // at page top: a full band
                 const whole = lineOffset === 0 && bandLines === maxLines;
                 const bandH = whole ? rowH : bandLines * lineH + 2 * pad;
+                if (this.pendingAnchors.length) this.placeAnchors();
                 const topY = this.pageH - this.y;
                 for (const p of placed) {
                     const x = xs[Math.min(p.col, cols)];
@@ -1456,6 +1534,7 @@ async function drawDocument(pdf: any, lib: any, fonts: Fonts, customFonts: boole
     for (const n of ast.auxiliary?.footers || []) await layout.render(n);
     await layout.flushNotes();
     layout.reportLostCharacters();
+    layout.writeLinks();
     if (pc.outline) writeOutline(pdf, lib, layout.outlineEntries);
 
     return await pdf.save();
