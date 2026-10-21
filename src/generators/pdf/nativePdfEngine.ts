@@ -17,9 +17,9 @@
  * @module generators/pdf/nativePdfEngine
  */
 
-import { EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextAlignment, TextFormatting } from '../../types.js';
+import { EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, ParagraphSpacing, TextAlignment, TextFormatting } from '../../types.js';
 import { getAbortError, getOfficeError } from '../../utils/errorUtils.js';
-import { documentLanguage, embedUrl, isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize } from '../../utils/officeGenUtils.js';
+import { documentLanguage, embedUrl, isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize, writableSpacing } from '../../utils/officeGenUtils.js';
 import { decodeBmp, decodeGif, encodePng } from '../../utils/rasterUtils.js';
 import { sanitizeOfficePackageUrl } from '../../utils/sanitize.js';
 
@@ -211,8 +211,11 @@ interface Piece { text: string; face: FaceKey; size: number; color: any; underli
 /** A stretch of inline text in one formatting, and the target it links to, if any. */
 type Run = { text: string; fmt: TextFormatting; link?: string };
 
-/** How a paragraph's lines sit: its alignment, and where its first line starts against the others. */
-interface LineLayout { align?: TextAlignment; firstLine?: number }
+/**
+ * How a paragraph's lines sit: its alignment, where its first line starts against the others, and the
+ * distance from one line to the next (a multiple of the usual, or fixed, or at least a height).
+ */
+interface LineLayout { align?: TextAlignment; firstLine?: number; lineMultiple?: number; lineHeight?: number; lineAtLeast?: boolean }
 
 /** One embedded font and the code points it has a glyph for. */
 interface Face { font: any; covers: (cp: number) => boolean; }
@@ -636,9 +639,17 @@ class NativeLayout {
         const lineRoom = () => width - lineStart();
 
         /** Draws the line gathered; `last` when it ends the paragraph or a forced break ends it. */
+        /** The distance from a line of text this size to the next, as the paragraph spaces its lines. */
+        const lineAdvance = (size: number) => {
+            const natural = size * 1.35;
+            if (layout.lineMultiple) return natural * layout.lineMultiple;
+            if (layout.lineHeight) return layout.lineAtLeast ? Math.max(natural, layout.lineHeight) : layout.lineHeight;
+            return natural;
+        };
+
         const flush = (last: boolean) => {
             if (!line.length) return;
-            const lh = Math.max(...line.map(it => it.p.size)) * 1.35;
+            const lh = lineAdvance(Math.max(...line.map(it => it.p.size)));
             this.ensureSpace(lh);
             const baseline = this.pageH - this.y - Math.max(...line.map(it => it.p.size));
             // Words and the gaps between them, in reading order, then in the order they are seen.
@@ -675,7 +686,7 @@ class NativeLayout {
             if (piece.brk) {
                 // A line ended here: the next starts below it. Two in a row leave an empty line.
                 if (line.length) flush(true);
-                else { const lh = piece.p.size * 1.35; this.ensureSpace(lh); this.y += lh; firstOfParagraph = false; }
+                else { const lh = lineAdvance(piece.p.size); this.ensureSpace(lh); this.y += lh; firstOfParagraph = false; }
                 if (piece.brk === 'page') this.newPage();
                 continue;
             }
@@ -692,11 +703,21 @@ class NativeLayout {
         flush(true);
     }
 
+    /** Space above a paragraph, as its document sets it: none at the top of a page, as a word processor sets it. */
+    private spaceAbove(points: number | undefined): void {
+        if (points && this.y > this.margin.top) this.y += Math.min(points, (this.bottom - this.margin.top) / 2);
+    }
+
+    /** Space below a paragraph, as its document sets it, or the engine's own. */
+    private spaceBelow(points: number | undefined, otherwise: number): number {
+        return points !== undefined ? Math.min(points, (this.bottom - this.margin.top) / 2) : otherwise;
+    }
+
     /**
      * Where a paragraph or heading sits: its left edge and width within the page's text column, from its
      * indents (in twips, as Word gives them; out into the margin when negative), and its lines' layout.
      */
-    private placement(node: OfficeContentNode, indentLeft = 0): { left: number; width: number; layout: LineLayout } {
+    private placement(node: OfficeContentNode, indentLeft = 0): { left: number; width: number; layout: LineLayout; spacing?: ParagraphSpacing } {
         const meta = node.metadata as { alignment?: TextAlignment; paragraphIndentation?: IndentationMetadata } | undefined;
         const pt = (twips: unknown) => typeof twips === 'number' && Number.isFinite(twips) ? twips / 20 : 0;
         const ind = meta?.paragraphIndentation;
@@ -710,7 +731,12 @@ class NativeLayout {
         const firstLine = ind?.firstLine ? pt(ind.firstLine) : ind?.hanging ? -pt(ind.hanging) : 0;
         const width = right - left;
         const align = meta?.alignment && ['left', 'center', 'right', 'justify'].includes(meta.alignment) ? meta.alignment : undefined;
-        return { left, width, layout: { align, firstLine: Math.max(-left, Math.min(firstLine, width - 72)) } };
+        const spacing = writableSpacing(meta);
+        const layout: LineLayout = { align, firstLine: Math.max(-left, Math.min(firstLine, width - 72)) };
+        // A line no closer to the next than a quarter of its usual distance, nor farther than a page.
+        if (spacing?.lineMultiple) layout.lineMultiple = Math.min(Math.max(spacing.lineMultiple, 0.25), 10);
+        else if (spacing?.lineHeight) { layout.lineHeight = Math.min(Math.max(spacing.lineHeight, 2), this.bottom - this.margin.top); layout.lineAtLeast = spacing.lineAtLeast; }
+        return { left, width, layout, spacing };
     }
 
     /**
@@ -850,13 +876,14 @@ class NativeLayout {
         this.ensureSpace(size * 1.35 + 11 * 1.35 * 2);
         // Space-before, but not when the heading is already at the very top of a page (including one it
         // was just pushed onto by the reservation above): a gap there would float it below the margin.
-        if (this.y > this.margin.top) this.y += size * 0.6;
+        const { left, width, layout, spacing } = this.placement(node);
+        if (spacing?.before !== undefined) this.spaceAbove(spacing.before);
+        else if (this.y > this.margin.top) this.y += size * 0.6;
         const runs = (await this.collectRuns(node)).map(r => ({ ...r, fmt: { ...r.fmt, bold: true, size: `${size}pt` } }));
         const title = (runs.length ? runs.map(r => r.text).join('') : node.text || '').replace(/\s+/g, ' ').trim();
         if (title) this.outlineEntries.push({ title, level, page: this.page, top: this.pageH - this.y });
-        const { left, width, layout } = this.placement(node);
         this.drawRuns(runs.length ? runs : [{ text: node.text || '', fmt: { bold: true, size: `${size}pt` } }], left, width, false, layout);
-        this.y += size * 0.35;
+        this.y += this.spaceBelow(spacing?.after, size * 0.35);
     }
 
     private async paragraph(node: OfficeContentNode, indentLeft = 0): Promise<void> {
@@ -867,9 +894,10 @@ class NativeLayout {
             const flush = async () => {
                 const runs = run.length ? await this.collectRuns({ ...node, text: undefined, children: run }) : [];
                 if (runs.some(r => r.text.trim())) {
-                    const { left, width, layout } = this.placement(node, indentLeft);
+                    const { left, width, layout, spacing } = this.placement(node, indentLeft);
+                    this.spaceAbove(spacing?.before);
                     this.drawRuns(runs, left, width, false, layout);
-                    this.y += 6;
+                    this.y += this.spaceBelow(spacing?.after, 6);
                 }
                 run = [];
             };
@@ -883,9 +911,10 @@ class NativeLayout {
         }
         const runs = await this.collectRuns(node);
         if (!runs.length) { this.y += 6; return; }
-        const { left, width, layout } = this.placement(node, indentLeft);
+        const { left, width, layout, spacing } = this.placement(node, indentLeft);
+        this.spaceAbove(spacing?.before);
         this.drawRuns(runs, left, width, false, layout);
-        this.y += 6;
+        this.y += this.spaceBelow(spacing?.after, 6);
     }
 
     /** Draws one already-known plain string as a paragraph (an image's alt text, a note marker). */

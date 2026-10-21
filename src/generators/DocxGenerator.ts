@@ -4,7 +4,7 @@ import { layoutTableRows } from '../utils/tableLayout.js';
 import { ConversionResult, DocxGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 
@@ -287,6 +287,17 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         if (numPr) s += numPr;
         if (extra) s += extra;
         if (this.config.includeFormatting !== false && meta) {
+            // Space in twips; a line multiple in 240ths of a line (auto), a fixed line in twips.
+            const spacing = writableSpacing(meta);
+            if (spacing) {
+                const attrs = [
+                    spacing.before !== undefined ? `w:before="${Math.round(spacing.before * 20)}"` : '',
+                    spacing.after !== undefined ? `w:after="${Math.round(spacing.after * 20)}"` : '',
+                    spacing.lineMultiple ? `w:line="${Math.round(spacing.lineMultiple * 240)}" w:lineRule="auto"`
+                        : spacing.lineHeight ? `w:line="${Math.round(spacing.lineHeight * 20)}" w:lineRule="${spacing.lineAtLeast ? 'atLeast' : 'exact'}"` : '',
+                ].filter(Boolean).join(' ');
+                if (attrs) s += `<w:spacing ${attrs}/>`;
+            }
             const ind = meta.paragraphIndentation;
             if (ind && (ind.left || ind.right || ind.firstLine || ind.hanging)) {
                 const attrs = [

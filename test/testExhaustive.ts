@@ -4678,6 +4678,46 @@ async function testParagraphLayout(): Promise<void> {
 }
 
 /**
+ * Paragraph spacing (space before and after, line spacing) is read from Word, ODT, RTF and HTML, written
+ * by DOCX, ODT, RTF and HTML output, and set by the native PDF engine: double-spaced text printed single.
+ */
+async function testParagraphSpacing(): Promise<void> {
+    const ns = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+    const para = (spacing: string, text: string) => `<w:p><w:pPr>${spacing}<w:rPr><w:spacing w:val="40"/></w:rPr></w:pPr><w:r><w:t>${text}</w:t></w:r></w:p>`;
+    const docx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${ns}><w:body>`
+            + para('<w:spacing w:before="240" w:after="0" w:line="480" w:lineRule="auto"/>', 'Double. '.repeat(40))
+            + para('<w:spacing w:line="300" w:lineRule="exact"/>', 'Exact')
+            + para('<w:spacing w:line="360" w:lineRule="atLeast"/>', 'At least')
+            + para('', 'Plain') + '</w:body></w:document>'),
+    }));
+    const word = await OfficeParser.parseOffice(docx, { fileType: 'docx' } as any) as OfficeParserAST;
+    const expected = [{ before: 12, after: 0, lineMultiple: 2 }, { lineHeight: 15 }, { lineHeight: 18, lineAtLeast: true }, undefined];
+    assert.deepStrictEqual(word.content.map(n => (n.metadata as any).spacing), expected, 'Word\'s paragraph spacing is read (not the run\'s letter spacing)');
+
+    for (const format of ['docx', 'odt', 'rtf', 'html'] as const) {
+        const out = (await word.to(format, { includeFormatting: true } as any)).value;
+        const back = await OfficeParser.parseOffice(Buffer.from(out as any), { fileType: format } as any) as OfficeParserAST;
+        const spacings = back.content.filter(n => n.type === 'paragraph').map(n => (n.metadata as any)?.spacing);
+        // CSS has no least height for a line: HTML keeps it as a fixed one. RTF output gives each paragraph
+        // 6pt after unless it sets its own.
+        const want = format === 'html' ? [expected[0], expected[1], { lineHeight: 18 }, undefined]
+            : format === 'rtf' ? expected.map(e => ({ after: 6, ...e })) : expected;
+        assert.deepStrictEqual(spacings, want, `${format} output keeps paragraph spacing`);
+    }
+
+    const pdf = (await word.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const lines = collectAllNodes(back).filter(n => n.type === 'text' && /Double/.test(n.text || '') && n.bounds).map(n => n.bounds!.y);
+    const rows = [...new Set(lines.map(y => Math.round(y)))].sort((a, b) => a - b);
+    assert.ok(rows.length >= 3, `the double-spaced paragraph has several lines; got ${JSON.stringify(rows)}`);
+    const step = rows[1] - rows[0];
+    assert.ok(step > 25 && step < 34, `its lines are double spaced (about 30pt apart at 11pt); got ${step}`);
+}
+
+/**
  * The native PDF engine draws GIF (its first frame) and uncompressed BMP pictures, turned into PNG: a PDF
  * holds neither, and both were dropped with IMAGE_PROCESSING_FAILED.
  */
@@ -6515,6 +6555,7 @@ async function runTests(): Promise<void> {
         ['Sheet tables in PDF', testSheetTablesInPdf],
         ['Native PDF links', testNativePdfLinks],
         ['Paragraph layout', testParagraphLayout],
+        ['Paragraph spacing', testParagraphSpacing],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

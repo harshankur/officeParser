@@ -154,6 +154,7 @@ import {
     CommentMetadata,
     HeaderFooterMetadata,
     IndentationMetadata,
+    ParagraphSpacing,
     ParagraphMetadata,
     DefinitionMetadata,
 } from './types.js';
@@ -268,6 +269,7 @@ export {
     CommentMetadata,
     HeaderFooterMetadata,
     IndentationMetadata,
+    ParagraphSpacing,
     ParagraphMetadata,
     DefinitionMetadata,
 };

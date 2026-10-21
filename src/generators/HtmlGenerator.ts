@@ -1,7 +1,7 @@
 import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
-import { base64ByteLength, documentLanguage, isHeaderRow, resolveEmbed } from '../utils/officeGenUtils.js';
+import { base64ByteLength, documentLanguage, isHeaderRow, resolveEmbed, writableSpacing } from '../utils/officeGenUtils.js';
 import { escapeHtml, isSafeHtmlAttributeName, isSafeStyleMapTag, sanitizeCommentText, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
 import { isDefaultHighlight } from '../utils/colorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
@@ -1924,6 +1924,14 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 if (ind.left) styles.push(`margin-left: ${ind.left / 20}pt`);
                 if (ind.right) styles.push(`margin-right: ${ind.right / 20}pt`);
                 if (ind.firstLine) styles.push(`text-indent: ${ind.firstLine / 20}pt`);
+            }
+            const spacing = writableSpacing(meta);
+            if (spacing) {
+                if (spacing.before !== undefined) styles.push(`margin-top: ${+spacing.before.toFixed(2)}pt`);
+                if (spacing.after !== undefined) styles.push(`margin-bottom: ${+spacing.after.toFixed(2)}pt`);
+                // A fixed line height is written as one; CSS has no least height for a line.
+                if (spacing.lineMultiple) styles.push(`line-height: ${+spacing.lineMultiple.toFixed(3)}`);
+                else if (spacing.lineHeight) styles.push(`line-height: ${+spacing.lineHeight.toFixed(2)}pt`);
             }
         }
 

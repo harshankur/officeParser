@@ -1854,6 +1854,39 @@
       "P21": {
         "formatting": {}
       },
+      "P140": {
+        "formatting": {}
+      },
+      "P220": {
+        "formatting": {}
+      },
+      "P231": {
+        "formatting": {}
+      },
+      "P232": {
+        "formatting": {}
+      },
+      "P234": {
+        "formatting": {}
+      },
+      "P236": {
+        "formatting": {}
+      },
+      "P238": {
+        "formatting": {}
+      },
+      "P239": {
+        "formatting": {}
+      },
+      "P241": {
+        "formatting": {}
+      },
+      "P242": {
+        "formatting": {}
+      },
+      "P243": {
+        "formatting": {}
+      },
       "P586": {
         "formatting": {}
       },
@@ -2195,6 +2228,9 @@
       "metadata": {
         "level": 1,
         "alignment": "center",
+        "spacing": {
+          "before": 24
+        },
         "style": "Heading1",
         "anchorIds": [
           "_Toc2054249818"
@@ -2221,6 +2257,9 @@
       ],
       "metadata": {
         "level": 2,
+        "spacing": {
+          "before": 9.99
+        },
         "style": "Heading2",
         "anchorIds": [
           "_Toc2137712100"
@@ -2986,6 +3025,9 @@
       ],
       "metadata": {
         "level": 2,
+        "spacing": {
+          "before": 9.99
+        },
         "style": "Heading2",
         "anchorIds": [
           "_Toc1074133965"
@@ -3091,6 +3133,9 @@
       ],
       "metadata": {
         "level": 2,
+        "spacing": {
+          "before": 9.99
+        },
         "style": "Heading2",
         "anchorIds": [
           "_Paragraph_level_formatting",
@@ -3152,6 +3197,9 @@
           "left": 720,
           "hanging": 720
         },
+        "spacing": {
+          "before": 30
+        },
         "style": "P21"
       },
       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P21\">For the lovers of poetry amongst you, paragraphs with hanging indents, like this often come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is <text:s/>too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph.</text:p>"
@@ -3182,6 +3230,9 @@
       "metadata": {
         "level": 1,
         "alignment": "center",
+        "spacing": {
+          "before": 24
+        },
         "style": "Heading1",
         "anchorIds": [
           "_Toc28114276"
@@ -4870,6 +4921,10 @@
         }
       ],
       "metadata": {
+        "spacing": {
+          "before": 12,
+          "after": 12
+        },
         "style": "P140"
       },
       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P140\">Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved.</text:p>"
@@ -5897,6 +5952,9 @@
         }
       ],
       "metadata": {
+        "spacing": {
+          "before": 12
+        },
         "style": "P220"
       },
       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P220\">Next, we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged.<text:s/>The table is displayed horizontally centered.</text:p>"
@@ -5935,6 +5993,9 @@
                                 }
                               ],
                               "metadata": {
+                                "spacing": {
+                                  "before": 12
+                                },
                                 "style": "P231"
                               },
                               "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P231\">One</text:p>"
@@ -5953,6 +6014,9 @@
                                 }
                               ],
                               "metadata": {
+                                "spacing": {
+                                  "before": 12
+                                },
                                 "style": "P232"
                               },
                               "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P232\">Three</text:p>"
@@ -5983,6 +6047,9 @@
                                 }
                               ],
                               "metadata": {
+                                "spacing": {
+                                  "before": 12
+                                },
                                 "style": "P234"
                               },
                               "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P234\">Two</text:p>"
@@ -6018,6 +6085,9 @@
                                 }
                               ],
                               "metadata": {
+                                "spacing": {
+                                  "before": 12
+                                },
                                 "style": "P238"
                               },
                               "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P238\">Four</text:p>"
@@ -6039,6 +6109,9 @@
                   "text": "",
                   "children": [],
                   "metadata": {
+                    "spacing": {
+                      "before": 12
+                    },
                     "style": "P239"
                   },
                   "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P239\"/>"
@@ -6068,6 +6141,9 @@
                     }
                   ],
                   "metadata": {
+                    "spacing": {
+                      "before": 12
+                    },
                     "style": "P241"
                   },
                   "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P241\">To the left is a table inside a table, with some cells merged.</text:p>"
@@ -6090,6 +6166,9 @@
       "text": "",
       "children": [],
       "metadata": {
+        "spacing": {
+          "before": 12
+        },
         "style": "P242"
       },
       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P242\"/>"
@@ -6172,6 +6251,9 @@
         }
       ],
       "metadata": {
+        "spacing": {
+          "before": 12
+        },
         "style": "P243"
       },
       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P243\">We end with a<text:s/>fancy<text:s/>calendar, note how<text:s/>much of the original formatting is preserved.<text:s/>Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.</text:p>"
@@ -10046,6 +10128,9 @@
       "metadata": {
         "level": 1,
         "alignment": "center",
+        "spacing": {
+          "before": 24
+        },
         "style": "Heading1",
         "anchorIds": [
           "_Toc54889875"
@@ -10107,6 +10192,9 @@
       ],
       "metadata": {
         "level": 2,
+        "spacing": {
+          "before": 9.99
+        },
         "style": "Heading2",
         "anchorIds": [
           "_Toc201580556"
@@ -10281,6 +10369,9 @@
       ],
       "metadata": {
         "level": 2,
+        "spacing": {
+          "before": 9.99
+        },
         "style": "Heading2",
         "anchorIds": [
           "_Toc1977424358"
@@ -10335,6 +10426,9 @@
       ],
       "metadata": {
         "level": 2,
+        "spacing": {
+          "before": 9.99
+        },
         "style": "Heading2",
         "anchorIds": [
           "_Toc1233048813"
@@ -10536,6 +10630,9 @@
       ],
       "metadata": {
         "level": 2,
+        "spacing": {
+          "before": 9.99
+        },
         "style": "Heading2",
         "anchorIds": [
           "_Toc64145348"
@@ -11496,6 +11593,9 @@
       "metadata": {
         "level": 1,
         "alignment": "center",
+        "spacing": {
+          "before": 24
+        },
         "style": "Heading1",
         "anchorIds": [
           "_Toc484565143"
@@ -11658,6 +11758,9 @@
       "metadata": {
         "level": 1,
         "alignment": "center",
+        "spacing": {
+          "before": 24
+        },
         "style": "Heading1",
         "anchorIds": [
           "_Toc1359965655"
@@ -11708,6 +11811,9 @@
       ],
       "metadata": {
         "level": 2,
+        "spacing": {
+          "before": 9.99
+        },
         "style": "Heading2",
         "anchorIds": [
           "_Toc1958162433"
@@ -11780,6 +11886,9 @@
       ],
       "metadata": {
         "level": 2,
+        "spacing": {
+          "before": 9.99
+        },
         "style": "Heading2",
         "anchorIds": [
           "_Toc415190676"
@@ -11852,6 +11961,9 @@
       ],
       "metadata": {
         "level": 2,
+        "spacing": {
+          "before": 9.99
+        },
         "style": "Heading2",
         "anchorIds": [
           "_Toc1093260318"
@@ -12152,6 +12264,9 @@
       ],
       "metadata": {
         "level": 2,
+        "spacing": {
+          "before": 9.99
+        },
         "style": "Heading2",
         "anchorIds": [
           "_Toc1471533984"

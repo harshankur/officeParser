@@ -21,7 +21,7 @@
  * @module OpenOfficeParser
  */
 
-import { BreakMetadata, CellMetadata, ChartData, ChartMetadata, CodeMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, PageMetadata, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
+import { BreakMetadata, CellMetadata, ChartData, ChartMetadata, CodeMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, IndentationMetadata, ListMetadata, ParagraphSpacing, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, PageMetadata, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { chartRawTexts, extractChartData, MAX_CHART_VALUES } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
@@ -145,6 +145,8 @@ interface ParagraphStyleInfo {
     alignment?: 'left' | 'center' | 'right' | 'justify';
     /** `fo:margin-left`, `fo:margin-right` and `fo:text-indent`, in twips as Word's are read. */
     indentation?: IndentationMetadata;
+    /** `fo:margin-top`, `fo:margin-bottom`, `fo:line-height` and `style:line-height-at-least`. */
+    spacing?: ParagraphSpacing;
     dropCap?: boolean;
     /** `fo:break-before` - a break emitted before the paragraph that carries the style. */
     breakBefore?: 'page' | 'column';
@@ -517,6 +519,23 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 else if (first < 0) indentation.hanging = -first;
                 if (Object.keys(indentation).length) styleInfo.indentation = indentation;
 
+                // Spacing: margins above and below, and the line height as a percentage (proportional)
+                // or a length (fixed), or a least height. 100% is what readers assume.
+                const spacing: ParagraphSpacing = {};
+                // In points to the hundredth (a length in cm is no whole number of them).
+                const hundredths = (pt: number) => Math.round(pt * 100) / 100;
+                const points = (attr: string) => { const pt = lengthToPt(paraProps.getAttribute(attr) || undefined); return pt == null ? undefined : hundredths(pt); };
+                const above = points("fo:margin-top"), below = points("fo:margin-bottom");
+                if (above !== undefined && above >= 0) spacing.before = above;
+                if (below !== undefined && below >= 0) spacing.after = below;
+                const lineHeight = (paraProps.getAttribute("fo:line-height") || '').trim();
+                const percent = /^(\d+(?:\.\d+)?)%$/.exec(lineHeight);
+                if (percent) { const multiple = Number(percent[1]) / 100; if (multiple > 0 && multiple !== 1) spacing.lineMultiple = multiple; }
+                else if (lineHeight && lineHeight !== 'normal') { const pt = lengthToPt(lineHeight); if (pt && pt > 0) spacing.lineHeight = hundredths(pt); }
+                const least = points("style:line-height-at-least");
+                if (least && least > 0 && spacing.lineHeight === undefined && spacing.lineMultiple === undefined) { spacing.lineHeight = least; spacing.lineAtLeast = true; }
+                if (Object.keys(spacing).length) styleInfo.spacing = spacing;
+
                 // Detect Drop Caps
                 const dropCap = getDirectChildren(paraProps, "style:drop-cap")[0];
                 if (dropCap) {
@@ -759,6 +778,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 metadata: {
                                     ...(npContent.alignment ? { alignment: npContent.alignment } : {}),
                                     ...(npContent.indentation ? { paragraphIndentation: npContent.indentation } : {}),
+                                    ...(npContent.spacing ? { spacing: npContent.spacing } : {}),
                                     ...(npContent.anchorIds?.length ? { anchorIds: npContent.anchorIds } : {})
                                 }
                             };
@@ -999,7 +1019,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         styleMap: Record<string, TextFormatting>,
         config: OfficeParserConfig,
         sourceXml: string
-    ): { text: string; children: OfficeContentNode[]; alignment?: 'left' | 'center' | 'right' | 'justify'; indentation?: IndentationMetadata; style?: string; anchorIds?: string[] } => {
+    ): { text: string; children: OfficeContentNode[]; alignment?: 'left' | 'center' | 'right' | 'justify'; indentation?: IndentationMetadata; spacing?: ParagraphSpacing; style?: string; anchorIds?: string[] } => {
         // Get paragraph style for alignment and drop caps
         const paraStyle = node.getAttribute("text:style-name");
         const styleInfo = paraStyle ? paraStyleMap[paraStyle] : undefined;
@@ -1066,7 +1086,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             }
         }
 
-        return { text: content.text, children: content.children, alignment, indentation: styleInfo?.indentation, style: paraStyle || undefined, anchorIds: content.anchorIds };
+        return { text: content.text, children: content.children, alignment, indentation: styleInfo?.indentation, spacing: styleInfo?.spacing, style: paraStyle || undefined, anchorIds: content.anchorIds };
     };
 
     /**
@@ -1182,6 +1202,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                             level: parseInt(element.getAttribute("text:outline-level") || "1"),
                                             ...(pContent.alignment ? { alignment: pContent.alignment } : {}),
                                             ...(pContent.indentation ? { paragraphIndentation: pContent.indentation } : {}),
+                                            ...(pContent.spacing ? { spacing: pContent.spacing } : {}),
                                             ...(pContent.style ? { style: pContent.style } : {})
                                         }
                                     };
@@ -1193,6 +1214,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                         metadata: {
                                             ...(pContent.alignment ? { alignment: pContent.alignment } : {}),
                                             ...(pContent.indentation ? { paragraphIndentation: pContent.indentation } : {}),
+                                            ...(pContent.spacing ? { spacing: pContent.spacing } : {}),
                                             ...(pContent.style ? { style: pContent.style } : {})
                                         }
                                     };
@@ -1412,6 +1434,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 const metadata: any = {
                     ...(pContent.alignment ? { alignment: pContent.alignment } : {}),
                     ...(pContent.indentation ? { paragraphIndentation: pContent.indentation } : {}),
+                    ...(pContent.spacing ? { spacing: pContent.spacing } : {}),
                     ...(pContent.style ? { style: pContent.style } : {}),
                     ...(pContent.anchorIds?.length ? { anchorIds: pContent.anchorIds } : {})
                 };
@@ -1451,6 +1474,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     level,
                     ...(hContent.alignment ? { alignment: hContent.alignment } : {}),
                     ...(hContent.indentation ? { paragraphIndentation: hContent.indentation } : {}),
+                    ...(hContent.spacing ? { spacing: hContent.spacing } : {}),
                     ...(hContent.style ? { style: hContent.style } : {}),
                     ...(hContent.anchorIds?.length ? { anchorIds: hContent.anchorIds } : {})
                 };

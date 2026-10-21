@@ -40,7 +40,7 @@
  * @see https://latex2rtf.sourceforge.net/RTF-Spec-1.2.pdf RTF 1.2 Specification
  */
 
-import { CellMetadata, FullOfficeParserConfig, ImageMetadata, IndentationMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, TextFormatting } from '../types.js';
+import { CellMetadata, FullOfficeParserConfig, ImageMetadata, IndentationMetadata, ListMetadata, ParagraphSpacing, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, TextFormatting } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
@@ -685,6 +685,24 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     let paragraphAlignment: 'left' | 'center' | 'right' | 'justify' = 'left';
     /** The paragraph's \li, \ri and \fi, in twips (a negative \fi is a hanging indent). */
     let paragraphIndentation: IndentationMetadata = {};
+    /** The paragraph's \sb and \sa (twips), and its \sl and \slmult as written (see lineSpacing). */
+    let paragraphSpacing: { before?: number; after?: number; line?: number; multiple?: boolean } = {};
+    /**
+     * The paragraph's spacing as the AST has it: \sb and \sa in points, and \sl as a multiple of single
+     * spacing under \slmult1 (in 240ths), else a least height (positive) or an exact one (negative), in
+     * twips. Single spacing is left out.
+     */
+    const spacingMetadata = (): { spacing?: ParagraphSpacing } => {
+        const out: ParagraphSpacing = {};
+        const { before, after, line, multiple } = paragraphSpacing;
+        if (before !== undefined && before >= 0) out.before = before / 20;
+        if (after !== undefined && after >= 0) out.after = after / 20;
+        if (line) {
+            if (multiple) { if (line > 0 && line !== 240) out.lineMultiple = line / 240; }
+            else { out.lineHeight = Math.abs(line) / 20; if (line > 0) out.lineAtLeast = true; }
+        }
+        return Object.keys(out).length ? { spacing: out } : {};
+    };
     let isListItem = false;
     let listType: 'ordered' | 'unordered' | undefined;
     let headingLevel: number | undefined;
@@ -810,6 +828,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         runFormatting: TextFormatting;
         indent: number;
         indentation: IndentationMetadata;
+        spacing: typeof paragraphSpacing;
         alignment: 'left' | 'center' | 'right' | 'justify';
         listItem: boolean;
         list: 'ordered' | 'unordered' | undefined;
@@ -838,6 +857,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             runFormatting: currentFormatting,
             indent: paragraphIndent,
             indentation: paragraphIndentation,
+            spacing: paragraphSpacing,
             alignment: paragraphAlignment,
             listItem: isListItem,
             list: listType,
@@ -891,6 +911,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         paragraphIndent = saved.indent;
         paragraphAlignment = saved.alignment;
         paragraphIndentation = saved.indentation;
+        paragraphSpacing = saved.spacing;
         isListItem = saved.listItem;
         listType = saved.list;
         headingLevel = saved.heading;
@@ -1017,6 +1038,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             const layout = {
                 ...(paragraphAlignment !== 'left' ? { alignment: paragraphAlignment } : {}),
                 ...(Object.keys(paragraphIndentation).length ? { paragraphIndentation: { ...paragraphIndentation } } : {}),
+                ...spacingMetadata(),
             };
             if (headingLevel !== undefined && headingLevel > 0) {
                 nodeType = 'heading';
@@ -1940,6 +1962,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 // Reset other props...
                 paragraphIndent = 0;
                 paragraphIndentation = {};
+                paragraphSpacing = {};
                 paragraphAlignment = 'left';
                 isListItem = false;
                 listType = undefined;
@@ -2061,6 +2084,11 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             // List control words
             // ═══════════════════════════════════════════════════════════
             // Paragraph indentation (\li - left indent in twips)
+            else if ((node.value === 'sb' || node.value === 'sa' || node.value === 'sl') && node.param !== undefined) {
+                paragraphSpacing = { ...paragraphSpacing, [node.value === 'sb' ? 'before' : node.value === 'sa' ? 'after' : 'line']: node.param };
+            } else if (node.value === 'slmult') {
+                paragraphSpacing = { ...paragraphSpacing, multiple: node.param === 1 };
+            }
             else if ((node.value === 'ri' || node.value === 'fi') && node.param !== undefined) {
                 paragraphIndentation = { ...paragraphIndentation };
                 if (node.value === 'ri') { if (node.param) paragraphIndentation.right = node.param; else delete paragraphIndentation.right; }

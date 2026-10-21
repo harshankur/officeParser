@@ -3,7 +3,7 @@ import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
-import { base64ByteLength, decodeBase64, embedUrl, hexColor, isHeaderRow } from '../utils/officeGenUtils.js';
+import { base64ByteLength, decodeBase64, embedUrl, hexColor, isHeaderRow, writableSpacing } from '../utils/officeGenUtils.js';
 
 /** Each byte's two hex digits. */
 const HEX_BYTES = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
@@ -186,6 +186,12 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         if (ind?.right) out += `\\ri${twips(ind.right)}`;
         if (ind?.firstLine) out += `\\fi${twips(ind.firstLine)}`;
         else if (ind?.hanging) out += `\\fi${-twips(ind.hanging)}`;
+        // Space in twips; a line multiple in 240ths under \slmult1, a fixed line in twips (negative: exact).
+        const spacing = writableSpacing(meta);
+        if (spacing?.before !== undefined) out += `\\sb${Math.round(spacing.before * 20)}`;
+        if (spacing?.after !== undefined) out += `\\sa${Math.round(spacing.after * 20)}`;
+        if (spacing?.lineMultiple) out += `\\sl${Math.round(spacing.lineMultiple * 240)}\\slmult1`;
+        else if (spacing?.lineHeight) out += `\\sl${(spacing.lineAtLeast ? 1 : -1) * Math.round(spacing.lineHeight * 20)}\\slmult0`;
         return out;
     }
 
@@ -290,8 +296,8 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     // Written into control words, so only ever a number.
                     const level = clampInt(meta?.level, 1, 9, 1);
                     const fontSize = 24 + (6 - level) * 4;
-                    const pPr = this.pard() + this.paragraphLayout(meta);
-                    return `${pPr}\\s${level}\\sb240\\sa120{\\b\\fs${fontSize} ${childrenOutput}}\\par\n`;
+                    // The document's own spacing after the heading's usual, so it wins where it is set.
+                    return `${this.pard()}\\s${level}\\sb240\\sa120${this.paragraphLayout(meta)}{\\b\\fs${fontSize} ${childrenOutput}}\\par\n`;
                 }
 
                 case 'paragraph': {

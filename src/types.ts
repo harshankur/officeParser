@@ -2767,6 +2767,27 @@ export interface IndentationMetadata {
 }
 
 /**
+ * The space around a paragraph or heading and between its lines, where the document sets it (Word's
+ * `w:spacing`, ODF's `fo:margin-top`/`fo:margin-bottom`/`fo:line-height`, RTF's `\sb`/`\sa`/`\sl`,
+ * an HTML element's `margin-top`/`margin-bottom`/`line-height`).
+ */
+export interface ParagraphSpacing {
+    /** Space above, in points. */
+    before?: number;
+    /** Space below, in points. */
+    after?: number;
+    /**
+     * The distance from one line to the next as a multiple of single spacing, when it is proportional.
+     * @example 2 for double spacing, 1.5 for one and a half
+     */
+    lineMultiple?: number;
+    /** The distance from one line to the next in points, when it is fixed (at least that, where `lineAtLeast`). */
+    lineHeight?: number;
+    /** `lineHeight` is a least distance, which a taller line exceeds (Word's and ODF's "at least"). */
+    lineAtLeast?: boolean;
+}
+
+/**
  * Metadata for a heading.
  */
 export interface HeadingMetadata {
@@ -2786,6 +2807,8 @@ export interface HeadingMetadata {
     style?: string;
     /** Detailed indentation information. */
     paragraphIndentation?: IndentationMetadata;
+    /** The space around the heading and between its lines. */
+    spacing?: ParagraphSpacing;
     /** Unique anchor IDs for internal linking. */
     anchorIds?: string[];
 }
@@ -2800,6 +2823,8 @@ export interface ParagraphMetadata {
     style?: string;
     /** Detailed indentation information. */
     paragraphIndentation?: IndentationMetadata;
+    /** The space around the paragraph and between its lines. */
+    spacing?: ParagraphSpacing;
     /** Unique anchor IDs for internal linking. */
     anchorIds?: string[];
 }

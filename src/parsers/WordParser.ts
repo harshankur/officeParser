@@ -61,7 +61,7 @@
  */
 
 import { attachmentLookup } from '../utils/repeatUtils.js';
-import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError, logWarning } from '../utils/errorUtils.js';
 import { createAttachment, renameAttachments } from '../utils/imageUtils.js';
@@ -284,6 +284,42 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
             case 'lowKashida': case 'mediumKashida': case 'highKashida': return 'justify';
             default: return undefined;
         }
+    };
+
+    /**
+     * A paragraph's `w:spacing` (its own, not the `w:rPr`'s letter spacing): before and after in twips,
+     * the line distance in 240ths of a line (`auto`) or in twips (`exact`, `atLeast`).
+     */
+    const extractSpacingFromXml = (pPr: Element): ParagraphSpacing | undefined => {
+        const sp = getDirectChildren(pPr, "w:spacing")[0];
+        if (!sp) return undefined;
+        const num = (name: string) => { const raw = sp.getAttribute(name); const v = raw ? Number(raw) : NaN; return Number.isFinite(v) ? v : undefined; };
+        const spacing: ParagraphSpacing = {};
+        const before = num("w:before"), after = num("w:after"), line = num("w:line");
+        if (before !== undefined && sp.getAttribute("w:beforeAutospacing") !== '1' && sp.getAttribute("w:beforeAutospacing") !== 'true') spacing.before = before / 20;
+        if (after !== undefined && sp.getAttribute("w:afterAutospacing") !== '1' && sp.getAttribute("w:afterAutospacing") !== 'true') spacing.after = after / 20;
+        if (line !== undefined && line > 0) {
+            const rule = sp.getAttribute("w:lineRule");
+            if (rule === 'exact' || rule === 'atLeast') { spacing.lineHeight = line / 20; if (rule === 'atLeast') spacing.lineAtLeast = true; }
+            else spacing.lineMultiple = line / 240;
+        }
+        return Object.keys(spacing).length ? spacing : undefined;
+    };
+
+    /** Spacing set over spacing inherited: a line distance of either kind replaces the other kind. */
+    const overSpacing = (base: ParagraphSpacing | undefined, own: ParagraphSpacing | undefined): ParagraphSpacing | undefined => {
+        if (!own) return base;
+        const merged: ParagraphSpacing = { ...base };
+        if (own.lineMultiple !== undefined || own.lineHeight !== undefined) { delete merged.lineMultiple; delete merged.lineHeight; delete merged.lineAtLeast; }
+        return { ...merged, ...own };
+    };
+
+    /** Spacing as the AST keeps it: without single spacing, which every reader assumes (no space is kept: readers' own differ). */
+    const keptSpacing = (spacing: ParagraphSpacing | undefined): ParagraphSpacing | undefined => {
+        if (!spacing) return undefined;
+        const out: ParagraphSpacing = { ...spacing };
+        if (out.lineMultiple === 1) delete out.lineMultiple;
+        return Object.keys(out).length ? out : undefined;
     };
 
     const extractIndentationFromXml = (pPr: Element): IndentationMetadata | undefined => {
@@ -730,7 +766,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
 
     // Parse Styles
     const stylesFile = files.find(f => f.path.match(stylesFileRegex));
-    const styleMap: { [key: string]: { formatting: TextFormatting, alignment?: 'left' | 'center' | 'right' | 'justify', backgroundColor?: string, paragraphIndentation?: IndentationMetadata } } = Object.create(null);
+    const styleMap: { [key: string]: { formatting: TextFormatting, alignment?: 'left' | 'center' | 'right' | 'justify', backgroundColor?: string, paragraphIndentation?: IndentationMetadata, spacing?: ParagraphSpacing } } = Object.create(null);
 
     if (stylesFile) {
         const stylesXml = parseXmlString(stylesFile.content.toString(), { config });
@@ -746,8 +782,10 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 let alignment: 'left' | 'center' | 'right' | 'justify' | undefined = undefined;
                 let backgroundColor: string | undefined = undefined;
                 let paragraphIndentation: IndentationMetadata | undefined = undefined;
+                let spacing: ParagraphSpacing | undefined = undefined;
 
                 if (pPr) {
+                    spacing = extractSpacingFromXml(pPr);
                     const jc = jcAlignment(getFirstElementByTagName(pPr, "w:jc")?.getAttribute("w:val"));
                     if (jc) alignment = jc;
                     const shd = getFirstElementByTagName(pPr, "w:shd");
@@ -760,7 +798,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     if (ind) paragraphIndentation = ind;
                 }
 
-                styleMap[styleId] = { formatting, alignment, backgroundColor, paragraphIndentation };
+                styleMap[styleId] = { formatting, alignment, backgroundColor, paragraphIndentation, spacing };
             }
         }
     }
@@ -867,6 +905,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 paraIndentation = { ...paraIndentation, ...ind };
             }
         }
+
+        const paraSpacing = keptSpacing(overSpacing(styleProps.spacing, pPr ? extractSpacingFromXml(pPr) : undefined));
 
         // Extract Paragraph Background
         let paraBackgroundColor = styleProps.backgroundColor;
@@ -1357,7 +1397,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 children: children,
                 ...(notes.length > 0 ? { notes } : {}),
                 ...(comments.length > 0 ? { comments } : {}),
-                metadata: { level, alignment, paragraphIndentation: paraIndentation, style: pStyleVal ?? undefined, ...commonMetadata }
+                metadata: { level, alignment, paragraphIndentation: paraIndentation, ...(paraSpacing ? { spacing: paraSpacing } : {}), style: pStyleVal ?? undefined, ...commonMetadata }
             };
             if (config.includeRawContent) headingNode.rawContent = getRawContent(pNode, documentContent, config);
             return headingNode;
@@ -1368,7 +1408,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 children: children,
                 ...(notes.length > 0 ? { notes } : {}),
                 ...(comments.length > 0 ? { comments } : {}),
-                metadata: { alignment, paragraphIndentation: paraIndentation, style: pStyleVal ?? undefined, ...commonMetadata }
+                metadata: { alignment, paragraphIndentation: paraIndentation, ...(paraSpacing ? { spacing: paraSpacing } : {}), style: pStyleVal ?? undefined, ...commonMetadata }
             };
             if (config.includeRawContent) paraNode.rawContent = getRawContent(pNode, documentContent, config);
             return paraNode;

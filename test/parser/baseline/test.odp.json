@@ -10729,6 +10729,9 @@
         "formatting": {},
         "alignment": "right"
       },
+      "a1106": {
+        "formatting": {}
+      },
       "a1733": {
         "formatting": {},
         "alignment": "right"
@@ -10889,9 +10892,18 @@
         "formatting": {},
         "alignment": "right"
       },
+      "a1150": {
+        "formatting": {}
+      },
+      "a1154": {
+        "formatting": {}
+      },
       "a1782": {
         "formatting": {},
         "alignment": "right"
+      },
+      "a1158": {
+        "formatting": {}
       },
       "a941": {
         "formatting": {},
@@ -10920,6 +10932,12 @@
       "a1478": {
         "formatting": {},
         "alignment": "right"
+      },
+      "a1162": {
+        "formatting": {}
+      },
+      "a1166": {
+        "formatting": {}
       },
       "a950": {
         "formatting": {},
@@ -10957,6 +10975,15 @@
         "formatting": {},
         "alignment": "right"
       },
+      "a1171": {
+        "formatting": {}
+      },
+      "a1174": {
+        "formatting": {}
+      },
+      "a1177": {
+        "formatting": {}
+      },
       "a964": {
         "formatting": {},
         "alignment": "left"
@@ -10972,6 +10999,24 @@
       "a1496": {
         "formatting": {},
         "alignment": "right"
+      },
+      "a1182": {
+        "formatting": {}
+      },
+      "a1186": {
+        "formatting": {}
+      },
+      "a1190": {
+        "formatting": {}
+      },
+      "a1194": {
+        "formatting": {}
+      },
+      "a1199": {
+        "formatting": {}
+      },
+      "a991": {
+        "formatting": {}
       },
       "a995": {
         "formatting": {},
@@ -11005,6 +11050,12 @@
         "formatting": {},
         "alignment": "right"
       },
+      "a1303": {
+        "formatting": {}
+      },
+      "a1308": {
+        "formatting": {}
+      },
       "a1622": {
         "formatting": {},
         "alignment": "right"
@@ -11016,6 +11067,12 @@
       "a1628": {
         "formatting": {},
         "alignment": "right"
+      },
+      "a1315": {
+        "formatting": {}
+      },
+      "a1319": {
+        "formatting": {}
       },
       "a1003": {
         "formatting": {},
@@ -11044,6 +11101,9 @@
       "a1640": {
         "formatting": {},
         "alignment": "right"
+      },
+      "a1016": {
+        "formatting": {}
       },
       "a1643": {
         "formatting": {},
@@ -11092,6 +11152,9 @@
       "a1660": {
         "formatting": {},
         "alignment": "right"
+      },
+      "a1037": {
+        "formatting": {}
       },
       "a1663": {
         "formatting": {},
@@ -11152,6 +11215,9 @@
       "a1681": {
         "formatting": {},
         "alignment": "right"
+      },
+      "a1059": {
+        "formatting": {}
       },
       "a1684": {
         "formatting": {},
@@ -11224,6 +11290,9 @@
       "a1396": {
         "formatting": {},
         "alignment": "right"
+      },
+      "a1082": {
+        "formatting": {}
       },
       "a1086": {
         "formatting": {},
@@ -11305,6 +11374,12 @@
         "formatting": {},
         "alignment": "right"
       },
+      "a1203": {
+        "formatting": {}
+      },
+      "a1207": {
+        "formatting": {}
+      },
       "a1834": {
         "formatting": {},
         "alignment": "right"
@@ -11324,6 +11399,12 @@
       "a1528": {
         "formatting": {},
         "alignment": "right"
+      },
+      "a1211": {
+        "formatting": {}
+      },
+      "a1215": {
+        "formatting": {}
       },
       "a1841": {
         "formatting": {},
@@ -11349,9 +11430,18 @@
         "formatting": {},
         "alignment": "right"
       },
+      "a1220": {
+        "formatting": {}
+      },
+      "a1223": {
+        "formatting": {}
+      },
       "a1850": {
         "formatting": {},
         "alignment": "right"
+      },
+      "a1226": {
+        "formatting": {}
       },
       "a1853": {
         "formatting": {},
@@ -11377,9 +11467,18 @@
         "formatting": {},
         "alignment": "right"
       },
+      "a1231": {
+        "formatting": {}
+      },
+      "a1235": {
+        "formatting": {}
+      },
       "a1862": {
         "formatting": {},
         "alignment": "right"
+      },
+      "a1239": {
+        "formatting": {}
       },
       "a1865": {
         "formatting": {},
@@ -11405,9 +11504,15 @@
         "formatting": {},
         "alignment": "right"
       },
+      "a1243": {
+        "formatting": {}
+      },
       "a1871": {
         "formatting": {},
         "alignment": "right"
+      },
+      "a1248": {
+        "formatting": {}
       },
       "a1562": {
         "formatting": {},
@@ -11421,6 +11526,12 @@
         "formatting": {},
         "alignment": "right"
       },
+      "a1252": {
+        "formatting": {}
+      },
+      "a1256": {
+        "formatting": {}
+      },
       "a1573": {
         "formatting": {},
         "alignment": "right"
@@ -11428,6 +11539,15 @@
       "a1576": {
         "formatting": {},
         "alignment": "right"
+      },
+      "a1260": {
+        "formatting": {}
+      },
+      "a1265": {
+        "formatting": {}
+      },
+      "a1269": {
+        "formatting": {}
       },
       "a1580": {
         "formatting": {},
@@ -11441,6 +11561,12 @@
         "formatting": {},
         "alignment": "right"
       },
+      "a1273": {
+        "formatting": {}
+      },
+      "a1277": {
+        "formatting": {}
+      },
       "a1590": {
         "formatting": {},
         "alignment": "right"
@@ -11452,6 +11578,12 @@
       "a1597": {
         "formatting": {},
         "alignment": "right"
+      },
+      "a1296": {
+        "formatting": {}
+      },
+      "a1299": {
+        "formatting": {}
       }
     }
   },
@@ -11465,6 +11597,10 @@
           "children": [],
           "metadata": {
             "alignment": "center",
+            "spacing": {
+              "before": 0,
+              "after": 0
+            },
             "style": "a764"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a764\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a763\" text:class-names=\"\"/></text:p>"
@@ -11475,6 +11611,10 @@
           "children": [],
           "metadata": {
             "alignment": "center",
+            "spacing": {
+              "before": 0,
+              "after": 0
+            },
             "style": "a809"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a809\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a808\" text:class-names=\"\"/></text:p>"
@@ -11485,6 +11625,10 @@
           "children": [],
           "metadata": {
             "alignment": "center",
+            "spacing": {
+              "before": 0,
+              "after": 0
+            },
             "style": "a812"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a812\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a811\" text:class-names=\"\"/></text:p>"
@@ -11495,6 +11639,10 @@
           "children": [],
           "metadata": {
             "alignment": "center",
+            "spacing": {
+              "before": 0,
+              "after": 0
+            },
             "style": "a815"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a815\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a814\" text:class-names=\"\"/></text:p>"
@@ -11505,6 +11653,10 @@
           "children": [],
           "metadata": {
             "alignment": "center",
+            "spacing": {
+              "before": 0,
+              "after": 0
+            },
             "style": "a768"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a768\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a767\" text:class-names=\"\"/></text:p>"
@@ -11540,6 +11692,11 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 0,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a772",
             "level": 1
           },
@@ -11636,6 +11793,11 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a782"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a782\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a774\" text:class-names=\"\">This document demonstrates the ability of the </text:span><text:span text:style-name=\"a775\" text:class-names=\"\">calibre</text:span><text:span text:style-name=\"a776\" text:class-names=\"\"> DOCX Input plugin to convert the various typographic features in a Microsoft Word (2007 and newer) document. Convert this document to a modern </text:span><text:span text:style-name=\"a777\" text:class-names=\"\">ebook</text:span><text:span text:style-name=\"a778\" text:class-names=\"\"> format, such as AZW3 for Kindles or EPUB for other </text:span><text:span text:style-name=\"a779\" text:class-names=\"\">ebook</text:span><text:span text:style-name=\"a780\" text:class-names=\"\"> readers, to see it in action.</text:span><text:span text:style-name=\"a781\" text:class-names=\"\"/></text:p>"
@@ -11683,6 +11845,11 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a787"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a787\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a784\" text:class-names=\"\">There is support for images, tables, lists, footnotes, endnotes, links, </text:span><text:span text:style-name=\"a785\" text:class-names=\"\">dropcaps</text:span><text:span text:style-name=\"a786\" text:class-names=\"\"> and various types of text and paragraph level formatting.</text:span></text:p>"
@@ -11805,6 +11972,11 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a798"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a798\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a789\" text:class-names=\"\">To see the DOCX conversion in action, simply add this file to </text:span><text:span text:style-name=\"a790\" text:class-names=\"\">calibre</text:span><text:span text:style-name=\"a791\" text:class-names=\"\"> using the </text:span><text:span text:style-name=\"a792\" text:class-names=\"\">“Add Books” </text:span><text:span text:style-name=\"a793\" text:class-names=\"\">button and then click “</text:span><text:span text:style-name=\"a794\" text:class-names=\"\">Convert”. </text:span><text:span text:style-name=\"a795\" text:class-names=\"\"> Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click </text:span><text:span text:style-name=\"a796\" text:class-names=\"\">“OK”</text:span><text:span text:style-name=\"a797\" text:class-names=\"\">.</text:span></text:p>"
@@ -11837,6 +12009,10 @@
               ],
               "metadata": {
                 "alignment": "left",
+                "spacing": {
+                  "before": 0,
+                  "after": 0
+                },
                 "style": "a819"
               },
               "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a819\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a818\" text:class-names=\"\">Slide Note 1.</text:span></text:p>"
@@ -11860,6 +12036,10 @@
               ],
               "metadata": {
                 "alignment": "right",
+                "spacing": {
+                  "before": 0,
+                  "after": 0
+                },
                 "style": "a823"
               },
               "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a823\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a821\" text:class-names=\"\"><text:page-number xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" style:num-format=\"1\" text:fixed=\"false\">1</text:page-number></text:span><text:span text:style-name=\"a822\" text:class-names=\"\"/></text:p>"
@@ -11895,6 +12075,11 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 0,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a828",
             "level": 1
           },
@@ -11920,6 +12105,11 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a832"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a832\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a830\" text:class-names=\"\">Inline formatting</text:span><text:span text:style-name=\"a831\" text:class-names=\"\"/></text:p>"
@@ -11943,6 +12133,11 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a835"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a835\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a834\" text:class-names=\"\">Here, we demonstrate various types of inline text formatting and the use of embedded fonts.</text:span></text:p>"
@@ -12238,6 +12433,11 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a859"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a859\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a837\" text:class-names=\"\">Here is some </text:span><text:span text:style-name=\"a838\" text:class-names=\"\">bold, </text:span><text:span text:style-name=\"a839\" text:class-names=\"\">italic, </text:span><text:span text:style-name=\"a840\" text:class-names=\"\">bold-italic, </text:span><text:span text:style-name=\"a841\" text:class-names=\"\">underlined </text:span><text:span text:style-name=\"a842\" text:class-names=\"\">and </text:span><text:span text:style-name=\"a843\" text:class-names=\"\">struck out </text:span><text:span text:style-name=\"a844\" text:class-names=\"\"> text. Then, we have a super</text:span><text:span text:style-name=\"a845\" text:class-names=\"\">script</text:span><text:span text:style-name=\"a846\" text:class-names=\"\"> and a sub</text:span><text:span text:style-name=\"a847\" text:class-names=\"\">script</text:span><text:span text:style-name=\"a848\" text:class-names=\"\">. Now we see some </text:span><text:span text:style-name=\"a849\" text:class-names=\"\">red</text:span><text:span text:style-name=\"a850\" text:class-names=\"\">, </text:span><text:span text:style-name=\"a851\" text:class-names=\"\">green</text:span><text:span text:style-name=\"a852\" text:class-names=\"\"> and </text:span><text:span text:style-name=\"a853\" text:class-names=\"\">blue</text:span><text:span text:style-name=\"a854\" text:class-names=\"\"> text. Some text with a </text:span><text:span text:style-name=\"a855\" text:class-names=\"\">yellow highlight.</text:span><text:span text:style-name=\"a856\" text:class-names=\"\"><text:s text:c=\"1\"/>Some text in a box. Some text in </text:span><text:span text:style-name=\"a857\" text:class-names=\"\">inverse video</text:span><text:span text:style-name=\"a858\" text:class-names=\"\">.</text:span></text:p>"
@@ -12361,6 +12561,11 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a870"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a870\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a861\" text:class-names=\"\">A paragraph with styled text: </text:span><text:span text:style-name=\"a862\" text:class-names=\"\">subtle emphasis  </text:span><text:span text:style-name=\"a863\" text:class-names=\"\">followed by </text:span><text:span text:style-name=\"a864\" text:class-names=\"\">strong text </text:span><text:span text:style-name=\"a865\" text:class-names=\"\">and </text:span><text:span text:style-name=\"a866\" text:class-names=\"\">intense emphasis</text:span><text:span text:style-name=\"a867\" text:class-names=\"\">. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — </text:span><text:span text:style-name=\"a868\" text:class-names=\"\">calibre</text:span><text:span text:style-name=\"a869\" text:class-names=\"\"> can handle both with equal ease.</text:span></text:p>"
@@ -12385,6 +12590,11 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a873"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a873\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a872\" text:class-names=\"\">Fun with fonts</text:span></text:p>"
@@ -12480,6 +12690,11 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a882"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a882\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a875\" text:class-names=\"\">This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is </text:span><text:span text:style-name=\"a876\" text:class-names=\"\">some text in the Ubuntu Mono typeface, notice how every letter has the same width, even </text:span><text:span text:style-name=\"a877\" text:class-names=\"\">i</text:span><text:span text:style-name=\"a878\" text:class-names=\"\"> and m</text:span><text:span text:style-name=\"a879\" text:class-names=\"\">. Every embedded font will automatically be embedded in the output </text:span><text:span text:style-name=\"a880\" text:class-names=\"\">ebook</text:span><text:span text:style-name=\"a881\" text:class-names=\"\"> during conversion. </text:span></text:p>"
@@ -12504,6 +12719,11 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a885"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a885\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a884\" text:class-names=\"\">Paragraph level formatting</text:span></text:p>"
@@ -12527,6 +12747,11 @@
           ],
           "metadata": {
             "alignment": "right",
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a888"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a888\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a887\" text:class-names=\"\">You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.</text:span></text:p>"
@@ -12550,6 +12775,11 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a891"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a891\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a890\" text:class-names=\"\">For the lovers of poetry amongst you, paragraphs with hanging indents, like this often come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph.</text:span></text:p>"
@@ -12717,6 +12947,10 @@
               ],
               "metadata": {
                 "alignment": "left",
+                "spacing": {
+                  "before": 0,
+                  "after": 0
+                },
                 "style": "a902"
               },
               "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a902\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a895\" text:class-names=\"\">Slide Note 2. This is a<text:s text:c=\"1\"/></text:span><text:span text:style-name=\"a896\" text:class-names=\"\">bold</text:span><text:span text:style-name=\"a897\" text:class-names=\"\"><text:s text:c=\"1\"/>text, but no<text:s text:c=\"1\"/></text:span><text:span text:style-name=\"a898\" text:class-names=\"\">italic</text:span><text:span text:style-name=\"a899\" text:class-names=\"\">. Let's strike<text:s text:c=\"1\"/></text:span><text:span text:style-name=\"a900\" text:class-names=\"\">that</text:span><text:span text:style-name=\"a901\" text:class-names=\"\"><text:s text:c=\"1\"/>out.</text:span></text:p>"
@@ -12740,6 +12974,10 @@
               ],
               "metadata": {
                 "alignment": "right",
+                "spacing": {
+                  "before": 0,
+                  "after": 0
+                },
                 "style": "a906"
               },
               "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a906\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a904\" text:class-names=\"\"><text:page-number xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" style:num-format=\"1\" text:fixed=\"false\">2</text:page-number></text:span><text:span text:style-name=\"a905\" text:class-names=\"\"/></text:p>"
@@ -12775,6 +13013,11 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 0,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a911",
             "level": 1
           },
@@ -12810,6 +13053,9 @@
                       ],
                       "metadata": {
                         "alignment": "left",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a919"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a919\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a917\" text:class-names=\"\">ITEM </text:span><text:span text:style-name=\"a918\" text:class-names=\"\"/></text:p>"
@@ -12846,6 +13092,9 @@
                       ],
                       "metadata": {
                         "alignment": "left",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a923"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a923\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a921\" text:class-names=\"\">NEEDED </text:span><text:span text:style-name=\"a922\" text:class-names=\"\"/></text:p>"
@@ -12886,6 +13135,9 @@
                       ],
                       "metadata": {
                         "alignment": "left",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a928"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a928\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a926\" text:class-names=\"\">Books </text:span><text:span text:style-name=\"a927\" text:class-names=\"\"/></text:p>"
@@ -12919,6 +13171,9 @@
                       ],
                       "metadata": {
                         "alignment": "left",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a932"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a932\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a930\" text:class-names=\"\">1 </text:span><text:span text:style-name=\"a931\" text:class-names=\"\"/></text:p>"
@@ -12958,6 +13213,9 @@
                       ],
                       "metadata": {
                         "alignment": "left",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a937"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a937\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a935\" text:class-names=\"\">Pens </text:span><text:span text:style-name=\"a936\" text:class-names=\"\"/></text:p>"
@@ -12991,6 +13249,9 @@
                       ],
                       "metadata": {
                         "alignment": "left",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a941"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a941\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a939\" text:class-names=\"\">3 </text:span><text:span text:style-name=\"a940\" text:class-names=\"\"/></text:p>"
@@ -13030,6 +13291,9 @@
                       ],
                       "metadata": {
                         "alignment": "left",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a946"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a946\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a944\" text:class-names=\"\">Pencils </text:span><text:span text:style-name=\"a945\" text:class-names=\"\"/></text:p>"
@@ -13063,6 +13327,9 @@
                       ],
                       "metadata": {
                         "alignment": "left",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a950"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a950\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a948\" text:class-names=\"\">2 </text:span><text:span text:style-name=\"a949\" text:class-names=\"\"/></text:p>"
@@ -13102,6 +13369,9 @@
                       ],
                       "metadata": {
                         "alignment": "left",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a955"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a955\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a953\" text:class-names=\"\">Highlighter </text:span><text:span text:style-name=\"a954\" text:class-names=\"\"/></text:p>"
@@ -13135,6 +13405,9 @@
                       ],
                       "metadata": {
                         "alignment": "left",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a959"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a959\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a957\" text:class-names=\"\">2 colors </text:span><text:span text:style-name=\"a958\" text:class-names=\"\"/></text:p>"
@@ -13174,6 +13447,9 @@
                       ],
                       "metadata": {
                         "alignment": "left",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a964"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a964\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a962\" text:class-names=\"\">Scissors </text:span><text:span text:style-name=\"a963\" text:class-names=\"\"/></text:p>"
@@ -13207,6 +13483,9 @@
                       ],
                       "metadata": {
                         "alignment": "left",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a968"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a968\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a966\" text:class-names=\"\">1 pair </text:span><text:span text:style-name=\"a967\" text:class-names=\"\"/></text:p>"
@@ -13279,6 +13558,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 0,
+              "after": 0
+            },
             "style": "a975"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a975\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a970\" text:class-names=\"\"> Tables in Word can vary from the extremely simple to the extremely complex. </text:span><text:span text:style-name=\"a971\" text:class-names=\"\">calibre</text:span><text:span text:style-name=\"a972\" text:class-names=\"\"> tries to do its best when converting tables. While you may run into trouble with the occasional table, the vast majority of common cases should be converted very well, as demonstrated in this section. Note that for optimum results, when creating tables in Word, you should set their widths using percentages, rather than absolute units.  To the left of this paragraph is a floating two column table with a nice green border and header row.</text:span><text:span text:style-name=\"a973\" text:class-names=\"\"> </text:span><text:span text:style-name=\"a974\" text:class-names=\"\"/></text:p>"
@@ -13302,6 +13585,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 0,
+              "after": 0
+            },
             "style": "a977"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a977\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a976\" text:class-names=\"\"> Now let’s look at a fancier table—one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.</text:span></text:p>"
@@ -13312,6 +13599,10 @@
           "children": [],
           "metadata": {
             "alignment": "center",
+            "spacing": {
+              "before": 0,
+              "after": 0
+            },
             "style": "a979"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a979\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a978\" text:class-names=\"\"/></text:p>"
@@ -13343,6 +13634,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 12.75
+                        },
                         "style": "a991"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a991\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a989\" text:class-names=\"\">City or Town </text:span><text:span text:style-name=\"a990\" text:class-names=\"\"/></text:p>"
@@ -13377,6 +13671,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 12.75
+                        },
                         "style": "a995"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a995\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a993\" text:class-names=\"\">Point A </text:span><text:span text:style-name=\"a994\" text:class-names=\"\"/></text:p>"
@@ -13411,6 +13708,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 12.75
+                        },
                         "style": "a999"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a999\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a997\" text:class-names=\"\">Point B </text:span><text:span text:style-name=\"a998\" text:class-names=\"\"/></text:p>"
@@ -13445,6 +13745,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 12.75
+                        },
                         "style": "a1003"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1003\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1001\" text:class-names=\"\">Point C </text:span><text:span text:style-name=\"a1002\" text:class-names=\"\"/></text:p>"
@@ -13479,6 +13782,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 12.75
+                        },
                         "style": "a1007"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1007\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1005\" text:class-names=\"\">Point D </text:span><text:span text:style-name=\"a1006\" text:class-names=\"\"/></text:p>"
@@ -13513,6 +13819,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 12.75
+                        },
                         "style": "a1011"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1011\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1009\" text:class-names=\"\">Point E </text:span><text:span text:style-name=\"a1010\" text:class-names=\"\"/></text:p>"
@@ -13552,6 +13861,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1016"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1016\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1014\" text:class-names=\"\">Point A </text:span><text:span text:style-name=\"a1015\" text:class-names=\"\"/></text:p>"
@@ -13586,6 +13898,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1020"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1020\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1018\" text:class-names=\"\">— </text:span><text:span text:style-name=\"a1019\" text:class-names=\"\"/></text:p>"
@@ -13608,6 +13923,9 @@
                       "children": [],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1023"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1023\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1022\" text:class-names=\"\"/></text:p>"
@@ -13630,6 +13948,9 @@
                       "children": [],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1026"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1026\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1025\" text:class-names=\"\"/></text:p>"
@@ -13652,6 +13973,9 @@
                       "children": [],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1029"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1029\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1028\" text:class-names=\"\"/></text:p>"
@@ -13674,6 +13998,9 @@
                       "children": [],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1032"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1032\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1031\" text:class-names=\"\"/></text:p>"
@@ -13713,6 +14040,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1037"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1037\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1035\" text:class-names=\"\">Point B </text:span><text:span text:style-name=\"a1036\" text:class-names=\"\"/></text:p>"
@@ -13747,6 +14077,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1041"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1041\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1039\" text:class-names=\"\">87 </text:span><text:span text:style-name=\"a1040\" text:class-names=\"\"/></text:p>"
@@ -13780,6 +14113,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1045"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1045\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1043\" text:class-names=\"\">— </text:span><text:span text:style-name=\"a1044\" text:class-names=\"\"/></text:p>"
@@ -13801,6 +14137,9 @@
                       "children": [],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1048"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1048\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1047\" text:class-names=\"\"/></text:p>"
@@ -13822,6 +14161,9 @@
                       "children": [],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1051"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1051\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1050\" text:class-names=\"\"/></text:p>"
@@ -13843,6 +14185,9 @@
                       "children": [],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1054"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1054\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1053\" text:class-names=\"\"/></text:p>"
@@ -13881,6 +14226,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1059"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1059\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1057\" text:class-names=\"\">Point C </text:span><text:span text:style-name=\"a1058\" text:class-names=\"\"/></text:p>"
@@ -13915,6 +14263,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1063"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1063\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1061\" text:class-names=\"\">64 </text:span><text:span text:style-name=\"a1062\" text:class-names=\"\"/></text:p>"
@@ -13949,6 +14300,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1067"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1067\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1065\" text:class-names=\"\">56 </text:span><text:span text:style-name=\"a1066\" text:class-names=\"\"/></text:p>"
@@ -13983,6 +14337,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1071"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1071\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1069\" text:class-names=\"\">— </text:span><text:span text:style-name=\"a1070\" text:class-names=\"\"/></text:p>"
@@ -14005,6 +14362,9 @@
                       "children": [],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1074"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1074\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1073\" text:class-names=\"\"/></text:p>"
@@ -14027,6 +14387,9 @@
                       "children": [],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1077"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1077\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1076\" text:class-names=\"\"/></text:p>"
@@ -14066,6 +14429,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1082"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1082\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1080\" text:class-names=\"\">Point D </text:span><text:span text:style-name=\"a1081\" text:class-names=\"\"/></text:p>"
@@ -14100,6 +14466,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1086"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1086\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1084\" text:class-names=\"\">37 </text:span><text:span text:style-name=\"a1085\" text:class-names=\"\"/></text:p>"
@@ -14133,6 +14502,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1090"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1090\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1088\" text:class-names=\"\">32 </text:span><text:span text:style-name=\"a1089\" text:class-names=\"\"/></text:p>"
@@ -14166,6 +14538,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1094"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1094\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1092\" text:class-names=\"\">91 </text:span><text:span text:style-name=\"a1093\" text:class-names=\"\"/></text:p>"
@@ -14199,6 +14574,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1098"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1098\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1096\" text:class-names=\"\">— </text:span><text:span text:style-name=\"a1097\" text:class-names=\"\"/></text:p>"
@@ -14220,6 +14598,9 @@
                       "children": [],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1101"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1101\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1100\" text:class-names=\"\"/></text:p>"
@@ -14258,6 +14639,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1106"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1106\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1104\" text:class-names=\"\">Point E </text:span><text:span text:style-name=\"a1105\" text:class-names=\"\"/></text:p>"
@@ -14292,6 +14676,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1110"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1110\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1108\" text:class-names=\"\">93 </text:span><text:span text:style-name=\"a1109\" text:class-names=\"\"/></text:p>"
@@ -14326,6 +14713,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1114"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1114\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1112\" text:class-names=\"\">35 </text:span><text:span text:style-name=\"a1113\" text:class-names=\"\"/></text:p>"
@@ -14360,6 +14750,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1118"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1118\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1116\" text:class-names=\"\">54 </text:span><text:span text:style-name=\"a1117\" text:class-names=\"\"/></text:p>"
@@ -14394,6 +14787,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1122"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1122\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1120\" text:class-names=\"\">43 </text:span><text:span text:style-name=\"a1121\" text:class-names=\"\"/></text:p>"
@@ -14428,6 +14824,9 @@
                       ],
                       "metadata": {
                         "alignment": "center",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1126"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1126\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1124\" text:class-names=\"\">— </text:span><text:span text:style-name=\"a1125\" text:class-names=\"\"/></text:p>"
@@ -14474,6 +14873,10 @@
               ],
               "metadata": {
                 "alignment": "left",
+                "spacing": {
+                  "before": 0,
+                  "after": 0
+                },
                 "style": "a1130"
               },
               "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1130\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1129\" text:class-names=\"\">And then about tables</text:span></text:p>"
@@ -14497,6 +14900,10 @@
               ],
               "metadata": {
                 "alignment": "right",
+                "spacing": {
+                  "before": 0,
+                  "after": 0
+                },
                 "style": "a1134"
               },
               "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1134\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1132\" text:class-names=\"\"><text:page-number xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" style:num-format=\"1\" text:fixed=\"false\">3</text:page-number></text:span><text:span text:style-name=\"a1133\" text:class-names=\"\"/></text:p>"
@@ -14531,6 +14938,11 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a1139"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1139\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1138\" text:class-names=\"\">Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved.</text:span></text:p>"
@@ -14564,6 +14976,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1150"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1150\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1148\" text:class-names=\"\">College </text:span><text:span text:style-name=\"a1149\" text:class-names=\"\"/></text:p>"
@@ -14599,6 +15014,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1154"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1154\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1152\" text:class-names=\"\">New students </text:span><text:span text:style-name=\"a1153\" text:class-names=\"\"/></text:p>"
@@ -14634,6 +15052,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1158"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1158\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1156\" text:class-names=\"\">Graduating students </text:span><text:span text:style-name=\"a1157\" text:class-names=\"\"/></text:p>"
@@ -14669,6 +15090,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1162"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1162\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1160\" text:class-names=\"\">Change </text:span><text:span text:style-name=\"a1161\" text:class-names=\"\"/></text:p>"
@@ -14708,6 +15132,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1166"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1166\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1165\" text:class-names=\"\"> </text:span></text:p>"
@@ -14754,6 +15181,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1171"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1171\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1168\" text:class-names=\"\">Undergraduate</text:span><text:span text:style-name=\"a1169\" text:class-names=\"\"> </text:span><text:span text:style-name=\"a1170\" text:class-names=\"\"/></text:p>"
@@ -14786,6 +15216,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1174"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1174\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1173\" text:class-names=\"\"> </text:span></text:p>"
@@ -14818,6 +15251,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1177"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1177\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1176\" text:class-names=\"\"> </text:span></text:p>"
@@ -14856,6 +15292,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1182"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1182\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1180\" text:class-names=\"\">Cedar University </text:span><text:span text:style-name=\"a1181\" text:class-names=\"\"/></text:p>"
@@ -14888,6 +15327,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "after": 10,
+                          "lineHeight": 12.75
+                        },
                         "style": "a1186"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1186\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1184\" text:class-names=\"\">110 </text:span><text:span text:style-name=\"a1185\" text:class-names=\"\"/></text:p>"
@@ -14920,6 +15363,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "after": 10,
+                          "lineHeight": 12.75
+                        },
                         "style": "a1190"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1190\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1188\" text:class-names=\"\">103 </text:span><text:span text:style-name=\"a1189\" text:class-names=\"\"/></text:p>"
@@ -14952,6 +15399,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "after": 10,
+                          "lineHeight": 12.75
+                        },
                         "style": "a1194"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1194\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1192\" text:class-names=\"\">+7 </text:span><text:span text:style-name=\"a1193\" text:class-names=\"\"/></text:p>"
@@ -14990,6 +15441,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1199"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1199\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1197\" text:class-names=\"\">Oak Institute </text:span><text:span text:style-name=\"a1198\" text:class-names=\"\"/></text:p>"
@@ -15022,6 +15476,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "after": 10,
+                          "lineHeight": 12.75
+                        },
                         "style": "a1203"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1203\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1201\" text:class-names=\"\">202 </text:span><text:span text:style-name=\"a1202\" text:class-names=\"\"/></text:p>"
@@ -15054,6 +15512,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "after": 10,
+                          "lineHeight": 12.75
+                        },
                         "style": "a1207"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1207\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1205\" text:class-names=\"\">210 </text:span><text:span text:style-name=\"a1206\" text:class-names=\"\"/></text:p>"
@@ -15086,6 +15548,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "after": 10,
+                          "lineHeight": 12.75
+                        },
                         "style": "a1211"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1211\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1209\" text:class-names=\"\">-8 </text:span><text:span text:style-name=\"a1210\" text:class-names=\"\"/></text:p>"
@@ -15124,6 +15590,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1215"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1215\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1214\" text:class-names=\"\"> </text:span></text:p>"
@@ -15170,6 +15639,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1220"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1220\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1217\" text:class-names=\"\">Graduate</text:span><text:span text:style-name=\"a1218\" text:class-names=\"\"> </text:span><text:span text:style-name=\"a1219\" text:class-names=\"\"/></text:p>"
@@ -15202,6 +15674,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1223"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1223\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1222\" text:class-names=\"\"> </text:span></text:p>"
@@ -15234,6 +15709,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1226"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1226\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1225\" text:class-names=\"\"> </text:span></text:p>"
@@ -15272,6 +15750,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1231"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1231\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1229\" text:class-names=\"\">Cedar University </text:span><text:span text:style-name=\"a1230\" text:class-names=\"\"/></text:p>"
@@ -15304,6 +15785,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "after": 10,
+                          "lineHeight": 12.75
+                        },
                         "style": "a1235"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1235\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1233\" text:class-names=\"\">24 </text:span><text:span text:style-name=\"a1234\" text:class-names=\"\"/></text:p>"
@@ -15336,6 +15821,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "after": 10,
+                          "lineHeight": 12.75
+                        },
                         "style": "a1239"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1239\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1237\" text:class-names=\"\">20 </text:span><text:span text:style-name=\"a1238\" text:class-names=\"\"/></text:p>"
@@ -15368,6 +15857,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "after": 10,
+                          "lineHeight": 12.75
+                        },
                         "style": "a1243"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1243\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1241\" text:class-names=\"\">+4 </text:span><text:span text:style-name=\"a1242\" text:class-names=\"\"/></text:p>"
@@ -15406,6 +15899,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1248"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1248\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1246\" text:class-names=\"\">Elm College </text:span><text:span text:style-name=\"a1247\" text:class-names=\"\"/></text:p>"
@@ -15438,6 +15934,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "after": 10,
+                          "lineHeight": 12.75
+                        },
                         "style": "a1252"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1252\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1250\" text:class-names=\"\">43 </text:span><text:span text:style-name=\"a1251\" text:class-names=\"\"/></text:p>"
@@ -15470,6 +15970,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "after": 10,
+                          "lineHeight": 12.75
+                        },
                         "style": "a1256"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1256\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1254\" text:class-names=\"\">53 </text:span><text:span text:style-name=\"a1255\" text:class-names=\"\"/></text:p>"
@@ -15502,6 +16006,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "after": 10,
+                          "lineHeight": 12.75
+                        },
                         "style": "a1260"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1260\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1258\" text:class-names=\"\">-10 </text:span><text:span text:style-name=\"a1259\" text:class-names=\"\"/></text:p>"
@@ -15540,6 +16048,9 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1265"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1265\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1263\" text:class-names=\"\">Total </text:span><text:span text:style-name=\"a1264\" text:class-names=\"\"/></text:p>"
@@ -15573,6 +16084,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "after": 10,
+                          "lineHeight": 12.75
+                        },
                         "style": "a1269"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1269\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1267\" text:class-names=\"\">998 </text:span><text:span text:style-name=\"a1268\" text:class-names=\"\"/></text:p>"
@@ -15606,6 +16121,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "after": 10,
+                          "lineHeight": 12.75
+                        },
                         "style": "a1273"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1273\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1271\" text:class-names=\"\">908 </text:span><text:span text:style-name=\"a1272\" text:class-names=\"\"/></text:p>"
@@ -15639,6 +16158,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "after": 10,
+                          "lineHeight": 12.75
+                        },
                         "style": "a1277"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1277\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1275\" text:class-names=\"\">90 </text:span><text:span text:style-name=\"a1276\" text:class-names=\"\"/></text:p>"
@@ -15701,6 +16224,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 0,
+              "after": 0
+            },
             "style": "a1283"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1283\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1279\" text:class-names=\"\">Source:</text:span><text:span text:style-name=\"a1280\" text:class-names=\"\"> Fictitious data, for illustration purposes only</text:span><text:span text:style-name=\"a1281\" text:class-names=\"\"> </text:span><text:span text:style-name=\"a1282\" text:class-names=\"\"/></text:p>"
@@ -15736,6 +16263,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 0,
+              "after": 0
+            },
             "style": "a1288"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1288\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1285\" text:class-names=\"\">Next, we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged. The table is displayed horizontally centered.</text:span><text:span text:style-name=\"a1286\" text:class-names=\"\"> </text:span><text:span text:style-name=\"a1287\" text:class-names=\"\"/></text:p>"
@@ -15767,6 +16298,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "before": 12,
+                          "lineHeight": 14.25
+                        },
                         "style": "a1296"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1296\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1294\" text:class-names=\"\">One </text:span><text:span text:style-name=\"a1295\" text:class-names=\"\"/></text:p>"
@@ -15788,6 +16323,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "before": 12,
+                          "lineHeight": 14.25
+                        },
                         "style": "a1299"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1299\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1297\" text:class-names=\"\">Three </text:span><text:span text:style-name=\"a1298\" text:class-names=\"\"/></text:p>"
@@ -15821,6 +16360,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "before": 12,
+                          "lineHeight": 14.25
+                        },
                         "style": "a1303"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1303\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1301\" text:class-names=\"\">Two </text:span><text:span text:style-name=\"a1302\" text:class-names=\"\"/></text:p>"
@@ -15859,6 +16402,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "before": 12,
+                          "lineHeight": 14.25
+                        },
                         "style": "a1308"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1308\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1306\" text:class-names=\"\">Four </text:span><text:span text:style-name=\"a1307\" text:class-names=\"\"/></text:p>"
@@ -15891,6 +16438,10 @@
                       "text": "",
                       "children": [],
                       "metadata": {
+                        "spacing": {
+                          "before": 12,
+                          "lineHeight": 14.25
+                        },
                         "style": "a1315"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1315\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1314\" text:class-names=\"\"/></text:p>"
@@ -15923,6 +16474,10 @@
                         }
                       ],
                       "metadata": {
+                        "spacing": {
+                          "before": 12,
+                          "lineHeight": 14.25
+                        },
                         "style": "a1319"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1319\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1317\" text:class-names=\"\">To the left is a table inside a table, with some cells merged. </text:span><text:span text:style-name=\"a1318\" text:class-names=\"\"/></text:p>"
@@ -15996,6 +16551,11 @@
               "left": 360,
               "hanging": 360
             },
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a1325"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1325\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1322\" text:class-names=\"\"> We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in </text:span><text:span text:style-name=\"a1323\" text:class-names=\"\">ebooks</text:span><text:span text:style-name=\"a1324\" text:class-names=\"\">.</text:span></text:p>"
@@ -16006,6 +16566,11 @@
           "children": [],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a1328"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1328\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1327\" text:class-names=\"\"/></text:p>"
@@ -16039,6 +16604,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1349"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1349\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1347\" text:class-names=\"\">December 2007 </text:span><text:span text:style-name=\"a1348\" text:class-names=\"\"/></text:p>"
@@ -16090,6 +16658,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1358"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1358\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1356\" text:class-names=\"\">Sun </text:span><text:span text:style-name=\"a1357\" text:class-names=\"\"/></text:p>"
@@ -16124,6 +16695,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1361"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1361\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1360\" text:class-names=\"\"> </text:span></text:p>"
@@ -16158,6 +16732,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1365"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1365\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1363\" text:class-names=\"\">Mon </text:span><text:span text:style-name=\"a1364\" text:class-names=\"\"/></text:p>"
@@ -16192,6 +16769,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1368"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1368\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1367\" text:class-names=\"\"> </text:span></text:p>"
@@ -16226,6 +16806,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1372"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1372\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1370\" text:class-names=\"\">Tue </text:span><text:span text:style-name=\"a1371\" text:class-names=\"\"/></text:p>"
@@ -16260,6 +16843,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1375"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1375\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1374\" text:class-names=\"\"> </text:span></text:p>"
@@ -16294,6 +16880,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1379"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1379\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1377\" text:class-names=\"\">Wed </text:span><text:span text:style-name=\"a1378\" text:class-names=\"\"/></text:p>"
@@ -16328,6 +16917,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1382"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1382\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1381\" text:class-names=\"\"> </text:span></text:p>"
@@ -16362,6 +16954,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1386"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1386\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1384\" text:class-names=\"\">Thu </text:span><text:span text:style-name=\"a1385\" text:class-names=\"\"/></text:p>"
@@ -16396,6 +16991,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1389"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1389\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1388\" text:class-names=\"\"> </text:span></text:p>"
@@ -16430,6 +17028,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1393"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1393\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1391\" text:class-names=\"\">Fri </text:span><text:span text:style-name=\"a1392\" text:class-names=\"\"/></text:p>"
@@ -16464,6 +17065,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1396"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1396\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1395\" text:class-names=\"\"> </text:span></text:p>"
@@ -16498,6 +17102,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1400"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1400\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1398\" text:class-names=\"\">Sat </text:span><text:span text:style-name=\"a1399\" text:class-names=\"\"/></text:p>"
@@ -16539,6 +17146,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1404"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1404\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1403\" text:class-names=\"\"> </text:span></text:p>"
@@ -16573,6 +17183,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1407"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1407\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1406\" text:class-names=\"\"> </text:span></text:p>"
@@ -16607,6 +17220,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1410"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1410\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1409\" text:class-names=\"\"> </text:span></text:p>"
@@ -16641,6 +17257,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1413"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1413\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1412\" text:class-names=\"\"> </text:span></text:p>"
@@ -16675,6 +17294,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1416"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1416\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1415\" text:class-names=\"\"> </text:span></text:p>"
@@ -16709,6 +17331,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1419"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1419\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1418\" text:class-names=\"\"> </text:span></text:p>"
@@ -16743,6 +17368,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1422"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1422\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1421\" text:class-names=\"\"> </text:span></text:p>"
@@ -16777,6 +17405,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1425"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1425\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1424\" text:class-names=\"\"> </text:span></text:p>"
@@ -16811,6 +17442,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1428"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1428\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1427\" text:class-names=\"\"> </text:span></text:p>"
@@ -16845,6 +17479,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1431"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1431\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1430\" text:class-names=\"\"> </text:span></text:p>"
@@ -16879,6 +17516,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1434"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1434\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1433\" text:class-names=\"\"> </text:span></text:p>"
@@ -16913,6 +17553,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1437"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1437\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1436\" text:class-names=\"\"> </text:span></text:p>"
@@ -16947,6 +17590,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1441"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1441\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1439\" text:class-names=\"\">1 </text:span><text:span text:style-name=\"a1440\" text:class-names=\"\"/></text:p>"
@@ -16988,6 +17634,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1445"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1445\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1444\" text:class-names=\"\"> </text:span></text:p>"
@@ -17022,6 +17671,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1448"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1448\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1447\" text:class-names=\"\"> </text:span></text:p>"
@@ -17056,6 +17708,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1451"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1451\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1450\" text:class-names=\"\"> </text:span></text:p>"
@@ -17090,6 +17745,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1454"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1454\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1453\" text:class-names=\"\"> </text:span></text:p>"
@@ -17124,6 +17782,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1457"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1457\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1456\" text:class-names=\"\"> </text:span></text:p>"
@@ -17158,6 +17819,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1460"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1460\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1459\" text:class-names=\"\"> </text:span></text:p>"
@@ -17192,6 +17856,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1463"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1463\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1462\" text:class-names=\"\"> </text:span></text:p>"
@@ -17226,6 +17893,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1466"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1466\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1465\" text:class-names=\"\"> </text:span></text:p>"
@@ -17260,6 +17930,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1469"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1469\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1468\" text:class-names=\"\"> </text:span></text:p>"
@@ -17294,6 +17967,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1472"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1472\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1471\" text:class-names=\"\"> </text:span></text:p>"
@@ -17328,6 +18004,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1475"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1475\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1474\" text:class-names=\"\"> </text:span></text:p>"
@@ -17362,6 +18041,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1478"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1478\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1477\" text:class-names=\"\"> </text:span></text:p>"
@@ -17396,6 +18078,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1481"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1481\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1480\" text:class-names=\"\"> </text:span></text:p>"
@@ -17437,6 +18122,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1486"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1486\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1484\" text:class-names=\"\">2 </text:span><text:span text:style-name=\"a1485\" text:class-names=\"\"/></text:p>"
@@ -17471,6 +18159,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1489"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1489\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1488\" text:class-names=\"\"> </text:span></text:p>"
@@ -17505,6 +18196,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1493"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1493\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1491\" text:class-names=\"\">3 </text:span><text:span text:style-name=\"a1492\" text:class-names=\"\"/></text:p>"
@@ -17539,6 +18233,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1496"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1496\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1495\" text:class-names=\"\"> </text:span></text:p>"
@@ -17573,6 +18270,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1500"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1500\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1498\" text:class-names=\"\">4 </text:span><text:span text:style-name=\"a1499\" text:class-names=\"\"/></text:p>"
@@ -17607,6 +18307,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1503"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1503\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1502\" text:class-names=\"\"> </text:span></text:p>"
@@ -17641,6 +18344,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1507"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1507\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1505\" text:class-names=\"\">5 </text:span><text:span text:style-name=\"a1506\" text:class-names=\"\"/></text:p>"
@@ -17675,6 +18381,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1510"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1510\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1509\" text:class-names=\"\"> </text:span></text:p>"
@@ -17709,6 +18418,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1514"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1514\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1512\" text:class-names=\"\">6 </text:span><text:span text:style-name=\"a1513\" text:class-names=\"\"/></text:p>"
@@ -17743,6 +18455,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1517"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1517\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1516\" text:class-names=\"\"> </text:span></text:p>"
@@ -17777,6 +18492,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1521"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1521\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1519\" text:class-names=\"\">7 </text:span><text:span text:style-name=\"a1520\" text:class-names=\"\"/></text:p>"
@@ -17811,6 +18529,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1524"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1524\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1523\" text:class-names=\"\"> </text:span></text:p>"
@@ -17845,6 +18566,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1528"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1528\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1526\" text:class-names=\"\">8 </text:span><text:span text:style-name=\"a1527\" text:class-names=\"\"/></text:p>"
@@ -17886,6 +18610,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1532"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1532\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1531\" text:class-names=\"\"> </text:span></text:p>"
@@ -17920,6 +18647,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1535"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1535\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1534\" text:class-names=\"\"> </text:span></text:p>"
@@ -17954,6 +18684,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1538"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1538\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1537\" text:class-names=\"\"> </text:span></text:p>"
@@ -17988,6 +18721,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1541"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1541\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1540\" text:class-names=\"\"> </text:span></text:p>"
@@ -18022,6 +18758,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1544"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1544\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1543\" text:class-names=\"\"> </text:span></text:p>"
@@ -18056,6 +18795,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1547"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1547\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1546\" text:class-names=\"\"> </text:span></text:p>"
@@ -18090,6 +18832,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1550"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1550\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1549\" text:class-names=\"\"> </text:span></text:p>"
@@ -18124,6 +18869,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1553"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1553\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1552\" text:class-names=\"\"> </text:span></text:p>"
@@ -18158,6 +18906,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1556"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1556\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1555\" text:class-names=\"\"> </text:span></text:p>"
@@ -18192,6 +18943,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1559"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1559\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1558\" text:class-names=\"\"> </text:span></text:p>"
@@ -18226,6 +18980,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1562"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1562\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1561\" text:class-names=\"\"> </text:span></text:p>"
@@ -18260,6 +19017,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1565"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1565\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1564\" text:class-names=\"\"> </text:span></text:p>"
@@ -18294,6 +19054,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1568"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1568\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1567\" text:class-names=\"\"> </text:span></text:p>"
@@ -18335,6 +19098,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1573"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1573\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1571\" text:class-names=\"\">9 </text:span><text:span text:style-name=\"a1572\" text:class-names=\"\"/></text:p>"
@@ -18369,6 +19135,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1576"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1576\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1575\" text:class-names=\"\"> </text:span></text:p>"
@@ -18403,6 +19172,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1580"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1580\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1578\" text:class-names=\"\">10 </text:span><text:span text:style-name=\"a1579\" text:class-names=\"\"/></text:p>"
@@ -18437,6 +19209,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1583"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1583\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1582\" text:class-names=\"\"> </text:span></text:p>"
@@ -18471,6 +19246,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1587"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1587\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1585\" text:class-names=\"\">11 </text:span><text:span text:style-name=\"a1586\" text:class-names=\"\"/></text:p>"
@@ -18505,6 +19283,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1590"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1590\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1589\" text:class-names=\"\"> </text:span></text:p>"
@@ -18539,6 +19320,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1594"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1594\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1592\" text:class-names=\"\">12 </text:span><text:span text:style-name=\"a1593\" text:class-names=\"\"/></text:p>"
@@ -18573,6 +19357,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1597"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1597\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1596\" text:class-names=\"\"> </text:span></text:p>"
@@ -18607,6 +19394,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1601"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1601\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1599\" text:class-names=\"\">13 </text:span><text:span text:style-name=\"a1600\" text:class-names=\"\"/></text:p>"
@@ -18641,6 +19431,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1604"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1604\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1603\" text:class-names=\"\"> </text:span></text:p>"
@@ -18675,6 +19468,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1608"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1608\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1606\" text:class-names=\"\">14 </text:span><text:span text:style-name=\"a1607\" text:class-names=\"\"/></text:p>"
@@ -18709,6 +19505,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1611"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1611\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1610\" text:class-names=\"\"> </text:span></text:p>"
@@ -18743,6 +19542,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1615"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1615\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1613\" text:class-names=\"\">15 </text:span><text:span text:style-name=\"a1614\" text:class-names=\"\"/></text:p>"
@@ -18784,6 +19586,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1619"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1619\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1618\" text:class-names=\"\"> </text:span></text:p>"
@@ -18818,6 +19623,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1622"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1622\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1621\" text:class-names=\"\"> </text:span></text:p>"
@@ -18852,6 +19660,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1625"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1625\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1624\" text:class-names=\"\"> </text:span></text:p>"
@@ -18886,6 +19697,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1628"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1628\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1627\" text:class-names=\"\"> </text:span></text:p>"
@@ -18920,6 +19734,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1631"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1631\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1630\" text:class-names=\"\"> </text:span></text:p>"
@@ -18954,6 +19771,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1634"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1634\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1633\" text:class-names=\"\"> </text:span></text:p>"
@@ -18988,6 +19808,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1637"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1637\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1636\" text:class-names=\"\"> </text:span></text:p>"
@@ -19022,6 +19845,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1640"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1640\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1639\" text:class-names=\"\"> </text:span></text:p>"
@@ -19056,6 +19882,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1643"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1643\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1642\" text:class-names=\"\"> </text:span></text:p>"
@@ -19090,6 +19919,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1646"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1646\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1645\" text:class-names=\"\"> </text:span></text:p>"
@@ -19124,6 +19956,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1649"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1649\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1648\" text:class-names=\"\"> </text:span></text:p>"
@@ -19158,6 +19993,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1652"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1652\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1651\" text:class-names=\"\"> </text:span></text:p>"
@@ -19192,6 +20030,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1655"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1655\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1654\" text:class-names=\"\"> </text:span></text:p>"
@@ -19233,6 +20074,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1660"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1660\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1658\" text:class-names=\"\">16 </text:span><text:span text:style-name=\"a1659\" text:class-names=\"\"/></text:p>"
@@ -19267,6 +20111,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1663"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1663\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1662\" text:class-names=\"\"> </text:span></text:p>"
@@ -19301,6 +20148,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1667"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1667\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1665\" text:class-names=\"\">17 </text:span><text:span text:style-name=\"a1666\" text:class-names=\"\"/></text:p>"
@@ -19335,6 +20185,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1670"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1670\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1669\" text:class-names=\"\"> </text:span></text:p>"
@@ -19369,6 +20222,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1674"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1674\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1672\" text:class-names=\"\">18 </text:span><text:span text:style-name=\"a1673\" text:class-names=\"\"/></text:p>"
@@ -19403,6 +20259,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1677"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1677\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1676\" text:class-names=\"\"> </text:span></text:p>"
@@ -19437,6 +20296,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1681"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1681\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1679\" text:class-names=\"\">19 </text:span><text:span text:style-name=\"a1680\" text:class-names=\"\"/></text:p>"
@@ -19471,6 +20333,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1684"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1684\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1683\" text:class-names=\"\"> </text:span></text:p>"
@@ -19505,6 +20370,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1688"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1688\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1686\" text:class-names=\"\">20 </text:span><text:span text:style-name=\"a1687\" text:class-names=\"\"/></text:p>"
@@ -19539,6 +20407,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1691"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1691\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1690\" text:class-names=\"\"> </text:span></text:p>"
@@ -19573,6 +20444,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1695"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1695\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1693\" text:class-names=\"\">21 </text:span><text:span text:style-name=\"a1694\" text:class-names=\"\"/></text:p>"
@@ -19607,6 +20481,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1698"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1698\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1697\" text:class-names=\"\"> </text:span></text:p>"
@@ -19641,6 +20518,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1702"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1702\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1700\" text:class-names=\"\">22 </text:span><text:span text:style-name=\"a1701\" text:class-names=\"\"/></text:p>"
@@ -19682,6 +20562,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1706"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1706\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1705\" text:class-names=\"\"> </text:span></text:p>"
@@ -19716,6 +20599,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1709"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1709\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1708\" text:class-names=\"\"> </text:span></text:p>"
@@ -19750,6 +20636,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1712"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1712\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1711\" text:class-names=\"\"> </text:span></text:p>"
@@ -19784,6 +20673,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1715"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1715\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1714\" text:class-names=\"\"> </text:span></text:p>"
@@ -19818,6 +20710,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1718"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1718\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1717\" text:class-names=\"\"> </text:span></text:p>"
@@ -19852,6 +20747,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1721"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1721\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1720\" text:class-names=\"\"> </text:span></text:p>"
@@ -19886,6 +20784,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1724"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1724\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1723\" text:class-names=\"\"> </text:span></text:p>"
@@ -19920,6 +20821,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1727"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1727\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1726\" text:class-names=\"\"> </text:span></text:p>"
@@ -19954,6 +20858,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1730"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1730\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1729\" text:class-names=\"\"> </text:span></text:p>"
@@ -19988,6 +20895,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1733"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1733\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1732\" text:class-names=\"\"> </text:span></text:p>"
@@ -20022,6 +20932,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1736"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1736\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1735\" text:class-names=\"\"> </text:span></text:p>"
@@ -20056,6 +20969,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1739"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1739\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1738\" text:class-names=\"\"> </text:span></text:p>"
@@ -20090,6 +21006,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1742"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1742\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1741\" text:class-names=\"\"> </text:span></text:p>"
@@ -20131,6 +21050,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1747"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1747\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1745\" text:class-names=\"\">23 </text:span><text:span text:style-name=\"a1746\" text:class-names=\"\"/></text:p>"
@@ -20165,6 +21087,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1750"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1750\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1749\" text:class-names=\"\"> </text:span></text:p>"
@@ -20199,6 +21124,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1754"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1754\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1752\" text:class-names=\"\">24 </text:span><text:span text:style-name=\"a1753\" text:class-names=\"\"/></text:p>"
@@ -20233,6 +21161,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1757"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1757\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1756\" text:class-names=\"\"> </text:span></text:p>"
@@ -20267,6 +21198,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1761"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1761\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1759\" text:class-names=\"\">25 </text:span><text:span text:style-name=\"a1760\" text:class-names=\"\"/></text:p>"
@@ -20301,6 +21235,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1764"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1764\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1763\" text:class-names=\"\"> </text:span></text:p>"
@@ -20335,6 +21272,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1768"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1768\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1766\" text:class-names=\"\">26 </text:span><text:span text:style-name=\"a1767\" text:class-names=\"\"/></text:p>"
@@ -20369,6 +21309,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1771"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1771\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1770\" text:class-names=\"\"> </text:span></text:p>"
@@ -20403,6 +21346,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1775"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1775\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1773\" text:class-names=\"\">27 </text:span><text:span text:style-name=\"a1774\" text:class-names=\"\"/></text:p>"
@@ -20437,6 +21383,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1778"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1778\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1777\" text:class-names=\"\"> </text:span></text:p>"
@@ -20471,6 +21420,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1782"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1782\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1780\" text:class-names=\"\">28 </text:span><text:span text:style-name=\"a1781\" text:class-names=\"\"/></text:p>"
@@ -20505,6 +21457,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1785"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1785\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1784\" text:class-names=\"\"> </text:span></text:p>"
@@ -20539,6 +21494,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1789"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1789\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1787\" text:class-names=\"\">29 </text:span><text:span text:style-name=\"a1788\" text:class-names=\"\"/></text:p>"
@@ -20580,6 +21538,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1793"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1793\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1792\" text:class-names=\"\"> </text:span></text:p>"
@@ -20614,6 +21575,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1796"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1796\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1795\" text:class-names=\"\"> </text:span></text:p>"
@@ -20648,6 +21612,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1799"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1799\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1798\" text:class-names=\"\"> </text:span></text:p>"
@@ -20682,6 +21649,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1802"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1802\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1801\" text:class-names=\"\"> </text:span></text:p>"
@@ -20716,6 +21686,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1805"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1805\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1804\" text:class-names=\"\"> </text:span></text:p>"
@@ -20750,6 +21723,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1808"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1808\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1807\" text:class-names=\"\"> </text:span></text:p>"
@@ -20784,6 +21760,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1811"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1811\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1810\" text:class-names=\"\"> </text:span></text:p>"
@@ -20818,6 +21797,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1814"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1814\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1813\" text:class-names=\"\"> </text:span></text:p>"
@@ -20852,6 +21834,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1817"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1817\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1816\" text:class-names=\"\"> </text:span></text:p>"
@@ -20886,6 +21871,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1820"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1820\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1819\" text:class-names=\"\"> </text:span></text:p>"
@@ -20920,6 +21908,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1823"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1823\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1822\" text:class-names=\"\"> </text:span></text:p>"
@@ -20954,6 +21945,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1826"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1826\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1825\" text:class-names=\"\"> </text:span></text:p>"
@@ -20988,6 +21982,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1829"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1829\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1828\" text:class-names=\"\"> </text:span></text:p>"
@@ -21029,6 +22026,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1834"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1834\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1832\" text:class-names=\"\">30 </text:span><text:span text:style-name=\"a1833\" text:class-names=\"\"/></text:p>"
@@ -21063,6 +22063,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1837"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1837\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1836\" text:class-names=\"\"> </text:span></text:p>"
@@ -21097,6 +22100,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1841"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1841\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1839\" text:class-names=\"\">31 </text:span><text:span text:style-name=\"a1840\" text:class-names=\"\"/></text:p>"
@@ -21131,6 +22137,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1844"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1844\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1843\" text:class-names=\"\"> </text:span></text:p>"
@@ -21165,6 +22174,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1847"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1847\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1846\" text:class-names=\"\"> </text:span></text:p>"
@@ -21199,6 +22211,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1850"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1850\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1849\" text:class-names=\"\"> </text:span></text:p>"
@@ -21233,6 +22248,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1853"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1853\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1852\" text:class-names=\"\"> </text:span></text:p>"
@@ -21267,6 +22285,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1856"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1856\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1855\" text:class-names=\"\"> </text:span></text:p>"
@@ -21301,6 +22322,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1859"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1859\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1858\" text:class-names=\"\"> </text:span></text:p>"
@@ -21335,6 +22359,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1862"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1862\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1861\" text:class-names=\"\"> </text:span></text:p>"
@@ -21369,6 +22396,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1865"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1865\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1864\" text:class-names=\"\"> </text:span></text:p>"
@@ -21403,6 +22433,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1868"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1868\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1867\" text:class-names=\"\"> </text:span></text:p>"
@@ -21437,6 +22470,9 @@
                       ],
                       "metadata": {
                         "alignment": "right",
+                        "spacing": {
+                          "lineHeight": 14.25
+                        },
                         "style": "a1871"
                       },
                       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1871\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1870\" text:class-names=\"\"> </text:span></text:p>"
@@ -21483,6 +22519,10 @@
               ],
               "metadata": {
                 "alignment": "left",
+                "spacing": {
+                  "before": 0,
+                  "after": 0
+                },
                 "style": "a1875"
               },
               "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1875\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1874\" text:class-names=\"\">Now calendars</text:span></text:p>"
@@ -21493,6 +22533,10 @@
               "children": [],
               "metadata": {
                 "alignment": "left",
+                "spacing": {
+                  "before": 0,
+                  "after": 0
+                },
                 "style": "a1877"
               },
               "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1877\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1876\" text:class-names=\"\"/></text:p>"
@@ -21557,6 +22601,10 @@
               "children": [],
               "metadata": {
                 "alignment": "left",
+                "spacing": {
+                  "before": 0,
+                  "after": 0
+                },
                 "style": "a1885"
               },
               "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1885\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1884\" text:class-names=\"\"/></text:p>"
@@ -21580,6 +22628,10 @@
               ],
               "metadata": {
                 "alignment": "left",
+                "spacing": {
+                  "before": 0,
+                  "after": 0
+                },
                 "style": "a1887"
               },
               "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1887\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1886\" text:class-names=\"\">7. Sat</text:span></text:p>"
@@ -21603,6 +22655,10 @@
               ],
               "metadata": {
                 "alignment": "right",
+                "spacing": {
+                  "before": 0,
+                  "after": 0
+                },
                 "style": "a1891"
               },
               "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1891\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1889\" text:class-names=\"\"><text:page-number xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" style:num-format=\"1\" text:fixed=\"false\">5</text:page-number></text:span><text:span text:style-name=\"a1890\" text:class-names=\"\"/></text:p>"
@@ -21638,6 +22694,11 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 0,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a1896",
             "level": 1
           },
@@ -21690,6 +22751,11 @@
               "left": 360,
               "hanging": 360
             },
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a1901"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1901\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1898\" text:class-names=\"\">Miscellaneous structural elements you can add to your document, like footnotes, endnotes, </text:span><text:span text:style-name=\"a1899\" text:class-names=\"\">dropcaps</text:span><text:span text:style-name=\"a1900\" text:class-names=\"\"> and the like. </text:span></text:p>"
@@ -21717,6 +22783,11 @@
             "paragraphIndentation": {
               "left": 360,
               "hanging": 360
+            },
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
             },
             "style": "a1904"
           },
@@ -21841,6 +22912,11 @@
               "left": 360,
               "hanging": 360
             },
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a1914"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1914\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1906\" text:class-names=\"\">Footnotes</text:span><text:span text:style-name=\"a1907\" text:class-names=\"\">1</text:span><text:span text:style-name=\"a1908\" text:class-names=\"\"> and<text:s text:c=\"1\"/></text:span><text:span text:style-name=\"a1909\" text:class-names=\"\">endnotes</text:span><text:span text:style-name=\"a1910\" text:class-names=\"\">i</text:span><text:span text:style-name=\"a1911\" text:class-names=\"\"> are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in </text:span><text:span text:style-name=\"a1912\" text:class-names=\"\">ebook</text:span><text:span text:style-name=\"a1913\" text:class-names=\"\"> devices.</text:span></text:p>"
@@ -21869,6 +22945,11 @@
               "left": 360,
               "hanging": 360
             },
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a1918"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1918\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1916\" text:class-names=\"\">Dropcaps</text:span><text:span text:style-name=\"a1917\" text:class-names=\"\"/></text:p>"
@@ -21895,6 +22976,11 @@
             "paragraphIndentation": {
               "left": 360,
               "hanging": 360
+            },
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
             },
             "style": "a1921"
           },
@@ -21947,6 +23033,11 @@
               "left": 360,
               "hanging": 360
             },
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a1925"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1925\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1923\" text:class-names=\"\">rop</text:span><text:span text:style-name=\"a1924\" text:class-names=\"\"> caps are used to emphasize the leading paragraph at the start of a section. In Word it is possible to specify how many lines of text a drop-cap should use.<text:s text:c=\"1\"/></text:span></text:p>"
@@ -21974,6 +23065,11 @@
             "paragraphIndentation": {
               "left": 360,
               "hanging": 360
+            },
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
             },
             "style": "a1928"
           },
@@ -22080,6 +23176,11 @@
               "left": 360,
               "hanging": 360
             },
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a1937"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1937\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1930\" text:class-names=\"\">Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by </text:span><text:span text:style-name=\"a1931\" text:class-names=\"\">calibre</text:span><text:span text:style-name=\"a1932\" text:class-names=\"\">. For example, here is a link pointing to the </text:span><text:span text:style-name=\"a1933\" text:class-names=\"\"><text:a xmlns:xlink=\"http://www.w3.org/1999/xlink\" xlink:href=\"http://calibre-ebook.com/download\" text:style-name=\"\" text:visited-style-name=\"\">calibre download page</text:a></text:span><text:span text:style-name=\"a1934\" text:class-names=\"\">. Then we have a link that points back to the section on </text:span><text:span text:style-name=\"a1935\" text:class-names=\"\"><text:a xmlns:xlink=\"http://www.w3.org/1999/xlink\" xlink:href=\"#Slide2\" text:style-name=\"\" text:visited-style-name=\"\">paragraph level formatting</text:a></text:span><text:span text:style-name=\"a1936\" text:class-names=\"\"> in this document.</text:span></text:p>"
@@ -22090,6 +23191,11 @@
           "children": [],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a1940"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1940\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1939\" text:class-names=\"\"/></text:p>"
@@ -22123,6 +23229,11 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 0,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a1945",
             "level": 1
           },
@@ -22150,6 +23261,11 @@
             "paragraphIndentation": {
               "left": 360,
               "hanging": 360
+            },
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
             },
             "style": "a1949"
           },
@@ -22212,6 +23328,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 0,
+              "after": 0
+            },
             "style": "a1957"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1957\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1953\" text:class-names=\"\">There is no analogous technology in ebooks, so theconversion will usually end up placingthe image either centered or floating close to the point in the text where itwas </text:span><text:span text:style-name=\"a1954\" text:class-names=\"\">inserted</text:span><text:span text:style-name=\"a1955\" text:class-names=\"\">, notnecessarily where it appears on the page in Word.</text:span><text:span text:style-name=\"a1956\" text:class-names=\"\"/></text:p>"
@@ -22222,6 +23342,10 @@
           "children": [],
           "metadata": {
             "alignment": "center",
+            "spacing": {
+              "before": 0,
+              "after": 0
+            },
             "style": "a1959"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1959\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1958\" text:class-names=\"\"/></text:p>"
@@ -22259,6 +23383,11 @@
               "left": 360,
               "hanging": 360
             },
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a1963"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1963\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1962\" text:class-names=\"\">Lists</text:span></text:p>"
@@ -22285,6 +23414,11 @@
             "paragraphIndentation": {
               "left": 360,
               "hanging": 360
+            },
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
             },
             "style": "a1966"
           },
@@ -22313,6 +23447,11 @@
             "paragraphIndentation": {
               "left": 360,
               "hanging": 360
+            },
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
             },
             "style": "a1969"
           },
@@ -22382,6 +23521,11 @@
               "left": 360,
               "hanging": 360
             },
+            "spacing": {
+              "before": 10,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a1980"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1980\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1979\" text:class-names=\"\"/></text:p>"
@@ -22406,6 +23550,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 0,
+              "after": 0
+            },
             "style": "a1984"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1984\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1983\" text:class-names=\"\">Numbered List</text:span></text:p>"
@@ -22484,6 +23632,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 0,
+              "after": 0
+            },
             "style": "a1994"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1994\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1992\" text:class-names=\"\">Multi-level Lists</text:span><text:span text:style-name=\"a1993\" text:class-names=\"\"/></text:p>"
@@ -22656,6 +23808,10 @@
           "children": [],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 0,
+              "after": 0
+            },
             "style": "a2020"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a2020\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a2019\" text:class-names=\"\"/></text:p>"
@@ -22679,6 +23835,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 0,
+              "after": 0
+            },
             "style": "a2023"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a2023\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a2022\" text:class-names=\"\">A Multi-level list with bullets:</text:span></text:p>"
@@ -22838,6 +23998,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 0,
+              "after": 0
+            },
             "style": "a2041"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a2041\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a2040\" text:class-names=\"\">Continued Lists</text:span></text:p>"
@@ -23001,6 +24165,11 @@
           ],
           "metadata": {
             "alignment": "left",
+            "spacing": {
+              "before": 0,
+              "after": 0,
+              "lineMultiple": 0.9
+            },
             "style": "a2057",
             "level": 1
           },

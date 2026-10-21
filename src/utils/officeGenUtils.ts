@@ -9,7 +9,7 @@
  * @module officeGenUtils
  */
 
-import { CellMetadata, EmbedMetadata, ImageMode, OfficeContentNode, OfficeParserAST, RowMetadata, SheetMetadata } from '../types.js';
+import { CellMetadata, EmbedMetadata, ImageMode, OfficeContentNode, OfficeParserAST, ParagraphSpacing, RowMetadata, SheetMetadata } from '../types.js';
 import { cssColorHex } from './colorUtils.js';
 import { lookupTable } from './lookupUtils.js';
 
@@ -216,6 +216,26 @@ export const MIME_EXT: Record<string, string> = lookupTable({
 export const ADMONITION_COLOR: Record<string, string> = lookupTable({
     note: '0969DA', tip: '1A7F37', important: '8250DF', warning: '9A6700', caution: 'CF222E',
 });
+
+/**
+ * A paragraph's or heading's spacing (ParagraphSpacing) fit to write: each value a finite number within
+ * what a word processor takes (space and a fixed line height up to 1584pt, Word's 22 inches; a line
+ * multiple up to 132), others dropped. Undefined when nothing is left.
+ */
+export function writableSpacing(meta: unknown): ParagraphSpacing | undefined {
+    const spacing = (meta as { spacing?: unknown } | undefined)?.spacing as Record<string, unknown> | undefined;
+    if (!spacing || typeof spacing !== 'object') return undefined;
+    const within = (v: unknown, max: number, least: number) => typeof v === 'number' && Number.isFinite(v) && v >= least ? Math.min(v, max) : undefined;
+    const out: ParagraphSpacing = {};
+    // No space is a setting (a word processor's own default is some); a line distance of none is not.
+    const before = within(spacing.before, 1584, 0), after = within(spacing.after, 1584, 0);
+    const lineMultiple = within(spacing.lineMultiple, 132, 0.01), lineHeight = within(spacing.lineHeight, 1584, 0.01);
+    if (before !== undefined) out.before = before;
+    if (after !== undefined) out.after = after;
+    if (lineMultiple !== undefined) out.lineMultiple = lineMultiple;
+    else if (lineHeight !== undefined) { out.lineHeight = lineHeight; if (spacing.lineAtLeast === true) out.lineAtLeast = true; }
+    return Object.keys(out).length ? out : undefined;
+}
 
 /** Parses a CSS-ish length ('12pt', '1in', '2cm', '10mm', '96px', or a bare number = px) to points. */
 export function lengthToPt(value: string | number | undefined): number | null {

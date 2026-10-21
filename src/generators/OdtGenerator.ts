@@ -4,7 +4,7 @@ import { layoutTableRows } from '../utils/tableLayout.js';
 import { ConversionResult, GeneratorConfig, ImageMode, OdtGeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 
@@ -340,6 +340,13 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             if (ind.right) a += ` fo:margin-right="${fmtPt(ind.right / 20)}"`;
             if (ind.firstLine) a += ` fo:text-indent="${fmtPt(ind.firstLine / 20)}"`;
             else if (ind.hanging) a += ` fo:text-indent="${fmtPt(-ind.hanging / 20)}"`;
+        }
+        const spacing = writableSpacing(meta);
+        if (spacing) {
+            if (spacing.before !== undefined) a += ` fo:margin-top="${fmtPt(spacing.before)}"`;
+            if (spacing.after !== undefined) a += ` fo:margin-bottom="${fmtPt(spacing.after)}"`;
+            if (spacing.lineMultiple) a += ` fo:line-height="${fmtNum(spacing.lineMultiple * 100)}%"`;
+            else if (spacing.lineHeight) a += spacing.lineAtLeast ? ` style:line-height-at-least="${fmtPt(spacing.lineHeight)}"` : ` fo:line-height="${fmtPt(spacing.lineHeight)}"`;
         }
         return a;
     }

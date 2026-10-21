@@ -1,4 +1,4 @@
-import { AdmonitionMetadata, CellMetadata, CodeMetadata, CommentMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, CellMetadata, CodeMetadata, CommentMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, ParagraphMetadata, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { anchorMark, isAnchorMark, resolveAnchorMarks } from '../utils/anchorUtils.js';
 import { createAST } from '../utils/astUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
@@ -10,6 +10,7 @@ import { setOwn } from '../utils/lookupUtils.js';
 import { cellSpan, MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
 import { textDecoder } from '../utils/encodingUtils.js';
+import { lengthToPt } from '../utils/officeGenUtils.js';
 
 /**
  * Maximum element nesting depth accepted from an HTML/XHTML source before the parser gives up
@@ -431,6 +432,38 @@ const getDeclaration = (decls: Map<string, string>, prop: string): string | unde
     ?? decls.get(`-moz-${prop}`)
     ?? decls.get(`-ms-${prop}`)
     ?? decls.get(`-o-${prop}`);
+
+/**
+ * A paragraph's or heading's own spacing from its inline style (see ParagraphSpacing): `margin-top` and
+ * `margin-bottom` (or the `margin` shorthand's), and `line-height` as a multiple (a number, a percentage)
+ * or a length. An `em` is taken at 12pt, the size of body text.
+ */
+const cssSpacing = (style: string | undefined): ParagraphSpacing | undefined => {
+    if (!style) return undefined;
+    const decls = parseStyleDeclarations(style);
+    const points = (value: string | undefined): number | undefined => {
+        if (!value) return undefined;
+        const em = /^\s*(\d*\.?\d+)\s*r?em\s*$/i.exec(value);
+        const pt = em ? Number(em[1]) * 12 : lengthToPt(value.trim());
+        return pt != null && Number.isFinite(pt) && pt >= 0 ? Math.round(pt * 100) / 100 : undefined;
+    };
+    const margin = (decls.get('margin') || '').trim().split(/\s+/);
+    const spacing: ParagraphSpacing = {};
+    const before = points(decls.get('margin-top') ?? margin[0]);
+    const after = points(decls.get('margin-bottom') ?? margin[2] ?? margin[0]);
+    if (before !== undefined) spacing.before = before;
+    if (after !== undefined) spacing.after = after;
+    const line = (decls.get('line-height') || '').trim().toLowerCase();
+    const multiple = /^(\d*\.?\d+)(%?)$/.exec(line);
+    if (multiple) {
+        const m = Number(multiple[1]) / (multiple[2] ? 100 : 1);
+        if (m > 0 && m !== 1) spacing.lineMultiple = m;
+    } else if (line && line !== 'normal') {
+        const pt = points(line);
+        if (pt) spacing.lineHeight = pt;
+    }
+    return Object.keys(spacing).length ? spacing : undefined;
+};
 
 /**
  * Returns the first family from a `font-family` stack, respecting quotes so a quoted family name
@@ -1187,6 +1220,12 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
      * Captures the attributes of `node` that `consumed` didn't claim.
      * Returns undefined when nothing survives, so the field stays absent rather than `{}`.
      */
+    /** An element's spacing, as metadata to spread (nothing when it sets none). */
+    const spacingOf = (node: HtmlNode): { spacing?: ParagraphSpacing } => {
+        const spacing = cssSpacing(node.attributes?.style);
+        return spacing ? { spacing } : {};
+    };
+
     const collectHtmlAttributes = (node: HtmlNode, consumed: string[]): Record<string, string> | undefined => {
         if (!preserveAttributes || !node.attributes) return undefined;
         const consumedSet = new Set(consumed.map(c => c.toLowerCase()));
@@ -1745,7 +1784,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
 
                 const pNode: OfficeContentNode = {
                     type: 'paragraph',
-                    metadata: { alignment: newFormatting.alignment, anchorIds: anchorIds.length > 0 ? anchorIds : undefined } as ParagraphMetadata,
+                    metadata: { alignment: newFormatting.alignment, ...spacingOf(node), anchorIds: anchorIds.length > 0 ? anchorIds : undefined } as ParagraphMetadata,
                     children: flattenedChildren,
                     htmlAttributes: collectHtmlAttributes(node, ['align'])
                 };
@@ -1761,7 +1800,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 const level = parseInt(tagName.substring(1));
                 const hNode: OfficeContentNode = {
                     type: 'heading',
-                    metadata: { level, alignment: newFormatting.alignment, anchorIds: anchorIds.length > 0 ? anchorIds : undefined } as HeadingMetadata,
+                    metadata: { level, alignment: newFormatting.alignment, ...spacingOf(node), anchorIds: anchorIds.length > 0 ? anchorIds : undefined } as HeadingMetadata,
                     children: parseChildren(node, newFormatting, listContext),
                     htmlAttributes: collectHtmlAttributes(node, ['align'])
                 };
