@@ -107,7 +107,7 @@ export const DEFAULT_OFFICE_PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     ignoreInternalLinks: false,
     ignorePageGeometry: false,
     fileType: null,
-    csvDelimiter: ',',
+    csvDelimiter: 'auto',
     decompressionLimits: {
         maxUncompressedBytes: 512 * 1024 * 1024,
         maxZipEntries: 10000,

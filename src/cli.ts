@@ -405,7 +405,7 @@ if (fileArg && !showHelp) {
     console.log('  --ignorePageGeometry                        Omit per-node bounding boxes and page dimensions (default: false)');
     console.log('  --verbose                                   Show full error stack traces and warning logs');
     console.log('  --newlineDelimiter=string                   Delimiter string between blocks/lines (default: \\n)');
-    console.log('  --csvDelimiter=char                         Custom CSV delimiter (default: ,)');
+    console.log('  --csvDelimiter=char                         CSV delimiter (default: auto, read from the file)');
     console.log('  --password=secret                           Password for an encrypted document (PDF, OOXML, or ODF)');
     console.log('                                              (or set OFFICEPARSER_PASSWORD to keep it out of the process list)');
     console.log('  --allowRemoteAssets=false                   Fail, not fetch, where the pdf.js worker or OCR files would come from a CDN (default: true)');

@@ -4547,6 +4547,27 @@ async function testRtfHeaderRows(): Promise<void> {
 }
 
 /**
+ * A CSV file's delimiter is read from it by default: European spreadsheets write `;` with decimal commas,
+ * which a comma split (`Müller;1.234,56` came out as `Müller;1.234 | 56`). An explicit one is used as
+ * given, CSV output keeps the one read, and a byte order mark is no text of the first cell.
+ */
+async function testCsvDelimiterDetection(): Promise<void> {
+    const csv = async (text: string, cfg: any = {}) => OfficeParser.parseOffice(Buffer.from(text), { fileType: 'csv', ...cfg } as any) as Promise<OfficeParserAST>;
+    const cells = (ast: OfficeParserAST) => ast.content[0].children!.filter(r => r.type === 'row').map(r => r.children!.map(c => c.text));
+    const german = await csv('\uFEFFName;Betrag;Datum\nMüller;1.234,56;01.10.2026\n"Schmidt; Anna";99,90;02.10.2026\n');
+    assert.deepStrictEqual(cells(german), [['Name', 'Betrag', 'Datum'], ['Müller', '1.234,56', '01.10.2026'], ['Schmidt; Anna', '99,90', '02.10.2026']], 'a semicolon file is read with semicolons, its BOM dropped');
+    assert.strictEqual(german.config.csvDelimiter, ';', 'the parse says which delimiter it read');
+    assert.ok(String((await german.to('csv')).value).startsWith('Name;Betrag;Datum'), 'CSV output keeps the delimiter read');
+    assert.deepStrictEqual(cells(await csv('a\tb\tc\n1\t2\t3\n')), [['a', 'b', 'c'], ['1', '2', '3']], 'a tab file is read with tabs');
+    assert.deepStrictEqual(cells(await csv('a|b\n1|2\n')), [['a', 'b'], ['1', '2']], 'a pipe file is read with pipes');
+    assert.deepStrictEqual(cells(await csv('name,note\nAda,"x; y; z"\nBo,"p; q"\n')), [['name', 'note'], ['Ada', 'x; y; z'], ['Bo', 'p; q']], 'semicolons inside quotes do not count');
+    assert.deepStrictEqual(cells(await csv('a;b\n1;2\n', { csvDelimiter: ',' })), [['a;b'], ['1;2']], 'an explicit delimiter is used as given');
+    assert.deepStrictEqual(cells(await csv('just one column\nof text\n')), [['just one column'], ['of text']], 'a file of one column is one column');
+    const fromMarkdown = await OfficeParser.parseOffice(Buffer.from('| a | b |\n|---|---|\n| 1 | 2 |\n'), { fileType: 'md' } as any) as OfficeParserAST;
+    assert.ok(String((await fromMarkdown.to('csv')).value).startsWith('a,b'), 'CSV written from another format uses commas, not "auto"');
+}
+
+/**
  * Plain text of a PDF page sets the runs of two table cells apart even where their boxes touch, as a
  * tight table's do in Chromium's PDFs: "DescriptionQuantityUnit price" was one word.
  */
@@ -6253,6 +6274,7 @@ async function runTests(): Promise<void> {
         ['RTF symbol words', testRtfSymbols],
         ['PDF ideograph look-alikes', testPdfIdeographLookalikes],
         ['Text table cells apart', testTextTableCellsApart],
+        ['CSV delimiter detection', testCsvDelimiterDetection],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

@@ -540,7 +540,9 @@ export function resolveGeneratorConfig<D extends string>(
         // of a formula (a row whose first cell is empty starts with the delimiter): a delimiter of `\n=`
         // wrote a formula line that no cell of the document held.
         const astCsvDelimiter: unknown = astConfig.csvDelimiter;
-        if (destination === 'csv' && astCsvDelimiter !== undefined && astCsvDelimiter !== ',' && (userConfig as any)?.csvConfig?.columnDelimiter === undefined) {
+        // 'auto' is a parse's own choice, made only when it reads a CSV file (which then says what it read):
+        // any other parse leaves it, and it is no delimiter to write.
+        if (destination === 'csv' && astCsvDelimiter !== undefined && astCsvDelimiter !== ',' && astCsvDelimiter !== 'auto' && (userConfig as any)?.csvConfig?.columnDelimiter === undefined) {
             const safe = typeof astCsvDelimiter === 'string' && astCsvDelimiter.length > 0 && astCsvDelimiter.length <= MAX_INHERITED_DELIMITER
                 && !/[\r\n"]/.test(astCsvDelimiter) && !'=+-@'.includes(astCsvDelimiter[0]);
             if (safe) config.csvConfig.columnDelimiter = astCsvDelimiter;

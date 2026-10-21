@@ -15,8 +15,12 @@ export const parseCsv = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // noticeable duration, so short-circuiting on an aborted signal is still worthwhile.
     checkAbortSignal(config.abortSignal);
 
-    const textStr = buffer.toString('utf-8');
-    const delimiter = config.csvDelimiter;
+    // A UTF-8 byte order mark (Excel writes one) is no text of the first cell.
+    const textStr = buffer.toString('utf-8').replace(/^\uFEFF/, '');
+    // 'auto' (the default) reads the delimiter from the file, and the parse's config says which it was,
+    // so CSV output written from it uses the same one.
+    const delimiter = config.csvDelimiter === 'auto' || !config.csvDelimiter ? sniffDelimiter(textStr) : config.csvDelimiter;
+    config.csvDelimiter = delimiter;
 
     const records: string[][] = [];
     let currentRow: string[] = [];
@@ -112,3 +116,47 @@ export const parseCsv = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
     return createAST('csv', { title: 'Sheet1' }, [sheetNode], [], config, undefined);
 };
+
+/** The delimiters `csvDelimiter: 'auto'` chooses among, in the order a tie goes to. */
+const CANDIDATE_DELIMITERS = [',', ';', '\t', '|'] as const;
+
+/** At most this many records, and characters, are read to choose a delimiter. */
+const SNIFF_RECORDS = 50;
+const SNIFF_CHARACTERS = 64 * 1024;
+
+/**
+ * The delimiter a CSV file is written with, as LibreOffice and Python's csv.Sniffer find it: of `,`, `;`,
+ * tab and `|`, counted outside quotes in each of the first records, the one that splits the most records
+ * into the same number of fields (more than one). German, French and other European spreadsheets write
+ * `;` with decimal commas: read with `,`, `Müller;1.234,56` split the number. A comma when none does.
+ */
+export function sniffDelimiter(text: string): string {
+    const counts = CANDIDATE_DELIMITERS.map(() => [] as number[]);
+    let current = CANDIDATE_DELIMITERS.map(() => 0);
+    let inQuotes = false;
+    let records = 0;
+    const end = Math.min(text.length, SNIFF_CHARACTERS);
+    const finishRecord = () => {
+        if (current.some(n => n > 0)) current.forEach((n, i) => counts[i].push(n));
+        current = CANDIDATE_DELIMITERS.map(() => 0);
+        records++;
+    };
+    for (let i = 0; i < end && records < SNIFF_RECORDS; i++) {
+        const ch = text[i];
+        if (ch === '"') { inQuotes = !inQuotes; continue; }
+        if (inQuotes) continue;
+        if (ch === '\n') { finishRecord(); continue; }
+        const at = CANDIDATE_DELIMITERS.indexOf(ch as typeof CANDIDATE_DELIMITERS[number]);
+        if (at >= 0) current[at]++;
+    }
+    if (records < SNIFF_RECORDS && !inQuotes) finishRecord();
+    let best = 0, bestScore = 0;
+    counts.forEach((perRecord, i) => {
+        // The records that split into the most common number of fields, when that number is above one.
+        const tally = new Map<number, number>();
+        for (const n of perRecord) if (n > 0) tally.set(n, (tally.get(n) ?? 0) + 1);
+        const score = Math.max(0, ...tally.values());
+        if (score > bestScore) { best = i; bestScore = score; }
+    });
+    return CANDIDATE_DELIMITERS[best];
+}

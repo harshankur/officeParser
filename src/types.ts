@@ -526,8 +526,12 @@ export interface CommonOfficeParserConfig {
      */
     fileType?: SupportedFileType | FileTypeAlias | null;
     /**
-     * Custom delimiter for CSV files.
-     * Defaults to ',' but can be overridden (e.g., ';', '\t').
+     * The delimiter a CSV file's fields are separated by. `'auto'` (the default) reads it from the file:
+     * of `,`, `;`, tab and `|`, counted outside quotes over the first 50 records, the one that splits
+     * the most of them into the same number of fields, and `,` when none does. European spreadsheets
+     * write `;` with decimal commas (`Müller;1.234,56`), which a comma split. Any other text is used as
+     * given (e.g. `';'`, `'\t'`). After a parse, the AST's `config.csvDelimiter` is the delimiter the
+     * file was read with, and CSV output written from it uses the same one.
      */
     csvDelimiter?: string;
     /**
