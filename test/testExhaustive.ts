@@ -4547,6 +4547,25 @@ async function testRtfHeaderRows(): Promise<void> {
 }
 
 /**
+ * Plain text of a PDF page sets the runs of two table cells apart even where their boxes touch, as a
+ * tight table's do in Chromium's PDFs: "DescriptionQuantityUnit price" was one word.
+ */
+async function testTextTableCellsApart(): Promise<void> {
+    const run = (text: string, x: number, width: number, y: number) => ({ type: 'text', text, bounds: { x, y, width, height: 12 } });
+    const cell = (text: string, x: number, width: number, y: number) => ({ type: 'cell', text, children: [run(text, x, width, y)] });
+    const row = (y: number, cells: [string, number, number][]) => ({ type: 'row', children: cells.map(([t, x, w]) => cell(t, x, w, y)) });
+    const ast = {
+        type: 'pdf', metadata: {}, attachments: [],
+        content: [{ type: 'page', metadata: { pageNumber: 1, pageWidth: 300, pageHeight: 200 }, children: [{ type: 'table', children: [
+            row(20, [['Description', 66, 59], ['Quantity', 125, 48], ['Unit price', 173, 54]]),
+            row(40, [['Consulting', 63, 55], ['1', 118, 15], ['40.00', 176, 27]]),
+        ] }] }],
+    } as any;
+    const text = String((await OfficeGenerator.generate(ast, 'text', { onWarning: () => { } } as any)).value);
+    assert.ok(/Description Quantity Unit price/.test(text) && /Consulting 1\s+40\.00/.test(text), `cells whose boxes touch are set apart; got ${JSON.stringify(text)}`);
+}
+
+/**
  * Text a PDF's font maps to look-alikes of CJK ideographs (Kangxi radicals, compatibility ideographs),
  * as Chromium's PDFs of Chinese and Japanese do, reads as the unified ideographs: ⽇本語 was the text.
  */
@@ -6233,6 +6252,7 @@ async function runTests(): Promise<void> {
         ['RTF header rows', testRtfHeaderRows],
         ['RTF symbol words', testRtfSymbols],
         ['PDF ideograph look-alikes', testPdfIdeographLookalikes],
+        ['Text table cells apart', testTextTableCellsApart],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

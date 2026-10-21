@@ -285,13 +285,15 @@ export class TextGenerator extends BaseGenerator<'text'> {
         if (override === false) return '';
         if (typeof override === 'string') return override + (override.endsWith(newline) ? '' : newline);
 
-        interface Atom { text: string; x: number; y: number; w: number; h: number; }
+        // `cell`: the table cell a run stands in, if any (each cell its own number).
+        interface Atom { text: string; x: number; y: number; w: number; h: number; cell?: number; }
         const atoms: Atom[] = [];
         // Of two placed atoms (by index, -1 for none), the one read first: the higher line, or on one
         // line the one further left.
         const firstRead = (a: number, b: number): number =>
             a < 0 ? b : b < 0 ? a : (atoms[b].y < atoms[a].y - 0.5 || (Math.abs(atoms[b].y - atoms[a].y) < 1 && atoms[b].x < atoms[a].x)) ? b : a;
         const place = (atom: Atom): number => atoms.push(atom) - 1;
+        let cellCount = 0;
         // Places the atoms of `n`, and returns the one read first (-1 for none): a list folds its marker
         // into its own, found from its children's, where scanning every atom under each list took time
         // in the depth of the lists times the atoms.
@@ -318,6 +320,15 @@ export class TextGenerator extends BaseGenerator<'text'> {
                     if (text) return place({ text, x: n.bounds.x, y: n.bounds.y, w: n.bounds.width, h: n.bounds.height });
                 }
                 return -1;
+            } else if (n.type === 'cell') {
+                // Its runs are marked as one cell's, so the next cell's are set apart from them even
+                // where their boxes touch (see rowStrings).
+                const start = atoms.length;
+                let first = -1;
+                for (const c of n.children || []) first = firstRead(first, await collect(c));
+                const cell = ++cellCount;
+                for (let i = start; i < atoms.length; i++) atoms[i].cell ??= cell;
+                return first;
             } else if (n.type === 'list') {
                 // The parser strips the item's marker into metadata; re-synthesize it (as flow mode does)
                 // and fold it into the item's first placed atom so bullets/numbers survive layout mode.
@@ -377,6 +388,7 @@ export class TextGenerator extends BaseGenerator<'text'> {
             row.sort((a, b) => a.x - b.x);
             let line = '';
             let prevRight: number | null = null; // right edge (x) of the last placed atom
+            let prevCell: number | undefined;
             for (const a of row) {
                 let col = Math.round((a.x - marginX) / charW);
                 if (col < 0) col = 0;
@@ -392,11 +404,14 @@ export class TextGenerator extends BaseGenerator<'text'> {
                     // The column is at or before the current line end. Only insert a space when this
                     // atom is separated from the previous one by a real horizontal gap; adjacent runs
                     // (a formatting/link boundary inside a word) must join with no space.
+                    // Runs of two table cells are always set apart: a tight table's cells touch
+                    // ("DescriptionQuantityUnit price").
                     const gap = prevRight != null ? a.x - prevRight : 0;
-                    if (gap > 0.25 * charW) line += ' ';
+                    if (gap > 0.25 * charW || (a.cell !== undefined && a.cell !== prevCell)) line += ' ';
                 }
                 line += a.text;
                 prevRight = a.x + a.w;
+                prevCell = a.cell;
             }
             return line.trimEnd();
         });
