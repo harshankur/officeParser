@@ -170,6 +170,7 @@ const DEFAULT_PDF_GENERATOR_CONFIG: DeepRequired<PdfGeneratorConfig> = {
     fonts: { regular: null, bold: null, italic: null, boldItalic: null, mono: null },
     fallbackFonts: [],
     subsetFonts: true,
+    printHidden: false,
     tagged: true,
     outline: false,
     format: 'A4',

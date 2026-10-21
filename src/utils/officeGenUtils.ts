@@ -9,7 +9,7 @@
  * @module officeGenUtils
  */
 
-import { EmbedMetadata, ImageMode, OfficeContentNode } from '../types.js';
+import { CellMetadata, EmbedMetadata, ImageMode, OfficeContentNode, OfficeParserAST, RowMetadata, SheetMetadata } from '../types.js';
 import { cssColorHex } from './colorUtils.js';
 import { lookupTable } from './lookupUtils.js';
 
@@ -363,4 +363,61 @@ export function embedUrl(meta: EmbedMetadata | undefined): string {
     if (meta?.url) return meta.url;
     const embed = resolveEmbed(meta);
     return embed?.kind === 'youtube' ? `https://www.youtube.com/watch?v=${embed.videoId}` : '';
+}
+
+/**
+ * A spreadsheet's content as a printout shows it: hidden sheets, rows and cells (SheetMetadata.hidden,
+ * RowMetadata.hidden, CellMetadata.hidden) left out, and the rows and columns that remain numbered
+ * without the gaps, a span across hidden columns shortened by them. The AST as given when nothing in
+ * it is hidden; otherwise a copy, sharing the nodes it does not change.
+ */
+export function withoutHiddenSheetContent(ast: OfficeParserAST): OfficeParserAST {
+    let changed = false;
+    const isHiddenCell = (c: OfficeContentNode) => c.type === 'cell' && !!(c.metadata as CellMetadata | undefined)?.hidden;
+    const content = ast.content.flatMap((node): OfficeContentNode[] => {
+        if (node.type !== 'sheet') return [node];
+        if ((node.metadata as SheetMetadata | undefined)?.hidden) { changed = true; return []; }
+        const children = node.children || [];
+        const isHiddenRow = (r: OfficeContentNode) => r.type === 'row' && !!(r.metadata as RowMetadata | undefined)?.hidden;
+        if (!children.some(r => isHiddenRow(r) || (r.type === 'row' && (r.children || []).some(isHiddenCell)))) return [node];
+        changed = true;
+        // A column is hidden where a shown row's cell in it is; a row by its own mark.
+        const hiddenCols = new Set<number>();
+        const hiddenRows = new Set<number>();
+        for (const r of children) {
+            if (r.type !== 'row') continue;
+            for (const c of r.children || []) {
+                const m = c.metadata as CellMetadata | undefined;
+                if (c.type !== 'cell' || !m?.hidden) continue;
+                if (isHiddenRow(r)) { if (typeof m.row === 'number') hiddenRows.add(m.row); }
+                else if (typeof m.col === 'number') hiddenCols.add(m.col);
+            }
+        }
+        const cols = [...hiddenCols].sort((a, b) => a - b);
+        const rowsHidden = [...hiddenRows].sort((a, b) => a - b);
+        // How many of `sorted` are below `at` (a binary search).
+        const below = (sorted: number[], at: number) => { let lo = 0, hi = sorted.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] < at) lo = mid + 1; else hi = mid; } return lo; };
+        const kept: OfficeContentNode[] = [];
+        for (const child of children) {
+            if (child.type !== 'row') { kept.push(child); continue; }
+            if (isHiddenRow(child)) continue;
+            const cells = (child.children || []).filter(c => !isHiddenCell(c)).map(c => {
+                const m = c.metadata as CellMetadata | undefined;
+                if (c.type !== 'cell' || !m || (typeof m.col !== 'number' && typeof m.row !== 'number')) return c;
+                const next: CellMetadata = { ...m };
+                if (typeof m.col === 'number') {
+                    next.col = m.col - below(cols, m.col);
+                    if (m.colSpan && m.colSpan > 1) {
+                        const span = m.colSpan - (below(cols, m.col + m.colSpan) - below(cols, m.col));
+                        if (span > 1) next.colSpan = span; else delete next.colSpan;
+                    }
+                }
+                if (typeof m.row === 'number') next.row = m.row - below(rowsHidden, m.row);
+                return { ...c, metadata: next } as OfficeContentNode;
+            });
+            kept.push({ ...child, children: cells });
+        }
+        return [{ ...node, children: kept }];
+    });
+    return changed ? { ...ast, content } : ast;
 }

@@ -4547,6 +4547,53 @@ async function testRtfHeaderRows(): Promise<void> {
 }
 
 /**
+ * A spreadsheet's hidden columns, rows and sheets are read and marked, kept as data by every output, and
+ * left out of PDF output, as a spreadsheet's printout leaves them (pdfConfig.printHidden prints them).
+ */
+async function testHiddenSheetContent(): Promise<void> {
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const sheetXml = (cols: string, rows: string) => `<?xml version="1.0"?><worksheet ${ns}>${cols}<sheetData>${rows}</sheetData></worksheet>`;
+    const cell = (ref: string, text: string) => `<c r="${ref}" t="inlineStr"><is><t>${text}</t></is></c>`;
+    const xlsx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="Shown" sheetId="1" r:id="rId1"/><sheet name="Secret sheet" sheetId="2" state="hidden" r:id="rId2"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/><Relationship Id="rId2" Target="worksheets/sheet2.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+        'xl/worksheets/sheet1.xml': strToU8(sheetXml('<cols><col min="2" max="2" hidden="1"/></cols>',
+            `<row r="1">${cell('A1', 'Name')}${cell('B1', 'HIDDENCOL')}${cell('C1', 'Amount')}</row><row r="2" hidden="1">${cell('A2', 'HIDDENROW')}${cell('C2', '1')}</row><row r="3">${cell('A3', 'Ada')}${cell('B3', 'HIDDENCELL')}${cell('C3', '7')}</row>`)),
+        'xl/worksheets/sheet2.xml': strToU8(sheetXml('', `<row r="1">${cell('A1', 'HIDDENSHEET')}</row>`)),
+    }));
+    const odsNs = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"';
+    const odsCell = (text: string) => `<table:table-cell office:value-type="string"><text:p>${text}</text:p></table:table-cell>`;
+    const ods = Buffer.from(zipSync({
+        mimetype: strToU8('application/vnd.oasis.opendocument.spreadsheet'),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${odsNs}><office:automatic-styles><style:style style:name="ta2" style:family="table"><style:table-properties table:display="false"/></style:style></office:automatic-styles><office:body><office:spreadsheet>`
+            + `<table:table table:name="Shown"><table:table-column/><table:table-column table:visibility="collapse"/><table:table-column/>`
+            + `<table:table-row>${odsCell('Name')}${odsCell('HIDDENCOL')}${odsCell('Amount')}</table:table-row>`
+            + `<table:table-row table:visibility="collapse">${odsCell('HIDDENROW')}${odsCell('x')}${odsCell('1')}</table:table-row>`
+            + `<table:table-row>${odsCell('Ada')}${odsCell('HIDDENCELL')}${odsCell('7')}</table:table-row></table:table>`
+            + `<table:table table:name="Secret sheet" table:style-name="ta2"><table:table-row>${odsCell('HIDDENSHEET')}</table:table-row></table:table>`
+            + `</office:spreadsheet></office:body></office:document-content>`),
+    }));
+    for (const [label, bytes, fileType] of [['XLSX', xlsx, 'xlsx'], ['ODS', ods, 'ods']] as const) {
+        const ast = await OfficeParser.parseOffice(bytes, { fileType } as any) as OfficeParserAST;
+        const sheets = ast.content.filter(n => n.type === 'sheet');
+        assert.deepStrictEqual(sheets.map(s => !!(s.metadata as any)?.hidden), [false, true], `${label}: the hidden sheet is marked`);
+        const marked = sheets[0].children!.flatMap(r => (r.children || []).filter(c => (c.metadata as any)?.hidden).map(c => c.text));
+        assert.deepStrictEqual(marked.sort(), ['1', 'HIDDENCELL', 'HIDDENCOL', 'HIDDENROW', ...(fileType === 'ods' ? ['x'] : [])].sort(), `${label}: the hidden column's and row's cells are marked; got ${marked}`);
+        const csv = String((await ast.to('csv')).value);
+        assert.ok(csv.includes('HIDDENCOL') && csv.includes('HIDDENROW'), `${label}: CSV keeps hidden content as data`);
+        for (const printHidden of [false, true]) {
+            const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native', printHidden } } as any)).value as Uint8Array;
+            const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+            const text = String((await back.to('text')).value);
+            const hiddenShown = ['HIDDENCOL', 'HIDDENROW', 'HIDDENCELL', 'HIDDENSHEET'].filter(w => text.includes(w));
+            assert.ok(text.includes('Ada') && text.includes('Amount'), `${label}: the shown cells are printed`);
+            assert.deepStrictEqual(hiddenShown, printHidden ? ['HIDDENCOL', 'HIDDENROW', 'HIDDENCELL', 'HIDDENSHEET'] : [], `${label}: printHidden ${printHidden}; got ${hiddenShown} in ${JSON.stringify(text)}`);
+        }
+    }
+}
+
+/**
  * A CSV file's delimiter is read from it by default: European spreadsheets write `;` with decimal commas,
  * which a comma split (`Müller;1.234,56` came out as `Müller;1.234 | 56`). An explicit one is used as
  * given, CSV output keeps the one read, and a byte order mark is no text of the first cell.
@@ -6275,6 +6322,7 @@ async function runTests(): Promise<void> {
         ['PDF ideograph look-alikes', testPdfIdeographLookalikes],
         ['Text table cells apart', testTextTableCellsApart],
         ['CSV delimiter detection', testCsvDelimiterDetection],
+        ['Hidden sheet content', testHiddenSheetContent],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

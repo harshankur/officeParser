@@ -1579,6 +1579,13 @@ export interface PdfGeneratorConfig {
      */
     subsetFonts?: boolean;
     /**
+     * Print a spreadsheet's hidden sheets, rows and columns. A spreadsheet's printout leaves them out,
+     * and so does PDF output by default (both engines): they are marked when read
+     * (SheetMetadata.hidden, RowMetadata.hidden, CellMetadata.hidden) and kept as data by every other
+     * format. Defaults to false.
+     */
+    printHidden?: boolean;
+    /**
      * Emit a tagged (accessible / PDF-UA-friendly) PDF, so screen readers can follow the document
      * structure. Passed through to the rendering engine; ignored by engines that do not support it.
      * Defaults to true.
@@ -2720,6 +2727,22 @@ export interface SheetMetadata {
     style?: string;
     /** Unique anchor IDs for internal linking. */
     anchorIds?: string[];
+    /**
+     * The workbook hides the sheet (XLSX `state="hidden"` or `"veryHidden"`, ODS `table:display="false"`).
+     * Its content is read as any sheet's; a printout leaves it out, as PDF output does unless
+     * `pdfConfig.printHidden` is set.
+     */
+    hidden?: boolean;
+}
+
+/** Metadata for a row of a sheet. */
+export interface RowMetadata {
+    /**
+     * The sheet hides the row (XLSX `hidden`, ODS `table:visibility` of `collapse` or `filter`). Its cells
+     * are read and marked hidden too (CellMetadata.hidden); PDF output leaves them out unless
+     * `pdfConfig.printHidden` is set.
+     */
+    hidden?: boolean;
 }
 
 /**
@@ -2865,6 +2888,12 @@ export interface CellMetadata {
     anchorIds?: string[];
     /** Background color for this cell in hex format (e.g. #FFFFFF). */
     backgroundColor?: string;
+    /**
+     * The sheet does not show the cell: its row or its column is hidden. It is read as any cell (text,
+     * CSV, chunks and every other output keep it as data); a printout leaves it out, as PDF output does
+     * unless `pdfConfig.printHidden` is set.
+     */
+    hidden?: boolean;
 }
 
 /**
@@ -3210,7 +3239,7 @@ export interface HeaderFooterMetadata {
 /**
  * Union type for content metadata.
  */
-export type ContentMetadata = SlideMetadata | SheetMetadata | HeadingMetadata | ListMetadata | CellMetadata | ImageMetadata | ChartMetadata | PageMetadata | ParagraphMetadata | TextMetadata | NoteMetadata | BreakMetadata | CodeMetadata | CommentMetadata | HeaderFooterMetadata | TableMetadata | EmbedMetadata | AdmonitionMetadata | DefinitionMetadata | undefined;
+export type ContentMetadata = SlideMetadata | SheetMetadata | RowMetadata | HeadingMetadata | ListMetadata | CellMetadata | ImageMetadata | ChartMetadata | PageMetadata | ParagraphMetadata | TextMetadata | NoteMetadata | BreakMetadata | CodeMetadata | CommentMetadata | HeaderFooterMetadata | TableMetadata | EmbedMetadata | AdmonitionMetadata | DefinitionMetadata | undefined;
 
 
 /**
@@ -3384,7 +3413,7 @@ export type OfficeContentNode = BaseContentNode & (
     | { type: 'header'; metadata?: HeaderFooterMetadata }
     | { type: 'footer'; metadata?: HeaderFooterMetadata }
     | { type: 'table'; metadata?: TableMetadata }
-    | { type: 'row'; metadata?: undefined }
+    | { type: 'row'; metadata?: RowMetadata }
     | { type: 'drawing'; metadata?: undefined }
     | { type: 'slideMaster'; metadata?: SlideMetadata }
     | { type: 'embed'; metadata?: EmbedMetadata }

@@ -4,6 +4,7 @@ import { getAbortError, getOfficeError } from '../utils/errorUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { HtmlGenerator } from './HtmlGenerator.js';
 import { renderNativePdf } from './pdf/nativePdfEngine.js';
+import { withoutHiddenSheetContent } from '../utils/officeGenUtils.js';
 
 /**
  * Generates high-fidelity PDF documents using a headless browser engine.
@@ -21,10 +22,12 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
 
         // Native engine: lay the AST out directly with pdf-lib, no browser required (works in Node
         // and the browser alike). The default 'html' engine falls through to the browser path below.
+        // A printout of a spreadsheet leaves its hidden sheets, rows and columns out.
+        const ast = this.config.pdfConfig.printHidden ? this.ast : withoutHiddenSheetContent(this.ast);
         if (this.config.pdfConfig.engine === 'native') {
             if (this.config.abortSignal?.aborted) throw getAbortError();
             try {
-                const value = await renderNativePdf(this.ast, this.config, this.effectiveMetadata, (t, i) => this.warn(t, i));
+                const value = await renderNativePdf(ast, this.config, this.effectiveMetadata, (t, i) => this.warn(t, i));
                 return { value, messages: this.messages };
             } catch (err: any) {
                 if (this.config.abortSignal?.aborted) throw getAbortError();
@@ -35,7 +38,7 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
 
         // Step 1: Generate high-fidelity HTML as the source for PDF rendering
         // We reuse the current configuration but ensure standalone mode is on for HTML
-        const htmlGenerator = new HtmlGenerator(this.ast, {
+        const htmlGenerator = new HtmlGenerator(ast, {
             ...this.config,
             // The HTML is rendered in a real browser (Puppeteer in Node, the print engine in-page), which
             // resolves a data: URI of any size. The maxInlineImageBytes cap exists only to keep a huge

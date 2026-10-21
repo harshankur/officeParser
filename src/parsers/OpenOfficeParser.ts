@@ -220,6 +220,8 @@ const rowCells = (row: Element): Element[] => {
 };
 /** A cell's comment is its own node (its body is not the cell's text). */
 const CELL_SKIP = new Set(['office:annotation']);
+/** A sheet's column definitions come before its rows: a nested table's, in a cell, are not the sheet's. */
+const COLUMN_SKIP = new Set(['table:table-row', 'table:table-rows', 'table:table-row-group', 'table:table-header-rows']);
 
 function buildAnnotationComment(
     element: Element,
@@ -1783,10 +1785,32 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 // taken as descendants, a table nested in a cell was read again at each level (586
                 // bytes took 7 seconds), and became a sheet of its own.
                 const tables = getDirectChildren(spreadsheet, "table:table");
+                // The table styles that hide their sheet (`table:display="false"`).
+                const hiddenTableStyles = new Set<string>();
+                const contentStyles = getFirstElementByTagName(xml, "office:automatic-styles");
+                if (contentStyles) {
+                    for (const style of getDirectChildren(contentStyles, "style:style")) {
+                        if (style.getAttribute("style:family") !== 'table') continue;
+                        if (getDirectChildren(style, "style:table-properties")[0]?.getAttribute("table:display") === 'false') hiddenTableStyles.add(style.getAttribute("style:name") || '');
+                    }
+                }
+                const isHiddenVisibility = (value: string | null) => value === 'collapse' || value === 'filter';
                 for (let i = 0; i < tables.length; i++) {
                     const table = tables[i];
                     const sheetName = table.getAttribute("table:name") || `Sheet${i + 1}`;
                     const rows: OfficeContentNode[] = [];
+                    const sheetHidden = hiddenTableStyles.has(table.getAttribute("table:style-name") || '');
+                    // Hidden columns and rows are read, and marked (CellMetadata.hidden): a printout leaves
+                    // them out, as the PDF writer does, and every other output keeps them as data. A
+                    // column's repeats are ranges; the rows (where nested tables live) are not searched.
+                    const hiddenColumns: [number, number][] = [];
+                    let columnAt = 0;
+                    for (const column of getOutermostElements(table, "table:table-column", COLUMN_SKIP)) {
+                        const repeat = toRepeatCount(column.getAttribute("table:number-columns-repeated"));
+                        if (isHiddenVisibility(column.getAttribute("table:visibility"))) hiddenColumns.push([columnAt, columnAt + repeat - 1]);
+                        columnAt += repeat;
+                    }
+                    const columnHidden = (col: number) => hiddenColumns.some(([first, last]) => col >= first && col <= last);
 
                     const tableRows = getOutermostElements(table, "table:table-row");
                     let rowIndex = 0;
@@ -1798,6 +1822,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         const tableCells = rowCells(row);
 
                         let colIndex = 0;
+                        const rowHidden = isHiddenVisibility(row.getAttribute("table:visibility"));
                         const rowsRepeated = toRepeatCount(row.getAttribute("table:number-rows-repeated"));
                         // What one copy of this row writes, for its row repeats (see CellBudget.takeRepeats).
                         let rowWeight = 0;
@@ -1960,6 +1985,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                             // Merged cells: the spans were not read, so the merge was lost.
                                             ...(colSpan > 1 ? { colSpan } : {}),
                                             ...(rowSpan > 1 ? { rowSpan } : {}),
+                                            ...(rowHidden || columnHidden(colIndex) ? { hidden: true } : {}),
                                         } as CellMetadata
                                     };
                                     if (config.includeRawContent) {
@@ -2008,7 +2034,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 const rowNode: OfficeContentNode = {
                                     type: 'row',
                                     children: rowCells,
-                                    metadata: undefined
+                                    metadata: rowHidden ? { hidden: true } : undefined
                                 };
                                 // Fix row index in metadata for repeated rows
                                 if (k > 0) {
@@ -2033,7 +2059,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     const sheetNode: OfficeContentNode = {
                         type: 'sheet',
                         children: rows,
-                        metadata: { sheetName } as SheetMetadata
+                        metadata: { sheetName, ...(sheetHidden ? { hidden: true } : {}) } as SheetMetadata
                     };
                     if (config.includeRawContent) {
                         sheetNode.rawContent = getRawContent(table, xmlString, config);

@@ -85,6 +85,31 @@ const attributeOf = (attrs: string, name: 'val' | 'rgb'): string | undefined => 
     return match ? decodeXmlEntities(match[1] ?? match[2]) : undefined;
 };
 
+/** An attribute's value by its (plain, unprefixed) name in the attributes of an element, or undefined. */
+const attributeNamed = (attrs: string, name: 'hidden' | 'min' | 'max'): string | undefined => {
+    const match = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(attrs);
+    return match ? (match[1] ?? match[2]) : undefined;
+};
+
+/** Whether a boolean attribute's value is true (`1` or `true`, as the schema's xsd:boolean has it). */
+const isTrue = (value: string | undefined): boolean => value === '1' || value === 'true';
+
+/**
+ * The 0-based columns a sheet hides, as ranges [first, last]: its `<cols>`'s `<col>` elements with
+ * `hidden`, each covering `min` to `max` (1-based).
+ */
+function hiddenColumnRanges(sheetXml: string): [number, number][] {
+    const cols = firstElementContent(sheetXml, 'cols');
+    if (!cols) return [];
+    const ranges: [number, number][] = [];
+    for (const col of xmlElements(cols, 'col')) {
+        if (!isTrue(attributeNamed(col.attrs, 'hidden'))) continue;
+        const min = Number(attributeNamed(col.attrs, 'min')), max = Number(attributeNamed(col.attrs, 'max'));
+        if (Number.isInteger(min) && min >= 1) ranges.push([min - 1, (Number.isInteger(max) && max >= min ? max : min) - 1]);
+    }
+    return ranges;
+}
+
 /**
  * The text an element's XML content holds, as an XML reader gives it: references decoded, line breaks
  * normalized, CDATA sections as written, and markup inside it left out.
@@ -626,6 +651,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     // Parse workbook.xml to get sheet names and map them to sheet files
     // Null-prototype, as every map keyed by the document's own names and ids is here.
     const sheetNameMap: Record<string, string> = Object.create(null);
+    // The sheets the workbook hides (`state="hidden"` or `"veryHidden"`), by file.
+    const hiddenSheets = new Set<string>();
     const workbookRelsFile = files.find(f => f.path === 'xl/_rels/workbook.xml.rels');
 
     if (workbookRelsFile) {
@@ -654,6 +681,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             const rId = sheet.getAttribute("r:id");
             if (name && rId && rIdToFile[rId]) {
                 sheetNameMap[rIdToFile[rId]] = name;
+                const state = sheet.getAttribute("state");
+                if (state === 'hidden' || state === 'veryHidden') hiddenSheets.add(rIdToFile[rId]);
             }
         }
     }
@@ -736,6 +765,10 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             // The <row> elements as they stand, rather than a walk over the (possibly vast, sparse)
             // row range the sheet's dimensions declare.
             const rowElements = xmlElements(sheetXml, 'row');
+            // Hidden columns and rows are read, and marked (CellMetadata.hidden): a printout leaves them
+            // out, as the PDF writer does, and every other output keeps them as data.
+            const hiddenColumns = hiddenColumnRanges(sheetXml);
+            const columnHidden = (col: number) => hiddenColumns.some(([first, last]) => col >= first && col <= last);
 
             /** Helper to convert Excel column string (A, B, AA, etc.) to 0-based index */
             const colToNumber = (col: string): number => {
@@ -766,6 +799,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                 // The row's <c> (cell) elements: attributes (r="A1", t="s") and content (<v>, <is>).
                 const cellElements = xmlElements(rowContent, 'c');
 
+                const rowHidden = isTrue(attributeNamed(rowAttrs, 'hidden'));
                 const rMatch = rowAttrs.match(/r="(\d+)"/);
                 const rowIndex = rMatch ? parseInt(rMatch[1]) - 1 : lastRowIndex + 1;
                 lastRowIndex = rowIndex;
@@ -893,7 +927,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                             text: text,
                             children: cellNodes,
                             comments: commentsNodeList,
-                            metadata: { row: rowIndex, col: colIndex }
+                            metadata: { row: rowIndex, col: colIndex, ...(rowHidden || columnHidden(colIndex) ? { hidden: true } : {}) }
                         };
                         if (config.includeRawContent) {
                             cellNode.rawContent = chargeRawContent(cXml, config);
@@ -906,7 +940,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     const rowNode: OfficeContentNode = {
                         type: 'row',
                         children: cells,
-                        metadata: undefined
+                        metadata: rowHidden ? { hidden: true } : undefined
                     };
                     if (config.includeRawContent) {
                         rowNode.rawContent = chargeRawContent(rowXml, config);
@@ -982,7 +1016,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             content.push({
                 type: 'sheet',
                 children: rows,
-                metadata: { sheetName },
+                metadata: { sheetName, ...(hiddenSheets.has(sheetFileName) ? { hidden: true } : {}) },
                 rawContent: config.includeRawContent ? chargeRawContent(file.content.toString(), config) : undefined
             });
         }
