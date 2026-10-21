@@ -294,6 +294,15 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
      */
     const ownFirst = (element: Element, tag: string): Element | undefined => getOutermostElements(element, tag, TEXT_BOX)[0];
 
+    /** Whether content control `sdt` is set to show its placeholder (`w:showingPlcHdr`, unless switched off). */
+    const showsPlaceholder = (sdt: Element): boolean => {
+        const properties = getDirectChildren(sdt, "w:sdtPr")[0];
+        const flag = properties ? getDirectChildren(properties, "w:showingPlcHdr")[0] : undefined;
+        if (!flag) return false;
+        const value = (flag.getAttribute("w:val") || "").toLowerCase();
+        return value !== "false" && value !== "0" && value !== "off";
+    };
+
     /**
      * The child elements of `container` as Word lays them out: a content control (`w:sdt`) or custom XML
      * element (`w:customXml`) stands for what it wraps, at any depth, and alternate content for the branch
@@ -309,6 +318,9 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
             const node = pending.pop()!;
             if (!isElement(node)) continue;
             if (node.nodeName === 'w:sdt') {
+                // A control that shows its placeholder holds Word's prompt ("Click or tap here to enter
+                // text."), not text the author wrote, so it adds nothing
+                if (showsPlaceholder(node)) continue;
                 const inner = getDirectChildren(node, "w:sdtContent")[0];
                 if (inner) pushChildren(inner);
             } else if (node.nodeName === 'w:customXml') {
@@ -1276,6 +1288,9 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
             } else if (isElement(node) && (node.nodeName === 'w:moveFrom' || node.nodeName === 'w:del')) {
                 // Content a tracked change removed, or moved to where a `w:moveTo` holds it: not the
                 // document's text (read, moved text came out twice). Insertions are read as text.
+            } else if (isElement(node) && node.nodeName === 'w:sdt' && showsPlaceholder(node)) {
+                // An inline content control showing its placeholder holds Word's prompt, as a block one does
+                // (see layoutChildren).
             } else if (node.childNodes.length > 0) {
                 // Generic fallback for unknown elements that might contain content
                 for (const child of Array.from(node.childNodes)) processChildNode(child, depth + 1);
