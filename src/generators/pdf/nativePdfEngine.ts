@@ -203,7 +203,25 @@ function toPoints(v: string | number | undefined, fallback: number): number {
 }
 
 /** The styles text is drawn in. */
-type FaceKey = 'regular' | 'bold' | 'italic' | 'boldItalic' | 'mono';
+type FaceKey = 'regular' | 'bold' | 'italic' | 'boldItalic' | 'mono'
+    | 'serif' | 'serifBold' | 'serifItalic' | 'serifBoldItalic' | 'monoBold' | 'monoItalic' | 'monoBoldItalic';
+
+/** The styles `pdfConfig.fonts` gives a font for; the others are drawn in a stand-in of their kind. */
+type GivenFaceKey = 'regular' | 'bold' | 'italic' | 'boldItalic' | 'mono';
+
+/**
+ * The kind of a font family, by its name: monospaced, serif or (anything else) sans-serif, for the
+ * Standard-14 font that stands in for it. Serif text printed in Helvetica, and code inline in a line in
+ * it too.
+ */
+function fontKind(family: string | undefined): 'mono' | 'serif' | 'sans' {
+    if (!family) return 'sans';
+    const name = family.toLowerCase().replace(/["']/g, '').trim();
+    if (/mono|code|courier|consol|menlo|monaco|typewriter|terminal|fixed|^ocr|lucida console|andale|inconsolata|hack$|^pt mono/.test(name)) return 'mono';
+    if (/sans/.test(name)) return 'sans';
+    if (/serif|times|georgia|garamond|cambria|palatino|book ?antiqua|baskerville|bodoni|didot|caslon|minion|constantia|century|bookman|charter|cochin|hoefler|lora|merriweather|playfair|perpetua|rockwell|sylfaen|mincho|ming|song|batang|myeongjo|^roman|nimbus roman|tinos|crimson|cormorant|liberation serif|dejavu serif|noto serif|source serif|pt serif|droid serif|charis|gentium|linux libertine|libertinus|stix|cmu serif|computer modern|latin modern roman|lm roman/.test(name)) return 'serif';
+    return 'sans';
+}
 
 /** A single word ready to place, carrying the style/size/color it should be drawn with. */
 interface Piece { text: string; face: FaceKey; size: number; color: any; underline: boolean; link?: string; }
@@ -356,14 +374,16 @@ class NativeLayout {
         if (this.pendingAnchors.length) this.placeAnchors();
     }
 
-    /** Picks the style matching a run's formatting (mono for code, bold/italic variants otherwise). */
+    /**
+     * Picks the style matching a run's formatting: its font's kind (monospaced for code, serif or sans),
+     * then its bold and italic.
+     */
     private faceFor(fmt: TextFormatting | undefined, mono: boolean): FaceKey {
-        if (mono) return 'mono';
+        const kind = mono ? 'mono' : fontKind(fmt?.font);
         const bold = !!fmt?.bold, italic = !!fmt?.italic;
-        if (bold && italic) return 'boldItalic';
-        if (bold) return 'bold';
-        if (italic) return 'italic';
-        return 'regular';
+        const variant = bold && italic ? 'BoldItalic' : bold ? 'Bold' : italic ? 'Italic' : '';
+        if (kind === 'sans') return (variant ? variant[0].toLowerCase() + variant.slice(1) : 'regular') as FaceKey;
+        return `${kind}${variant}` as FaceKey;
     }
 
     /** Parses a `#rrggbb` (or `#rgb`) hex color into a pdf-lib rgb color, or null. */
@@ -1441,8 +1461,16 @@ async function embedFonts(pdf: any, lib: any, pc: FullGeneratorConfig['pdfConfig
         italic: standard(await pdf.embedFont(lib.StandardFonts.HelveticaOblique)),
         boldItalic: standard(await pdf.embedFont(lib.StandardFonts.HelveticaBoldOblique)),
         mono: standard(await pdf.embedFont(lib.StandardFonts.Courier)),
+        monoBold: standard(await pdf.embedFont(lib.StandardFonts.CourierBold)),
+        monoItalic: standard(await pdf.embedFont(lib.StandardFonts.CourierOblique)),
+        monoBoldItalic: standard(await pdf.embedFont(lib.StandardFonts.CourierBoldOblique)),
+        serif: standard(await pdf.embedFont(lib.StandardFonts.TimesRoman)),
+        serifBold: standard(await pdf.embedFont(lib.StandardFonts.TimesRomanBold)),
+        serifItalic: standard(await pdf.embedFont(lib.StandardFonts.TimesRomanItalic)),
+        serifBoldItalic: standard(await pdf.embedFont(lib.StandardFonts.TimesRomanBoldItalic)),
     };
-    const keys: FaceKey[] = ['regular', 'bold', 'italic', 'boldItalic', 'mono'];
+    const allKeys = Object.keys(std) as FaceKey[];
+    const keys: GivenFaceKey[] = ['regular', 'bold', 'italic', 'boldItalic', 'mono'];
     // `fonts` names a file for each style. Given as anything else (a font's bytes alone, a file name) it is
     // reported and no style has one; a style is read only as the object's own key.
     const fontMap: unknown = pc.fonts;
@@ -1451,7 +1479,7 @@ async function embedFonts(pdf: any, lib: any, pc: FullGeneratorConfig['pdfConfig
         const shown = typeof fontMap === 'string' ? fontMap : Object.prototype.toString.call(fontMap);
         reportWarning(OfficeWarningType.INVALID_CONFIG_VALUE, { option: 'pdfConfig.fonts', value: shown, expected: 'an object giving a font file for each style it names (regular, bold, italic, boldItalic, mono)', fallback: undefined });
     }
-    const styleFont = (key: FaceKey): unknown => isMap && Object.prototype.hasOwnProperty.call(fontMap, key) ? (fontMap as Record<string, unknown>)[key] : undefined;
+    const styleFont = (key: GivenFaceKey): unknown => isMap && Object.prototype.hasOwnProperty.call(fontMap, key) ? (fontMap as Record<string, unknown>)[key] : undefined;
     const given = keys.map(key => ({ name: `fonts.${key}`, key, bytes: fontBytes(styleFont(key), `fonts.${key}`, reportWarning) }));
     const fallbackList: unknown[] = Array.isArray(pc.fallbackFonts) ? pc.fallbackFonts : [];
     if (!Array.isArray(pc.fallbackFonts) && pc.fallbackFonts !== undefined && pc.fallbackFonts !== null) {
@@ -1459,9 +1487,7 @@ async function embedFonts(pdf: any, lib: any, pc: FullGeneratorConfig['pdfConfig
     }
     const fallbackGiven = fallbackList.map((value, i) => ({ name: `fallbackFonts[${i}]`, bytes: fontBytes(value, `fallbackFonts[${i}]`, reportWarning) }));
     const custom = given.some(g => g.bytes) || fallbackGiven.some(g => g.bytes);
-    if (!custom) {
-        return { fonts: { regular: [std.regular], bold: [std.bold], italic: [std.italic], boldItalic: [std.boldItalic], mono: [std.mono] }, custom };
-    }
+    if (!custom) return { fonts: Object.fromEntries(allKeys.map(key => [key, [std[key]]])) as Fonts, custom };
 
     pdf.registerFontkit(await loadFontkit(config));
     // The same bytes given for two styles are embedded once: the same view, or views of the same part of
@@ -1484,7 +1510,7 @@ async function embedFonts(pdf: any, lib: any, pc: FullGeneratorConfig['pdfConfig
         inBuffer.set(span, face);
         return face;
     };
-    const own = {} as Record<FaceKey, Face | undefined>;
+    const own = {} as Record<GivenFaceKey, Face | undefined>;
     for (const g of given) own[g.key] = await embed(g.name, g.bytes);
     const fallbacks: Face[] = [];
     for (const g of fallbackGiven) { const face = await embed(g.name, g.bytes); if (face) fallbacks.push(face); }
@@ -1492,12 +1518,19 @@ async function embedFonts(pdf: any, lib: any, pc: FullGeneratorConfig['pdfConfig
     const chain = (key: FaceKey): Face[] => {
         // A style is drawn in its own font, or in the regular one given. With neither (and for code,
         // which stays in a fixed-width font unless a `mono` font is given) the Standard-14 font of the
-        // style comes first, and the fonts given draw only what it lacks.
-        const primary = key === 'mono' ? own.mono : (own[key] ?? own.regular);
-        const order = primary ? [primary, own.regular, ...fallbacks, std[key]] : [std[key], own.regular, ...fallbacks];
+        // style comes first, and the fonts given draw only what it lacks. Serif text, which no font
+        // given is for, is drawn in Times, and in the fonts given where Times lacks a character.
+        const variant = key.replace(/^(serif|mono)/, '');
+        const sansKey = (variant ? variant[0].toLowerCase() + variant.slice(1) : 'regular') as GivenFaceKey;
+        if (key.startsWith('serif')) {
+            const order = [std[key], own[sansKey], own.regular, ...fallbacks];
+            return order.filter((face, i): face is Face => !!face && order.indexOf(face) === i);
+        }
+        const given = key.startsWith('mono') ? own.mono : (own[sansKey] ?? own.regular);
+        const order = given ? [given, own.regular, ...fallbacks, std[key]] : [std[key], own.regular, ...fallbacks];
         return order.filter((face, i): face is Face => !!face && order.indexOf(face) === i);
     };
-    return { fonts: { regular: chain('regular'), bold: chain('bold'), italic: chain('italic'), boldItalic: chain('boldItalic'), mono: chain('mono') }, custom };
+    return { fonts: Object.fromEntries(allKeys.map(key => [key, chain(key)])) as Fonts, custom };
 }
 
 /**

@@ -4718,6 +4718,21 @@ async function testParagraphSpacing(): Promise<void> {
 }
 
 /**
+ * The native PDF engine prints a run in a stand-in of its font's kind: Times for a serif font, Courier for
+ * a monospaced one (inline code too), Helvetica otherwise. Everything printed in Helvetica.
+ */
+async function testNativePdfFontKinds(): Promise<void> {
+    const html = '<h1 style="font-family: Georgia">Serif title</h1><p>Sans <code>inline code</code> and <span style="font-family: \'Times New Roman\'"><i>italic serif</i></span>'
+        + ' and <span style="font-family: \'Courier New\'"><b>bold mono</b></span> and <span style="font-family: \'Noto Sans\'">noto sans</span>.</p>';
+    const ast = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' } as any) as OfficeParserAST;
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const fontOf = (text: string) => collectAllNodes(back).find(n => n.type === 'text' && (n.text || '').includes(text))?.formatting?.font;
+    assert.deepStrictEqual(['Serif title', 'Sans', 'inline code', 'italic serif', 'bold mono', 'noto sans'].map(fontOf),
+        ['Times-Bold', 'Helvetica', 'Courier', 'Times-Italic', 'Courier-Bold', 'Helvetica'], 'each run is printed in a stand-in of its kind');
+}
+
+/**
  * The native PDF engine draws GIF (its first frame) and uncompressed BMP pictures, turned into PNG: a PDF
  * holds neither, and both were dropped with IMAGE_PROCESSING_FAILED.
  */
@@ -6556,6 +6571,7 @@ async function runTests(): Promise<void> {
         ['Native PDF links', testNativePdfLinks],
         ['Paragraph layout', testParagraphLayout],
         ['Paragraph spacing', testParagraphSpacing],
+        ['Native PDF font kinds', testNativePdfFontKinds],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],
