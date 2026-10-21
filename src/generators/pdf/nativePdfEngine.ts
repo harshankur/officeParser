@@ -236,6 +236,8 @@ class NativeLayout {
     private readonly embeddedImages = new Map<OfficeParserAST['attachments'][number], Promise<any>>();
     /** Footnote/endnote bodies gathered from `node.notes` during the walk, drawn at document end. */
     private readonly collectedNotes: OfficeContentNode[] = [];
+    /** Sheets drawn so far: each after the first starts a page. */
+    private sheetsDrawn = 0;
     private readonly collectedNoteSet = new Set<OfficeContentNode>();
 
     constructor(
@@ -313,9 +315,9 @@ class NativeLayout {
      * Makes text drawable in a style before it is measured or drawn: a tab is four spaces, a line break
      * or a space the fonts lack a plain space (a drawn string cannot hold a line break), and any other
      * character none of the style's fonts has is a `?`, counted for the one warning
-     * {@link reportLostCharacters} gives.
+     * {@link reportLostCharacters} gives, unless `count` is false (text measured, not drawn).
      */
-    private enc(text: string, key: FaceKey = 'regular'): string {
+    private enc(text: string, key: FaceKey = 'regular', count = true): string {
         const chain = this.fonts[key];
         let out = '';
         for (const ch of text) {
@@ -331,6 +333,7 @@ class NativeLayout {
             else if (CONTROL.test(ch)) { /* no glyph: no loss */ }
             else {
                 out += '?';
+                if (!count) continue;
                 this.lostCharacters++;
                 if (this.lostSample.length < 8 && !this.lostSample.includes(ch)) this.lostSample.push(ch);
             }
@@ -672,6 +675,13 @@ class NativeLayout {
             // drawing images/charts sit as non-row children after the rows; render them after the grid
             // (as the HTML/DOCX/ODT generators do) rather than dropping them.
             case 'sheet': {
+                // Each sheet on pages of its own, under its name when the workbook has more than one, as a
+                // workbook prints: they ran on one after another with nothing between them.
+                if (this.sheetsDrawn++ > 0 && this.y > this.margin.top) this.newPage();
+                const sheetName = (node.metadata as any)?.sheetName;
+                if (sheetName && this.ast.content.filter(n => n.type === 'sheet').length > 1) {
+                    await this.heading({ type: 'heading', metadata: { level: 2 }, children: [{ type: 'text', text: String(sheetName) }] } as OfficeContentNode);
+                }
                 await this.table(node);
                 for (const c of (node.children || [])) if (c.type !== 'row') await this.render(c);
                 return;
@@ -985,17 +995,12 @@ class NativeLayout {
             }
         }
         cols = Math.max(cols, ...rows.map(r => (r.children || []).filter(c => c.type === 'cell').length), 1);
-        const colW = this.contentWidth / cols;
-        const size = 10, pad = 4;
+        const pad = 4;
         const border = this.lib.rgb(0.6, 0.6, 0.6);
 
-        this.y += 2;
-        /** Wraps a cell's (un-encoded) text to the width of the columns it spans. */
-        // A header cell is drawn bold, so it is wrapped at the bold font's widths.
-        const wrap = (text: string, span: number, header = false) => {
-            const face: FaceKey = header ? 'bold' : 'regular';
-            return wrapPlain(text, t => this.widthOf(t, face, size), Math.max(10, colW * span - 2 * pad), t => this.enc(t, face));
-        };
+        // First the cells' texts and places, then the columns' widths from them, then the rows drawn.
+        type Placed = { col: number; span: number; rowSpan: number; text: string; header: boolean; lines: string[] };
+        const grid: Placed[][] = [];
         // Grid occupancy: column -> rows still covered by a rowspan from above, so a spanning cell
         // reserves its column(s) below instead of letting later rows slide left under it.
         const carry = new Map<number, number>();
@@ -1009,11 +1014,13 @@ class NativeLayout {
             const rowIsHeader = isHeaderRow(row, row === rows[0]);
             // Place each cell into a grid column: honour explicit `col`, otherwise the next free one.
             let cursor = 0;
-            const placed: { col: number; span: number; rowSpan: number; lines: string[]; header: boolean }[] = [];
+            const placed: Placed[] = [];
+            // The columns this row's earlier cells span: an empty cell there is one a merge covers.
+            const spanned = new Set<number>();
             if (typeof rowOverride === 'string') {
                 // An onNode string for a whole row: paint it across the full grid width, since the
                 // engine has no markup to splice a replacement row into.
-                placed.push({ col: 0, span: cols, rowSpan: 1, lines: wrap(rowOverride, cols, rowIsHeader), header: rowIsHeader });
+                placed.push({ col: 0, span: cols, rowSpan: 1, text: rowOverride, header: rowIsHeader, lines: [] });
             }
             for (const cell of typeof rowOverride === 'string' ? [] : cells) {
                 const override = await this.onNodeValue(cell);
@@ -1025,10 +1032,48 @@ class NativeLayout {
                 // Cells built by the markup parsers carry their text only in `children`; reading
                 // `cell.text` alone rendered every Markdown/HTML table as an empty grid.
                 const text = typeof override === 'string' ? override : await this.flatText(cell);
+                // An empty cell under another's span (a merged range's covered cells, as XLSX keeps them)
+                // is not drawn: its box would cut through the merged one.
+                if (!text.trim() && (spanned.has(col) || (carry.get(col) || 0) > 0)) continue;
                 const header = rowIsHeader || meta?.style === 'header';
-                placed.push({ col, span, rowSpan: Math.max(1, meta?.rowSpan || 1), lines: wrap(text, span, header), header });
+                placed.push({ col, span, rowSpan: Math.max(1, meta?.rowSpan || 1), text, header, lines: [] });
+                for (let c = col + 1; c < col + span && c < cols; c++) spanned.add(c);
                 cursor = col + span;
             }
+            grid.push(placed);
+            // Record this row's rowspans, then age the carries by one row. The carry reserves the
+            // spanned columns below so later rows do not slide under a rowspan cell, and the cell's text
+            // is placed correctly in its first row. Its border box, though, covers only that first row:
+            // painting the continuation border correctly (a single tall box, or edges without internal
+            // lines, and correct across a page break) needs pre-measured row heights, so a rowspan
+            // cell's lower rows are left unbordered rather than mis-bordered.
+            const newCarry = new Map<number, number>();
+            for (const p of placed) {
+                if (p.rowSpan > 1) for (let c = p.col; c < p.col + p.span; c++) newCarry.set(c, p.rowSpan - 1);
+            }
+            for (const [c, v] of [...carry]) { if (v > 1) carry.set(c, v - 1); else carry.delete(c); }
+            for (const [c, v] of newCarry) carry.set(c, v);
+        }
+
+        // Each column as wide as its content asks, within the page: never narrower than its longest
+        // word (so a number is never broken over two lines), wider for longer text, sharing what is
+        // left. A table whose words alone are wider than the page is set smaller, down to 6pt, as a
+        // printout fits a wide sheet to the page width; past that a word is broken where it must be.
+        // Equal columns broke 104 into "10" over "4", and a narrow column's text a letter at a time.
+        const { widths, size } = this.columnWidths(grid, cols, pad);
+        const xs = [this.margin.left];
+        for (const w of widths) xs.push(xs[xs.length - 1] + w);
+        const spanWidth = (col: number, span: number) => xs[Math.min(col + span, cols)] - xs[Math.min(col, cols)];
+        /** Wraps a cell's (un-encoded) text to the width of the columns it spans. */
+        // A header cell is drawn bold, so it is wrapped at the bold font's widths.
+        const wrap = (text: string, col: number, span: number, header = false) => {
+            const face: FaceKey = header ? 'bold' : 'regular';
+            return wrapPlain(text, t => this.widthOf(t, face, size), Math.max(10, spanWidth(col, span) - 2 * pad), t => this.enc(t, face));
+        };
+
+        this.y += 2;
+        for (const placed of grid) {
+            for (const p of placed) p.lines = wrap(p.text, p.col, p.span, p.header);
             const lineH = size * 1.35;
             const rowH = Math.max(size * 1.4, ...placed.map(p => p.lines.length * lineH)) + 2 * pad;
             // Draw the row in vertical bands so a row taller than a whole page is split across pages
@@ -1037,7 +1082,6 @@ class NativeLayout {
             // lines, so the cell continues cleanly on the next page.
             const fullBand = Math.max(1, Math.floor((this.bottom - this.margin.top - 2 * pad) / lineH));
             const maxLines = Math.max(1, ...placed.map(p => p.lines.length));
-            const newCarry = new Map<number, number>();
             let lineOffset = 0;
             while (lineOffset < maxLines) {
                 const remaining = maxLines - lineOffset;
@@ -1055,31 +1099,56 @@ class NativeLayout {
                 const bandH = whole ? rowH : bandLines * lineH + 2 * pad;
                 const topY = this.pageH - this.y;
                 for (const p of placed) {
-                    const x = this.margin.left + p.col * colW;
-                    this.page.drawRectangle({ x, y: topY - bandH, width: colW * p.span, height: bandH, borderColor: border, borderWidth: 0.5, color: undefined });
+                    const x = xs[Math.min(p.col, cols)];
+                    this.page.drawRectangle({ x, y: topY - bandH, width: spanWidth(p.col, p.span), height: bandH, borderColor: border, borderWidth: 0.5, color: undefined });
                     const face: FaceKey = p.header ? 'bold' : 'regular';
                     let ty = topY - pad - size;
                     for (let li = lineOffset; li < lineOffset + bandLines && li < p.lines.length; li++) {
-                        this.drawLine(p.lines[li], face, x + pad, ty, size, this.lib.rgb(0.12, 0.12, 0.12), colW * p.span - 2 * pad); ty -= lineH;
+                        this.drawLine(p.lines[li], face, x + pad, ty, size, this.lib.rgb(0.12, 0.12, 0.12), spanWidth(p.col, p.span) - 2 * pad); ty -= lineH;
                     }
                 }
                 this.y += bandH;
                 lineOffset += bandLines;
             }
-            // Record this row's rowspans, then age the carries by one row. The carry reserves the
-            // spanned columns below so later rows do not slide under a rowspan cell, and the cell's text
-            // is placed correctly in its first row. Its border box, though, covers only that first row:
-            // painting the continuation border correctly (a single tall box, or edges without internal
-            // lines, and correct across a page break) needs a two-pass layout with pre-measured row
-            // heights, which is out of proportion to this opt-in engine's fallback role, so a rowspan
-            // cell's lower rows are left unbordered rather than mis-bordered.
-            for (const p of placed) {
-                if (p.rowSpan > 1) for (let c = p.col; c < p.col + p.span; c++) newCarry.set(c, p.rowSpan - 1);
-            }
-            for (const [c, v] of [...carry]) { if (v > 1) carry.set(c, v - 1); else carry.delete(c); }
-            for (const [c, v] of newCarry) carry.set(c, v);
         }
         this.y += 6;
+    }
+
+    /**
+     * The widths of a table's columns and the size its text is set in (see table): each column at least
+     * as wide as its longest word, at most as wide as its longest line, at 10pt; set smaller, down to 6pt,
+     * when its words alone are wider than the page. Measured from the cells that span one column.
+     */
+    private columnWidths(grid: { col: number; span: number; text: string; header: boolean }[][], cols: number, pad: number): { widths: number[]; size: number } {
+        const base = 10, smallest = 6, room = this.contentWidth;
+        const least = new Array<number>(cols).fill(2 * pad + 6), most = new Array<number>(cols).fill(2 * pad + 6);
+        for (const placed of grid) {
+            for (const p of placed) {
+                if (p.span !== 1 || p.col >= cols) continue;
+                const face: FaceKey = p.header ? 'bold' : 'regular';
+                let word = 0, line = 0;
+                for (const raw of p.text.split(/\r\n|\r|\n/)) {
+                    const encoded = this.enc(raw, face, false);
+                    line = Math.max(line, this.widthOf(encoded, face, base));
+                    for (const w of encoded.split(/\s+/)) if (w) word = Math.max(word, this.widthOf(w, face, base));
+                }
+                // A point to spare, so a word as wide as its column is not broken by rounding.
+                least[p.col] = Math.max(least[p.col], word + 1 + 2 * pad);
+                most[p.col] = Math.max(most[p.col], line + 1 + 2 * pad);
+            }
+        }
+        const sum = (a: number[]) => a.reduce((n, w) => n + w, 0);
+        const leastSum = sum(least), mostSum = sum(most);
+        if (mostSum <= room) return { widths: most.map(w => w * room / mostSum), size: base };
+        if (leastSum <= room) {
+            const spare = room - leastSum, give = mostSum - leastSum;
+            return { widths: least.map((w, c) => w + (give > 0 ? spare * (most[c] - w) / give : spare / cols)), size: base };
+        }
+        // The words alone are wider than the page: smaller text, its widths scaled with it.
+        const scale = Math.max(smallest / base, (room - 2 * pad * cols) / (leastSum - 2 * pad * cols));
+        const scaled = least.map(w => (w - 2 * pad) * scale + 2 * pad);
+        const total = sum(scaled);
+        return { widths: scaled.map(w => w * room / total), size: base * scale };
     }
 }
 

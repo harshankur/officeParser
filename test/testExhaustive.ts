@@ -4580,6 +4580,38 @@ async function testXlsxShownText(): Promise<void> {
 }
 
 /**
+ * A sheet is printed as a spreadsheet prints it: a merged range is one cell (XLSX keeps its covered cells,
+ * empty, and they were drawn as boxes under the merged one's text, which was wrapped to its first column),
+ * each column as wide as its content asks so a number is never broken over two lines (equal columns broke
+ * 104 into "10" over "4"), and each sheet on pages of its own, under its name.
+ */
+async function testSheetTablesInPdf(): Promise<void> {
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const column = (i: number) => (i >= 26 ? String.fromCharCode(64 + Math.floor(i / 26)) : '') + String.fromCharCode(65 + i % 26);
+    const wide = [0, 1].map(r => `<row r="${r + 1}">${Array.from({ length: 26 }, (_, c) => `<c r="${column(c)}${r + 1}"><v>${100 + r * 26 + c}</v></c>`).join('')}</row>`).join('');
+    const xlsx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="Invoice" sheetId="1" r:id="rId1"/><sheet name="Wide" sheetId="2" r:id="rId2"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/><Relationship Id="rId2" Target="worksheets/sheet2.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+        'xl/sharedStrings.xml': strToU8(`<?xml version="1.0"?><sst ${ns}><si><t>Invoice 2026-17 for ACME Corporation</t></si></sst>`),
+        'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1"/><c r="C1"/></row><row r="2"><c r="A2"><v>1</v></c><c r="B2"><v>2</v></c><c r="C2"><v>3</v></c></row></sheetData><mergeCells count="1"><mergeCell ref="A1:C1"/></mergeCells></worksheet>`),
+        'xl/worksheets/sheet2.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData>${wide}</sheetData></worksheet>`),
+    }));
+    const ast = await OfficeParser.parseOffice(xlsx, { fileType: 'xlsx' } as any) as OfficeParserAST;
+    const title = ast.content[0].children![0].children![0];
+    assert.deepStrictEqual([title.text, (title.metadata as any).colSpan, (title.metadata as any).rowSpan], ['Invoice 2026-17 for ACME Corporation', 3, undefined], 'a merged range is read as its top-left cell\'s span');
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const pages = back.content.filter(n => n.type === 'page').map(page => String(page.text ?? (page.children || []).map(c => c.text).join('\n')));
+    assert.strictEqual(pages.length, 2, `each sheet on a page of its own; got ${pages.length} pages`);
+    assert.ok(pages[0].includes('Invoice 2026-17 for ACME Corporation'), `the merged cell's text is on one line; got ${JSON.stringify(pages[0])}`);
+    assert.ok(pages[1].trimStart().startsWith('Wide'), `a sheet is printed under its name; got ${JSON.stringify(pages[1].slice(0, 40))}`);
+    const words = new Set(pages[1].split(/\s+/));
+    const broken = Array.from({ length: 52 }, (_, i) => String(100 + i)).filter(n => !words.has(n));
+    assert.deepStrictEqual(broken, [], 'no number in a 26-column sheet is broken over two lines');
+}
+
+/**
  * The native PDF engine draws GIF (its first frame) and uncompressed BMP pictures, turned into PNG: a PDF
  * holds neither, and both were dropped with IMAGE_PROCESSING_FAILED.
  */
@@ -6414,6 +6446,7 @@ async function runTests(): Promise<void> {
         ['Speaker notes in PDF', testSpeakerNotesInPdf],
         ['Native PDF GIF and BMP', testNativePdfGifAndBmp],
         ['XLSX shown text', testXlsxShownText],
+        ['Sheet tables in PDF', testSheetTablesInPdf],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],
