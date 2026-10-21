@@ -52,7 +52,7 @@
     }
   },
   {
-    "text": "A paragraph with styled text: subtle emphasis  followed by strong text and intense emphasis. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph  calibre can handle both with equal ease.",
+    "text": "A paragraph with styled text: subtle emphasis  followed by strong text and intense emphasis. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.",
     "metadata": {
       "sourceType": "rtf",
       "closestHeading": "Inline formatting"
@@ -116,14 +116,14 @@
     }
   },
   {
-    "text": "Now let’s look at a fancier tableone with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.",
+    "text": "Now let’s look at a fancier table—one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.",
     "metadata": {
       "sourceType": "rtf",
       "closestHeading": "Tables"
     }
   },
   {
-    "text": "| City or Town | Point A | Point B | Point C | Point D | Point E |\n| Point A |  |  |  |  |  |\n| Point B | 87 |  |  |  |  |\n| Point C | 64 | 56 |  |  |  |\n| Point D | 37 | 32 | 91 |  |  |\n| Point E | 93 | 35 | 54 | 43 |  |",
+    "text": "| City or Town | Point A | Point B | Point C | Point D | Point E |\n| Point A | — |  |  |  |  |\n| Point B | 87 | — |  |  |  |\n| Point C | 64 | 56 | — |  |  |\n| Point D | 37 | 32 | 91 | — |  |\n| Point E | 93 | 35 | 54 | 43 | — |",
     "metadata": {
       "sourceType": "rtf",
       "closestHeading": "Tables",

@@ -126,6 +126,15 @@ export interface RtfControl {
  * Union type representing any RTF parse tree node.
  */
 export type RtfNode = RtfGroup | RtfText | RtfControl;
+
+/** The characters RTF's symbol control words and control symbols stand for. */
+const RTF_SYMBOLS: ReadonlyMap<string, string> = new Map([
+    ['lquote', '\u2018'], ['rquote', '\u2019'], ['ldblquote', '\u201C'], ['rdblquote', '\u201D'],
+    ['emdash', '\u2014'], ['endash', '\u2013'], ['bullet', '\u2022'],
+    ['emspace', '\u2003'], ['enspace', '\u2002'], ['qmspace', '\u2005'],
+    ['zwj', '\u200D'], ['zwnj', '\u200C'], ['ltrmark', '\u200E'], ['rtlmark', '\u200F'],
+    ['~', '\u00A0'], ['_', '\u2011'], ['-', '\u00AD'],
+]);
 /**
  * Represents every RTF-supported image format that this parser handles.
  * This ensures compile-time safety. Adding a new format forces all maps to be updated.
@@ -362,6 +371,14 @@ export class SimpleRtfParser {
             this.index++;
             if (char === 0x0D && this.buffer[this.index] === 0x0A) this.index++;
             group.content.push({ type: 'control', value: 'par' });
+            return;
+        }
+
+        // The control symbols for characters: \~ a no-break space, \_ a non-breaking hyphen and \- an
+        // optional hyphen. Read as control words of their own, each was the character after it as text.
+        if (char === 0x7E || char === 0x5F || char === 0x2D) {
+            group.content.push({ type: 'control', value: String.fromCharCode(char) });
+            this.index++;
             return;
         }
 
@@ -1932,35 +1949,14 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 }
                 currentRunTextChunks.push('\n');
             }
-            // Quote characters
-            else if (node.value === 'lquote') {
-                // Left single quotation mark (U+2018)
+            // A character a control word or symbol stands for (quotes, dashes, a bullet, spaces of other
+            // widths, joiners, direction marks). Not read, \emdash and the rest were lost.
+            else if (RTF_SYMBOLS.has(node.value)) {
                 if (formattingChanged(currentFormatting, formatting)) {
                     flushRun();
                     currentFormatting = { ...formatting };
                 }
-                currentRunTextChunks.push('\u2018');
-            } else if (node.value === 'rquote') {
-                // Right single quotation mark (U+2019)
-                if (formattingChanged(currentFormatting, formatting)) {
-                    flushRun();
-                    currentFormatting = { ...formatting };
-                }
-                currentRunTextChunks.push('\u2019');
-            } else if (node.value === 'ldblquote') {
-                // Left double quotation mark (U+201C)
-                if (formattingChanged(currentFormatting, formatting)) {
-                    flushRun();
-                    currentFormatting = { ...formatting };
-                }
-                currentRunTextChunks.push('\u201C');
-            } else if (node.value === 'rdblquote') {
-                // Right double quotation mark (U+201D)
-                if (formattingChanged(currentFormatting, formatting)) {
-                    flushRun();
-                    currentFormatting = { ...formatting };
-                }
-                currentRunTextChunks.push('\u201D');
+                currentRunTextChunks.push(RTF_SYMBOLS.get(node.value)!);
             }
             // Unicode character
             else if (node.value === 'u') {

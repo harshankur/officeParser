@@ -4547,6 +4547,20 @@ async function testRtfHeaderRows(): Promise<void> {
 }
 
 /**
+ * RTF's symbol control words and control symbols are the characters they stand for: \emdash and the
+ * rest were dropped, and \~ was read as a tilde.
+ */
+async function testRtfSymbols(): Promise<void> {
+    const rtf = String.raw`{\rtf1 a\emdash b\endash c\bullet d\~e f\_g h\-i \lquote j\rquote \ldblquote k\rdblquote l\emspace m\enspace n}`;
+    const ast = await OfficeParser.parseOffice(Buffer.from(rtf), { fileType: 'rtf' } as any) as OfficeParserAST;
+    // A space after a control word is its delimiter, not text: `\\rquote \\ldblquote k` is ’“k.
+    const text = String((await ast.to('text')).value).trim();
+    assert.strictEqual(text, 'a\u2014b\u2013c\u2022d\u00A0e f\u2011g h\u00ADi \u2018j\u2019\u201Ck\u201Dl\u2003m\u2002n', `RTF symbol words are their characters; got ${JSON.stringify(text)}`);
+    const sample = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.rtf')), { fileType: 'rtf' } as any) as OfficeParserAST;
+    assert.ok(JSON.stringify(sample.content).includes('\u2014'), 'the sample RTF keeps its em dashes');
+}
+
+/**
  * A line break alone in a Markdown table cell, or at its edge, survives.
  */
 async function testMarkdownCellBreaks(): Promise<void> {
@@ -6192,6 +6206,7 @@ async function runTests(): Promise<void> {
         ['Chart scripts', testChartScripts],
         ['Markdown header rows', testMarkdownHeaderRows],
         ['RTF header rows', testRtfHeaderRows],
+        ['RTF symbol words', testRtfSymbols],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],
