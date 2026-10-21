@@ -760,6 +760,12 @@ async function markdownTests() {
         });
         check(`md: ${label} parses and serializes`, outcome === 'ok', outcome);
     }
+    // A document's stylesheet is bounded: its rules, the rules tried for each element and the ancestors
+    // looked through, so a thousand descendant rules over deeply nested elements cost in proportion.
+    const rules = Array.from({ length: 2000 }, (_, i) => `.a .a .a .b${i % 50}, div div div div div span.c { color: #${(i % 4096).toString(16).padStart(3, '0')} }`).join('\n');
+    await linear('html: a stylesheet of 4,000 descendant selectors over 20,000 nested elements', () => OfficeParser.parseOffice(Buffer.from(`<style>${rules}</style>`
+        + `${'<div class="a">'.repeat(200)}${'<span class="c b1">x</span>'.repeat(n(20_000))}${'</div>'.repeat(200)}`), { fileType: 'html' } as any));
+    await linear('html: a stylesheet of one unclosed block parses', () => OfficeParser.parseOffice(Buffer.from(`<style>${'p { color: red; '.repeat(n(50_000))}</style><p>x</p>`), { fileType: 'html' } as any));
     // A table cell's alignment wrappers are found once each, not searched for a closing tag from each.
     await linear('md: a cell of 80,000 unclosed alignment wrappers parses', () => OfficeParser.parseOffice(Buffer.from(`| a |\n| - |\n| ${'<div style="text-align: left">x'.repeat(n(80_000))} |`), { fileType: 'md' } as any));
     // Writing many blocks, or a paragraph of many runs, never reads back all it has written: reading

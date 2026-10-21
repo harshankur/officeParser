@@ -4801,12 +4801,17 @@
     },
     {
       "type": "paragraph",
-      "metadata": {},
+      "metadata": {
+        "spacing": {
+          "after": 9.6
+        }
+      },
       "children": [
         {
           "type": "text",
           "text": "In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.",
           "formatting": {
+            "backgroundColor": "#fdfdfd",
             "size": "10pt"
           },
           "rawContent": " In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre."
@@ -4825,12 +4830,17 @@
     },
     {
       "type": "paragraph",
-      "metadata": {},
+      "metadata": {
+        "spacing": {
+          "after": 9.6
+        }
+      },
       "children": [
         {
           "type": "text",
           "text": "Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.",
           "formatting": {
+            "backgroundColor": "#fdfdfd",
             "size": "10pt"
           },
           "rawContent": " Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note."

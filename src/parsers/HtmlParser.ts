@@ -11,6 +11,8 @@ import { cellSpan, MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
 import { textDecoder } from '../utils/encodingUtils.js';
 import { lengthToPt } from '../utils/officeGenUtils.js';
+import { cssColorHex } from '../utils/colorUtils.js';
+import { declarationsFor, isEmptyStylesheet, readStylesheet } from '../utils/cssRules.js';
 import { cssListStyle, formatListNumber, NumberFormat } from '../utils/listMarkers.js';
 
 /**
@@ -433,6 +435,19 @@ const getDeclaration = (decls: Map<string, string>, prop: string): string | unde
     ?? decls.get(`-moz-${prop}`)
     ?? decls.get(`-ms-${prop}`)
     ?? decls.get(`-o-${prop}`);
+
+/**
+ * The colour a `background` shorthand sets (`yellow`, `#ff0 url(x.png)`, `rgb(1, 2, 3) no-repeat`), or
+ * `transparent`, or undefined when it sets none.
+ */
+const shorthandColor = (value: string | undefined): string | undefined => {
+    if (!value || value.length > 512) return undefined;
+    for (const token of value.match(/[a-z-]+\([^()]*\)|#[0-9a-f]+|[a-z-]+/gi) ?? []) {
+        if (/^url\(/i.test(token)) continue;
+        if (token.toLowerCase() === 'transparent' || cssColorHex(token)) return token;
+    }
+    return undefined;
+};
 
 /**
  * A paragraph's or heading's own spacing from its inline style (see ParagraphSpacing): `margin-top` and
@@ -1018,6 +1033,35 @@ const decodeHtmlBytes = (buffer: Buffer): string => {
     return new TextDecoder('utf-8').decode(buffer);
 };
 
+/**
+ * Gives each element what the document's own stylesheet (its `<style>` elements) sets for it, before its
+ * `style` attribute so that its own declarations win (see cssRules). Outside SVG and MathML, whose
+ * `<style>` and classes are their own.
+ */
+const applyDocumentStylesheet = (root: HtmlNode): void => {
+    const texts: string[] = [];
+    const elements: HtmlNode[] = [];
+    const stack: HtmlNode[] = [root];
+    while (stack.length) {
+        const node = stack.pop()!;
+        if (node.type !== 'element' && node !== root) continue;
+        if (node.tagName === 'svg' || node.tagName === 'math') continue;
+        // A writer's own default styles (HTML output marks its stylesheet so) are no part of the document's look.
+        if (node.tagName === 'style') { if (node.attributes?.['data-default-styles'] === undefined) texts.push(rawChildText(node)); continue; }
+        if (node !== root) elements.push(node);
+        for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]);
+    }
+    if (!texts.length) return;
+    const sheet = readStylesheet(texts);
+    if (isEmptyStylesheet(sheet)) return;
+    for (const element of elements) {
+        const declarations = declarationsFor(sheet, element);
+        if (!declarations) continue;
+        const own = element.attributes?.style;
+        element.attributes = { ...element.attributes, style: own ? `${declarations}; ${own}` : declarations };
+    }
+};
+
 export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, part: HtmlPartContext = {}): Promise<OfficeParserAST> => {
     // Honour cancellation requests before the HTML tree is built and traversed.
     // The custom recursive HTML parser can be expensive for large documents;
@@ -1025,6 +1069,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
     checkAbortSignal(config.abortSignal);
 
     const { root, head, htmlAttributes, bodyAttributes } = parseHtmlTree(decodeHtmlBytes(buffer), config, config.htmlParserConfig?.preserveComments === true);
+    applyDocumentStylesheet(root);
     // What a browser shows: the document, its <head> passed over (the tree builds no <html> or <body>).
     const body = root;
 
@@ -1362,8 +1407,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 // and `currentcolor` name the colour the text already has, and `initial` and `revert` the
                 // default one: kept as written, `color: inherit` (what an editor adds to a highlight) was a
                 // colour, and the text was written back in a `<span style="color: inherit">`.
+                // A custom property's value (`var(--text)`) is the page's, not known here: no colour of its own.
                 const color = decls.get('color');
-                if (color) {
+                if (color && !/var\(/i.test(color)) {
                     const keyword = color.trim().toLowerCase();
                     if (keyword === 'initial' || keyword === 'revert' || keyword === 'revert-layer') delete newFormatting.color;
                     else if (keyword !== 'inherit' && keyword !== 'unset' && keyword !== 'currentcolor') newFormatting.color = color;
@@ -1371,8 +1417,10 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
 
                 // The same for a background, which is not inherited: every keyword is none, but `inherit`
                 // (the background around it) and `currentcolor` (a background in the text's colour).
-                const background = getDeclaration(decls, 'background-color');
-                if (background) {
+                // `background-color`, or the colour in the `background` shorthand (`background: yellow`,
+                // which editors write for a highlight): read from the longhand alone, it was lost.
+                const background = getDeclaration(decls, 'background-color') ?? shorthandColor(getDeclaration(decls, 'background'));
+                if (background && !/var\(/i.test(background)) {
                     const keyword = background.trim().toLowerCase();
                     if (keyword === 'transparent' || keyword === 'initial' || keyword === 'unset' || keyword === 'revert' || keyword === 'revert-layer') delete newFormatting.backgroundColor;
                     else if (keyword !== 'inherit') newFormatting.backgroundColor = background;

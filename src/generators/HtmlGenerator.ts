@@ -468,7 +468,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             metaTags = this.renderMetaTags();
         }
 
-        const styleBlock = sa.styles === 'none' ? '' : `<style>${
+        // Marked as the writer's own defaults, which a reader leaves out of the document's look.
+        const styleBlock = sa.styles === 'none' ? '' : `<style data-default-styles>${
             sa.styles === 'scoped'
                 ? this.getScopedPremiumStyles(this.isSpreadsheetMode, isPresentation, isPdf)
                 : this.getPremiumStyles(this.isSpreadsheetMode, isPresentation, isPdf)

@@ -1010,7 +1010,7 @@ async function testGeneratorConfigs(
                     }
                 });
 
-                const hasStyle = htmlVal.includes('<style>');
+                const hasStyle = /<style[\s>]/.test(htmlVal);
                 const hasEnvelopeScript = htmlVal.includes('cdn.jsdelivr.net/npm/chart.js') || htmlVal.includes('initSpreadsheetResizing');
                 const hasContainer = /<div class="[^"]*container[^"]*"/.test(htmlVal);
                 results.push({
@@ -1029,7 +1029,7 @@ async function testGeneratorConfigs(
             if (ct.id === 'G15' && destFmt === 'html') {
                 const htmlVal = typeof result.value === 'string' ? result.value : '';
                 const hasDoctype = htmlVal.includes('<!DOCTYPE');
-                const hasStyle = htmlVal.includes('<style>');
+                const hasStyle = /<style[\s>]/.test(htmlVal);
                 results.push({
                     category, feature: `${ct.id}: Styled fragment (document:false only)`, sourceFormat: srcFmt, destFormat: destFmt,
                     result: {

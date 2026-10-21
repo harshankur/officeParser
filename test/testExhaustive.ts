@@ -4770,6 +4770,33 @@ async function testListMarkers(): Promise<void> {
 }
 
 /**
+ * HTML styled by its own stylesheet keeps the look: a `<style>` element's rules (classes, ids, types,
+ * descendant and child selectors) reach the elements they select, under their own `style`, and the
+ * `background` shorthand's colour is read. The native PDF engine fills shaded cells, aligns and colours
+ * their text, highlights a run's background, and reads named and rgb() colours.
+ */
+async function testHtmlStylesheetAndShading(): Promise<void> {
+    const html = '<html><head><style>.red { color: #c00 } p.lead { font-weight: bold; text-align: center } .box td { background-color: #1F497D; color: white }'
+        + ' #t { color: blue } @media print { .red { color: green } } .list li > b { color: purple } p { margin: 40px } td:hover { color: red }</style></head><body>'
+        + '<p class="lead">Lead <span class="red">red</span> <span class="red" style="color: green">own</span> <span style="background: url(x.png) yellow">high</span></p>'
+        + '<p id="t">blue</p><table class="box"><tr><td>cell</td><td style="text-align: right; background: none">right</td></tr></table><ul class="list"><li><b>bold</b></li></ul></body></html>';
+    const ast = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' } as any) as OfficeParserAST;
+    const run = (text: string) => collectAllNodes(ast).find(n => n.type === 'text' && n.text === text)?.formatting ?? {};
+    assert.strictEqual(ast.content[0].metadata && (ast.content[0].metadata as any).alignment, 'center', 'a type-and-class rule aligns its paragraph');
+    assert.strictEqual((ast.content[1].metadata as any).spacing, undefined, 'a rule for every element of a type is the page\'s theme, not the document\'s');
+    assert.deepStrictEqual([run('red').color, run('own').color, run('blue').color, run('bold').color, run('Lead ').bold], ['#c00', 'green', 'blue', 'purple', true],
+        'class, id and child rules apply, an element\'s own style wins, and an at-rule\'s rules do not');
+    assert.deepStrictEqual([run('high').backgroundColor, run('cell').backgroundColor, run('cell').color], ['yellow', '#1F497D', 'white'], 'the background shorthand\'s colour and descendant rules are read');
+
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const at = (text: string) => collectAllNodes(back).find(n => n.type === 'text' && (n.text || '').includes(text));
+    assert.strictEqual(at('cell')?.formatting?.color?.toUpperCase(), '#FFFFFF', 'a cell\'s text is drawn in its colour');
+    const cell = at('cell')!.bounds!, right = at('right')!.bounds!;
+    assert.ok(right.x > cell.x + 200, `a right-aligned cell's text sits at its right; got ${right.x} against ${cell.x}`);
+}
+
+/**
  * The native PDF engine draws GIF (its first frame) and uncompressed BMP pictures, turned into PNG: a PDF
  * holds neither, and both were dropped with IMAGE_PROCESSING_FAILED.
  */
@@ -6610,6 +6637,7 @@ async function runTests(): Promise<void> {
         ['Paragraph spacing', testParagraphSpacing],
         ['Native PDF font kinds', testNativePdfFontKinds],
         ['List markers', testListMarkers],
+        ['HTML stylesheet and shading', testHtmlStylesheetAndShading],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],
