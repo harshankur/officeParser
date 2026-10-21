@@ -31,6 +31,7 @@ import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { attachmentLookup, repeatPreview, takeRepeats, valuesLength } from '../utils/repeatUtils.js';
 import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
 import { chargeRawContent, decodeXmlEntities, getChildElements, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, takeNodes } from '../utils/xmlUtils.js';
+import { MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
 import { BUILTIN_NUMBER_FORMATS, excelShownText } from '../utils/excelFormat.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 
@@ -94,6 +95,35 @@ const attributeNamed = (attrs: string, name: 'hidden' | 'min' | 'max'): string |
 
 /** Whether a boolean attribute's value is true (`1` or `true`, as the schema's xsd:boolean has it). */
 const isTrue = (value: string | undefined): boolean => value === '1' || value === 'true';
+
+/** A cell reference's 0-based column and row (`B3` is 1, 2), or null. */
+function cellAt(ref: string): { col: number; row: number } | null {
+    const match = /^\$?([A-Z]{1,3})\$?(\d{1,7})$/.exec(ref.trim());
+    if (!match) return null;
+    let col = 0;
+    for (const ch of match[1]) col = col * 26 + (ch.charCodeAt(0) - 64);
+    return { col: col - 1, row: Number(match[2]) - 1 };
+}
+
+/**
+ * A sheet's merged ranges (`<mergeCell ref="A1:F1"/>`) as the spans of their top-left cells, by `row:col`.
+ * The cells a merge covers are left as read (a writer sets an empty one under the span).
+ */
+function mergeSpans(sheetXml: string): Map<string, { colSpan: number; rowSpan: number }> {
+    const spans = new Map<string, { colSpan: number; rowSpan: number }>();
+    const merges = firstElementContent(sheetXml, 'mergeCells');
+    if (!merges) return spans;
+    for (const merge of xmlElements(merges, 'mergeCell')) {
+        const ref = /(?:^|\s)ref\s*=\s*["']([^"']*)["']/.exec(merge.attrs)?.[1];
+        const [from, to] = (ref ?? '').split(':').map(cellAt);
+        if (!from || !to || to.col < from.col || to.row < from.row) continue;
+        spans.set(`${from.row}:${from.col}`, {
+            colSpan: Math.min(to.col - from.col + 1, MAX_COL_SPAN),
+            rowSpan: Math.min(to.row - from.row + 1, MAX_ROW_SPAN),
+        });
+    }
+    return spans;
+}
 
 /**
  * The 0-based columns a sheet hides, as ranges [first, last]: its `<cols>`'s `<col>` elements with
@@ -774,6 +804,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             // Hidden columns and rows are read, and marked (CellMetadata.hidden): a printout leaves them
             // out, as the PDF writer does, and every other output keeps them as data.
             const hiddenColumns = hiddenColumnRanges(sheetXml);
+            // Merged ranges, as the spans of their first cells: a merged title was one narrow cell.
+            const merged = mergeSpans(sheetXml);
             const columnHidden = (col: number) => hiddenColumns.some(([first, last]) => col >= first && col <= last);
 
             /** Helper to convert Excel column string (A, B, AA, etc.) to 0-based index */
@@ -936,12 +968,19 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
 
                         const commentsNodeList = (ref && sheetCommentsMap[ref]) ? sheetCommentsMap[ref] : undefined;
 
+                        const span = merged.get(`${rowIndex}:${colIndex}`);
                         const cellNode: OfficeContentNode = {
                             type: 'cell',
                             text: text,
                             children: cellNodes,
                             comments: commentsNodeList,
-                            metadata: { row: rowIndex, col: colIndex, ...(shownText !== undefined ? { shownText } : {}), ...(rowHidden || columnHidden(colIndex) ? { hidden: true } : {}) }
+                            metadata: {
+                                row: rowIndex, col: colIndex,
+                                ...(span && span.colSpan > 1 ? { colSpan: span.colSpan } : {}),
+                                ...(span && span.rowSpan > 1 ? { rowSpan: span.rowSpan } : {}),
+                                ...(shownText !== undefined ? { shownText } : {}),
+                                ...(rowHidden || columnHidden(colIndex) ? { hidden: true } : {}),
+                            }
                         };
                         if (config.includeRawContent) {
                             cellNode.rawContent = chargeRawContent(cXml, config);

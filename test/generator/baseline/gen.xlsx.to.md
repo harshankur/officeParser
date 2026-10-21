@@ -82,21 +82,194 @@ TestBool: true
 
 ---
 
-| We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.  |  |  |  |  |  |  |  |  |  |  |  |  |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| December 2007  |  |  |  |  |  |  |  |  |  |  |  |  |
-| Sun  |   | Mon  |   | Tue  |   | Wed  |   | Thu  |   | Fri  |   | Sat  |
-|   |   |   |   |   |   |   |   |   |   |   |   | 1  |
-|   |   |   |   |   |   |   |   |   |   |   |   |   |
-| 2  |   | 3  |   | 4  |   | 5  |   | 6  |   | 7  |   | 8  |
-|   |   |   |   |   |   |   |   |   |   |   |   |   |
-| 9  |   | 10  |   | 11  |   | 12  |   | 13  |   | 14  |   | 15  |
-|   |   |   |   |   |   |   |   |   |   |   |   |   |
-| 16  |   | 17  |   | 18  |   | 19  |   | 20  |   | 21  |   | 22  |
-|   |   |   |   |   |   |   |   |   |   |   |   |   |
-| 23  |   | 24  |   | 25  |   | 26  |   | 27  |   | 28  |   | 29  |
-|   |   |   |   |   |   |   |   |   |   |   |   |   |
-| 30  |   | 31  |   |   |   |   |   |   |   |   |   |   |
+<table>
+  <tr>
+    <td><span style="color: #000000; font-size: 12pt">We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks. </span></td>
+  </tr>
+  <tr>
+    <td colspan="13"><span style="color: #365F91; font-size: 12pt">December 2007 </span></td>
+  </tr>
+  <tr>
+    <td><span style="color: #365F91; font-size: 12pt">Sun </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">Mon </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">Tue </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">Wed </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">Thu </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">Fri </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt">Sat </span></td>
+  </tr>
+  <tr>
+    <td><span style="color: #365F91; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt">1 </span></td>
+  </tr>
+  <tr>
+    <td><span style="color: #365F91; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+  </tr>
+  <tr>
+    <td><span style="color: #365F91; font-size: 12pt">2 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">3 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">4 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">5 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">6 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">7 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt">8 </span></td>
+  </tr>
+  <tr>
+    <td><span style="color: #365F91; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+  </tr>
+  <tr>
+    <td><span style="color: #365F91; font-size: 12pt">9 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">10 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">11 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">12 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">13 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">14 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt">15 </span></td>
+  </tr>
+  <tr>
+    <td><span style="color: #365F91; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+  </tr>
+  <tr>
+    <td><span style="color: #365F91; font-size: 12pt">16 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">17 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">18 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">19 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">20 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">21 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt">22 </span></td>
+  </tr>
+  <tr>
+    <td><span style="color: #365F91; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+  </tr>
+  <tr>
+    <td><span style="color: #365F91; font-size: 12pt">23 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">24 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">25 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">26 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">27 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">28 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt">29 </span></td>
+  </tr>
+  <tr>
+    <td><span style="color: #365F91; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+  </tr>
+  <tr>
+    <td><span style="color: #365F91; font-size: 12pt">30 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">31 </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt"> </span></td>
+  </tr>
+</table>
 
 ---
 
