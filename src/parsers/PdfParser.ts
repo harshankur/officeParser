@@ -49,6 +49,18 @@ import { setOwn } from '../utils/lookupUtils.js';
 import { acquirePdfProcess, PdfProcess } from './pdf/pdfProcess.js';
 import { appendAll } from '../utils/nodeListUtils.js';
 
+/**
+ * Look-alikes of CJK ideographs, which a PDF's font maps text to (Chromium's PDF of 日本語 reads as
+ * ⽇本語, a Kangxi radical first): the Kangxi radicals, the CJK radicals supplement and the
+ * compatibility ideographs. Each is read as the unified ideograph it stands for (its NFKC form), as
+ * pdftotext does, so search, copying and spelling see the text. Nothing else is normalized.
+ */
+const IDEOGRAPH_LOOKALIKE = /[\u2E80-\u2EFF\u2F00-\u2FDF\uF900-\uFAFF]|[\u{2F800}-\u{2FA1F}]/u;
+const IDEOGRAPH_LOOKALIKES = new RegExp(IDEOGRAPH_LOOKALIKE.source, 'gu');
+export function unifyIdeographs(text: string): string {
+    return IDEOGRAPH_LOOKALIKE.test(text) ? text.replace(IDEOGRAPH_LOOKALIKES, ch => ch.normalize('NFKC')) : text;
+}
+
 /** Type guard for a pdf.js TextItem (marked-content items lack `str`/`transform`). */
 function isTextItem(item: any): item is { str: string; transform: number[]; width: number; height: number; fontName: string; dir?: string; hasEOL?: boolean } {
     return item && typeof item.str === 'string' && Array.isArray(item.transform) && item.transform.length >= 6;
@@ -1124,7 +1136,7 @@ async function collectPage(
             ? segmentByLinks(box.x, box.width, box.yTop, box.height, len, links)
             : [{ start: 0, end: len, link: linkForBox(box.x, box.yTop, box.width, box.height, links) }];
         for (const seg of segments) {
-            const segText = item.str.slice(seg.start, seg.end);
+            const segText = unifyIdeographs(item.str.slice(seg.start, seg.end));
             if (!segText) continue;
             const segX = box.x + (len ? (seg.start / len) * box.width : 0);
             const segW = len ? ((seg.end - seg.start) / len) * box.width : box.width;

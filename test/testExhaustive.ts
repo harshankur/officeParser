@@ -4547,6 +4547,31 @@ async function testRtfHeaderRows(): Promise<void> {
 }
 
 /**
+ * Text a PDF's font maps to look-alikes of CJK ideographs (Kangxi radicals, compatibility ideographs),
+ * as Chromium's PDFs of Chinese and Japanese do, reads as the unified ideographs: ⽇本語 was the text.
+ */
+async function testPdfIdeographLookalikes(): Promise<void> {
+    const objects = [
+        '<< /Type /Catalog /Pages 2 0 R >>',
+        '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+        '<< /Length 41 >>\nstream\nBT /F1 24 Tf 20 100 Td (ABCD) Tj ET\nendstream',
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 6 0 R >>',
+    ];
+    // A becomes the Kangxi radical for 日, D the compatibility ideograph for 豈; B and C are 本 and 語.
+    const cmap = '/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /T def 1 begincodespacerange <00> <FF> endcodespacerange 4 beginbfchar <41> <2F47> <42> <672C> <43> <8A9E> <44> <F900> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end';
+    objects.push(`<< /Length ${cmap.length} >>\nstream\n${cmap}\nendstream`);
+    let pdf = '%PDF-1.7\n';
+    const offsets: number[] = [];
+    objects.forEach((o, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+    const xref = pdf.length;
+    pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+    const ast = await OfficeParser.parseOffice(Buffer.from(pdf, 'latin1'), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false }, onWarning: () => { } } as any) as OfficeParserAST;
+    const text = String((await ast.to('text')).value).trim();
+    assert.strictEqual(text, '\u65E5\u672C\u8A9E\u8C48', `look-alike ideographs read as the unified ones; got ${JSON.stringify(text)}`);
+}
+
+/**
  * RTF's symbol control words and control symbols are the characters they stand for: \emdash and the
  * rest were dropped, and \~ was read as a tilde.
  */
@@ -6207,6 +6232,7 @@ async function runTests(): Promise<void> {
         ['Markdown header rows', testMarkdownHeaderRows],
         ['RTF header rows', testRtfHeaderRows],
         ['RTF symbol words', testRtfSymbols],
+        ['PDF ideograph look-alikes', testPdfIdeographLookalikes],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],
