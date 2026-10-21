@@ -1,4 +1,4 @@
-import { CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextMetadata } from '../types.js';
+import { CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, IndentationMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TextMetadata } from '../types.js';
 import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
@@ -175,6 +175,20 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
     }
 
     /** A paragraph's opening: `\pard`, and in a table `\intbl` and, nested, how deeply (`\itapN`). */
+    /** A paragraph's or heading's alignment and indents (`\qc`, `\li`, `\ri`, `\fi`), when formatting is written. */
+    private paragraphLayout(meta: { alignment?: string; paragraphIndentation?: IndentationMetadata } | undefined): string {
+        if (!this.config.includeFormatting || !meta) return '';
+        let out = meta.alignment === 'center' ? '\\qc' : meta.alignment === 'right' ? '\\qr' : meta.alignment === 'justify' ? '\\qj' : '';
+        const ind = meta.paragraphIndentation;
+        // Written into control words, so only ever whole numbers.
+        const twips = (v: unknown) => clampInt(v, -31680, 31680, 0);
+        if (ind?.left) out += `\\li${twips(ind.left)}`;
+        if (ind?.right) out += `\\ri${twips(ind.right)}`;
+        if (ind?.firstLine) out += `\\fi${twips(ind.firstLine)}`;
+        else if (ind?.hanging) out += `\\fi${-twips(ind.hanging)}`;
+        return out;
+    }
+
     private pard(): string {
         if (this.tableDepth === 0) return '\\pard';
         return this.tableDepth === 1 ? '\\pard\\intbl' : `\\pard\\intbl\\itap${this.tableDepth}`;
@@ -276,21 +290,13 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     // Written into control words, so only ever a number.
                     const level = clampInt(meta?.level, 1, 9, 1);
                     const fontSize = 24 + (6 - level) * 4;
-                    const pPr = this.pard();
+                    const pPr = this.pard() + this.paragraphLayout(meta);
                     return `${pPr}\\s${level}\\sb240\\sa120{\\b\\fs${fontSize} ${childrenOutput}}\\par\n`;
                 }
 
                 case 'paragraph': {
                     let pPr = this.pard();
-                    pPr += '\\sa120';
-                    if (this.config.includeFormatting && node.metadata) {
-                        const meta = node.metadata as any;
-                        if (meta.alignment) {
-                            if (meta.alignment === 'center') pPr += '\\qc';
-                            else if (meta.alignment === 'right') pPr += '\\qr';
-                            else if (meta.alignment === 'justify') pPr += '\\qj';
-                        }
-                    }
+                    pPr += '\\sa120' + this.paragraphLayout(node.metadata as ParagraphMetadata | undefined);
                     return `${pPr} ${childrenOutput}\\par\n`;
                 }
 

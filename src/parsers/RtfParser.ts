@@ -40,7 +40,7 @@
  * @see https://latex2rtf.sourceforge.net/RTF-Spec-1.2.pdf RTF 1.2 Specification
  */
 
-import { CellMetadata, FullOfficeParserConfig, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, TextFormatting } from '../types.js';
+import { CellMetadata, FullOfficeParserConfig, ImageMetadata, IndentationMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, TextFormatting } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
@@ -683,6 +683,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // Paragraph-level state
     let paragraphIndent = 0;
     let paragraphAlignment: 'left' | 'center' | 'right' | 'justify' = 'left';
+    /** The paragraph's \li, \ri and \fi, in twips (a negative \fi is a hanging indent). */
+    let paragraphIndentation: IndentationMetadata = {};
     let isListItem = false;
     let listType: 'ordered' | 'unordered' | undefined;
     let headingLevel: number | undefined;
@@ -807,6 +809,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         runTextChunks: string[];
         runFormatting: TextFormatting;
         indent: number;
+        indentation: IndentationMetadata;
         alignment: 'left' | 'center' | 'right' | 'justify';
         listItem: boolean;
         list: 'ordered' | 'unordered' | undefined;
@@ -834,6 +837,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             runTextChunks: currentRunTextChunks,
             runFormatting: currentFormatting,
             indent: paragraphIndent,
+            indentation: paragraphIndentation,
             alignment: paragraphAlignment,
             listItem: isListItem,
             list: listType,
@@ -886,6 +890,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         currentFormatting = saved.runFormatting;
         paragraphIndent = saved.indent;
         paragraphAlignment = saved.alignment;
+        paragraphIndentation = saved.indentation;
         isListItem = saved.listItem;
         listType = saved.list;
         headingLevel = saved.heading;
@@ -1008,9 +1013,14 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 }
             }
 
+            // Alignment and indents, which a heading and a paragraph keep (a list item has its own).
+            const layout = {
+                ...(paragraphAlignment !== 'left' ? { alignment: paragraphAlignment } : {}),
+                ...(Object.keys(paragraphIndentation).length ? { paragraphIndentation: { ...paragraphIndentation } } : {}),
+            };
             if (headingLevel !== undefined && headingLevel > 0) {
                 nodeType = 'heading';
-                metadata = { level: headingLevel };
+                metadata = { level: headingLevel, ...layout };
                 // Reset list context when we encounter a heading
                 lastKnownListId = undefined;
                 lastKnownListType = undefined;
@@ -1062,6 +1072,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 if (effectiveListType) {
                     lastKnownListType = effectiveListType;
                 }
+            } else if (Object.keys(layout).length) {
+                metadata = layout;
             }
 
             const node: OfficeContentNode = {
@@ -1927,6 +1939,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 paragraphDepth = 0;
                 // Reset other props...
                 paragraphIndent = 0;
+                paragraphIndentation = {};
                 paragraphAlignment = 'left';
                 isListItem = false;
                 listType = undefined;
@@ -2048,8 +2061,15 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             // List control words
             // ═══════════════════════════════════════════════════════════
             // Paragraph indentation (\li - left indent in twips)
+            else if ((node.value === 'ri' || node.value === 'fi') && node.param !== undefined) {
+                paragraphIndentation = { ...paragraphIndentation };
+                if (node.value === 'ri') { if (node.param) paragraphIndentation.right = node.param; else delete paragraphIndentation.right; }
+                else { delete paragraphIndentation.firstLine; delete paragraphIndentation.hanging; if (node.param > 0) paragraphIndentation.firstLine = node.param; else if (node.param < 0) paragraphIndentation.hanging = -node.param; }
+            }
             else if (node.value === 'li') {
                 if (node.param !== undefined) {
+                    paragraphIndentation = { ...paragraphIndentation, left: node.param };
+                    if (!node.param) delete paragraphIndentation.left;
                     // Standard level indent is 720 twips (0.5 inch)
                     // Using a slightly more flexible divisor to account for different generators
                     const level = Math.round(node.param / 720);

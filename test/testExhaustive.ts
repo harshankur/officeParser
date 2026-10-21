@@ -4634,6 +4634,50 @@ async function testNativePdfLinks(): Promise<void> {
 }
 
 /**
+ * Paragraphs keep their alignment and indents: the native PDF engine sets them (every paragraph printed
+ * left-aligned, from the margin), Word's justified paragraphs (`w:jc="both"`) are read as justified, and
+ * ODT's and RTF's indents are read (RTF's plain paragraphs lost their alignment too) and written by RTF.
+ */
+async function testParagraphLayout(): Promise<void> {
+    const html = '<h1 style="text-align:center">Centred title</h1><p style="text-align:right">Right aligned line</p><p style="text-align:justify">'
+        + 'Justified words fill the whole line from edge to edge, '.repeat(6) + 'and the last line is not stretched.</p>';
+    const ast = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' } as any) as OfficeParserAST;
+    ast.content.push({ type: 'paragraph', metadata: { paragraphIndentation: { left: 1440, right: 1440 } }, children: [{ type: 'text', text: 'An inch in from each side, '.repeat(8) }] } as any);
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const [title, right, justified, indented] = back.content[0].children!.map(n => n.bounds!);
+    const near = (a: number, b: number, what: string) => assert.ok(Math.abs(a - b) < 3, `${what}: ${a.toFixed(1)}, not ${b.toFixed(1)}`);
+    const pageW = 595.28, margin = 48;
+    near(title.x + title.width / 2, pageW / 2, 'a centred heading is centred');
+    near(right.x + right.width, pageW - margin, 'a right-aligned line ends at the right margin');
+    near(justified.width, pageW - 2 * margin, 'a justified paragraph fills the line');
+    near(indented.x, margin + 72, 'an indented paragraph starts an inch in');
+    assert.ok(indented.x + indented.width <= pageW - margin - 72 + 3, `an indented paragraph ends an inch in; got ${indented.x + indented.width}`);
+
+    const ns = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+    const docx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${ns}><w:body>${['both', 'start', 'end', 'distribute'].map(jc => `<w:p><w:pPr><w:jc w:val="${jc}"/></w:pPr><w:r><w:t>${jc}</w:t></w:r></w:p>`).join('')}</w:body></w:document>`),
+    }));
+    const word = await OfficeParser.parseOffice(docx, { fileType: 'docx' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(word.content.map(n => (n.metadata as any).alignment), ['justify', 'left', 'right', 'justify'], 'Word\'s w:jc values are read');
+
+    const rtf = await OfficeParser.parseOffice(Buffer.from('{\\rtf1\\ansi\\pard\\qc\\li720\\ri360\\fi-360 Centred and indented.\\par\\pard\\li0 Plain.\\par}'), { fileType: 'rtf' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(rtf.content.map(n => [(n.metadata as any)?.alignment, (n.metadata as any)?.paragraphIndentation]), [['center', { left: 720, right: 360, hanging: 360 }], [undefined, undefined]], 'RTF paragraphs keep their alignment and indents');
+    const rtfOut = String((await rtf.to('rtf', { includeFormatting: true } as any)).value);
+    assert.ok(/\\qc\\li720\\ri360\\fi-360/.test(rtfOut), `RTF output writes them; got ${rtfOut.slice(0, 400)}`);
+
+    const odt = await OfficeParser.parseOffice(Buffer.from(zipSync({
+        'mimetype': strToU8('application/vnd.oasis.opendocument.text'),
+        'content.xml': strToU8('<?xml version="1.0"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0">'
+            + '<office:automatic-styles><style:style style:name="P1" style:family="paragraph"><style:paragraph-properties fo:margin-left="0.5in" fo:margin-right="0in" fo:text-indent="0.25in"/></style:style></office:automatic-styles>'
+            + '<office:body><office:text><text:p text:style-name="P1">Indented.</text:p></office:text></office:body></office:document-content>'),
+    })), { fileType: 'odt' } as any) as OfficeParserAST;
+    assert.deepStrictEqual((odt.content[0].metadata as any).paragraphIndentation, { left: 720, firstLine: 360 }, 'ODT indents are read, in twips');
+}
+
+/**
  * The native PDF engine draws GIF (its first frame) and uncompressed BMP pictures, turned into PNG: a PDF
  * holds neither, and both were dropped with IMAGE_PROCESSING_FAILED.
  */
@@ -6470,6 +6514,7 @@ async function runTests(): Promise<void> {
         ['XLSX shown text', testXlsxShownText],
         ['Sheet tables in PDF', testSheetTablesInPdf],
         ['Native PDF links', testNativePdfLinks],
+        ['Paragraph layout', testParagraphLayout],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

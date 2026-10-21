@@ -269,6 +269,23 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
     };
 
     // Helper to extract indentation from paragraph properties XML string
+    /**
+     * A paragraph's `w:jc` as an alignment: Word writes a justified paragraph as `both` (and `distribute`
+     * or a kashida or Thai kind for its variants), and newer files `start` and `end` for left and right.
+     * Only `left`, `center`, `right` and a non-schema `justify` were read, so every justified paragraph
+     * read as left-aligned.
+     */
+    const jcAlignment = (val: string | null | undefined): 'left' | 'center' | 'right' | 'justify' | undefined => {
+        switch (val) {
+            case 'left': case 'start': return 'left';
+            case 'right': case 'end': return 'right';
+            case 'center': return 'center';
+            case 'both': case 'justify': case 'distribute': case 'thaiDistribute':
+            case 'lowKashida': case 'mediumKashida': case 'highKashida': return 'justify';
+            default: return undefined;
+        }
+    };
+
     const extractIndentationFromXml = (pPr: Element): IndentationMetadata | undefined => {
         const ind = getFirstElementByTagName(pPr, "w:ind");
         if (ind) {
@@ -731,13 +748,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 let paragraphIndentation: IndentationMetadata | undefined = undefined;
 
                 if (pPr) {
-                    const jc = getFirstElementByTagName(pPr, "w:jc");
-                    if (jc) {
-                        const val = jc.getAttribute("w:val");
-                        if (val === 'left' || val === 'center' || val === 'right' || val === 'justify') {
-                            alignment = val;
-                        }
-                    }
+                    const jc = jcAlignment(getFirstElementByTagName(pPr, "w:jc")?.getAttribute("w:val"));
+                    if (jc) alignment = jc;
                     const shd = getFirstElementByTagName(pPr, "w:shd");
                     if (shd) {
                         const fill = shd.getAttribute("w:fill");
@@ -843,13 +855,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         // Extract Alignment
         let alignment = styleProps.alignment;
         if (pPr) {
-            const jc = getFirstElementByTagName(pPr, "w:jc");
-            if (jc) {
-                const val = jc.getAttribute("w:val");
-                if (val === 'left' || val === 'center' || val === 'right' || val === 'justify') {
-                    alignment = val;
-                }
-            }
+            const jc = jcAlignment(getFirstElementByTagName(pPr, "w:jc")?.getAttribute("w:val"));
+            if (jc) alignment = jc;
         }
 
         // Extract Indentation

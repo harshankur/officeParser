@@ -870,8 +870,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     }
                     let content = `${prefix}${headingText}${headingText ? id : id.trimStart()}`;
 
-                    // Alignment fallback via HTML div/p
-                    if (this.resolvedFallbackToHtml.alignment && meta?.alignment && meta.alignment !== 'left') {
+                    // Alignment fallback via HTML div/p, for a heading with something in it to align.
+                    if (this.resolvedFallbackToHtml.alignment && meta?.alignment && meta.alignment !== 'left' && content.trim()) {
                         // Use extra newlines to ensure Markdown inside the div is parsed
                         content = `<div style="text-align: ${sanitizeCssValue(meta.alignment)}">\n\n${content}\n\n</div>`;
                     }

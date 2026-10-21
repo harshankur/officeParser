@@ -6,7 +6,11 @@ There is support for images, tables, lists, footnotes, endnotes, links, dropcaps
 
 To see the DOCX conversion in action, simply add this file to calibre using the **“Add Books”** button and then click “**Convert”.**  Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click **“OK”**.
 
+<div style="text-align: center">
+
 # Text Formatting {#toc2054249818}
+
+</div>
 
 ## Inline formatting {#toc2137712100}
 
@@ -23,11 +27,15 @@ This document has embedded the Ubuntu font family. The body text is in the Ubunt
 <a name="paragraph-level-formatting"></a>
 ## Paragraph level formatting {#toc2022725662}
 
-==You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.==
+<div style="text-align: right">==You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.==</div>
 
 For the lovers of poetry amongst you, paragraphs with hanging indents, like this often come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph.
 
+<div style="text-align: center">
+
 # Tables {#toc28114276}
+
+</div>
 
 | ITEM | NEEDED |
 | --- | --- |
@@ -41,13 +49,13 @@ Tables in Word can vary from the extremely simple to the extremely complex. cali
 
 Now let’s look at a fancier table—one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.
 
-| City or Town | Point A | Point B | Point C | Point D | Point E |
+| City or Town | <div style="text-align: center">Point A</div> | <div style="text-align: center">Point B</div> | <div style="text-align: center">Point C</div> | <div style="text-align: center">Point D</div> | <div style="text-align: center">Point E</div> |
 | --- | --- | --- | --- | --- | --- |
-| Point A | — |  |  |  |  |
-| Point B | 87 | — |  |  |  |
-| Point C | 64 | 56 | — |  |  |
-| Point D | 37 | 32 | 91 | — |  |
-| Point E | 93 | 35 | 54 | 43 | — |
+| Point A | <div style="text-align: center">—</div> |  |  |  |  |
+| Point B | <div style="text-align: center">87</div> | <div style="text-align: center">—</div> |  |  |  |
+| Point C | <div style="text-align: center">64</div> | <div style="text-align: center">56</div> | <div style="text-align: center">—</div> |  |  |
+| Point D | <div style="text-align: center">37</div> | <div style="text-align: center">32</div> | <div style="text-align: center">91</div> | <div style="text-align: center">—</div> |  |
+| Point E | <div style="text-align: center">93</div> | <div style="text-align: center">35</div> | <div style="text-align: center">54</div> | <div style="text-align: center">43</div> | <div style="text-align: center">—</div> |
 
 Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved.
 
@@ -83,22 +91,26 @@ Next, we have something a little more complex, a nested table, i.e. a table insi
 
 We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.
 
-| December 2007 |  |  |  |  |  |  |  |  |  |  |  |  |
+| <div style="text-align: right">December 2007</div> |  |  |  |  |  |  |  |  |  |  |  |  |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Sun |  | Mon |  | Tue |  | Wed |  | Thu |  | Fri |  | Sat |
-|  |  |  |  |  |  |  |  |  |  |  |  | 1 |
+| <div style="text-align: right">Sun</div> |  | <div style="text-align: right">Mon</div> |  | <div style="text-align: right">Tue</div> |  | <div style="text-align: right">Wed</div> |  | <div style="text-align: right">Thu</div> |  | <div style="text-align: right">Fri</div> |  | <div style="text-align: right">Sat</div> |
+|  |  |  |  |  |  |  |  |  |  |  |  | <div style="text-align: right">1</div> |
 |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| 2 |  | 3 |  | 4 |  | 5 |  | 6 |  | 7 |  | 8 |
+| <div style="text-align: right">2</div> |  | <div style="text-align: right">3</div> |  | <div style="text-align: right">4</div> |  | <div style="text-align: right">5</div> |  | <div style="text-align: right">6</div> |  | <div style="text-align: right">7</div> |  | <div style="text-align: right">8</div> |
 |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| 9 |  | 10 |  | 11 |  | 12 |  | 13 |  | 14 |  | 15 |
+| <div style="text-align: right">9</div> |  | <div style="text-align: right">10</div> |  | <div style="text-align: right">11</div> |  | <div style="text-align: right">12</div> |  | <div style="text-align: right">13</div> |  | <div style="text-align: right">14</div> |  | <div style="text-align: right">15</div> |
 |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| 16 |  | 17 |  | 18 |  | 19 |  | 20 |  | 21 |  | 22 |
+| <div style="text-align: right">16</div> |  | <div style="text-align: right">17</div> |  | <div style="text-align: right">18</div> |  | <div style="text-align: right">19</div> |  | <div style="text-align: right">20</div> |  | <div style="text-align: right">21</div> |  | <div style="text-align: right">22</div> |
 |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| 23 |  | 24 |  | 25 |  | 26 |  | 27 |  | 28 |  | 29 |
+| <div style="text-align: right">23</div> |  | <div style="text-align: right">24</div> |  | <div style="text-align: right">25</div> |  | <div style="text-align: right">26</div> |  | <div style="text-align: right">27</div> |  | <div style="text-align: right">28</div> |  | <div style="text-align: right">29</div> |
 |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| 30 |  | 31 |  |  |  |  |  |  |  |  |  |  |
+| <div style="text-align: right">30</div> |  | <div style="text-align: right">31</div> |  |  |  |  |  |  |  |  |  |  |
+
+<div style="text-align: center">
 
 # Structural Elements {#toc54889875}
+
+</div>
 
 Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like.
 
@@ -154,7 +166,11 @@ You can see the Table of Contents created by calibre by clicking the Table of Co
 
 [<u>*Continued Lists*</u>](#toc1471533984)[	](#toc1471533984)[<u>*8*</u>](#toc1471533984)
 
+<div style="text-align: center">
+
 # Images {#toc484565143}
+
+</div>
 
 Centered images like this are useful for large pictures that should be a focus of attention.
 
@@ -162,7 +178,11 @@ Centered images like this are useful for large pictures that should be a focus o
 
 There is no analogous technology in ebooks, so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was *inserted*, not necessarily where it appears on the page in Word.
 
+<div style="text-align: center">
+
 # Lists {#toc1359965655}
+
+</div>
 
 All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets.
 

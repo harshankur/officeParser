@@ -21,7 +21,7 @@
  * @module OpenOfficeParser
  */
 
-import { BreakMetadata, CellMetadata, ChartData, ChartMetadata, CodeMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, PageMetadata, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
+import { BreakMetadata, CellMetadata, ChartData, ChartMetadata, CodeMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, PageMetadata, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { chartRawTexts, extractChartData, MAX_CHART_VALUES } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
@@ -29,6 +29,7 @@ import { mathmlToLatex } from '../utils/mathUtils.js';
 import { cellSpan, clampRepeat, MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
 import { TextBuilder } from '../utils/textUtils.js';
 import { lookupTable, plainRecord } from '../utils/lookupUtils.js';
+import { lengthToPt } from '../utils/officeGenUtils.js';
 
 /**
  * Tracks how many table cells a single document has been allowed to materialize.
@@ -142,6 +143,8 @@ const createCellBudget = (config: OfficeParserConfig): CellBudget =>
  */
 interface ParagraphStyleInfo {
     alignment?: 'left' | 'center' | 'right' | 'justify';
+    /** `fo:margin-left`, `fo:margin-right` and `fo:text-indent`, in twips as Word's are read. */
+    indentation?: IndentationMetadata;
     dropCap?: boolean;
     /** `fo:break-before` - a break emitted before the paragraph that carries the style. */
     breakBefore?: 'page' | 'column';
@@ -504,6 +507,16 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     }
                 }
 
+                // Indents, in twips as the AST has Word's (a negative first-line indent is a hanging one).
+                const twips = (attr: string) => { const pt = lengthToPt(paraProps.getAttribute(attr) || undefined); return pt ? Math.round(pt * 20) : 0; };
+                const indentation: IndentationMetadata = {};
+                const left = twips("fo:margin-left"), right = twips("fo:margin-right"), first = twips("fo:text-indent");
+                if (left) indentation.left = left;
+                if (right) indentation.right = right;
+                if (first > 0) indentation.firstLine = first;
+                else if (first < 0) indentation.hanging = -first;
+                if (Object.keys(indentation).length) styleInfo.indentation = indentation;
+
                 // Detect Drop Caps
                 const dropCap = getDirectChildren(paraProps, "style:drop-cap")[0];
                 if (dropCap) {
@@ -745,6 +758,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 children: npContent.children,
                                 metadata: {
                                     ...(npContent.alignment ? { alignment: npContent.alignment } : {}),
+                                    ...(npContent.indentation ? { paragraphIndentation: npContent.indentation } : {}),
                                     ...(npContent.anchorIds?.length ? { anchorIds: npContent.anchorIds } : {})
                                 }
                             };
@@ -985,7 +999,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         styleMap: Record<string, TextFormatting>,
         config: OfficeParserConfig,
         sourceXml: string
-    ): { text: string; children: OfficeContentNode[]; alignment?: 'left' | 'center' | 'right' | 'justify'; style?: string; anchorIds?: string[] } => {
+    ): { text: string; children: OfficeContentNode[]; alignment?: 'left' | 'center' | 'right' | 'justify'; indentation?: IndentationMetadata; style?: string; anchorIds?: string[] } => {
         // Get paragraph style for alignment and drop caps
         const paraStyle = node.getAttribute("text:style-name");
         const styleInfo = paraStyle ? paraStyleMap[paraStyle] : undefined;
@@ -1052,7 +1066,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             }
         }
 
-        return { text: content.text, children: content.children, alignment, style: paraStyle || undefined, anchorIds: content.anchorIds };
+        return { text: content.text, children: content.children, alignment, indentation: styleInfo?.indentation, style: paraStyle || undefined, anchorIds: content.anchorIds };
     };
 
     /**
@@ -1167,6 +1181,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                         metadata: {
                                             level: parseInt(element.getAttribute("text:outline-level") || "1"),
                                             ...(pContent.alignment ? { alignment: pContent.alignment } : {}),
+                                            ...(pContent.indentation ? { paragraphIndentation: pContent.indentation } : {}),
                                             ...(pContent.style ? { style: pContent.style } : {})
                                         }
                                     };
@@ -1177,6 +1192,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                         children: pContent.children,
                                         metadata: {
                                             ...(pContent.alignment ? { alignment: pContent.alignment } : {}),
+                                            ...(pContent.indentation ? { paragraphIndentation: pContent.indentation } : {}),
                                             ...(pContent.style ? { style: pContent.style } : {})
                                         }
                                     };
@@ -1395,6 +1411,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                 const metadata: any = {
                     ...(pContent.alignment ? { alignment: pContent.alignment } : {}),
+                    ...(pContent.indentation ? { paragraphIndentation: pContent.indentation } : {}),
                     ...(pContent.style ? { style: pContent.style } : {}),
                     ...(pContent.anchorIds?.length ? { anchorIds: pContent.anchorIds } : {})
                 };
@@ -1433,6 +1450,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 const metadata: any = {
                     level,
                     ...(hContent.alignment ? { alignment: hContent.alignment } : {}),
+                    ...(hContent.indentation ? { paragraphIndentation: hContent.indentation } : {}),
                     ...(hContent.style ? { style: hContent.style } : {}),
                     ...(hContent.anchorIds?.length ? { anchorIds: hContent.anchorIds } : {})
                 };

@@ -17,7 +17,7 @@
  * @module generators/pdf/nativePdfEngine
  */
 
-import { EmbedMetadata, FullGeneratorConfig, ImageMode, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextFormatting } from '../../types.js';
+import { EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextAlignment, TextFormatting } from '../../types.js';
 import { getAbortError, getOfficeError } from '../../utils/errorUtils.js';
 import { documentLanguage, embedUrl, isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize } from '../../utils/officeGenUtils.js';
 import { decodeBmp, decodeGif, encodePng } from '../../utils/rasterUtils.js';
@@ -210,6 +210,9 @@ interface Piece { text: string; face: FaceKey; size: number; color: any; underli
 
 /** A stretch of inline text in one formatting, and the target it links to, if any. */
 type Run = { text: string; fmt: TextFormatting; link?: string };
+
+/** How a paragraph's lines sit: its alignment, and where its first line starts against the others. */
+interface LineLayout { align?: TextAlignment; firstLine?: number }
 
 /** One embedded font and the code points it has a glyph for. */
 interface Face { font: any; covers: (cp: number) => boolean; }
@@ -594,7 +597,7 @@ class NativeLayout {
      * Wraps a set of inline runs into lines within `[left, left+width]` and draws them, paginating as
      * needed. Returns nothing; advances the cursor to just below the last line.
      */
-    private drawRuns(runs: Run[], left: number, width: number, mono = false): void {
+    private drawRuns(runs: Run[], left: number, width: number, mono = false, layout: LineLayout = {}): void {
         // Expand runs into per-word pieces (a trailing-space flag lets us re-insert inter-word gaps).
         // A piece is a word, or (`brk`) a forced break: a new line, or a new page.
         const pieces: { p: Piece; space: boolean; brk?: 'line' | 'page' }[] = [];
@@ -627,8 +630,13 @@ class NativeLayout {
         const spaceWidth = (p: Piece) => this.widthOf(' ', p.face, p.size);
         let line: { p: Piece; space: boolean; w: number }[] = [];
         let lineWidth = 0;
+        // The paragraph's first line starts `firstLine` points in from the others (out, when negative).
+        let firstOfParagraph = true;
+        const lineStart = () => firstOfParagraph ? (layout.firstLine || 0) : 0;
+        const lineRoom = () => width - lineStart();
 
-        const flush = () => {
+        /** Draws the line gathered; `last` when it ends the paragraph or a forced break ends it. */
+        const flush = (last: boolean) => {
             if (!line.length) return;
             const lh = Math.max(...line.map(it => it.p.size)) * 1.35;
             this.ensureSpace(lh);
@@ -639,7 +647,14 @@ class NativeLayout {
                 items.push({ p: it.p, w: it.w, dir: directionOf(it.p.text) });
                 if (it.space && i < line.length - 1) items.push({ w: spaceWidth(it.p), dir: 'neutral' });
             });
-            let x = baseRtl ? left + Math.max(0, width - items.reduce((s, it) => s + it.w, 0)) : left;
+            const room = lineRoom();
+            const used = items.reduce((s, it) => s + it.w, 0);
+            const free = Math.max(0, room - used);
+            // A justified line's spaces share what is left, but for its last line (as a word processor sets it).
+            const gaps = items.filter(it => !it.p).length;
+            const stretch = layout.align === 'justify' && !last && gaps ? free / gaps : 0;
+            const align = layout.align === 'center' || layout.align === 'right' ? layout.align : baseRtl ? 'right' : 'left';
+            let x = left + lineStart() + (align === 'center' ? free / 2 : align === 'right' ? free : 0);
             for (const it of visualOrder(items, baseRtl)) {
                 if (it.p) {
                     this.drawText(it.p.text, it.p.face, x, baseline, it.p.size, it.p.color);
@@ -648,18 +663,19 @@ class NativeLayout {
                     }
                     if (it.p.link) this.addLinkBox(it.p.link, x, baseline - it.p.size * 0.25, it.w, it.p.size * 1.15);
                 }
-                x += it.w;
+                x += it.w + (it.p ? 0 : stretch);
             }
             this.y += lh;
             line = [];
             lineWidth = 0;
+            firstOfParagraph = false;
         };
 
         for (const piece of pieces) {
             if (piece.brk) {
                 // A line ended here: the next starts below it. Two in a row leave an empty line.
-                if (line.length) flush();
-                else { const lh = piece.p.size * 1.35; this.ensureSpace(lh); this.y += lh; }
+                if (line.length) flush(true);
+                else { const lh = piece.p.size * 1.35; this.ensureSpace(lh); this.y += lh; firstOfParagraph = false; }
                 if (piece.brk === 'page') this.newPage();
                 continue;
             }
@@ -668,12 +684,33 @@ class NativeLayout {
             // runs (or a splitToWidth chunk) has space:false and draws with no gap, so measuring one
             // there wrapped such lines slightly early and disagreed with what flush() draws.
             const prev = line[line.length - 1];
-            if (prev && lineWidth + (prev.space ? spaceWidth(prev.p) : 0) + w > width) flush();
+            if (prev && lineWidth + (prev.space ? spaceWidth(prev.p) : 0) + w > lineRoom()) flush(false);
             const prevAfter = line[line.length - 1];
             lineWidth += (prevAfter && prevAfter.space ? spaceWidth(prevAfter.p) : 0) + w;
             line.push({ p: piece.p, space: piece.space, w });
         }
-        flush();
+        flush(true);
+    }
+
+    /**
+     * Where a paragraph or heading sits: its left edge and width within the page's text column, from its
+     * indents (in twips, as Word gives them; out into the margin when negative), and its lines' layout.
+     */
+    private placement(node: OfficeContentNode, indentLeft = 0): { left: number; width: number; layout: LineLayout } {
+        const meta = node.metadata as { alignment?: TextAlignment; paragraphIndentation?: IndentationMetadata } | undefined;
+        const pt = (twips: unknown) => typeof twips === 'number' && Number.isFinite(twips) ? twips / 20 : 0;
+        const ind = meta?.paragraphIndentation;
+        let left = this.margin.left + indentLeft + pt(ind?.left);
+        let right = this.margin.left + this.contentWidth - pt(ind?.right);
+        // Never past the page's edges, and never narrower than an inch: an indent that leaves less is
+        // the source's own mistake, or a unit this engine does not read.
+        left = Math.max(0, left);
+        right = Math.min(this.pageW, right);
+        if (right - left < 72) { left = this.margin.left + indentLeft; right = this.margin.left + this.contentWidth; }
+        const firstLine = ind?.firstLine ? pt(ind.firstLine) : ind?.hanging ? -pt(ind.hanging) : 0;
+        const width = right - left;
+        const align = meta?.alignment && ['left', 'center', 'right', 'justify'].includes(meta.alignment) ? meta.alignment : undefined;
+        return { left, width, layout: { align, firstLine: Math.max(-left, Math.min(firstLine, width - 72)) } };
     }
 
     /**
@@ -817,7 +854,8 @@ class NativeLayout {
         const runs = (await this.collectRuns(node)).map(r => ({ ...r, fmt: { ...r.fmt, bold: true, size: `${size}pt` } }));
         const title = (runs.length ? runs.map(r => r.text).join('') : node.text || '').replace(/\s+/g, ' ').trim();
         if (title) this.outlineEntries.push({ title, level, page: this.page, top: this.pageH - this.y });
-        this.drawRuns(runs.length ? runs : [{ text: node.text || '', fmt: { bold: true, size: `${size}pt` } }], this.margin.left, this.contentWidth);
+        const { left, width, layout } = this.placement(node);
+        this.drawRuns(runs.length ? runs : [{ text: node.text || '', fmt: { bold: true, size: `${size}pt` } }], left, width, false, layout);
         this.y += size * 0.35;
     }
 
@@ -829,7 +867,8 @@ class NativeLayout {
             const flush = async () => {
                 const runs = run.length ? await this.collectRuns({ ...node, text: undefined, children: run }) : [];
                 if (runs.some(r => r.text.trim())) {
-                    this.drawRuns(runs, this.margin.left + indentLeft, this.contentWidth - indentLeft);
+                    const { left, width, layout } = this.placement(node, indentLeft);
+                    this.drawRuns(runs, left, width, false, layout);
                     this.y += 6;
                 }
                 run = [];
@@ -844,7 +883,8 @@ class NativeLayout {
         }
         const runs = await this.collectRuns(node);
         if (!runs.length) { this.y += 6; return; }
-        this.drawRuns(runs, this.margin.left + indentLeft, this.contentWidth - indentLeft);
+        const { left, width, layout } = this.placement(node, indentLeft);
+        this.drawRuns(runs, left, width, false, layout);
         this.y += 6;
     }
 

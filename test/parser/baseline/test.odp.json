@@ -15992,6 +15992,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "paragraphIndentation": {
+              "left": 360,
+              "hanging": 360
+            },
             "style": "a1325"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1325\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1322\" text:class-names=\"\"> We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in </text:span><text:span text:style-name=\"a1323\" text:class-names=\"\">ebooks</text:span><text:span text:style-name=\"a1324\" text:class-names=\"\">.</text:span></text:p>"
@@ -21682,6 +21686,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "paragraphIndentation": {
+              "left": 360,
+              "hanging": 360
+            },
             "style": "a1901"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1901\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1898\" text:class-names=\"\">Miscellaneous structural elements you can add to your document, like footnotes, endnotes, </text:span><text:span text:style-name=\"a1899\" text:class-names=\"\">dropcaps</text:span><text:span text:style-name=\"a1900\" text:class-names=\"\"> and the like. </text:span></text:p>"
@@ -21706,6 +21714,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "paragraphIndentation": {
+              "left": 360,
+              "hanging": 360
+            },
             "style": "a1904"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1904\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1903\" text:class-names=\"\">Footnotes &amp; Endnotes</text:span></text:p>"
@@ -21825,6 +21837,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "paragraphIndentation": {
+              "left": 360,
+              "hanging": 360
+            },
             "style": "a1914"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1914\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1906\" text:class-names=\"\">Footnotes</text:span><text:span text:style-name=\"a1907\" text:class-names=\"\">1</text:span><text:span text:style-name=\"a1908\" text:class-names=\"\"> and<text:s text:c=\"1\"/></text:span><text:span text:style-name=\"a1909\" text:class-names=\"\">endnotes</text:span><text:span text:style-name=\"a1910\" text:class-names=\"\">i</text:span><text:span text:style-name=\"a1911\" text:class-names=\"\"> are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in </text:span><text:span text:style-name=\"a1912\" text:class-names=\"\">ebook</text:span><text:span text:style-name=\"a1913\" text:class-names=\"\"> devices.</text:span></text:p>"
@@ -21849,6 +21865,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "paragraphIndentation": {
+              "left": 360,
+              "hanging": 360
+            },
             "style": "a1918"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1918\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1916\" text:class-names=\"\">Dropcaps</text:span><text:span text:style-name=\"a1917\" text:class-names=\"\"/></text:p>"
@@ -21872,6 +21892,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "paragraphIndentation": {
+              "left": 360,
+              "hanging": 360
+            },
             "style": "a1921"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1921\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1920\" text:class-names=\"\">D</text:span></text:p>"
@@ -21919,6 +21943,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "paragraphIndentation": {
+              "left": 360,
+              "hanging": 360
+            },
             "style": "a1925"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1925\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1923\" text:class-names=\"\">rop</text:span><text:span text:style-name=\"a1924\" text:class-names=\"\"> caps are used to emphasize the leading paragraph at the start of a section. In Word it is possible to specify how many lines of text a drop-cap should use.<text:s text:c=\"1\"/></text:span></text:p>"
@@ -21943,6 +21971,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "paragraphIndentation": {
+              "left": 360,
+              "hanging": 360
+            },
             "style": "a1928"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1928\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1927\" text:class-names=\"\">Links</text:span></text:p>"
@@ -22044,6 +22076,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "paragraphIndentation": {
+              "left": 360,
+              "hanging": 360
+            },
             "style": "a1937"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1937\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1930\" text:class-names=\"\">Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by </text:span><text:span text:style-name=\"a1931\" text:class-names=\"\">calibre</text:span><text:span text:style-name=\"a1932\" text:class-names=\"\">. For example, here is a link pointing to the </text:span><text:span text:style-name=\"a1933\" text:class-names=\"\"><text:a xmlns:xlink=\"http://www.w3.org/1999/xlink\" xlink:href=\"http://calibre-ebook.com/download\" text:style-name=\"\" text:visited-style-name=\"\">calibre download page</text:a></text:span><text:span text:style-name=\"a1934\" text:class-names=\"\">. Then we have a link that points back to the section on </text:span><text:span text:style-name=\"a1935\" text:class-names=\"\"><text:a xmlns:xlink=\"http://www.w3.org/1999/xlink\" xlink:href=\"#Slide2\" text:style-name=\"\" text:visited-style-name=\"\">paragraph level formatting</text:a></text:span><text:span text:style-name=\"a1936\" text:class-names=\"\"> in this document.</text:span></text:p>"
@@ -22111,6 +22147,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "paragraphIndentation": {
+              "left": 360,
+              "hanging": 360
+            },
             "style": "a1949"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1949\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1947\" text:class-names=\"\">Centered images like this are useful for large pictures that should be a focus of attention. </text:span><text:span text:style-name=\"a1948\" text:class-names=\"\"/></text:p>"
@@ -22215,6 +22255,10 @@
           ],
           "metadata": {
             "alignment": "center",
+            "paragraphIndentation": {
+              "left": 360,
+              "hanging": 360
+            },
             "style": "a1963"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1963\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1962\" text:class-names=\"\">Lists</text:span></text:p>"
@@ -22238,6 +22282,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "paragraphIndentation": {
+              "left": 360,
+              "hanging": 360
+            },
             "style": "a1966"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1966\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1965\" text:class-names=\"\">All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets.</text:span></text:p>"
@@ -22262,6 +22310,10 @@
           ],
           "metadata": {
             "alignment": "left",
+            "paragraphIndentation": {
+              "left": 360,
+              "hanging": 360
+            },
             "style": "a1969"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1969\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1968\" text:class-names=\"\">Bulleted List</text:span></text:p>"
@@ -22326,6 +22378,10 @@
           "children": [],
           "metadata": {
             "alignment": "center",
+            "paragraphIndentation": {
+              "left": 360,
+              "hanging": 360
+            },
             "style": "a1980"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1980\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1979\" text:class-names=\"\"/></text:p>"
