@@ -2109,6 +2109,15 @@ async function runNativePdfEngineTests(): Promise<GenFeatureTest[]> {
     ] as OfficeContentNode[]);
     const scriptWords = ['Καλημέρα', 'Привет', 'ΩΜΕΓΑ', 'κόσμε', 'мир', 'код'];
 
+    // A break inside a paragraph (`<br>`, `w:br`, RTF's \\line) starts a new line: it was dropped,
+    // gluing "Line one" to "line two".
+    const brokenAst = await OfficeParser.parseOffice(Buffer.from('<p>Line one<br>line two</p><p>a<br><br>b</p>'), { fileType: 'html' } as any) as OfficeParserAST;
+    const broken = await native(brokenAst);
+    results.push(mk('a line break inside a paragraph starts a new line',
+        'Line one and line two on lines of their own', JSON.stringify(broken.text),
+        broken.text.includes('Line one') && broken.text.includes('line two') && !/Line one[ \t]*line two/.test(broken.text),
+        'an HTML <br> was dropped by the native PDF engine'));
+
     const plain = await native(scriptsAst);
     const plainLoss = lossOf(plain.messages);
     results.push(mk('without fonts, the characters lost are counted and sampled',

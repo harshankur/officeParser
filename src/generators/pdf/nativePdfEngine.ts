@@ -433,6 +433,14 @@ class NativeLayout {
                 if (alt) out.push({ text: alt, fmt, link });
                 return;
             }
+            // A break inside a line (`<br>`, Word's `w:br`, a column break) starts a new line, and a page
+            // break inside a paragraph a new page; they were dropped, gluing the lines together.
+            if (n.type === 'break' && !isRoot && typeof override !== 'string') {
+                const kind = (n.metadata as any)?.breakType;
+                if (kind === 'page') out.push({ text: '\f', fmt, link: false });
+                else if (kind !== 'lastRenderedPage' && kind !== 'thematic') out.push({ text: '\n', fmt, link: false });
+                return;
+            }
             if (n.type === 'text' || (!n.children?.length && text)) {
                 if (text) out.push({ text, fmt, link });
                 return;
@@ -466,12 +474,13 @@ class NativeLayout {
                 let t: string;
                 if (typeof override === 'string') t = override;
                 else if (c.type === 'image') t = this.cellImageText(c);
-                else t = (await this.collectRuns(c)).map(r => r.text).join('');
+                else t = (await this.collectRuns(c)).map(r => r.text).join('').replace(/\f/g, '\n');
                 if (t !== '') lines.push(t);
             }
             if (lines.length) return lines.join('\n');
         }
-        const flat = (await this.collectRuns(node)).map(r => r.text).join('');
+        // A page break inside a cell is a line break there: a cell cannot start a page.
+        const flat = (await this.collectRuns(node)).map(r => r.text).join('').replace(/\f/g, '\n');
         return flat || node.text || '';
     }
 
@@ -510,7 +519,8 @@ class NativeLayout {
      */
     private drawRuns(runs: { text: string; fmt: TextFormatting; link: boolean }[], left: number, width: number, mono = false): void {
         // Expand runs into per-word pieces (a trailing-space flag lets us re-insert inter-word gaps).
-        const pieces: { p: Piece; space: boolean }[] = [];
+        // A piece is a word, or (`brk`) a forced break: a new line, or a new page.
+        const pieces: { p: Piece; space: boolean; brk?: 'line' | 'page' }[] = [];
         // A paragraph whose first letter is a right-to-left one is read from the right edge.
         const baseRtl = startsRtl(runs.map(r => r.text).join(''));
         for (const run of runs) {
@@ -518,17 +528,23 @@ class NativeLayout {
             const size = parseFontSize(run.fmt.size) ?? (mono ? 10 : 11);
             const color = run.link ? this.lib.rgb(0.1, 0.32, 0.72) : (this.color(run.fmt.color) ?? this.lib.rgb(0.12, 0.12, 0.12));
             const underline = !!(run.fmt.underline || run.link);
-            const words = this.enc(run.text, face).split(/(\s+)/);
-            for (const w of words) {
-                if (w === '') continue;
-                if (/^\s+$/.test(w)) { if (pieces.length) pieces[pieces.length - 1].space = true; continue; }
-                // Split a word wider than the whole line at character boundaries so it wraps instead
-                // of running off the page (a long URL, a hash, a base64 token).
-                for (const chunk of splitToWidth(w, t => this.widthOf(t, face, size), width)) {
-                    pieces.push({ p: { text: chunk, face, size, color, underline }, space: false });
+            // A newline in a run's text is a line break, as the other writers have it (DOCX writes
+            // `<w:br/>`): split there before encoding, which turns control characters into spaces.
+            run.text.split(/(\r\n|[\n\r\f])/).forEach((segment, at) => {
+                if (at % 2) { pieces.push({ p: { text: '', face, size, color, underline: false }, space: false, brk: segment === '\f' ? 'page' : 'line' }); return; }
+                for (const w of this.enc(segment, face).split(/(\s+)/)) {
+                    if (w === '') continue;
+                    if (/^\s+$/.test(w)) { const last = pieces[pieces.length - 1]; if (last && !last.brk) last.space = true; continue; }
+                    // Split a word wider than the whole line at character boundaries so it wraps instead
+                    // of running off the page (a long URL, a hash, a base64 token).
+                    for (const chunk of splitToWidth(w, t => this.widthOf(t, face, size), width)) {
+                        pieces.push({ p: { text: chunk, face, size, color, underline }, space: false });
+                    }
                 }
-            }
+            });
         }
+        // Breaks at the very end draw nothing, as a browser shows a `<br>` closing a paragraph.
+        while (pieces.length && pieces[pieces.length - 1].brk) pieces.pop();
         if (!pieces.length) return;
 
         const spaceWidth = (p: Piece) => this.widthOf(' ', p.face, p.size);
@@ -562,6 +578,13 @@ class NativeLayout {
         };
 
         for (const piece of pieces) {
+            if (piece.brk) {
+                // A line ended here: the next starts below it. Two in a row leave an empty line.
+                if (line.length) flush();
+                else { const lh = piece.p.size * 1.35; this.ensureSpace(lh); this.y += lh; }
+                if (piece.brk === 'page') this.newPage();
+                continue;
+            }
             const w = this.widthOf(piece.p.text, piece.p.face, piece.p.size);
             // Only the previous piece's OWN trailing space counts toward width: a word split across two
             // runs (or a splitToWidth chunk) has space:false and draws with no gap, so measuring one
