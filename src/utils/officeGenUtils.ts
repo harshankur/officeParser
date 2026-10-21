@@ -372,6 +372,32 @@ export function embedUrl(meta: EmbedMetadata | undefined): string {
 }
 
 /**
+ * A spreadsheet as its printout shows it: each cell whose number the sheet shows through its number
+ * format (CellMetadata.shownText) written as that text, `19%` rather than `0.19`. The AST as given when no
+ * cell has one; otherwise a copy, sharing every node it does not change.
+ */
+export function withShownCellText(ast: OfficeParserAST): OfficeParserAST {
+    const shown = (c: OfficeContentNode) => c.type === 'cell' && typeof (c.metadata as CellMetadata | undefined)?.shownText === 'string';
+    if (!ast.content.some(n => n.type === 'sheet' && (n.children || []).some(r => (r.children || []).some(shown)))) return ast;
+    return {
+        ...ast,
+        content: ast.content.map(n => n.type !== 'sheet' ? n : {
+            ...n,
+            children: (n.children || []).map(r => r.type !== 'row' || !(r.children || []).some(shown) ? r : {
+                ...r,
+                children: (r.children || []).map(c => {
+                    if (!shown(c)) return c;
+                    const text = (c.metadata as CellMetadata).shownText!;
+                    // The cell's text, in its first run's formatting.
+                    const run = (c.children || []).find(k => k.type === 'text');
+                    return { ...c, text, children: [{ type: 'text', text, ...(run?.formatting ? { formatting: run.formatting } : {}) } as OfficeContentNode] } as OfficeContentNode;
+                }),
+            }),
+        }),
+    };
+}
+
+/**
  * A presentation as its printout shows it: the slides without their speaker notes (a slide's own
  * `notes`). The AST as given when no slide has any; otherwise a copy, sharing every other node.
  */

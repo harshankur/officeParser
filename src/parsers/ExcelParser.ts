@@ -31,6 +31,7 @@ import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { attachmentLookup, repeatPreview, takeRepeats, valuesLength } from '../utils/repeatUtils.js';
 import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
 import { chargeRawContent, decodeXmlEntities, getChildElements, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, takeNodes } from '../utils/xmlUtils.js';
+import { BUILTIN_NUMBER_FORMATS, excelShownText } from '../utils/excelFormat.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 
 /** Whether the character at `at` of `xml` can continue a tag name (so `<c` there opens `<col`, not `<c`). */
@@ -376,6 +377,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     const cellFormatMap: Record<number, TextFormatting> = {};
     // A date or a time is stored as a day count and shown through its style's number format
     const cellDateFormatMap: Record<number, DateFormatKind> = {};
+    // Each cell style's number format code, which writes the text the sheet shows (see excelShownText).
+    const cellNumberFormatMap: Record<number, string> = {};
 
     if (stylesFile) {
         const xml = parseXmlString(stylesFile.content.toString(), { config });
@@ -383,12 +386,13 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         // Parse custom number formats (numFmtId -> format code)
         // Classified once per number format, however many cell formats share it.
         const numFmtKinds = new Map<string, DateFormatKind | undefined>();
+        const numFmtCodes = new Map<string, string>(BUILTIN_NUMBER_FORMATS);
         const numFmtsNode = getElementsByTagName(xml, "numFmts")[0];
         if (numFmtsNode) {
             for (const numFmt of getChildElements(numFmtsNode, "numFmt")) {
                 const id = numFmt.getAttribute("numFmtId");
                 const code = numFmt.getAttribute("formatCode");
-                if (id && code !== null) numFmtKinds.set(id, getDateFormatKind(code));
+                if (id && code !== null) { numFmtKinds.set(id, getDateFormatKind(code)); numFmtCodes.set(id, code); }
             }
         }
 
@@ -478,6 +482,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     ? numFmtKinds.get(numFmtId)
                     : BUILTIN_DATE_FORMATS.get(numFmtId);
                 if (dateFormatKind) cellDateFormatMap[i] = dateFormatKind;
+                const formatCode = numFmtCodes.get(numFmtId);
+                if (formatCode !== undefined) cellNumberFormatMap[i] = formatCode;
 
                 const fontId = xf.getAttribute("fontId");
                 if (fontId) {
@@ -830,6 +836,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     const isContent = type === 'inlineStr' ? firstElementContent(cContent, 'is') : undefined;
 
                     let text = '';
+                    // What the sheet shows for a number, through its style's number format, where that
+                    // differs from the value read (see CellMetadata.shownText).
+                    let shownText: string | undefined;
                     let cellNodes: OfficeContentNode[] = [];
 
                     // Shared rich-text runs, merged with this cell's style below (the runs themselves are shared).
@@ -875,6 +884,11 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                         // A number in a date or time style is a day count: show the date or time instead
                         const dateFormatKind = type === 'n' && styleIdx !== undefined ? cellDateFormatMap[styleIdx] : undefined;
                         if (dateFormatKind) text = formatDateSerial(text, dateFormatKind, date1904) ?? text;
+                        const formatCode = type === 'n' && styleIdx !== undefined ? cellNumberFormatMap[styleIdx] : undefined;
+                        if (formatCode !== undefined) {
+                            const shown = excelShownText(vContent.trim(), formatCode, date1904);
+                            if (shown !== undefined && shown !== text) shownText = shown;
+                        }
                     }
 
                     // Parse cell coordinate
@@ -927,7 +941,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                             text: text,
                             children: cellNodes,
                             comments: commentsNodeList,
-                            metadata: { row: rowIndex, col: colIndex, ...(rowHidden || columnHidden(colIndex) ? { hidden: true } : {}) }
+                            metadata: { row: rowIndex, col: colIndex, ...(shownText !== undefined ? { shownText } : {}), ...(rowHidden || columnHidden(colIndex) ? { hidden: true } : {}) }
                         };
                         if (config.includeRawContent) {
                             cellNode.rawContent = chargeRawContent(cXml, config);

@@ -2895,6 +2895,13 @@ export interface CellMetadata {
     /** Background color for this cell in hex format (e.g. #FFFFFF). */
     backgroundColor?: string;
     /**
+     * The text the sheet shows for the cell's number, through its number format, where that differs
+     * from `text` (XLSX, which stores a number and a format: `text` is the value, 0.19, and this the
+     * `19%`, `€120.00` or `01.10.2026` a spreadsheet shows). PDF output prints it, as a spreadsheet's
+     * printout shows it; data outputs keep `text`. ODS stores the shown text itself, which is `text`.
+     */
+    shownText?: string;
+    /**
      * The sheet does not show the cell: its row or its column is hidden. It is read as any cell (text,
      * CSV, chunks and every other output keep it as data); a printout leaves it out, as PDF output does
      * unless `pdfConfig.printHidden` is set.

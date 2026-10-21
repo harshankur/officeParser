@@ -7,6 +7,7 @@
 import { OfficeParser } from '../src/OfficeParser';
 import { OfficeGenerator } from '../src/OfficeGenerator';
 import { decodeBmp, decodeGif } from '../src/utils/rasterUtils';
+import { excelShownText } from '../src/utils/excelFormat';
 import { OfficeTemplate } from '../src/OfficeTemplate';
 import { OfficeConverter } from '../src/OfficeConverter';
 import { zipSync, strToU8, unzipSync, strFromU8 } from 'fflate';
@@ -4548,6 +4549,37 @@ async function testRtfHeaderRows(): Promise<void> {
 }
 
 /**
+ * An XLSX number cell keeps its value as its text and records what the sheet shows through its number
+ * format (CellMetadata.shownText); PDF output prints that, as a spreadsheet's printout does (it printed
+ * 0.19 for 19%, 120 for €120.00, 2026-10-01 for 01.10.2026), and data outputs keep the value.
+ */
+async function testXlsxShownText(): Promise<void> {
+    const cases: [string, string, string | undefined][] = [
+        ['120', '[$€-407]#,##0.00', '€120.00'], ['0.19', '0%', '19%'], ['46296', 'dd\\.mm\\.yyyy', '01.10.2026'], ['2', '0.00', '2.00'],
+        ['-1250.5', '#,##0.00;[Red](#,##0.00)', '(1,250.50)'], ['0', '#,##0.00;(#,##0.00);"-"', '-'], ['1234567', '#,##0,"K"', '1,235K'],
+        ['46296.5', 'mmm d, yyyy h:mm AM/PM', 'Oct 1, 2026 12:00 PM'], ['0.5', 'hh:mm:ss', '12:00:00'], ['1234.5', '#,##0.00 _€;-#,##0.00 _€', '1,234.50'],
+        ['12', 'General', undefined], ['3', '@', undefined], ['1.5', '# ?/?', undefined], ['1.5', '0.00E+00', undefined], ['30', '[h]:mm', undefined],
+    ];
+    for (const [value, code, shown] of cases) assert.strictEqual(excelShownText(value, code, false), shown, `${value} through ${code}`);
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const xlsx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+        'xl/styles.xml': strToU8(`<?xml version="1.0"?><styleSheet ${ns}><numFmts count="2"><numFmt numFmtId="165" formatCode="dd\\.mm\\.yyyy"/><numFmt numFmtId="166" formatCode="[$€-407]#,##0.00"/></numFmts><cellXfs count="4"><xf numFmtId="0"/><xf numFmtId="165"/><xf numFmtId="166"/><xf numFmtId="9"/></cellXfs></styleSheet>`),
+        'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData><row r="1"><c r="A1" s="1"><v>46296</v></c><c r="B1" s="2"><v>120</v></c><c r="C1" s="3"><v>0.19</v></c><c r="D1"><v>7</v></c></row></sheetData></worksheet>`),
+    }));
+    const ast = await OfficeParser.parseOffice(xlsx, { fileType: 'xlsx' } as any) as OfficeParserAST;
+    const cells = ast.content[0].children![0].children!;
+    assert.deepStrictEqual(cells.map(c => [c.text, (c.metadata as any).shownText]), [['2026-10-01', '01.10.2026'], ['120', '€120.00'], ['0.19', '19%'], ['7', undefined]], 'the value is the text, the shown text beside it');
+    assert.ok(String((await ast.to('csv')).value).startsWith('2026-10-01,120,0.19,7'), 'CSV keeps the values');
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const printed = String((await back.to('text')).value);
+    assert.ok(['01.10.2026', '€120.00', '19%', '7'].every(t => printed.includes(t)) && !printed.includes('0.19'), `the PDF prints what the sheet shows; got ${JSON.stringify(printed)}`);
+}
+
+/**
  * The native PDF engine draws GIF (its first frame) and uncompressed BMP pictures, turned into PNG: a PDF
  * holds neither, and both were dropped with IMAGE_PROCESSING_FAILED.
  */
@@ -6381,6 +6413,7 @@ async function runTests(): Promise<void> {
         ['Hidden sheet content', testHiddenSheetContent],
         ['Speaker notes in PDF', testSpeakerNotesInPdf],
         ['Native PDF GIF and BMP', testNativePdfGifAndBmp],
+        ['XLSX shown text', testXlsxShownText],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],
