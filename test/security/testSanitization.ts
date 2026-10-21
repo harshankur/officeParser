@@ -2675,6 +2675,10 @@ async function parserHardeningTests() {
     const bigGif = await OfficeGenerator.generate(pictureAst(gifWith(65535, 65535, Buffer.alloc(16))), 'pdf' as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any);
     check('pdf: a GIF declaring 65535 x 65535 pixels is refused before decoding, its alt text drawn', (bigGif.messages || []).some((m: any) => m.code === 'IMAGE_PROCESSING_FAILED'), JSON.stringify(bigGif.messages));
     await timed('pdf: a 2000 x 2000 GIF of 1 MB of noise is decoded', () => OfficeGenerator.generate(pictureAst(gifWith(n(2000), n(2000), Buffer.from(Array.from({ length: n(1_000_000) }, (_, i) => (i * 2654435761) >>> 24)))), 'pdf' as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any));
+    // Footnotes are measured once each and given a page as they are cited: many of them, each cited
+    // once, cost in proportion; a stylesheet of many rules over many elements too (see the HTML cases).
+    const footnoted = () => astWith(Array.from({ length: n(3000) }, (_, i) => ({ type: 'paragraph', children: [{ type: 'text', text: `Cited ${i}`, notes: [{ type: 'note', metadata: { noteType: i % 3 ? 'footnote' : 'endnote' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: `Note ${i} text.` }] }] }] }] })));
+    await timed('pdf: 3,000 cited footnotes and endnotes are placed', () => OfficeGenerator.generate(footnoted(), 'pdf' as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any));
     await timed('md: block math of 200 KB of spaces is written inline', () => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'a' }, { type: 'code', text: 'x' + ' '.repeat(n(200000)) + 'y', metadata: { math: 'block' } }] }]), 'md' as any, { onWarning: () => {} } as any));
 
     // Raw HTML in Markdown, read as links and pictures, passes the writers' URL checks like any other.

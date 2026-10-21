@@ -4797,6 +4797,33 @@ async function testHtmlStylesheetAndShading(): Promise<void> {
 }
 
 /**
+ * The native PDF engine numbers footnotes (1, 2, 3) and endnotes (i, ii, iii), raises each number where it
+ * is cited, and draws a footnote at the foot of the page that cites it, an endnote at the end: all of
+ * them printed at the end of the document, with nothing in the text to say where. A superscript or
+ * subscript run is drawn smaller and raised or lowered.
+ */
+async function testNativePdfFootnotes(): Promise<void> {
+    const note = (kind: 'footnote' | 'endnote', text: string) => ({ type: 'note', metadata: { noteType: kind }, children: [{ type: 'paragraph', children: [{ type: 'text', text }] }] });
+    const filler = Array.from({ length: 60 }, (_, i) => ({ type: 'paragraph', children: [{ type: 'text', text: `Filler paragraph ${i} with some words in it to take a line.` }] }));
+    const ast = { type: 'docx', metadata: {}, attachments: [], content: [
+        { type: 'paragraph', children: [{ type: 'text', text: 'First cites a footnote', notes: [note('footnote', 'Footnote one text.')] }, { type: 'text', text: ' and an endnote', notes: [note('endnote', 'Endnote text.')] }, { type: 'text', text: '.' }] },
+        ...filler,
+        { type: 'paragraph', children: [{ type: 'text', text: 'Second cites another', notes: [note('footnote', 'Footnote two text.')] }, { type: 'text', text: ' and H' }, { type: 'text', text: '2', formatting: { subscript: true } }, { type: 'text', text: 'O.' }] },
+    ] } as any;
+    const pdf = (await OfficeGenerator.generate(ast, 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const pages = back.content.filter(n => n.type === 'page').map(p => collectAllNodes({ content: [p] } as any).filter(n => n.type === 'text').map(n => n.text).join(' '));
+    const pageOf = (text: string) => pages.findIndex(p => p.includes(text));
+    assert.ok(pages.length >= 2, `the filler takes more than a page; got ${pages.length}`);
+    assert.strictEqual(pageOf('Footnote one text.'), pageOf('First cites'), 'the first footnote is at the foot of the page that cites it');
+    assert.strictEqual(pageOf('Footnote two text.'), pageOf('Second cites'), 'the second footnote is at the foot of its page');
+    assert.ok(pageOf('Footnote one text.') < pageOf('Footnote two text.'), 'the footnotes are on their own pages, not gathered at the end');
+    assert.ok(pages[pages.length - 1].includes('Endnote text.'), 'an endnote is at the end');
+    const raised = collectAllNodes(back).filter(n => n.type === 'text' && /^(1|2|i)$/.test((n.text || '').trim()) && n.bounds && n.bounds.height < 9);
+    assert.ok(raised.length >= 3, `the numbers cited are drawn small; got ${JSON.stringify(raised.map(n => [n.text, n.bounds?.height]))}`);
+}
+
+/**
  * The native PDF engine draws GIF (its first frame) and uncompressed BMP pictures, turned into PNG: a PDF
  * holds neither, and both were dropped with IMAGE_PROCESSING_FAILED.
  */
@@ -6638,6 +6665,7 @@ async function runTests(): Promise<void> {
         ['Native PDF font kinds', testNativePdfFontKinds],
         ['List markers', testListMarkers],
         ['HTML stylesheet and shading', testHtmlStylesheetAndShading],
+        ['Native PDF footnotes', testNativePdfFootnotes],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

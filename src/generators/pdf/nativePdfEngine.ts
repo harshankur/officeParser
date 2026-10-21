@@ -23,6 +23,7 @@ import { documentLanguage, embedUrl, isHeaderRow, lengthToPt, paperSizePt, resol
 import { decodeBmp, decodeGif, encodePng } from '../../utils/rasterUtils.js';
 import { sanitizeOfficePackageUrl } from '../../utils/sanitize.js';
 import { cssColorHex } from '../../utils/colorUtils.js';
+import { formatListNumber } from '../../utils/listMarkers.js';
 
 /**
  * Megapixel ceiling for an embedded image. `embedPng`/`embedJpg` decode the full bitmap, so a
@@ -225,10 +226,10 @@ function fontKind(family: string | undefined): 'mono' | 'serif' | 'sans' {
 }
 
 /** A single word ready to place, carrying the style/size/color it should be drawn with. */
-interface Piece { text: string; face: FaceKey; size: number; color: any; underline: boolean; link?: string; background?: string; }
+interface Piece { text: string; face: FaceKey; size: number; color: any; underline: boolean; link?: string; background?: string; rise?: number; note?: OfficeContentNode; }
 
 /** A stretch of inline text in one formatting, and the target it links to, if any. */
-type Run = { text: string; fmt: TextFormatting; link?: string };
+type Run = { text: string; fmt: TextFormatting; link?: string; note?: OfficeContentNode };
 
 /**
  * How a paragraph's lines sit: its alignment, where its first line starts against the others, and the
@@ -292,7 +293,8 @@ class NativeLayout {
     }
 
     private get contentWidth(): number { return this.pageW - this.margin.left - this.margin.right; }
-    private get bottom(): number { return this.pageH - this.margin.bottom; }
+    /** The lowest a line of the body goes: above the page's margin, and above its footnotes. */
+    private get bottom(): number { return this.pageH - this.margin.bottom - this.footReserve; }
 
     /** Where each anchor id is (its page and the height on it), for the links into the document. */
     private readonly anchors = new Map<string, { page: any; top: number }>();
@@ -360,8 +362,113 @@ class NativeLayout {
 
     /** Starts a fresh page and resets the cursor to the top margin. */
     private newPage(): void {
+        this.drawPageFootnotes();
         this.page = this.pdf.addPage([this.pageW, this.pageH]);
         this.y = this.margin.top;
+        // Footnotes whose reference ended the page before, without room left there, go on this one.
+        const carried = this.carriedFootnotes;
+        this.carriedFootnotes = [];
+        for (const note of carried) this.reserveFootnote(note, true);
+    }
+
+    // ── footnotes ───────────────────────────────────────────────────────────────
+
+    /** Each footnote's and endnote's number as its reference and its text show it (1, 2, 3; i, ii, iii). */
+    private readonly noteLabels = new Map<OfficeContentNode, string>();
+    private footnoteCount = 0;
+    private endnoteCount = 0;
+    /** Each footnote's text, ready to draw, and the height it takes (see measureFootnotes). */
+    private readonly footnoteRuns = new Map<OfficeContentNode, Run[]>();
+    private readonly footnoteHeights = new Map<OfficeContentNode, number>();
+    /** The footnotes cited on this page, the room kept for them at its foot, and those for the next. */
+    private pageFootnotes: OfficeContentNode[] = [];
+    private footReserve = 0;
+    private carriedFootnotes: OfficeContentNode[] = [];
+    /** The footnotes given a page (the rest are drawn with the endnotes, at the end). */
+    private readonly placedNotes = new Set<OfficeContentNode>();
+    /** Set while footnotes are measured or drawn: no page is started, and no footnote placed. */
+    private drawingFootnotes = false;
+    /** The rule over a page's footnotes and the space around it. */
+    private static readonly FOOTNOTE_RULE = 12;
+
+    /** Whether a note is a footnote (one with no kind counts as one) or an endnote, which get numbers. */
+    private static isNumberedNote(note: OfficeContentNode): boolean {
+        const kind = (note.metadata as { noteType?: string } | undefined)?.noteType;
+        return kind === undefined || kind === 'footnote' || kind === 'endnote';
+    }
+
+    /**
+     * Each footnote's text as it is drawn at the foot of a page (its number, then its text, at 9pt), and
+     * its height there: measured once, on a page made for it and taken away, before the body is laid out.
+     */
+    async measureFootnotes(): Promise<void> {
+        const notes = this.collectedNotes.filter(n => (n.metadata as { noteType?: string } | undefined)?.noteType !== 'endnote' && this.noteLabels.has(n));
+        if (!notes.length) return;
+        const saved = { page: this.page, y: this.y, links: this.linkBoxes.length, lost: this.lostCharacters, sample: this.lostSample.length, pending: [...this.pendingAnchors] };
+        const pagesBefore = this.pdf.getPageCount();
+        this.drawingFootnotes = true;
+        try {
+            this.page = this.pdf.addPage([this.pageW, this.pageH]);
+            for (const note of notes) {
+                const runs = [{ text: `${this.noteLabels.get(note)} `, fmt: { size: '9pt', superscript: true } } as Run,
+                    ...(await this.collectRuns(note)).map(r => ({ ...r, fmt: { ...r.fmt, size: '9pt' } }))];
+                this.footnoteRuns.set(note, runs);
+                this.y = 0;
+                this.drawRuns(runs, this.margin.left, this.contentWidth);
+                this.footnoteHeights.set(note, this.y + 2);
+            }
+        } finally {
+            while (this.pdf.getPageCount() > pagesBefore) this.pdf.removePage(this.pdf.getPageCount() - 1);
+            this.drawingFootnotes = false;
+            this.page = saved.page;
+            this.y = saved.y;
+            this.linkBoxes.length = saved.links;
+            this.lostCharacters = saved.lost;
+            this.lostSample.length = saved.sample;
+            this.pendingAnchors = saved.pending;
+            for (const [id, at] of [...this.anchors]) if (at.page !== this.page && !this.pdf.getPages().includes(at.page)) this.anchors.delete(id);
+        }
+    }
+
+    /**
+     * Keeps room at this page's foot for a footnote cited on it, or, when the page has no more room, at
+     * the next page's. A footnote taller than half a page is drawn with the endnotes instead.
+     */
+    private reserveFootnote(note: OfficeContentNode, fresh = false): void {
+        const height = this.footnoteHeights.get(note);
+        if (height === undefined || height > (this.pageH - this.margin.top - this.margin.bottom) / 2) return;
+        const needed = height + (this.pageFootnotes.length ? 0 : NativeLayout.FOOTNOTE_RULE);
+        if (!fresh && this.y + needed > this.bottom) { this.carriedFootnotes.push(note); this.placedNotes.add(note); return; }
+        this.footReserve += needed;
+        this.pageFootnotes.push(note);
+        this.placedNotes.add(note);
+    }
+
+    /** A footnote cited in a line just drawn: given a page, once. */
+    private citeFootnote(note: OfficeContentNode): void {
+        if (this.drawingFootnotes || this.placedNotes.has(note) || !this.footnoteRuns.has(note)) return;
+        this.reserveFootnote(note);
+    }
+
+    /** Draws this page's footnotes in the room kept at its foot, under a short rule. */
+    private drawPageFootnotes(): void {
+        if (!this.pageFootnotes.length || !this.page) return;
+        const notes = this.pageFootnotes, reserve = this.footReserve;
+        this.pageFootnotes = [];
+        this.footReserve = 0;
+        this.drawingFootnotes = true;
+        try {
+            this.y = this.pageH - this.margin.bottom - reserve + NativeLayout.FOOTNOTE_RULE / 2;
+            const yy = this.pageH - this.y;
+            this.page.drawLine({ start: { x: this.margin.left, y: yy }, end: { x: this.margin.left + Math.min(180, this.contentWidth), y: yy }, thickness: 0.5, color: this.lib.rgb(0.7, 0.7, 0.7) });
+            this.y += NativeLayout.FOOTNOTE_RULE / 2;
+            for (const note of notes) {
+                this.drawRuns(this.footnoteRuns.get(note)!, this.margin.left, this.contentWidth);
+                this.y += 2;
+            }
+        } finally {
+            this.drawingFootnotes = false;
+        }
     }
 
     /**
@@ -371,7 +478,7 @@ class NativeLayout {
      * content taller than a page (tables) split it across pages themselves.
      */
     private ensureSpace(h: number): void {
-        if (this.y + h > this.bottom && this.y > this.margin.top) this.newPage();
+        if (this.y + h > this.bottom && this.y > this.margin.top && !this.drawingFootnotes) this.newPage();
         if (this.pendingAnchors.length) this.placeAnchors();
     }
 
@@ -548,9 +655,18 @@ class NativeLayout {
             }
             if (n.type === 'text' || (!n.children?.length && text)) {
                 if (text) out.push({ text, fmt, link });
+                cite(n, fmt);
                 return;
             }
             for (const c of n.children || []) await walk(c, fmt, link, false);
+            if (!isRoot) cite(n, fmt);
+        };
+        // A footnote's or endnote's number where it is cited, raised (it was drawn nowhere in the text).
+        const cite = (n: OfficeContentNode, fmt: TextFormatting) => {
+            for (const note of n.notes || []) {
+                const label = this.noteLabels.get(note);
+                if (label) out.push({ text: label, fmt: { ...fmt, superscript: true, subscript: false }, note });
+            }
         };
         await walk(node, {}, undefined, true);
         if (!out.length && node.text) out.push({ text: node.text, fmt: node.formatting || {} });
@@ -630,7 +746,11 @@ class NativeLayout {
         const baseRtl = startsRtl(runs.map(r => r.text).join(''));
         for (const run of runs) {
             const face = this.faceFor(run.fmt, mono);
-            const size = parseFontSize(run.fmt.size) ?? (mono ? 10 : 11);
+            // A superscript or subscript is smaller and raised or lowered (they were drawn as body text).
+            const baseSize = parseFontSize(run.fmt.size) ?? (mono ? 10 : 11);
+            const shifted = !!(run.fmt.superscript || run.fmt.subscript);
+            const size = shifted ? baseSize * 0.65 : baseSize;
+            const rise = run.fmt.superscript ? baseSize * 0.35 : run.fmt.subscript ? -baseSize * 0.12 : 0;
             const color = run.link ? this.lib.rgb(0.1, 0.32, 0.72) : (this.color(run.fmt.color) ?? this.lib.rgb(0.12, 0.12, 0.12));
             const underline = !!(run.fmt.underline || run.link);
             // A highlight or a run's own background, drawn behind its words.
@@ -645,7 +765,7 @@ class NativeLayout {
                     // Split a word wider than the whole line at character boundaries so it wraps instead
                     // of running off the page (a long URL, a hash, a base64 token).
                     for (const chunk of splitToWidth(w, t => this.widthOf(t, face, size), width)) {
-                        pieces.push({ p: { text: chunk, face, size, color, underline, link: run.link, background }, space: false });
+                        pieces.push({ p: { text: chunk, face, size, color, underline, link: run.link, background, rise, note: run.note }, space: false });
                     }
                 }
             });
@@ -703,7 +823,7 @@ class NativeLayout {
             });
             for (const it of ordered) {
                 if (it.p) {
-                    this.drawText(it.p.text, it.p.face, x, baseline, it.p.size, it.p.color);
+                    this.drawText(it.p.text, it.p.face, x, baseline + (it.p.rise || 0), it.p.size, it.p.color);
                     if (it.p.underline) {
                         this.page.drawLine({ start: { x, y: baseline - 1.5 }, end: { x: x + it.w, y: baseline - 1.5 }, thickness: 0.5, color: it.p.color });
                     }
@@ -712,6 +832,8 @@ class NativeLayout {
                 x += it.w + (it.p ? 0 : stretch);
             }
             this.y += lh;
+            // The footnotes this line cites, given room at this page's foot.
+            for (const it of line) if (it.p.note) this.citeFootnote(it.p.note);
             line = [];
             lineWidth = 0;
             firstOfParagraph = false;
@@ -1060,7 +1182,9 @@ class NativeLayout {
     }
 
     private async note(node: OfficeContentNode): Promise<void> {
-        const runs = (await this.collectRuns(node)).map(r => ({ ...r, fmt: { ...r.fmt, size: '9pt' } }));
+        const label = this.noteLabels.get(node);
+        const runs = [...(label ? [{ text: `${label} `, fmt: { size: '9pt', superscript: true } } as Run] : []),
+            ...(await this.collectRuns(node)).map(r => ({ ...r, fmt: { ...r.fmt, size: '9pt' } }))];
         if (runs.length) this.drawRuns(runs, this.margin.left + 12, this.contentWidth - 12);
         this.y += 4;
     }
@@ -1186,6 +1310,12 @@ class NativeLayout {
             if (this.collectedNoteSet.has(note)) continue;
             this.collectedNoteSet.add(note);
             this.collectedNotes.push(note);
+            // Numbered in the order they are cited: footnotes 1, 2, 3, endnotes i, ii, iii, as Word does.
+            if (NativeLayout.isNumberedNote(note)) {
+                const endnote = (note.metadata as { noteType?: string } | undefined)?.noteType === 'endnote';
+                const count = endnote ? ++this.endnoteCount : ++this.footnoteCount;
+                this.noteLabels.set(note, endnote ? formatListNumber(count, 'lowerRoman') : String(count));
+            }
             this.collectNotes(note);
         }
         for (const c of node.children || []) this.collectNotes(c);
@@ -1193,13 +1323,19 @@ class NativeLayout {
 
     /** Draws the footnote/endnote bodies gathered during the walk, under a short separating rule. */
     async flushNotes(): Promise<void> {
-        if (!this.collectedNotes.length) return;
+        // The last page's footnotes at its foot; then the endnotes, and any footnote no page took.
+        const carried = this.carriedFootnotes;
+        this.carriedFootnotes = [];
+        for (const note of carried) this.placedNotes.delete(note);
+        this.drawPageFootnotes();
+        const rest = this.collectedNotes.filter(n => !this.placedNotes.has(n));
+        if (!rest.length) return;
         this.y += 8;
         this.ensureSpace(14);
         const yy = this.pageH - this.y;
         this.page.drawLine({ start: { x: this.margin.left, y: yy }, end: { x: this.margin.left + Math.min(180, this.contentWidth), y: yy }, thickness: 0.5, color: this.lib.rgb(0.7, 0.7, 0.7) });
         this.y += 8;
-        for (const n of this.collectedNotes) await this.note(n);
+        for (const n of rest) await this.note(n);
     }
 
     private async table(node: OfficeContentNode): Promise<void> {
@@ -1715,6 +1851,7 @@ async function drawDocument(pdf: any, lib: any, fonts: Fonts, customFonts: boole
     // Gather footnote/endnote bodies from the whole content tree first (they attach to text runs, deep
     // in the tree, so a render()-level sweep would miss them), then render the body, then draw them.
     for (const node of ast.content) layout.collectNotes(node);
+    await layout.measureFootnotes();
     for (const node of ast.content) await layout.render(node, true);
     for (const n of ast.auxiliary?.footers || []) await layout.render(n);
     await layout.flushNotes();
