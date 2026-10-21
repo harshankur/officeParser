@@ -22,6 +22,7 @@ import { getAbortError, getOfficeError } from '../../utils/errorUtils.js';
 import { documentLanguage, embedUrl, isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize, writableSpacing } from '../../utils/officeGenUtils.js';
 import { decodeBmp, decodeGif, encodePng } from '../../utils/rasterUtils.js';
 import { sanitizeOfficePackageUrl } from '../../utils/sanitize.js';
+import { cssColorHex } from '../../utils/colorUtils.js';
 
 /**
  * Megapixel ceiling for an embedded image. `embedPng`/`embedJpg` decode the full bitmap, so a
@@ -224,7 +225,7 @@ function fontKind(family: string | undefined): 'mono' | 'serif' | 'sans' {
 }
 
 /** A single word ready to place, carrying the style/size/color it should be drawn with. */
-interface Piece { text: string; face: FaceKey; size: number; color: any; underline: boolean; link?: string; }
+interface Piece { text: string; face: FaceKey; size: number; color: any; underline: boolean; link?: string; background?: string; }
 
 /** A stretch of inline text in one formatting, and the target it links to, if any. */
 type Run = { text: string; fmt: TextFormatting; link?: string };
@@ -386,12 +387,13 @@ class NativeLayout {
         return `${kind}${variant}` as FaceKey;
     }
 
-    /** Parses a `#rrggbb` (or `#rgb`) hex color into a pdf-lib rgb color, or null. */
-    private color(hex: string | undefined): any {
-        if (!hex || typeof hex !== 'string') return null;
-        let h = hex.trim().replace(/^#/, '');
-        if (h.length === 3) h = h.split('').map(c => c + c).join('');
-        if (!/^[0-9a-f]{6}$/i.test(h)) return null;
+    /**
+     * A CSS colour (`#rrggbb`, `#rgb`, a name, `rgb()`, `hsl()`) as a pdf-lib rgb colour, or null. Read as
+     * hex alone, an HTML document's named and `rgb()` colours were dropped.
+     */
+    private color(value: string | undefined): any {
+        const h = cssColorHex(value);
+        if (!h) return null;
         const n = parseInt(h, 16);
         return this.lib.rgb(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255);
     }
@@ -631,6 +633,8 @@ class NativeLayout {
             const size = parseFontSize(run.fmt.size) ?? (mono ? 10 : 11);
             const color = run.link ? this.lib.rgb(0.1, 0.32, 0.72) : (this.color(run.fmt.color) ?? this.lib.rgb(0.12, 0.12, 0.12));
             const underline = !!(run.fmt.underline || run.link);
+            // A highlight or a run's own background, drawn behind its words.
+            const background = cssColorHex(run.fmt.backgroundColor) ?? undefined;
             // A newline in a run's text is a line break, as the other writers have it (DOCX writes
             // `<w:br/>`): split there before encoding, which turns control characters into spaces.
             run.text.split(/(\r\n|[\n\r\f])/).forEach((segment, at) => {
@@ -641,7 +645,7 @@ class NativeLayout {
                     // Split a word wider than the whole line at character boundaries so it wraps instead
                     // of running off the page (a long URL, a hash, a base64 token).
                     for (const chunk of splitToWidth(w, t => this.widthOf(t, face, size), width)) {
-                        pieces.push({ p: { text: chunk, face, size, color, underline, link: run.link }, space: false });
+                        pieces.push({ p: { text: chunk, face, size, color, underline, link: run.link, background }, space: false });
                     }
                 }
             });
@@ -686,7 +690,18 @@ class NativeLayout {
             const stretch = layout.align === 'justify' && !last && gaps ? free / gaps : 0;
             const align = layout.align === 'center' || layout.align === 'right' ? layout.align : baseRtl ? 'right' : 'left';
             let x = left + lineStart() + (align === 'center' ? free / 2 : align === 'right' ? free : 0);
-            for (const it of visualOrder(items, baseRtl)) {
+            // Backgrounds first, under the words: a word's and the gap after it, where the next word has
+            // the same one, so a highlighted phrase is one band.
+            const ordered = visualOrder(items, baseRtl);
+            let bx = x;
+            ordered.forEach((it, i) => {
+                const w = it.w + (it.p ? 0 : stretch);
+                const bg = it.p?.background ?? (!it.p && ordered[i - 1]?.p?.background && ordered[i - 1]?.p?.background === ordered[i + 1]?.p?.background ? ordered[i - 1].p!.background : undefined);
+                const size = it.p?.size ?? ordered[i - 1]?.p?.size ?? 11;
+                if (bg) this.page.drawRectangle({ x: bx, y: baseline - size * 0.25, width: w, height: size * 1.15, color: this.color(bg) });
+                bx += w;
+            });
+            for (const it of ordered) {
                 if (it.p) {
                     this.drawText(it.p.text, it.p.face, x, baseline, it.p.size, it.p.color);
                     if (it.p.underline) {
@@ -1205,11 +1220,36 @@ class NativeLayout {
         const border = this.lib.rgb(0.6, 0.6, 0.6);
 
         // First the cells' texts and places, then the columns' widths from them, then the rows drawn.
-        type Placed = { col: number; span: number; rowSpan: number; text: string; header: boolean; lines: string[] };
+        type Placed = { col: number; span: number; rowSpan: number; text: string; header: boolean; lines: string[]; fill?: string; align?: TextAlignment; ink?: string };
         const grid: Placed[][] = [];
         // Grid occupancy: column -> rows still covered by a rowspan from above, so a spanning cell
         // reserves its column(s) below instead of letting later rows slide left under it.
         const carry = new Map<number, number>();
+        /**
+         * A cell's fill, alignment and text colour: its own, or what every text run in it shares (a sheet's
+         * cell style rides on its runs). Shading was not drawn, and every cell's text sat at its left in grey
+         * (white text on a dark fill was unreadable once the fill was drawn).
+         */
+        const cellLook = (cell: OfficeContentNode): { fill?: string; align?: TextAlignment; ink?: string } => {
+            const meta = cell.metadata as { backgroundColor?: string; align?: TextAlignment } | undefined;
+            const runs: OfficeContentNode[] = [];
+            const gather = (n: OfficeContentNode, depth: number) => {
+                if (runs.length > 64 || depth > 8) return;
+                if (n.type === 'text') runs.push(n);
+                else for (const c of n.children || []) gather(c, depth + 1);
+            };
+            for (const c of cell.children || []) gather(c, 0);
+            const shared = (pick: (n: OfficeContentNode) => string | undefined) => {
+                const values = runs.filter(n => (n.text || '').trim()).map(pick);
+                return values.length && values.every(v => v && v === values[0]) ? values[0] : undefined;
+            };
+            const fill = cssColorHex(meta?.backgroundColor) ?? cssColorHex(shared(n => n.formatting?.backgroundColor)) ?? undefined;
+            const blocks = (cell.children || []).filter(c => c.type === 'paragraph' || c.type === 'heading');
+            const blockAlign = blocks.length && blocks.every(b => (b.metadata as any)?.alignment === (blocks[0].metadata as any)?.alignment) ? (blocks[0].metadata as any)?.alignment : undefined;
+            const align = meta?.align ?? blockAlign ?? shared(n => n.formatting?.alignment);
+            const ink = cssColorHex(shared(n => n.formatting?.color)) ?? undefined;
+            return { ...(fill ? { fill } : {}), ...(align === 'center' || align === 'right' ? { align } : {}), ...(ink ? { ink } : {}) };
+        };
         for (const row of rows) {
             const rowOverride = await this.onNodeValue(row);
             if (rowOverride === false) continue;
@@ -1242,7 +1282,7 @@ class NativeLayout {
                 // is not drawn: its box would cut through the merged one.
                 if (!text.trim() && (spanned.has(col) || (carry.get(col) || 0) > 0)) continue;
                 const header = rowIsHeader || meta?.style === 'header';
-                placed.push({ col, span, rowSpan: Math.max(1, meta?.rowSpan || 1), text, header, lines: [] });
+                placed.push({ col, span, rowSpan: Math.max(1, meta?.rowSpan || 1), text, header, lines: [], ...cellLook(cell) });
                 for (let c = col + 1; c < col + span && c < cols; c++) spanned.add(c);
                 cursor = col + span;
             }
@@ -1307,11 +1347,14 @@ class NativeLayout {
                 const topY = this.pageH - this.y;
                 for (const p of placed) {
                     const x = xs[Math.min(p.col, cols)];
-                    this.page.drawRectangle({ x, y: topY - bandH, width: spanWidth(p.col, p.span), height: bandH, borderColor: border, borderWidth: 0.5, color: undefined });
+                    this.page.drawRectangle({ x, y: topY - bandH, width: spanWidth(p.col, p.span), height: bandH, borderColor: border, borderWidth: 0.5, color: p.fill ? this.color(p.fill) : undefined });
                     const face: FaceKey = p.header ? 'bold' : 'regular';
+                    const room = spanWidth(p.col, p.span) - 2 * pad;
                     let ty = topY - pad - size;
                     for (let li = lineOffset; li < lineOffset + bandLines && li < p.lines.length; li++) {
-                        this.drawLine(p.lines[li], face, x + pad, ty, size, this.lib.rgb(0.12, 0.12, 0.12), spanWidth(p.col, p.span) - 2 * pad); ty -= lineH;
+                        const free = p.align ? Math.max(0, room - this.widthOf(p.lines[li], face, size)) : 0;
+                        const lx = x + pad + (p.align === 'center' ? free / 2 : p.align === 'right' ? free : 0);
+                        this.drawLine(p.lines[li], face, lx, ty, size, (p.ink && this.color(p.ink)) || this.lib.rgb(0.12, 0.12, 0.12), room); ty -= lineH;
                     }
                 }
                 this.y += bandH;
