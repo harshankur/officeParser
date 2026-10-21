@@ -20,6 +20,7 @@
 import { EmbedMetadata, FullGeneratorConfig, ImageMode, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextFormatting } from '../../types.js';
 import { getAbortError, getOfficeError } from '../../utils/errorUtils.js';
 import { documentLanguage, embedUrl, isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize } from '../../utils/officeGenUtils.js';
+import { decodeBmp, decodeGif, encodePng } from '../../utils/rasterUtils.js';
 
 /**
  * Megapixel ceiling for an embedded image. `embedPng`/`embedJpg` decode the full bitmap, so a
@@ -882,7 +883,18 @@ class NativeLayout {
                     const dim = sniffImageSize(bytes);
                     if (dim && dim.w * dim.h > MAX_IMAGE_PIXELS) return `image is too large to embed (${dim.w}x${dim.h} pixels)`;
                     const isJpg = /jpe?g/i.test(attachment.extension || '') || attachment.mimeType === 'image/jpeg';
-                    return isJpg ? await this.pdf.embedJpg(bytes) : await this.pdf.embedPng(bytes);
+                    if (isJpg) return await this.pdf.embedJpg(bytes);
+                    // A GIF (its first frame) or an uncompressed BMP, which a PDF cannot hold, as a PNG: both
+                    // were dropped. Decoded within the same pixel budget, checked before allocating.
+                    const isGif = bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46;
+                    const isBmp = bytes[0] === 0x42 && bytes[1] === 0x4D;
+                    if (isGif || isBmp) {
+                        const raster = isGif ? decodeGif(bytes, MAX_IMAGE_PIXELS) : decodeBmp(bytes, MAX_IMAGE_PIXELS);
+                        const png = raster ? encodePng(raster) : null;
+                        if (!png) return `unreadable ${isGif ? 'GIF' : 'BMP'} picture`;
+                        return await this.pdf.embedPng(png);
+                    }
+                    return await this.pdf.embedPng(bytes);
                 })();
                 this.embeddedImages.set(attachment, embedded);
             }
@@ -918,8 +930,9 @@ class NativeLayout {
             this.page.drawImage(img, { x: this.margin.left, y: this.pageH - this.y - h, width: w, height: h });
             this.y += h + 6;
         } catch {
-            // pdf-lib embeds PNG and JPEG only, so a GIF/BMP/WebP/TIFF/SVG attachment lands here.
-            this.reportWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name, reason: 'unsupported image format (the native PDF engine embeds PNG and JPEG only)' });
+            // pdf-lib embeds PNG and JPEG (and a GIF or BMP is turned into PNG), so a WebP, TIFF or SVG
+            // attachment lands here.
+            this.reportWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name, reason: 'unsupported image format (the native PDF engine embeds PNG, JPEG, GIF and BMP)' });
             fallback();
             return;
         }

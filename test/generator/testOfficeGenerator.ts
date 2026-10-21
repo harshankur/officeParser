@@ -1980,6 +1980,7 @@ const tableGrid = (table: OfficeContentNode | null): string[][] =>
 
 /** A 1x1 GIF: a real image pdf-lib cannot embed (it handles PNG and JPEG only). */
 const GIF_1PX = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+const WEBP_1PX = 'UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA';
 /** A 1x1 PNG. */
 const PNG_1PX = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
@@ -2071,17 +2072,24 @@ async function runNativePdfEngineTests(): Promise<GenFeatureTest[]> {
         'CommonGeneratorConfig.onNode promises every node; the engine flattened runs without ever asking'));
 
     // --- An image the engine cannot embed degrades to its alt text, and says so ---
-    const gifAst = synthAst('docx', [{ type: 'image', metadata: { attachmentName: 'pic.gif', altText: 'A described picture' } } as OfficeContentNode],
-        [{ name: 'pic.gif', extension: 'gif', mimeType: 'image/gif', data: GIF_1PX, size: 40 }]);
-    const gifOut = await nativeText(gifAst);
-    results.push(mk('an unembeddable image (GIF) falls back to its alt text',
-        'alt text drawn', JSON.stringify(gifOut.text).slice(0, 120),
-        gifOut.text.includes('A described picture'),
+    // (A GIF is drawn: the engine turns it into PNG. A WebP is the format it cannot embed.)
+    const webpAst = synthAst('docx', [{ type: 'image', metadata: { attachmentName: 'pic.webp', altText: 'A described picture' } } as OfficeContentNode],
+        [{ name: 'pic.webp', extension: 'webp', mimeType: 'image/webp', data: WEBP_1PX, size: 42 }]);
+    const webpOut = await nativeText(webpAst);
+    results.push(mk('an unembeddable image (WebP) falls back to its alt text',
+        'alt text drawn', JSON.stringify(webpOut.text).slice(0, 120),
+        webpOut.text.includes('A described picture'),
         'pdf-lib embeds PNG/JPEG only; a bare catch drew nothing at all for every other format'));
     results.push(mk('an unembeddable image warns (IMAGE_PROCESSING_FAILED)',
-        'IMAGE_PROCESSING_FAILED', JSON.stringify(gifOut.messages.map((m: any) => m.code)),
-        gifOut.messages.some((m: any) => m.code === OfficeWarningType.IMAGE_PROCESSING_FAILED),
+        'IMAGE_PROCESSING_FAILED', JSON.stringify(webpOut.messages.map((m: any) => m.code)),
+        webpOut.messages.some((m: any) => m.code === OfficeWarningType.IMAGE_PROCESSING_FAILED),
         'DOCX and ODT warn and degrade for the same input; a silently vanishing picture is unfindable'));
+    const gifOut = await nativeText(synthAst('docx', [{ type: 'image', metadata: { attachmentName: 'pic.gif', altText: 'A described picture' } } as OfficeContentNode],
+        [{ name: 'pic.gif', extension: 'gif', mimeType: 'image/gif', data: GIF_1PX, size: 40 }]));
+    results.push(mk('a GIF picture is drawn, turned into PNG',
+        'no IMAGE_PROCESSING_FAILED', JSON.stringify(gifOut.messages.map((m: any) => m.code)),
+        !gifOut.messages.some((m: any) => m.code === OfficeWarningType.IMAGE_PROCESSING_FAILED),
+        'a PDF cannot hold a GIF; it was dropped'));
 
     const missingAst = synthAst('docx', [{ type: 'image', metadata: { attachmentName: 'gone.png', altText: 'Missing picture alt' } } as OfficeContentNode]);
     const missingOut = await nativeText(missingAst);

@@ -6,6 +6,7 @@
 
 import { OfficeParser } from '../src/OfficeParser';
 import { OfficeGenerator } from '../src/OfficeGenerator';
+import { decodeBmp, decodeGif } from '../src/utils/rasterUtils';
 import { OfficeTemplate } from '../src/OfficeTemplate';
 import { OfficeConverter } from '../src/OfficeConverter';
 import { zipSync, strToU8, unzipSync, strFromU8 } from 'fflate';
@@ -4547,6 +4548,38 @@ async function testRtfHeaderRows(): Promise<void> {
 }
 
 /**
+ * The native PDF engine draws GIF (its first frame) and uncompressed BMP pictures, turned into PNG: a PDF
+ * holds neither, and both were dropped with IMAGE_PROCESSING_FAILED.
+ */
+async function testNativePdfGifAndBmp(): Promise<void> {
+    const sample = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.docx')), { fileType: 'docx', extractAttachments: true } as any) as OfficeParserAST;
+    const gif = sample.attachments.find(a => a.mimeType === 'image/gif')!;
+    const gifBytes = Buffer.from(gif.data, 'base64');
+    const raster = decodeGif(gifBytes, 40_000_000)!;
+    assert.ok(raster && raster.width === (gifBytes[6] | (gifBytes[7] << 8)) && raster.rgba.some((v, i) => i % 4 === 3 && v === 255), 'the sample GIF decodes to its size, with opaque pixels');
+    // A 2 x 2 BMP of 24 bits a pixel, bottom row first: red, green / blue, white.
+    const bmp = (topDown: boolean) => {
+        const b = Buffer.alloc(54 + 16);
+        b.write('BM', 0); b.writeUInt32LE(b.length, 2); b.writeUInt32LE(54, 10); b.writeUInt32LE(40, 14);
+        b.writeInt32LE(2, 18); b.writeInt32LE(topDown ? -2 : 2, 22); b.writeUInt16LE(1, 26); b.writeUInt16LE(24, 28);
+        const rows = topDown ? [[[255, 0, 0], [0, 255, 0]], [[0, 0, 255], [255, 255, 255]]] : [[[0, 0, 255], [255, 255, 255]], [[255, 0, 0], [0, 255, 0]]];
+        rows.forEach((row, y) => row.forEach(([r, g, bl], x) => { const o = 54 + y * 8 + x * 3; b[o] = bl; b[o + 1] = g; b[o + 2] = r; }));
+        return b;
+    };
+    for (const topDown of [false, true]) {
+        const decoded = decodeBmp(bmp(topDown), 40_000_000)!;
+        assert.deepStrictEqual([...decoded.rgba], [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255], `a BMP (${topDown ? 'top down' : 'bottom up'}) reads red, green / blue, white`);
+    }
+    assert.strictEqual(decodeBmp(bmp(false), 3), null, 'a BMP past the pixel budget is not decoded');
+    for (const [name, mimeType, data] of [['picture.gif', 'image/gif', gif.data], ['picture.bmp', 'image/bmp', bmp(false).toString('base64')]] as const) {
+        const ast = { type: 'docx', metadata: {}, content: [{ type: 'paragraph', children: [{ type: 'image', metadata: { attachmentName: name } }] }],
+            attachments: [{ type: 'image', name, mimeType, extension: name.split('.')[1], data }] } as any;
+        const result = await OfficeGenerator.generate(ast, 'pdf', { pdfConfig: { engine: 'native' }, onWarning: () => { } } as any);
+        assert.ok(!(result.messages || []).some((m: any) => m.code === 'IMAGE_PROCESSING_FAILED') && Buffer.from(result.value as Uint8Array).toString('latin1').includes('/Subtype /Image'), `the native PDF engine draws a ${mimeType} picture`);
+    }
+}
+
+/**
  * A PDF of slides leaves their speaker notes out, as PowerPoint's and LibreOffice's do: they were printed,
  * and at the end of the document, on the last slide's page. pdfConfig.printSpeakerNotes prints each
  * under its own slide; every other format keeps them.
@@ -6347,6 +6380,7 @@ async function runTests(): Promise<void> {
         ['CSV delimiter detection', testCsvDelimiterDetection],
         ['Hidden sheet content', testHiddenSheetContent],
         ['Speaker notes in PDF', testSpeakerNotesInPdf],
+        ['Native PDF GIF and BMP', testNativePdfGifAndBmp],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

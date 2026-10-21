@@ -255,6 +255,12 @@ export function sniffImageSize(bytes: Uint8Array): { w: number; h: number } | nu
         const h = bytes[8] | (bytes[9] << 8);
         if (w > 0 && h > 0) return { w, h };
     }
+    // BMP: width and height (signed, a negative height for rows stored top down) at offsets 18 and 22.
+    if (bytes[0] === 0x42 && bytes[1] === 0x4D && bytes.length >= 26) {
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        const w = view.getInt32(18, true), h = Math.abs(view.getInt32(22, true));
+        if (w > 0 && h > 0) return { w, h };
+    }
     // JPEG: scan segments for a SOF marker carrying height/width.
     if (bytes[0] === 0xFF && bytes[1] === 0xD8) {
         let o = 2;

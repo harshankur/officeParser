@@ -2661,6 +2661,14 @@ async function parserHardeningTests() {
     await timed('csv: a 1 MB run of digits is checked as a formula', async () => csvSafeCell('1'.repeat(n(1_000_000)) + 'x', ','));
     await timed('xlsx: 1 MB of & in an inline string decodes', () => parseQuiet(withSheetData('<row r="1"><c r="A1" t="inlineStr"><is><t>' + '&amp;'.repeat(n(200000)) + '</t></is></c></row>'), 'xlsx'));
     await timed('docx: an image width of 200 KB of spaces is written', () => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'image', metadata: { url: 'a.png', width: '1' + ' '.repeat(n(200000)) + 'x' } }] }]), 'docx' as any, { onWarning: () => {} } as any));
+    // A GIF or BMP the native PDF engine turns into PNG is held to its pixel budget before any pixel is
+    // allocated, and noise as LZW data decodes in time linear in its length.
+    const gifWith = (w: number, h: number, data: Buffer) => Buffer.concat([Buffer.from('GIF89a'), Buffer.from([w & 255, w >> 8, h & 255, h >> 8, 0x80, 0, 0]), Buffer.alloc(6, 0xAA),
+        Buffer.from([0x2C, 0, 0, 0, 0, w & 255, w >> 8, h & 255, h >> 8, 0, 8]), ...Array.from({ length: Math.ceil(data.length / 255) }, (_, i) => { const part = data.subarray(i * 255, i * 255 + 255); return Buffer.concat([Buffer.from([part.length]), part]); }), Buffer.from([0, 0x3B])]);
+    const pictureAst = (data: Buffer) => ({ type: 'docx', metadata: {}, content: [{ type: 'paragraph', children: [{ type: 'image', metadata: { attachmentName: 'p.gif', altText: 'alt' } }] }], attachments: [{ type: 'image', name: 'p.gif', mimeType: 'image/gif', extension: 'gif', data: data.toString('base64') }] }) as any;
+    const bigGif = await OfficeGenerator.generate(pictureAst(gifWith(65535, 65535, Buffer.alloc(16))), 'pdf' as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any);
+    check('pdf: a GIF declaring 65535 x 65535 pixels is refused before decoding, its alt text drawn', (bigGif.messages || []).some((m: any) => m.code === 'IMAGE_PROCESSING_FAILED'), JSON.stringify(bigGif.messages));
+    await timed('pdf: a 2000 x 2000 GIF of 1 MB of noise is decoded', () => OfficeGenerator.generate(pictureAst(gifWith(n(2000), n(2000), Buffer.from(Array.from({ length: n(1_000_000) }, (_, i) => (i * 2654435761) >>> 24)))), 'pdf' as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any));
     await timed('md: block math of 200 KB of spaces is written inline', () => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'a' }, { type: 'code', text: 'x' + ' '.repeat(n(200000)) + 'y', metadata: { math: 'block' } }] }]), 'md' as any, { onWarning: () => {} } as any));
 
     // Raw HTML in Markdown, read as links and pictures, passes the writers' URL checks like any other.
