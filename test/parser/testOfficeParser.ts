@@ -592,7 +592,7 @@ function applyOdpParityAdjustments(
 ): { adjusted: FeatureMetrics, notes: Record<string, string> } {
     const adjusted = { ...actual, lists: { ...actual.lists }, tables: { ...actual.tables }, attachments: { ...actual.attachments } };
     const notes: Record<string, string> = {};
-    const { emptyLists, tablePadding, mergedCells, splitLists, layoutLists, referencedAttachments } = getOdpVirtualDiscrepancies(ast);
+    const { emptyLists, tablePadding, splitLists, layoutLists, referencedAttachments } = getOdpVirtualDiscrepancies(ast);
 
     // 1. Attachments: Filter unused media
     const actualAttachments = ast.attachments || [];
@@ -603,10 +603,10 @@ function applyOdpParityAdjustments(
         adjusted.attachments.withOCR = actualAttachments.filter(a => referencedAttachments.has(a.name || '') && a.ocrText !== undefined).length;
     }
 
-    // 2. Tables: Account for merged cells and padding
-    if (mergedCells > 0 || tablePadding > 0) {
-        notes['Tables - Cells'] = `ODP table cells adjusted. Adjusted for ${tablePadding} implicit empty trailing cells, ${mergedCells} merged/spanned cells`;
-        adjusted.tables.cells += (mergedCells + tablePadding);
+    // 2. Tables: Account for padding (positions a merged cell covers are no cells in either format)
+    if (tablePadding > 0) {
+        notes['Tables - Cells'] = `ODP table cells adjusted. Adjusted for ${tablePadding} implicit empty trailing cells`;
+        adjusted.tables.cells += tablePadding;
     }
 
     // 3. Lists: Exclude placeholders and layout-wrap lists

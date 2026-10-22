@@ -10,7 +10,7 @@
   \usepackage{lmodern}
 \fi
 \usepackage{newunicodechar}
-\usepackage{array}
+\usepackage{array,multirow}
 \usepackage[normalem]{ulem}
 \hypersetup{colorlinks=true,
   linkcolor=blue,
@@ -474,10 +474,10 @@ Elm College~ & {\fontsize{11pt}{13.2pt}\selectfont 43~} & {\fontsize{11pt}{13.2p
 
 \begin{tabular}{|*{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-4\tabcolsep-3\arrayrulewidth)/2\relax}|}}
 \hline
-One~
+\multirow{2}{=}{One~
 
-Three~ & Two~ \\
-\hline
+Three~} & Two~ \\
+\cline{2-2}
  & Four~ \\
 \hline
 \end{tabular}
@@ -496,31 +496,31 @@ Three~ & Two~ \\
 {\scriptsize\setlength{\tabcolsep}{2pt}
 \begin{tabular}{|*{14}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)/14\relax}|}}
 \hline
-\textcolor{hex365F91}{December 2007~} &  &  &  &  &  &  &  &  &  &  &  &  &  \\
+\multicolumn{13}{|>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*13/14+24\tabcolsep+12\arrayrulewidth\relax}|}{\textcolor{hex365F91}{December 2007~}} &  \\
 \hline
-\textcolor{hex365F91}{Sun~} & ~ & \textcolor{hex7F7F7F}{Mon~} & ~ & \textcolor{hex7F7F7F}{Tue~} & ~ & \textcolor{hex7F7F7F}{Wed~} & ~ & \textcolor{hex7F7F7F}{Thu~} & ~ & \textcolor{hex7F7F7F}{Fri~} & ~ & \textcolor{hex7F7F7F}{Sat~} &  \\
+\textcolor{hex365F91}{Sun~} & ~ & \textcolor{hex7F7F7F}{Mon~} & ~ & \textcolor{hex7F7F7F}{Tue~} & ~ & \textcolor{hex7F7F7F}{Wed~} & ~ & \textcolor{hex7F7F7F}{Thu~} & ~ & \textcolor{hex7F7F7F}{Fri~} & ~ & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{\textcolor{hex7F7F7F}{Sat~}} \\
 \hline
-~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & \textcolor{hex7F7F7F}{1~} &  \\
+~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{\textcolor{hex7F7F7F}{1~}} \\
 \hline
-~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ &  \\
+~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{~} \\
 \hline
-\textcolor{hex365F91}{2~} & ~ & \textcolor{hex7F7F7F}{3~} & ~ & \textcolor{hex7F7F7F}{4~} & ~ & \textcolor{hex7F7F7F}{5~} & ~ & \textcolor{hex7F7F7F}{6~} & ~ & \textcolor{hex7F7F7F}{7~} & ~ & \textcolor{hex7F7F7F}{8~} &  \\
+\textcolor{hex365F91}{2~} & ~ & \textcolor{hex7F7F7F}{3~} & ~ & \textcolor{hex7F7F7F}{4~} & ~ & \textcolor{hex7F7F7F}{5~} & ~ & \textcolor{hex7F7F7F}{6~} & ~ & \textcolor{hex7F7F7F}{7~} & ~ & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{\textcolor{hex7F7F7F}{8~}} \\
 \hline
-~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ &  \\
+~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{~} \\
 \hline
-\textcolor{hex365F91}{9~} & ~ & \textcolor{hex7F7F7F}{10~} & ~ & \textcolor{hex7F7F7F}{11~} & ~ & \textcolor{hex7F7F7F}{12~} & ~ & \textcolor{hex7F7F7F}{13~} & ~ & \textcolor{hex7F7F7F}{14~} & ~ & \textcolor{hex7F7F7F}{15~} &  \\
+\textcolor{hex365F91}{9~} & ~ & \textcolor{hex7F7F7F}{10~} & ~ & \textcolor{hex7F7F7F}{11~} & ~ & \textcolor{hex7F7F7F}{12~} & ~ & \textcolor{hex7F7F7F}{13~} & ~ & \textcolor{hex7F7F7F}{14~} & ~ & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{\textcolor{hex7F7F7F}{15~}} \\
 \hline
-~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ &  \\
+~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{~} \\
 \hline
-\textcolor{hex365F91}{16~} & ~ & \textcolor{hex7F7F7F}{17~} & ~ & \textcolor{hex7F7F7F}{18~} & ~ & \textcolor{hex7F7F7F}{19~} & ~ & \textcolor{hex7F7F7F}{20~} & ~ & \textcolor{hex7F7F7F}{21~} & ~ & \textcolor{hex7F7F7F}{22~} &  \\
+\textcolor{hex365F91}{16~} & ~ & \textcolor{hex7F7F7F}{17~} & ~ & \textcolor{hex7F7F7F}{18~} & ~ & \textcolor{hex7F7F7F}{19~} & ~ & \textcolor{hex7F7F7F}{20~} & ~ & \textcolor{hex7F7F7F}{21~} & ~ & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{\textcolor{hex7F7F7F}{22~}} \\
 \hline
-~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ &  \\
+~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{~} \\
 \hline
-\textcolor{hex365F91}{23~} & ~ & \textcolor{hex7F7F7F}{24~} & ~ & \textcolor{hex7F7F7F}{25~} & ~ & \textcolor{hex7F7F7F}{26~} & ~ & \textcolor{hex7F7F7F}{27~} & ~ & \textcolor{hex7F7F7F}{28~} & ~ & \textcolor{hex7F7F7F}{29~} &  \\
+\textcolor{hex365F91}{23~} & ~ & \textcolor{hex7F7F7F}{24~} & ~ & \textcolor{hex7F7F7F}{25~} & ~ & \textcolor{hex7F7F7F}{26~} & ~ & \textcolor{hex7F7F7F}{27~} & ~ & \textcolor{hex7F7F7F}{28~} & ~ & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{\textcolor{hex7F7F7F}{29~}} \\
 \hline
-~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ &  \\
+~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{~} \\
 \hline
-\textcolor{hex365F91}{30~} & ~ & \textcolor{hex7F7F7F}{31~} & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ &  \\
+\textcolor{hex365F91}{30~} & ~ & \textcolor{hex7F7F7F}{31~} & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{~} \\
 \hline
 \end{tabular}
 }

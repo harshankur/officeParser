@@ -311,6 +311,11 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
 
             for (let cIndex = 0; cIndex < tcNodes.length; cIndex++) {
                 const tcNode = tcNodes[cIndex];
+                // A position a merged cell covers (merged across or down into) is that cell's, not one of its own.
+                const flag = (name: string) => { const v = tcNode.getAttribute(name); return v === '1' || v === 'true'; };
+                if (flag('hMerge') || flag('vMerge')) continue;
+                const span = (name: string) => { const v = parseInt(tcNode.getAttribute(name) || '', 10); return Number.isFinite(v) && v > 1 ? v : undefined; };
+                const colSpan = span('gridSpan'), rowSpan = span('rowSpan');
                 const cellChildren: OfficeContentNode[] = [];
                 let cellText = '';
 
@@ -391,7 +396,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                     type: 'cell',
                     text: cellText,
                     children: cellChildren,
-                    metadata: { row: rIndex, col: cIndex, ...(backgroundColor ? { backgroundColor } : {}) }
+                    metadata: { row: rIndex, col: cIndex, ...(colSpan ? { colSpan } : {}), ...(rowSpan ? { rowSpan } : {}), ...(backgroundColor ? { backgroundColor } : {}) }
                 };
                 cells.push(cellNode);
             }
