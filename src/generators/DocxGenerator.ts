@@ -176,7 +176,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         const { iso, mtime } = this.resolveModified();
 
         // The running header and footer, and the first section's first page's and even pages' own, first:
-        // the sections the body ends name them where they have none of their own (see sectionReferences).
+        // a later section without its own of a type takes them on, as Word gives it (see sectionReferences).
         const headers = runningFurniture(this.ast.auxiliary?.headers, 'header'), footers = runningFurniture(this.ast.auxiliary?.footers, 'footer');
         const hasHeader = headers.length > 0;
         const hasFooter = footers.length > 0;
@@ -187,11 +187,9 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         // A first page's own (a letterhead) or even pages' own is written as that kind: on the title
         // page (`w:titlePg`), or on even pages with the settings' `w:evenAndOddHeaders`.
         const headerKind = hasHeader ? furnitureKind(headers, 'header') : 'default', footerKind = hasFooter ? furnitureKind(footers, 'footer') : 'default';
-        // Even pages' own parts anywhere: then every section names its even pages' (see sectionReferences).
+        // Even pages' own parts anywhere: then the document has even and odd pages' parts (`w:evenAndOddHeaders`).
         const evenAnywhere = (['header', 'footer'] as const).some(kind => { const list = kind === 'header' ? this.ast.auxiliary?.headers : this.ast.auxiliary?.footers; return !!list?.length && sectionFurnitureIndex(list, kind, 'even').sections.length > 0; });
         this.evenPages = headerKind === 'even' || footerKind === 'even' || evenAnywhere;
-        this.inForce.header = headerKind === 'default' ? headerRid : '';
-        this.inForce.footer = footerKind === 'default' ? footerRid : '';
         const firstOwn = await this.sectionReferences(0, false);
         const furniture = { headerKind, footerKind, titlePage: headerKind === 'first' || footerKind === 'first', evenPages: this.evenPages, firstOwn };
         if (furniture.evenPages) this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings', 'settings.xml');
@@ -868,31 +866,25 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
 
     /** The current section's own header and footer references, written once (its later properties take them on). */
     private async ownReferences(): Promise<{ refs: string; titlePage: boolean }> {
-        if (this.currentSection === this.referencedSection) return { refs: '', titlePage: false };
+        if (this.currentSection === this.referencedSection) return { refs: '', titlePage: !!this.sectionSetup?.differentFirstPage };
         this.referencedSection = this.currentSection;
         return this.sectionReferences(this.currentSection);
     }
 
-    /**
-     * Each kind's every-page part in force (a section's own, else the one before it, which Word gives the
-     * section): what a section's first page and even pages show where it has none of their own.
-     */
-    private readonly inForce: Record<'header' | 'footer', string> = { header: '', footer: '' };
-    /** Whether the document has even pages' own parts (`w:evenAndOddHeaders`): then every section names its even pages'. */
+    /** Whether the document has even pages' own parts (`w:evenAndOddHeaders`). */
     private evenPages = false;
 
     /**
      * A section's own header and footer, as parts of their own and references in its properties: its every
-     * page's (none where it has none of its own: Word gives it the one before it), its first page's (and
-     * the title page, `w:titlePg`, it needs), and its even pages'. Where the section has a first page or the
-     * document even pages, a kind with no part of its own for them names the every-page one in force: Word
-     * would otherwise take the one before it of that type, or none. The first section's every-page parts
-     * are written apart (runningFurniture), so `withDefault` is false for it.
+     * page's, its first page's and its even pages', each only where the section has its own (Word gives a
+     * section without one of a type the one before it of that type, as Word reading reads it); and whether
+     * it has a title page (`w:titlePg`: its own first page's part, or its page's `differentFirstPage`). The
+     * first section's every-page parts are written apart (runningFurniture), so `withDefault` is false for it.
      */
     private async sectionReferences(section: number, withDefault = true): Promise<{ refs: string; titlePage: boolean }> {
         const lists = { header: this.ast.auxiliary?.headers, footer: this.ast.auxiliary?.footers };
         const own = (kind: 'header' | 'footer', type: 'default' | 'first' | 'even') => sectionFurniture(lists[kind], kind, section, type);
-        const titlePage = !!(own('header', 'first') || own('footer', 'first'));
+        const titlePage = !!(own('header', 'first') || own('footer', 'first') || this.sectionSetup?.differentFirstPage);
         let refs = '';
         for (const kind of ['header', 'footer'] as const) {
             const write = async (nodes: OfficeContentNode[]) => {
@@ -908,12 +900,10 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
                 return rid;
             };
             const every = withDefault ? own(kind, 'default') : undefined;
-            if (every) { this.inForce[kind] = await write(every); refs += `<w:${kind}Reference w:type="default" r:id="${this.inForce[kind]}"/>`; }
+            if (every) refs += `<w:${kind}Reference w:type="default" r:id="${await write(every)}"/>`;
             const first = own(kind, 'first'), even = own(kind, 'even');
             if (first) refs += `<w:${kind}Reference w:type="first" r:id="${await write(first)}"/>`;
-            else if (titlePage && this.inForce[kind]) refs += `<w:${kind}Reference w:type="first" r:id="${this.inForce[kind]}"/>`;
             if (even) refs += `<w:${kind}Reference w:type="even" r:id="${await write(even)}"/>`;
-            else if (this.evenPages && this.inForce[kind]) refs += `<w:${kind}Reference w:type="even" r:id="${this.inForce[kind]}"/>`;
         }
         return { refs, titlePage };
     }
@@ -1066,7 +1056,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         const references = (tag: 'header' | 'footer', rid: string, kind: string) => rid ? kinds(kind).map(type => `<w:${tag}Reference w:type="${type}" r:id="${rid}"/>`).join('') : '';
         // The header and footer are the first section's (a later one takes them on), with its title page.
         const first = references('header', headerRid, furniture.headerKind) + references('footer', footerRid, furniture.footerKind) + (furniture.firstOwn?.refs ?? '');
-        const firstTitle = furniture.titlePage || ownTitle;
+        const firstTitle = furniture.titlePage || ownTitle || !!this.ast.metadata?.pageSetup?.differentFirstPage;
         const sectioned = body.includes(FIRST_SECTION);
         if (sectioned) body = body.replace(FIRST_SECTION, first).replace(FIRST_SECTION_TITLE, firstTitle ? '<w:titlePg/>' : '');
         // The last section's properties close the body.

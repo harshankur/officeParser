@@ -41,6 +41,7 @@
  */
 
 import { BreakMetadata, CellMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, IndentationMetadata, ListMetadata, ParagraphSpacing, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, PageSetup, TextFormatting } from '../types.js';
+import { MAX_PAGE_PT } from '../utils/pageLimits.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
@@ -674,7 +675,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // twips: a section's state from its `\sectd` on; and the break (with includeBreakNodes) each `\sect`
     // ends one with, given the next section's page once its properties are read (see sectionSetup).
     const page: Partial<Record<'w' | 'h' | 'ml' | 'mr' | 'mt' | 'mb' | 'hy' | 'fy', number>> & { landscape?: boolean } = {};
-    type SectionState = Partial<Record<'w' | 'h' | 'ml' | 'mr' | 'mt' | 'mb' | 'hy' | 'fy' | 'cols' | 'colsx', number>> & { landscape?: boolean; line?: boolean; start?: 'none' | 'page'; widths: Map<number, number>; colNo: number };
+    type SectionState = Partial<Record<'w' | 'h' | 'ml' | 'mr' | 'mt' | 'mb' | 'hy' | 'fy' | 'cols' | 'colsx', number>> & { landscape?: boolean; line?: boolean; start?: 'none' | 'page'; title?: boolean; widths: Map<number, number>; colNo: number };
     const newSection = (): SectionState => ({ widths: new Map(), colNo: 1 });
     let section = newSection();
     const firstSection = section;
@@ -1928,7 +1929,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 return;
             }
             // Whether the first page's own header and footer (`\headerf`) and the left pages' (`\headerl`) are shown.
-            if (node.value === 'titlepg') titlePage = true;
+            if (node.value === 'titlepg') { titlePage = true; section.title = true; }
             else if (node.value === 'facingp') facingPages = true;
             // The page and the sections' pages.
             else if (PAGE_WORDS.has(node.value) && node.param !== undefined && node.param >= 0) { (page as any)[PAGE_WORDS.get(node.value)!] = node.param; pageStated = true; }
@@ -2313,20 +2314,22 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     }
     // A section's page in points: its own size, margins and columns, else the document's (RTF's defaults,
     // Letter with margins of an inch and a quarter across, where it states none). Held as Word's reader
-    // holds a page: none where its size is no page (up to twenty-two inches each way), margins at most a
+    // holds a page: none where its size is no page (up to two hundred inches each way), margins at most a
     // third of the page, header and footer distances a third of its height, the gap a quarter of its
     // width, a column no wider than the page: a page of 2,147,483,647 by 1 lost its text, and a gap of
     // millions made a file LibreOffice would not open.
     const sectionSetup = (state: SectionState): PageSetup | undefined => {
         const pt = (twips: number | undefined, fallback: number) => (twips ?? fallback) / 20;
         let width = pt(state.w ?? page.w, 12240), height = pt(state.h ?? page.h, 15840);
-        if (!(width > 0 && height > 0 && width <= 1584 && height <= 1584)) return undefined;
+        if (!(width > 0 && height > 0 && width <= MAX_PAGE_PT && height <= MAX_PAGE_PT)) return undefined;
         if ((state.landscape || (state.w === undefined && page.landscape)) && width < height) [width, height] = [height, width];
         const margin = (twips: number | undefined, fallback: number) => Math.min(pt(twips, fallback), Math.min(width, height) / 3);
         const setup: PageSetup = {
             width, height,
             margin: { top: margin(state.mt ?? page.mt, 1440), right: margin(state.mr ?? page.mr, 1800), bottom: margin(state.mb ?? page.mb, 1440), left: margin(state.ml ?? page.ml, 1800) },
             headerDistance: Math.min(pt(state.hy ?? page.hy, 720), height / 3), footerDistance: Math.min(pt(state.fy ?? page.fy, 720), height / 3),
+            // Its first page with a header and footer of its own (`\titlepg`), as a Word section's `w:titlePg`.
+            ...(state.title ? { differentFirstPage: true } : {}),
         };
         const count = Math.min(16, state.cols ?? 1);
         if (count > 1) {
@@ -2338,10 +2341,10 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     for (const { node, state } of sectionBreaks) {
         const meta = node.metadata as BreakMetadata;
         if (state.start === 'none') meta.breakType = 'section';
-        const setup = pageStated || (state.cols ?? 1) > 1 ? sectionSetup(state) : undefined;
+        const setup = pageStated || (state.cols ?? 1) > 1 || state.title ? sectionSetup(state) : undefined;
         if (setup) meta.pageSetup = setup;
     }
-    const firstSetup = pageStated || (firstSection.cols ?? 1) > 1 ? sectionSetup(firstSection) : undefined;
+    const firstSetup = pageStated || (firstSection.cols ?? 1) > 1 || firstSection.title ? sectionSetup(firstSection) : undefined;
     const result = createAST(
         'rtf',
         {

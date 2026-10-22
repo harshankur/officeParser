@@ -383,8 +383,11 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
 
         // The document's columns, from its first section's page (multicols), closed at its end.
         const opening = this.beamer ? '' : this.columnsSwitch(this.ast.metadata?.pageSetup?.columns);
+        // The first section's own first page's and even pages' header and footer, from the start.
+        this.firstSectionSwitch = this.beamer ? '' : this.sectionStyleSwitch(0, this.ast.metadata?.pageSetup);
         let body = this.beamer ? await this.renderBeamerBody(this.ast.content) : await this.renderFlow(this.ast.content);
         if (opening) body = `${opening}\n${body}`;
+        if (this.firstSectionSwitch) body = `${this.firstSectionSwitch}\n${body}`;
         if (this.openColumns) { body += '\n\\end{multicols}}'; this.openColumns = false; }
         const running = this.beamer ? this.warnBeamerHeaders() : await this.pageHeaderSetup();
         // The sections' own page styles, with the running one (fancyhdr loaded for them where it has none).
@@ -623,7 +626,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                 if (node !== this.titleNodes.title) continue;
                 const override = await this.handleOnNode(node);
                 if (override === false) continue;
-                blocks.push(typeof override === 'string' ? override : `${this.commentsBefore(node)}${this.anchorsFor(node, true)}\\maketitle`);
+                // (A title's page is `plain`: the first section's first page style is set again after it.)
+                blocks.push(typeof override === 'string' ? override : `${this.commentsBefore(node)}${this.anchorsFor(node, true)}\\maketitle${this.firstSectionSwitch.includes('thispagestyle') ? `\\thispagestyle{osec0first}` : ''}`);
                 prevPaginated = null;
                 continue;
             }
@@ -1936,10 +1940,16 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         // note opened a multicols there, which LaTeX cannot set.
         const body = this.ctx.sections;
         // A section starting on this page, in its own columns.
-        if (t === 'section') return body ? this.columnsSwitch((node.metadata as BreakMetadata | undefined)?.pageSetup?.columns) : '';
+        if (t === 'section') {
+            if (!body) return '';
+            const meta = node.metadata as BreakMetadata | undefined;
+            // (Its own header and footer from the next page on.)
+            const style = !this.beamer && typeof meta?.section === 'number' ? this.sectionStyleSwitch(meta.section, meta.pageSetup, true) : '';
+            return [style, this.columnsSwitch(meta?.pageSetup?.columns)].filter(Boolean).join('\n');
+        }
         // A section starting on a new page, in its own columns: the columns before end, the page breaks.
         if (t === 'page' && !this.beamer && body && typeof (node.metadata as BreakMetadata | undefined)?.section === 'number') {
-            return [this.columnsSwitch(undefined), '\\clearpage', this.sectionStyleSwitch((node.metadata as BreakMetadata).section!), this.columnsSwitch((node.metadata as BreakMetadata | undefined)?.pageSetup?.columns)].filter(Boolean).join('\n');
+            return [this.columnsSwitch(undefined), '\\clearpage', this.sectionStyleSwitch((node.metadata as BreakMetadata).section!, (node.metadata as BreakMetadata).pageSetup), this.columnsSwitch((node.metadata as BreakMetadata | undefined)?.pageSetup?.columns)].filter(Boolean).join('\n');
         }
         // A page break in columns: they end on the page, and go on, the same, on the next.
         if (t === 'page' && !this.beamer && body && this.openColumns) {
@@ -2166,30 +2176,41 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     private readonly sectionStyles = new Map<number, { every: boolean; first: boolean }>();
 
     /**
-     * Where a section starts on a new page, its own header and footer from there on: a page style of its
-     * own (`\pagestyle`), and its first page's (`\thispagestyle`) where it has one; nothing where it has
-     * none of its own, which keeps the one before it, as Word gives it. The styles are set up with the
-     * running one (see sectionStyleSetup).
+     * A section's own header and footer from its start: a page style of its own (`\\pagestyle`) where it
+     * has its own every page's or even pages' part, and its first page's (`\\thispagestyle`) where it has
+     * a title page (its own first page's part, or its page's `differentFirstPage`); nothing where it has
+     * neither, which keeps the one before it, as Word gives it. The first section's (section 0) where the
+     * running part is every page's, at the document's start. A section starting on the same page
+     * (`continuous`) takes its style from the next page on (after its page is shipped out), as Word shows
+     * it, and no title page. The styles are set up with the running one (see sectionStyleSetup).
      */
-    private sectionStyleSwitch(section: number): string {
-        if (section < 1) return '';
+    private sectionStyleSwitch(section: number, setup: PageSetup | undefined, continuous = false): string {
         const lists = { header: this.ast.auxiliary?.headers, footer: this.ast.auxiliary?.footers };
+        if (section === 0 && (['header', 'footer'] as const).some(kind => !!lists[kind]?.length && furnitureKind(runningFurniture(lists[kind], kind), kind) !== 'default')) return '';
         const own = (type: 'default' | 'first' | 'even') => (['header', 'footer'] as const).some(kind => !!sectionFurniture(lists[kind], kind, section, type));
-        const every = own('default') || own('even'), first = own('first');
+        const every = (section > 0 && own('default')) || own('even'), first = !continuous && (own('first') || !!setup?.differentFirstPage);
         if (!every && !first) return '';
-        this.sectionStyles.set(section, { every, first });
+        this.sectionStyles.set(section, { every: every || (this.sectionStyles.get(section)?.every ?? false), first: first || (this.sectionStyles.get(section)?.first ?? false) });
+        // (After the page it starts on is shipped out, globally: an output routine's assignments are its own,
+        // and `\\afterpage` next to multicols never ran.)
+        if (continuous) return `\\AddToHookNext{shipout/after}{{\\globaldefs=1 \\pagestyle{osec${section}}}}`;
         return `${every ? `\\pagestyle{osec${section}}` : ''}${first ? `\\thispagestyle{osec${section}first}` : ''}`;
     }
+    /** The first section's own page style switch (see sectionStyleSwitch), written at the body's start and again after a title on the first page. */
+    private firstSectionSwitch = '';
 
-    /** A kind's part of a type in force in a section: its own, else the latest section's before it, else (every page's) the running one. */
-    private partInForce(kind: 'header' | 'footer', section: number, type: 'default' | 'even'): OfficeContentNode | undefined {
+    /**
+     * A kind's part of a type in force in a section: its own, else the latest section's before it, else the
+     * running one where it is of that type (every page's: the running every-page one).
+     */
+    private partInForce(kind: 'header' | 'footer', section: number, type: 'default' | 'first' | 'even'): OfficeContentNode | undefined {
         const nodes = kind === 'header' ? this.ast.auxiliary?.headers : this.ast.auxiliary?.footers;
         if (!nodes?.length) return undefined;
         const { bySection, sections } = sectionFurnitureIndex(nodes, kind, type);
         let lo = 0, hi = sections.length - 1, found = -1;
         while (lo <= hi) { const mid = (lo + hi) >> 1; if (sections[mid] <= section) { found = sections[mid]; lo = mid + 1; } else hi = mid - 1; }
         if (found >= 0) return bySection.get(found);
-        return type === 'default' && furnitureKind(runningFurniture(nodes, kind), kind) === 'default' ? this.pickHeaderFooter(nodes, kind) : undefined;
+        return furnitureKind(runningFurniture(nodes, kind), kind) === type ? this.pickHeaderFooter(nodes, kind) : undefined;
     }
 
     /** The page styles of the sections that have their own headers and footers (`\fancypagestyle`). */
@@ -2201,7 +2222,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                 const parts: string[] = ['\\fancyhf{}'];
                 for (const kind of ['header', 'footer'] as const) {
                     const lists = kind === 'header' ? this.ast.auxiliary?.headers : this.ast.auxiliary?.footers;
-                    const every = await field(type === 'first' ? (sectionFurniture(lists, kind, section, 'first')?.[0] ?? this.partInForce(kind, section, 'default')) : this.partInForce(kind, section, 'default'));
+                    // (A title page shows the first page's part in force, and none of a kind with none, as Word does.)
+                    const every = await field(this.partInForce(kind, section, type === 'first' ? 'first' : 'default'));
                     const even = type === 'every' ? await field(this.partInForce(kind, section, 'even')) : null;
                     const command = kind === 'header' ? 'fancyhead' : 'fancyfoot';
                     // (Even pages' own where the section has them: on the even pages, every page's on the odd ones;
@@ -2210,7 +2232,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                     else {
                         if (even?.text) parts.push(`\\${command}[${even.position}]{\\ifodd\\value{page}\\else {${even.text}}\\fi}`);
                         if (every?.text) parts.push(`\\${command}[${every.position}]{${even?.text ? `\\ifodd\\value{page} {${every.text}}\\fi` : every.text}}`);
-                        else if (kind === 'footer' && !even?.text) parts.push('\\fancyfoot[C]{\\thepage}');
+                        else if (kind === 'footer' && !even?.text && type === 'every') parts.push('\\fancyfoot[C]{\\thepage}');
                     }
                 }
                 return parts.join('');
@@ -2353,7 +2375,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         // A title block in the content is typeset where it stands.
         if (this.titleNodes) return '';
         if (!this.config.renderMetadata || !this.effectiveMetadata.title) return '';
-        return this.beamer ? '\\begin{frame}\n\\titlepage\n\\end{frame}' : '\\maketitle';
+        return this.beamer ? '\\begin{frame}\n\\titlepage\n\\end{frame}' : `\\maketitle${this.firstSectionSwitch.includes('thispagestyle') ? '\\thispagestyle{osec0first}' : ''}`;
     }
 
     /**

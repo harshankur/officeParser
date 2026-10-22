@@ -23,6 +23,7 @@
 
 import { presetOfOdfShape } from '../utils/shapeNames.js';
 import { BreakMetadata, CellMetadata, ChartData, ChartMetadata, CodeMetadata, FullOfficeParserConfig, HeaderFooterMetadata, HeadingMetadata, ImageMetadata, IndentationMetadata, ListMetadata, PageSetup, ParagraphSpacing, ShapeMetadata, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, PageMetadata, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
+import { MAX_PAGE_PT } from '../utils/pageLimits.js';
 import { createAST } from '../utils/astUtils.js';
 import { chartRawTexts, extractChartData, MAX_CHART_VALUES } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
@@ -545,7 +546,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         const layout = master ? pageLayouts.get(master.getAttribute("style:page-layout-name") || '') : undefined;
         const props = layout ? getDirectChildren(layout, "style:page-layout-properties")[0] : undefined;
         if (!props) return undefined;
-        const pt = (el: Element | undefined, attr: string) => { const v = lengthToPt(el?.getAttribute(attr) || undefined); return v != null && v >= 0 && v < 1584 ? Math.round(v * 100) / 100 : undefined; };
+        const pt = (el: Element | undefined, attr: string) => { const v = lengthToPt(el?.getAttribute(attr) || undefined); return v != null && v >= 0 && v <= MAX_PAGE_PT ? Math.round(v * 100) / 100 : undefined; };
         const width = pt(props, "fo:page-width"), height = pt(props, "fo:page-height");
         if (!width || !height) return undefined;
         const margin = { top: pt(props, "fo:margin-top") ?? 0, right: pt(props, "fo:margin-right") ?? 0, bottom: pt(props, "fo:margin-bottom") ?? 0, left: pt(props, "fo:margin-left") ?? 0 };
@@ -558,7 +559,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         };
         if (shown(master, "style:header")) { setup.headerDistance = margin.top; margin.top += room("style:header-style", "fo:margin-bottom"); }
         if (shown(master, "style:footer")) { setup.footerDistance = margin.bottom; margin.bottom += room("style:footer-style", "fo:margin-top"); }
-        if (shown(master, "style:header-first") || shown(master, "style:footer-first")) setup.differentFirstPage = true;
+        // A first page of its own: its own first page's parts, or a master that hands over to another after
+        // its first page (a word processor's "First Page" style, and ODT output's section title pages).
+        const next = master?.getAttribute("style:next-style-name");
+        if (shown(master, "style:header-first") || shown(master, "style:footer-first") || (next && next !== masterName && masterPages.has(next))) setup.differentFirstPage = true;
         const columns = odfColumns(getDirectChildren(props, "style:columns")[0], width - margin.left - margin.right);
         if (columns) setup.columns = columns;
         return setup;

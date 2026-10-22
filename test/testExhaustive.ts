@@ -4887,7 +4887,9 @@ async function testDocxSectionsInPdf(): Promise<void> {
     const odtOut = unzipSync(new Uint8Array((await OfficeGenerator.generate(perPage, 'odt', {} as any)).value as any));
     // (Once on each master page: a section on a page of its own has a master of its own, with the body's header.)
     const odtStyles = strFromU8(odtOut['styles.xml']);
-    assert.strictEqual((odtStyles.match(/Same on every page/g) || []).length, (odtStyles.match(/<style:master-page /g) || []).length, 'a header given for each page (as a PDF gives it) is written once a master page');
+    // (A title page with no first page's part of its own shows none, as Word does: that master holds none.)
+    const masterTexts = (odtStyles.match(/<style:master-page [\s\S]*?<\/style:master-page>/g) || []).map(m => (m.match(/Same on every page/g) || []).length);
+    assert.ok(masterTexts.some(c => c === 1) && masterTexts.every(c => c <= 1), `a header given for each page (as a PDF gives it) is written once a master page; got ${masterTexts}`);
 }
 
 /**
@@ -5428,7 +5430,8 @@ async function testPdfScriptsColumnsAndLists(): Promise<void> {
     assert.ok(closing && closing.bounds!.x < 60, `a line after them starts where it is drawn; got ${closing?.bounds?.x}`);
 
     const rtl = (await read('rtl_words_chrome.pdf')).content.map(p => p.text).join('\n');
-    assert.ok(rtl.includes('عربي نص وهذا جميلة لغة العربية') && rtl.includes('בעברית טקסט זה עולם שלום'), `right-to-left words keep their spaces; got ${JSON.stringify(rtl.slice(0, 200))}`);
+    // (In the order they are read, as pdftotext gives them: Chrome sets each word as a run of its own.)
+    assert.ok(rtl.includes('العربية لغة جميلة وهذا نص عربي') && rtl.includes('שלום עולם זה טקסט בעברית'), `right-to-left words keep their spaces, in reading order; got ${JSON.stringify(rtl.slice(0, 200))}`);
 
     const scripts = await read('scripts_table_chrome.pdf');
     const scriptText = blocks(scripts).filter(n => n.type === 'paragraph').map(n => n.text).join('\n');
@@ -5534,6 +5537,16 @@ async function testPdfRuledTables(): Promise<void> {
     const [boxed, numbered] = read2.content[0].children!.filter(n => n.type === 'table');
     assert.deepStrictEqual(boxed && rowsOf(boxed)[1], ['North', '1200', '800', '400'], `a box ruled between its rows alone is read by its columns; got ${boxed && JSON.stringify(rowsOf(boxed))}`);
     assert.deepStrictEqual(numbered && rowsOf(numbered), [['No.', 'Item', 'Quantity', 'Location'], ['1.', 'Apples', '30', 'Shelf A'], ['2.', 'Bananas', '12', 'Shelf B'], ['3.', 'Cherries', '7', 'Shelf C']], `a table's numbered first column keeps its cells; got ${numbered && JSON.stringify(rowsOf(numbered))}`);
+    // A merged title row keeps its span: a run in a merged cell is not cut at the grid lines under it.
+    const titled = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'merged_title_table.pdf')), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const titledTable = collectAllNodes(titled).find(n => n.type === 'table');
+    assert.ok(titledTable && (titledTable.children![0].children![0].metadata as any)?.colSpan === 3 && titledTable.children![0].children![0].text === 'Quarterly results by region'
+        && titledTable.children![1].children!.map(c => c.text).join('|') === 'North|South|East', `a ruled table's merged title row stays one cell over its columns; got ${JSON.stringify(titledTable?.text)}`);
+    // Chrome sets each word as a run of its own: right-to-left lines are read last word first on the page,
+    // and a word space after an Indic conjunct (whose width pdf.js lost) is kept.
+    const scripts = String((await (await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'scripts_words_chrome.pdf')), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).to('text')).value);
+    for (const line of ['שלום עולם זה טקסט בעברית עם כמה מילים', 'مرحبا بالعالم هذا نص عربي فيه كلمات كثيرة', 'தமிழ் மொழி ஒரு அழகான மொழி', 'বাংলা ভাষা একটি সুন্দর ভাষা']) assert.ok(scripts.includes(line), `a Chrome PDF reads "${line}"; got ${JSON.stringify(scripts.slice(0, 400))}`);
+
 }
 
 /**
@@ -5775,7 +5788,8 @@ async function testColumns(): Promise<void> {
     assert.ok([...docxCols.matchAll(/w:space="(\d+)"/g)].every(m => Number(m[1]) <= 12240 / 4) && !/w:num="(1[7-9]|[2-9]\d|\d{3,})"/.test(docxCols), 'DOCX: columns held to the page');
     const absurdPdf = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(absurd, 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
     const absurdText = String((await absurdPdf.to('text')).value);
-    assert.ok(absurdText.includes('Hello absurd') && absurdText.includes('After absurd') && absurdPdf.content.every(p => (p.metadata as any).pageWidth >= 72 && (p.metadata as any).pageHeight >= 72), 'native PDF: a section page no page is takes the document\'s, its text kept');
+    // (Its text kept, broken where narrow columns break it.)
+    assert.ok(absurdText.replace(/\s+/g, '').includes('Helloabsurd') && absurdText.includes('After absurd') && absurdPdf.content.every(p => (p.metadata as any).pageWidth >= 72 && (p.metadata as any).pageHeight >= 72), 'native PDF: a section page no page is takes the document\'s, its text kept');
 
     // A later section's own first-page header reads back as its first page's, not as every page's.
     const firstHdr = (kind: string, type: string, section: number, text: string) => ({ type: kind, text, metadata: { type, section }, children: [{ type: 'paragraph', children: [{ type: 'text', text }] }] });
@@ -5784,6 +5798,44 @@ async function testColumns(): Promise<void> {
         auxiliary: { headers: [firstHdr('header', 'default', 0, 'HDR-A'), firstHdr('header', 'default', 1, 'HDR-B'), firstHdr('header', 'first', 1, 'FIRST-B')] } } as any;
     const firstBack = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(firstPageDoc, 'odt')).value as unknown as Uint8Array), { fileType: 'odt' } as any) as OfficeParserAST;
     assert.deepStrictEqual(firstBack.auxiliary!.headers!.map(h => [h.text, (h.metadata as any).type, (h.metadata as any).section]), [['HDR-A', 'default', 0], ['FIRST-B', 'first', 1], ['HDR-B', 'default', 1]], 'odt: a later section\'s first-page header reads back as its first page\'s');
+
+    // Word's rule for sections' headers: a section without its own part of a type takes the one before it
+    // (DOCX and RTF leave it to the word processor; ODT writes the part in force), and its title page comes
+    // from its page's differentFirstPage too, read back by every reader.
+    const sectionPage = (extra: any = {}) => ({ width: 612, height: 792, margin: { top: 72, right: 72, bottom: 72, left: 72 }, headerDistance: 36, footerDistance: 36, ...extra });
+    const hdrOf = (type: string, section: number, text: string) => ({ type: 'header', text, metadata: { type, section }, children: [{ type: 'paragraph', children: [{ type: 'text', text }] }] });
+    const inheriting = { type: 'docx', metadata: { pageSetup: sectionPage({ differentFirstPage: true }) }, attachments: [],
+        content: [{ type: 'paragraph', children: [{ type: 'text', text: 'One' }] }, { type: 'break', metadata: { breakType: 'page', section: 1, pageSetup: sectionPage({ differentFirstPage: true }) } }, { type: 'paragraph', children: [{ type: 'text', text: 'Two' }] }],
+        auxiliary: { headers: [hdrOf('default', 0, 'H1DEF'), hdrOf('first', 0, 'H1FIRST'), hdrOf('even', 0, 'H1EVEN'), hdrOf('default', 1, 'H2DEF')] } } as any;
+    const docxSections = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(inheriting, 'docx')).value as unknown as Uint8Array))['word/document.xml']);
+    const secondSect = docxSections.slice(docxSections.indexOf('</w:sectPr>') + 1);
+    assert.ok(!/w:type="first"|w:type="even"/.test(secondSect.slice(0, secondSect.indexOf('</w:sectPr>'))) && (docxSections.match(/<w:titlePg\/>/g) || []).length === 2, 'docx: a section names only its own parts (Word gives it the others), its title page from differentFirstPage');
+    const rtfSections = String((await OfficeGenerator.generate(inheriting, 'rtf')).value);
+    const afterSect = rtfSections.slice(rtfSections.indexOf('\\sect'));
+    assert.ok(/\\titlepg/.test(afterSect) && !/\\headerf|\\headerl/.test(afterSect), 'rtf: a section writes only its own parts, its title page from differentFirstPage');
+    const rtfBack = await OfficeParser.parseOffice(Buffer.from(rtfSections), { fileType: 'rtf', includeBreakNodes: true } as any) as OfficeParserAST;
+    assert.ok(rtfBack.metadata.pageSetup?.differentFirstPage && (rtfBack.content.find(n => (n.metadata as any)?.section === 1)?.metadata as any)?.pageSetup?.differentFirstPage, 'rtf: \\titlepg reads back as each section\'s differentFirstPage');
+    const odtSections = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(inheriting, 'odt')).value as unknown as Uint8Array), { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+    const odtHeaders = odtSections.auxiliary!.headers!.filter(h => (h.metadata as any).section === 1).map(h => [h.text, (h.metadata as any).type]);
+    assert.deepStrictEqual(odtHeaders.sort(), [['H1EVEN', 'even'], ['H1FIRST', 'first'], ['H2DEF', 'default']], 'odt: a section\'s title page and even pages show the parts in force before it');
+    assert.ok(odtSections.metadata.pageSetup?.differentFirstPage && odtSections.metadata.pageSetup?.headerDistance === 36, 'odt: the title page and the header distance read back');
+    // LaTeX: the first section's first page's and even pages' parts are written too.
+    const texSections = String((await OfficeGenerator.generate(inheriting, 'tex')).value);
+    assert.ok(/\\fancypagestyle\{osec0first\}\{[^\n]*H1FIRST/.test(texSections) && /osec0\}\{[^\n]*H1EVEN/.test(texSections) && texSections.includes('\\pagestyle{osec0}\\thispagestyle{osec0first}'), 'tex: the first section\'s first and even pages\' headers are written');
+    // A continuous section's own header: LaTeX from its next page, ODT reported where no page break shows it.
+    const continuing = { type: 'docx', metadata: { pageSetup: sectionPage() }, attachments: [],
+        content: [{ type: 'paragraph', children: [{ type: 'text', text: 'One' }] }, { type: 'break', metadata: { breakType: 'section', section: 1, pageSetup: sectionPage() } }, { type: 'paragraph', children: [{ type: 'text', text: 'Two' }] }],
+        auxiliary: { headers: [hdrOf('default', 0, 'HS0'), hdrOf('default', 1, 'HS1')] } } as any;
+    assert.ok(String((await OfficeGenerator.generate(continuing, 'tex')).value).includes('\\AddToHookNext{shipout/after}{{\\globaldefs=1 \\pagestyle{osec1}}}'), 'tex: a continuous section\'s header from its next page');
+    assert.ok(((await OfficeGenerator.generate(continuing, 'odt')).messages || []).some((m: any) => /section starting mid-page/.test(m.details?.feature ?? '')), 'odt: a continuous section\'s header no page break shows is reported');
+    // Large papers keep their size (A2), and a narrow column's first line never sets out past its edge.
+    const posterDoc = { type: 'odt', metadata: { pageSetup: { width: 1190.55, height: 1683.78, margin: { top: 56, right: 56, bottom: 56, left: 56 } } }, attachments: [], content: [{ type: 'paragraph', children: [{ type: 'text', text: 'Poster' }] }] } as any;
+    const posterPdf = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(posterDoc, 'pdf', { pdfConfig: { engine: 'native', format: 'auto' } } as any)).value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.ok(Math.round((posterPdf.content[0].metadata as any).pageWidth) === 1191, `native pdf: an A2 page stays A2; got ${(posterPdf.content[0].metadata as any).pageWidth}`);
+    const sixDoc = { type: 'docx', metadata: { pageSetup: { width: 612, height: 792, margin: { top: 72, right: 72, bottom: 72, left: 72 }, columns: { count: 6, gap: 18 } } }, attachments: [],
+        content: Array.from({ length: 12 }, (_, i) => ({ type: 'paragraph', children: [{ type: 'text', text: `Para${i} lorem ipsum dolor sit amet consectetur adipiscing elit sed do` }] })) } as any;
+    const sixBack = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(sixDoc, 'pdf', { pdfConfig: { engine: 'native', format: 'auto' } } as any)).value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.ok(collectAllNodes(sixBack).filter(n => n.type === 'text' && n.bounds).every(n => n.bounds!.x >= 71.5), 'native pdf: no line starts left of its column');
 
 }
 
@@ -5866,6 +5918,47 @@ async function testSpreadsheetWriters(): Promise<void> {
         const back = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(linked, format)).value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
         const report = collectAllNodes(back).find(n => n.type === 'text' && n.text === 'Report');
         assert.strictEqual((report?.metadata as any)?.link, 'https://example.com/My%20Report.pdf', `${format}: a cell's hyperlink reads back`);
+    }
+    // An address already encoded is kept as given (it was encoded again: a%2520b), in every writer that encodes.
+    const encoded = await OfficeParser.parseOffice(Buffer.from('<p><a href="https://example.com/a%20b?q=x%26y">Encoded</a></p><table><tr><td><a href="https://example.com/a%20b?q=x%26y">Cell</a></td></tr></table>'), { fileType: 'html' } as any) as OfficeParserAST;
+    for (const format of ['xlsx', 'ods', 'pptx', 'odp', 'docx', 'odt'] as const) {
+        const parts = unzipSync(new Uint8Array((await OfficeGenerator.generate(encoded, format)).value as unknown as Uint8Array));
+        const all = Object.values(parts).map(v => strFromU8(v)).join('\n');
+        assert.ok(all.includes('a%20b?q=x%26y') && !all.includes('%2520'), `${format}: an encoded address is written as given`);
+    }
+    // A sheet's hyperlinks are read in time bounded by the cells they visit, however often a range repeats.
+    const repeated = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': strToU8('<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>'),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+        'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>x</t></is></c></row></sheetData><hyperlinks>${'<hyperlink ref="A1:A99990" location="S!A1"/>'.repeat(2000)}</hyperlinks></worksheet>`),
+    }));
+    const repeatedStart = performance.now();
+    await OfficeParser.parseOffice(repeated, { fileType: 'xlsx' } as any);
+    assert.ok(performance.now() - repeatedStart < 5000, 'xlsx: a hyperlink range repeated two thousand times is read in bounded time');
+    // Blocks beside a workbook's sheets are written (a Text sheet); a sheet name never ends in an apostrophe;
+    // a link to a place in the workbook is a place link; onNode's string for a chart on a sheet is written.
+    const beside = { type: 'xlsx', metadata: {}, attachments: [{ type: 'chart', name: 'c1', mimeType: 'application/xml', data: '', chartData: { labels: ['a'], dataSets: [{ name: 's', values: ['1'] }] } }], content: [
+        { type: 'sheet', metadata: { sheetName: 'S' }, children: [{ type: 'row', children: [{ type: 'cell', metadata: { row: 0, col: 0 }, children: [{ type: 'text', text: 'go', metadata: { link: '#T!B2', linkType: 'internal' } }] }] }, { type: 'chart', metadata: { attachmentName: 'c1' } }] },
+        { type: 'sheet', metadata: { sheetName: 'T' }, children: [{ type: 'row', children: [{ type: 'cell', metadata: { row: 0, col: 0 }, children: [{ type: 'text', text: 't' }] }] }] },
+        { type: 'sheet', metadata: { sheetName: 'a'.repeat(30) + "'b" }, children: [] },
+        { type: 'paragraph', children: [{ type: 'text', text: 'BESIDE THE SHEETS' }] },
+    ] } as any;
+    for (const format of ['xlsx', 'ods'] as const) {
+        const parts = unzipSync(new Uint8Array((await OfficeGenerator.generate(beside, format, { onNode: (n: OfficeContentNode) => n.type === 'chart' ? 'CHART REPLACED' : undefined } as any)).value as unknown as Uint8Array));
+        const all = Object.values(parts).map(v => strFromU8(v)).join('\n');
+        assert.ok(all.includes('BESIDE THE SHEETS'), `${format}: a block beside the sheets is written`);
+        assert.ok(all.includes('CHART REPLACED'), `${format}: onNode's string for a chart on a sheet is written`);
+        assert.ok(!/(?:sheet |table:)name="[^"]*'"/.test(all), `${format}: no sheet name ends in an apostrophe`);
+        assert.ok(format === 'xlsx' ? all.includes('location="T!B2"') : all.includes('xlink:href="#T.B2"'), `${format}: a link to a place in the workbook is a place link`);
+    }
+    // A run onNode leaves out takes its note, comment and link with it.
+    const withExtras = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'kept ' },
+        { type: 'text', text: 'GONE', metadata: { link: 'https://gone.example/' }, notes: [{ type: 'note', metadata: { noteType: 'footnote' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'GONENOTE' }] }] }], comments: [{ type: 'comment', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'GONECOMMENT' }] }] }] }] }] }] }] }] } as any;
+    for (const format of ['xlsx', 'ods', 'pptx', 'odp'] as const) {
+        const parts = unzipSync(new Uint8Array((await OfficeGenerator.generate(withExtras, format, { onNode: (n: OfficeContentNode) => n.text === 'GONE' ? false : undefined } as any)).value as unknown as Uint8Array));
+        const all = Object.values(parts).map(v => strFromU8(v)).join('\n');
+        assert.ok(!/GONE|gone\.example/.test(all), `${format}: a removed run's note, comment and link go with it`);
     }
 
     // A hidden row hides that row, not the columns its cells are in (a parser marks a hidden row's cells hidden).
@@ -6203,6 +6296,32 @@ async function testPresentationWriters(): Promise<void> {
     const shapesXml = strFromU8(unzipSync(new Uint8Array(odpShapes.value as unknown as Uint8Array))['content.xml']);
     assert.ok(!shapesXml.includes('function') && (shapesXml.match(/draw:type="rectangle"/g) || []).length === 2 && (odpShapes.messages || []).filter((m: any) => /constructor/.test(m.details?.feature ?? '')).length === 1, 'odp: a shape name no preset has is a rectangle, reported once');
 
+    // onNode's string for a cell is that cell's text whatever it holds; a comment's string its text, without
+    // its author; a nested table's cells are asked too.
+    const verdicts = { type: 'docx', metadata: {}, attachments: [], content: [
+        { type: 'heading', metadata: { level: 2 }, children: [{ type: 'text', text: 'Cells' }] },
+        { type: 'table', children: [{ type: 'row', children: [
+            { type: 'cell', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'SECRET CELL' }] }] },
+            { type: 'cell', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'outer' }] }, { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', text: 'SECRET NESTED', children: [{ type: 'text', text: 'SECRET NESTED' }] }] }] }] },
+        ] }] },
+        { type: 'paragraph', children: [{ type: 'text', text: 'note me', comments: [{ type: 'comment', metadata: { author: 'SECRET AUTHOR' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'SECRET COMMENT' }] }] }] }] },
+    ] } as any;
+    for (const format of ['pptx', 'odp'] as const) {
+        const parts = unzipSync(new Uint8Array((await OfficeGenerator.generate(verdicts, format, { onNode: (n: OfficeContentNode) => {
+            if (n.type === 'cell' && JSON.stringify(n).includes('SECRET CELL')) return 'CELL REPLACED';
+            if (n.type === 'cell' && n.text === 'SECRET NESTED') return false;
+            if (n.type === 'comment') return 'COMMENT REPLACED';
+            return undefined;
+        } } as any)).value as unknown as Uint8Array));
+        const all = Object.values(parts).map(v => strFromU8(v)).join('\n');
+        assert.ok(all.includes('CELL REPLACED') && all.includes('COMMENT REPLACED') && !/SECRET/.test(all), `${format}: onNode's strings and false hold for cells, nested cells and comments`);
+    }
+    // ODP writes text sizes for every script (CJK, Arabic and Indic text kept the default's alone).
+    const sized = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', children: [{ type: 'text', text: '中文 العربية', formatting: { size: '11pt', bold: true } }] }] } as any, 'odp')).value as unknown as Uint8Array))['content.xml']);
+    assert.ok(/style:font-size-asian="11pt"/.test(sized) && /style:font-size-complex="11pt"/.test(sized) && /style:font-weight-complex="bold"/.test(sized), 'odp: sizes and weights are written for Asian and complex scripts');
+    // A link to a place in the document, which a slide's text cannot open, is reported.
+    const placeLink = await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', children: [{ type: 'text', text: 'see', metadata: { link: '#intro', linkType: 'internal' } }] }] } as any, 'pptx');
+    assert.ok((placeLink.messages || []).some((m: any) => m.details?.feature === 'links to places in the document'), 'pptx: a link to a place in the document is reported');
 }
 
 async function testNativePdfFurnitureLimits(): Promise<void> {

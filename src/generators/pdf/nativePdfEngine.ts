@@ -18,6 +18,7 @@
  */
 
 import { EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, SheetMetadata, TextAlignment, TextFormatting, BreakMetadata, ChartData, HeaderFooterMetadata, NodeBounds, ShapeMetadata, SlideMetadata } from '../../types.js';
+import { isPageSize } from '../../utils/pageLimits.js';
 import { getAbortError, getOfficeError } from '../../utils/errorUtils.js';
 import { documentLanguage, embedUrl, isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize, writableSpacing } from '../../utils/officeGenUtils.js';
 import { decodeBmp, decodeGif, encodePng } from '../../utils/rasterUtils.js';
@@ -1685,7 +1686,11 @@ class NativeLayout {
         const width = right - left;
         const align = meta?.alignment && ['left', 'center', 'right', 'justify'].includes(meta.alignment) ? meta.alignment : undefined;
         const spacing = writableSpacing(meta);
-        const layout: LineLayout = { align, firstLine: Math.max(-left, Math.min(firstLine, width - 72)) };
+        // A first line set in at most to leave an inch (none in a column narrower than that), and set out at
+        // most to the page's edge, or in columns to the column's own: it ran into the gutter and over the
+        // column before.
+        const outmost = (this.columns?.count ?? 1) > 1 ? Math.min(0, this.margin.left - left) : -left;
+        const layout: LineLayout = { align, firstLine: Math.max(outmost, Math.min(firstLine, Math.max(0, width - 72))) };
         // A line no closer to the next than a quarter of its usual distance, nor farther than a page.
         if (spacing?.lineMultiple) layout.lineMultiple = Math.min(Math.max(spacing.lineMultiple, 0.25), 10);
         else if (spacing?.lineHeight) { layout.lineHeight = Math.min(Math.max(spacing.lineHeight, 2), this.bottom - this.margin.top); layout.lineAtLeast = spacing.lineAtLeast; }
@@ -2961,10 +2966,10 @@ async function drawDocument(pdf: any, lib: any, fonts: Fonts, customFonts: boole
         return { top: side(pc.margin?.top, setup?.margin?.top), right: side(pc.margin?.right, setup?.margin?.right), bottom: side(pc.margin?.bottom, setup?.margin?.bottom), left: side(pc.margin?.left, setup?.margin?.left) };
     };
     // A section's page: its own size (turned to landscape when the caller asks), its own margins. Held as
-    // the readers hold a page: a size that is no page (an inch to twenty-two inches each way) is the
+    // the readers hold a page: a size that is no page (an inch to two hundred inches each way) is the
     // document's, a margin at most a third of the page: a section of a hundred million points by a
     // twentieth of one lost its text.
-    const isPage = (setup: PageSetup | undefined): setup is PageSetup => !!setup && setup.width >= 72 && setup.height >= 72 && setup.width <= 1584 && setup.height <= 1584;
+    const isPage = (setup: PageSetup | undefined): setup is PageSetup => !!setup && isPageSize(setup.width, setup.height);
     const documentPage = auto && isPage(ast.metadata?.pageSetup) ? ast.metadata!.pageSetup! : undefined;
     const sectionPage = (setup: PageSetup | undefined) => {
         const own = isPage(setup);

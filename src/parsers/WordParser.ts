@@ -62,6 +62,7 @@
 
 import { attachmentLookup } from '../utils/repeatUtils.js';
 import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { MAX_PAGE_PT } from '../utils/pageLimits.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError, logWarning } from '../utils/errorUtils.js';
 import { createAttachment, renameAttachments } from '../utils/imageUtils.js';
@@ -1488,7 +1489,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         };
         const size = getDirectChildren(sectPr, "w:pgSz")[0];
         let width = twips(size, "w:w"), height = twips(size, "w:h");
-        if (!width || !height || width > 1584 || height > 1584) return undefined;
+        if (!width || !height || width > MAX_PAGE_PT || height > MAX_PAGE_PT) return undefined;
         // A landscape page given in portrait's order is turned, as Word turns it.
         if (size.getAttribute("w:orient") === 'landscape' && width < height) [width, height] = [height, width];
         const setup: PageSetup = { width, height };
@@ -1506,7 +1507,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         const own = cols ? getDirectChildren(cols, "w:col") : [];
         const count = Math.min(16, Math.max(1, Math.round(Number(cols?.getAttribute("w:num")) || 0) || own.length || 1));
         if (cols && count > 1) {
-            const columns: NonNullable<PageSetup['columns']> = { count, gap: Math.min(twips(cols, "w:space") ?? 36, width / 4) };
+            // (The gap: the columns' own where they give none together, as LibreOffice writes unequal columns.)
+            const columns: NonNullable<PageSetup['columns']> = { count, gap: Math.min(twips(cols, "w:space") ?? (own.length ? twips(own[0], "w:space") : undefined) ?? 36, width / 4) };
             const widths = cols.getAttribute("w:equalWidth") === '0' || cols.getAttribute("w:equalWidth") === 'false' ? own.map(c => twips(c, "w:w") ?? 0) : [];
             if (widths.length === count && widths.every(w => w > 0)) columns.widths = widths;
             const sep = cols.getAttribute("w:sep");

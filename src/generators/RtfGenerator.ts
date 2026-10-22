@@ -1,4 +1,5 @@
 import { BreakMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, IndentationMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphMetadata, TextMetadata } from '../types.js';
+import { isPageSize } from '../utils/pageLimits.js';
 import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
@@ -425,7 +426,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                         // section before); its own header and footer, written where it starts.
                         const starts = typeof meta.section === 'number' && meta.section !== this.currentSection;
                         if (typeof meta.section === 'number') this.currentSection = meta.section;
-                        const own = starts ? await this.sectionFurnitureRtf(this.currentSection) : { title: false, rtf: '' };
+                        const own = starts ? await this.sectionFurnitureRtf(this.currentSection, meta.pageSetup) : { title: !!meta.pageSetup?.differentFirstPage, rtf: '' };
                         return `\\sect\\sectd\\${meta.breakType === 'section' ? 'sbknone' : 'sbkpage'}${own.title ? '\\titlepg' : ''}${sectionPageRtf(meta.pageSetup)}${columnsRtf(meta.pageSetup?.columns, meta.pageSetup)}\n${own.rtf}`;
                     }
                     return meta?.breakType === 'page' ? '\\page\n' : '\\line\n';
@@ -518,9 +519,9 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         // The header and footer (the AST's auxiliary) first, so a note in one is listed with the body's.
         // Written into one header and one footer, as DOCX and ODT write them; they were left out.
         // A first page's own (a letterhead) is the title page's (`\titlepg`, `\headerf`), even pages' own
-        // the left pages' (`\facingp`, `\headerl`); one on every page is then written for those too.
-        // The first section's own first page's and even pages' parts beside them, and every later section's
-        // (see sectionFurnitureRtf), which a section with none of its own takes on, as Word gives them.
+        // the left pages' (`\facingp`, `\headerl`), every page's the right pages' where pages face. The first
+        // section's own first page's and even pages' parts beside them, and every later section's (see
+        // sectionFurnitureRtf): a type a section has none of its own of is the one before it, as Word gives it.
         let running = '';
         const lists = { header: ast.auxiliary?.headers, footer: ast.auxiliary?.footers };
         const parts = (['header', 'footer'] as const).map(kind => {
@@ -532,14 +533,13 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         this.facingPages = parts.some(p => p.nodes.length && p.on === 'even') || evenAnywhere;
         const ownFirst = { header: sectionFurniture(lists.header, 'header', 0, 'first'), footer: sectionFurniture(lists.footer, 'footer', 0, 'first') };
         const ownEven = { header: sectionFurniture(lists.header, 'header', 0, 'even'), footer: sectionFurniture(lists.footer, 'footer', 0, 'even') };
-        const titlePage = parts.some(p => p.nodes.length && p.on === 'first') || !!(ownFirst.header || ownFirst.footer);
+        const titlePage = parts.some(p => p.nodes.length && p.on === 'first') || !!(ownFirst.header || ownFirst.footer) || !!ast.metadata?.pageSetup?.differentFirstPage;
         if (this.facingPages) running += '\\facingp\n';
         if (titlePage) running += '\\titlepg\n';
         for (const { kind, nodes, on } of parts) {
             if (nodes.length) {
                 const text = await this.renderApart(nodes);
-                if (on === 'default') this.inForce[kind] = text;
-                const groups = on === 'first' ? ['f'] : on === 'even' ? ['l'] : [...(this.facingPages ? (ownEven[kind] ? ['r'] : ['l', 'r']) : ['']), ...(titlePage && !ownFirst[kind] ? ['f'] : [])];
+                const groups = on === 'first' ? ['f'] : on === 'even' ? ['l'] : [this.facingPages ? 'r' : ''];
                 for (const group of groups) running += `{\\${kind}${group} ${text}}\n`;
             }
             if (ownFirst[kind]) running += `{\\${kind}f ${await this.renderApart(ownFirst[kind]!)}}\n`;
@@ -560,27 +560,22 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
 
     /** Left and right pages (`\facingp`): the document has even pages' own parts. */
     private facingPages = false;
-    /** Each kind's every-page part in force, as written: what a section's first page and even pages show where it has none of their own. */
-    private readonly inForce: Record<'header' | 'footer', string> = { header: '', footer: '' };
 
     /**
-     * A later section's own header and footer, written where it starts: its every page's (none where it has
-     * none of its own: it takes on the one before it), its first page's (and the title page, `\titlepg`,
-     * it needs) and its even pages'; where it has a first page or the document left and right pages, a kind
-     * with no part of its own for them is the every-page one in force.
+     * A later section's own header and footer, written where it starts: its every page's (the right pages'
+     * where pages face), its first page's and its even pages', each only where it has its own (a type it has
+     * none of its own of is the one before it, as Word gives it, and as RTF reading reads it); and whether it
+     * has a title page (`\titlepg`: its own first page's part, or its page's `differentFirstPage`).
      */
-    private async sectionFurnitureRtf(section: number): Promise<{ title: boolean; rtf: string }> {
+    private async sectionFurnitureRtf(section: number, setup: PageSetup | undefined): Promise<{ title: boolean; rtf: string }> {
         const lists = { header: this.ast.auxiliary?.headers, footer: this.ast.auxiliary?.footers };
         const own = (kind: 'header' | 'footer', type: 'default' | 'first' | 'even') => sectionFurniture(lists[kind], kind, section, type);
-        const title = !!(own('header', 'first') || own('footer', 'first'));
+        const title = !!(own('header', 'first') || own('footer', 'first') || setup?.differentFirstPage);
         let rtf = '';
         for (const kind of ['header', 'footer'] as const) {
             const every = own(kind, 'default'), first = own(kind, 'first'), even = own(kind, 'even');
-            if (every) this.inForce[kind] = await this.renderApart(every);
-            const everyGroups = this.facingPages ? (even ? ['r'] : ['l', 'r']) : [''];
-            if (every || (this.facingPages && this.inForce[kind])) for (const group of everyGroups) rtf += `{\\${kind}${group} ${this.inForce[kind]}}\n`;
+            if (every) rtf += `{\\${kind}${this.facingPages ? 'r' : ''} ${await this.renderApart(every)}}\n`;
             if (first) rtf += `{\\${kind}f ${await this.renderApart(first)}}\n`;
-            else if (title && this.inForce[kind]) rtf += `{\\${kind}f ${this.inForce[kind]}}\n`;
             if (even) rtf += `{\\${kind}l ${await this.renderApart(even)}}\n`;
         }
         return { title, rtf };
@@ -693,13 +688,13 @@ function columnsRtf(given: PageSetup['columns'] | undefined, setup: PageSetup | 
 const twips = (pt: number) => Number.isFinite(pt) ? Math.max(0, Math.min(31680, Math.round(pt * 20))) : 0;
 
 /**
- * A page as RTF output writes it: none where its size is no page (an inch to twenty-two inches each way,
+ * A page as RTF output writes it: none where its size is no page (an inch to two hundred inches each way,
  * as Word takes), its margins at most a third of it, its header's and footer's distances a third of its
  * height: a page of a hundred million points by a twentieth of
  * one lost its text.
  */
 function heldPage(setup: PageSetup | undefined): PageSetup | undefined {
-    if (!setup || !(setup.width >= 72 && setup.height >= 72 && setup.width <= 1584 && setup.height <= 1584)) return undefined;
+    if (!setup || !isPageSize(setup.width, setup.height)) return undefined;
     const most = Math.min(setup.width, setup.height) / 3;
     const held = (v: number | undefined) => Math.min(Number.isFinite(v) && v! > 0 ? v! : 0, most);
     const m = setup.margin;

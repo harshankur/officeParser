@@ -13,6 +13,7 @@ import { CellMetadata, EmbedMetadata, ImageMode, OfficeContentNode, OfficeParser
 import { cssColorHex } from './colorUtils.js';
 import { escapeXml, stripInvalidXmlChars } from './sanitize.js';
 import { lookupTable } from './lookupUtils.js';
+import { isPageSize } from './pageLimits.js';
 
 /**
  * Resolves `config.includeImages` - a boolean, a CLI-provided `'true'`/`'false'` string, or an
@@ -120,7 +121,21 @@ export function fillSheetRowGaps(rows: OfficeContentNode[], take: (positions: nu
  * Target with an "unreadable content" dialog. Falls back to the raw string if encoding throws.
  */
 export function encUrl(url: string): string {
-    try { return encodeURI(url); } catch { return url; }
+    // Only what a URL cannot hold is encoded (spaces, quotes, angle brackets, control and non-ASCII
+    // characters, a `%` that starts no escape): an address already encoded (`a%20b`) was encoded again
+    // (`a%2520b`), and opened another address.
+    let out = '';
+    for (let i = 0; i < url.length; i++) {
+        const ch = url[i], code = url.charCodeAt(i);
+        if (ch === '%') { out += /^[0-9a-fA-F]{2}$/.test(url.slice(i + 1, i + 3)) ? '%' : '%25'; continue; }
+        if (code > 0x20 && code < 0x7f && !'"<>\\^`{|}'.includes(ch)) { out += ch; continue; }
+        // A character beyond ASCII as its UTF-8 bytes (a surrogate pair as one character, a lone half as U+FFFD).
+        const pair = code >= 0xd800 && code <= 0xdbff && i + 1 < url.length && url.charCodeAt(i + 1) >= 0xdc00 && url.charCodeAt(i + 1) <= 0xdfff;
+        const whole = pair ? url.slice(i, i + 2) : code >= 0xd800 && code <= 0xdfff ? '�' : ch;
+        if (pair) i++;
+        out += encodeURIComponent(whole);
+    }
+    return out;
 }
 
 /** Decodes a base64 string to raw bytes, cross-env (atob exists in Node 16+ and browsers). */
@@ -195,6 +210,18 @@ export const PAPER_FORMAT_NAMES: readonly string[] = [...Object.keys(PAPER_SIZES
  */
 export function runningFurniture(nodes: OfficeContentNode[] | undefined, kind: 'header' | 'footer'): OfficeContentNode[] {
     if (!nodes?.length) return [];
+    // Found once a list (writers ask for it at every section of thousands).
+    let byKind = runningByList.get(nodes);
+    if (!byKind) runningByList.set(nodes, byKind = new Map());
+    const known = byKind.get(kind);
+    if (known) return known;
+    const found = findRunningFurniture(nodes, kind);
+    byKind.set(kind, found);
+    return found;
+}
+const runningByList = new WeakMap<OfficeContentNode[], Map<string, OfficeContentNode[]>>();
+
+function findRunningFurniture(nodes: OfficeContentNode[], kind: 'header' | 'footer'): OfficeContentNode[] {
     const loose = nodes.filter(n => n.type !== kind);
     if (loose.length) return loose;
     const meta = (n: OfficeContentNode) => n.metadata as { type?: string; section?: number; hidden?: boolean; page?: number } | undefined;
@@ -270,9 +297,8 @@ export function resolvePaper(format: string | undefined, landscape: boolean | un
     margin?: { top?: number | string; right?: number | string; bottom?: number | string; left?: number | string }): { w: number; h: number; landscape: boolean; name?: string; margin: { top: number; right: number; bottom: number; left: number }; headerDistance?: number; footerDistance?: number } {
     const key = String(format ?? 'auto').toLowerCase();
     let w: number, h: number;
-    // (A document's page between an inch and twenty-two inches each way, which a word processor takes;
-    // another is A4.)
-    const own = key === 'auto' && !!setup && setup.width >= 72 && setup.height >= 72 && setup.width <= 1584 && setup.height <= 1584;
+    // (A document's page between an inch and two hundred inches each way (see isPageSize); another is A4.)
+    const own = key === 'auto' && !!setup && isPageSize(setup.width, setup.height);
     if (own) {
         [w, h] = landscape && setup!.width < setup!.height ? [setup!.height, setup!.width] : [setup!.width, setup!.height];
     } else {

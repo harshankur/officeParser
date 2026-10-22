@@ -451,31 +451,43 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
 
     /**
      * The stylesheet's rules by what an element must have for them (its id, else one of its classes, else
-     * its type, else none), so an element tries only the rules that may match it; and the declarations each
-     * element takes from them, found once (a `use` drawn ten thousand times matched all rules each time).
+     * its type, else none), so an element tries only the rules that may match it; and the properties an
+     * element takes from them, merged last over first, found once for each kind of element (its type, and
+     * the id and classes the rules name): a `use` drawn ten thousand times matched all rules each time, and
+     * a list of every matching rule's declarations kept for every element ran the process out of memory.
      */
     const ruleIndex = new Map<string, number[]>();
+    const ruleIds = new Set<string>(), ruleClasses = new Set<string>();
     svg.rules.forEach((rule, i) => {
         const key = rule.id ? `#${rule.id}` : rule.classes.length ? `.${rule.classes[0]}` : rule.tag ? `t:${rule.tag}` : '*';
         (ruleIndex.get(key) ?? ruleIndex.set(key, []).get(key)!).push(i);
+        if (rule.id) ruleIds.add(rule.id);
+        for (const c of rule.classes) ruleClasses.add(c);
     });
-    const matched = new Map<Element, [string, string][]>();
-    const matchedRules = (el: Element): [string, string][] => {
-        const known = matched.get(el);
+    const matched = new Map<string, Map<string, string>>();
+    const noRules = new Map<string, string>();
+    const matchedRules = (el: Element): Map<string, string> => {
+        if (!svg.rules.length) return noRules;
+        const tag = localName(el);
+        const ownId = el.getAttribute('id') || undefined;
+        const id = ownId && ruleIds.has(ownId) ? ownId : undefined;
+        const classes = [...new Set((el.getAttribute('class') || '').slice(0, 4096).split(/\s+/).filter(c => c && ruleClasses.has(c)))].sort();
+        const key = `${tag}|${id ?? ''}|${classes.join(' ')}`;
+        const known = matched.get(key);
         if (known) return known;
-        const classes = new Set((el.getAttribute('class') || '').split(/\s+/).filter(Boolean));
-        const id = el.getAttribute('id') || undefined, tag = localName(el);
+        const has = new Set(classes);
         const candidates: number[] = [...(ruleIndex.get('*') ?? []), ...(ruleIndex.get(`t:${tag}`) ?? []), ...(id ? ruleIndex.get(`#${id}`) ?? [] : [])];
         for (const c of classes) for (const i of ruleIndex.get(`.${c}`) ?? []) candidates.push(i);
         // (In the stylesheet's order of precedence, as the rules are sorted.)
         candidates.sort((a, b) => a - b);
-        const out: [string, string][] = [];
+        // The properties drawing reads alone, each its last value: bounded by them, however many rules match.
+        const out = new Map<string, string>();
         for (const i of candidates) {
             const rule = svg.rules[i];
-            if ((rule.tag && rule.tag !== tag) || (rule.id && rule.id !== id) || !rule.classes.every(c => classes.has(c))) continue;
-            for (const entry of rule.declarations) out.push(entry);
+            if ((rule.tag && rule.tag !== tag) || (rule.id && rule.id !== id) || !rule.classes.every(c => has.has(c))) continue;
+            for (const [k, v] of rule.declarations) if (PROPERTIES.has(k)) out.set(k, v);
         }
-        matched.set(el, out);
+        matched.set(key, out);
         return out;
     };
 
@@ -489,10 +501,11 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
         if (inline) declarations(inline.slice(0, 4096), own);
         const style: Style = { ...parent, opacity: 1 };
         const get = (k: string) => { const v = own.get(k); return v === undefined || v === 'inherit' ? undefined : v; };
-        const font = get('font');
+        // (A shorthand longer than any font names is cut: its pattern tells sizes from digits.)
+        const font = get('font')?.slice(0, 256);
         if (font) {
-            const size = /(\d*\.?\d+(?:px|pt|em|%)?)\s*(?:\/\S+\s+)?(.+)$/.exec(font);
-            if (size) { own.set('font-size', own.get('font-size') ?? size[1]); own.set('font-family', own.get('font-family') ?? size[2]); }
+            const size = /(\d+(?:\.\d+)?|\.\d+)(px|pt|em|%)?\s*(?:\/\S+\s+)?(.+)$/.exec(font);
+            if (size) { own.set('font-size', own.get('font-size') ?? size[1] + (size[2] ?? '')); own.set('font-family', own.get('font-family') ?? size[3]); }
             if (/\bbold\b|\b[6-9]00\b/.test(font) && !own.has('font-weight')) own.set('font-weight', 'bold');
             if (/\bitalic\b|\boblique\b/.test(font) && !own.has('font-style')) own.set('font-style', 'italic');
         }

@@ -2647,6 +2647,11 @@ async function parserHardeningTests() {
     await timed('xlsx: 160k unclosed rows parse', () => parseQuiet(withSheetData('<row r="1"><c r="A1"><v>1</v></c>'.repeat(n(160000))), 'xlsx'));
     await timed('xlsx: a row of 160k unclosed cells parses', () => parseQuiet(withSheetData('<row r="1">' + '<c r="A1"><v>1</v>'.repeat(n(160000)) + '</row>'), 'xlsx'));
     await timed('xlsx: a cell of 160k unclosed values parses', () => parseQuiet(withSheetData('<row r="1"><c r="A1" t="inlineStr"><is>' + '<t>1'.repeat(n(160000)) + '</is></c></row>'), 'xlsx'));
+    // A sheet's hyperlinks are bounded by the positions they visit: one range of 100k cells repeated
+    // thousands of times marked nothing new and visited all of it each time.
+    await timed('xlsx: a hyperlink range repeated 6,400 times parses', () => parseQuiet(repack('test.xlsx', z => {
+        z['xl/worksheets/sheet1.xml'] = enc(sheetXml.replace(/<\/worksheet>/, `<hyperlinks>${'<hyperlink ref="A1:A99990" location="Sheet1!A1"/>'.repeat(n(6400))}</hyperlinks></worksheet>`));
+    }), 'xlsx'));
     // A number format is classified once per format with one forward pass. At 100k `[` the old
     // backtracking strip took 4.5 s, so 200k keeps it well past the limit.
     const withStyles = (formatCode: string, cellFormats: number) => repack('test.xlsx', z => {
@@ -2701,6 +2706,13 @@ async function parserHardeningTests() {
     await timed('pdf: an SVG root width of 80k digits is read', svgRun(`<svg xmlns="http://www.w3.org/2000/svg" width="${'1'.repeat(n(80_000))}x" height="10"><rect width="5" height="5"/></svg>`));
     await timed('pdf: an SVG transform of 80k unclosed scale( is read', svgRun(svgOf(`<g transform="${'scale(1 '.repeat(n(80_000))}"><rect width="5" height="5"/></g>`)));
     await timed('pdf: an SVG stylesheet rule of 200k repeated classes is matched', svgRun(svgOf(`<style>${'.a'.repeat(n(200_000))}{fill:red}</style>${'<rect class="a" width="1" height="1"/>'.repeat(n(5_000))}`)));
+    // 2,000 rules matching every element, over thousands of elements: the properties each kind of element
+    // takes are kept once, not every rule's declarations for every element (which ran out of memory).
+    const ruleDecl = 'fill:red;stroke:blue;stroke-width:1;opacity:1;fill-opacity:1;stroke-opacity:1;font-size:3px;font-family:a;';
+    for (const [label, selector, attrs] of [['*', '*', ''], ['type', 'rect', ''], ['class', '.a', ' class="a"']] as const) {
+        await linear(`pdf: 2,000 SVG ${label} rules over 10,000 elements are matched`, svgRun(svgOf(`<style>${`${selector}{${ruleDecl}}`.repeat(2000)}</style>${`<rect${attrs} width="1" height="1"/>`.repeat(n(10_000))}`)),
+            { label: `pdf: 2,000 SVG ${label} rules over 10,000 elements hold the heap`, limit: 300e6 });
+    }
     // A use of text or a picture copied ten thousand times: bounded (characters drawn, the picture embedded once).
     const fanSvg = (leaf: string, levels: number) => svgOf('<defs><g id="a0">' + leaf + '</g>' + Array.from({ length: levels }, (_, i) => `<g id="a${i + 1}">` + '<use href="#a' + i + '"/>'.repeat(10) + '</g>').join('') + `</defs><use href="#a${levels}"/>`);
     await timed('pdf: SVG text used ten thousand times is drawn within its bound', svgRun(fanSvg(`<text x="1" y="10">${'W'.repeat(n(16_000))}</text>`, 4)));
