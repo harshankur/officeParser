@@ -871,7 +871,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     let content = `${prefix}${headingText}${headingText ? id : id.trimStart()}`;
 
                     // Alignment fallback via HTML div/p, for a heading with something in it to align.
-                    if (this.resolvedFallbackToHtml.alignment && meta?.alignment && meta.alignment !== 'left' && content.trim()) {
+                    if (this.resolvedFallbackToHtml.alignment && meta?.alignment && meta.alignment !== 'left' && headingText.trim()) {
                         // Use extra newlines to ensure Markdown inside the div is parsed
                         content = `<div style="text-align: ${sanitizeCssValue(meta.alignment)}">\n\n${content}\n\n</div>`;
                     }
@@ -1409,7 +1409,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         // Allow user to completely override rendering or skip via onNode
         const override = await this.handleOnNode(node);
         // (A shape drawn on a slide, ShapeMetadata, writes nothing: its text is in the nodes after it.)
-        if (override === false || (node.type === 'drawing' && typeof override !== 'string')) {
+        if (override === false || (node.type === 'drawing' && !node.children?.length && typeof override !== 'string')) {
             return '';
         }
         if (typeof override === 'string') {

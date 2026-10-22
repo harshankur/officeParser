@@ -647,8 +647,12 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             const props = `<style:list-level-properties text:space-before="${fmtIn(0.25 * l)}" text:min-label-width="0.25in"/>`;
             if (type.kind === 'ordered') {
                 const start = def.startAt.get(l) ?? 1;
-                const prefix = type.prefix ? ` style:num-prefix="${xmlText(type.prefix)}"` : '';
-                const shown = type.withParents ? ` text:display-levels="${l + 1}"` : '';
+                // Its parents' numbers shown where those levels are numbered in this list, else as the text
+                // its marker shows (a PDF's levels, each a list of its own).
+                const parentsNumbered = Array.from({ length: l }, (_, k) => k).every(k => def.levels.get(k)?.kind === 'ordered');
+                const literalPrefix = type.prefix + (type.withParents && !parentsNumbered ? type.parentText ?? '' : '');
+                const prefix = literalPrefix ? ` style:num-prefix="${xmlText(literalPrefix)}"` : '';
+                const shown = type.withParents && parentsNumbered ? ` text:display-levels="${l + 1}"` : '';
                 levels += `<text:list-level-style-number text:level="${l + 1}"${prefix} style:num-format="${odfNumFormat(type.format)}" style:num-suffix="${xmlText(type.suffix)}"${shown} text:start-value="${start}">${props}</text:list-level-style-number>`;
             } else {
                 // A bullet of none is a space: ODF's bullet is one character.

@@ -676,7 +676,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 continue;
             }
             // A shape drawn on a slide (ShapeMetadata) writes nothing, and no gap around it either.
-            if (node.type === 'drawing' && typeof override !== 'string') continue;
+            if (node.type === 'drawing' && !node.children?.length && typeof override !== 'string') continue;
 
             // A top-level footnote/endnote note is an orphan definition (the MarkdownParser
             // recovers unreferenced `[^id]: ...` defs as trailing note nodes). Route it into the
@@ -861,7 +861,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             return '';
         }
         // A shape drawn on a slide (ShapeMetadata) writes nothing: its text is in the nodes after it.
-        if (node.type === 'drawing' && typeof actualOverride !== 'string') return '';
+        if (node.type === 'drawing' && !node.children?.length && typeof actualOverride !== 'string') return '';
 
         // Returning a string overrides default rendering and recursion
         if (typeof actualOverride === 'string') {
@@ -1925,7 +1925,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             // A list item's own marker (`a)`, `iv.`, `◦`) as a CSS string, every character but a letter,
             // a digit or a space escaped, so nothing in it can end the string or the attribute.
             if (node.type === 'list' && typeof meta.marker === 'string' && !meta.isTask) {
-                const escaped = [...meta.marker.slice(0, 32)].map(ch => /^[\p{L}\p{N} ]$/u.test(ch) ? ch : `\\${ch.codePointAt(0)!.toString(16)} `).join('');
+                const escaped = [...meta.marker].slice(0, 32).map(ch => /^[\p{L}\p{N} ]$/u.test(ch) ? ch : `\\${ch.codePointAt(0)!.toString(16)} `).join('');
                 styles.push(`list-style-type: '${escaped}${meta.marker ? ' ' : ''}'`);
             }
             if (meta.backgroundColor) pushSafe('background-color', meta.backgroundColor);

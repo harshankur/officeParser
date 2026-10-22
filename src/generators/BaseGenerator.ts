@@ -299,8 +299,9 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
 
         if (override === false) return '';
         if (typeof override === 'string') return override;
-        // A shape drawn on a slide (ShapeMetadata) writes nothing: its text is in the nodes after it.
-        if (node.type === 'drawing') return '';
+        // A shape drawn on a slide (ShapeMetadata) writes nothing: its text is in the nodes after it. (One
+        // holding nodes, as a drawing could before, writes them.)
+        if (node.type === 'drawing' && !node.children?.length) return '';
 
         let childrenOutput = '';
         if (node.children && !this.walkedByProcessor(node)) {

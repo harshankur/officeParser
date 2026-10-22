@@ -524,7 +524,17 @@ class NativeLayout {
         const wrapped = (nodes || []).filter(n => n.type === kind);
         const loose = (nodes || []).filter(n => n.type !== kind);
         if (loose.length) wrapped.push({ type: kind, children: loose, metadata: { type: 'default' } } as OfficeContentNode);
-        return wrapped.filter(n => !(n.metadata as HeaderFooterMetadata | undefined)?.hidden);
+        const shown = wrapped.filter(n => !(n.metadata as HeaderFooterMetadata | undefined)?.hidden);
+        // A header read from a PDF's page is one of that page's lines: one header a page, of its lines.
+        const byPage = new Map<number, OfficeContentNode[]>();
+        const kept = shown.filter(n => {
+            const page = (n.metadata as HeaderFooterMetadata | undefined)?.page;
+            if (page === undefined) return true;
+            byPage.set(page, [...(byPage.get(page) || []), { ...n, type: 'paragraph', metadata: undefined }]);
+            return false;
+        });
+        for (const [page, lines] of byPage) kept.push({ type: kind, children: lines, metadata: { type: 'default', page } } as OfficeContentNode);
+        return kept;
     }
 
     /** The tallest header's and footer's heights (see fitRunningContent). */
@@ -590,8 +600,11 @@ class NativeLayout {
             const own = (first?.metadata as HeaderFooterMetadata | undefined)?.section;
             return first && (record.differentFirstPage ?? (own === undefined || own === record.section)) ? first : undefined;
         };
+        // A PDF's: the page's own, where the document's pages have theirs.
+        const ofPage = (list: OfficeContentNode[], number: number) => list.find(n => (n.metadata as HeaderFooterMetadata | undefined)?.page === number);
+        const paged = (list: OfficeContentNode[]) => list.some(n => (n.metadata as HeaderFooterMetadata | undefined)?.page !== undefined);
         const choose = (list: OfficeContentNode[], record: typeof this.pageRecords[number], number: number) =>
-            firstOf(list, record)
+            paged(list) ? ofPage(list, number) : firstOf(list, record)
             ?? (number % 2 === 0 ? pick(list, record.section, 'even') : undefined)
             ?? pick(list, record.section, 'default');
         const saved = { page: this.page, y: this.y, w: this.pageW, h: this.pageH, margin: this.margin };

@@ -1767,8 +1767,8 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         if (!config.ignoreHeadersAndFooters) {
             const pageHeaders: OfficeContentNode[] = [];
             const pageFooters: OfficeContentNode[] = [];
-            for (const node of geometricNodes(headerRuns, layoutCtx, docCtx, layoutCfg, false)) pageHeaders.push(retypeAsHeaderFooter(node, 'header'));
-            for (const node of geometricNodes(footerRuns, layoutCtx, docCtx, layoutCfg, false)) pageFooters.push(retypeAsHeaderFooter(node, 'footer'));
+            for (const node of geometricNodes(headerRuns, layoutCtx, docCtx, layoutCfg, false)) pageHeaders.push(retypeAsHeaderFooter(node, 'header', extract.pageNumber));
+            for (const node of geometricNodes(footerRuns, layoutCtx, docCtx, layoutCfg, false)) pageFooters.push(retypeAsHeaderFooter(node, 'footer', extract.pageNumber));
             finalizeBounds(pageHeaders, pageCtx, pdfCfg.includeBounds);
             finalizeBounds(pageFooters, pageCtx, pdfCfg.includeBounds);
             appendAll(auxHeaders, pageHeaders);
@@ -1928,8 +1928,8 @@ function finalizeBounds(nodes: OfficeContentNode[], page: PageContext, includeBo
 }
 
 /** Wraps a paragraph produced from margin artifacts as a header/footer node. */
-function retypeAsHeaderFooter(node: OfficeContentNode, type: 'header' | 'footer'): OfficeContentNode {
-    return { type, text: node.text, children: node.children, bounds: node.bounds, metadata: { type: 'default' } };
+function retypeAsHeaderFooter(node: OfficeContentNode, type: 'header' | 'footer', page: number): OfficeContentNode {
+    return { type, text: node.text, children: node.children, bounds: node.bounds, metadata: { type: 'default', page } };
 }
 
 /**

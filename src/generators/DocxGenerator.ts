@@ -541,8 +541,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     }
 
     private styleNoteBody(body: string): string {
-        // Give each top-level body paragraph the FootnoteText style (only when it has no pPr already).
-        return body.replace(/<w:p>(?!<w:pPr>)/g, '<w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>');
+        // Give each body paragraph the FootnoteText style, where it has no style of its own.
+        return withParagraphProperties(body, { style: 'FootnoteText' });
     }
 
     /**
@@ -653,7 +653,10 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         for (const entry of this.numbering) {
             const unordered = markerPattern(undefined, 0);
             const types = Array.from({ length: 9 }, (_, l) => entry.levels.get(l) ?? entry.levels.get(0) ?? unordered);
-            const signature = JSON.stringify(types);
+            // A level shows its parents' numbers as fields where those levels are numbered in this list;
+            // where they are not (a PDF's levels, each a list of its own), as the text its marker shows.
+            const parentsNumbered = types.map((_, l) => Array.from({ length: l }, (_, k) => k).every(k => entry.levels.get(k)?.kind === 'ordered'));
+            const signature = JSON.stringify([types, types.map((type, l) => type.withParents && parentsNumbered[l])]);
             let aId = abstractIds.get(signature);
             if (aId === undefined) {
                 aId = abstractIds.size;
@@ -663,7 +666,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
                     const fmt = type.kind === 'ordered' ? type.format : 'bullet';
                     // A literal `%` in Word's level text would read as a field: it is left out.
                     const literal = (t: string) => t.replace(/%/g, '');
-                    const parents = type.withParents ? Array.from({ length: l }, (_, k) => `%${k + 1}.`).join('') : '';
+                    const parents = !type.withParents ? '' : parentsNumbered[l] ? Array.from({ length: l }, (_, k) => `%${k + 1}.`).join('') : literal(type.parentText ?? '');
                     const text = type.kind === 'ordered' ? `${literal(type.prefix)}${parents}${type.format === 'none' ? '' : `%${l + 1}`}${literal(type.suffix)}` : literal(type.bullet);
                     levels += `<w:lvl w:ilvl="${l}"><w:start w:val="1"/><w:numFmt w:val="${fmt}"/>`
                         + `<w:lvlText w:val="${xmlText(text)}"/><w:lvlJc w:val="left"/>`
@@ -870,7 +873,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         const titleP = `<w:p><w:pPr><w:pBdr><w:left w:val="single" w:sz="18" w:space="4" w:color="${color}"/></w:pBdr><w:ind w:left="360"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="${color}"/></w:rPr><w:t xml:space="preserve">${xmlText(title)}</w:t></w:r></w:p>`;
         const body = await this.renderBlocks(node.children);
         // Indent the body paragraphs with a left border to visually box the admonition.
-        const boxed = body.replace(/<w:p>(?!<w:pPr>)/g, `<w:p><w:pPr><w:pBdr><w:left w:val="single" w:sz="18" w:space="4" w:color="${color}"/></w:pBdr><w:ind w:left="360"/></w:pPr>`);
+        const boxed = withParagraphProperties(body, { border: `<w:pBdr><w:left w:val="single" w:sz="18" w:space="4" w:color="${color}"/></w:pBdr>`, indentLeft: 360 });
         return titleP + boxed;
     }
 
@@ -1122,4 +1125,30 @@ function buildStyles(): string {
         + `<w:style w:type="paragraph" w:styleId="FootnoteText"><w:name w:val="Footnote Text"/><w:basedOn w:val="Normal"/></w:style>`
         + `<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:left w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:right w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="auto"/></w:tblBorders></w:tblPr></w:style>`
         + `</w:styles>`;
+}
+
+/** A paragraph's properties in the order WordprocessingML lists them, which Word requires. */
+const PPR_ORDER = ['pStyle', 'keepNext', 'keepLines', 'pageBreakBefore', 'framePr', 'widowControl', 'numPr', 'suppressLineNumbers', 'pBdr', 'shd', 'tabs', 'suppressAutoHyphens', 'kinsoku', 'wordWrap', 'overflowPunct', 'topLinePunct', 'autoSpaceDE', 'autoSpaceDN', 'bidi', 'adjustRightInd', 'snapToGrid', 'spacing', 'ind', 'contextualSpacing', 'mirrorIndents', 'suppressOverlap', 'jc', 'textDirection', 'textAlignment', 'textboxTightWrap', 'outlineLvl', 'divId', 'cnfStyle', 'rPr', 'sectPr', 'pPrChange'];
+
+/**
+ * Gives every paragraph of `body` a style where it has none, a border where it has none, or `indentLeft`
+ * more of left indent, merged into the properties it already has (its spacing, its list, its alignment).
+ */
+function withParagraphProperties(body: string, add: { style?: string; border?: string; indentLeft?: number }): string {
+    return body.replace(/<w:p>(<w:pPr>([\s\S]*?)<\/w:pPr>)?/g, (_m, _whole, inner: string | undefined) => {
+        const parts = new Map<string, string>();
+        for (const el of (inner || '').match(/<w:(\w+)\b[^>]*?(?:\/>|>[\s\S]*?<\/w:\1>)/g) || []) parts.set(/^<w:(\w+)/.exec(el)![1], el);
+        if (add.style && !parts.has('pStyle')) parts.set('pStyle', `<w:pStyle w:val="${add.style}"/>`);
+        if (add.border && !parts.has('pBdr')) parts.set('pBdr', add.border);
+        // (A list item's own indent, from its numbering, is past the box's already.)
+        if (add.indentLeft && (parts.has('ind') || !parts.has('numPr'))) {
+            const ind = parts.get('ind');
+            const left = ind ? Number(/w:(?:left|start)="(-?\d+)"/.exec(ind)?.[1] ?? 0) : 0;
+            parts.set('ind', ind
+                ? (/w:(?:left|start)="/.test(ind) ? ind.replace(/w:(left|start)="-?\d+"/, `w:$1="${left + add.indentLeft}"`) : ind.replace('<w:ind', `<w:ind w:left="${add.indentLeft}"`))
+                : `<w:ind w:left="${add.indentLeft}"/>`);
+        }
+        const ordered = [...parts.entries()].sort((a, b) => (PPR_ORDER.indexOf(a[0]) + 1 || 99) - (PPR_ORDER.indexOf(b[0]) + 1 || 99)).map(([, el]) => el);
+        return `<w:p><w:pPr>${ordered.join('')}</w:pPr>`;
+    });
 }

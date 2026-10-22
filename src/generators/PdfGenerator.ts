@@ -186,7 +186,9 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
                 autoSize = { width: `${+(w / 72).toFixed(4)}in`, height: `${+(h / 72).toFixed(4)}in` };
             }
             const pdfBuffer = await page.pdf({
-                format: auto ? (autoSize ? undefined : 'A4') : pdfConfig.format as any,
+                // ('auto' is the library's, which the browser knows nothing of: with a width or height given
+                // it is no format at all.)
+                format: auto ? (autoSize ? undefined : 'A4') : String(pdfConfig.format ?? '').toLowerCase() === 'auto' ? undefined : pdfConfig.format as any,
                 width: autoSize?.width ?? pdfConfig.width,
                 height: autoSize?.height ?? pdfConfig.height,
                 landscape: autoSize ? false : pdfConfig.landscape,

@@ -196,10 +196,16 @@ export function runningFurniture(nodes: OfficeContentNode[] | undefined, kind: '
     if (!nodes?.length) return [];
     const loose = nodes.filter(n => n.type !== kind);
     if (loose.length) return loose;
-    const shown = nodes.filter(n => !(n.metadata as { hidden?: boolean } | undefined)?.hidden);
-    const meta = (n: OfficeContentNode) => n.metadata as { type?: string; section?: number } | undefined;
-    const pick = shown.find(n => (meta(n)?.type ?? 'default') === 'default' && (meta(n)?.section ?? 0) === 0) ?? shown[0];
-    return pick ? [pick] : [];
+    const meta = (n: OfficeContentNode) => n.metadata as { type?: string; section?: number; hidden?: boolean; page?: number } | undefined;
+    // One with something in it: an empty default header did not stand for a first page's letterhead.
+    const filled = (n: OfficeContentNode, depth = 0): boolean => !!(n.text || '').trim() || (depth < 8 && (n.children || []).some(c => c.type === 'image' || c.type === 'chart' || filled(c, depth + 1)));
+    const shown = nodes.filter(n => !meta(n)?.hidden && filled(n));
+    const first = shown.filter(n => (meta(n)?.section ?? 0) === 0);
+    const pick = first.find(n => (meta(n)?.type ?? 'default') === 'default') ?? first[0] ?? shown[0];
+    if (!pick) return [];
+    // A header read from a page (a PDF's) is that page's paragraphs, each a node: all of them.
+    const page = meta(pick)?.page;
+    return page === undefined ? [pick] : shown.filter(n => meta(n)?.page === page && (meta(n)?.type ?? 'default') === (meta(pick)?.type ?? 'default'));
 }
 
 /**
@@ -210,7 +216,9 @@ export function runningFurniture(nodes: OfficeContentNode[] | undefined, kind: '
 export function resolvePaper(format: string | undefined, landscape: boolean | undefined, setup: PageSetup | undefined): { w: number; h: number; landscape: boolean; name?: string } {
     const key = String(format ?? 'auto').toLowerCase();
     let w: number, h: number;
-    if (key === 'auto' && setup && setup.width > 0 && setup.height > 0) {
+    // (A document's page between three and twenty-two inches each way, which a word processor takes and
+    // a page's default margins leave text room on; another is A4.)
+    if (key === 'auto' && setup && setup.width >= 216 && setup.height >= 216 && setup.width <= 1584 && setup.height <= 1584) {
         [w, h] = landscape && setup.width < setup.height ? [setup.height, setup.width] : [setup.width, setup.height];
     } else {
         const paper = PAPER_SIZES_PT[key] ?? PAPER_SIZES_PT.a4;

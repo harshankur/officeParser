@@ -3372,6 +3372,8 @@ export interface HeaderFooterMetadata {
      * section refers to. PDF output leaves it out.
      */
     hidden?: boolean;
+    /** The page it was read from: a PDF's running header is read from each page, a node a paragraph. */
+    page?: number;
 }
 
 /**

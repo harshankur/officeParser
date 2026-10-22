@@ -21,7 +21,7 @@ import { parseXmlString } from '../src/utils/xmlUtils';
 import { decodeWindows1252, textDecoder } from '../src/utils/encodingUtils';
 import { ocrTestHooks, performOcr, terminateOcr } from '../src/utils/ocrUtils';
 import { imageFromPdf, imageToTextPdf, newDecodeBudget } from '../src/utils/textPdf';
-import { decodeBase64, hexColor, isHeaderRow, lengthToPt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw } from '../src/utils/officeGenUtils';
+import { decodeBase64, hexColor, isHeaderRow, lengthToPt, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toBookmarkNameRaw } from '../src/utils/officeGenUtils';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -5156,6 +5156,51 @@ async function testFormatsReadAsTheyShow(): Promise<void> {
     assert.deepStrictEqual(await csv('a,b\nc,d\n'), ['a', 'b', 'c', 'd'], 'a comma CSV is read with `,`');
 }
 
+/**
+ * DOCX output keeps a footnote's style and an admonition's border on paragraphs with spacing of their
+ * own (they were written only on paragraphs without properties); a list level whose parents are not in
+ * its list writes their numbers as text; the native PDF engine draws a PDF's own headers on their pages;
+ * a running header is one with something in it; a document's page too small or too large to write on is
+ * A4; a drawing node holding nodes writes them; and a list marker is cut at a whole character.
+ */
+async function testWritersHoldUp(): Promise<void> {
+    assert.deepStrictEqual([resolvePaper('auto', false, { width: 50, height: 50 }), resolvePaper('auto', false, { width: 612, height: 792 })].map(p => [Math.round(p.w * 100) / 100, Math.round(p.h * 100) / 100]), [[595.28, 841.89], [612, 792]], 'a page too small to write on is A4, a letter page is its own');
+    const furniture = (text: string, meta: object) => ({ type: 'header', text, children: text ? [{ type: 'paragraph', text, children: [{ type: 'text', text }] }] : [], metadata: meta }) as any;
+    assert.deepStrictEqual(runningFurniture([furniture('', { type: 'default', section: 0 }), furniture('Letterhead', { type: 'first', section: 0 })], 'header').map(n => n.text), ['Letterhead'], 'an empty default header does not stand in for the one with text');
+    const drawingAst = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'drawing', children: [{ type: 'paragraph', text: 'Inside a drawing', children: [{ type: 'text', text: 'Inside a drawing' }] }] }] } as any;
+    for (const format of ['md', 'html', 'txt'] as const) assert.ok(String((await OfficeGenerator.generate(drawingAst, format)).value).includes('Inside a drawing'), `${format}: a drawing node holding nodes writes them`);
+    const astral = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'list', text: 'Item', children: [{ type: 'text', text: 'Item' }], metadata: { listType: 'unordered', indentation: 0, listId: 'l', itemIndex: 0, marker: 'x'.repeat(31) + '\u{1F600}\u{1F600}' } }] } as any;
+    assert.ok(!/\\d[89ab][0-9a-f]{2} /.test(String((await OfficeGenerator.generate(astral, 'html')).value)), 'HTML: a long marker is cut at a whole character, not inside one');
+    const listAst = (items: [number, string, string][]) => ({ type: 'pdf', metadata: {}, attachments: [], content: items.map(([level, marker, text], i) => ({
+        type: 'list', text, children: [{ type: 'text', text }], metadata: { listType: 'ordered', indentation: level, listId: level ? `sub${i}` : 'top', itemIndex: 0, marker } })) }) as any;
+    const parts = docxParts((await OfficeGenerator.generate(listAst([[1, '2.1.', 'A sub-item alone']]), 'docx')).value as Uint8Array);
+    assert.ok(/<w:lvl w:ilvl="1"[^]*?<w:lvlText w:val="2\.%2\."\/>/.test(parts['word/numbering.xml']), 'DOCX: a level whose parents are in no list of its own writes their number as text');
+    const nested = docxParts((await OfficeGenerator.generate({ ...listAst([[0, '1.', 'Top']]), content: [...listAst([[0, '1.', 'Top']]).content, { ...listAst([[1, '1.1.', 'Under']]).content[0], metadata: { listType: 'ordered', indentation: 1, listId: 'top', itemIndex: 0, marker: '1.1.' } }] }, 'docx')).value as Uint8Array);
+    assert.ok(/<w:lvl w:ilvl="1"[^]*?<w:lvlText w:val="%1\.%2\."\/>/.test(nested['word/numbering.xml']), 'DOCX: a level under its list\'s own parents numbers with their fields');
+    const odt = Object.entries(unzipSync(new Uint8Array((await OfficeGenerator.generate(listAst([[1, '2.1.', 'A sub-item alone']]), 'odt')).value as Uint8Array))).map(([, b]) => strFromU8(b)).join('');
+    assert.ok(/text:level="2"[^>]*style:num-prefix="2\."/.test(odt) && !/text:level="2"[^>]*text:display-levels/.test(odt), 'ODT: the same level writes its parents\' number as its prefix');
+
+    const note = { type: 'note', metadata: { noteType: 'footnote' }, children: [{ type: 'paragraph', text: 'Spaced note', metadata: { spacing: { after: 2 } }, children: [{ type: 'text', text: 'Spaced note' }] }] };
+    const doc = { type: 'docx', metadata: {}, attachments: [], content: [
+        { type: 'paragraph', text: 'Cites', children: [{ type: 'text', text: 'Cites', notes: [note] }] },
+        { type: 'admonition', metadata: { admonitionType: 'warning' }, children: [{ type: 'paragraph', text: 'Spaced', metadata: { spacing: { before: 6 }, alignment: 'center' }, children: [{ type: 'text', text: 'Spaced' }] }] }] } as any;
+    const written = docxParts((await OfficeGenerator.generate(doc, 'docx')).value as Uint8Array);
+    assert.ok(/<w:pPr><w:pStyle w:val="FootnoteText"\/><w:spacing w:after="40"\/><\/w:pPr>/.test(written['word/footnotes.xml']), 'DOCX: a footnote paragraph with spacing keeps the footnote style');
+    assert.ok(/<w:pPr><w:pBdr>[^]*?<\/w:pBdr><w:spacing w:before="120"\/><w:ind w:left="360"\/><w:jc w:val="center"\/><\/w:pPr><w:r><w:t[^>]*>Spaced/.test(written['word/document.xml']), 'DOCX: an admonition\'s paragraph with spacing keeps its border, in the order Word reads');
+
+    const header = (page: number, text: string) => ({ type: 'header', text, children: [{ type: 'text', text }], metadata: { type: 'default', page } });
+    const paged = { type: 'pdf', metadata: {}, attachments: [], content: [
+        { type: 'paragraph', text: 'First body', children: [{ type: 'text', text: 'First body' }] }, { type: 'break', metadata: { breakType: 'page' } },
+        { type: 'paragraph', text: 'Second body', children: [{ type: 'text', text: 'Second body' }] }],
+        auxiliary: { headers: [header(1, 'Cover head'), header(1, 'Cover subtitle'), header(2, 'Chapter head')] } } as any;
+    const out = (await OfficeGenerator.generate(paged, 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(out), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const pdfText = String((await back.to('text')).value);
+    const at = (text: string) => pdfText.indexOf(text);
+    assert.ok(pdfText.lastIndexOf('Cover') < at('First body') && at('First body') < at('Chapter head') && at('Chapter head') === pdfText.lastIndexOf('Chapter head') && at('Chapter head') < at('Second body'),
+        `a PDF's headers are drawn on their own pages; got ${JSON.stringify(pdfText)}`);
+}
+
 async function testNativePdfFurnitureLimits(): Promise<void> {
     const t = (text: string, more: any = {}) => ({ type: 'text', text, ...more });
     const p = (...children: any[]) => ({ type: 'paragraph', children });
@@ -7049,6 +7094,7 @@ async function runTests(): Promise<void> {
         ['Slides drawn as laid out', testSlidesDrawnAsLaidOut],
         ['Native PDF furniture limits', testNativePdfFurnitureLimits],
         ['Formats read as they show', testFormatsReadAsTheyShow],
+        ['Writers hold up', testWritersHoldUp],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

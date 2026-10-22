@@ -17,7 +17,9 @@ export function formatListNumber(n: number, format: NumberFormat): string {
     switch (format) {
         case 'decimalZero': return n < 10 ? `0${n}` : String(n);
         case 'lowerLetter': case 'upperLetter': {
-            // a..z, then aa..zz, then aaa..: the letter repeated, as both word processors do.
+            // a..z, then aa..zz, then aaa..: the letter repeated, as both word processors do, as far as
+            // ten letters; past that, digits (a long list's markers grew with its length, past any output).
+            if (n > 260) return String(n);
             const letter = String.fromCharCode(97 + ((n - 1) % 26)).repeat(Math.ceil(n / 26));
             return format === 'upperLetter' ? letter.toUpperCase() : letter;
         }
@@ -113,6 +115,8 @@ export interface MarkerPattern {
     suffix: string;
     /** The number follows its parent levels' (`1.2.3.`): each writer writes those as its own fields. */
     withParents: boolean;
+    /** The parent levels' numbers as the marker shows them (`1.2.`), for a writer whose list numbers no parents. */
+    parentText?: string;
     /** The bullet's character (`''` for none). */
     bullet: string;
 }
@@ -142,7 +146,7 @@ export function markerPattern(meta: { listType?: string; itemIndex?: number; mar
         if (/[\p{L}\p{N}]/u.test(before) || /[\p{L}\p{N}]/u.test(after)) continue;
         const prefix = marker.slice(0, at), suffix = marker.slice(at + written.length);
         const withParents = level > 0 && new RegExp(`^(?:\\d+\\.){${level}}$`).test(prefix);
-        return { kind: 'ordered', format, prefix: withParents ? '' : prefix, suffix, withParents, bullet: '' };
+        return { kind: 'ordered', format, prefix: withParents ? '' : prefix, suffix, withParents, ...(withParents ? { parentText: prefix } : {}), bullet: '' };
     }
     return plain;
 }

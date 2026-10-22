@@ -314,7 +314,8 @@ if (fileArg && !showHelp) {
             generatorConfig.textConfig.newlineDelimiter = config.newlineDelimiter;
         }
     }
-    if (config.csvDelimiter !== undefined) {
+    // ('auto' reads the delimiter from the input; CSV output then writes the one read.)
+    if (config.csvDelimiter !== undefined && config.csvDelimiter !== 'auto') {
         if (!generatorConfig.csvConfig) generatorConfig.csvConfig = {};
         if (generatorConfig.csvConfig.columnDelimiter === undefined) {
             generatorConfig.csvConfig.columnDelimiter = config.csvDelimiter;
