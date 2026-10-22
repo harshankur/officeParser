@@ -7,6 +7,8 @@ import { EpubGenerator } from './generators/EpubGenerator.js';
 import { HtmlGenerator } from './generators/HtmlGenerator.js';
 import { MarkdownGenerator } from './generators/MarkdownGenerator.js';
 import { OdtGenerator } from './generators/OdtGenerator.js';
+import { OdsGenerator } from './generators/OdsGenerator.js';
+import { XlsxGenerator } from './generators/XlsxGenerator.js';
 import { LatexGenerator } from './generators/LatexGenerator.js';
 import { PdfGenerator } from './generators/PdfGenerator.js';
 import { RtfGenerator } from './generators/RtfGenerator.js';
@@ -152,6 +154,12 @@ export class OfficeGenerator {
                 break;
             case 'tex':
                 generator = new LatexGenerator(input, config as GeneratorConfig<'tex'>);
+                break;
+            case 'xlsx':
+                generator = new XlsxGenerator(input, config as GeneratorConfig<'xlsx'>);
+                break;
+            case 'ods':
+                generator = new OdsGenerator(input, config as GeneratorConfig<'ods'>);
                 break;
             default:
                 // Reported where a generator would report it: the caller's handler, else the AST's.

@@ -39,7 +39,7 @@ import { isHeaderRow } from '../../src/utils/officeGenUtils.js';
 // ============================================================================
 
 /** Output formats tested (PDF excluded — slow/brittle in CI) */
-const GENERATOR_FORMATS = ['html', 'md', 'text', 'rtf', 'csv', 'chunks', 'epub', 'docx', 'odt', 'tex'] as const;
+const GENERATOR_FORMATS = ['html', 'md', 'text', 'rtf', 'csv', 'chunks', 'epub', 'docx', 'odt', 'tex', 'xlsx', 'ods'] as const;
 type GeneratorFormat = typeof GENERATOR_FORMATS[number];
 
 /** Formats that support roundtrip testing (parse → generate → re-parse) */
@@ -141,7 +141,7 @@ const BASELINE_MODIFIED = new Date('2024-01-01T00:00:00Z');
  * entry mtimes follow the same instant.
  */
 const deterministicConfigFor = (destFmt: string): GeneratorConfig =>
-    (destFmt === 'epub' || destFmt === 'docx' || destFmt === 'odt' ? { metadataOverrides: { modified: BASELINE_MODIFIED } } : {}) as GeneratorConfig;
+    (destFmt === 'epub' || destFmt === 'docx' || destFmt === 'odt' || destFmt === 'xlsx' || destFmt === 'ods' ? { metadataOverrides: { modified: BASELINE_MODIFIED } } : {}) as GeneratorConfig;
 
 /** Generator config permutations */
 const GENERATOR_CONFIG_TESTS = [
@@ -450,6 +450,23 @@ function extractOdtMetrics(bytes: Uint8Array): GeneratedMetrics {
     };
 }
 
+/** A workbook's metrics (XLSX, ODS): its sheets as tables, its rows as lines, its cells' words. */
+function extractSheetMetrics(bytes: Uint8Array, fmt: 'xlsx' | 'ods'): GeneratedMetrics {
+    const files = unzipSync(bytes);
+    const xml = fmt === 'xlsx'
+        ? Object.keys(files).filter(n => /^xl\/worksheets\/sheet\d+\.xml$/.test(n)).map(n => strFromU8(files[n])).join('')
+        : (files['content.xml'] ? strFromU8(files['content.xml']) : '');
+    const texts = fmt === 'xlsx' ? (xml.match(/<t[^>]*>[^<]*<\/t>|<v>[^<]*<\/v>/g) || []) : (xml.match(/<text:p>[^<]*<\/text:p>|office:value="[^"]*"/g) || []);
+    const words = texts.join(' ').replace(/<[^>]+>|office:value="|"/g, ' ').split(/\s+/).filter(Boolean);
+    return {
+        outputLength: bytes.length,
+        hasContent: bytes.length > 0 && words.length > 0,
+        lineCount: (xml.match(fmt === 'xlsx' ? /<row[ >]/g : /<table:table-row[ >]/g) || []).length,
+        wordCount: words.length,
+        tableCount: (xml.match(fmt === 'xlsx' ? /<worksheet[ >]/g : /<table:table[ >]/g) || []).length,
+    };
+}
+
 function extractGeneratedMetrics(output: string, fmt: GeneratorFormat): GeneratedMetrics {
     const outputLength = output.length;
     const hasContent = outputLength > 0;
@@ -708,6 +725,9 @@ async function testGeneration(
             // ODT is always a binary ZIP (ODF) archive.
             isOdtOutput = true;
             rawOutput = '[ODT archive]';
+        } else if (destFmt === 'xlsx' || destFmt === 'ods') {
+            // A workbook is always a binary ZIP archive.
+            rawOutput = `[${destFmt.toUpperCase()} archive]`;
         } else if (destFmt === 'csv') {
             if (result.value instanceof Uint8Array) {
                 // ZIP archive — convert to base64 placeholder metrics
@@ -730,6 +750,8 @@ async function testGeneration(
             actualMetrics = extractDocxMetrics(result.value as Uint8Array);
         } else if (isOdtOutput) {
             actualMetrics = extractOdtMetrics(result.value as Uint8Array);
+        } else if (destFmt === 'xlsx' || destFmt === 'ods') {
+            actualMetrics = extractSheetMetrics(result.value as Uint8Array, destFmt);
         } else if (isZipOutput) {
             // ZIP: treat as valid multi-sheet output, just validate non-empty archive
             actualMetrics = {
@@ -753,6 +775,8 @@ async function testGeneration(
             fs.writeFileSync(`${outPath}.docx`, result.value as Uint8Array);
         } else if (isOdtOutput) {
             fs.writeFileSync(`${outPath}.odt`, result.value as Uint8Array);
+        } else if (destFmt === 'xlsx' || destFmt === 'ods') {
+            fs.writeFileSync(`${outPath}.${destFmt}`, result.value as Uint8Array);
         } else if (isZipOutput) {
             fs.writeFileSync(`${outPath}.zip`, result.value as Uint8Array);
         } else {
@@ -2656,6 +2680,8 @@ async function generateBaselines(): Promise<void> {
                     metrics = extractDocxMetrics(result.value as Uint8Array);
                 } else if (destFmt === 'odt') {
                     metrics = extractOdtMetrics(result.value as Uint8Array);
+                } else if (destFmt === 'xlsx' || destFmt === 'ods') {
+                    metrics = extractSheetMetrics(result.value as Uint8Array, destFmt);
                 } else if (result.value instanceof Uint8Array) {
                     // ZIP archive (multi-sheet CSV)
                     metrics = { outputLength: result.value.length, hasContent: result.value.length > 0, lineCount: 0, wordCount: 0 };
@@ -2677,6 +2703,8 @@ async function generateBaselines(): Promise<void> {
                     fs.writeFileSync(`${fileBaselinePath}.docx`, result.value as Uint8Array);
                 } else if (destFmt === 'odt') {
                     fs.writeFileSync(`${fileBaselinePath}.odt`, result.value as Uint8Array);
+                } else if (destFmt === 'xlsx' || destFmt === 'ods') {
+                    fs.writeFileSync(`${fileBaselinePath}.${destFmt}`, result.value as Uint8Array);
                 } else if (result.value instanceof Uint8Array) {
                     fs.writeFileSync(`${fileBaselinePath}.zip`, result.value);
                 } else if (destFmt === 'chunks') {

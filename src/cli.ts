@@ -8,7 +8,7 @@
  *   officeparser file.docx --ocr --extractAttachments
  *
  * Options (--key=value, --key value, or bare flags):
- *   --to=json|text|md|html|csv|rtf|pdf|docx|odt|tex|epub|chunks  Convert AST to specified format (default: json)
+ *   --to=json|text|md|html|csv|rtf|pdf|docx|odt|xlsx|ods|tex|epub|chunks  Convert AST to specified format (default: json)
  *   --output=path             Save result to a file
  *   --fileType=docx|xlsx|...  Override file type detection
  *   --ocr                     Enable OCR for images (default: false); also requires --extractAttachments
@@ -77,6 +77,7 @@ const knownGeneratorBooleans = new Set([
     // Dotted generator booleans, same rationale as the parser set above.
     'pdfConfig.tagged', 'pdfConfig.outline', 'pdfConfig.subsetFonts', 'pdfConfig.printHidden', 'pdfConfig.printSpeakerNotes', 'pdfConfig.landscape', 'pdfConfig.printBackground', 'pdfConfig.displayHeaderFooter',
     'docxConfig.landscape', 'odtConfig.landscape',
+    'xlsxConfig.sheetPerTable', 'xlsxConfig.includeText', 'odsConfig.sheetPerTable', 'odsConfig.includeText',
     'texConfig.standalone', 'texConfig.bundle', 'texConfig.embedImages', 'texConfig.numberSections', 'texConfig.landscape',
     'textConfig.preserveLayout', 'textConfig.renderNotes',
     'htmlConfig.standalone', 'htmlConfig.sourceAttributes', 'htmlConfig.gatedEmbeds',
@@ -108,7 +109,7 @@ const REMOVED_CLI_FLAGS: Record<string, string> = lookupTable({
 
 // Prefixes used to identify configurations targeted for the generator instead of the parser.
 const generatorPrefixes = [
-    'generatorConfig.', 'htmlConfig.', 'csvConfig.', 'textConfig.', 'mdConfig.', 'pdfConfig.', 'rtfConfig.', 'docxConfig.', 'odtConfig.', 'texConfig.', 'chunksConfig.'
+    'generatorConfig.', 'htmlConfig.', 'csvConfig.', 'textConfig.', 'mdConfig.', 'pdfConfig.', 'rtfConfig.', 'docxConfig.', 'odtConfig.', 'xlsxConfig.', 'odsConfig.', 'texConfig.', 'chunksConfig.'
 ];
 
 // Options only a generator has (`--maxInlineImageBytes`, `--metadataOverrides.title`), read from the
@@ -388,7 +389,7 @@ if (fileArg && !showHelp) {
     console.log('Usage: officeparser <file> [options]');
     console.log('');
     console.log('Options:');
-    console.log('  --to=json|text|md|html|pdf|csv|rtf|docx|odt|tex|epub|chunks  Target conversion format (default: json)');
+    console.log('  --to=json|text|md|html|pdf|csv|rtf|docx|odt|xlsx|ods|tex|epub|chunks  Target conversion format (default: json)');
     console.log('  --output=file.ext                           Save output to file instead of stdout');
     console.log('  --fileType=docx|xlsx|pptx|odt|...           Explicitly override input file type detection');
     console.log('  --ocr                                       Enable OCR for images (default: false; also requires --extractAttachments)');

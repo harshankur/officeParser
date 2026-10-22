@@ -336,7 +336,7 @@ const OCR_CACHE_METHODS = ['write', 'readOnly', 'refresh', 'none'] as const;
 /** The per-destination and metadata sub-objects a generator config groups its settings into. */
 const GENERATOR_CONFIG_CONTAINERS = [
     'metadataOverrides', 'htmlConfig', 'mdConfig', 'pdfConfig',
-    'csvConfig', 'textConfig', 'rtfConfig', 'docxConfig', 'odtConfig', 'texConfig', 'chunksConfig',
+    'csvConfig', 'textConfig', 'rtfConfig', 'docxConfig', 'odtConfig', 'xlsxConfig', 'odsConfig', 'texConfig', 'chunksConfig',
 ] as const;
 
 /**
@@ -453,7 +453,7 @@ export function resolveGeneratorConfig<D extends string>(
         // with no signal at all.
         unknownKeys = unknownGeneratorKeys(userConfig as Record<string, any>);
         // Extract sub-configs to avoid shallow-overwriting the whole sub-config objects
-        const { htmlConfig, mdConfig, pdfConfig, csvConfig, textConfig, rtfConfig, docxConfig, odtConfig, texConfig, chunksConfig, ...commonProps } = userConfig as any;
+        const { htmlConfig, mdConfig, pdfConfig, csvConfig, textConfig, rtfConfig, docxConfig, odtConfig, xlsxConfig, odsConfig, texConfig, chunksConfig, ...commonProps } = userConfig as any;
         Object.assign(config, withoutPrototypeKeys(commonProps));
 
         // Merge sub-configs individually, ignoring undefined properties to preserve defaults
@@ -500,6 +500,8 @@ export function resolveGeneratorConfig<D extends string>(
         if (rtfConfig) mergeSubConfig(config.rtfConfig, rtfConfig);
         if (docxConfig) mergeSubConfig(config.docxConfig, docxConfig);
         if (odtConfig) mergeSubConfig(config.odtConfig, odtConfig);
+        if (xlsxConfig) mergeSubConfig(config.xlsxConfig, xlsxConfig);
+        if (odsConfig) mergeSubConfig(config.odsConfig, odsConfig);
         if (texConfig) mergeSubConfig(config.texConfig, texConfig);
         if (chunksConfig) mergeSubConfig(config.chunksConfig, chunksConfig);
     }

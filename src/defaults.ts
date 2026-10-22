@@ -1,4 +1,4 @@
-import { ChunkingConfig, CsvGeneratorConfig, DeepRequired, DocumentStructureChunkingConfig, DocxGeneratorConfig, FixedSizeChunkingConfig, FullGeneratorConfig, HtmlGeneratorConfig, HtmlParserConfig, MdGeneratorConfig, OcrConfig, OcrTimeoutConfig, OdtGeneratorConfig, OfficeParserConfig, PdfGeneratorConfig, PdfParserConfig, SemanticChunkingConfig, TemplateConfig, TemplateDateNames, TexGeneratorConfig, TexParserConfig, TextGeneratorConfig } from './types.js';
+import { ChunkingConfig, CsvGeneratorConfig, DeepRequired, DocumentStructureChunkingConfig, DocxGeneratorConfig, FixedSizeChunkingConfig, FullGeneratorConfig, HtmlGeneratorConfig, HtmlParserConfig, MdGeneratorConfig, OcrConfig, OcrTimeoutConfig, OdsGeneratorConfig, OdtGeneratorConfig, OfficeParserConfig, PdfGeneratorConfig, PdfParserConfig, SemanticChunkingConfig, TemplateConfig, TemplateDateNames, TexGeneratorConfig, TexParserConfig, TextGeneratorConfig, XlsxGeneratorConfig } from './types.js';
 
 const PDFJS_VERSION = '6.2.108';
 /** The pdf.js worker address the non-slim builds fall back to (see `allowRemoteAssets`). Empty in the slim builds. */
@@ -304,6 +304,16 @@ const DEFAULT_ODT_GENERATOR_CONFIG: DeepRequired<OdtGeneratorConfig> = {
     margin: { top: '', right: '', bottom: '', left: '' },
 };
 
+const DEFAULT_XLSX_GENERATOR_CONFIG: DeepRequired<XlsxGeneratorConfig> = {
+    sheetPerTable: true,
+    includeText: true,
+};
+
+const DEFAULT_ODS_GENERATOR_CONFIG: DeepRequired<OdsGeneratorConfig> = {
+    sheetPerTable: true,
+    includeText: true,
+};
+
 const DEFAULT_TEX_GENERATOR_CONFIG: DeepRequired<TexGeneratorConfig> = {
     documentClass: 'auto',
     standalone: true,
@@ -338,6 +348,8 @@ export const DEFAULT_GENERATOR_CONFIG: FullGeneratorConfig = {
     rtfConfig: {},
     docxConfig: DEFAULT_DOCX_GENERATOR_CONFIG,
     odtConfig: DEFAULT_ODT_GENERATOR_CONFIG,
+    xlsxConfig: DEFAULT_XLSX_GENERATOR_CONFIG,
+    odsConfig: DEFAULT_ODS_GENERATOR_CONFIG,
     texConfig: DEFAULT_TEX_GENERATOR_CONFIG,
     chunksConfig: DEFAULT_CHUNKING_CONFIG,
 };

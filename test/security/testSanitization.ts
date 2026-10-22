@@ -2700,6 +2700,12 @@ async function parserHardeningTests() {
         { label: 'html: 32 wide rules over 20,000 elements hold the heap', limit: 400e6 });
     await timed('html: a selector of 200 KB of spaces around a > reads', () => parseQuiet(Buffer.from(`<style>.a${' '.repeat(n(200000))}>${' '.repeat(n(200000))}.b { color: red }</style><p class="a">x</p>`), 'html'));
     await timed('html: a declaration of 200k unclosed url( reads', () => parseQuiet(Buffer.from(`<style>.a { background: ${'url('.repeat(n(200000))} }</style><p class="a">x</p>`), 'html'));
+    // A sheet of many cells is written as a workbook in time in proportion: XLSX and ODS (cells typed once,
+    // merged cells' covered positions found per row).
+    const bigSheet = () => ({ type: 'xlsx', metadata: {}, attachments: [], content: [{ type: 'sheet', metadata: { sheetName: 'Big' }, children: Array.from({ length: n(20_000) }, (_, r) => ({
+        type: 'row', children: Array.from({ length: 10 }, (_, c) => ({ type: 'cell', text: c % 3 ? `${r * c}.5` : `Row ${r}`, metadata: { row: r, col: c, ...(c === 0 && r % 50 === 0 ? { rowSpan: 2 } : {}) }, children: [{ type: 'text', text: c % 3 ? `${r * c}.5` : `Row ${r}` }] })),
+    })) }] }) as any;
+    for (const format of ['xlsx', 'ods'] as const) await timed(`${format}: a sheet of 200,000 cells is written`, () => OfficeGenerator.generate(bigSheet(), format, { onWarning: () => {} } as any));
     await timed('md: block math of 200 KB of spaces is written inline', () => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'a' }, { type: 'code', text: 'x' + ' '.repeat(n(200000)) + 'y', metadata: { math: 'block' } }] }]), 'md' as any, { onWarning: () => {} } as any));
 
     // Raw HTML in Markdown, read as links and pictures, passes the writers' URL checks like any other.

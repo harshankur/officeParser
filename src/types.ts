@@ -1000,6 +1000,8 @@ type ConversionValue<D extends string> =
     CanonicalFormat<D> extends 'epub' ? Uint8Array :
     CanonicalFormat<D> extends 'docx' ? Uint8Array :
     CanonicalFormat<D> extends 'odt' ? Uint8Array :
+    CanonicalFormat<D> extends 'xlsx' ? Uint8Array :
+    CanonicalFormat<D> extends 'ods' ? Uint8Array :
     CanonicalFormat<D> extends 'tex' ? string | Uint8Array :
     string;
 
@@ -1013,7 +1015,7 @@ export interface ConversionResult<D extends string> {
 /**
  * Universal formats supported by all source types for generation.
  */
-export type UniversalGeneratorFormat = 'text' | 'md' | 'html' | 'pdf' | 'csv' | 'rtf' | 'chunks' | 'epub' | 'docx' | 'odt' | 'tex';
+export type UniversalGeneratorFormat = 'text' | 'md' | 'html' | 'pdf' | 'csv' | 'rtf' | 'chunks' | 'epub' | 'docx' | 'odt' | 'tex' | 'xlsx' | 'ods';
 
 /**
  * Other names the generators accept for a format: `'txt'` for `'text'`, `'markdown'` for `'md'` and
@@ -1277,6 +1279,8 @@ type GeneratorSpecificConfigOf<D extends string> =
     D extends 'rtf' ? { rtfConfig?: RtfGeneratorConfig } :
     D extends 'docx' ? { docxConfig?: DocxGeneratorConfig } :
     D extends 'odt' ? { odtConfig?: OdtGeneratorConfig } :
+    D extends 'xlsx' ? { xlsxConfig?: XlsxGeneratorConfig } :
+    D extends 'ods' ? { odsConfig?: OdsGeneratorConfig } :
     D extends 'tex' ? { texConfig?: TexGeneratorConfig } :
     D extends 'chunks' ? { chunksConfig?: ChunkingConfig } :
     Partial<{
@@ -1288,6 +1292,8 @@ type GeneratorSpecificConfigOf<D extends string> =
         rtfConfig: RtfGeneratorConfig;
         docxConfig: DocxGeneratorConfig;
         odtConfig: OdtGeneratorConfig;
+        xlsxConfig: XlsxGeneratorConfig;
+        odsConfig: OdsGeneratorConfig;
         texConfig: TexGeneratorConfig;
         chunksConfig: ChunkingConfig;
     }>;
@@ -1362,6 +1368,8 @@ export type FullGeneratorConfig = DeepRequired<Omit<CommonGeneratorConfig, 'meta
     rtfConfig: RtfGeneratorConfig;
     docxConfig: DocxGeneratorConfig;
     odtConfig: OdtGeneratorConfig;
+    xlsxConfig: XlsxGeneratorConfig;
+    odsConfig: OdsGeneratorConfig;
     texConfig: TexGeneratorConfig;
 }> & {
     chunksConfig: ChunkingConfig;
@@ -1774,6 +1782,26 @@ export interface DocxGeneratorConfig {
      * a side left unset is the document's own margin under `format: 'auto'`, else 72 (one inch).
      */
     margin?: { top?: number | string; right?: number | string; bottom?: number | string; left?: number | string };
+}
+
+/**
+ * Configuration options for XLSX (Excel workbook) generation. A spreadsheet is written sheet for sheet,
+ * its values typed and shown in their formats; a document is written as its tables, each a sheet, and
+ * its text outside them on a sheet of its own.
+ */
+export interface XlsxGeneratorConfig {
+    /** Each of a document's tables on a sheet of its own, named after the heading before it (true), or all on one sheet, an empty row between them (false). Defaults to true. */
+    sheetPerTable?: boolean;
+    /** A document's text outside its tables, a block a row, on a sheet named Text. Defaults to true. */
+    includeText?: boolean;
+}
+
+/** Configuration options for ODS (OpenDocument spreadsheet) generation, as {@link XlsxGeneratorConfig}'s. */
+export interface OdsGeneratorConfig {
+    /** Each of a document's tables on a sheet of its own (true), or all on one sheet (false). Defaults to true. */
+    sheetPerTable?: boolean;
+    /** A document's text outside its tables on a sheet named Text. Defaults to true. */
+    includeText?: boolean;
 }
 
 /**

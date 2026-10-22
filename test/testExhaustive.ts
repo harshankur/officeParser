@@ -5488,6 +5488,55 @@ async function testPdfActualText(): Promise<void> {
     assert.deepStrictEqual(await read(await pdf.save()), ['हिन्दी plain'], 'each span reads as its ActualText, in its place, and the text around it as drawn');
 }
 
+/**
+ * XLSX and ODS output: a spreadsheet is written sheet for sheet (its values typed and shown in their
+ * formats, merged cells, hidden sheets, rows and columns kept), a document as its tables, each a sheet
+ * named after the heading before it, typed from their text (a currency, a percentage, a date; a code with
+ * leading zeros and a long number stay text), and its text on a sheet of its own; pictures are reported.
+ */
+async function testSpreadsheetWriters(): Promise<void> {
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const xlsx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="Sales" sheetId="1" r:id="rId1"/><sheet name="Secret" sheetId="2" state="hidden" r:id="rId2"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/><Relationship Id="rId2" Target="worksheets/sheet2.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+        'xl/styles.xml': strToU8(`<?xml version="1.0"?><styleSheet ${ns}><numFmts count="1"><numFmt numFmtId="166" formatCode="[$€-407]#,##0.00"/></numFmts><cellXfs count="3"><xf numFmtId="0"/><xf numFmtId="166"/><xf numFmtId="9"/></cellXfs></styleSheet>`),
+        'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><cols><col min="3" max="3" hidden="1"/></cols><sheetData>`
+            + '<row r="1"><c r="A1" t="inlineStr"><is><t>Quarterly sales</t></is></c></row>'
+            + '<row r="2"><c r="A2" t="inlineStr"><is><t>Item</t></is></c><c r="B2" t="inlineStr"><is><t>Price</t></is></c><c r="C2" t="inlineStr"><is><t>Cost</t></is></c><c r="D2" t="inlineStr"><is><t>Share</t></is></c></row>'
+            + '<row r="3"><c r="A3" t="inlineStr"><is><t>Pens</t></is></c><c r="B3" s="1"><v>1250.5</v></c><c r="C3"><v>800</v></c><c r="D3" s="2"><v>0.19</v></c></row>'
+            + '<row r="4" hidden="1"><c r="A4" t="inlineStr"><is><t>Draft</t></is></c></row>'
+            + '</sheetData><mergeCells count="1"><mergeCell ref="A1:D1"/></mergeCells></worksheet>'),
+        'xl/worksheets/sheet2.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData><row r="1"><c r="A1"><v>42</v></c></row></sheetData></worksheet>`),
+    }));
+    const book = await OfficeParser.parseOffice(xlsx, { fileType: 'xlsx' } as any) as OfficeParserAST;
+    const shape = (ast: OfficeParserAST) => ast.content.map(sheet => [(sheet.metadata as any).sheetName, !!(sheet.metadata as any).hidden,
+        sheet.children!.filter(r => r.type === 'row').map(r => [!!(r.metadata as any)?.hidden, r.children!.map(c => { const m = c.metadata as any; return [c.text, m.shownText ?? null, m.colSpan ?? 1, !!m.hidden]; })])]);
+    for (const format of ['xlsx', 'ods'] as const) {
+        const out = await OfficeGenerator.generate(book, format);
+        const back = await OfficeParser.parseOffice(Buffer.from(out.value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+        const sheets = shape(back);
+        assert.deepStrictEqual(sheets.map(s => [s[0], s[1]]), [['Sales', false], ['Secret', true]], `${format}: the sheets keep their names, the hidden one hidden`);
+        const rows = sheets[0][2] as any[];
+        const cell = (r: number, c: number) => rows[r][1][c];
+        assert.strictEqual(cell(0, 0)[2], 4, `${format}: the merged title spans its four columns`);
+        assert.deepStrictEqual([cell(2, 1)[1] ?? cell(2, 1)[0], cell(2, 3)[1] ?? cell(2, 3)[0]], ['€1,250.50', '19%'], `${format}: numbers are shown in their formats`);
+        assert.ok(cell(2, 2)[3] && rows[3][0], `${format}: the hidden column and row stay hidden`);
+    }
+    // A document's tables, typed from their text, and its text.
+    const doc = await OfficeParser.parseOffice(Buffer.from('<p>Before.</p><h2>Prices</h2><table><tr><th>Item</th><th>Price</th><th>Share</th><th>Date</th><th>Code</th><th>Card</th></tr>'
+        + '<tr><td>Pens</td><td>€1,250.50</td><td>19%</td><td>2026-10-01</td><td>007</td><td>12345678901234567890</td></tr></table><p><img src="data:image/png;base64,iVBORw0KGgo=" alt="x"> After.</p>'), { fileType: 'html', extractAttachments: true } as any) as OfficeParserAST;
+    const written = await OfficeGenerator.generate(doc, 'xlsx');
+    const parts = unzipSync(new Uint8Array(written.value as Uint8Array));
+    const workbook = strFromU8(parts['xl/workbook.xml']), sheet1 = strFromU8(parts['xl/worksheets/sheet1.xml']), styles = strFromU8(parts['xl/styles.xml']);
+    assert.ok(/<sheet name="Prices"[^>]*\/><sheet name="Text"/.test(workbook), `the table is a sheet named after its heading, the text another; got ${workbook}`);
+    assert.ok(/<c r="B2" s="\d+"><v>1250.5<\/v><\/c><c r="C2" s="\d+"><v>0.19<\/v><\/c><c r="D2" s="\d+"><v>46296<\/v><\/c>/.test(sheet1) && /formatCode="&quot;€&quot;#,##0.00"/.test(styles), 'a currency, a percentage and a date are numbers in their formats');
+    assert.ok(/<c r="E2"[^>]*t="inlineStr"><is><t[^>]*>007<\/t>/.test(sheet1) && /<c r="F2"[^>]*t="inlineStr"><is><t[^>]*>12345678901234567890</.test(sheet1), 'a code with leading zeros and a long number stay text');
+    assert.ok((written.messages || []).some((m: any) => m.code === 'CONTENT_NOT_REPRESENTABLE' && m.details?.feature === 'pictures'), 'a picture, which a cell cannot hold, is reported');
+    const together = unzipSync(new Uint8Array((await OfficeGenerator.generate(doc, 'xlsx', { xlsxConfig: { sheetPerTable: false, includeText: false } } as any)).value as Uint8Array));
+    assert.deepStrictEqual(strFromU8(together['xl/workbook.xml']).match(/<sheet name="[^"]+"/g), ['<sheet name="Tables"'], 'sheetPerTable false and includeText false: the tables on one sheet, no text sheet');
+}
+
 async function testNativePdfFurnitureLimits(): Promise<void> {
     const t = (text: string, more: any = {}) => ({ type: 'text', text, ...more });
     const p = (...children: any[]) => ({ type: 'paragraph', children });
@@ -7388,6 +7437,7 @@ async function runTests(): Promise<void> {
         ['PDF ruled tables', testPdfRuledTables],
         ['Columns', testColumns],
         ['PDF ActualText', testPdfActualText],
+        ['Spreadsheet writers', testSpreadsheetWriters],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],
