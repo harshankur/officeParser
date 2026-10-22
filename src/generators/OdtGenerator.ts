@@ -4,7 +4,7 @@ import { layoutTableRows } from '../utils/tableLayout.js';
 import { BreakMetadata, ConversionResult, GeneratorConfig, ImageMode, OdtGeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, odfUserDefinedXml, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
 import { markerPattern, MarkerPattern, odfNumFormat } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
@@ -1000,20 +1000,12 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         const m = this.effectiveMetadata;
         const el = (tag: string, val: string | undefined) => val ? `<${tag}>${xmlText(val)}</${tag}>` : '';
         const created = toW3CDTF(m.created);
-        let meta = el('dc:title', m.title) + el('meta:initial-creator', m.author) + el('dc:creator', m.author)
+        let meta = el('dc:title', m.title) + el('meta:initial-creator', m.author) + el('dc:creator', m.lastModifiedBy || m.author)
             + el('dc:description', m.description) + el('dc:subject', m.subject) + el('dc:language', (m as any).language);
         if (m.keywords) for (const k of String(m.keywords).split(',').map(s => s.trim()).filter(Boolean)) meta += `<meta:keyword>${xmlText(k)}</meta:keyword>`;
         if (created) meta += `<meta:creation-date>${created}</meta:creation-date>`;
         meta += `<dc:date>${iso}</dc:date><meta:generator>officeParser</meta:generator>`;
-        const props = m.customProperties || {};
-        for (const [key, value] of Object.entries(props)) {
-            let type = 'string', v: string;
-            if (typeof value === 'boolean') { type = 'boolean'; v = value ? 'true' : 'false'; }
-            else if (typeof value === 'number') { type = 'float'; v = String(value); }
-            else if (value instanceof Date) { type = 'date'; v = value.toISOString().replace(/\.\d+Z$/, 'Z'); }
-            else v = String(value);
-            meta += `<meta:user-defined meta:name="${xmlText(key)}" meta:value-type="${type}">${xmlText(v)}</meta:user-defined>`;
-        }
+        meta += odfUserDefinedXml(m.customProperties);
         return `<?xml version="1.0" encoding="UTF-8"?>\n`
             + `<office:document-meta ${ODF_NS} office:version="1.2"><office:meta>${meta}</office:meta></office:document-meta>`;
     }

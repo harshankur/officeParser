@@ -1,6 +1,6 @@
 ---
 title: "DOCX Demo"
-author: "Harsh Ankur"
+author: "Kovid Goyal"
 created: 2025-11-29T07:48:00.000Z
 modified: 2025-11-29T07:48:00.000Z
 description: "Demonstration of DOCX support in calibre"

@@ -480,8 +480,13 @@ export const parseOfficeMetadata = (xmlContent: string, config?: OfficeParserCon
         const title = getElementsByTagName(officeMeta, "dc:title")[0];
         if (title && title.textContent) metadata.title = title.textContent;
 
-        const author = getElementsByTagName(officeMeta, "dc:creator")[0];
-        if (author && author.textContent) metadata.author = author.textContent;
+        // ODF's author is the initial creator; dc:creator is whoever saved it last (the author where no
+        // initial creator is given).
+        const initial = getElementsByTagName(officeMeta, "meta:initial-creator")[0]?.textContent;
+        const creator = getElementsByTagName(officeMeta, "dc:creator")[0]?.textContent;
+        if (initial) metadata.author = initial;
+        else if (creator) metadata.author = creator;
+        if (initial && creator) metadata.lastModifiedBy = creator;
 
         const description = getElementsByTagName(officeMeta, "dc:description")[0];
         if (description && description.textContent) metadata.description = description.textContent;

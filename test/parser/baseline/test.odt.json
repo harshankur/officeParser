@@ -87,7 +87,8 @@
       "meta:user-defined": "true"
     },
     "title": "DOCX Demo",
-    "author": "Harsh Ankur",
+    "author": "Kovid Goyal",
+    "lastModifiedBy": "Harsh Ankur",
     "description": "Demonstration of DOCX support in calibre",
     "keywords": "calibre,  docs,  ebook,  conversion",
     "created": "2025-11-29T07:48:00.000Z",

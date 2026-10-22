@@ -11605,7 +11605,7 @@
             "height": 539.95
           },
           "metadata": {
-            "geometry": "non-primitive",
+            "geometry": "rect",
             "fill": "#156082",
             "textAnchor": "middle",
             "textInsets": {
@@ -11646,7 +11646,7 @@
             "height": 53.03
           },
           "metadata": {
-            "geometry": "non-primitive",
+            "geometry": "rect",
             "fill": "#0F9ED5",
             "textAnchor": "middle",
             "textInsets": {
@@ -11687,7 +11687,7 @@
             "height": 53.03
           },
           "metadata": {
-            "geometry": "non-primitive",
+            "geometry": "rect",
             "fill": "#0F9ED5",
             "textAnchor": "middle",
             "textInsets": {
@@ -11728,7 +11728,7 @@
             "height": 53.03
           },
           "metadata": {
-            "geometry": "non-primitive",
+            "geometry": "rect",
             "fill": "#0F9ED5",
             "textAnchor": "middle",
             "textInsets": {
@@ -11769,7 +11769,7 @@
             "height": 149.14
           },
           "metadata": {
-            "geometry": "non-primitive",
+            "geometry": "rect",
             "fill": "#FFFFFF",
             "textAnchor": "middle",
             "textInsets": {
