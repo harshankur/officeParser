@@ -5044,6 +5044,14 @@ async function testSlidesDrawnAsLaidOut(): Promise<void> {
     assert.deepStrictEqual([turnedParagraph?.text, (turnedParagraph?.metadata as any)?.rotation], ['Turned label', 270], 'a PDF\'s turned text is read with its angle');
     const slanted = collectAllNodes(back).find(n => n.type === 'paragraph' && (n.text || '').includes('Slanted'));
     assert.deepStrictEqual([slanted?.text, (slanted?.metadata as any)?.rotation], ['Slanted words', 30], 'text at an angle no quarter turn is is read whole, with its angle');
+
+    // An ODP deck's frames and shapes have their places and looks too (svg:x, svg:y, graphic styles).
+    const odp = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.odp')), { fileType: 'odp' } as any) as OfficeParserAST;
+    const first = odp.content[0];
+    const odpTitle = first.children!.find(n => n.type !== 'drawing' && (n.text || '').startsWith('Demonstration'))!;
+    assert.ok((first.metadata as any).background && odpTitle.bounds && first.children!.some(n => n.type === 'drawing' && (n.metadata as any).fill), `an ODP slide has its background, places and filled shapes; got ${JSON.stringify([(first.metadata as any).background, odpTitle.bounds])}`);
+    const odpPdf = await OfficeParser.parseOffice(Buffer.from((await odp.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.strictEqual(odpPdf.content.length, odp.content.length, 'each ODP slide is one page');
 }
 
 /**

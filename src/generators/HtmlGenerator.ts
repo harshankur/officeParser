@@ -675,6 +675,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 this.onNodeSkipped.add(node);
                 continue;
             }
+            // A shape drawn on a slide (ShapeMetadata) writes nothing, and no gap around it either.
+            if (node.type === 'drawing' && typeof override !== 'string') continue;
 
             // A top-level footnote/endnote note is an orphan definition (the MarkdownParser
             // recovers unreferenced `[^id]: ...` defs as trailing note nodes). Route it into the
@@ -858,6 +860,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         if (actualOverride === false) {
             return '';
         }
+        // A shape drawn on a slide (ShapeMetadata) writes nothing: its text is in the nodes after it.
+        if (node.type === 'drawing' && typeof actualOverride !== 'string') return '';
 
         // Returning a string overrides default rendering and recursion
         if (typeof actualOverride === 'string') {

@@ -21,7 +21,7 @@
  * @module OpenOfficeParser
  */
 
-import { BreakMetadata, CellMetadata, ChartData, ChartMetadata, CodeMetadata, FullOfficeParserConfig, HeaderFooterMetadata, HeadingMetadata, ImageMetadata, IndentationMetadata, ListMetadata, PageSetup, ParagraphSpacing, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, PageMetadata, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
+import { BreakMetadata, CellMetadata, ChartData, ChartMetadata, CodeMetadata, FullOfficeParserConfig, HeaderFooterMetadata, HeadingMetadata, ImageMetadata, IndentationMetadata, ListMetadata, PageSetup, ParagraphSpacing, ShapeMetadata, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, PageMetadata, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { chartRawTexts, extractChartData, MAX_CHART_VALUES } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
@@ -1494,6 +1494,96 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         // splitting a huge repeat expansion across many small tables. `traverse` and the
         // spreadsheet branch below both close over this; `parseTable` receives it explicitly.
         const cellBudget = createCellBudget(config);
+
+        // ── Where a slide's shapes are, and what they look like (ODP; see the PPTX reader's) ─────────
+        /** The styles of both parts by name (graphic, presentation and drawing-page families among them). */
+        let drawingStyles: Map<string, Element> | undefined;
+        const drawingStyle = (doc: Document, name: string | null): Element | undefined => {
+            if (!name) return undefined;
+            if (!drawingStyles) {
+                drawingStyles = new Map();
+                for (const dom of [doc, stylesDom]) for (const style of dom ? getElementsByTagName(dom, "style:style") : []) {
+                    const styleName = style.getAttribute("style:name");
+                    if (styleName && !drawingStyles.has(styleName)) drawingStyles.set(styleName, style);
+                }
+            }
+            return drawingStyles.get(name);
+        };
+        /** A style's property (on its graphic or drawing-page properties), or its parent's. */
+        const styleProperty = (doc: Document, name: string | null, tag: string, attr: string): string | undefined => {
+            for (let style = drawingStyle(doc, name), depth = 0; style && depth < 16; style = drawingStyle(doc, style.getAttribute("style:parent-style-name")), depth++) {
+                const value = getDirectChildren(style, tag)[0]?.getAttribute(attr);
+                if (value) return value;
+            }
+            return undefined;
+        };
+        const odpLength = (value: string | null): number | undefined => {
+            const pt = value ? lengthToPt(value) : null;
+            return pt != null && Number.isFinite(pt) && Math.abs(pt) < 16128 ? pt : undefined;
+        };
+        /** A slide's fill: its own drawing-page style's, else its master page's. */
+        const odpBackground = (page: Element, doc: Document): string | undefined => {
+            const fillOf = (style: string | null) => styleProperty(doc, style, "style:drawing-page-properties", "draw:fill") === 'solid'
+                ? styleProperty(doc, style, "style:drawing-page-properties", "draw:fill-color") : undefined;
+            const master = masterPages.get(page.getAttribute("draw:master-page-name") || '');
+            const color = fillOf(page.getAttribute("draw:style-name")) ?? fillOf(master?.getAttribute("draw:style-name") ?? null);
+            return color && /^#[0-9a-f]{6}$/i.test(color) ? color.toUpperCase() : undefined;
+        };
+        /**
+         * Reads a slide's shape with its box (`svg:x`, `svg:y`, `svg:width`, `svg:height`, or a turned
+         * shape's `draw:transform`) on each node, and before them a `drawing` node where it is filled,
+         * outlined, turned, or sets its text off its top (from its graphic style). A group's shapes each
+         * have their own place.
+         */
+        const placeOdpShape = (element: Element, out: OfficeContentNode[], doc: Document, sourceXml: string): void => {
+            if (element.tagName === 'draw:g') {
+                for (const child of Array.from(element.childNodes).filter(isElement)) placeOdpShape(child, out, doc, sourceXml);
+                return;
+            }
+            const nodes: OfficeContentNode[] = [];
+            traverse(element, nodes, false, sourceXml);
+            const width = odpLength(element.getAttribute("svg:width")), height = odpLength(element.getAttribute("svg:height"));
+            let x = odpLength(element.getAttribute("svg:x")), y = odpLength(element.getAttribute("svg:y"));
+            let rotation = 0;
+            // `rotate (a) translate (x y)`: turned by a (radians, anticlockwise) about its corner, which
+            // the translation then places; its box is about the same centre, unturned.
+            const transform = /rotate\s*\(\s*(-?[\d.eE+-]+)\s*\)\s*translate\s*\(\s*([^\s)]+)\s+([^\s)]+)\s*\)/.exec(element.getAttribute("draw:transform") || '');
+            if (transform && width !== undefined && height !== undefined) {
+                const angle = Number(transform[1]), tx = odpLength(transform[2]), ty = odpLength(transform[3]);
+                if (Number.isFinite(angle) && tx !== undefined && ty !== undefined) {
+                    const cos = Math.cos(-angle), sin = Math.sin(-angle);
+                    const cx = tx + cos * width / 2 - sin * height / 2, cy = ty + sin * width / 2 + cos * height / 2;
+                    x = cx - width / 2; y = cy - height / 2;
+                    rotation = ((Math.round(-angle * 180 / Math.PI * 100) / 100) % 360 + 360) % 360;
+                }
+            }
+            if (x === undefined || y === undefined || width === undefined || height === undefined) { appendAll(out, nodes); return; }
+            const bounds = { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, width: Math.round(width * 100) / 100, height: Math.round(height * 100) / 100 };
+            for (const node of nodes) node.bounds = bounds;
+            const style = element.getAttribute("draw:style-name") || element.getAttribute("presentation:style-name");
+            const prop = (attr: string) => styleProperty(doc, style, "style:graphic-properties", attr);
+            const isShape = element.tagName !== 'draw:frame';
+            const geometryType = getFirstElementByTagName(element, "draw:enhanced-geometry")?.getAttribute("draw:type");
+            const geometry = element.tagName === 'draw:ellipse' || element.tagName === 'draw:circle' || geometryType === 'ellipse' ? 'ellipse'
+                : geometryType === 'round-rectangle' ? 'roundRect' : geometryType && geometryType !== 'rectangle' ? geometryType : 'rect';
+            const fill = isShape && prop("draw:fill") !== 'none' ? prop("draw:fill-color") : prop("draw:fill") === 'solid' ? prop("draw:fill-color") : undefined;
+            const stroked = isShape ? prop("draw:stroke") !== 'none' : prop("draw:stroke") === 'solid';
+            const strokeColor = stroked ? (prop("svg:stroke-color") ?? (isShape ? '#000000' : undefined)) : undefined;
+            const anchor = prop("draw:textarea-vertical-align");
+            const textAnchor = anchor === 'middle' ? 'middle' as const : anchor === 'bottom' ? 'bottom' as const : undefined;
+            const metadata: ShapeMetadata = {
+                ...(fill || strokeColor ? { geometry } : {}),
+                ...(fill && /^#[0-9a-f]{6}$/i.test(fill) ? { fill: fill.toUpperCase() } : {}),
+                ...(strokeColor && /^#[0-9a-f]{6}$/i.test(strokeColor) ? { line: { color: strokeColor.toUpperCase(), width: odpLength(prop("svg:stroke-width") ?? null) || 0.75 } } : {}),
+                ...(rotation ? { rotation } : {}),
+                ...(nodes.length && textAnchor ? { textAnchor } : {}),
+            };
+            if (metadata.fill || metadata.line || (nodes.length && (rotation || textAnchor))) {
+                if (nodes.length) metadata.textInsets = { top: odpLength(prop("fo:padding-top") ?? null) ?? 3.6, right: odpLength(prop("fo:padding-right") ?? null) ?? 7.2, bottom: odpLength(prop("fo:padding-bottom") ?? null) ?? 3.6, left: odpLength(prop("fo:padding-left") ?? null) ?? 7.2 };
+                out.push({ type: 'drawing', text: '', bounds, metadata });
+            }
+            appendAll(out, nodes);
+        };
         // Automatic styles are local to content.xml, but their definitions have exactly the
         // shape styles.xml uses, so they go through the same reader rather than a second copy of
         // it - the copy is how `fo:break-before` came to be read in neither place.
@@ -2304,9 +2394,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                     }
                                     continue;
                                 }
-                                traverse(element, slideNode.children!, false, xmlString);
+                                if (config.ignorePageGeometry) traverse(element, slideNode.children!, false, xmlString);
+                                else placeOdpShape(element, slideNode.children!, xml, xmlString);
                             }
                         }
+                    }
+                    if (!config.ignorePageGeometry) {
+                        const background = odpBackground(page, xml);
+                        if (background) (slideNode.metadata as SlideMetadata).background = background;
                     }
 
                     if (config.includeRawContent) {

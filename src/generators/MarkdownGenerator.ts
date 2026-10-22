@@ -1408,7 +1408,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         checkAbortSignal(this.config.abortSignal);
         // Allow user to completely override rendering or skip via onNode
         const override = await this.handleOnNode(node);
-        if (override === false) {
+        // (A shape drawn on a slide, ShapeMetadata, writes nothing: its text is in the nodes after it.)
+        if (override === false || (node.type === 'drawing' && typeof override !== 'string')) {
             return '';
         }
         if (typeof override === 'string') {
