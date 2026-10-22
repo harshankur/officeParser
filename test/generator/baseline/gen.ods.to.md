@@ -30,15 +30,15 @@ TestBool: true
 
 | Text Formatting  |
 | --- |
-| Inline formatting  |
+| **Inline formatting**  |
 | Here, we demonstrate various types of inline text formatting and the use of embedded fonts.  |
 | Here is some **bold,** *italic,* ***bold-italic,*** <u>underlined </u>and ~~struck out~~  text. Then, we have a superscript and a subscript. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in  |
 | inverse video |
 | . |
 | A paragraph with styled text: *subtle emphasis*  followed by **strong text** and ***intense emphasis***. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.  |
-| Fun with fonts  |
+| **Fun with fonts**  |
 | This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m. Every embedded font will automatically be embedded in the output ebook during conversion.   |
-| Paragraph level formatting  |
+| **Paragraph level formatting**  |
 | You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.  |
 | For the lovers of poetry amongst you, paragraphs with hanging indents, like this often<br>come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph.  |
 
@@ -46,7 +46,7 @@ TestBool: true
 
 | Tables  |  |  |  |  |  |
 | --- | --- | --- | --- | --- | --- |
-| ITEM  | NEEDED  |  |  |  |  |
+| **ITEM**  | **NEEDED**  |  |  |  |  |
 | Books  | 1  |  |  |  |  |
 | Pens  | 3  |  |  |  |  |
 | Pencils  | 2  |  |  |  |  |
@@ -65,15 +65,15 @@ TestBool: true
 
 | Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved.  |  |  |  |
 | --- | --- | --- | --- |
-| College  | New students  | Graduating students  | Change  |
-|  | Undergraduate  |  |  |
+| **College**  | **New students**  | **Graduating students**  | **Change**  |
+|  | *Undergraduate*  |  |  |
 | Cedar University  | 110  | 103  | +7  |
 | Oak Institute  | 202  | 210  | -8  |
-|  | Graduate  |  |  |
+|  | *Graduate*  |  |  |
 | Cedar University  | 24  | 20  | +4  |
 | Elm College  | 43  | 53  | -10  |
 | Total  | 998  | 908  | 90  |
-| Source: Fictitious data, for illustration purposes only  |  |  |  |
+| *Source:* Fictitious data, for illustration purposes only  |  |  |  |
 | Next, we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged. The table is displayed horizontally centered.  |  |  |  |
 | One  | Two  | To the left is a table inside a table, with some cells merged.  |  |
 | Three  |  |  |  |
@@ -84,40 +84,25 @@ TestBool: true
 
 <table>
   <tr>
-    <td>We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks. </td>
+    <td><span style="color: #000000; font-size: 12pt">We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks. </span></td>
   </tr>
   <tr>
-    <td colspan="13">December 2007 </td>
+    <td colspan="13"><span style="color: #365F91; font-size: 12pt">December 2007 </span></td>
   </tr>
   <tr>
-    <td>Sun </td>
+    <td><span style="color: #365F91; font-size: 12pt">Sun </span></td>
     <td></td>
-    <td>Mon </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">Mon </span></td>
     <td></td>
-    <td>Tue </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">Tue </span></td>
     <td></td>
-    <td>Wed </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">Wed </span></td>
     <td></td>
-    <td>Thu </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">Thu </span></td>
     <td></td>
-    <td>Fri </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">Fri </span></td>
     <td></td>
-    <td colspan="2">Sat </td>
-  </tr>
-  <tr>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td colspan="2">1 </td>
+    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt">Sat </span></td>
   </tr>
   <tr>
     <td></td>
@@ -132,22 +117,7 @@ TestBool: true
     <td></td>
     <td></td>
     <td></td>
-    <td colspan="2"></td>
-  </tr>
-  <tr>
-    <td>2 </td>
-    <td></td>
-    <td>3 </td>
-    <td></td>
-    <td>4 </td>
-    <td></td>
-    <td>5 </td>
-    <td></td>
-    <td>6 </td>
-    <td></td>
-    <td>7 </td>
-    <td></td>
-    <td colspan="2">8 </td>
+    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt">1 </span></td>
   </tr>
   <tr>
     <td></td>
@@ -165,19 +135,19 @@ TestBool: true
     <td colspan="2"></td>
   </tr>
   <tr>
-    <td>9 </td>
+    <td><span style="color: #365F91; font-size: 12pt">2 </span></td>
     <td></td>
-    <td>10 </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">3 </span></td>
     <td></td>
-    <td>11 </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">4 </span></td>
     <td></td>
-    <td>12 </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">5 </span></td>
     <td></td>
-    <td>13 </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">6 </span></td>
     <td></td>
-    <td>14 </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">7 </span></td>
     <td></td>
-    <td colspan="2">15 </td>
+    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt">8 </span></td>
   </tr>
   <tr>
     <td></td>
@@ -195,19 +165,19 @@ TestBool: true
     <td colspan="2"></td>
   </tr>
   <tr>
-    <td>16 </td>
+    <td><span style="color: #365F91; font-size: 12pt">9 </span></td>
     <td></td>
-    <td>17 </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">10 </span></td>
     <td></td>
-    <td>18 </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">11 </span></td>
     <td></td>
-    <td>19 </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">12 </span></td>
     <td></td>
-    <td>20 </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">13 </span></td>
     <td></td>
-    <td>21 </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">14 </span></td>
     <td></td>
-    <td colspan="2">22 </td>
+    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt">15 </span></td>
   </tr>
   <tr>
     <td></td>
@@ -225,19 +195,19 @@ TestBool: true
     <td colspan="2"></td>
   </tr>
   <tr>
-    <td>23 </td>
+    <td><span style="color: #365F91; font-size: 12pt">16 </span></td>
     <td></td>
-    <td>24 </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">17 </span></td>
     <td></td>
-    <td>25 </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">18 </span></td>
     <td></td>
-    <td>26 </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">19 </span></td>
     <td></td>
-    <td>27 </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">20 </span></td>
     <td></td>
-    <td>28 </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">21 </span></td>
     <td></td>
-    <td colspan="2">29 </td>
+    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt">22 </span></td>
   </tr>
   <tr>
     <td></td>
@@ -255,9 +225,39 @@ TestBool: true
     <td colspan="2"></td>
   </tr>
   <tr>
-    <td>30 </td>
+    <td><span style="color: #365F91; font-size: 12pt">23 </span></td>
     <td></td>
-    <td>31 </td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">24 </span></td>
+    <td></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">25 </span></td>
+    <td></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">26 </span></td>
+    <td></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">27 </span></td>
+    <td></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">28 </span></td>
+    <td></td>
+    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt">29 </span></td>
+  </tr>
+  <tr>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td colspan="2"></td>
+  </tr>
+  <tr>
+    <td><span style="color: #365F91; font-size: 12pt">30 </span></td>
+    <td></td>
+    <td><span style="color: #7F7F7F; font-size: 12pt">31 </span></td>
     <td></td>
     <td></td>
     <td></td>
@@ -276,12 +276,12 @@ TestBool: true
 | Structural Elements  |
 | --- |
 | Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like.   |
-| Footnotes & Endnotes  |
+| **Footnotes & Endnotes**  |
 | Footnotes1 and endnotesi are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.  |
-| Dropcaps  |
+| **Dropcaps**  |
 | D  |
 | rop caps are used to emphasize the leading paragraph at the start of a section. In Word it is possible to specify how many lines of text a drop-cap should use.  |
-| Links  |
+| **Links**  |
 | Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the <u>calibre download page</u>. Then we have a link that points back to the section on <u>paragraph level formatting</u> in this document.  |
 
 ---
@@ -297,13 +297,13 @@ TestBool: true
 | Lists  |  |
 | --- | --- |
 | All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets.  |  |
-| Bulleted List  |  |
+| **Bulleted List**  |  |
 | One  |  |
 | Two  |  |
-| Numbered List  |  |
+| **Numbered List**  |  |
 | 1 | One, with a very long line to demonstrate that the hanging indent for the list is working correctly  |
 | 2 | Two  |
-| Multi-level Lists  |  |
+| **Multi-level Lists**  |  |
 | 1 | One  |
 | 1 | Two  |
 | 1 | Three  |
@@ -316,7 +316,7 @@ TestBool: true
 | This bullet uses an image as the bullet item  |  |
 | Four  |  |
 | Five  |  |
-| Continued Lists  |  |
+| **Continued Lists**  |  |
 | i | One  |
 | ii | Two  |
 | An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.  |  |

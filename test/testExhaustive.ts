@@ -5865,6 +5865,10 @@ async function testPresentationWriters(): Promise<void> {
             : boldRead.has(text);
         assert.ok(!boldRun(plain.xml, 'Bold words') && !boldRun(plain.xml, 'Head'), `${format}: includeFormatting false writes the document's runs plain`);
         if (format === 'pptx') assert.ok(boldRun((await textAndMedia({})).xml, 'Bold words'), 'pptx: a bold run is bold by default');
+        if (format === 'xlsx' || format === 'ods') {
+            const back = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(scanned, format)).value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+            assert.ok(collectAllNodes(back).some(n => n.type === 'text' && (n.text || '').trim() === 'Head' && n.formatting?.bold), `${format}: a bold cell reads back bold (a cell style's looks are its runs')`);
+        }
     }
 
 }

@@ -312,6 +312,13 @@ const ODF_FILE_TYPES: SupportedFileType[] = ['odt', 'odp', 'ods', 'odg'];
  * @param config - Parser configuration
  * @returns A promise resolving to the parsed AST
  */
+/** A table-cell style's text looks, which the cell's runs take under their own (its background is the cell's, not theirs). */
+function cellTextLooks(style: TextFormatting | undefined): TextFormatting | undefined {
+    if (!style) return undefined;
+    const { backgroundColor: _background, ...looks } = style;
+    return Object.keys(looks).length ? looks : undefined;
+}
+
 export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
     // Honour cancellation requests immediately, before extracting the ZIP archive.
     // ODF containers (ODT/ODS/ODP) bundle content.xml, styles.xml, and media files;
@@ -1168,14 +1175,16 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         paraStyleMap: Record<string, ParagraphStyleInfo>,
         styleMap: Record<string, TextFormatting>,
         config: OfficeParserConfig,
-        sourceXml: string
+        sourceXml: string,
+        inherited?: TextFormatting
     ): { text: string; children: OfficeContentNode[]; alignment?: 'left' | 'center' | 'right' | 'justify'; indentation?: IndentationMetadata; spacing?: ParagraphSpacing; style?: string; anchorIds?: string[] } => {
         // Get paragraph style for alignment and drop caps
         const paraStyle = node.getAttribute("text:style-name");
         const styleInfo = paraStyle ? paraStyleMap[paraStyle] : undefined;
         const alignment = styleInfo?.alignment;
         const dropCap = styleInfo?.dropCap;
-        const formatting = mergeFormatting({}, paraStyle ? styleMap[paraStyle] : undefined);
+        // The looks of what holds the paragraph (a spreadsheet cell's style), under its own style's.
+        const formatting = mergeFormatting(mergeFormatting({}, inherited), paraStyle ? styleMap[paraStyle] : undefined);
 
         // Parse content recursively using the new helper
         const content = parseInlineContent(node, styleMap, config, notes, paraStyleMap, formatting, undefined, sourceXml);
@@ -1332,6 +1341,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 const rowSpan = cellSpan(cell.getAttribute("table:number-rows-spanned"), MAX_ROW_SPAN);
 
                 // Helper to recursively process cell children (handles frames, text-boxes, etc. in ODP)
+                // The cell style's text looks (bold, italic, size, colour, font), which its runs take under
+                // their own: a spreadsheet sets a cell bold through its style. Its background is the cell's.
+                const cellLooks = cellTextLooks(styleMap[cell.getAttribute("table:style-name") || '']);
                 const processChildren = (node: Element) => {
                     if (!node.childNodes) return;
 
@@ -1341,7 +1353,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             const element = child as Element;
 
                             if (element.tagName === "text:p" || element.tagName === "text:h") {
-                                const pContent = parseParagraphContent(element, paraStyleMap, styleMap, config, sourceXml);
+                                const pContent = parseParagraphContent(element, paraStyleMap, styleMap, config, sourceXml, cellLooks);
                                 let pNode: OfficeContentNode;
                                 if (element.tagName === "text:h") {
                                     pNode = {
@@ -2170,6 +2182,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             // Extract text from cell (paragraphs inside cell, excluding a comment's body)
                             let cellText = "";
                             const children: OfficeContentNode[] = [];
+                            const odsCellLooks = cellTextLooks(styleMap[cell.getAttribute("table:style-name") || '']);
                             const ps = getOutermostElements(cell, "text:p", CELL_SKIP);
                             for (let p = 0; p < ps.length; p++) {
                                 const para = ps[p];
@@ -2178,7 +2191,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 // span, spaces, tabs, line breaks, links and fields. Taking only the spans'
                                 // text when there were any dropped the rest ("Total: " before a bold "5").
                                 // (Its frames are read with the cell's, below.)
-                                const inline = parseInlineContent(para, styleMap, config, notes, paragraphStyleMap, {}, undefined, xmlString, false);
+                                // Its runs take the cell style's looks (a spreadsheet sets a cell bold through its style)
+                                // and the paragraph style's under their own; the cell's background is the cell's.
+                                const paraStyle = para.getAttribute("text:style-name");
+                                const inline = parseInlineContent(para, styleMap, config, notes, paragraphStyleMap, mergeFormatting(mergeFormatting({}, odsCellLooks), paraStyle ? styleMap[paraStyle] : undefined), undefined, xmlString, false);
                                 cellText += inline.text;
                                 const shown = inline.text.trim() !== '';
                                 // A paragraph after another is a line of its own: its runs followed the

@@ -840,7 +840,11 @@
                 {
                   "type": "text",
                   "text": "Demonstration of DOCX support in calibre ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "26pt",
+                    "color": "#17365D",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -862,7 +866,11 @@
                 {
                   "type": "text",
                   "text": "This document demonstrates the ability of the ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 },
                 {
                   "type": "text",
@@ -876,7 +884,11 @@
                 {
                   "type": "text",
                   "text": " DOCX Input plugin to convert the various typographic features in a Microsoft Word (2007 and newer) document. Convert this document to a modern ebook format, such as AZW3 for Kindles or EPUB for other ebook readers, to see it in action. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -898,7 +910,11 @@
                 {
                   "type": "text",
                   "text": "There is support for images, tables, lists, footnotes, endnotes, links, dropcaps and various types of text and paragraph level formatting. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -920,43 +936,45 @@
                 {
                   "type": "text",
                   "text": "To see the DOCX conversion in action, simply add this file to calibre using the ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 },
                 {
                   "type": "text",
                   "text": "“Add Books” ",
                   "formatting": {
-                    "bold": true,
                     "size": "12pt",
                     "color": "#000000",
-                    "font": "Ubuntu"
+                    "font": "Ubuntu",
+                    "bold": true
                   }
                 },
                 {
                   "type": "text",
                   "text": "button and then click “",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 },
                 {
                   "type": "text",
                   "text": "Convert”. ",
                   "formatting": {
-                    "bold": true,
                     "size": "12pt",
                     "color": "#000000",
-                    "font": "Ubuntu"
+                    "font": "Ubuntu",
+                    "bold": true
                   }
                 },
                 {
                   "type": "text",
                   "text": " Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click ",
-                  "formatting": {}
-                },
-                {
-                  "type": "text",
-                  "text": "“OK”",
                   "formatting": {
-                    "bold": true,
                     "size": "12pt",
                     "color": "#000000",
                     "font": "Ubuntu"
@@ -964,8 +982,22 @@
                 },
                 {
                   "type": "text",
+                  "text": "“OK”",
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu",
+                    "bold": true
+                  }
+                },
+                {
+                  "type": "text",
                   "text": ". ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -987,7 +1019,11 @@
                 {
                   "type": "text",
                   "text": "One, with a very long line to demonstrate that the hanging indent for the list is working correctly ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1009,7 +1045,11 @@
                 {
                   "type": "text",
                   "text": "Two ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1031,7 +1071,11 @@
                 {
                   "type": "text",
                   "text": "One ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1053,7 +1097,11 @@
                 {
                   "type": "text",
                   "text": "Two ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1075,7 +1123,11 @@
                 {
                   "type": "text",
                   "text": "Three ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1097,7 +1149,11 @@
                 {
                   "type": "text",
                   "text": "Four with a very long line to demonstrate that the hanging indent for the list is working correctly. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1119,7 +1175,11 @@
                 {
                   "type": "text",
                   "text": "Five ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1141,7 +1201,11 @@
                 {
                   "type": "text",
                   "text": "Six ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1163,7 +1227,11 @@
                 {
                   "type": "text",
                   "text": "One ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1185,7 +1253,11 @@
                 {
                   "type": "text",
                   "text": "Two ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1207,7 +1279,11 @@
                 {
                   "type": "text",
                   "text": "We now resume our normal programming ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1229,7 +1305,11 @@
                 {
                   "type": "text",
                   "text": "Four ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1260,7 +1340,12 @@
                 {
                   "type": "text",
                   "text": "Text Formatting ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "14pt",
+                    "color": "#365F91",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1282,7 +1367,12 @@
                 {
                   "type": "text",
                   "text": "Inline formatting ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "13pt",
+                    "color": "#4F81BD",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1304,7 +1394,11 @@
                 {
                   "type": "text",
                   "text": "Here, we demonstrate various types of inline text formatting and the use of embedded fonts. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1336,41 +1430,41 @@
                   "type": "text",
                   "text": "bold, ",
                   "formatting": {
-                    "bold": true,
                     "size": "12pt",
                     "color": "#000000",
-                    "font": "Ubuntu"
+                    "font": "Ubuntu",
+                    "bold": true
                   }
                 },
                 {
                   "type": "text",
                   "text": "italic, ",
                   "formatting": {
-                    "italic": true,
                     "size": "12pt",
                     "color": "#000000",
-                    "font": "Ubuntu"
+                    "font": "Ubuntu",
+                    "italic": true
                   }
                 },
                 {
                   "type": "text",
                   "text": "bold-italic, ",
                   "formatting": {
-                    "bold": true,
-                    "italic": true,
                     "size": "12pt",
                     "color": "#000000",
-                    "font": "Ubuntu"
+                    "font": "Ubuntu",
+                    "bold": true,
+                    "italic": true
                   }
                 },
                 {
                   "type": "text",
                   "text": "underlined ",
                   "formatting": {
-                    "underline": true,
                     "size": "12pt",
                     "color": "#000000",
-                    "font": "Ubuntu"
+                    "font": "Ubuntu",
+                    "underline": true
                   }
                 },
                 {
@@ -1386,10 +1480,10 @@
                   "type": "text",
                   "text": "struck out ",
                   "formatting": {
-                    "strikethrough": true,
                     "size": "12pt",
                     "color": "#000000",
-                    "font": "Ubuntu"
+                    "font": "Ubuntu",
+                    "strikethrough": true
                   }
                 },
                 {
@@ -1511,7 +1605,11 @@
                 {
                   "type": "text",
                   "text": "inverse video",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#FFFFFF",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1533,7 +1631,11 @@
                 {
                   "type": "text",
                   "text": ".",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1555,28 +1657,7 @@
                 {
                   "type": "text",
                   "text": "A paragraph with styled text: ",
-                  "formatting": {}
-                },
-                {
-                  "type": "text",
-                  "text": "subtle emphasis  ",
                   "formatting": {
-                    "italic": true,
-                    "size": "12pt",
-                    "color": "#808080",
-                    "font": "Ubuntu"
-                  }
-                },
-                {
-                  "type": "text",
-                  "text": "followed by ",
-                  "formatting": {}
-                },
-                {
-                  "type": "text",
-                  "text": "strong text ",
-                  "formatting": {
-                    "bold": true,
                     "size": "12pt",
                     "color": "#000000",
                     "font": "Ubuntu"
@@ -1584,24 +1665,61 @@
                 },
                 {
                   "type": "text",
-                  "text": "and ",
-                  "formatting": {}
+                  "text": "subtle emphasis  ",
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#808080",
+                    "font": "Ubuntu",
+                    "italic": true
+                  }
                 },
                 {
                   "type": "text",
-                  "text": "intense emphasis",
+                  "text": "followed by ",
                   "formatting": {
-                    "bold": true,
-                    "italic": true,
                     "size": "12pt",
-                    "color": "#4F81BD",
+                    "color": "#000000",
                     "font": "Ubuntu"
                   }
                 },
                 {
                   "type": "text",
+                  "text": "strong text ",
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu",
+                    "bold": true
+                  }
+                },
+                {
+                  "type": "text",
+                  "text": "and ",
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
+                },
+                {
+                  "type": "text",
+                  "text": "intense emphasis",
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#4F81BD",
+                    "font": "Ubuntu",
+                    "bold": true,
+                    "italic": true
+                  }
+                },
+                {
+                  "type": "text",
                   "text": ". This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1623,7 +1741,12 @@
                 {
                   "type": "text",
                   "text": "Fun with fonts ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "13pt",
+                    "color": "#4F81BD",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1645,7 +1768,11 @@
                 {
                   "type": "text",
                   "text": "This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 },
                 {
                   "type": "text",
@@ -1659,7 +1786,11 @@
                 {
                   "type": "text",
                   "text": ". Every embedded font will automatically be embedded in the output ebook during conversion.  ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1681,7 +1812,12 @@
                 {
                   "type": "text",
                   "text": "Paragraph level formatting ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "13pt",
+                    "color": "#4F81BD",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1703,7 +1839,11 @@
                 {
                   "type": "text",
                   "text": "You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1725,7 +1865,11 @@
                 {
                   "type": "text",
                   "text": "For the lovers of poetry amongst you, paragraphs with hanging indents, like this often",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 },
                 {
                   "type": "break",
@@ -1736,7 +1880,11 @@
                 {
                   "type": "text",
                   "text": "come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1767,7 +1915,12 @@
                 {
                   "type": "text",
                   "text": "Tables ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "14pt",
+                    "color": "#365F91",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1789,7 +1942,12 @@
                 {
                   "type": "text",
                   "text": "ITEM ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "12pt",
+                    "color": "#FFFFFF",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1805,7 +1963,12 @@
                 {
                   "type": "text",
                   "text": "NEEDED ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "12pt",
+                    "color": "#FFFFFF",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1827,7 +1990,11 @@
                 {
                   "type": "text",
                   "text": "Books ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1843,7 +2010,11 @@
                 {
                   "type": "text",
                   "text": "1 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1865,7 +2036,11 @@
                 {
                   "type": "text",
                   "text": "Pens ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1881,7 +2056,11 @@
                 {
                   "type": "text",
                   "text": "3 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1903,7 +2082,11 @@
                 {
                   "type": "text",
                   "text": "Pencils ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1919,7 +2102,11 @@
                 {
                   "type": "text",
                   "text": "2 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1941,7 +2128,11 @@
                 {
                   "type": "text",
                   "text": "Highlighter ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1957,7 +2148,11 @@
                 {
                   "type": "text",
                   "text": "2 colors ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1979,7 +2174,11 @@
                 {
                   "type": "text",
                   "text": "Scissors ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -1995,7 +2194,11 @@
                 {
                   "type": "text",
                   "text": "1 pair ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2017,7 +2220,11 @@
                 {
                   "type": "text",
                   "text": "Tables in Word can vary from the extremely simple to the extremely complex. calibre tries to do its best when converting tables. While you may run into trouble with the occasional table, the vast majority of common cases should be converted very well, as demonstrated in this section. Note that for optimum results, when creating tables in Word, you should set their widths using percentages, rather than absolute units.  To the left of this paragraph is a floating two column table with a nice green border and header row. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2039,7 +2246,11 @@
                 {
                   "type": "text",
                   "text": "Now let’s look at a fancier table—one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2061,7 +2272,10 @@
                 {
                   "type": "text",
                   "text": "City or Town ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2077,7 +2291,10 @@
                 {
                   "type": "text",
                   "text": "Point A ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2093,7 +2310,10 @@
                 {
                   "type": "text",
                   "text": "Point B ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2109,7 +2329,10 @@
                 {
                   "type": "text",
                   "text": "Point C ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2125,7 +2348,10 @@
                 {
                   "type": "text",
                   "text": "Point D ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2141,7 +2367,10 @@
                 {
                   "type": "text",
                   "text": "Point E ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2163,7 +2392,11 @@
                 {
                   "type": "text",
                   "text": "Point A ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2179,7 +2412,11 @@
                 {
                   "type": "text",
                   "text": "— ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2241,7 +2478,11 @@
                 {
                   "type": "text",
                   "text": "Point B ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2257,7 +2498,11 @@
                 {
                   "type": "text",
                   "text": "87 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2273,7 +2518,11 @@
                 {
                   "type": "text",
                   "text": "— ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2325,7 +2574,11 @@
                 {
                   "type": "text",
                   "text": "Point C ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2341,7 +2594,11 @@
                 {
                   "type": "text",
                   "text": "64 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2357,7 +2614,11 @@
                 {
                   "type": "text",
                   "text": "56 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2373,7 +2634,11 @@
                 {
                   "type": "text",
                   "text": "— ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2415,7 +2680,11 @@
                 {
                   "type": "text",
                   "text": "Point D ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2431,7 +2700,11 @@
                 {
                   "type": "text",
                   "text": "37 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2447,7 +2720,11 @@
                 {
                   "type": "text",
                   "text": "32 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2463,7 +2740,11 @@
                 {
                   "type": "text",
                   "text": "91 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2479,7 +2760,11 @@
                 {
                   "type": "text",
                   "text": "— ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2511,7 +2796,11 @@
                 {
                   "type": "text",
                   "text": "Point E ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2527,7 +2816,11 @@
                 {
                   "type": "text",
                   "text": "93 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2543,7 +2836,11 @@
                 {
                   "type": "text",
                   "text": "35 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2559,7 +2856,11 @@
                 {
                   "type": "text",
                   "text": "54 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2575,7 +2876,11 @@
                 {
                   "type": "text",
                   "text": "43 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2591,7 +2896,11 @@
                 {
                   "type": "text",
                   "text": "— ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2622,7 +2931,11 @@
                 {
                   "type": "text",
                   "text": "Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2644,7 +2957,12 @@
                 {
                   "type": "text",
                   "text": "College ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "12pt",
+                    "color": "#FFFFFF",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2660,7 +2978,12 @@
                 {
                   "type": "text",
                   "text": "New students ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "12pt",
+                    "color": "#FFFFFF",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2676,7 +2999,12 @@
                 {
                   "type": "text",
                   "text": "Graduating students ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "12pt",
+                    "color": "#FFFFFF",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2692,7 +3020,12 @@
                 {
                   "type": "text",
                   "text": "Change ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "12pt",
+                    "color": "#FFFFFF",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2724,7 +3057,12 @@
                 {
                   "type": "text",
                   "text": "Undergraduate",
-                  "formatting": {}
+                  "formatting": {
+                    "italic": true,
+                    "size": "12pt",
+                    "color": "#808080",
+                    "font": "Ubuntu"
+                  }
                 },
                 {
                   "type": "text",
@@ -2775,7 +3113,11 @@
                 {
                   "type": "text",
                   "text": "Cedar University ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2791,7 +3133,10 @@
                 {
                   "type": "text",
                   "text": "110 ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2807,7 +3152,10 @@
                 {
                   "type": "text",
                   "text": "103 ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2823,7 +3171,10 @@
                 {
                   "type": "text",
                   "text": "+7 ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2845,7 +3196,11 @@
                 {
                   "type": "text",
                   "text": "Oak Institute ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2861,7 +3216,10 @@
                 {
                   "type": "text",
                   "text": "202 ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2877,7 +3235,10 @@
                 {
                   "type": "text",
                   "text": "210 ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2893,7 +3254,10 @@
                 {
                   "type": "text",
                   "text": "-8 ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2925,7 +3289,12 @@
                 {
                   "type": "text",
                   "text": "Graduate",
-                  "formatting": {}
+                  "formatting": {
+                    "italic": true,
+                    "size": "12pt",
+                    "color": "#808080",
+                    "font": "Ubuntu"
+                  }
                 },
                 {
                   "type": "text",
@@ -2976,7 +3345,11 @@
                 {
                   "type": "text",
                   "text": "Cedar University ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -2992,7 +3365,10 @@
                 {
                   "type": "text",
                   "text": "24 ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3008,7 +3384,10 @@
                 {
                   "type": "text",
                   "text": "20 ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3024,7 +3403,10 @@
                 {
                   "type": "text",
                   "text": "+4 ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3046,7 +3428,11 @@
                 {
                   "type": "text",
                   "text": "Elm College ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3062,7 +3448,10 @@
                 {
                   "type": "text",
                   "text": "43 ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3078,7 +3467,10 @@
                 {
                   "type": "text",
                   "text": "53 ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3094,7 +3486,10 @@
                 {
                   "type": "text",
                   "text": "-10 ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3116,7 +3511,11 @@
                 {
                   "type": "text",
                   "text": "Total ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3132,7 +3531,10 @@
                 {
                   "type": "text",
                   "text": "998 ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3148,7 +3550,10 @@
                 {
                   "type": "text",
                   "text": "908 ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3164,7 +3569,10 @@
                 {
                   "type": "text",
                   "text": "90 ",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3186,7 +3594,12 @@
                 {
                   "type": "text",
                   "text": "Source:",
-                  "formatting": {}
+                  "formatting": {
+                    "italic": true,
+                    "size": "10pt",
+                    "color": "#808080",
+                    "font": "Ubuntu"
+                  }
                 },
                 {
                   "type": "text",
@@ -3217,7 +3630,11 @@
                 {
                   "type": "text",
                   "text": "Next, we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged. The table is displayed horizontally centered. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3239,7 +3656,11 @@
                 {
                   "type": "text",
                   "text": "One ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3255,7 +3676,11 @@
                 {
                   "type": "text",
                   "text": "Two ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3271,7 +3696,11 @@
                 {
                   "type": "text",
                   "text": "To the left is a table inside a table, with some cells merged. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3293,7 +3722,11 @@
                 {
                   "type": "text",
                   "text": "Three ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3315,7 +3748,11 @@
                 {
                   "type": "text",
                   "text": "Four ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3362,7 +3799,11 @@
                 {
                   "type": "text",
                   "text": "We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3384,7 +3825,11 @@
                 {
                   "type": "text",
                   "text": "December 2007 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#365F91",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3407,7 +3852,11 @@
                 {
                   "type": "text",
                   "text": "Sun ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#365F91",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3433,7 +3882,11 @@
                 {
                   "type": "text",
                   "text": "Mon ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3459,7 +3912,11 @@
                 {
                   "type": "text",
                   "text": "Tue ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3485,7 +3942,11 @@
                 {
                   "type": "text",
                   "text": "Wed ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3511,7 +3972,11 @@
                 {
                   "type": "text",
                   "text": "Thu ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3537,7 +4002,11 @@
                 {
                   "type": "text",
                   "text": "Fri ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3563,7 +4032,11 @@
                 {
                   "type": "text",
                   "text": "Sat ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3706,7 +4179,11 @@
                 {
                   "type": "text",
                   "text": "1 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3866,7 +4343,11 @@
                 {
                   "type": "text",
                   "text": "2 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#365F91",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3892,7 +4373,11 @@
                 {
                   "type": "text",
                   "text": "3 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3918,7 +4403,11 @@
                 {
                   "type": "text",
                   "text": "4 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3944,7 +4433,11 @@
                 {
                   "type": "text",
                   "text": "5 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3970,7 +4463,11 @@
                 {
                   "type": "text",
                   "text": "6 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -3996,7 +4493,11 @@
                 {
                   "type": "text",
                   "text": "7 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4022,7 +4523,11 @@
                 {
                   "type": "text",
                   "text": "8 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4182,7 +4687,11 @@
                 {
                   "type": "text",
                   "text": "9 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#365F91",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4208,7 +4717,11 @@
                 {
                   "type": "text",
                   "text": "10 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4234,7 +4747,11 @@
                 {
                   "type": "text",
                   "text": "11 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4260,7 +4777,11 @@
                 {
                   "type": "text",
                   "text": "12 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4286,7 +4807,11 @@
                 {
                   "type": "text",
                   "text": "13 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4312,7 +4837,11 @@
                 {
                   "type": "text",
                   "text": "14 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4338,7 +4867,11 @@
                 {
                   "type": "text",
                   "text": "15 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4498,7 +5031,11 @@
                 {
                   "type": "text",
                   "text": "16 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#365F91",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4524,7 +5061,11 @@
                 {
                   "type": "text",
                   "text": "17 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4550,7 +5091,11 @@
                 {
                   "type": "text",
                   "text": "18 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4576,7 +5121,11 @@
                 {
                   "type": "text",
                   "text": "19 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4602,7 +5151,11 @@
                 {
                   "type": "text",
                   "text": "20 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4628,7 +5181,11 @@
                 {
                   "type": "text",
                   "text": "21 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4654,7 +5211,11 @@
                 {
                   "type": "text",
                   "text": "22 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4814,7 +5375,11 @@
                 {
                   "type": "text",
                   "text": "23 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#365F91",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4840,7 +5405,11 @@
                 {
                   "type": "text",
                   "text": "24 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4866,7 +5435,11 @@
                 {
                   "type": "text",
                   "text": "25 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4892,7 +5465,11 @@
                 {
                   "type": "text",
                   "text": "26 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4918,7 +5495,11 @@
                 {
                   "type": "text",
                   "text": "27 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4944,7 +5525,11 @@
                 {
                   "type": "text",
                   "text": "28 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -4970,7 +5555,11 @@
                 {
                   "type": "text",
                   "text": "29 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5130,7 +5719,11 @@
                 {
                   "type": "text",
                   "text": "30 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#365F91",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5156,7 +5749,11 @@
                 {
                   "type": "text",
                   "text": "31 ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#7F7F7F",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5288,7 +5885,12 @@
                 {
                   "type": "text",
                   "text": "Structural Elements ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "14pt",
+                    "color": "#365F91",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5310,7 +5912,11 @@
                 {
                   "type": "text",
                   "text": "Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like.  ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5332,7 +5938,12 @@
                 {
                   "type": "text",
                   "text": "Footnotes & Endnotes ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "13pt",
+                    "color": "#4F81BD",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5354,7 +5965,11 @@
                 {
                   "type": "text",
                   "text": "Footnotes",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 },
                 {
                   "type": "text",
@@ -5368,7 +5983,11 @@
                 {
                   "type": "text",
                   "text": " and endnotes",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 },
                 {
                   "type": "text",
@@ -5382,7 +6001,11 @@
                 {
                   "type": "text",
                   "text": " are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5404,7 +6027,12 @@
                 {
                   "type": "text",
                   "text": "Dropcaps ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "13pt",
+                    "color": "#4F81BD",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5426,7 +6054,11 @@
                 {
                   "type": "text",
                   "text": "D ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "58pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5448,7 +6080,11 @@
                 {
                   "type": "text",
                   "text": "rop caps are used to emphasize the leading paragraph at the start of a section. In Word it is possible to specify how many lines of text a drop-cap should use. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5470,7 +6106,12 @@
                 {
                   "type": "text",
                   "text": "Links ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "13pt",
+                    "color": "#4F81BD",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5492,37 +6133,49 @@
                 {
                   "type": "text",
                   "text": "Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 },
                 {
                   "type": "text",
                   "text": "calibre download page",
                   "formatting": {
-                    "underline": true,
                     "size": "12pt",
                     "color": "#0000FF",
-                    "font": "Ubuntu"
+                    "font": "Ubuntu",
+                    "underline": true
                   }
                 },
                 {
                   "type": "text",
                   "text": ". Then we have a link that points back to the section on ",
-                  "formatting": {}
-                },
-                {
-                  "type": "text",
-                  "text": "paragraph level formatting",
                   "formatting": {
-                    "underline": true,
                     "size": "12pt",
-                    "color": "#0000FF",
+                    "color": "#000000",
                     "font": "Ubuntu"
                   }
                 },
                 {
                   "type": "text",
+                  "text": "paragraph level formatting",
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#0000FF",
+                    "font": "Ubuntu",
+                    "underline": true
+                  }
+                },
+                {
+                  "type": "text",
                   "text": " in this document. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5553,7 +6206,12 @@
                 {
                   "type": "text",
                   "text": "Images ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "14pt",
+                    "color": "#365F91",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5575,7 +6233,11 @@
                 {
                   "type": "text",
                   "text": "Centered images like this are useful for large pictures that should be a focus of attention.  ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5624,22 +6286,30 @@
                 {
                   "type": "text",
                   "text": "There is no analogous technology in ebooks, so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was ",
-                  "formatting": {}
-                },
-                {
-                  "type": "text",
-                  "text": "inserted",
                   "formatting": {
-                    "italic": true,
                     "size": "12pt",
-                    "color": "#808080",
+                    "color": "#000000",
                     "font": "Ubuntu"
                   }
                 },
                 {
                   "type": "text",
+                  "text": "inserted",
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#808080",
+                    "font": "Ubuntu",
+                    "italic": true
+                  }
+                },
+                {
+                  "type": "text",
                   "text": ", not necessarily where it appears on the page in Word. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5670,7 +6340,12 @@
                 {
                   "type": "text",
                   "text": "Lists ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "14pt",
+                    "color": "#365F91",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5692,7 +6367,11 @@
                 {
                   "type": "text",
                   "text": "All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5714,7 +6393,12 @@
                 {
                   "type": "text",
                   "text": "Bulleted List ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "13pt",
+                    "color": "#4F81BD",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5736,7 +6420,11 @@
                 {
                   "type": "text",
                   "text": "One ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5758,7 +6446,11 @@
                 {
                   "type": "text",
                   "text": "Two ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5780,7 +6472,12 @@
                 {
                   "type": "text",
                   "text": "Numbered List ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "13pt",
+                    "color": "#4F81BD",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5802,7 +6499,11 @@
                 {
                   "type": "text",
                   "text": "1",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5818,7 +6519,11 @@
                 {
                   "type": "text",
                   "text": "One, with a very long line to demonstrate that the hanging indent for the list is working correctly ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5840,7 +6545,11 @@
                 {
                   "type": "text",
                   "text": "2",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5856,7 +6565,11 @@
                 {
                   "type": "text",
                   "text": "Two ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5878,7 +6591,12 @@
                 {
                   "type": "text",
                   "text": "Multi-level Lists ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "13pt",
+                    "color": "#4F81BD",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5900,7 +6618,11 @@
                 {
                   "type": "text",
                   "text": "1",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5916,7 +6638,11 @@
                 {
                   "type": "text",
                   "text": "One ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5938,7 +6664,11 @@
                 {
                   "type": "text",
                   "text": "1",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5954,7 +6684,11 @@
                 {
                   "type": "text",
                   "text": "Two ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5976,7 +6710,11 @@
                 {
                   "type": "text",
                   "text": "1",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -5992,7 +6730,11 @@
                 {
                   "type": "text",
                   "text": "Three ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6014,7 +6756,11 @@
                 {
                   "type": "text",
                   "text": "2",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6030,7 +6776,11 @@
                 {
                   "type": "text",
                   "text": "Four with a very long line to demonstrate that the hanging indent for the list is working correctly. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6052,7 +6802,11 @@
                 {
                   "type": "text",
                   "text": "3",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6068,7 +6822,11 @@
                 {
                   "type": "text",
                   "text": "Five ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6090,7 +6848,11 @@
                 {
                   "type": "text",
                   "text": "2",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6106,7 +6868,11 @@
                 {
                   "type": "text",
                   "text": "Six ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6128,7 +6894,11 @@
                 {
                   "type": "text",
                   "text": "A Multi-level list with bullets: ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6150,7 +6920,11 @@
                 {
                   "type": "text",
                   "text": "One ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6172,7 +6946,11 @@
                 {
                   "type": "text",
                   "text": "Two ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6194,7 +6972,11 @@
                 {
                   "type": "text",
                   "text": "This bullet uses an image as the bullet item ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6216,7 +6998,11 @@
                 {
                   "type": "text",
                   "text": "Four ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6238,7 +7024,11 @@
                 {
                   "type": "text",
                   "text": "Five ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6260,7 +7050,12 @@
                 {
                   "type": "text",
                   "text": "Continued Lists ",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "13pt",
+                    "color": "#4F81BD",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6282,7 +7077,11 @@
                 {
                   "type": "text",
                   "text": "i",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6298,7 +7097,11 @@
                 {
                   "type": "text",
                   "text": "One ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6320,7 +7123,11 @@
                 {
                   "type": "text",
                   "text": "ii",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6336,7 +7143,11 @@
                 {
                   "type": "text",
                   "text": "Two ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6358,7 +7169,11 @@
                 {
                   "type": "text",
                   "text": "An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement. ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6380,7 +7195,11 @@
                 {
                   "type": "text",
                   "text": "iii",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6396,7 +7215,11 @@
                 {
                   "type": "text",
                   "text": "We now resume our normal programming ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6418,7 +7241,11 @@
                 {
                   "type": "text",
                   "text": "iv",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6434,7 +7261,11 @@
                 {
                   "type": "text",
                   "text": "Four ",
-                  "formatting": {}
+                  "formatting": {
+                    "size": "12pt",
+                    "color": "#000000",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6465,7 +7296,12 @@
                 {
                   "type": "text",
                   "text": "Charts",
-                  "formatting": {}
+                  "formatting": {
+                    "bold": true,
+                    "size": "14pt",
+                    "color": "#365F91",
+                    "font": "Ubuntu"
+                  }
                 }
               ],
               "metadata": {
@@ -6497,7 +7333,9 @@
                 {
                   "type": "text",
                   "text": "Series 1",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000"
+                  }
                 }
               ],
               "metadata": {
@@ -6513,7 +7351,9 @@
                 {
                   "type": "text",
                   "text": "Series 2",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000"
+                  }
                 }
               ],
               "metadata": {
@@ -6529,7 +7369,9 @@
                 {
                   "type": "text",
                   "text": "Series 3",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000"
+                  }
                 }
               ],
               "metadata": {
@@ -6551,7 +7393,9 @@
                 {
                   "type": "text",
                   "text": "Category 1",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000"
+                  }
                 }
               ],
               "metadata": {
@@ -6567,7 +7411,9 @@
                 {
                   "type": "text",
                   "text": "4.3",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000"
+                  }
                 }
               ],
               "metadata": {
@@ -6583,7 +7429,9 @@
                 {
                   "type": "text",
                   "text": "2.4",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000"
+                  }
                 }
               ],
               "metadata": {
@@ -6599,7 +7447,9 @@
                 {
                   "type": "text",
                   "text": "2",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000"
+                  }
                 }
               ],
               "metadata": {
@@ -6641,7 +7491,9 @@
                 {
                   "type": "text",
                   "text": "Category 2",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000"
+                  }
                 }
               ],
               "metadata": {
@@ -6657,7 +7509,9 @@
                 {
                   "type": "text",
                   "text": "2.5",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000"
+                  }
                 }
               ],
               "metadata": {
@@ -6673,7 +7527,9 @@
                 {
                   "type": "text",
                   "text": "4.4",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000"
+                  }
                 }
               ],
               "metadata": {
@@ -6689,7 +7545,9 @@
                 {
                   "type": "text",
                   "text": "2",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000"
+                  }
                 }
               ],
               "metadata": {
@@ -6711,7 +7569,9 @@
                 {
                   "type": "text",
                   "text": "Category 3",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000"
+                  }
                 }
               ],
               "metadata": {
@@ -6727,7 +7587,9 @@
                 {
                   "type": "text",
                   "text": "3.5",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000"
+                  }
                 }
               ],
               "metadata": {
@@ -6743,7 +7605,9 @@
                 {
                   "type": "text",
                   "text": "1.8",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000"
+                  }
                 }
               ],
               "metadata": {
@@ -6759,7 +7623,9 @@
                 {
                   "type": "text",
                   "text": "3",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000"
+                  }
                 }
               ],
               "metadata": {
@@ -6781,7 +7647,9 @@
                 {
                   "type": "text",
                   "text": "Category 4",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000"
+                  }
                 }
               ],
               "metadata": {
@@ -6797,7 +7665,9 @@
                 {
                   "type": "text",
                   "text": "4.5",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000"
+                  }
                 }
               ],
               "metadata": {
@@ -6813,7 +7683,9 @@
                 {
                   "type": "text",
                   "text": "2.8",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000"
+                  }
                 }
               ],
               "metadata": {
@@ -6829,7 +7701,9 @@
                 {
                   "type": "text",
                   "text": "5",
-                  "formatting": {}
+                  "formatting": {
+                    "color": "#000000"
+                  }
                 }
               ],
               "metadata": {
