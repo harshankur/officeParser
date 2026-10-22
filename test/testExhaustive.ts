@@ -4961,6 +4961,30 @@ async function testNativePdfChartsAndCellPictures(): Promise<void> {
 }
 
 /**
+ * A picture among a paragraph's words is drawn in its line (it broke the paragraph in two, as a picture
+ * between them), and a page's footer stays below the body and its footnotes (it rose into them).
+ */
+async function testNativePdfInlinePictures(): Promise<void> {
+    const dot = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP8z8BAEmAiTfmohlENQwkDAJQxAR9rsc8UAAAAAElFTkSuQmCC';
+    const html = `<p>Before <img src="data:image/png;base64,${dot}" alt="dot"> after the icon.</p>`;
+    const ast = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html', extractAttachments: true } as any) as OfficeParserAST;
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, extractAttachments: true, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const nodes = collectAllNodes(back);
+    const image = nodes.find(n => n.type === 'image')?.bounds, before = nodes.find(n => n.type === 'text' && (n.text || '').includes('Before'))?.bounds;
+    assert.ok(image && before && Math.abs((image.y + image.height) - (before.y + before.height)) < 4 && image.x > before.x, `the picture stands in the line, after "Before"; got ${JSON.stringify([image, before])}`);
+
+    const note = { type: 'note', metadata: { noteType: 'footnote' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'The footnote text.' }] }] };
+    const doc = { type: 'docx', metadata: { pageSetup: { width: 612, height: 792, margin: { top: 72, right: 72, bottom: 68, left: 72 }, footerDistance: 54 } }, attachments: [],
+        content: [{ type: 'paragraph', children: [{ type: 'text', text: 'Cites it.', notes: [note] }] }],
+        auxiliary: { footers: [{ type: 'footer', metadata: { type: 'default' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'Footer line' }] }] }] } } as any;
+    const out = (await OfficeGenerator.generate(doc, 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const read = collectAllNodes(await OfficeParser.parseOffice(Buffer.from(out), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST);
+    const footnote = read.find(n => n.type === 'text' && (n.text || '').includes('footnote text'))?.bounds, footer = read.find(n => n.type === 'text' && (n.text || '').includes('Footer line'))?.bounds;
+    assert.ok(footnote && footer && footer.y >= footnote.y + footnote.height, `the footer is below the footnote; got ${JSON.stringify([footnote, footer])}`);
+}
+
+/**
  * The native PDF engine draws GIF (its first frame) and uncompressed BMP pictures, turned into PNG: a PDF
  * holds neither, and both were dropped with IMAGE_PROCESSING_FAILED.
  */
@@ -6807,6 +6831,7 @@ async function runTests(): Promise<void> {
         ['ODT master pages in PDF', testOdtMasterPagesInPdf],
         ['Sheet and slide pages', testSheetAndSlidePages],
         ['Native PDF charts and cell pictures', testNativePdfChartsAndCellPictures],
+        ['Native PDF inline pictures', testNativePdfInlinePictures],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

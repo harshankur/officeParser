@@ -226,10 +226,10 @@ function fontKind(family: string | undefined): 'mono' | 'serif' | 'sans' {
 }
 
 /** A single word ready to place, carrying the style/size/color it should be drawn with. */
-interface Piece { text: string; face: FaceKey; size: number; color: any; underline: boolean; link?: string; background?: string; rise?: number; note?: OfficeContentNode; }
+interface Piece { text: string; face: FaceKey; size: number; color: any; underline: boolean; link?: string; background?: string; rise?: number; note?: OfficeContentNode; picture?: { img: any; w: number; h: number }; }
 
 /** A stretch of inline text in one formatting, and the target it links to, if any. */
-type Run = { text: string; fmt: TextFormatting; link?: string; note?: OfficeContentNode };
+type Run = { text: string; fmt: TextFormatting; link?: string; note?: OfficeContentNode; picture?: { img: any; w: number; h: number } };
 
 /**
  * How a paragraph's lines sit: its alignment, where its first line starts against the others, and the
@@ -430,7 +430,9 @@ class NativeLayout {
                     // Measured first, on a page made for it and taken away: it ends at its distance from the bottom.
                     const height = await this.measured(async () => { await this.render(footer); });
                     this.page = record.page;
-                    this.y = Math.max(record.margin.top, record.h - (record.footerDistance || Math.max(12, record.margin.bottom / 3)) - height);
+                    // Ending at its distance from the bottom, but never above the body's margin, where the
+                    // page's last lines and footnotes are (its height counts the space after its paragraphs).
+                    this.y = Math.max(record.margin.top, record.h - record.margin.bottom + 2, record.h - (record.footerDistance || Math.max(12, record.margin.bottom / 3)) - height);
                     await this.render(footer);
                 }
             }
@@ -804,6 +806,9 @@ class NativeLayout {
             // A picture in a line the engine draws as text (a list item, heading or note; a paragraph
             // draws its pictures itself) is its alt or recognized text: it was dropped.
             if (n.type === 'image' && !isRoot) {
+                // A picture in the line, where it is drawn there (see paragraph).
+                const picture = this.inlinePictures.get(n);
+                if (picture && typeof override !== 'string') { out.push({ text: '', fmt, link, picture }); return; }
                 const alt = this.inlineImageText(n, typeof override === 'string' ? override : undefined);
                 if (alt) out.push({ text: alt, fmt, link });
                 return;
@@ -953,6 +958,13 @@ class NativeLayout {
             const underline = !!(run.fmt.underline || run.link);
             // A highlight or a run's own background, drawn behind its words.
             const background = cssColorHex(run.fmt.backgroundColor) ?? undefined;
+            // A picture in the line: as wide and tall as it is drawn, no wider than the line, no taller
+            // than most of a page.
+            if (run.picture) {
+                const scale = Math.min(1, width / run.picture.w, (this.bottom - this.margin.top) * 0.8 / run.picture.h);
+                pieces.push({ p: { text: '', face, size, color, underline: false, link: run.link, picture: { img: run.picture.img, w: run.picture.w * scale, h: run.picture.h * scale } }, space: false });
+                continue;
+            }
             // A newline in a run's text is a line break, as the other writers have it (DOCX writes
             // `<w:br/>`): split there before encoding, which turns control characters into spaces.
             run.text.split(/(\r\n|[\n\r\f])/).forEach((segment, at) => {
@@ -991,9 +1003,12 @@ class NativeLayout {
 
         const flush = (last: boolean) => {
             if (!line.length) return;
-            const lh = lineAdvance(Math.max(...line.map(it => it.p.size)));
+            // A picture in the line stands on its baseline, and the line is as tall as it needs.
+            const tallest = Math.max(0, ...line.map(it => it.p.picture?.h ?? 0));
+            const textSize = Math.max(...line.filter(it => !it.p.picture).map(it => it.p.size), tallest ? 0 : 11);
+            const lh = Math.max(lineAdvance(textSize || 11), tallest + (textSize || 11) * 0.35);
             this.ensureSpace(lh);
-            const baseline = this.pageH - this.y - Math.max(...line.map(it => it.p.size));
+            const baseline = this.pageH - this.y - Math.max(textSize, tallest);
             // Words and the gaps between them, in reading order, then in the order they are seen.
             const items: { p?: Piece; w: number; dir: 'ltr' | 'rtl' | 'neutral' }[] = [];
             line.forEach((it, i) => {
@@ -1020,7 +1035,10 @@ class NativeLayout {
                 bx += w;
             });
             for (const it of ordered) {
-                if (it.p) {
+                if (it.p?.picture) {
+                    this.page.drawImage(it.p.picture.img, { x, y: baseline, width: it.p.picture.w, height: it.p.picture.h });
+                    if (it.p.link) this.addLinkBox(it.p.link, x, baseline, it.p.picture.w, it.p.picture.h);
+                } else if (it.p) {
                     this.drawText(it.p.text, it.p.face, x, baseline + (it.p.rise || 0), it.p.size, it.p.color);
                     if (it.p.underline) {
                         this.page.drawLine({ start: { x, y: baseline - 1.5 }, end: { x: x + it.w, y: baseline - 1.5 }, thickness: 0.5, color: it.p.color });
@@ -1045,7 +1063,7 @@ class NativeLayout {
                 if (piece.brk === 'page') this.newPage();
                 continue;
             }
-            const w = this.widthOf(piece.p.text, piece.p.face, piece.p.size);
+            const w = piece.p.picture ? piece.p.picture.w : this.widthOf(piece.p.text, piece.p.face, piece.p.size);
             // Only the previous piece's OWN trailing space counts toward width: a word split across two
             // runs (or a splitToWidth chunk) has space:false and draws with no gap, so measuring one
             // there wrapped such lines slightly early and disagreed with what flush() draws.
@@ -1330,6 +1348,24 @@ class NativeLayout {
     private async paragraph(node: OfficeContentNode, indentLeft = 0): Promise<void> {
         // A picture in the paragraph (where Word, ODF and Markdown put one) is drawn where it stands,
         // between the lines of text around it: runs carry text only, and it was dropped.
+        // A picture among the paragraph's words is drawn in its line, where it can be embedded (it broke
+        // the paragraph in two, as a picture of its own between them).
+        const images = (node.children || []).filter(child => child.type === 'image');
+        if (images.length && (node.children || []).some(child => child.type !== 'image' && (child.text || child.children?.length))
+            && (this.imageMode === 'image-only' || this.imageMode === 'image+ocr-text')) {
+            for (const image of images) {
+                const picture = await this.embedPicture(image);
+                if (picture) this.inlinePictures.set(image, picture);
+            }
+            if (images.every(image => this.inlinePictures.has(image))) {
+                const runs = await this.collectRuns(node);
+                const { left, width, layout, spacing } = this.placement(node, indentLeft);
+                this.spaceAbove(spacing?.before);
+                this.drawRuns(runs, left, width, false, layout);
+                this.y += this.spaceBelow(spacing?.after, 6);
+                return;
+            }
+        }
         if (node.children?.some(child => child.type === 'image')) {
             let run: OfficeContentNode[] = [];
             const flush = async () => {
@@ -1357,6 +1393,9 @@ class NativeLayout {
         this.drawRuns(runs, left, width, false, layout);
         this.y += this.spaceBelow(spacing?.after, 6);
     }
+
+    /** The pictures drawn in their lines (see paragraph), embedded. */
+    private readonly inlinePictures = new Map<OfficeContentNode, { img: any; w: number; h: number }>();
 
     /** Draws one already-known plain string as a paragraph (an image's alt text, a note marker). */
     private plainParagraph(text: string): void {
