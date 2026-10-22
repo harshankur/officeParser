@@ -4,7 +4,7 @@ import { layoutTableRows } from '../utils/tableLayout.js';
 import { BreakMetadata, ConversionResult, DocxGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, ooxmlCustomPropertiesXml, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, ooxmlCustomPropertiesXml, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
 import { markerPattern, MarkerPattern } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
@@ -191,7 +191,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         const furniture = { headerKind, footerKind, titlePage: headerKind === 'first' || footerKind === 'first', evenPages: headerKind === 'even' || footerKind === 'even' };
         if (furniture.evenPages) this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings', 'settings.xml');
 
-        const documentXml = this.buildDocumentXml(metaBlock + body, headerRid, footerRid, furniture);
+        const lastRefs = this.sectionsEnded > 0 ? await this.ownReferences() : '';
+        const documentXml = this.buildDocumentXml(metaBlock + body, headerRid, footerRid, furniture, lastRefs);
         const parts = this.assembleParts({ documentXml, iso, hasHeader, hasFooter, headerXml, footerXml });
         if (furniture.evenPages) parts['word/settings.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:settings ${WML_NS}><w:evenAndOddHeaders/></w:settings>`;
 
@@ -849,6 +850,35 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     private sectionSetup: PageSetup | undefined;
     private sectionStart: 'nextPage' | 'continuous' = 'nextPage';
     private sectionsEnded = 0;
+    /** The section being written (counted from 0, as BreakMetadata.section counts), and later sections' own header and footer parts. */
+    private currentSection = 0;
+    private referencedSection = 0;
+    private readonly sectionParts: { path: string; kind: 'header' | 'footer'; xml: string }[] = [];
+
+    /** The current section's own header and footer references, written once (its later properties take them on). */
+    private async ownReferences(): Promise<string> {
+        if (this.currentSection === this.referencedSection) return '';
+        this.referencedSection = this.currentSection;
+        return this.sectionReferences(this.currentSection);
+    }
+
+    /**
+     * A later section's own header and footer, as parts of their own and references in its properties; none
+     * where the section has none of its own (Word gives it the one before it).
+     */
+    private async sectionReferences(section: number): Promise<string> {
+        let refs = '';
+        for (const kind of ['header', 'footer'] as const) {
+            const nodes = sectionFurniture(kind === 'header' ? this.ast.auxiliary?.headers : this.ast.auxiliary?.footers, kind, section);
+            if (!nodes) continue;
+            const name = `${kind}${this.sectionParts.length + 2}.xml`;
+            const xml = await this.withRelOwner(`word/${name}`, () => this.renderHdrFtr(kind === 'header' ? 'hdr' : 'ftr', nodes));
+            this.sectionParts.push({ path: `word/${name}`, kind, xml });
+            const rid = this.addRel(`http://schemas.openxmlformats.org/officeDocument/2006/relationships/${kind}`, name);
+            refs += `<w:${kind}Reference w:type="default" r:id="${rid}"/>`;
+        }
+        return refs;
+    }
 
     /**
      * A section's properties (`w:sectPr`): its page's size and margins (under format 'auto' the
@@ -871,14 +901,19 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         return `<w:sectPr>${refs}${start === 'continuous' ? '<w:type w:val="continuous"/>' : ''}<w:pgSz w:w="${twips(paper.w)}" w:h="${twips(paper.h)}"${orient}/>${pgMar}${cols}${title}</w:sectPr>`;
     }
 
-    private blockBreak(node: OfficeContentNode): string {
+    private async blockBreak(node: OfficeContentNode): Promise<string> {
         const meta = node.metadata as BreakMetadata | undefined;
         const t = meta?.breakType;
         // A section ends here: a paragraph holding its properties (Word's way), and the next one starts,
-        // on a new page or on this one ('section'). The first section's carry the header and footer.
+        // on a new page or on this one ('section'). The first section's carry the header and footer; a
+        // later one's, its own (if it has them).
         if (t === 'section' || (t === 'page' && typeof meta?.section === 'number')) {
             const first = this.sectionsEnded++ === 0;
-            const ended = this.sectionProperties(this.sectionSetup ?? this.ast.metadata?.pageSetup, this.sectionStart, first ? FIRST_SECTION : '', first ? FIRST_SECTION_TITLE : false);
+            const refs = first ? FIRST_SECTION : await this.ownReferences();
+            // The section the break starts, as it numbers it (a reader numbering only some breaks leaves the
+            // others in the section before, whose header and footer they keep).
+            if (typeof meta?.section === 'number') this.currentSection = meta.section;
+            const ended = this.sectionProperties(this.sectionSetup ?? this.ast.metadata?.pageSetup, this.sectionStart, refs, first ? FIRST_SECTION_TITLE : false);
             this.sectionSetup = meta?.pageSetup ?? this.sectionSetup;
             this.sectionStart = t === 'section' ? 'continuous' : 'nextPage';
             return `<w:p><w:pPr>${ended}</w:pPr></w:p>`;
@@ -982,7 +1017,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     // ── part assembly ─────────────────────────────────────────────────────────────
 
     private buildDocumentXml(body: string, headerRid: string, footerRid: string,
-        furniture: { headerKind: string; footerKind: string; titlePage: boolean; evenPages: boolean } = { headerKind: 'default', footerKind: 'default', titlePage: false, evenPages: false }): string {
+        furniture: { headerKind: string; footerKind: string; titlePage: boolean; evenPages: boolean } = { headerKind: 'default', footerKind: 'default', titlePage: false, evenPages: false }, lastRefs = ''): string {
         // The kinds of page a part is on: every page's is also the title page's and even pages', where
         // the document has those.
         const kinds = (kind: string) => kind !== 'default' ? [kind] : ['default', ...(furniture.titlePage ? ['first'] : []), ...(furniture.evenPages ? ['even'] : [])];
@@ -992,7 +1027,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         const sectioned = body.includes(FIRST_SECTION);
         if (sectioned) body = body.replace(FIRST_SECTION, first).replace(FIRST_SECTION_TITLE, furniture.titlePage ? '<w:titlePg/>' : '');
         // The last section's properties close the body.
-        const sectPr = this.sectionProperties(this.sectionSetup ?? this.ast.metadata?.pageSetup, this.sectionStart, sectioned ? '' : first, !sectioned && furniture.titlePage);
+        const sectPr = this.sectionProperties(this.sectionSetup ?? this.ast.metadata?.pageSetup, this.sectionStart, sectioned ? lastRefs : first, !sectioned && furniture.titlePage);
         const bodyContent = body.trim() ? body : '<w:p/>';
         return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n`
             + `<w:document ${WML_NS}>`
@@ -1023,6 +1058,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         if (hasComments) parts['word/comments.xml'] = this.buildCommentsXml();
         if (o.hasHeader) parts['word/header1.xml'] = o.headerXml;
         if (o.hasFooter) parts['word/footer1.xml'] = o.footerXml;
+        for (const part of this.sectionParts) parts[part.path] = part.xml;
         parts['docProps/core.xml'] = this.coreProps(o.iso);
         parts['docProps/app.xml'] = APP_XML;
         if (custom) parts['docProps/custom.xml'] = custom;
@@ -1070,6 +1106,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         if (o.hasComments) overrides += `<Override PartName="/word/comments.xml" ContentType="${wml}.comments+xml"/>`;
         if (runningFurniture(this.ast.auxiliary?.headers, 'header').length) overrides += `<Override PartName="/word/header1.xml" ContentType="${wml}.header+xml"/>`;
         if (runningFurniture(this.ast.auxiliary?.footers, 'footer').length) overrides += `<Override PartName="/word/footer1.xml" ContentType="${wml}.footer+xml"/>`;
+        for (const part of this.sectionParts) overrides += `<Override PartName="/${part.path}" ContentType="${wml}.${part.kind}+xml"/>`;
         const headers = runningFurniture(this.ast.auxiliary?.headers, 'header'), footers = runningFurniture(this.ast.auxiliary?.footers, 'footer');
         if ((headers.length && furnitureKind(headers, 'header') === 'even') || (footers.length && furnitureKind(footers, 'footer') === 'even')) overrides += `<Override PartName="/word/settings.xml" ContentType="${wml}.settings+xml"/>`;
         overrides += `<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>`

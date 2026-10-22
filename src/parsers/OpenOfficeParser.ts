@@ -559,29 +559,43 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         if (shown(master, "style:header")) { setup.headerDistance = margin.top; margin.top += room("style:header-style", "fo:margin-bottom"); }
         if (shown(master, "style:footer")) { setup.footerDistance = margin.bottom; margin.bottom += room("style:footer-style", "fo:margin-top"); }
         if (shown(master, "style:header-first") || shown(master, "style:footer-first")) setup.differentFirstPage = true;
-        const columns = odfColumns(getDirectChildren(props, "style:columns")[0]);
+        const columns = odfColumns(getDirectChildren(props, "style:columns")[0], width - margin.left - margin.right);
         if (columns) setup.columns = columns;
         return setup;
     };
     /** A `style:columns` element's columns (their number, the gap, a line between), where there are two or more. */
-    function odfColumns(columns: Element | undefined): PageSetup['columns'] | undefined {
+    function odfColumns(columns: Element | undefined, available?: number): PageSetup['columns'] | undefined {
         const count = Math.min(16, Math.round(Number(columns?.getAttribute("fo:column-count")) || 0));
         if (!columns || count < 2) return undefined;
-        const gap = lengthToPt(columns.getAttribute("fo:column-gap") || undefined);
         const sep = getDirectChildren(columns, "style:column-sep")[0];
-        // Each column's width where they are given (style:column): its relative width, in twentieths of a
-        // point as office suites write it, holds the column's indents (the halves of the gaps beside it).
+        // Each column's width where they are given (style:column): its relative width holds the column's
+        // indents (the halves of the gaps beside it), a share of the width the columns stand in (LibreOffice's
+        // shares sum to 65535; a share read as twentieths of a point gave columns of a thousand points).
         const own = getDirectChildren(columns, "style:column");
-        const widths = own.map(c => {
-            const rel = parseFloat(c.getAttribute("style:rel-width") || '');
-            const indents = (lengthToPt(c.getAttribute("fo:start-indent") || undefined) ?? 0) + (lengthToPt(c.getAttribute("fo:end-indent") || undefined) ?? 0);
-            return Number.isFinite(rel) && rel > 0 ? Math.round((rel / 20 - indents) * 100) / 100 : 0;
+        const indent = (c: Element, attr: string) => Math.max(0, lengthToPt(c.getAttribute(attr) || undefined) ?? 0);
+        const rels = own.map(c => parseFloat(c.getAttribute("style:rel-width") || ''));
+        const total = rels.reduce((sum, r) => sum + (Number.isFinite(r) && r > 0 ? r : 0), 0);
+        const widths = own.map((c, i) => {
+            const rel = rels[i];
+            if (!(Number.isFinite(rel) && rel > 0)) return 0;
+            const whole = available !== undefined && available > 0 && total > 0 ? rel / total * available : rel / 20;
+            return Math.round((whole - indent(c, "fo:start-indent") - indent(c, "fo:end-indent")) * 100) / 100;
         });
         const differ = widths.length === count && widths.every(w => w > 0 && w < 1e5) && widths.some(w => Math.abs(w - widths[0]) > 0.5);
-        return { count, gap: gap != null && gap >= 0 && gap < 1584 ? Math.round(gap * 100) / 100 : 0, ...(differ ? { widths } : {}), ...(sep && (sep.getAttribute("style:style") ?? 'solid') !== 'none' ? { separator: true } : {}) };
+        // The gap: as stated, else the indents between the first two columns.
+        const stated = lengthToPt(columns.getAttribute("fo:column-gap") || undefined);
+        const gap = stated ?? (own.length >= 2 ? indent(own[0], "fo:end-indent") + indent(own[1], "fo:start-indent") : 0);
+        return { count, gap: gap >= 0 && gap < 1584 ? Math.round(gap * 100) / 100 : 0, ...(differ ? { widths } : {}), ...(sep && (sep.getAttribute("style:style") ?? 'solid') !== 'none' ? { separator: true } : {}) };
     }
-    /** Each section style's columns (`style:section-properties`), by its name. */
-    const sectionColumns = new Map<string, PageSetup['columns'] | undefined>();
+    /** Each section style's columns (`style:section-properties`'s `style:columns`), by its name; read against the page they stand on (see sectionColumnsOn). */
+    const sectionColumns = new Map<string, Element | undefined>();
+    /** A section style's columns on a page: their widths a share of the page's text width. */
+    const sectionColumnsOn = (styleName: string, page: PageSetup | undefined) => {
+        const el = sectionColumns.get(styleName);
+        return el ? odfColumns(el, page ? page.width - (page.margin?.left ?? 0) - (page.margin?.right ?? 0) : undefined) : undefined;
+    };
+    /** The columns of the sections being read, innermost last (a page break inside one is set in them). */
+    const openSectionColumns: (string | undefined)[] = [];
     const content: OfficeContentNode[] = [];
     const notes: OfficeContentNode[] = [];
 
@@ -628,7 +642,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
             if (style.getAttribute("style:family") === 'section') {
                 const sectionProps = getDirectChildren(style, "style:section-properties")[0];
-                if (!sectionColumns.has(name)) sectionColumns.set(name, odfColumns(sectionProps ? getDirectChildren(sectionProps, "style:columns")[0] : undefined));
+                if (!sectionColumns.has(name)) {
+                    const cols = sectionProps ? getDirectChildren(sectionProps, "style:columns")[0] : undefined;
+                    sectionColumns.set(name, cols && Math.round(Number(cols.getAttribute("fo:column-count")) || 0) >= 2 ? cols : undefined);
+                }
                 continue;
             }
             const styleInfo: ParagraphStyleInfo = {};
@@ -1683,6 +1700,16 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     sectionMasters.push(master);
                     if (config.includeBreakNodes) {
                         const pageSetup = config.ignorePageGeometry ? undefined : odfPageSetup(master);
+                        // A page that starts inside a section of columns (LibreOffice turns to a section's page
+                        // on its first paragraph) is set in that section's columns: the section's own break,
+                        // just before it with nothing between, is this one.
+                        const inSection = openSectionColumns[openSectionColumns.length - 1];
+                        if (pageSetup && inSection) {
+                            const columns = sectionColumnsOn(inSection, pageSetup);
+                            if (columns) pageSetup.columns = columns; else delete pageSetup.columns;
+                            const before = targetArray[targetArray.length - 1];
+                            if (before?.type === 'break' && (before.metadata as BreakMetadata | undefined)?.breakType === 'section' && (before.metadata as any)?.openedSection) targetArray.pop();
+                        }
                         targetArray.push({ type: 'break', metadata: { breakType: 'page', section: sectionMasters.length, ...(pageSetup ? { pageSetup } : {}) } as BreakMetadata });
                     }
                     return;
@@ -2088,15 +2115,26 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             } else if (node.tagName === "text:section" && readingBody && config.includeBreakNodes && !config.ignorePageGeometry
                 && sectionColumns.get(node.getAttribute("text:style-name") || '') && odfPageSetup(sectionMasters[sectionMasters.length - 1] ?? firstMaster)) {
                 // A section set in columns of its own, on the page it is on: a section break before it
-                // with its columns, and one after it with the page's again.
-                const { columns: pageColumns, ...page } = odfPageSetup(sectionMasters[sectionMasters.length - 1] ?? firstMaster)!;
-                const columns = sectionColumns.get(node.getAttribute("text:style-name") || '')!;
-                targetArray.push({ type: 'break', metadata: { breakType: 'section', pageSetup: { ...page, columns } } as BreakMetadata });
-                for (let i = 0; i < node.childNodes.length; i++) {
-                    const child = node.childNodes[i];
-                    if (isElement(child)) traverse(child as Element, targetArray, forceHeading, sourceXml);
+                // with its columns, and one after it with the page's again (the page it ends on: a page break
+                // inside it turns to another).
+                const styleName = node.getAttribute("text:style-name") || '';
+                const { columns: _pageColumns, ...page } = odfPageSetup(sectionMasters[sectionMasters.length - 1] ?? firstMaster)!;
+                const opened: OfficeContentNode = { type: 'break', metadata: { breakType: 'section', pageSetup: { ...page, columns: sectionColumnsOn(styleName, page) } } as BreakMetadata };
+                // (Marked while it is the last node, so a page break at the section's start takes its place.)
+                (opened.metadata as any).openedSection = true;
+                targetArray.push(opened);
+                openSectionColumns.push(styleName);
+                try {
+                    for (let i = 0; i < node.childNodes.length; i++) {
+                        const child = node.childNodes[i];
+                        if (isElement(child)) traverse(child as Element, targetArray, forceHeading, sourceXml);
+                    }
+                } finally {
+                    openSectionColumns.pop();
+                    delete (opened.metadata as any).openedSection;
                 }
-                targetArray.push({ type: 'break', metadata: { breakType: 'section', pageSetup: { ...page, ...(pageColumns ? { columns: pageColumns } : {}) } } as BreakMetadata });
+                const { columns: endColumns, ...endPage } = odfPageSetup(sectionMasters[sectionMasters.length - 1] ?? firstMaster)!;
+                targetArray.push({ type: 'break', metadata: { breakType: 'section', pageSetup: { ...endPage, ...(endColumns ? { columns: endColumns } : {}) } } as BreakMetadata });
             } else if (node.tagName !== "text:tracked-changes") {
                 // (Tracked changes hold what a deletion removed, which is not the document's text.)
                 if (node.childNodes) {

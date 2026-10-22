@@ -4,7 +4,7 @@ import { layoutTableRows } from '../utils/tableLayout.js';
 import { BreakMetadata, ConversionResult, GeneratorConfig, ImageMode, OdtGeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, odfUserDefinedXml, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, odfUserDefinedXml, resolvePaper, resolveZipInstant, runningFurniture, sectionFurnitureIndex, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
 import { markerPattern, MarkerPattern, odfNumFormat } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
@@ -170,6 +170,10 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         this.activeStyles = this.stylesFileStyles;
         const headerXml = hasHeader ? await this.renderBlocks(headers) : '';
         const footerXml = hasFooter ? await this.renderBlocks(footers) : '';
+        for (const page of this.sectionPages) {
+            if (page.header) page.headerXml = await this.renderBlocks(page.header);
+            if (page.footer) page.footerXml = await this.renderBlocks(page.footer);
+        }
         this.activeStyles = this.contentStyles;
 
         // Serialize list styles into their owning file's registry (learned during render).
@@ -843,9 +847,58 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
      * The pages of sections set on other pages than the first's (a landscape section, other margins), each
      * a master page of its own, with its columns; and whether a section returns to the first's (`Body`).
      */
-    private sectionPages: { name: string; setup: PageSetup }[] = [];
+    private sectionPages: { name: string; setup: PageSetup | undefined; key: string; header?: OfficeContentNode[]; footer?: OfficeContentNode[]; headerXml?: string; footerXml?: string }[] = [];
+    private readonly sectionMasterByKey = new Map<string, string>();
     private bodyMasterUsed = false;
     private onSectionPage = false;
+    /** The section being written (counted from 0, as BreakMetadata.section counts), its page, and the master its pages are on ('' the first's). */
+    private currentSection = 0;
+    private currentSetup: PageSetup | undefined;
+    private activeMaster = '';
+
+    /** A section's header or footer: its own, else the nearest earlier section's own, else (undefined) the first section's. */
+    private sectionPart(kind: 'header' | 'footer', section: number): { key: string; nodes: OfficeContentNode[] } | undefined {
+        const nodes = kind === 'header' ? this.ast.auxiliary?.headers : this.ast.auxiliary?.footers;
+        if (!nodes?.length || section < 1) return undefined;
+        // The latest section at or before this one with its own (found by halving: a document of thousands of sections).
+        const { bySection, sections } = sectionFurnitureIndex(nodes, kind);
+        let lo = 0, hi = sections.length - 1, found = -1;
+        while (lo <= hi) { const mid = (lo + hi) >> 1; if (sections[mid] <= section) { found = sections[mid]; lo = mid + 1; } else hi = mid - 1; }
+        return found >= 1 ? { key: `${kind}${found}`, nodes: [bySection.get(found)!] } : undefined;
+    }
+
+    /**
+     * The master page a page of the current section is on: one of its own where its page (size, margins)
+     * or its header or footer differ from the first section's, else the first's (none, or `Body` once
+     * another master was turned to); and the paragraph a page break turns to it with, where it differs from
+     * the one the pages before were on.
+     */
+    private pageStart(): string {
+        const setup = this.currentSetup;
+        const first = this.paperOf(this.ast.metadata?.pageSetup), own = setup ? this.paperOf(setup) : first;
+        const samePaper = Math.abs(first.w - own.w) < 0.5 && Math.abs(first.h - own.h) < 0.5
+            && (['top', 'right', 'bottom', 'left'] as const).every(k => Math.abs(first.margin[k] - own.margin[k]) < 0.5);
+        const header = this.sectionPart('header', this.currentSection), footer = this.sectionPart('footer', this.currentSection);
+        let master = '';
+        if (!samePaper || header || footer) {
+            const columns = samePaper ? this.ast.metadata?.pageSetup?.columns : setup?.columns;
+            const key = JSON.stringify([own.w, own.h, own.margin, columns ?? null, header?.key ?? null, footer?.key ?? null]);
+            master = this.sectionMasterByKey.get(key) ?? '';
+            if (!master) {
+                master = `Section${this.sectionPages.length + 1}`;
+                this.sectionPages.push({ name: master, setup: samePaper ? this.ast.metadata?.pageSetup : setup, key, header: header?.nodes, footer: footer?.nodes });
+                this.sectionMasterByKey.set(key, master);
+            }
+        }
+        // The columns the page itself is set in: a section master's own, else the body's.
+        this.onSectionPage = !samePaper;
+        this.pageColumns = samePaper ? this.ast.metadata?.pageSetup?.columns : setup?.columns;
+        if (master === this.activeMaster) return `<text:p text:style-name="${this.pageBreakStyle()}"/>`;
+        const name = master || 'Body';
+        if (!master) this.bodyMasterUsed = true;
+        this.activeMaster = master;
+        return `<text:p text:style-name="${this.activeStyles.intern('paragraph', 'P', '<style:paragraph-properties fo:break-before="page"/>', ` style:parent-style-name="Standard" style:master-page-name="${name}"`)}"/>`;
+    }
     /** The columns the current page is set in (null: the body's, before any section page). */
     private pageColumns: PageSetup['columns'] | null = null;
 
@@ -884,28 +937,17 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         if (sectionStart) {
             // A section starting on this page (or on the next, after its page break), in its own columns:
             // a text:section of them, where they are not the page's (which the page layout has).
-            const setup = (node.metadata as BreakMetadata | undefined)?.pageSetup;
+            const meta = node.metadata as BreakMetadata | undefined;
+            const setup = meta?.pageSetup;
             const columns = setup?.columns;
             let out = this.openSection ? '</text:section>' : '';
-            if (t === 'page') {
-                // A section on a page of its own size or margins: a master page of them (and its columns),
-                // which the break's paragraph turns to; back on the first page's, the body's master.
-                const first = this.paperOf(this.ast.metadata?.pageSetup), own = setup ? this.paperOf(setup) : first;
-                const samePaper = (a: typeof first, b: typeof first) => Math.abs(a.w - b.w) < 0.5 && Math.abs(a.h - b.h) < 0.5
-                    && (['top', 'right', 'bottom', 'left'] as const).every(k => Math.abs(a.margin[k] - b.margin[k]) < 0.5);
-                let master: string | undefined;
-                if (setup && !samePaper(first, own)) {
-                    const key = JSON.stringify([own.w, own.h, own.margin, columns ?? null]);
-                    master = this.sectionPages.find(p => JSON.stringify([this.paperOf(p.setup).w, this.paperOf(p.setup).h, this.paperOf(p.setup).margin, p.setup.columns ?? null]) === key)?.name;
-                    if (!master) { master = `Section${this.sectionPages.length + 1}`; this.sectionPages.push({ name: master, setup }); }
-                } else if (this.onSectionPage) { master = 'Body'; this.bodyMasterUsed = true; }
-                this.onSectionPage = !!master && master !== 'Body';
-                // The columns the page itself is set in: a section master's own, else the body's.
-                this.pageColumns = this.onSectionPage ? columns : this.ast.metadata?.pageSetup?.columns;
-                out += master
-                    ? `<text:p text:style-name="${this.activeStyles.intern('paragraph', 'P', '<style:paragraph-properties fo:break-before="page"/>', ` style:parent-style-name="Standard" style:master-page-name="${master}"`)}"/>`
-                    : `<text:p text:style-name="${this.pageBreakStyle()}"/>`;
-            }
+            // (As the break numbers it: one numbering only some breaks leaves the others in the section before.)
+            if (typeof meta?.section === 'number') this.currentSection = meta.section;
+            if (setup) this.currentSetup = setup;
+            // A section on a page of its own size or margins, or with a header or footer of its own: a master
+            // page of them (and its columns), which the break's paragraph turns to (and the first's after it).
+            // A section starting on the same page takes them at its next page.
+            if (t === 'page') out += this.pageStart();
             const pageColumns = this.pageColumns === null ? this.ast.metadata?.pageSetup?.columns : this.pageColumns;
             this.openSection = (columns?.count ?? 1) !== (pageColumns?.count ?? 1) || (columns?.gap ?? 0) !== (pageColumns?.gap ?? 0);
             if (this.openSection) {
@@ -914,7 +956,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             }
             return out;
         }
-        if (t === 'page') return `<text:p text:style-name="${this.pageBreakStyle()}"/>`;
+        if (t === 'page') return this.pageStart();
         if (t === 'column') return `<text:p text:style-name="${this.internPara(' fo:break-before="column"')}"/>`;
         if (t === 'thematic') return `<text:p text:style-name="${this.internPara(' fo:border-bottom="0.5pt solid #808080" fo:padding-bottom="1pt"')}"/>`;
         if (t === 'lastRenderedPage') return '';
@@ -1035,8 +1077,11 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
                 + `<style:master-page style:name="Rest" style:page-layout-name="pm1">${masters('rest')}</style:master-page>`
             : `<style:master-page style:name="Standard" style:page-layout-name="pm1">${masters('rest')}</style:master-page>`;
         // Sections' own pages, and the body's page to return to after them, each with the body's header and footer.
-        const sectionLayouts = this.sectionPages.map((p, i) => this.pageLayoutXml(`pm${i + 2}`, this.paperOf(p.setup), p.setup.columns)).join('');
-        const sectionMasters = this.sectionPages.map((p, i) => `<style:master-page style:name="${p.name}" style:page-layout-name="pm${i + 2}">${masters('rest')}</style:master-page>`).join('')
+        const sectionLayouts = this.sectionPages.map((p, i) => this.pageLayoutXml(`pm${i + 2}`, this.paperOf(p.setup), p.setup?.columns)).join('');
+        // A section's own header and footer, else the first section's (as on the body's pages).
+        const sectionParts = (p: typeof this.sectionPages[number]) => (p.headerXml !== undefined ? `<style:header>${p.headerXml || '<text:p/>'}</style:header>` : part('header', headerXml, headerKind, 'rest'))
+            + (p.footerXml !== undefined ? `<style:footer>${p.footerXml || '<text:p/>'}</style:footer>` : part('footer', footerXml, footerKind, 'rest'));
+        const sectionMasters = this.sectionPages.map((p, i) => `<style:master-page style:name="${p.name}" style:page-layout-name="pm${i + 2}">${sectionParts(p)}</style:master-page>`).join('')
             + (this.bodyMasterUsed ? `<style:master-page style:name="Body" style:page-layout-name="pm1">${masters('rest')}</style:master-page>` : '');
         return `<?xml version="1.0" encoding="UTF-8"?>\n`
             + `<office:document-styles ${ODF_NS} office:version="1.2">`

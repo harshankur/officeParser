@@ -26,6 +26,13 @@ const MAX_USE_DEPTH = 8;
 const MAX_RULES = 2_000;
 /** At most this long the stylesheet text read. */
 const MAX_CSS_LENGTH = 256 * 1024;
+/** At most this many characters of text are drawn, `use` copies counted. */
+const MAX_TEXT_CHARS = 500_000;
+/** At most this long a single value read as a number or length (none is longer); at most this long a transform. */
+const MAX_NUMBER_TEXT = 64;
+const MAX_TRANSFORM_TEXT = 64 * 1024;
+/** At most this many distinct classes a selector names (one naming more matches nothing drawn). */
+const MAX_SELECTOR_CLASSES = 32;
 /** A picture larger than this, each way, in CSS pixels, is drawn at this size. */
 const MAX_SIDE_PX = 14_400;
 
@@ -97,14 +104,18 @@ const coord = (n: number): number => Number.isFinite(n) ? Math.max(-MAX_COORD, M
 /** A number, or NaN. */
 const num = (v: string | null | undefined): number => {
     if (v == null) return NaN;
-    const m = /^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/.exec(v);
-    return m ? bounded(parseFloat(m[1])) : NaN;
+    const m = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/.exec(v.trimStart().slice(0, MAX_NUMBER_TEXT));
+    return m ? bounded(parseFloat(m[0])) : NaN;
 };
 
 /** A length in user units (CSS pixels): px, pt, pc, mm, cm, in, em, ex, or a percentage of `whole`. */
 function length(v: string | null | undefined, whole: number, fontSize = 16): number {
     if (v == null) return NaN;
-    const m = /^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*(px|pt|pc|mm|cm|in|em|ex|%)?\s*$/i.exec(v);
+    // (Trimmed and of a length a length has: a value of tens of thousands of digits or spaces took time in
+    // its square to match.)
+    const t = v.trim();
+    if (t.length > MAX_NUMBER_TEXT) return NaN;
+    const m = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*(px|pt|pc|mm|cm|in|em|ex|%)?$/i.exec(t);
     if (!m) return NaN;
     const n = bounded(parseFloat(m[1]));
     const unit = (m[2] || '').toLowerCase();
@@ -117,7 +128,7 @@ function length(v: string | null | undefined, whole: number, fontSize = 16): num
 function numbers(v: string | null | undefined, max = 1 << 20): number[] {
     const out: number[] = [];
     if (!v) return out;
-    const re = /[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/g;
+    const re = /[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/g;
     for (let m = re.exec(v); m && out.length < max; m = re.exec(v)) out.push(bounded(parseFloat(m[0])));
     return out;
 }
@@ -132,10 +143,16 @@ const multiply = (a: Matrix, b: Matrix): Matrix => [
 function transformOf(v: string | null): Matrix {
     let m: Matrix = IDENTITY;
     if (!v) return m;
-    const re = /(matrix|translate|scale|rotate|skewX|skewY)\s*\(([^)]*)\)/g;
+    // Each function's name and opening, then its closing found forward once: a pattern of the arguments
+    // read the rest of the text again for every opening left unclosed.
+    const text = v.slice(0, MAX_TRANSFORM_TEXT);
+    const re = /(matrix|translate|scale|rotate|skewX|skewY)\s*\(/g;
     let count = 0;
-    for (let t = re.exec(v); t && count < 64; t = re.exec(v), count++) {
-        const a = numbers(t[2], 6);
+    for (let t = re.exec(text); t && count < 64; t = re.exec(text), count++) {
+        const close = text.indexOf(')', re.lastIndex);
+        if (close < 0) break;
+        const a = numbers(text.slice(re.lastIndex, close), 6);
+        re.lastIndex = close + 1;
         let next: Matrix = IDENTITY;
         switch (t[1]) {
             case 'matrix': if (a.length === 6) next = a as Matrix; break;
@@ -186,7 +203,8 @@ function readRules(css: string): Rule[] {
             if (!m || (!m[1] && !m[2])) continue;
             const classes: string[] = [];
             let id: string | undefined;
-            for (const part of m[2].match(/[.#][\w-]+/g) ?? []) part[0] === '.' ? classes.push(part.slice(1)) : (id = part.slice(1));
+            for (const part of m[2].match(/[.#][\w-]+/g) ?? []) part[0] === '.' ? (classes.includes(part.slice(1)) || classes.length > MAX_SELECTOR_CLASSES || classes.push(part.slice(1))) : (id = part.slice(1));
+            if (classes.length > MAX_SELECTOR_CLASSES) continue;
             const tag = m[1] && m[1] !== '*' ? m[1] : undefined;
             rules.push({ tag, classes, id, specificity: (id ? 10_000 : 0) + classes.length * 100 + (tag ? 1 : 0), order: rules.length, declarations: decls });
             if (rules.length >= MAX_RULES) break;
@@ -299,7 +317,7 @@ function parsePath(d: string, budget: { left: number }): Segment[] {
     const out: Segment[] = [];
     const n = d.length;
     let i = 0;
-    const NUMBER = /[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/y;
+    const NUMBER = /[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/y;
     const skip = () => { while (i < n && (d[i] === ' ' || d[i] === ',' || d[i] === '\n' || d[i] === '\t' || d[i] === '\r')) i++; };
     const readNumber = (): number => { skip(); NUMBER.lastIndex = i; const m = NUMBER.exec(d); if (!m) return NaN; i = NUMBER.lastIndex; return bounded(parseFloat(m[0])); };
     const readFlag = (): boolean | undefined => { skip(); const c = d[i]; if (c === '0' || c === '1') { i++; return c === '1'; } return undefined; };
@@ -404,7 +422,9 @@ function rect(x: number, y: number, w: number, h: number, rx: number, ry: number
 export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<string[]> {
     const { lib, page } = canvas;
     const left = new Set<string>();
-    const budget = { elements: MAX_ELEMENTS, path: { left: MAX_PATH_COMMANDS } };
+    const budget = { elements: MAX_ELEMENTS, path: { left: MAX_PATH_COMMANDS }, chars: MAX_TEXT_CHARS };
+    // Each picture embedded once, however often it is drawn (a `use` of it drawn a thousand times).
+    const images = new Map<string, Promise<any | undefined>>();
     const W = svg.width, H = svg.height;
     // Page space (points, y up) from the picture's (pixels, y down), then its viewBox.
     const base: Matrix = multiply([0.75, 0, 0, -0.75, 0, H * 0.75], viewBoxMatrix(svg.viewBox, svg.preserve, W, H));
@@ -430,12 +450,12 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
     /** The style an element draws with: its parent's inherited, then rules, attributes, `style`. */
     const styleOf = (el: Element, parent: Style): { style: Style; own: Map<string, string> } => {
         const own = new Map<string, string>();
-        const classes = (el.getAttribute('class') || '').split(/\s+/).filter(Boolean);
+        const classes = new Set((el.getAttribute('class') || '').split(/\s+/).filter(Boolean));
         const id = el.getAttribute('id') || undefined, tag = localName(el);
         // Presentation attributes first, then the stylesheet's rules over them, then `style` over both.
         for (const name of PROPERTIES) { const v = el.getAttribute(name); if (v != null && v.length <= 256) own.set(name, v.trim()); }
         for (const rule of svg.rules) {
-            if ((rule.tag && rule.tag !== tag) || (rule.id && rule.id !== id) || !rule.classes.every(c => classes.includes(c))) continue;
+            if ((rule.tag && rule.tag !== tag) || (rule.id && rule.id !== id) || !rule.classes.every(c => classes.has(c))) continue;
             for (const [k, v] of rule.declarations) own.set(k, v);
         }
         const inline = el.getAttribute('style');
@@ -548,6 +568,7 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
 
     /** Draws a text element: its runs (`tspan`s) one after another from its position, each at its anchor. */
     const drawText = (el: Element, style: Style, opacity: number) => {
+        if (budget.chars <= 0) { left.add('text past the picture\'s limits'); return; }
         let x = length((el.getAttribute('x') || '').split(/[\s,]+/)[0], viewport.w, style.fontSize) || 0;
         let y = length((el.getAttribute('y') || '').split(/[\s,]+/)[0], viewport.h, style.fontSize) || 0;
         x += length((el.getAttribute('dx') || '').split(/[\s,]+/)[0], viewport.w, style.fontSize) || 0;
@@ -610,7 +631,11 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
             const width = chunk.runs.reduce((w, r) => w + canvas.width(r.text, faceOf(r.style), r.style.fontSize), 0);
             let cx = chunk.x - (style.textAnchor === 'middle' ? width / 2 : style.textAnchor === 'end' ? width : 0);
             for (const run of chunk.runs) {
-                const fill = paint(run.style.fill, run.style);
+                // Text past the picture's bound on characters (its `use` copies counted) is not drawn, and named.
+                if (budget.chars <= 0) { left.add('text past the picture\'s limits'); return; }
+                budget.chars -= run.text.length;
+                const hidden = run.style.visibility === 'hidden' || run.style.visibility === 'collapse';
+                const fill = hidden ? undefined : paint(run.style.fill, run.style);
                 const face = faceOf(run.style);
                 const w = canvas.width(run.text, face, run.style.fontSize);
                 if (fill && run.text.trim()) {
@@ -625,16 +650,26 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
     };
 
     /** Draws a picture given as data (`data:image/png;base64,...`) in its box. */
-    const drawImage = async (el: Element, opacity: number) => {
-        const href = el.getAttribute('href') || el.getAttribute('xlink:href') || '';
-        const m = /^data:image\/(png|jpe?g);base64,([A-Za-z0-9+/=\s]*)$/i.exec(href.trim());
-        if (!m) { left.add('pictures that are not PNG or JPEG data'); return; }
+    const drawImage = async (el: Element, style: Style, opacity: number) => {
+        if (style.visibility === 'hidden' || style.visibility === 'collapse') return;
+        const href = (el.getAttribute('href') || el.getAttribute('xlink:href') || '').trim();
         const w = length(el.getAttribute('width'), viewport.w), h = length(el.getAttribute('height'), viewport.h);
         if (!(w > 0) || !(h > 0)) return;
-        let bytes: Uint8Array;
-        try { bytes = Uint8Array.from(Buffer.from(m[2].replace(/\s+/g, ''), 'base64')); } catch { return; }
-        const img = await canvas.image(bytes, m[1].toLowerCase() === 'png' ? 'png' : 'jpeg');
-        if (!img) { left.add('pictures that could not be read'); return; }
+        let embedding = images.get(href);
+        if (!embedding) {
+            embedding = (async () => {
+                const m = /^data:image\/(png|jpe?g);base64,([A-Za-z0-9+/=\s]*)$/i.exec(href);
+                if (!m) { left.add('pictures that are not PNG or JPEG data'); return undefined; }
+                let bytes: Uint8Array;
+                try { bytes = Uint8Array.from(Buffer.from(m[2].replace(/\s+/g, ''), 'base64')); } catch { return undefined; }
+                const embedded = await canvas.image(bytes, m[1].toLowerCase() === 'png' ? 'png' : 'jpeg');
+                if (!embedded) left.add('pictures that could not be read');
+                return embedded;
+            })();
+            images.set(href, embedding);
+        }
+        const img = await embedding;
+        if (!img) return;
         const x = length(el.getAttribute('x'), viewport.w) || 0, y = length(el.getAttribute('y'), viewport.h) || 0;
         page.pushOperators(lib.pushGraphicsState(), ...(opacity < 1 ? [op('gs', opacityState(opacity, opacity))] : []),
             cm([w, 0, 0, -h, x, y + h]));
@@ -702,7 +737,7 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
                     break;
                 }
                 case 'text': drawText(el, style, opacity); break;
-                case 'image': await drawImage(el, opacity); break;
+                case 'image': await drawImage(el, style, opacity); break;
                 case 'use': {
                     const href = el.getAttribute('href') || el.getAttribute('xlink:href') || '';
                     const target = href.startsWith('#') ? svg.ids.get(href.slice(1)) : undefined;

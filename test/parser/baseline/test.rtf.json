@@ -70,7 +70,20 @@
     }
   },
   "type": "rtf",
-  "metadata": {},
+  "metadata": {
+    "pageSetup": {
+      "width": 612,
+      "height": 792,
+      "margin": {
+        "top": 72,
+        "right": 72,
+        "bottom": 72,
+        "left": 72
+      },
+      "headerDistance": 36,
+      "footerDistance": 36
+    }
+  },
   "content": [
     {
       "type": "paragraph",

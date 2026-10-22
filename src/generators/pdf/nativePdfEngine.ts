@@ -341,6 +341,13 @@ class NativeLayout {
     private columnsBottom = 0;
     private pageMargin: { top: number; right: number; bottom: number; left: number } | null = null;
     private columnLimit: number | null = null;
+    /**
+     * A balanced section running past this page: the room its text takes (its height in the first column
+     * times that column's width), and the room the columns filled so far took; its last page is balanced
+     * on what is left (see balanceOnThisPage).
+     */
+    private balanceArea: number | null = null;
+    private usedArea = 0;
     /** The document's top-level blocks, and which is being drawn: what a balanced section holds. */
     flow: OfficeContentNode[] = [];
     flowIndex = -1;
@@ -375,8 +382,33 @@ class NativeLayout {
         this.margin = saved.margin;
     }
 
+    /** The widths of all the text columns, as applyColumn lays them out. */
+    private textColumnWidths(): number[] {
+        const saved = { index: this.columnIndex, margin: this.margin };
+        const out: number[] = [];
+        for (let i = 0; i < (this.columns?.count ?? 0); i++) { this.columnIndex = i; this.applyColumn(); out.push(this.contentWidth); }
+        this.columnIndex = saved.index;
+        this.margin = saved.margin;
+        return out;
+    }
+
+    /**
+     * Balances the columns of this page on `area` (room as height times width): level at the height the
+     * columns' widths together need for it, where that fits on the page. Whether it fit.
+     */
+    private balanceOnThisPage(area: number): boolean {
+        const total = this.textColumnWidths().reduce((a, b) => a + b, 0);
+        if (!(total > 0)) return false;
+        const limit = this.columnTop + area / total;
+        if (limit >= this.pageH - (this.pageMargin ?? this.margin).bottom - this.footReserve) return false;
+        this.columnLimit = limit;
+        return true;
+    }
+
     /** The text runs on into the next column, or, from the last, onto the next page. */
     private nextColumnOrPage(): void {
+        // The room the column took, for a balanced section's last page.
+        if (this.columns && this.balanceArea !== null) this.usedArea += Math.max(0, this.y - this.columnTop) * this.contentWidth;
         if (this.columns && !this.fixedPage && this.columnIndex < this.columns.count - 1) {
             this.columnsBottom = Math.max(this.columnsBottom, this.y);
             this.columnIndex++;
@@ -402,6 +434,8 @@ class NativeLayout {
             this.pageMargin = null;
             this.columnLimit = null;
         }
+        this.balanceArea = null;
+        this.usedArea = 0;
         if (!columns || columns.count < 2) return;
         this.pageMargin = { ...this.margin };
         this.columns = { ...columns, count: Math.min(columns.count, 16) };
@@ -422,9 +456,11 @@ class NativeLayout {
             region.push(this.flow[i]);
         }
         const height = await this.measured(async () => { for (const node of region) await this.render(node); });
+        // The room its text takes, measured in the first column: on this page where it fits (its columns,
+        // of whatever widths, ending level), else on the page it ends on, on what the pages before left.
         // (The last column has no limit: what the measure missed, it takes.)
-        const limit = this.columnTop + height / this.columns.count;
-        if (limit < this.pageH - this.margin.bottom - this.footReserve) this.columnLimit = limit;
+        const area = height * this.contentWidth;
+        if (!this.balanceOnThisPage(area)) { this.balanceArea = area; this.usedArea = 0; }
     }
 
     // ── sections ─────────────────────────────────────────────────────────────────
@@ -908,6 +944,8 @@ class NativeLayout {
             this.columnTop = this.columnsBottom = this.y;
             this.columnLimit = null;
             this.applyColumn();
+            // A balanced section's last page: its columns end level on what is left of it.
+            if (this.balanceArea !== null && this.balanceOnThisPage(Math.max(0, this.balanceArea - this.usedArea))) this.balanceArea = null;
         }
         // Footnotes whose reference ended the page before, without room left there, go on this one.
         const carried = this.carriedFootnotes;

@@ -2684,6 +2684,29 @@ async function parserHardeningTests() {
     const svgOf = (body: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">${body}</svg>`;
     await timed('pdf: an SVG path of 400k segments is drawn', () => OfficeGenerator.generate(svgAst(svgOf(`<path stroke="black" d="M0 0${' L1 1'.repeat(n(400_000))}"/>`)), 'pdf' as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any));
     await timed('pdf: an SVG polyline of 300k points is drawn', () => OfficeGenerator.generate(svgAst(svgOf(`<polyline stroke="black" points="${'1 1 '.repeat(n(300_000))}"/>`)), 'pdf' as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any));
+    // A document of thousands of sections, each with a header of its own, is written in time in proportion
+    // (each section's own looked for among all of them, and each master page among all made).
+    const sectionsAst = () => {
+        const count = n(4_000);
+        return { type: 'docx', metadata: {}, attachments: [], auxiliary: { headers: Array.from({ length: count }, (_, i) => ({ type: 'header', metadata: { type: 'default', section: i }, children: [{ type: 'paragraph', children: [{ type: 'text', text: `H${i}` }] }] })) },
+            content: Array.from({ length: count }, (_, i) => [...(i ? [{ type: 'break', metadata: { breakType: 'page', section: i, pageSetup: { width: 612, height: 792 } } }] : []), { type: 'paragraph', children: [{ type: 'text', text: `S${i}` }] }]).flat() } as any;
+    };
+    for (const format of ['docx', 'odt', 'rtf'] as const) await timed(`${format}: 4,000 sections each with its own header are written`, () => OfficeGenerator.generate(sectionsAst(), format, { onWarning: () => {} } as any));
+    await timed('rtf: 50,000 sections are read', () => OfficeParser.parseOffice(Buffer.from(`{\\rtf1\\ansi ${'x\\par\\sect\\sectd\\pgwsxn15840\\pghsxn12240\\cols2 '.repeat(n(50_000))}}`), { fileType: 'rtf', includeBreakNodes: true } as any));
+    // Every value read as a number, a length or a transform in time in proportion to it (each took time in
+    // its square: digits matched two ways, spaces before and after a unit, an unclosed transform read on).
+    const svgRun = (svg: string) => () => OfficeGenerator.generate(svgAst(svg), 'pdf' as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any);
+    await timed('pdf: an SVG width of 80k digits is read', svgRun(svgOf(`<rect width="${'1'.repeat(n(80_000))}x" height="5"/>`)));
+    await timed('pdf: an SVG width of 200k spaces is read', svgRun(svgOf(`<rect width="5${' '.repeat(n(200_000))}x" height="5"/>`)));
+    await timed('pdf: an SVG root width of 80k digits is read', svgRun(`<svg xmlns="http://www.w3.org/2000/svg" width="${'1'.repeat(n(80_000))}x" height="10"><rect width="5" height="5"/></svg>`));
+    await timed('pdf: an SVG transform of 80k unclosed scale( is read', svgRun(svgOf(`<g transform="${'scale(1 '.repeat(n(80_000))}"><rect width="5" height="5"/></g>`)));
+    await timed('pdf: an SVG stylesheet rule of 200k repeated classes is matched', svgRun(svgOf(`<style>${'.a'.repeat(n(200_000))}{fill:red}</style>${'<rect class="a" width="1" height="1"/>'.repeat(n(5_000))}`)));
+    // A use of text or a picture copied ten thousand times: bounded (characters drawn, the picture embedded once).
+    const fanSvg = (leaf: string, levels: number) => svgOf('<defs><g id="a0">' + leaf + '</g>' + Array.from({ length: levels }, (_, i) => `<g id="a${i + 1}">` + '<use href="#a' + i + '"/>'.repeat(10) + '</g>').join('') + `</defs><use href="#a${levels}"/>`);
+    await timed('pdf: SVG text used ten thousand times is drawn within its bound', svgRun(fanSvg(`<text x="1" y="10">${'W'.repeat(n(16_000))}</text>`, 4)));
+    const pngData = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    const usedPicture = Buffer.from((await svgRun(fanSvg(`<image width="5" height="5" href="data:image/png;base64,${pngData}${' '.repeat(100_000)}"/>`, 3))()).value as Uint8Array);
+    check('pdf: an SVG picture used a thousand times is embedded once', usedPicture.length < 200_000, `${usedPicture.length} bytes`);
     await timed('pdf: an SVG text of 50k spans is drawn', () => OfficeGenerator.generate(svgAst(svgOf(`<text x="1" y="20">${'<tspan dx="1">w</tspan>'.repeat(n(50_000))}</text>`)), 'pdf' as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any));
     const lostLong = await OfficeGenerator.generate(svgAst(svgOf(`<path stroke="black" d="M0 0${' L1 1'.repeat(100_000)}"/>`)), 'pdf' as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any);
     check('pdf: an SVG path of 100k segments is drawn, not lost', !(lostLong.messages || []).some((m: any) => m.code === 'IMAGE_PROCESSING_FAILED'), JSON.stringify(lostLong.messages));

@@ -3,7 +3,7 @@ import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
-import { base64ByteLength, decodeBase64, embedUrl, furnitureKind, hexColor, isHeaderRow, runningFurniture, writableSpacing } from '../utils/officeGenUtils.js';
+import { base64ByteLength, decodeBase64, embedUrl, furnitureKind, hexColor, isHeaderRow, runningFurniture, sectionFurniture, writableSpacing } from '../utils/officeGenUtils.js';
 
 /** Each byte's two hex digits. */
 const HEX_BYTES = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
@@ -65,6 +65,8 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
     private usedMonospace = false;
     /** Whether the math-as-source warning was given (once per document). */
     private mathWarned = false;
+    /** The section being written, counted from 0 as BreakMetadata.section counts. */
+    private currentSection = 0;
     /** The node processor the document is written with, kept so a comment's and a header's blocks are written by it too. */
     private processor?: (node: OfficeContentNode, childrenOutput: string) => Promise<string>;
     /** The comments of a block written, to go before it (see processNodeRecursive). */
@@ -79,6 +81,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         this.colorIndex = new Map();
         this.usedMonospace = false;
         this.mathWarned = false;
+        this.currentSection = 0;
 
         // We first process all nodes to collect colors and analyze structure
         const { running, body: bodyContent } = await this.renderBody(this.ast);
@@ -116,7 +119,8 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
             output += '}\n';
         }
 
-        // 4. The first section's columns, the header and footer, then the body
+        // 4. The document's page (where it gives one), the first section's columns, the header and footer, then the body
+        output += documentPageRtf(this.ast.metadata?.pageSetup);
         const columns = columnsRtf(this.ast.metadata?.pageSetup?.columns);
         if (columns) output += `\\sectd${columns}\n`;
         output += running;
@@ -413,10 +417,20 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
 
                 case 'break': {
                     const meta = node.metadata as BreakMetadata | undefined;
-                    // A section starting on this page, in its columns (`\sbknone`: no break in the text).
-                    if (meta?.breakType === 'section') return `\\sect\\sectd\\sbknone${columnsRtf(meta.pageSetup?.columns)}\n`;
-                    // A section starting on a new page, in its columns.
-                    if (meta?.breakType === 'page' && typeof meta.section === 'number') return `\\sect\\sectd\\sbkpage${columnsRtf(meta.pageSetup?.columns)}\n`;
+                    // A section starting on this page (`\sbknone`: no break in the text) or on a new one, on its
+                    // page (size, margins), in its columns, with its own header and footer where it has them.
+                    if (meta?.breakType === 'section' || (meta?.breakType === 'page' && typeof meta.section === 'number')) {
+                        // The section as the break numbers it (one numbering only some breaks leaves the others in the
+                        // section before); its own header and footer, written where it starts.
+                        const starts = typeof meta.section === 'number' && meta.section !== this.currentSection;
+                        if (typeof meta.section === 'number') this.currentSection = meta.section;
+                        let own = '';
+                        for (const kind of starts ? ['header', 'footer'] as const : [] as const) {
+                            const nodes = sectionFurniture(kind === 'header' ? this.ast.auxiliary?.headers : this.ast.auxiliary?.footers, kind, this.currentSection);
+                            if (nodes) own += `{\\${kind} ${await this.renderApart(nodes)}}\n`;
+                        }
+                        return `\\sect\\sectd\\${meta.breakType === 'section' ? 'sbknone' : 'sbkpage'}${sectionPageRtf(meta.pageSetup)}${columnsRtf(meta.pageSetup?.columns)}\n${own}`;
+                    }
                     return meta?.breakType === 'page' ? '\\page\n' : '\\line\n';
                 }
 
@@ -623,8 +637,30 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
     }
 }
 
-/** Columns as RTF's section controls: their number, the gap in twips, a line between. Nothing for one. */
+/** Columns as RTF's section controls: their number, the gap in twips, a line between, each one's width where they differ. Nothing for one. */
 function columnsRtf(columns: PageSetup['columns'] | undefined): string {
     if (!columns || columns.count < 2) return '';
-    return `\\cols${Math.min(columns.count, 16)}\\colsx${Math.round(columns.gap * 20)}${columns.separator ? '\\linebetcol' : ''}`;
+    const count = Math.min(columns.count, 16), gap = Math.round(columns.gap * 20);
+    const own = columns.widths?.length === columns.count
+        ? columns.widths.slice(0, count).map((w, i) => `\\colno${i + 1}\\colw${Math.max(1, Math.round(w * 20))}${i < count - 1 ? `\\colsr${gap}` : ''}`).join('')
+        : '';
+    return `\\cols${count}\\colsx${gap}${columns.separator ? '\\linebetcol' : ''}${own}`;
+}
+
+/** A twips value RTF takes (a whole number within its range). */
+const twips = (pt: number) => Math.max(0, Math.min(31680, Math.round(pt * 20)));
+
+/** The document's page (`\paperw`, `\margl`, ..., `\landscape`) as its first section's setup gives it; nothing where it gives none. */
+function documentPageRtf(setup: PageSetup | undefined): string {
+    if (!setup || !(setup.width > 0) || !(setup.height > 0)) return '';
+    const m = setup.margin;
+    return `\\paperw${twips(setup.width)}\\paperh${twips(setup.height)}${m ? `\\margl${twips(m.left)}\\margr${twips(m.right)}\\margt${twips(m.top)}\\margb${twips(m.bottom)}` : ''}${setup.width > setup.height ? '\\landscape' : ''}\n`;
+}
+
+/** A section's own page (`\pgwsxn`, `\marglsxn`, ..., `\lndscpsxn`, header and footer distances); nothing where the break gives none. */
+function sectionPageRtf(setup: PageSetup | undefined): string {
+    if (!setup || !(setup.width > 0) || !(setup.height > 0)) return '';
+    const m = setup.margin;
+    return `\\pgwsxn${twips(setup.width)}\\pghsxn${twips(setup.height)}${m ? `\\marglsxn${twips(m.left)}\\margrsxn${twips(m.right)}\\margtsxn${twips(m.top)}\\margbsxn${twips(m.bottom)}` : ''}`
+        + `${setup.headerDistance !== undefined ? `\\headery${twips(setup.headerDistance)}` : ''}${setup.footerDistance !== undefined ? `\\footery${twips(setup.footerDistance)}` : ''}${setup.width > setup.height ? '\\lndscpsxn' : ''}`;
 }

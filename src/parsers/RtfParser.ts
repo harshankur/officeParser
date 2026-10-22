@@ -40,7 +40,7 @@
  * @see https://latex2rtf.sourceforge.net/RTF-Spec-1.2.pdf RTF 1.2 Specification
  */
 
-import { CellMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, IndentationMetadata, ListMetadata, ParagraphSpacing, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, TextFormatting } from '../types.js';
+import { BreakMetadata, CellMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, IndentationMetadata, ListMetadata, ParagraphSpacing, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, PageSetup, TextFormatting } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
@@ -48,6 +48,11 @@ import { lookupTable } from '../utils/lookupUtils.js';
 import { chargeRawContent } from '../utils/xmlUtils.js';
 import { attachmentLookup } from '../utils/repeatUtils.js';
 import { ByteDecoder, textDecoder } from '../utils/encodingUtils.js';
+
+/** The document's page words (twips), and their state keys. */
+const PAGE_WORDS = new Map([['paperw', 'w'], ['paperh', 'h'], ['margl', 'ml'], ['margr', 'mr'], ['margt', 'mt'], ['margb', 'mb']]);
+/** A section's own page and column words, and their state keys. */
+const SECTION_WORDS = new Map([['pgwsxn', 'w'], ['pghsxn', 'h'], ['marglsxn', 'ml'], ['margrsxn', 'mr'], ['margtsxn', 'mt'], ['margbsxn', 'mb'], ['headery', 'hy'], ['footery', 'fy'], ['cols', 'cols'], ['colsx', 'colsx']]);
 
 /**
  * Represents an RTF group (content enclosed in braces).
@@ -665,6 +670,18 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // A first page's own part is shown under `\titlepg`, a left page's under `\facingp`; without them,
     // kept and hidden, as Word's are.
     let titlePage = false, facingPages = false;
+    // The page (`\paperw`, `\margl`, ...) and each section's own (`\pgwsxn`, `\marglsxn`, `\cols`, ...), in
+    // twips: a section's state from its `\sectd` on; and the break (with includeBreakNodes) each `\sect`
+    // ends one with, given the next section's page once its properties are read (see sectionSetup).
+    const page: Partial<Record<'w' | 'h' | 'ml' | 'mr' | 'mt' | 'mb' | 'hy' | 'fy', number>> & { landscape?: boolean } = {};
+    type SectionState = Partial<Record<'w' | 'h' | 'ml' | 'mr' | 'mt' | 'mb' | 'hy' | 'fy' | 'cols' | 'colsx', number>> & { landscape?: boolean; line?: boolean; start?: 'none' | 'page'; widths: Map<number, number>; colNo: number };
+    const newSection = (): SectionState => ({ widths: new Map(), colNo: 1 });
+    let section = newSection();
+    const firstSection = section;
+    let sectionNumber = 0, pageStated = false;
+    const sectionBreaks: { node: OfficeContentNode; state: SectionState }[] = [];
+    // Each header and footer part's section, set once the document is known to have sections.
+    const partSections = new Map<OfficeContentNode, number>();
     // Who wrote the next annotation (`\annotation`), given in the groups before it.
     let annotationAuthor: string | undefined;
     let annotationInitials: string | undefined;
@@ -1549,6 +1566,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                         const which = node.destination.slice(kind.length);
                         const part: OfficeContentNode = { type: kind, text: '', children: [], metadata: { type: which === 'f' ? 'first' : which === 'l' ? 'even' : 'default' } as HeaderFooterMetadata };
                         (kind === 'header' ? headers : footers).push(part);
+                        partSections.set(part, sectionNumber);
                         furniturePart = part;
                         redirect = part.children!;
                     }
@@ -1912,6 +1930,44 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             // Whether the first page's own header and footer (`\headerf`) and the left pages' (`\headerl`) are shown.
             if (node.value === 'titlepg') titlePage = true;
             else if (node.value === 'facingp') facingPages = true;
+            // The page and the sections' pages.
+            else if (PAGE_WORDS.has(node.value) && node.param !== undefined && node.param >= 0) { (page as any)[PAGE_WORDS.get(node.value)!] = node.param; pageStated = true; }
+            else if (node.value === 'landscape') { page.landscape = true; pageStated = true; }
+            else if (SECTION_WORDS.has(node.value) && node.param !== undefined && node.param >= 0) {
+                const key = SECTION_WORDS.get(node.value)!;
+                (section as any)[key] = node.param;
+                if (key !== 'cols' && key !== 'colsx') pageStated = true;
+            }
+            else if (node.value === 'lndscpsxn') { section.landscape = true; pageStated = true; }
+            else if (node.value === 'linebetcol') section.line = true;
+            else if (node.value === 'colno' && node.param !== undefined) section.colNo = Math.max(1, Math.min(16, node.param));
+            else if (node.value === 'colw' && node.param !== undefined && node.param > 0) section.widths.set(section.colNo, node.param);
+            else if (node.value === 'sbknone') section.start = 'none';
+            else if (node.value === 'sbkpage' || node.value === 'sbkodd' || node.value === 'sbkeven' || node.value === 'sbkcol') section.start = 'page';
+            else if (node.value === 'sectd') {
+                // Back to the default section, its own properties to follow.
+                const fresh = newSection();
+                for (const k of Object.keys(section) as (keyof SectionState)[]) delete (section as any)[k];
+                Object.assign(section, fresh);
+            }
+            // A section ends: its body's paragraph, then a break the next starts on (its page, read after it).
+            else if (node.value === 'sect' && currentTarget === content && paragraphDepth === 0) {
+                flushRun();
+                flushParagraph();
+                sectionNumber++;
+                section = newSection();
+                if (config.includeBreakNodes) {
+                    const brk: OfficeContentNode = { type: 'break', metadata: { breakType: 'page', section: sectionNumber } as BreakMetadata };
+                    content.push(brk);
+                    sectionBreaks.push({ node: brk, state: section });
+                }
+            }
+            // A page break the author typed, with includeBreakNodes.
+            else if (node.value === 'page' && config.includeBreakNodes && currentTarget === content && paragraphDepth === 0) {
+                flushRun();
+                flushParagraph();
+                content.push({ type: 'break', metadata: { breakType: 'page' } as BreakMetadata });
+            }
             // Paragraph control words
             if (node.value === 'par') {
                 flushParagraph();
@@ -2252,11 +2308,37 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     for (const part of [...headers, ...footers]) {
         const meta = part.metadata as HeaderFooterMetadata;
         if ((meta.type === 'first' && !titlePage) || (meta.type === 'even' && !facingPages)) meta.hidden = true;
+        // A document of sections gives each part its section, as Word's are.
+        if (sectionNumber > 0) meta.section = partSections.get(part) ?? 0;
+    }
+    // A section's page in points: its own size, margins and columns, else the document's (RTF's defaults,
+    // Letter with margins of an inch and a quarter across, where it states none).
+    const sectionSetup = (state: SectionState): PageSetup => {
+        const pt = (twips: number | undefined, fallback: number) => (twips ?? fallback) / 20;
+        let width = pt(state.w ?? page.w, 12240), height = pt(state.h ?? page.h, 15840);
+        if ((state.landscape || (state.w === undefined && page.landscape)) && width < height) [width, height] = [height, width];
+        const setup: PageSetup = {
+            width, height,
+            margin: { top: pt(state.mt ?? page.mt, 1440), right: pt(state.mr ?? page.mr, 1800), bottom: pt(state.mb ?? page.mb, 1440), left: pt(state.ml ?? page.ml, 1800) },
+            headerDistance: pt(state.hy ?? page.hy, 720), footerDistance: pt(state.fy ?? page.fy, 720),
+        };
+        const count = Math.min(16, state.cols ?? 1);
+        if (count > 1) {
+            const widths = Array.from({ length: count }, (_, i) => state.widths.get(i + 1));
+            setup.columns = { count, gap: pt(state.colsx, 720), ...(state.line ? { separator: true } : {}), ...(widths.every(w => w !== undefined) ? { widths: widths.map(w => w! / 20) } : {}) };
+        }
+        return setup;
+    };
+    for (const { node, state } of sectionBreaks) {
+        const meta = node.metadata as BreakMetadata;
+        if (state.start === 'none') meta.breakType = 'section';
+        if (pageStated || (state.cols ?? 1) > 1) meta.pageSetup = sectionSetup(state);
     }
     const result = createAST(
         'rtf',
         {
             // RTF Limitation: No style map available (RTF uses inline styles)
+            ...(pageStated || (firstSection.cols ?? 1) > 1 ? { pageSetup: sectionSetup(firstSection) } : {}),
         },
         content,
         attachments, // PNG and JPEG images extracted from \\pict groups

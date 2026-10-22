@@ -210,6 +210,38 @@ export function runningFurniture(nodes: OfficeContentNode[] | undefined, kind: '
 }
 
 /**
+ * A later section's own header or footer (its every-page part, `section` counted from 0, the first
+ * section's being {@link runningFurniture}'s): the part a Word section has of its own, an empty one
+ * included (its pages have none); undefined where the section has none of its own, and takes on the one
+ * before it, as a word processor's section does. A reader that gives loose blocks, or a page's (a
+ * PDF's), gives none.
+ */
+export function sectionFurniture(nodes: OfficeContentNode[] | undefined, kind: 'header' | 'footer', section: number): OfficeContentNode[] | undefined {
+    if (!nodes?.length || section < 1) return undefined;
+    const own = sectionFurnitureIndex(nodes, kind).bySection.get(section);
+    return own ? [own] : undefined;
+}
+
+/** Later sections' own parts of a kind, by section, and their sections in order: read once a list (see sectionFurniture). */
+const furnitureIndexes = new WeakMap<OfficeContentNode[], Map<string, { bySection: Map<number, OfficeContentNode>; sections: number[] }>>();
+export function sectionFurnitureIndex(nodes: OfficeContentNode[], kind: 'header' | 'footer'): { bySection: Map<number, OfficeContentNode>; sections: number[] } {
+    let byKind = furnitureIndexes.get(nodes);
+    if (!byKind) furnitureIndexes.set(nodes, byKind = new Map());
+    let index = byKind.get(kind);
+    if (!index) {
+        const bySection = new Map<number, OfficeContentNode>();
+        for (const n of nodes) {
+            const m = n.metadata as { type?: string; section?: number; hidden?: boolean; page?: number } | undefined;
+            if (n.type !== kind || typeof m?.section !== 'number' || m.section < 1 || m.page !== undefined || m.hidden || (m.type ?? 'default') !== 'default') continue;
+            if (!bySection.has(m.section)) bySection.set(m.section, n);
+        }
+        index = { bySection, sections: [...bySection.keys()].sort((a, b) => a - b) };
+        byKind.set(kind, index);
+    }
+    return index;
+}
+
+/**
  * Which pages the running header or footer {@link runningFurniture} picked is on: every page
  * (`default`), the first alone (`first`: a letterhead, where the default one is empty) or the even pages
  * alone (`even`). A writer writes it as that kind, never as every page's.
@@ -558,35 +590,45 @@ export function withoutHiddenSheetContent(ast: OfficeParserAST): OfficeParserAST
 const propText = (s: string): string => escapeXml(stripInvalidXmlChars(s));
 
 /**
- * A document's custom properties as an OOXML package's `docProps/custom.xml` (DOCX, XLSX, PPTX), each typed
- * as it is held (a flag, a number, a date, else text); null where there are none.
+ * A document's custom properties as a package holds them: each a name (not blank, at most 255 characters,
+ * as Office takes) and a value of its kind, a flag, a number, a date (between the years 1601 and 9999, as
+ * a file time holds one), else text; an object or list as its JSON, not `[object Object]`.
  */
-export function ooxmlCustomPropertiesXml(props: Record<string, unknown> | undefined): string | null {
-    if (!props || !Object.keys(props).length) return null;
-    let entries = '', pid = 2;
-    for (const [key, value] of Object.entries(props)) {
-        let v: string;
-        if (typeof value === 'boolean') v = `<vt:bool>${value ? 'true' : 'false'}</vt:bool>`;
-        else if (typeof value === 'number' && Number.isFinite(value)) v = `<vt:r8>${value}</vt:r8>`;
-        else if (value instanceof Date && !isNaN(value.getTime())) v = `<vt:filetime>${value.toISOString().replace(/\.\d+Z$/, 'Z')}</vt:filetime>`;
-        else v = `<vt:lpwstr>${propText(String(value))}</vt:lpwstr>`;
-        entries += `<property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="${pid++}" name="${propText(key)}">${v}</property>`;
+function customEntries(props: Record<string, unknown> | undefined): { name: string; kind: 'bool' | 'number' | 'date' | 'text'; value: string }[] {
+    const out: { name: string; kind: 'bool' | 'number' | 'date' | 'text'; value: string }[] = [];
+    for (const [key, value] of Object.entries(props || {})) {
+        const name = key.trim().slice(0, 255);
+        if (!name || value === undefined) continue;
+        const year = value instanceof Date ? value.getUTCFullYear() : NaN;
+        if (typeof value === 'boolean') out.push({ name, kind: 'bool', value: value ? 'true' : 'false' });
+        else if (typeof value === 'number' && Number.isFinite(value)) out.push({ name, kind: 'number', value: String(value) });
+        else if (value instanceof Date && year >= 1601 && year <= 9999) out.push({ name, kind: 'date', value: value.toISOString().replace(/\.\d+Z$/, 'Z') });
+        else {
+            let text: string;
+            if (value !== null && typeof value === 'object' && !(value instanceof Date)) { try { text = JSON.stringify(value) ?? String(value); } catch { text = String(value); } }
+            else text = String(value);
+            out.push({ name, kind: 'text', value: text });
+        }
     }
-    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n`
-        + `<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" `
-        + `xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">${entries}</Properties>`;
+    return out;
 }
 
-/** A document's custom properties as ODF `meta:user-defined` elements (ODT, ODS, ODP), each typed as it is held. */
+/**
+ * A document's custom properties as an OOXML package's `docProps/custom.xml` (DOCX, XLSX, PPTX), each typed
+ * as it is held (see customEntries); null where there are none.
+ */
+export function ooxmlCustomPropertiesXml(props: Record<string, unknown> | undefined): string | null {
+    const entries = customEntries(props);
+    if (!entries.length) return null;
+    const tag = { bool: 'vt:bool', number: 'vt:r8', date: 'vt:filetime', text: 'vt:lpwstr' } as const;
+    const xml = entries.map((e, i) => `<property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="${i + 2}" name="${propText(e.name)}"><${tag[e.kind]}>${propText(e.value)}</${tag[e.kind]}></property>`).join('');
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n`
+        + `<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" `
+        + `xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">${xml}</Properties>`;
+}
+
+/** A document's custom properties as ODF `meta:user-defined` elements (ODT, ODS, ODP), each typed as it is held (see customEntries). */
 export function odfUserDefinedXml(props: Record<string, unknown> | undefined): string {
-    let meta = '';
-    for (const [key, value] of Object.entries(props || {})) {
-        let type = 'string', v: string;
-        if (typeof value === 'boolean') { type = 'boolean'; v = value ? 'true' : 'false'; }
-        else if (typeof value === 'number' && Number.isFinite(value)) { type = 'float'; v = String(value); }
-        else if (value instanceof Date && !isNaN(value.getTime())) { type = 'date'; v = value.toISOString().replace(/\.\d+Z$/, 'Z'); }
-        else v = String(value);
-        meta += `<meta:user-defined meta:name="${propText(key)}" meta:value-type="${type}">${propText(v)}</meta:user-defined>`;
-    }
-    return meta;
+    const type = { bool: 'boolean', number: 'float', date: 'date', text: 'string' } as const;
+    return customEntries(props).map(e => `<meta:user-defined meta:name="${propText(e.name)}" meta:value-type="${type[e.kind]}">${propText(e.value)}</meta:user-defined>`).join('');
 }

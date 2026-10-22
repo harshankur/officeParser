@@ -5314,6 +5314,22 @@ async function testNativePdfSvgPictures(): Promise<void> {
     assert.ok(!long.messages.some(m => m.startsWith('IMAGE_PROCESSING_FAILED')) && long.nodes.some(n => (n.text || '').includes('AfterPath')), `a path of 100,000 segments is drawn; got ${JSON.stringify(long.messages)}`);
     const deep = await drawn('<g>'.repeat(200) + '<rect width="5" height="5"/>' + '</g>'.repeat(200) + '<g id="a"><use href="#b"/></g><g id="b"><use href="#a"/></g>');
     assert.ok(deep.messages.some(m => m.includes('groups nested past')) && deep.messages.some(m => m.includes('inside itself')), `groups past the depth limit and a use cycle are reported; got ${JSON.stringify(deep.messages)}`);
+    // A use of text or a picture drawn ten thousand times: the text within the picture's bound on characters
+    // (reported past it), the picture embedded once.
+    const fan = (leaf: string, levels: number) => '<defs><g id="a0">' + leaf + '</g>' + Array.from({ length: levels }, (_, i) => `<g id="a${i + 1}">` + `<use href="#a${i}"/>`.repeat(10) + '</g>').join('') + `</defs><use href="#a${levels}"/>`;
+    const started = Date.now();
+    const amplified = await drawn(fan(`<text x="1" y="10">${'W'.repeat(4000)}</text>`, 4));
+    assert.ok(Date.now() - started < 20_000 && amplified.messages.some(m => m.includes('text past the picture')), `text drawn by many uses is bounded and reported; got ${JSON.stringify(amplified.messages)} in ${Date.now() - started}ms`);
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    const pictures = await OfficeGenerator.generate(ast(`<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">${fan(`<image width="5" height="5" href="data:image/png;base64,${png}"/>`, 3)}</svg>`), 'pdf', { pdfConfig: { engine: 'native' } } as any);
+    const imageObjects = Buffer.from(pictures.value as Uint8Array).toString('latin1').match(/\/Subtype\s*\/Image/g) || [];
+    // (Once: the picture and its alpha channel's mask.)
+    assert.ok(imageObjects.length <= 2, `a picture drawn a thousand times by use is embedded once; got ${imageObjects.length} image objects`);
+    // Hidden text is not drawn; a selector naming one class many times is that one class.
+    const hidden = await drawn('<text x="10" y="30" visibility="hidden">HIDDENTEXT</text><g visibility="hidden"><text x="10" y="60">HIDDENGROUP</text></g><text x="10" y="90">VISIBLETEXT</text>');
+    assert.ok(!hidden.nodes.some(n => /HIDDEN/.test(n.text || '')) && hidden.nodes.some(n => (n.text || '').includes('VISIBLETEXT')), 'text in visibility="hidden" is not drawn');
+    const classes = await drawn(`<style>${'.a'.repeat(5000)} { fill: #ff0000 }</style><rect class="a" width="50" height="50"/>`);
+    assert.ok(/1 0 0 rg/.test(classes.streams), 'a selector repeating one class matches it');
 
 }
 
@@ -5508,7 +5524,7 @@ async function testColumns(): Promise<void> {
     assert.ok(/style:family="section"><style:section-properties><style:columns fo:column-count="2" fo:column-gap="36pt"><style:column-sep/.test(content) && /<text:section [^>]*>[^]*Column paragraph 6[^]*<\/text:section>/.test(content), 'ODT: the columns are a section of their own');
     const odtBack = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(ast, 'odt')).value as Uint8Array), { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
     assert.deepStrictEqual(odtBack.content.filter(n => n.type === 'break').map(n => (n.metadata as any).pageSetup?.columns?.count ?? 1), [2, 1], 'ODT: its column section reads back');
-    assert.ok(/\\sect\\sectd\\sbknone\\cols2\\colsx720\\linebetcol/.test(String((await OfficeGenerator.generate(ast, 'rtf')).value)), 'RTF: a section of two columns');
+    assert.ok(/\\sect\\sectd\\sbknone(?:\\[a-z]+\d*)*?\\cols2\\colsx720\\linebetcol/.test(String((await OfficeGenerator.generate(ast, 'rtf')).value)), 'RTF: a section of two columns');
     const tex = String((await OfficeGenerator.generate(ast, 'tex')).value);
     assert.ok(/\\usepackage\{multicol\}/.test(tex) && /\\begin\{multicols\}\{2\}[^]*Column paragraph 6[^]*\\end\{multicols\}/.test(tex), 'LaTeX: the columns are a multicols');
 
@@ -5543,15 +5559,17 @@ async function testColumns(): Promise<void> {
     const asked = new Map<unknown, number>();
     const { out: balancedOut } = await pdfRead({ type: 'docx', metadata: {}, attachments: [], content: balanced }, { onNode: (n: unknown) => { asked.set(n, (asked.get(n) ?? 0) + 1); return undefined; } });
     assert.ok([...asked.values()].every(v => v === 1) && (balancedOut.messages || []).filter((m: any) => m.code === 'IMAGE_PROCESSING_FAILED').length === 1, 'a balanced section asks onNode once a node and warns once');
-    // LaTeX: a table in columns is a tabular (multicols takes no longtable); a page break ends and reopens the
+    // LaTeX: a short table in columns is a tabular (multicols takes no longtable); a page break ends and reopens the
     // columns; a section break inside a table cell opens none there.
-    const texCols = String((await OfficeGenerator.generate(columnsOf({ count: 2, gap: 18 }, [P('Intro'), table, { type: 'break', metadata: { breakType: 'page' } }, P('Next page')]), 'tex')).value);
+    const texCols = String((await OfficeGenerator.generate(columnsOf({ count: 2, gap: 18 }, [P('Intro'), { ...table, children: table.children.slice(0, 5) }, { type: 'break', metadata: { breakType: 'page' } }, P('Next page')]), 'tex')).value);
     const inCols = texCols.slice(texCols.indexOf('\\begin{multicols}'));
     assert.ok(!inCols.includes('\\begin{longtable}') && inCols.includes('\\begin{tabular}') && /\\end\{multicols\}\}\n\\clearpage\n\{[^\n]*\\begin\{multicols\}\{2\}/.test(inCols), 'LaTeX: tables in columns are tabular, a page break ends and reopens them');
     const texCell = String((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [P('x'), { type: 'break', metadata: { breakType: 'section', pageSetup: { columns: { count: 2, gap: 10 } } } }, P('y')] }] }] }] } as any, 'tex')).value);
     assert.ok(!texCell.includes('multicols'), 'LaTeX: a section break inside a table cell opens no columns there');
     // ODT: columns of their own widths read back; a section inside a table cell is read.
-    const widthsBack = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(columnsOf({ count: 3, gap: 18, widths: [100, 200, 350] }, [P('Wide'), P('Text')]), 'odt')).value as Uint8Array), { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+    // (On a page whose text width holds them and their gaps: a column's width is a share of that width.)
+    const widthsDoc = { type: 'docx', metadata: { pageSetup: { width: 830, height: 600, margin: { top: 72, right: 72, bottom: 72, left: 72 }, columns: { count: 3, gap: 18, widths: [100, 200, 350] } } }, attachments: [], content: [P('Wide'), P('Text')] } as any;
+    const widthsBack = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(widthsDoc, 'odt')).value as Uint8Array), { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
     assert.deepStrictEqual(widthsBack.metadata.pageSetup?.columns?.widths, [100, 200, 350], 'ODT: columns of their own widths read back');
     const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"';
     const sectionInCell = Buffer.from(zipSync({ mimetype: strToU8('application/vnd.oasis.opendocument.text'),
@@ -5569,6 +5587,90 @@ async function testColumns(): Promise<void> {
     const landBack = await OfficeParser.parseOffice(landOdt, { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
     const landBreak = landBack.content.find(n => n.type === 'break' && (n.metadata as any)?.pageSetup?.width === 792);
     assert.ok(landBreak && (landBreak.metadata as any).pageSetup.height === 612 && (landBreak.metadata as any).pageSetup.columns?.count === 2, `odt: a landscape section of two columns keeps its page; got ${JSON.stringify(landBack.content.filter(n => n.type === 'break').map(n => n.metadata))}`);
+
+    // A table longer than a column holds, in a section of columns: the columns close for it (a longtable
+    // across the page), and open again after; a short one stays a tabular in its column.
+    const tableRows = (n: number, tag: string) => ({ type: 'table', children: Array.from({ length: n }, (_, i) => ({ type: 'row', children: [{ type: 'cell', children: [{ type: 'paragraph', children: [{ type: 'text', text: `${tag}${i}` }] }] }] })) });
+    const inColumns = (n: number) => ({ type: 'docx', metadata: {}, attachments: [], content: [{ type: 'break', metadata: { breakType: 'section', section: 1, pageSetup: { columns: { count: 2, gap: 18 } } } }, { type: 'paragraph', children: [{ type: 'text', text: 'Before' }] }, tableRows(n, 'R'), { type: 'paragraph', children: [{ type: 'text', text: 'AfterTable' }] }] }) as any;
+    const longTex = String((await OfficeGenerator.generate(inColumns(90), 'tex')).value);
+    assert.ok(/\\end\{multicols\}\}\s*\\begin\{longtable\}[^]*R89[^]*\\end\{longtable\}\s*\{\\setlength\{\\columnsep\}\{18pt\}\\begin\{multicols\}\{2\}[^]*AfterTable/.test(longTex), 'LaTeX: a long table closes the columns, runs across the page, and they open again after it');
+    const shortTex = String((await OfficeGenerator.generate(inColumns(5), 'tex')).value);
+    assert.ok(/\\begin\{multicols\}\{2\}[^]*\\begin\{tabular\}[^]*R4[^]*\\end\{tabular\}[^]*AfterTable[^]*\\end\{multicols\}/.test(shortTex) && !shortTex.includes('longtable}'), 'LaTeX: a short table stays a tabular in its column');
+
+    // Each section's own header and footer (a section with none takes on the one before it, as Word does).
+    const hfPart = (tag: 'hdr' | 'ftr', text: string) => `<?xml version="1.0"?><w:${tag} ${W}>${para(text)}</w:${tag}>`;
+    const sectionsWithHeaders = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            + ['header1', 'header2', 'header3'].map(n => `<Override PartName="/word/${n}.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>`).join('') + ['footer1', 'footer2'].map(n => `<Override PartName="/word/${n}.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>`).join('') + '</Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/_rels/document.xml.rels': strToU8(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${['h1', 'h2', 'h3'].map(id => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header${id.slice(1)}.xml"/>`).join('')}<Relationship Id="f1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/><Relationship Id="f2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer2.xml"/></Relationships>`),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${W}><w:body>${para('Section A')}<w:p><w:pPr><w:sectPr><w:headerReference w:type="default" r:id="h1"/><w:footerReference w:type="default" r:id="f1"/><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:pPr></w:p>`
+            + `${para('Section B')}<w:p><w:pPr><w:sectPr><w:headerReference w:type="default" r:id="h2"/><w:footerReference w:type="default" r:id="f2"/><w:pgSz w:w="15840" w:h="12240" w:orient="landscape"/></w:sectPr></w:pPr></w:p>${para('Section C')}<w:sectPr><w:headerReference w:type="default" r:id="h3"/><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:body></w:document>`),
+        'word/header1.xml': strToU8(hfPart('hdr', 'HEADER-A')), 'word/header2.xml': strToU8(hfPart('hdr', 'HEADER-B')), 'word/header3.xml': strToU8(hfPart('hdr', 'HEADER-C')),
+        'word/footer1.xml': strToU8(hfPart('ftr', 'FOOTER-A')), 'word/footer2.xml': strToU8(hfPart('ftr', 'FOOTER-B')),
+    }));
+    const sectioned = await OfficeParser.parseOffice(sectionsWithHeaders, { fileType: 'docx', includeBreakNodes: true } as any) as OfficeParserAST;
+    // Each writer's pages by section: which header and footer each section's pages show, read back.
+    const furnitureBySection = (ast: OfficeParserAST) => {
+        const own = (list: OfficeContentNode[] | undefined, section: number) => {
+            for (let s = section; s >= 0; s--) { const hit = (list ?? []).find(n => ((n.metadata as any)?.section ?? 0) === s && ((n.metadata as any)?.type ?? 'default') === 'default'); if (hit) return (hit.text || collectAllNodes({ content: [hit] } as any).map(n => n.text).join('')).trim(); }
+            return '';
+        };
+        const sections = 1 + ast.content.filter(n => n.type === 'break' && typeof (n.metadata as any)?.section === 'number').length;
+        return Array.from({ length: sections }, (_, i) => `${own(ast.auxiliary?.headers, i)}/${own(ast.auxiliary?.footers, i)}`);
+    };
+    assert.deepStrictEqual(furnitureBySection(sectioned), ['HEADER-A/FOOTER-A', 'HEADER-B/FOOTER-B', 'HEADER-C/FOOTER-B'], 'DOCX: each section reads its own header and footer');
+    for (const format of ['docx', 'odt', 'rtf'] as const) {
+        const out = (await OfficeGenerator.generate(sectioned, format)).value as any;
+        const read = await OfficeParser.parseOffice(typeof out === 'string' ? Buffer.from(out) : Buffer.from(out), { fileType: format, includeBreakNodes: true } as any) as OfficeParserAST;
+        assert.deepStrictEqual(furnitureBySection(read), ['HEADER-A/FOOTER-A', 'HEADER-B/FOOTER-B', 'HEADER-C/FOOTER-B'], `${format}: each section keeps its own header and footer`);
+        const pages = read.content.filter(n => n.type === 'break' && typeof (n.metadata as any)?.section === 'number').map(n => (n.metadata as any).pageSetup?.width);
+        assert.deepStrictEqual(pages, [792, 612], `${format}: each section keeps its page`);
+    }
+
+    // RTF reads its page and its sections (their pages, landscape, columns of their own widths).
+    const rtf = '{\\rtf1\\ansi\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440 First\\par\\sect\\sectd\\sbkpage\\pgwsxn15840\\pghsxn12240\\lndscpsxn\\cols3\\colsx360\\colno1\\colw2000\\colsr360\\colno2\\colw4000\\colsr360\\colno3\\colw7000 Second\\par\\sect\\sectd\\sbknone Third\\par}';
+    const rtfAst = await OfficeParser.parseOffice(Buffer.from(rtf), { fileType: 'rtf', includeBreakNodes: true } as any) as OfficeParserAST;
+    assert.deepStrictEqual([rtfAst.metadata.pageSetup?.width, rtfAst.metadata.pageSetup?.height, rtfAst.metadata.pageSetup?.margin?.left], [612, 792, 72], 'RTF: the document\'s page is read');
+    assert.deepStrictEqual(rtfAst.content.filter(n => n.type === 'break').map(n => { const m = n.metadata as any; return [m.breakType, m.section, m.pageSetup?.width, m.pageSetup?.height, m.pageSetup?.columns?.count ?? 1, m.pageSetup?.columns?.widths ?? null]; }),
+        [['page', 1, 792, 612, 3, [100, 200, 350]], ['section', 2, 612, 792, 1, null]], 'RTF: each section\'s page, columns and start are read');
+
+    // A LibreOffice-saved ODT: column widths as shares of the text width (summing to 65535), the gap in the
+    // columns' indents, and a section's page turned to on its first paragraph: the page break is in its columns.
+    const loOdt = Buffer.from(zipSync({
+        mimetype: strToU8('application/vnd.oasis.opendocument.text'),
+        'content.xml': strToU8('<?xml version="1.0"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"><office:automatic-styles>'
+            + '<style:style style:name="P1" style:family="paragraph" style:parent-style-name="Standard" style:master-page-name="Wide"/>'
+            + '<style:style style:name="Sect1" style:family="section"><style:section-properties><style:columns fo:column-count="3"><style:column style:rel-width="10412*" fo:start-indent="0in" fo:end-indent="0.125in"/><style:column style:rel-width="20824*" fo:start-indent="0.125in" fo:end-indent="0.125in"/><style:column style:rel-width="34299*" fo:start-indent="0.125in" fo:end-indent="0in"/></style:columns></style:section-properties></style:style>'
+            + '</office:automatic-styles><office:body><office:text><text:p text:style-name="Standard">Portrait</text:p><text:section text:style-name="Sect1" text:name="S"><text:p text:style-name="P1">In three columns</text:p></text:section><text:p text:style-name="Standard">After</text:p></office:text></office:body></office:document-content>'),
+        'styles.xml': strToU8('<?xml version="1.0"?><office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"><office:automatic-styles>'
+            + '<style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" fo:margin-top="1in" fo:margin-bottom="1in" fo:margin-left="1in" fo:margin-right="1in"/></style:page-layout>'
+            + '<style:page-layout style:name="pm2"><style:page-layout-properties fo:page-width="11in" fo:page-height="8.5in" fo:margin-top="1in" fo:margin-bottom="1in" fo:margin-left="1in" fo:margin-right="1in"/></style:page-layout>'
+            + '</office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/><style:master-page style:name="Wide" style:page-layout-name="pm2"/></office:master-styles></office:document-styles>'),
+    }));
+    const loRead = await OfficeParser.parseOffice(loOdt, { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+    const loBreaks = loRead.content.filter(n => n.type === 'break').map(n => n.metadata as any);
+    const turned = loBreaks.find(m => m.breakType === 'page');
+    const widths = turned?.pageSetup?.columns?.widths ?? [];
+    assert.ok(turned && turned.pageSetup.width === 792 && turned.pageSetup.columns?.count === 3 && Math.abs(turned.pageSetup.columns.gap - 18) < 0.5
+        && Math.abs(widths[1] / widths[0] - 2) < 0.1 && widths.reduce((a: number, b: number) => a + b, 0) + 36 < 650, `ODT: a section's page, turned to inside it, is in its columns, widths a share of the page; got ${JSON.stringify(loBreaks)}`);
+    assert.ok(!loBreaks.some(m => m.breakType === 'section' && m.pageSetup?.columns?.count === 3) && loBreaks[loBreaks.length - 1].pageSetup?.width === 792, 'ODT: no section break of its own before it, and the break after it on the page it ends on');
+
+    // Balanced columns: a section running onto a second page ends level there; unequal columns end level too.
+    const balancedRun = async (columns: any, n: number) => {
+        const doc = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'break', metadata: { breakType: 'section', section: 1, pageSetup: { columns } } }, ...Array.from({ length: n }, (_, i) => ({ type: 'paragraph', children: [{ type: 'text', text: `Para${i} ${lorem}` }] })), { type: 'break', metadata: { breakType: 'section', section: 2, pageSetup: {} } }, { type: 'paragraph', children: [{ type: 'text', text: 'Tail' }] }] } as any;
+        const read = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(doc, 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+        const pages = read.content.filter(n => n.type === 'page');
+        const last = pages[pages.length - 1];
+        const boxes = collectAllNodes({ content: [last] } as any).filter(n => n.type === 'text' && n.bounds && /^Para/.test(n.text || '')).map(n => n.bounds!);
+        // (Between the two columns' starts.)
+        const starts = boxes.map(b => b.x), middle = (Math.min(...starts) + Math.max(...starts)) / 2, ends = (side: (b: { x: number; y: number; height: number }) => boolean) => Math.max(0, ...boxes.filter(side).map(b => b.y + b.height));
+        return { pages: pages.length, left: ends(b => b.x < middle), right: ends(b => b.x >= middle) };
+    };
+    const spanning = await balancedRun({ count: 2, gap: 18 }, 34);
+    assert.ok(spanning.pages === 2 && spanning.right > 0 && Math.abs(spanning.left - spanning.right) < 60, `a balanced section's last page ends level; got ${JSON.stringify(spanning)}`);
+    const unequal = await balancedRun({ count: 2, gap: 18, widths: [150, 300] }, 8);
+    assert.ok(unequal.pages === 1 && unequal.right > 0 && Math.abs(unequal.left - unequal.right) < 80, `unequal columns end level; got ${JSON.stringify(unequal)}`);
 
 }
 
@@ -5883,6 +5985,34 @@ async function testPresentationWriters(): Promise<void> {
             assert.ok(collectAllNodes(back).some(n => n.type === 'text' && (n.text || '').trim() === 'Head' && n.formatting?.bold), `${format}: a bold cell reads back bold (a cell style's looks are its runs')`);
         }
     }
+
+    // Nothing a writer cannot hold goes silently: code blocks, comments, embeds, pictures known by address,
+    // list markers and note citations, charts (as sheets of their data), a merge within its table.
+    const t0 = (text: string, extra: any = {}) => ({ type: 'text', text, ...extra });
+    const mixed = { type: 'md', metadata: {}, attachments: [{ type: 'chart', name: 'c1', mimeType: 'application/xml', extension: 'xml', data: '', chartData: { labels: ['North', 'South'], dataSets: [{ name: 'Units', values: ['12', '30'], pointLabels: [] }], rawTexts: [] } }], content: [
+        { type: 'heading', metadata: { level: 2 }, children: [t0('Mixed')] },
+        { type: 'paragraph', children: [t0('Commented words', { comments: [{ type: 'comment', metadata: { author: 'Ana' }, children: [{ type: 'paragraph', children: [t0('COMMENTBODY')] }] }], notes: [{ type: 'note', metadata: { noteType: 'footnote' }, children: [{ type: 'paragraph', children: [t0('NOTEBODY')] }] }] })] },
+        { type: 'code', text: 'CODELINE one\nCODELINE two' },
+        { type: 'embed', text: '', metadata: { embedType: 'youtube', url: 'https://www.youtube.com/watch?v=EMBEDID' } },
+        { type: 'image', metadata: { url: 'https://example.com/x.png', altText: 'URLALT' } },
+        { type: 'list', metadata: { listType: 'ordered', listId: 'l', itemIndex: 2, indentation: 0, marker: 'iii.' }, children: [t0('Third item')] },
+        { type: 'chart', text: 'Units', metadata: { attachmentName: 'c1' } },
+        { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', metadata: { rowSpan: 3 }, children: [t0('Tall')] }, { type: 'cell', children: [t0('B')] }] }] },
+        { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', metadata: { colSpan: 2 }, children: [t0('Next')] }] }] },
+    ] } as any;
+    for (const format of ['pptx', 'odp', 'xlsx', 'ods'] as const) {
+        const out = await OfficeGenerator.generate(mixed, format, { xlsxConfig: { sheetPerTable: false }, odsConfig: { sheetPerTable: false } } as any);
+        const parts = unzipSync(new Uint8Array(out.value as unknown as Uint8Array));
+        const xml = Object.keys(parts).filter(k => /\.xml$/.test(k)).map(k => strFromU8(parts[k])).join('\n');
+        for (const needle of ['COMMENTBODY', 'NOTEBODY', 'CODELINE one', 'CODELINE two', 'EMBEDID', 'URLALT', 'iii.', 'North', 'South']) assert.ok(xml.includes(needle), `${format}: ${needle} is written`);
+        if (format === 'xlsx') assert.ok(!/<mergeCell ref="A1:A3"/.test(xml), 'xlsx: a merge stays within its table (it reached into the next on the sheet)');
+        if (format === 'xlsx' || format === 'ods') assert.ok(xml.includes('[Footnote 1]'), `${format}: the text cites its note by its number on the Notes sheet`);
+    }
+    // A PDF page shown turned: its text turned with it, in place.
+    const turnedPdf = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'rotated.pdf')), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const turnedXml = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(turnedPdf, 'pptx')).value as Uint8Array))['ppt/slides/slide1.xml']);
+    const alpha = turnedXml.split('<p:sp>').find(sp => sp.includes('LEFT COLUMN ALPHA'))!;
+    assert.ok(/<a:xfrm rot="5400000">/.test(alpha) && Number(/<a:ext cx="(\d+)" cy="(\d+)"/.exec(alpha)![1]) > Number(/<a:ext cx="(\d+)" cy="(\d+)"/.exec(alpha)![2]), 'a turned page\'s text is turned with it, its frame unturned');
 
 }
 

@@ -54,6 +54,9 @@ const ENUM_COUNTERS = ['enumi', 'enumii', 'enumiii', 'enumiv'];
 /** Guards against a hostile span/column count turning into an enormous grid. */
 const MAX_TABLE_COLUMNS = 1000;
 
+/** At most this many rows a table set inside a section's columns (as a tabular, which cannot break) holds. */
+const MAX_COLUMN_TABLE_ROWS = 20;
+
 /**
  * Widest table written as one `longtable`/`tabular`; a wider one continues below itself in bands
  * of this many columns. Past this the columns are too narrow to read on a page, and a table with
@@ -1437,6 +1440,15 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     private async table(node: OfficeContentNode, rowsOverride?: OfficeContentNode[]): Promise<string> {
         const rows = (rowsOverride ?? (node.children || [])).filter(r => r.type === 'row');
         if (rows.length === 0) return '';
+        // In a section's columns a table is a tabular, which no column or page breaks: a long one (more
+        // rows than a column holds) ran off the page and its rows were lost. Where a longtable may stand,
+        // the columns close for it, it runs across the page, and they open again after it.
+        if (this.openColumns && this.ctx.longtable && rows.length > MAX_COLUMN_TABLE_ROWS) {
+            const columns = this.openColumnsSetup;
+            const close = this.columnsSwitch(undefined);
+            const table = await this.table(node, rowsOverride);
+            return `${close}\n${table}\n${this.columnsSwitch(columns)}`;
+        }
         this.uses.tables = true;
         const { cols, grid } = this.layoutTable(rows);
         // The row callback runs once per row, however many column bands the row is split over.
