@@ -46,7 +46,7 @@ import { MarkedContent, readableItems } from './pdf/actualText.js';
 import { ruledFrames, ruledTables, shadeCells } from './pdf/rulings.js';
 import { computeRunBox, identityMatrix, mulMatrix, roundBounds, rotateBoundsToRendered, toMatrix6, unionAll } from './pdf/geometry.js';
 import { PageExtract, PdfImage, PdfLayoutConfig, RawRun, ResolvedFont } from './pdf/pdfTypes.js';
-import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, emitBounds, indentLevels as indentLevelsOf, joinMarkerLines, leadingMarker, ListCarry, markerLefts, PageContext, pageDirection, recoverTaggedGrids, relevelHeadings, runsToParagraph, segmentIntoBlocks } from './pdf/textLayout.js';
+import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, emitBounds, indentLevels as indentLevelsOf, joinMarkerLines, leadingMarker, ListCarry, markerLefts, PageContext, lineDirections, recoverTaggedGrids, rightToLeftLean, relevelHeadings, runsToParagraph, segmentIntoBlocks } from './pdf/textLayout.js';
 import { buildTaggedNodes } from './pdf/structTree.js';
 import { setOwn } from '../utils/lookupUtils.js';
 import { acquirePdfProcess, PdfProcess } from './pdf/pdfProcess.js';
@@ -1730,7 +1730,9 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     for (const extract of extracts) {
         checkAbortSignal(config.abortSignal);
         work.throwIfCancelled();
-        const pageCtx: PageContext = { pageNumber: extract.pageNumber, authoredW: extract.authoredW, authoredH: extract.authoredH, rotation: extract.rotation, ...(() => { const d = pageDirection(extract.runs); return { rtl: d.lean, textLeft: d.left, textRight: d.right }; })() };
+        const pageCtx: PageContext = { pageNumber: extract.pageNumber, authoredW: extract.authoredW, authoredH: extract.authoredH, rotation: extract.rotation, rtl: rightToLeftLean(extract.runs) };
+        let directions: Map<RawRun, boolean> | undefined;
+        pageCtx.lineDirections = () => directions ??= lineDirections(extract.runs, pdfCfg, pageCtx.rtl);
         // The frame every node is built in: authored space, so a `/Rotate` page's boxes stay
         // comparable to the runs they came from. `finalizeBounds` maps them at the end of the page.
         const layoutCtx: PageContext = { ...pageCtx, rotation: 0 };
@@ -1881,13 +1883,13 @@ function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext
     // Tables drawn with ruling lines first, from the lines themselves (see rulings); their text is theirs.
     const ruled = detectGridTables ? ruledTables(ruledFrames(shapes, pageCtx.authoredW, pageCtx.authoredH), runs, {
         cfg: pdfCfg,
-        content: cellRuns => blockToNodes(joinMarkerLines(buildLines(cellRuns, pdfCfg, { lean: pageCtx.rtl, left: pageCtx.textLeft, right: pageCtx.textRight })), pageCtx, docCtx),
+        content: cellRuns => blockToNodes(joinMarkerLines(buildLines(cellRuns, pdfCfg, pageCtx.rtl)), pageCtx, docCtx),
         bounds: box => emitBounds(box, pageCtx, pdfCfg),
     }) : { tables: [], consumed: new Set<RawRun>() };
     if (ruled.consumed.size) runs = runs.filter(r => !ruled.consumed.has(r));
     // Tables are found before a list's markers are joined to their text: a table's first column of numbers
     // (`1.`, `2.`) joined to the cell beside it gave each row a cell fewer than its header.
-    const built = buildLines(runs, pdfCfg, { lean: pageCtx.rtl, left: pageCtx.textLeft, right: pageCtx.textRight });
+    const built = buildLines(runs, pdfCfg, pageCtx.rtl);
     const { tables, consumed } = detectGridTables
         ? detectTables(built, pageCtx, docCtx)
         : { tables: [] as { node: OfficeContentNode; y: number }[], consumed: new Set<typeof built[number]>() };

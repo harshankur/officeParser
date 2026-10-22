@@ -5629,6 +5629,31 @@ async function testPdfRuledTables(): Promise<void> {
         .filter(n => ['paragraph', 'heading', 'list', 'cell'].includes(n.type)).map(n => n.text || '').join('\n');
     const mixed = await readText('bidi_mixed_chrome.pdf');
     for (const line of ['The word (שלום עולם) means hello world.', 'See "שלום עולם" here.', 'Item שלום, עולם, גדול end.', 'טלפון: 03-1234567']) assert.ok(mixed.includes(line), `a mixed line reads "${line}"; got ${JSON.stringify(mixed.slice(0, 500))}`);
+    // A line's direction is its column's and its paragraph's: a baseline across two columns is two lines, a
+    // line set against one edge of the page says nothing on a page of one direction's letters, and a table's
+    // column of dashes is no list's markers; a right-to-left page's two columns are read one after the other;
+    // a right-to-left line's last full stop beside an English word is read last.
+    const bidiLines: [string, string[]][] = [
+        ['columns_bidi_words_chrome.pdf', ['The museum guide said ברוכים הבאים to every group, then switched to English for the tour of the old city walls.', 'The final line has the words בית ספר in it, and then a few more English words to finish.']],
+        ['bilingual_columns_libreoffice.pdf', ['סעיף 2. כל מחלוקת תוכרע בתל אביב לפי דיני מדינת ישראל (State of Israel), ולבתי המשפט שם תהיה סמכות ייחודית.']],
+        ['indented_bidi_libreoffice.pdf', ['This indented quotation is justified, and it mentions the greeting שלום עליכם in the middle of a long sentence']],
+        ['right_aligned_bidi_chrome.pdf', ['Source: עיתון הארץ, page 12']],
+        ['dash_column_table_libreoffice.pdf', ['שלום (shalom)', 'לילה טוב (laila tov)']],
+        ['hebrew_columns_libreoffice.pdf', ['הפסקה הראשונה מציגה את הנושא במילים פשוטות בעברית שממלאות את הטור משוליים לשוליים לאורך כמה שורות של טקסט.', 'השלט בחנות אמר Open Monday to Friday מעל הדלת, והמחיר היה 25 שקלים לספר בכריכה רכה, במזומן בלבד.']],
+        ['hebrew_punctuation_chrome.pdf', ['שלב 3: לחצו על OK.', 'שלום is how you say hello in Hebrew.']],
+    ];
+    for (const [file, expected] of bidiLines) {
+        const read = await readText(file);
+        for (const line of expected) assert.ok(read.includes(line), `${file} reads "${line}"; got ${JSON.stringify(read.slice(0, 600))}`);
+    }
+    // A borderless table read right to left is a table: its columns by their cells' right edges, a cell's text
+    // wrapped onto another line its own (a row of one cell ended the table, read as loose paragraphs).
+    const rtlTable = collectAllNodes(await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'hebrew_table_borderless_libreoffice.pdf')), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST);
+    const rtlCells = rtlTable.filter(n => n.type === 'cell').map(n => n.text);
+    assert.ok(rtlTable.some(n => n.type === 'table') && rtlCells.includes('מעבד תמלילים (גרסה 2021)') && rtlCells.includes('עורך מסמכים בדפדפן Chrome') && rtlCells.includes('Notepad'), `a borderless right-to-left table with wrapped cells is read as one; got ${JSON.stringify(rtlCells)}`);
+    // Paragraphs set with neither space between them nor an indent are read apart where a line stops short.
+    const flush = (await readText('paragraphs_flush_libreoffice.pdf')).split('\n').filter(t => /^Paragraph \d+:/.test(t));
+    assert.ok(flush.length >= 12, `paragraphs set flush are read apart; got ${flush.length}`);
     const numbers = await readText('bidi_numbers_chrome.pdf');
     for (const line of ['הספר (מהדורה שנייה) יצא לאור', 'في عام 2026 افتتح المكتب الجديد', 'الكتاب (الطبعة الثانية) صدر']) assert.ok(numbers.includes(line), `a right-to-left line reads "${line}"; got ${JSON.stringify(numbers.slice(0, 500))}`);
     const listed = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'lists_rtl_items_libreoffice.pdf')), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
@@ -5643,6 +5668,9 @@ async function testPdfRuledTables(): Promise<void> {
     // A superscript a little larger than four fifths of its line (Chrome's) stays in its line.
     const sup = await readText('superscripts_chrome.pdf');
     assert.ok(sup.includes('See the note1 on the next page.') && sup.includes('ראו הערה1 בעמוד הבא'), `a superscript stays in its line; got ${JSON.stringify(sup.slice(0, 300))}`);
+    const supRuns = collectAllNodes(await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'superscripts_chrome.pdf')), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST)
+        .filter(n => n.type === 'text' && (n as any).formatting?.superscript).map(n => (n.text || '').trim());
+    assert.ok(supRuns.includes('1') && supRuns.includes('2'), `a superscript set at five sixths of its line's size is marked; got ${JSON.stringify(supRuns)}`);
 
 }
 
