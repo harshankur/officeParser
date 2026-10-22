@@ -100,11 +100,17 @@ export interface RunBox {
  * @param descent - font descent as a fraction of font size (negative)
  */
 export function computeRunBox(m: number[], itemWidth: number, ascent: number, descent: number): RunBox {
+    // Numbers a box can be made of: a font's metrics and an advance that are none (NaN, infinities) are a
+    // font's usual ones and no advance.
+    if (!Number.isFinite(ascent) || ascent <= 0) ascent = 0.8;
+    if (!Number.isFinite(descent) || descent > 0) descent = -0.2;
+    if (!Number.isFinite(itemWidth) || itemWidth < 0) itemWidth = 0;
     // Clamp to a sane maximum: the size comes from the document's own (untrusted) text matrix, and a
     // pathological `Tf`/scale can make `hypot(m2,m3)` astronomically large, which would then drive a
     // huge box height and, via the color lookup's y-window, an unbounded loop. No real font is anywhere
     // near this cap, so clamping never affects a genuine document.
-    const fontSize = Math.min(Math.hypot(m[2], m[3]) || Math.abs(m[3]) || 12, MAX_FONT_SIZE_PT);
+    const size = Math.hypot(m[2], m[3]) || Math.abs(m[3]);
+    const fontSize = Math.min(Number.isFinite(size) && size > 0 ? size : 12, MAX_FONT_SIZE_PT);
     const angle = snapAngle(Math.atan2(m[1], m[0]));
     const originX = m[4];
     const yBaseline = m[5];

@@ -29,7 +29,7 @@ export interface CellValue {
 }
 
 /** A cell: its text (a spreadsheet's stored value), what it shows (its value in its format), its value typed. */
-export interface WorkCell { col: number; text: string; shown: string; value: CellValue; bold: boolean; colSpan: number; rowSpan: number; hidden?: boolean }
+export interface WorkCell { col: number; text: string; shown: string; value: CellValue; bold: boolean; colSpan: number; rowSpan: number; hidden?: boolean; /** Its first web, mail or phone link. */ link?: string }
 export interface WorkRow { cells: WorkCell[]; hidden?: boolean }
 export interface WorkSheet { name: string; rows: WorkRow[]; hidden?: boolean; widths: number[] }
 
@@ -210,6 +210,8 @@ export interface WorkbookSource {
     keep(node: OfficeContentNode): Promise<boolean | string>;
     /** A chart's data as a table (its labels down, its series across), or undefined where it has none. */
     chartTable?(node: OfficeContentNode): OfficeContentNode | undefined;
+    /** A chart's title, where it has one. */
+    chartTitle?(node: OfficeContentNode): string | undefined;
 }
 
 /** A cell of `text` alone at `col`, typed from it. */
@@ -233,7 +235,7 @@ function allBold(node: OfficeContentNode): boolean {
  * merged down holds its columns in the rows below and no two merges overlap. A row onNode gives text
  * for is one cell holding it; a cell onNode gives text for holds that text.
  */
-async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadsheet: boolean): Promise<WorkRow[]> {
+async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadsheet: boolean, media?: CellMedia): Promise<WorkRow[]> {
     // The rows and cells kept, and the text onNode gave for any.
     const rows: { row: OfficeContentNode; cells: OfficeContentNode[]; text?: string }[] = [];
     const given = new Map<OfficeContentNode, string>();
@@ -256,12 +258,17 @@ async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadshe
     const hiddenRow = (row: OfficeContentNode) => (row.metadata as RowMetadata | undefined)?.hidden ? { hidden: true } : {};
     const workCell = async (cell: OfficeContentNode, col: number, rowIndex: number, colSpan: number, rowSpan: number): Promise<WorkCell> => {
         const cm = cell.metadata as CellMetadata | undefined;
-        const text = given.get(cell) ?? await source.textOf(cell);
+        const own = given.get(cell);
+        const text = own ?? await source.textOf(cell);
         const shown = spreadsheet && typeof cm?.shownText === 'string' ? cm.shownText : undefined;
+        // Its pictures and charts, which a cell cannot hold (see CellMedia), and its first link.
+        if (own === undefined && media) await mediaIn(cell, source, media);
+        const links = own === undefined ? linksIn(cell) : [];
+        if (links.length > 1 && media) media.extraLinks = true;
         return {
             col, text, shown: shown ?? text, value: cellValue(text, shown, spreadsheet), bold: cm?.style === 'header' || allBold(cell),
             colSpan: Math.max(1, Math.min(MAX_COLS - col, colSpan)), rowSpan: Math.max(1, Math.min(MAX_ROWS - rowIndex, rowSpan)),
-            ...(cm?.hidden ? { hidden: true } : {}),
+            ...(cm?.hidden ? { hidden: true } : {}), ...(links[0] ? { link: links[0] } : {}),
         };
     };
     const out: WorkRow[] = [];
@@ -314,24 +321,71 @@ async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadshe
     return withinRows(out);
 }
 
-/** A table's rows with each merge held to them: one reaching past its last row overlapped what came next on the sheet. */
+/**
+ * A table's rows with each merge held to them (one reaching past its last row overlapped what came next on
+ * the sheet) and to the area no earlier merge covers: a sheet whose cells name their places can give two
+ * merges that overlap, which a spreadsheet repairs by dropping them. A merge that would overlap is none.
+ * Bounded: past MAX_MERGE_POSITIONS positions marked, later merges are none.
+ */
 function withinRows(rows: WorkRow[]): WorkRow[] {
-    rows.forEach((row, ri) => { for (const cell of row.cells) if (cell.rowSpan > rows.length - ri) cell.rowSpan = Math.max(1, rows.length - ri); });
+    const taken = new Set<string>();
+    let marked = 0;
+    rows.forEach((row, ri) => {
+        for (const cell of row.cells) {
+            if (cell.rowSpan > rows.length - ri) cell.rowSpan = Math.max(1, rows.length - ri);
+            if (cell.rowSpan === 1 && cell.colSpan === 1) continue;
+            const area = cell.rowSpan * cell.colSpan;
+            let free = marked + area <= MAX_MERGE_POSITIONS;
+            for (let r = ri; free && r < ri + cell.rowSpan; r++) for (let c = cell.col; free && c < cell.col + cell.colSpan; c++) if (taken.has(`${r},${c}`)) free = false;
+            if (!free) { cell.rowSpan = 1; cell.colSpan = 1; continue; }
+            for (let r = ri; r < ri + cell.rowSpan; r++) for (let c = cell.col; c < cell.col + cell.colSpan; c++) taken.add(`${r},${c}`);
+            marked += area;
+        }
+    });
     return rows;
+}
+
+/** The most positions merges may cover on one sheet's check for overlaps. */
+const MAX_MERGE_POSITIONS = 2_000_000;
+
+/** The pictures and charts met in cells (a cell holds neither), and whether a cell held more than one link. */
+export interface CellMedia { pictures: number; charts: OfficeContentNode[]; extraLinks: boolean }
+
+/** The pictures and charts under a node, each asked of onNode: one left out, or replaced by a string, is none. */
+async function mediaIn(node: OfficeContentNode, source: WorkbookSource, media: CellMedia, depth = 0): Promise<void> {
+    for (const c of node.children || []) {
+        if (c.type !== 'image' && c.type !== 'chart' && !c.children?.length) continue;
+        const kept = await source.keep(c);
+        if (kept === false || typeof kept === 'string') continue;
+        if (c.type === 'image') media.pictures++;
+        else if (c.type === 'chart') media.charts.push(c);
+        if (depth < 32) await mediaIn(c, source, media, depth + 1);
+    }
+}
+
+/** A node's distinct web, mail and phone links, in order (two at most: whether there is more than one is all that is asked). */
+function linksIn(node: OfficeContentNode): string[] {
+    const out: string[] = [];
+    const walk = (n: OfficeContentNode, depth: number) => {
+        if (out.length > 1) return;
+        const url = (n.metadata as { link?: unknown } | undefined)?.link;
+        if (typeof url === 'string' && /^(https?:|mailto:|tel:)/i.test(url.trim()) && !out.includes(url.trim())) out.push(url.trim());
+        if (depth < 32) for (const c of n.children || []) walk(c, depth + 1);
+    };
+    walk(node, 0);
+    return out;
 }
 
 /**
  * The numbers of a document's footnotes and endnotes (`Footnote 1`, `Endnote 1`), each kind in its order
  * through the document, as its text cites them (see cellTextProcessor) and the Notes sheet lists them.
  */
-export function noteLabels(content: OfficeContentNode[]): Map<OfficeContentNode, string> {
+export async function noteLabels(content: OfficeContentNode[], keep: (node: OfficeContentNode) => Promise<boolean | string>): Promise<Map<OfficeContentNode, string>> {
     const labels = new Map<OfficeContentNode, string>();
     const counts = { footnote: 0, endnote: 0 };
-    const label = (note: OfficeContentNode) => {
-        if (labels.has(note)) return;
-        const end = (note.metadata as { noteType?: string } | undefined)?.noteType === 'endnote';
-        labels.set(note, end ? `Endnote ${++counts.endnote}` : `Footnote ${++counts.footnote}`);
-    };
+    // (A note onNode leaves out is neither numbered nor cited.)
+    const found: OfficeContentNode[] = [];
+    const label = (note: OfficeContentNode) => { if (!labels.has(note)) { labels.set(note, ''); found.push(note); } };
     const stack: { nodes: OfficeContentNode[]; at: number; depth: number }[] = [{ nodes: content, at: 0, depth: 0 }];
     while (stack.length) {
         const top = stack[stack.length - 1];
@@ -343,6 +397,11 @@ export function noteLabels(content: OfficeContentNode[]): Map<OfficeContentNode,
             if (top.depth < 32 && note.children?.length) stack.push({ nodes: note.children, at: 0, depth: top.depth + 1 });
         }
         if (top.depth < 32 && node.children?.length) stack.push({ nodes: node.children, at: 0, depth: top.depth + 1 });
+    }
+    for (const note of found) {
+        if (await keep(note) === false) { labels.delete(note); continue; }
+        const end = (note.metadata as { noteType?: string } | undefined)?.noteType === 'endnote';
+        labels.set(note, end ? `Endnote ${++counts.endnote}` : `Footnote ${++counts.footnote}`);
     }
     return labels;
 }
@@ -358,9 +417,10 @@ async function notesOf(content: OfficeContentNode[], source: WorkbookSource, lab
     const add = async (note: OfficeContentNode, label: string) => {
         if (seen.has(note) || rows.length >= MAX_ROWS) return;
         seen.add(note);
-        if (await source.keep(note) === false) return;
+        const kept = await source.keep(note);
+        if (kept === false) return;
         // (A comment's blocks one by one: a comment itself, in a run's text, writes nothing there.)
-        const text = (note.children?.length
+        const text = (typeof kept === 'string' ? kept : note.children?.length
             ? note.type === 'comment' ? (await Promise.all(note.children.map(c => source.textOf(c)))).join('\n') : await source.textOf(note)
             : note.text ?? '').trim();
         if (text) rows.push({ cells: [textCell(0, label), { ...textCell(1, text), value: { kind: 'text' } }] });
@@ -404,6 +464,23 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
     // is not one lost.
     const picturesWanted = options.imageMode === 'image-only' || options.imageMode === 'image+ocr-text';
     const lost = (node: OfficeContentNode) => { if (node.type === 'image') { if (picturesWanted) unrepresentable.add('pictures'); } else if (node.type === 'chart' && options.includeCharts) unrepresentable.add('charts'); };
+    // What cells and text held that a cell cannot: their pictures reported, their charts sheets of their data.
+    const media: CellMedia = { pictures: 0, charts: [], extraLinks: false };
+    const settle = async (after: string) => {
+        if (media.pictures && picturesWanted) unrepresentable.add('pictures');
+        if (media.extraLinks) unrepresentable.add('links past a cell\'s first');
+        const charts = media.charts.splice(0);
+        media.pictures = 0; media.extraLinks = false;
+        for (const c of charts) {
+            const rows = await chartRows(c);
+            if (rows) sheets.push({ name: sheetName(chartName(c, after), taken, `Chart ${chartCount}`), rows, widths: widthsOf(rows) });
+        }
+    };
+    // A chart's sheet is named for its title, else for what it follows.
+    const chartName = (node: OfficeContentNode, after: string) => {
+        const title = (source.chartTitle?.(node) ?? '').trim();
+        return title || (after ? `${after} Chart` : '');
+    };
     // The notes, on a sheet of their own after the others.
     const withNotes = async () => {
         const notes = await notesOf(content, source, options.noteLabels);
@@ -413,29 +490,36 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
         return { sheets, unrepresentable };
     };
     // A chart as a sheet of its data (its labels down, its series across), where it has data; else lost.
-    let charts = 0;
+    let chartCount = 0;
     const chartRows = async (node: OfficeContentNode): Promise<WorkRow[] | undefined> => {
         if (!options.includeCharts) return undefined;
         const table = source.chartTable?.(node);
         if (!table) { lost(node); return undefined; }
-        charts++;
+        chartCount++;
         return gridOf(table, source, false);
     };
+    // A node onNode gives a string for, where a table or sheet stood: one cell of it.
+    const oneCell = (text: string): WorkRow[] => [{ cells: [{ ...textCell(0, text), value: { kind: 'text' } }] }];
     const sheetNodes = content.filter(n => n.type === 'sheet');
     if (sheetNodes.length) {
         for (const [i, node] of sheetNodes.entries()) {
-            if (await source.keep(node) === false) continue;
+            const kept = await source.keep(node);
+            if (kept === false) continue;
             const meta = node.metadata as SheetMetadata | undefined;
-            const rows = await gridOf(node, source, true);
-            const name = sheetName(meta?.sheetName ?? '', taken, `Sheet${i + 1}`);
+            const rows = typeof kept === 'string' ? oneCell(kept) : await gridOf(node, source, true, media);
+            // (A sheet onNode gives a string for is that string alone, under no name of its own.)
+            const name = sheetName(typeof kept === 'string' ? '' : meta?.sheetName ?? '', taken, `Sheet${i + 1}`);
             sheets.push({ name, rows, ...(meta?.hidden ? { hidden: true } : {}), widths: widthsOf(rows) });
-            // Its charts, each a sheet of its data after it; its pictures, which a cell cannot hold, reported.
+            if (typeof kept === 'string') continue;
+            // Its charts and pictures (on it, or in its cells): each chart a sheet of its data after it; its
+            // pictures, which a cell cannot hold, reported.
             for (const c of node.children || []) {
-                if (c.type !== 'chart') { lost(c); continue; }
-                if (await source.keep(c) === false) continue;
-                const chart = await chartRows(c);
-                if (chart) sheets.push({ name: sheetName(`${name} Chart ${charts}`, taken, `Chart ${charts}`), rows: chart, widths: widthsOf(chart) });
+                if (c.type !== 'chart' && c.type !== 'image') continue;
+                const k = await source.keep(c);
+                if (k === false || typeof k === 'string') continue;
+                if (c.type === 'image') media.pictures++; else media.charts.push(c);
             }
+            await settle(name);
         }
         return withNotes();
     }
@@ -447,11 +531,22 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
         for (const node of nodes) {
             const kept = await source.keep(node);
             if (kept === false) continue;
+            // A table or chart onNode gives a string for: a table of that one cell; a picture, an embed or any
+            // other block: a row of the text.
+            if (typeof kept === 'string' && !['paragraph', 'heading', 'list', 'code', 'definitionTerm', 'definitionDescription'].includes(node.type)) {
+                if (node.type === 'table' || node.type === 'chart') {
+                    tables++;
+                    if (options.sheetPerTable) sheets.push({ name: sheetName(heading, taken, `Table ${tables}`), rows: oneCell(kept), widths: [Math.min(80, kept.length + 2)] });
+                    else { if (together.length) together.push({ cells: [] }); together.push(...oneCell(kept)); }
+                } else if (kept.trim() && options.includeText && text.length < MAX_ROWS) text.push(...oneCell(kept));
+                continue;
+            }
             if (node.type === 'table') {
-                const rows = await gridOf(node, source, false);
+                const rows = await gridOf(node, source, false, media);
                 tables++;
                 if (options.sheetPerTable) sheets.push({ name: sheetName(heading, taken, `Table ${tables}`), rows, widths: widthsOf(rows) });
                 else { if (together.length) together.push({ cells: [] }); for (const r of rows) together.push(r); }
+                await settle(heading);
                 continue;
             }
             if (node.type === 'image') {
@@ -464,7 +559,7 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
             if (node.type === 'chart') {
                 const rows = await chartRows(node);
                 if (!rows) continue;
-                if (options.sheetPerTable) sheets.push({ name: sheetName(heading ? `${heading} Chart` : '', taken, `Chart ${charts}`), rows, widths: widthsOf(rows) });
+                if (options.sheetPerTable) sheets.push({ name: sheetName(chartName(node, heading), taken, `Chart ${chartCount}`), rows, widths: widthsOf(rows) });
                 else { if (together.length) together.push({ cells: [] }); for (const r of rows) together.push(r); }
                 continue;
             }
@@ -485,10 +580,12 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
                 if (node.type === 'heading' && t) heading = t;
                 // A list item with its marker as the document shows it.
                 if (node.type === 'list' && t && blockText === null) { const marker = listMarker(node.metadata as ListMetadata | undefined); if (marker) t = `${marker} ${t}`; }
-                if (t && options.includeText && text.length < MAX_ROWS) text.push({ cells: [{ ...textCell(0, t, node.type === 'heading'), value: { kind: 'text' } }] });
-                // A picture in the text, which a cell cannot hold.
-                const walk = (n: OfficeContentNode, d: number) => { if (n.type === 'image' && picturesWanted) unrepresentable.add('pictures'); if (d < 16) for (const c of n.children || []) walk(c, d + 1); };
-                walk(node, 0);
+                // Its first link the row's; a picture or chart in the text, which a cell cannot hold, reported or a sheet of its data.
+                const links = blockText === null ? linksIn(node) : [];
+                if (links.length > 1) media.extraLinks = true;
+                if (t && options.includeText && text.length < MAX_ROWS) text.push({ cells: [{ ...textCell(0, t, node.type === 'heading'), value: { kind: 'text' }, ...(links[0] ? { link: links[0] } : {}) }] });
+                if (blockText === null) await mediaIn(node, source, media);
+                await settle(heading);
                 continue;
             }
             if (depth < 32 && node.children?.length) await visit(node.children, depth + 1);

@@ -119,13 +119,16 @@ async function runsOf(node: OfficeContentNode, source: DeckSource, notes: NoteSt
         } else if (depth < 32) {
             for (const r of await runsOf(child, source, notes, fmt, depth + 1)) runs.push(r);
         }
-        // A note cited here: its number, and its text on the notes slide.
+        // A note cited here: its number, and its text on the notes slide (one onNode leaves out is not cited;
+        // a string it gives is its text).
         for (const note of child.notes ?? []) {
             let n = notes.seen.get(note);
             if (n === undefined) {
+                const noteKept = await source.keep(note);
+                if (noteKept === false) continue;
                 n = notes.list.length + 1;
                 notes.seen.set(note, n);
-                const text = (await runsOf(note, source, notes, {}, depth + 1)).map(r => r.text).join('').trim();
+                const text = typeof noteKept === 'string' ? noteKept.trim() : (await runsOf(note, source, notes, {}, depth + 1)).map(r => r.text).join('').trim();
                 notes.list.push({ runs: [{ text: `${n}. ${text}`, size: 14 }] });
             }
             runs.push({ text: String(n), superscript: true });
@@ -217,23 +220,33 @@ function placedGroups(node: OfficeContentNode, p: DeckParagraph): { paragraph: D
     });
 }
 
-/** The pictures in a node, with their alternative text. */
-function picturesIn(node: OfficeContentNode): { attachment: string; alt?: string; ocr?: string }[] {
-    return picturesAndAddresses(node).filter((p): p is { attachment: string; alt?: string; ocr?: string } => !!p.attachment);
+/** A picture node as the deck takes it: its attachment (or, known only by its address, the address) and its words. */
+type FoundPicture = { attachment?: string; url?: string; alt?: string; ocr?: string };
+function pictureOf(n: OfficeContentNode): FoundPicture | undefined {
+    const m = n.metadata as { attachmentName?: string; url?: string; altText?: string; ocrText?: string } | undefined;
+    if (!m?.attachmentName && typeof m?.url !== 'string') return undefined;
+    return { ...(m.attachmentName ? { attachment: m.attachmentName } : { url: m.url }), ...(typeof m.altText === 'string' && m.altText.trim() ? { alt: m.altText.trim() } : {}), ...(typeof m.ocrText === 'string' && m.ocrText.trim() ? { ocr: m.ocrText.trim() } : {}) };
 }
 
-/** The pictures in a node, those known only by their address (no attachment, no bytes) too. */
-function picturesAndAddresses(node: OfficeContentNode): { attachment?: string; url?: string; alt?: string; ocr?: string }[] {
-    const out: { attachment?: string; url?: string; alt?: string; ocr?: string }[] = [];
-    const walk = (n: OfficeContentNode, d: number) => {
-        if (n.type === 'image') {
-            const m = n.metadata as { attachmentName?: string; url?: string; altText?: string; ocrText?: string } | undefined;
-            if (m?.attachmentName || typeof m?.url === 'string') out.push({ ...(m?.attachmentName ? { attachment: m.attachmentName } : { url: m!.url }), ...(typeof m.altText === 'string' && m.altText.trim() ? { alt: m.altText.trim() } : {}), ...(typeof m.ocrText === 'string' && m.ocrText.trim() ? { ocr: m.ocrText.trim() } : {}) });
+/**
+ * The pictures and charts under a node (not the node itself, which its caller has asked onNode about), each
+ * asked of onNode: one it leaves out is not here, nor what is under it; one it gives a string for is its
+ * text where it stands (runsOf writes that), not a picture.
+ */
+async function mediaUnder(node: OfficeContentNode, source: DeckSource): Promise<{ pictures: FoundPicture[]; charts: OfficeContentNode[] }> {
+    const pictures: FoundPicture[] = [], charts: OfficeContentNode[] = [];
+    const walk = async (n: OfficeContentNode, d: number) => {
+        for (const c of n.children ?? []) {
+            if (c.type !== 'image' && c.type !== 'chart' && !c.children?.length) continue;
+            const kept = await source.keep(c);
+            if (kept === false || typeof kept === 'string') continue;
+            if (c.type === 'image') { const p = pictureOf(c); if (p) pictures.push(p); }
+            else if (c.type === 'chart') charts.push(c);
+            if (d < 16) await walk(c, d + 1);
         }
-        if (d < 16) for (const c of n.children ?? []) walk(c, d + 1);
     };
-    walk(node, 0);
-    return out;
+    await walk(node, 0);
+    return { pictures, charts };
 }
 
 /** A block as a paragraph: its runs, its alignment, a list item's bullet and level. */
@@ -278,7 +291,16 @@ async function tableOf(node: OfficeContentNode, source: DeckSource, notes: NoteS
     const kept: OfficeContentNode[] = [];
     const keptText = new Map<OfficeContentNode, true | string>();
     for (const row of node.children ?? []) {
-        if (row.type !== 'row' || await source.keep(row) === false) continue;
+        if (row.type !== 'row') continue;
+        const rowKept = await source.keep(row);
+        if (rowKept === false) continue;
+        // A row onNode gives a string for: one cell of it.
+        if (typeof rowKept === 'string') {
+            const cell: OfficeContentNode = { type: 'cell', text: rowKept, children: [{ type: 'text', text: rowKept }] };
+            keptText.set(cell, rowKept);
+            kept.push({ type: 'row', children: [cell] });
+            continue;
+        }
         const cells: OfficeContentNode[] = [];
         for (const cell of row.children ?? []) {
             if (cell.type !== 'cell') continue;
@@ -303,8 +325,13 @@ async function tableOf(node: OfficeContentNode, source: DeckSource, notes: NoteS
             const paragraphs: DeckParagraph[] = [];
             if ((cell.children ?? []).some(c => c.type === 'paragraph' || c.type === 'list' || c.type === 'heading' || c.type === 'table')) {
                 for (const child of cell.children ?? []) {
+                    const childKept = await source.keep(child);
+                    if (childKept === false) continue;
+                    if (typeof childKept === 'string') { paragraphs.push({ runs: [{ text: childKept }] }); continue; }
                     // A table inside the cell: its rows as lines of the cell, their cells apart by tabs.
                     if (child.type === 'table') { for (const r of child.children ?? []) if (r.type === 'row') paragraphs.push({ runs: [{ text: (r.children ?? []).map(x => (x.text || '').trim()).join('\t') }] }); continue; }
+                    // (Pictures and charts in a cell are written apart from the table, see mediaUnder.)
+                    if (child.type === 'image' || child.type === 'chart') continue;
                     paragraphs.push(await paragraphOf(child, source, notes));
                 }
             } else paragraphs.push(await paragraphOf(cell, source, notes, keptText.get(cell) ?? true));
@@ -355,7 +382,10 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
         const printed = new Set<number>();
         for (const [index, node] of nodes.entries()) {
             if (slides.length >= MAX_SLIDES) { unrepresentable.add('slides past the deck\'s limit'); break; }
-            if (await source.keep(node) === false) continue;
+            const nodeKept = await source.keep(node);
+            if (nodeKept === false) continue;
+            // A slide or page onNode gives a string for: a slide of that text.
+            if (typeof nodeKept === 'string') { slides.push({ items: [{ kind: 'text', box: { x: width * 0.05, y: height * 0.05, w: width * 0.9, h: height * 0.9 }, paragraphs: [{ runs: [{ text: nodeKept }] }] }] }); continue; }
             const pm = node.metadata as { pageWidth?: number; pageHeight?: number } | undefined;
             // A page of another size, scaled into the slide, centred.
             const scale = !isSlides && pm?.pageWidth && pm.pageHeight ? Math.min(width / pm.pageWidth, height / pm.pageHeight) : 1;
@@ -425,6 +455,11 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
                 const kept = await source.keep(child);
                 if (kept === false) continue;
                 const box = boxOf(child.bounds, scale, dx, dy);
+                // A table, picture, chart or shape onNode gives a string for: that text in its place.
+                if (typeof kept === 'string' && !['paragraph', 'heading', 'list', 'code'].includes(child.type)) {
+                    if (kept.trim()) slide.items.push({ kind: 'text', box: box ?? { ...BODY_BOX, x: width * 0.05, w: width * 0.9, y: height * 0.1 + slide.items.length * 24, h: 24 }, paragraphs: [{ runs: [{ text: kept }] }] });
+                    continue;
+                }
                 if (child.type === 'drawing') {
                     // A shape, and the text in its box (the nodes after it with its bounds).
                     const shape = (child.metadata ?? {}) as ShapeMetadata;
@@ -453,7 +488,7 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
                 }
                 if (child.type === 'comment') { await noteComment(child, source, notes); continue; }
                 if (child.type === 'image') {
-                    const [found] = picturesAndAddresses(child);
+                    const found = pictureOf(child);
                     if (!found) continue;
                     if (!found.attachment) {
                         // A picture known by its address alone, which a slide cannot hold: its alternative text in its place.
@@ -480,7 +515,10 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
                     if ((slide.picture || pageTurn) && !isSlides && await cellsPlaced(child)) continue;
                     const t = await tableOf(child, source, notes);
                     if (box) slide.items.push({ kind: 'table', box, ...t });
-                    if (wantPicture && picturesIn(child).length) unrepresentable.add('pictures inside table cells');
+                    // A slide's table holds no picture or chart: those in its cells are reported.
+                    const inCells = await mediaUnder(child, source);
+                    if (wantPicture && inCells.pictures.some(p => p.attachment)) unrepresentable.add('pictures inside table cells');
+                    if (source.includeCharts && inCells.charts.length) unrepresentable.add('charts inside table cells');
                     continue;
                 }
                 if (child.type === 'chart') {
@@ -517,7 +555,7 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
             }
             // A slide's speaker notes.
             const own: DeckParagraph[] = [];
-            for (const note of node.notes ?? []) { if (await source.keep(note) === false) continue; for (const block of note.children ?? []) own.push(await paragraphOf(block, source, notes)); }
+            for (const note of node.notes ?? []) own.push(...await notesOfSlide(note, source, notes));
             if (own.length) slide.notes = own;
             // The comments met on it, in its speaker notes.
             if (notes.comments.length) { slide.notes = [...(slide.notes ?? []), ...notes.comments]; notes.comments = []; }
@@ -532,6 +570,19 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
     // Pictures behind the slides, one a slide in order.
     deck.slides.forEach((slide, i) => { const picture = options.backgrounds?.[i]; if (picture) slide.picture = picture; });
     return deck;
+}
+
+/** A slide's speaker note as paragraphs, each block asked of onNode (a string its text). */
+async function notesOfSlide(note: OfficeContentNode, source: DeckSource, notes: NoteState): Promise<DeckParagraph[]> {
+    const kept = await source.keep(note);
+    if (kept === false) return [];
+    if (typeof kept === 'string') return [{ runs: [{ text: kept }] }];
+    const out: DeckParagraph[] = [];
+    for (const block of note.children ?? []) {
+        const k = await source.keep(block);
+        if (k !== false) out.push(await paragraphOf(block, source, notes, k));
+    }
+    return out;
 }
 
 /** Whether two bounds are one box. */
@@ -612,13 +663,25 @@ async function flowDeck(content: OfficeContentNode[], metadata: OfficeMetadata, 
     // A node's pictures on slides of their own, and their recognized text where asked (includeImages).
     const wantPicture = source.imageMode === 'image-only' || source.imageMode === 'image+ocr-text';
     const wantOcr = source.imageMode === 'ocr-text-only' || source.imageMode === 'image+ocr-text';
-    const pictureSlides = (node: OfficeContentNode) => {
-        for (const { ocr, url, ...picture } of picturesAndAddresses(node)) {
+    const pictureSlides = async (node: OfficeContentNode) => {
+        const self = node.type === 'image' ? pictureOf(node) : undefined;
+        const { pictures, charts } = await mediaUnder(node, source);
+        for (const { ocr, url, ...picture } of self ? [self, ...pictures] : pictures) {
             // A picture known by its address alone, which a slide cannot hold: its alternative text.
             if (!picture.attachment) { unrepresentable.add('pictures known only by their address'); if (picture.alt) add({ runs: [{ text: picture.alt, ...(url && /^https?:/i.test(url) ? { link: url } : {}) }] }); continue; }
             if (wantPicture) { flushBody(); put([{ kind: 'picture', box: BODY_BOX, ...picture, attachment: picture.attachment }]); }
             if (wantOcr && ocr) add({ runs: [{ text: ocr }] });
         }
+        // Charts under it (in a table's cells, a paragraph): each a table of its data on slides of its own.
+        for (const chart of charts) await chartSlides(chart);
+    };
+    const chartSlides = async (node: OfficeContentNode) => {
+        if (!source.includeCharts) return;
+        const table = source.chartTable(node);
+        if (!table) { unrepresentable.add('charts without their data'); return; }
+        flushBody();
+        const t = await tableOf(table, source, notes);
+        put([{ kind: 'table', box: BODY_BOX, rows: t.rows, widths: t.widths }]);
     };
     // A table's slides: at most ten rows a slide, the first row (its header) repeated.
     const tableSlides = async (node: OfficeContentNode) => {
@@ -645,8 +708,8 @@ async function flowDeck(content: OfficeContentNode[], metadata: OfficeMetadata, 
             open = open.filter(o => o.row + o.cell.rowSpan > end);
             rest.slice(at, end).forEach((row, i) => { for (const cell of row.cells) if (at + i + cell.rowSpan > end) open.push({ row: at + i, cell }); });
         }
-        // The pictures in its cells, which a slide's table cannot hold, on slides of their own after it.
-        pictureSlides(node);
+        // The pictures and charts in its cells, which a slide's table cannot hold, on slides of their own after it.
+        await pictureSlides(node);
     };
     const add = (p: DeckParagraph) => {
         const size = BODY_SIZE;
@@ -665,6 +728,14 @@ async function flowDeck(content: OfficeContentNode[], metadata: OfficeMetadata, 
         for (const node of nodes) {
             const kept = await source.keep(node);
             if (kept === false) continue;
+            // A table, picture, chart, sheet or slide onNode gives a string for: that text (a slide's or sheet's on a slide of its own).
+            if (typeof kept === 'string' && !['heading', 'paragraph', 'list', 'code', 'definitionTerm', 'definitionDescription', 'embed'].includes(node.type)) {
+                const whole = node.type === 'slide' || node.type === 'page' || node.type === 'sheet';
+                if (whole) flush();
+                if (kept.trim()) add({ runs: [{ text: kept }] });
+                if (whole) flush();
+                continue;
+            }
             if (node.type === 'heading') {
                 const level = (node.metadata as HeadingMetadata | undefined)?.level ?? 1;
                 const p = await paragraphOf(node, source, notes, kept);
@@ -690,11 +761,11 @@ async function flowDeck(content: OfficeContentNode[], metadata: OfficeMetadata, 
                 const p = await paragraphOf(node, source, notes, kept);
                 if (p.runs.some(r => r.text.trim())) add(p);
                 // Its pictures on slides of their own.
-                pictureSlides(node);
+                await pictureSlides(node);
                 continue;
             }
             if (node.type === 'image') {
-                pictureSlides(node);
+                await pictureSlides(node);
                 continue;
             }
             if (node.type === 'table') {
@@ -702,12 +773,7 @@ async function flowDeck(content: OfficeContentNode[], metadata: OfficeMetadata, 
                 continue;
             }
             if (node.type === 'chart') {
-                if (!source.includeCharts) continue;
-                const table = source.chartTable(node);
-                if (!table) { unrepresentable.add('charts without their data'); continue; }
-                flushBody();
-                const t = await tableOf(table, source, notes);
-                put([{ kind: 'table', box: BODY_BOX, rows: t.rows, widths: t.widths }]);
+                await chartSlides(node);
                 continue;
             }
             // A comment goes to its slide's speaker notes; an embedded video or page is its address.
@@ -720,7 +786,7 @@ async function flowDeck(content: OfficeContentNode[], metadata: OfficeMetadata, 
                 flush();
                 // A slide's speaker notes go with the last slide its content made (one of their own if it made none).
                 const own: DeckParagraph[] = [];
-                for (const note of node.notes ?? []) { if (await source.keep(note) === false) continue; for (const block of note.children ?? []) own.push(await paragraphOf(block, source, notes)); }
+                for (const note of node.notes ?? []) own.push(...await notesOfSlide(note, source, notes));
                 if (own.length) {
                     if (slides.length === before) put([]);
                     const last = slides[slides.length - 1];

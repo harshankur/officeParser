@@ -22,7 +22,7 @@
  * @see https://www.ecma-international.org/publications-and-standards/standards/ecma-376/
  */
 
-import { ChartMetadata, FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting } from '../types.js';
+import { ChartMetadata, FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
@@ -125,6 +125,33 @@ function mergeSpans(sheetXml: string): Map<string, { colSpan: number; rowSpan: n
     }
     return spans;
 }
+
+/**
+ * A sheet's hyperlinks (`<hyperlink ref="A1" r:id="rId1"/>`, or `location="Sheet2!A1"` for a place in
+ * the workbook) as the link of each cell their range covers, by `row:col`; at most MAX_LINKED_CELLS cells.
+ */
+function cellLinks(sheetXml: string, targets: Map<string, string>): Map<string, { link: string; linkType: 'internal' | 'external' }> {
+    const links = new Map<string, { link: string; linkType: 'internal' | 'external' }>();
+    const block = firstElementContent(sheetXml, 'hyperlinks');
+    if (!block) return links;
+    const attr = (attrs: string, name: string) => new RegExp(`(?:^|\\s)${name}\\s*=\\s*["']([^"']*)["']`).exec(attrs)?.[1];
+    for (const h of xmlElements(block, 'hyperlink')) {
+        const id = attr(h.attrs, 'r:id'), location = attr(h.attrs, 'location');
+        const target = id ? targets.get(id) : undefined;
+        // (A relationship's target is read decoded already; an attribute of the sheet's text is not.)
+        const value = target ? { link: target, linkType: 'external' as const } : location ? { link: `#${decodeXmlEntities(location)}`, linkType: 'internal' as const } : undefined;
+        const [from, to] = (attr(h.attrs, 'ref') ?? '').split(':').map(cellAt);
+        if (!value || !from) continue;
+        const last = to ?? from;
+        for (let r = from.row; r <= last.row && links.size < MAX_LINKED_CELLS; r++) {
+            for (let c = from.col; c <= last.col && links.size < MAX_LINKED_CELLS; c++) if (!links.has(`${r}:${c}`)) links.set(`${r}:${c}`, value);
+        }
+    }
+    return links;
+}
+
+/** The most cells a sheet's hyperlinks mark (a range of a million cells is one link, not a million). */
+const MAX_LINKED_CELLS = 100_000;
 
 /** Excel's paper sizes (`pageSetup paperSize`) in points, upright: the common ones. */
 const PAPER_SIZES: Record<string, [number, number]> = {
@@ -367,7 +394,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             !!x.match(customPropsFileRegex) ||
             !!x.match(appPropsFileRegex) ||
             (!!config.extractAttachments && (!!x.match(mediaFileRegex) || !!x.match(drawingRelsRegex))) ||
-            ((!!config.extractAttachments || !config.ignoreComments) && !!x.match(relsRegex)),
+            !!x.match(relsRegex),
         config.decompressionLimits,
         config
     );
@@ -786,6 +813,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             // Null-prototype: keyed by the document-derived cell ref, so a crafted ref of `__proto__`
             // creates an own entry instead of throwing on `Object.prototype.push`.
             const sheetCommentsMap: Record<string, OfficeContentNode[]> = Object.create(null);
+            // The sheet's hyperlinks' targets by relationship id (see cellLinks).
+            const hyperlinkTargets = new Map<string, string>();
 
             if (relsFile) {
                 const relsXml = parseXmlString(relsFile.content.toString(), { config });
@@ -796,7 +825,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     const type = rel.getAttribute("Type");
                     
                     if (id && target && type) {
-                        if (config.extractAttachments && type.includes('drawing')) {
+                        if (type.endsWith('/hyperlink')) hyperlinkTargets.set(id, target);
+                        else if (config.extractAttachments && type.includes('drawing')) {
                             drawingMap[id] = 'xl/drawings/' + target.replace('../drawings/', '');
                         } else if (!config.ignoreComments && type.includes('comments')) {
                             const commentsPath = 'xl/' + target.replace('../', '');
@@ -842,6 +872,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             const hiddenColumns = hiddenColumnRanges(sheetXml);
             // Merged ranges, as the spans of their first cells: a merged title was one narrow cell.
             const merged = mergeSpans(sheetXml);
+            // Its cells' hyperlinks (a web or mail address, or a place in the workbook), by `row:col`.
+            const links = cellLinks(sheetXml, hyperlinkTargets);
             const columnHidden = inRanges(hiddenColumns);
 
             /** Helper to convert Excel column string (A, B, AA, etc.) to 0-based index */
@@ -1001,6 +1033,10 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                                 formatting: cellFormatting
                             });
                         }
+
+                        // The cell's hyperlink on its runs, as a document's links are on theirs.
+                        const link = links.get(`${rowIndex}:${colIndex}`);
+                        if (link) cellNodes = cellNodes.map(run => run.type === 'text' ? { ...run, metadata: { ...(run.metadata as TextMetadata | undefined), ...link } as TextMetadata } : run);
 
                         const commentsNodeList = (ref && sheetCommentsMap[ref]) ? sheetCommentsMap[ref] : undefined;
 

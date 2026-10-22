@@ -592,20 +592,24 @@ export function readableItems<T extends TextContentItem>(items: T[], events: Mar
 }
 
 /**
- * Items of whitespace alone drawn over a glyph of their line (a space pdf.js put where a glyph's width
- * was lost, over the glyphs after it) left out: no gap is there. Looked for among the few items drawn
- * around each.
+ * Items of whitespace alone drawn inside a glyph of their line (a space pdf.js put where a glyph's width
+ * was lost, over the glyphs after it) left out: no gap is there. A space lies inside a glyph when most of
+ * it is in the glyph's box, or it starts before a glyph before it ends; a space whose end runs a little
+ * into the next word (as one a producer sets between words of right-to-left text, or at a font's change)
+ * is a word's space and stays. Looked for among the few items drawn around each.
  */
 function withoutCoveredSpaces<T extends TextContentItem>(items: T[]): T[] {
-    const level = (it: T) => it.transform && it.transform.length >= 6 && Math.abs(it.transform[1]) < 1e-6 && Math.abs(it.transform[2]) < 1e-6;
+    const level = (it: T) => it.transform && it.transform.length >= 6 && Math.abs(it.transform[1]) < 1e-6 && Math.abs(it.transform[2]) < 1e-6
+        && it.transform.every(Number.isFinite);
     return items.filter((item, i) => {
-        if (typeof item.str !== 'string' || item.str.trim() || !item.str || !item.width || !level(item)) return true;
+        if (typeof item.str !== 'string' || item.str.trim() || !item.str || !item.width || !Number.isFinite(item.width) || !level(item)) return true;
         const x0 = item.transform![4], x1 = x0 + item.width, y = item.transform![5];
         for (let k = Math.max(0, i - 4); k < Math.min(items.length, i + 5); k++) {
             const o = items[k];
-            if (k === i || typeof o.str !== 'string' || !o.str.trim() || !level(o) || Math.abs(o.transform![5] - y) > 0.5) continue;
+            if (k === i || typeof o.str !== 'string' || !o.str.trim() || !level(o) || !(Math.abs(o.transform![5] - y) <= 0.5)) continue;
             const ox0 = o.transform![4], ox1 = ox0 + (o.width || 0);
-            if (x0 < ox1 - 0.5 && x1 > ox0 + 0.5) return false;
+            const overlap = Math.min(x1, ox1) - Math.max(x0, ox0);
+            if (overlap > 0.5 * (x1 - x0) || (ox0 < x0 - 0.5 && ox1 > x0 + 0.5)) return false;
         }
         return true;
     });
@@ -628,11 +632,19 @@ function clusters(text: string): number {
  * for "क्षत्रिय".
  */
 function advanced<T extends TextContentItem>(items: T[]): T[] {
-    let shift = 0, lineY = NaN, afterLost = false;
+    // (The line's baseline: none before its first item, so the shift starts afresh on every line, the first too.)
+    // (`lost`: the item without its width last given one, until the next item on its line shows whether pdf.js
+    // already left the room: one drawn at least a third of an em past it was, and is not moved.)
+    let shift = 0, lineY: number | undefined, afterLost = false, lost: { x: number; width: number; em: number } | undefined;
     return items.map(item => {
         const t = item.transform;
-        if (typeof item.str !== 'string' || !t || t.length < 6 || Math.abs(t[1]) > 1e-6 || Math.abs(t[2]) > 1e-6) return item;
-        if (Math.abs(t[5] - lineY) > 0.5) { shift = 0; lineY = t[5]; afterLost = false; }
+        if (typeof item.str !== 'string' || !t || t.length < 6 || !t.every(Number.isFinite) || Math.abs(t[1]) > 1e-6 || Math.abs(t[2]) > 1e-6) return item;
+        if (lineY === undefined || !(Math.abs(t[5] - lineY) <= 0.5)) { shift = 0; lineY = t[5]; afterLost = false; lost = undefined; }
+        else if (lost && item.str) {
+            // (Room left: the space before this item, if any, is the word's, not the lost width's gap.)
+            if (t[4] >= lost.x + lost.em / 3) { shift -= lost.width; afterLost = false; }
+            lost = undefined;
+        }
         let moved = shift ? { ...item, transform: [t[0], t[1], t[2], t[3], t[4] + shift, t[5]] } : item;
         if (afterLost && /^\s/.test(item.str) && item.str.trim()) moved = { ...moved, str: item.str.replace(/^\s+/, '') };
         if (item.str.trim()) afterLost = false;
@@ -642,6 +654,7 @@ function advanced<T extends TextContentItem>(items: T[]): T[] {
             // order, where a gap left would read as a space, or a column's edge).
             const width = 0.9 * Math.abs(t[0]) * clusters(item.str.trim());
             shift += width;
+            lost = { x: t[4], width, em: Math.abs(t[0]) || 1 };
             return { ...moved, width };
         }
         return moved;

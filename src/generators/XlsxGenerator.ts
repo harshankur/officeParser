@@ -2,7 +2,7 @@ import { zipSync, Zippable } from 'fflate';
 import { ConversionResult, GeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { ooxmlCustomPropertiesXml, resolveZipInstant, toW3CDTF } from '../utils/officeGenUtils.js';
+import { encUrl, ooxmlCustomPropertiesXml, resolveZipInstant, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { buildWorkbook, cellTextProcessor, noteLabels, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
 
@@ -73,16 +73,19 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
 
     private async write(): Promise<ConversionResult<'xlsx'>> {
         const cfg = this.config.xlsxConfig;
-        const labels = noteLabels(this.ast.content);
+        // Every node the workbook takes is asked for here, so the signal is heard node by node.
+        const keep = async (node: OfficeContentNode) => { checkAbortSignal(this.config.abortSignal); const v = await this.handleOnNode(node); return v === false ? false : typeof v === 'string' ? v : true; };
+        const labels = await noteLabels(this.ast.content, keep);
         const textProcessor = cellTextProcessor(this.imageMode(), labels);
+        const chartData = (node: OfficeContentNode) => this.ast.attachments?.find(a => a?.name === (node.metadata as { attachmentName?: string } | undefined)?.attachmentName)?.chartData;
         const { sheets, unrepresentable } = await buildWorkbook(this.ast.content, {
             chartTable: node => {
-                const data = this.ast.attachments?.find(a => a?.name === (node.metadata as { attachmentName?: string } | undefined)?.attachmentName)?.chartData;
-                return data ? this.chartTable(data, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode)) : undefined;
+                const data = chartData(node);
+                return data ? this.chartTable(data, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode), true) : undefined;
             },
+            chartTitle: node => chartData(node)?.title,
             textOf: async node => (await this.processNodeRecursive(node, textProcessor)).replace(/\n+$/, ''),
-            // Every node the workbook takes is asked for here, so the signal is heard node by node.
-            keep: async node => { checkAbortSignal(this.config.abortSignal); const v = await this.handleOnNode(node); return v === false ? false : typeof v === 'string' ? v : true; },
+            keep,
         }, { sheetPerTable: cfg.sheetPerTable !== false, includeText: cfg.includeText !== false, includeCharts: this.config.includeCharts !== false, imageMode: this.imageMode(), includeFormatting: this.config.includeFormatting !== false, noteLabels: labels });
         for (const feature of unrepresentable) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'xlsx' });
         // A workbook has a sheet at least: an empty one where the document held nothing a sheet takes.
@@ -94,7 +97,7 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
         if (sheets.every(s => s.hidden)) delete sheets[0].hidden;
 
         const styles = new StyleTable();
-        const sheetXml = sheets.map(sheet => this.sheetXml(sheet, styles));
+        const sheetParts = sheets.map(sheet => this.sheetXml(sheet, styles));
         const { iso, mtime } = resolveZipInstant(this.effectiveMetadata.modified);
         const enc = (s: string) => new TextEncoder().encode(s);
         const custom = ooxmlCustomPropertiesXml(this.effectiveMetadata.customProperties);
@@ -124,22 +127,30 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
             'docProps/app.xml': enc(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>officeParser</Application></Properties>`),
         };
         if (custom) files['docProps/custom.xml'] = enc(custom);
-        sheetXml.forEach((xml, i) => { files[`xl/worksheets/sheet${i + 1}.xml`] = enc(xml); });
+        sheetParts.forEach((part, i) => {
+            files[`xl/worksheets/sheet${i + 1}.xml`] = enc(part.xml);
+            if (part.rels) files[`xl/worksheets/_rels/sheet${i + 1}.xml.rels`] = enc(part.rels);
+        });
         return { value: zipSync(files, { mtime }), messages: this.messages };
     }
 
     /** Whether a cell cut to Excel's 32,767 characters was reported (once an output). */
     private cutCellReported = false;
 
-    /** A sheet's part: its columns' widths (hidden ones hidden), its rows and cells, its merged ranges. */
-    private sheetXml(sheet: WorkSheet, styles: StyleTable): string {
+    /** A sheet's part: its columns' widths (hidden ones hidden), its rows and cells, its merged ranges, its cells' links (and their relationships). */
+    private sheetXml(sheet: WorkSheet, styles: StyleTable): { xml: string; rels?: string } {
         const hiddenCols = hiddenColumns(sheet);
         const cols = sheet.widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"${hiddenCols.has(i) ? ' hidden="1"' : ''}/>`).join('');
-        const merges: string[] = [];
+        const merges: string[] = [], links: string[] = [], rels: string[] = [];
         const rows = sheet.rows.map((row, r) => {
             if (!row.cells.length && !row.hidden) return '';
             const cells = row.cells.map(cell => {
                 const ref = `${columnName(cell.col)}${r + 1}`;
+                if (cell.link) {
+                    const id = `rId${rels.length + 1}`;
+                    rels.push(`<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${xmlText(encUrl(cell.link))}" TargetMode="External"/>`);
+                    links.push(`<hyperlink ref="${ref}" r:id="${id}"/>`);
+                }
                 if (cell.colSpan > 1 || cell.rowSpan > 1) merges.push(`${ref}:${columnName(cell.col + cell.colSpan - 1)}${r + cell.rowSpan}`);
                 const wrap = cell.text.includes('\n');
                 const style = styles.index(cell.value.kind === 'text' ? 'General' : formatCode(cell.value), cell.bold, wrap);
@@ -152,10 +163,12 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
             }).join('');
             return `<row r="${r + 1}"${row.hidden ? ' hidden="1"' : ''}>${cells}</row>`;
         }).join('');
-        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`
+        const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`
             + (cols ? `<cols>${cols}</cols>` : '') + `<sheetData>${rows}</sheetData>`
             + (merges.length ? `<mergeCells count="${merges.length}">${merges.map(ref => `<mergeCell ref="${ref}"/>`).join('')}</mergeCells>` : '')
+            + (links.length ? `<hyperlinks>${links.join('')}</hyperlinks>` : '')
             + `</worksheet>`;
+        return { xml, ...(rels.length ? { rels: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join('')}</Relationships>` } : {}) };
     }
 
     private coreProps(iso: string): string {

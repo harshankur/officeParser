@@ -3,7 +3,7 @@ import { ConversionResult, GeneratorConfig, OfficeAttachment, OfficeContentNode,
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { DRAWINGML_PRESETS } from '../utils/shapeNames.js';
-import { decodeBase64, hexColor, ooxmlCustomPropertiesXml, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
+import { decodeBase64, encUrl, hexColor, ooxmlCustomPropertiesXml, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { buildDeck, bulletMargin, Box, DeckItem, DeckParagraph, DeckRun, DeckSlide } from './slides/deck.js';
 
@@ -16,7 +16,8 @@ function xmlText(s: string | undefined): string {
 }
 
 /** Points as English Metric Units (12,700 a point), whole. */
-const emu = (pt: number) => Math.round(pt * 12700);
+/** Points as EMUs: whole, finite, within a million points either way (a page's box no slide holds is held to it). */
+const emu = (pt: number) => Number.isFinite(pt) ? Math.round(Math.max(-1e6, Math.min(1e6, pt)) * 12700) : 0;
 
 const NS = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
 const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -73,7 +74,7 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
             includeFormatting: this.config.includeFormatting !== false,
             chartTable: node => {
                 const data = this.attachmentsByName.get((node.metadata as { attachmentName?: string } | undefined)?.attachmentName ?? '')?.chartData;
-                return data ? this.chartTable(data, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode)) : undefined;
+                return data ? this.chartTable(data, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode), true) : undefined;
             },
         }, { backgrounds: this.config.pptxConfig.backgrounds ?? undefined });
         for (const feature of deck.unrepresentable) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'pptx' });
@@ -187,7 +188,7 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
     }
 
     private xfrm(box: Box, rotation?: number, flipH?: boolean, flipV?: boolean, tag = 'a:xfrm'): string {
-        const rot = rotation ? ` rot="${Math.round((((rotation % 360) + 360) % 360) * 60000)}"` : '';
+        const rot = rotation && Number.isFinite(rotation) ? ` rot="${Math.round((((rotation % 360) + 360) % 360) * 60000)}"` : '';
         return `<${tag}${rot}${flipH ? ' flipH="1"' : ''}${flipV ? ' flipV="1"' : ''}><a:off x="${emu(box.x)}" y="${emu(box.y)}"/><a:ext cx="${emu(Math.max(box.w, 1))}" cy="${emu(Math.max(box.h, 1))}"/></${tag}>`;
     }
 
@@ -309,7 +310,7 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
         const attrs = `lang="en-US"${size ? ` sz="${pptSize(size)}"` : ''}${r.bold ? ' b="1"' : ''}${r.italic ? ' i="1"' : ''}${r.underline ? ' u="sng"' : ''}${r.strike ? ' strike="sngStrike"' : ''}${r.superscript ? ' baseline="30000"' : r.subscript ? ' baseline="-25000"' : ''} dirty="0"`;
         const color = r.color && hexColor(r.color) ? `<a:solidFill><a:srgbClr val="${hexColor(r.color)}"/></a:solidFill>` : '';
         const font = r.font || mono ? `<a:latin typeface="${xmlText(r.font || 'Courier New')}"/>` : '';
-        const link = r.link ? `<a:hlinkClick r:id="${rel('hyperlink', r.link, true)}"/>` : '';
+        const link = r.link ? `<a:hlinkClick r:id="${rel('hyperlink', encUrl(r.link), true)}"/>` : '';
         return `<a:r><a:rPr ${attrs}>${color}${font}${link}</a:rPr><a:t>${xmlText(r.text)}</a:t></a:r>`;
     }
 

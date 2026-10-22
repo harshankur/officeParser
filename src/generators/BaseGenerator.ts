@@ -37,7 +37,7 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
      * (see padWithinBudget) and at most MAX_CHART_TABLE_CELLS cells: at most MAX_LAYOUT_COLUMNS - 1 series,
      * and the rows those hold. What is left out is reported (CONTENT_NOT_REPRESENTABLE).
      */
-    protected chartTable(data: ChartData, cellOf: (text: string) => OfficeContentNode): OfficeContentNode {
+    protected chartTable(data: ChartData, cellOf: (text: string) => OfficeContentNode, caption = false): OfficeContentNode {
         const dataSets = Array.isArray(data.dataSets) ? data.dataSets : [];
         const labels = Array.isArray(data.labels) ? data.labels : [];
         const series = dataSets.slice(0, MAX_LAYOUT_COLUMNS - 1);
@@ -48,6 +48,13 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
             this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'chart data past the table limit', format: this.destination });
         }
         const rows: OfficeContentNode[] = [];
+        // Its title, where asked (a writer that writes no title of its own beside the table): a row across it.
+        const title = caption && typeof data.title === 'string' ? data.title.trim() : '';
+        if (title) {
+            const cell = cellOf(title);
+            cell.metadata = { ...(cell.metadata ?? {}), colSpan: width, style: 'header' } as OfficeContentNode['metadata'];
+            rows.push({ type: 'row', children: [cell] } as OfficeContentNode);
+        }
         if (allowed > 0) rows.push({ type: 'row', children: [cellOf(''), ...series.map(d => cellOf(d?.name || ''))] } as OfficeContentNode);
         for (let i = 0; i < allowed - 1; i++) {
             rows.push({ type: 'row', children: [cellOf(String(labels[i] ?? '')), ...series.map(d => cellOf(String(d?.values?.[i] ?? '')))] } as OfficeContentNode);

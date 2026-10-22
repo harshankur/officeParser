@@ -2,7 +2,7 @@ import { zipSync, Zippable } from 'fflate';
 import { ConversionResult, GeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { odfUserDefinedXml, resolveZipInstant, toW3CDTF } from '../utils/officeGenUtils.js';
+import { encUrl, odfUserDefinedXml, resolveZipInstant, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { buildWorkbook, cellTextProcessor, noteLabels, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
 
@@ -14,7 +14,7 @@ function xmlText(s: string | undefined): string {
 const ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
     + 'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" '
     + 'xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" '
-    + 'xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/"';
+    + 'xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xlink="http://www.w3.org/1999/xlink"';
 
 /**
  * Generates ODS spreadsheets from an AST: a spreadsheet's sheets as they are (values typed and shown in
@@ -89,16 +89,19 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
 
     private async write(): Promise<ConversionResult<'ods'>> {
         const cfg = this.config.odsConfig;
-        const labels = noteLabels(this.ast.content);
+        // Every node the workbook takes is asked for here, so the signal is heard node by node.
+        const keep = async (node: OfficeContentNode) => { checkAbortSignal(this.config.abortSignal); const v = await this.handleOnNode(node); return v === false ? false : typeof v === 'string' ? v : true; };
+        const labels = await noteLabels(this.ast.content, keep);
         const textProcessor = cellTextProcessor(this.imageMode(), labels);
+        const chartData = (node: OfficeContentNode) => this.ast.attachments?.find(a => a?.name === (node.metadata as { attachmentName?: string } | undefined)?.attachmentName)?.chartData;
         const { sheets, unrepresentable } = await buildWorkbook(this.ast.content, {
             chartTable: node => {
-                const data = this.ast.attachments?.find(a => a?.name === (node.metadata as { attachmentName?: string } | undefined)?.attachmentName)?.chartData;
-                return data ? this.chartTable(data, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode)) : undefined;
+                const data = chartData(node);
+                return data ? this.chartTable(data, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode), true) : undefined;
             },
+            chartTitle: node => chartData(node)?.title,
             textOf: async node => (await this.processNodeRecursive(node, textProcessor)).replace(/\n+$/, ''),
-            // Every node the workbook takes is asked for here, so the signal is heard node by node.
-            keep: async node => { checkAbortSignal(this.config.abortSignal); const v = await this.handleOnNode(node); return v === false ? false : typeof v === 'string' ? v : true; },
+            keep,
         }, { sheetPerTable: cfg.sheetPerTable !== false, includeText: cfg.includeText !== false, includeCharts: this.config.includeCharts !== false, imageMode: this.imageMode(), includeFormatting: this.config.includeFormatting !== false, noteLabels: labels });
         for (const feature of unrepresentable) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'ods' });
         if (!sheets.length) {
@@ -169,7 +172,9 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
                     + (cell.colSpan > 1 ? ` table:number-columns-spanned="${cell.colSpan}"` : '') + (cell.rowSpan > 1 ? ` table:number-rows-spanned="${cell.rowSpan}"` : '')
                     + valueAttrs(cell.value);
                 // (What the cell shows: a spreadsheet's number in its format, as ODF holds it beside the value.)
-                const paragraphs = cell.shown ? cell.shown.split('\n').map(line => `<text:p>${xmlText(line)}</text:p>`).join('') : '';
+                // Its link on its text, line by line.
+                const linked = (line: string) => cell.link ? `<text:a xlink:type="simple" xlink:href="${xmlText(encUrl(cell.link))}">${xmlText(line)}</text:a>` : xmlText(line);
+                const paragraphs = cell.shown ? cell.shown.split('\n').map(line => `<text:p>${linked(line)}</text:p>`).join('') : '';
                 out.push(`<table:table-cell${attrs}>${paragraphs}</table:table-cell>`);
             }
             if (!out.length && !empty) out.push('<table:table-cell/>');

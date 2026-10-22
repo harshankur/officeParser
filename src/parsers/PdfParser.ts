@@ -284,8 +284,10 @@ async function resolveFont(fontKey: string, commonObjs: any, styles: Record<stri
     const resolved: ResolvedFont = {
         bold: false,
         italic: false,
-        ascent: typeof style.ascent === 'number' ? style.ascent : 0.8,
-        descent: typeof style.descent === 'number' ? style.descent : -0.2,
+        // A font's ascent and descent as pdf.js gives them, where they are numbers a font has (pdf.js gives NaN
+        // for some fallback fonts: every box of their text was NaN, and a table took it, or it was lost).
+        ascent: Number.isFinite(style.ascent) && style.ascent > 0 && style.ascent <= 2 ? style.ascent : 0.8,
+        descent: Number.isFinite(style.descent) && style.descent <= 0 && style.descent >= -1 ? style.descent : -0.2,
     };
     try {
         if (commonObjs?.has?.(fontKey)) {
@@ -1135,6 +1137,15 @@ async function collectPage(
         const font = fontCache.get(item.fontName) || { bold: false, italic: false, ascent: 0.8, descent: -0.2 };
         const m = pdfjs.Util.transform(layoutViewport.transform, item.transform);
         const box = computeRunBox(m, item.width || 0, font.ascent, font.descent);
+        // A run placed nowhere a number says (a matrix of NaN or infinities): after the run before it, on its line.
+        if (!Number.isFinite(box.x) || !Number.isFinite(box.yBaseline)) {
+            const prev = runs[runs.length - 1];
+            box.x = prev ? prev.x + prev.width : 0;
+            box.yBaseline = prev ? prev.yBaseline : box.fontSize;
+            box.yTop = box.yBaseline - 0.8 * box.fontSize;
+            box.height = box.fontSize;
+            box.angle = 0;
+        }
 
         const formatting: TextFormatting = {};
         if (font.name) formatting.font = font.name;
@@ -1909,27 +1920,39 @@ function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext
 }
 
 /**
- * Each list read from the page's geometry levelled from its own outermost items: levels are found from
- * the markers' left edges across a page, so a list whose items all sat right of another marker (a
- * numbered table's first column, a list further left) started at level one.
+ * Each list read from the page's geometry levelled from its own outermost items, unless it is a part of
+ * the list before it: levels are found from the markers' left edges across a page, so a list whose items
+ * all sat right of another marker (a numbered table's first column, a list further left) started at level
+ * one. A list is a part of the one before it (its nested items after a paragraph of that one's, or on the
+ * next page) where the list item read just before its first, with no heading between, is at its level
+ * or a lower one: it keeps its levels.
  */
 function levelListsFromOwnItems(content: OfficeContentNode[]): void {
-    const lists = new Map<string, ListMetadata[]>();
-    const stack = [...content];
+    const lists = new Map<string, { items: ListMetadata[]; before: number | undefined }>();
+    // In reading order: the level of the last list item read, until a heading.
+    let lastLevel: number | undefined, lastId: string | undefined;
+    const stack: { nodes: OfficeContentNode[]; at: number }[] = [{ nodes: content, at: 0 }];
     let visited = 0;
     while (stack.length && visited++ < 5_000_000) {
-        const n = stack.pop()!;
+        const top = stack[stack.length - 1];
+        if (top.at >= top.nodes.length) { stack.pop(); continue; }
+        const n = top.nodes[top.at++];
+        if (n.type === 'heading') { lastLevel = undefined; lastId = undefined; }
         const meta = n.type === 'list' ? n.metadata as ListMetadata | undefined : undefined;
         if (meta && typeof meta.listId === 'string' && meta.listId.startsWith('pdf-geo-list') && typeof meta.indentation === 'number') {
-            const group = lists.get(meta.listId);
-            if (group) group.push(meta); else lists.set(meta.listId, [meta]);
+            let group = lists.get(meta.listId);
+            if (!group) lists.set(meta.listId, group = { items: [], before: lastId !== meta.listId ? lastLevel : undefined });
+            group.items.push(meta);
+            lastLevel = meta.indentation; lastId = meta.listId;
         }
-        if (n.children) for (const c of n.children) stack.push(c);
+        if (n.children?.length) stack.push({ nodes: n.children, at: 0 });
     }
     for (const group of lists.values()) {
         let least = Infinity;
-        for (const m of group) least = Math.min(least, m.indentation);
-        if (least > 0 && Number.isFinite(least)) for (const m of group) m.indentation -= least;
+        for (const m of group.items) least = Math.min(least, m.indentation);
+        if (!(least > 0) || !Number.isFinite(least)) continue;
+        if (group.before !== undefined && group.before <= least) continue;
+        for (const m of group.items) m.indentation -= least;
     }
 }
 

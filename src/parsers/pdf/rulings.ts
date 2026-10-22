@@ -212,15 +212,22 @@ export function ruledTables(frames: RuledFrame[], runs: readonly RawRun[], layou
         const contents: RawRun[][] = f.cells.map(() => []);
         const cellIndex = new Map<string, number>();
         f.cells.forEach((c, i) => { for (let r = c.row; r < c.row + c.rowSpan; r++) for (let k = c.col; k < c.col + c.colSpan; k++) cellIndex.set(`${r},${k}`, i); });
-        for (const run of runs) {
-            if (consumed.has(run) || run.angle !== 0) continue;
+        // (A piece of a run cut at a column's rule, and the run it was cut from.)
+        const pieceOf = new Map<RawRun, RawRun>();
+        const place = (run: RawRun) => {
             const cx = run.x + run.width / 2, cy = run.yTop + run.height / 2;
-            if (cx < f.xs[0] || cx > f.xs[f.xs.length - 1] || cy < f.ys[0] || cy > f.ys[f.ys.length - 1]) continue;
+            if (!(cx >= f.xs[0] && cx <= f.xs[f.xs.length - 1] && cy >= f.ys[0] && cy <= f.ys[f.ys.length - 1])) return;
             let col = 0, row = 0;
             while (col < f.xs.length - 2 && cx > f.xs[col + 1]) col++;
             while (row < f.ys.length - 2 && cy > f.ys[row + 1]) row++;
             const at = cellIndex.get(`${row},${col}`);
             if (at !== undefined) contents[at].push(run);
+        };
+        for (const run of runs) {
+            if (consumed.has(run) || run.angle !== 0) continue;
+            const pieces = cutAtRules(run, f.xs);
+            if (pieces.length > 1) for (const p of pieces) { pieceOf.set(p, run); place(p); }
+            else place(run);
         }
         // The frames inside this one, each in the cell holding its middle.
         const innerOf = new Map<number, OfficeContentNode[]>();
@@ -267,7 +274,7 @@ export function ruledTables(frames: RuledFrame[], runs: readonly RawRun[], layou
         if (falseMerge || columned) continue;
         const rows: OfficeContentNode[] = [];
         f.cells.forEach((c, i) => {
-            for (const r of contents[i]) consumed.add(r);
+            for (const r of contents[i]) consumed.add(pieceOf.get(r) ?? r);
             const children = layout.content(contents[i]);
             // A table inside the cell, among its paragraphs by its place.
             for (const inner of innerOf.get(i) ?? []) {
@@ -321,4 +328,45 @@ export function shadeCells(tables: readonly OfficeContentNode[], shapes: readonl
         }
     };
     for (const t of tables) visit(t);
+}
+
+/**
+ * A run drawn across a table's column rules (a producer setting a row's cells in one string, "Apples 10")
+ * cut at the word boundary nearest each rule it crosses, where text stands at least half an em on both
+ * sides; each piece over its share of the run's width (in proportion to its letters). A run that crosses
+ * no rule, or has no word boundary to cut at, is itself.
+ */
+export function cutAtRules(run: RawRun, xs: readonly number[]): RawRun[] {
+    const em = run.fontSize || 12;
+    const inner = xs.slice(1, -1).filter(x => x > run.x + em / 2 && x < run.x + run.width - em / 2);
+    if (!inner.length || inner.length > 64 || run.text.length > 4096) return [run];
+    // The word boundaries (where a run of spaces starts after a letter), found once.
+    const bounds: number[] = [];
+    const lastLetter = run.text.trimEnd().length;
+    for (let i = 1; i < lastLetter; i++) if (/\s/.test(run.text[i]) && !/\s/.test(run.text[i - 1])) bounds.push(i);
+    if (!bounds.length) return [run];
+    const perChar = run.width / Math.max(1, run.text.length);
+    const cuts: number[] = [];
+    for (const x of inner) {
+        // The boundary nearest the rule's place among the letters (by halving).
+        const want = (x - run.x) / perChar;
+        let lo = 0, hi = bounds.length - 1;
+        while (lo < hi) { const mid = (lo + hi) >> 1; if (bounds[mid] < want) lo = mid + 1; else hi = mid; }
+        const best = lo > 0 && Math.abs(bounds[lo - 1] - want) <= Math.abs(bounds[lo] - want) ? bounds[lo - 1] : bounds[lo];
+        if (!cuts.includes(best)) cuts.push(best);
+    }
+    if (!cuts.length) return [run];
+    cuts.sort((a, b) => a - b);
+    const pieces: RawRun[] = [];
+    let from = 0;
+    const edges = [...inner].sort((a, b) => a - b);
+    for (const [k, cut] of [...cuts, run.text.length].entries()) {
+        const text = run.text.slice(from, cut).trim();
+        // Each piece from its rule (the run's start for the first) to the next (the run's end for the last).
+        const left = k === 0 ? run.x : Math.max(run.x, edges[Math.min(k - 1, edges.length - 1)]);
+        const right = k === cuts.length ? run.x + run.width : Math.min(run.x + run.width, edges[Math.min(k, edges.length - 1)]);
+        if (text) pieces.push({ ...run, text, x: left, width: Math.max(0, right - left) });
+        from = cut;
+    }
+    return pieces.length > 1 ? pieces : [run];
 }

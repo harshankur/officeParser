@@ -3,7 +3,7 @@ import { ConversionResult, GeneratorConfig, OfficeAttachment, OfficeContentNode,
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { PRESET_TO_ODF } from '../utils/shapeNames.js';
-import { decodeBase64, hexColor, odfUserDefinedXml, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
+import { decodeBase64, encUrl, hexColor, odfUserDefinedXml, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { buildDeck, bulletMargin, Box, DeckItem, DeckParagraph, DeckRun, DeckSlide } from './slides/deck.js';
 
@@ -13,7 +13,8 @@ function xmlText(s: string | undefined): string {
 }
 
 /** A length in points, as ODF writes one. */
-const pt = (n: number) => `${Math.round(n * 100) / 100}pt`;
+/** Points as ODF writes them: finite, within a million points either way (a page's box no slide holds is held to it). */
+const pt = (n: number) => `${Number.isFinite(n) ? Math.round(Math.max(-1e6, Math.min(1e6, n)) * 100) / 100 : 0}pt`;
 
 const ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
     + 'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" '
@@ -66,7 +67,7 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
             includeFormatting: this.config.includeFormatting !== false,
             chartTable: node => {
                 const data = this.attachmentsByName.get((node.metadata as { attachmentName?: string } | undefined)?.attachmentName ?? '')?.chartData;
-                return data ? this.chartTable(data, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode)) : undefined;
+                return data ? this.chartTable(data, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode), true) : undefined;
             },
         }, { backgrounds: this.config.odpConfig.backgrounds ?? undefined });
         for (const feature of deck.unrepresentable) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'odp' });
@@ -134,7 +135,7 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
     }
 
     private frameAttrs(box: Box, rotation?: number): string {
-        if (!rotation) return ` svg:x="${pt(box.x)}" svg:y="${pt(box.y)}" svg:width="${pt(Math.max(1, box.w))}" svg:height="${pt(Math.max(1, box.h))}"`;
+        if (!rotation || !Number.isFinite(rotation)) return ` svg:x="${pt(box.x)}" svg:y="${pt(box.y)}" svg:width="${pt(Math.max(1, box.w))}" svg:height="${pt(Math.max(1, box.h))}"`;
         // Turned about its middle: ODF's transform turns about the frame's corner, then moves it.
         const r = -rotation * Math.PI / 180, cx = box.x + box.w / 2, cy = box.y + box.h / 2;
         const ox = cx - (box.w / 2) * Math.cos(r) - (box.h / 2) * Math.sin(r), oy = cy + (box.w / 2) * Math.sin(r) - (box.h / 2) * Math.cos(r);
@@ -151,14 +152,22 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
         return this.styleNamed(key, 'gr', name => `<style:style style:name="${name}" style:family="graphic" style:parent-style-name="standard"><style:graphic-properties${f}${l}${a}${i} draw:auto-grow-height="${autoGrow}" draw:auto-grow-width="${unwrapped}"${unwrapped ? ' fo:wrap-option="no-wrap" draw:textarea-horizontal-align="left"' : ''}/></style:style>`);
     }
 
+    /** A shape's ODF name: its preset's own, else a rectangle, reported once a name. */
+    private readonly unknownShapes = new Set<string>();
+    private odfShape(geometry: string | undefined): string {
+        if (!geometry) return 'rectangle';
+        if (Object.prototype.hasOwnProperty.call(PRESET_TO_ODF, geometry)) return PRESET_TO_ODF[geometry];
+        if (!this.unknownShapes.has(geometry)) { this.unknownShapes.add(geometry); this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: `a ${geometry.slice(0, 40)} shape (drawn as a rectangle)`, format: 'odp' }); }
+        return 'rectangle';
+    }
+
     private itemXml(item: DeckItem): string {
         if (item.kind === 'shape') {
             const s = item.shape;
-            const kind = s.geometry ? PRESET_TO_ODF[s.geometry] : 'rectangle';
+            const kind = this.odfShape(s.geometry);
             const style = this.graphicStyle(s.fill, s.line);
             if (s.geometry === 'line') return `<draw:line draw:style-name="${style}" svg:x1="${pt(item.box.x)}" svg:y1="${pt(item.box.y)}" svg:x2="${pt(item.box.x + item.box.w)}" svg:y2="${pt(item.box.y + item.box.h)}"/>`;
-            if (!kind) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: `a ${s.geometry} shape (drawn as a rectangle)`, format: 'odp' });
-            return `<draw:custom-shape draw:style-name="${style}"${this.frameAttrs(item.box, s.rotation)}><draw:enhanced-geometry svg:viewBox="0 0 21600 21600" draw:type="${kind ?? 'rectangle'}"/></draw:custom-shape>`;
+            return `<draw:custom-shape draw:style-name="${style}"${this.frameAttrs(item.box, s.rotation)}><draw:enhanced-geometry svg:viewBox="0 0 21600 21600" draw:type="${kind}"/></draw:custom-shape>`;
         }
         if (item.kind === 'picture') {
             const a = this.attachmentsByName.get(item.attachment);
@@ -180,7 +189,7 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
         const paragraphs = item.paragraphs.map(p => this.paragraphXml(p, size)).join('') || '<text:p/>';
         if (s && (s.geometry && s.geometry !== 'rect' || s.fill || s.line)) {
             // A shape with its text.
-            const kind = s.geometry ? PRESET_TO_ODF[s.geometry] ?? 'rectangle' : 'rectangle';
+            const kind = this.odfShape(s.geometry);
             return `<draw:custom-shape draw:style-name="${this.graphicStyle(s.fill, s.line, item.anchor, insets)}"${this.frameAttrs(item.box, item.rotation ?? s.rotation)}>${paragraphs}<draw:enhanced-geometry svg:viewBox="0 0 21600 21600" draw:type="${kind}"/></draw:custom-shape>`;
         }
         return `<draw:frame draw:style-name="${this.graphicStyle(undefined, undefined, item.anchor, insets, !item.exact, item.exact)}"${this.frameAttrs(item.box, item.rotation)}><draw:text-box>${paragraphs}</draw:text-box></draw:frame>`;
@@ -251,6 +260,6 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
             + (r.color && hexColor(r.color) ? ` fo:color="#${hexColor(r.color)}"` : '') + (r.font || mono ? ` style:font-name="${xmlText(r.font || 'Courier New')}" fo:font-family="${xmlText(r.font || 'Courier New')}"` : '');
         const text = xmlText(r.text).replace(/ {2,}/g, m => ` <text:s text:c="${m.length - 1}"/>`).replace(/\t/g, '<text:tab/>');
         const span = props ? `<text:span text:style-name="${this.styleNamed(`t|${props}`, 'T', name => `<style:style style:name="${name}" style:family="text"><style:text-properties${props}/></style:style>`)}">${text}</text:span>` : text;
-        return r.link ? `<text:a xlink:type="simple" xlink:href="${xmlText(r.link)}">${span}</text:a>` : span;
+        return r.link ? `<text:a xlink:type="simple" xlink:href="${xmlText(encUrl(r.link))}">${span}</text:a>` : span;
     }
 }
