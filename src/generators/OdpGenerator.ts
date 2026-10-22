@@ -5,7 +5,7 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { PRESET_TO_ODF } from '../utils/shapeNames.js';
 import { decodeBase64, hexColor, odfUserDefinedXml, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
-import { buildDeck, Box, DeckItem, DeckParagraph, DeckRun, DeckSlide } from './slides/deck.js';
+import { buildDeck, bulletMargin, Box, DeckItem, DeckParagraph, DeckRun, DeckSlide } from './slides/deck.js';
 
 /** Escapes text content for an XML part after stripping XML-illegal characters. */
 function xmlText(s: string | undefined): string {
@@ -167,7 +167,7 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
             if (!href) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: item.attachment, reason: a ? 'a picture a slide cannot hold (PNG, JPEG, GIF and BMP it can)' : 'missing attachment' }); return ''; }
             const size = bytes ? sniffImageSize(bytes) : null;
             let box = item.box;
-            if (size && size.w > 0 && size.h > 0) {
+            if (!item.fill && size && size.w > 0 && size.h > 0) {
                 const scale = Math.min(box.w / size.w, box.h / size.h);
                 box = { x: box.x + (box.w - size.w * scale) / 2, y: box.y + (box.h - size.h * scale) / 2, w: size.w * scale, h: size.h * scale };
             }
@@ -234,7 +234,7 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
         const first = !p.bullet && p.firstIndent ? p.firstIndent : 0;
         // Lines as far apart as the source set them.
         const spacing = p.lineSpacing && p.lineSpacing > 0 ? Math.min(1584, p.lineSpacing) : 0;
-        const pStyle = align || p.bullet || first || spacing ? this.styleNamed(`p|${align}|${p.bullet?.level ?? ''}|${first.toFixed(2)}|${spacing.toFixed(2)}`, 'P', name => `<style:style style:name="${name}" style:family="paragraph"><style:paragraph-properties${align ? ` fo:text-align="${align}"` : ''}${spacing ? ` fo:line-height="${pt(spacing)}"` : ''}${p.bullet ? ` fo:margin-left="${pt(18 * (p.bullet.level + 1))}" fo:text-indent="${pt(-14)}"` : first ? ` fo:margin-left="${pt(Math.max(0, -first))}" fo:text-indent="${pt(first)}"` : ''}/></style:style>`) : undefined;
+        const pStyle = align || p.bullet || first || spacing ? this.styleNamed(`p|${align}|${p.bullet?.level ?? ''}|${first.toFixed(2)}|${spacing.toFixed(2)}`, 'P', name => `<style:style style:name="${name}" style:family="paragraph"><style:paragraph-properties${align ? ` fo:text-align="${align}"` : ''}${spacing ? ` fo:line-height="${pt(spacing)}"` : ''}${p.bullet ? ` fo:margin-left="${pt(bulletMargin(p.bullet.level))}" fo:text-indent="${pt(-14)}"` : first ? ` fo:margin-left="${pt(Math.max(0, -first))}" fo:text-indent="${pt(first)}"` : ''}/></style:style>`) : undefined;
         const spans = p.runs.map(r => this.spanXml(r, defaultSize, p.mono)).join('');
         // A number is written as the item shows it, as a bullet's character is.
         const marker = p.bullet ? (p.bullet.numbered ? (p.bullet.text ? `${xmlText(p.bullet.text)}<text:tab/>` : '') : `${xmlText(p.bullet.char ? [...p.bullet.char][0] : '')}<text:tab/>`) : '';

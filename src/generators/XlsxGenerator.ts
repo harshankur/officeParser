@@ -1,9 +1,10 @@
 import { zipSync, Zippable } from 'fflate';
 import { ConversionResult, GeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType } from '../types.js';
+import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { ooxmlCustomPropertiesXml, resolveZipInstant, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
-import { buildWorkbook, cellTextProcessor, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
+import { buildWorkbook, cellTextProcessor, noteLabels, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
 
 /** Escapes text content for an XML part after stripping XML-illegal characters. */
 function xmlText(s: string | undefined): string {
@@ -72,11 +73,17 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
 
     private async write(): Promise<ConversionResult<'xlsx'>> {
         const cfg = this.config.xlsxConfig;
-        const textProcessor = cellTextProcessor(this.imageMode());
+        const labels = noteLabels(this.ast.content);
+        const textProcessor = cellTextProcessor(this.imageMode(), labels);
         const { sheets, unrepresentable } = await buildWorkbook(this.ast.content, {
+            chartTable: node => {
+                const data = this.ast.attachments?.find(a => a?.name === (node.metadata as { attachmentName?: string } | undefined)?.attachmentName)?.chartData;
+                return data ? this.chartTable(data, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode)) : undefined;
+            },
             textOf: async node => (await this.processNodeRecursive(node, textProcessor)).replace(/\n+$/, ''),
-            keep: async node => { const v = await this.handleOnNode(node); return v === false ? false : typeof v === 'string' ? v : true; },
-        }, { sheetPerTable: cfg.sheetPerTable !== false, includeText: cfg.includeText !== false, includeCharts: this.config.includeCharts !== false, imageMode: this.imageMode(), includeFormatting: this.config.includeFormatting !== false });
+            // Every node the workbook takes is asked for here, so the signal is heard node by node.
+            keep: async node => { checkAbortSignal(this.config.abortSignal); const v = await this.handleOnNode(node); return v === false ? false : typeof v === 'string' ? v : true; },
+        }, { sheetPerTable: cfg.sheetPerTable !== false, includeText: cfg.includeText !== false, includeCharts: this.config.includeCharts !== false, imageMode: this.imageMode(), includeFormatting: this.config.includeFormatting !== false, noteLabels: labels });
         for (const feature of unrepresentable) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'xlsx' });
         // A workbook has a sheet at least: an empty one where the document held nothing a sheet takes.
         if (!sheets.length) {

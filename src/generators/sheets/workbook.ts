@@ -10,7 +10,7 @@
  * @module generators/sheets/workbook
  */
 
-import { CellMetadata, ImageMode, OfficeContentNode, RowMetadata, SheetMetadata, SlideMetadata } from '../../types.js';
+import { CellMetadata, CommentMetadata, ImageMode, ListMetadata, OfficeContentNode, RowMetadata, SheetMetadata, SlideMetadata } from '../../types.js';
 import { stripInvalidXmlChars } from '../../utils/sanitize.js';
 import { layoutTableRows } from '../../utils/tableLayout.js';
 
@@ -161,12 +161,19 @@ function cutTo(text: string, max: number): string {
  * A sheet name a spreadsheet takes: at most 31 characters (cut at a whole character), none of
  * `[]:*?/\` nor what XML cannot hold, not blank, unique as a spreadsheet compares names (case aside).
  */
+const nextSuffix = new WeakMap<Set<string>, Map<string, number>>();
+
 export function sheetName(wanted: string, taken: Set<string>, fallback: string): string {
     const clean = (name: string) => cutTo(stripInvalidXmlChars(name).replace(/[[\]:*?/\\\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().replace(/^'+|'+$/g, '').trim(), 31).trim();
     let base = clean(wanted) || clean(fallback) || 'Sheet';
     if (base.toLowerCase() === 'history') base = `${cutTo(base, 29)} 1`;
     let name = base;
-    for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${cutTo(base, 31 - String(n).length - 1).trim()} ${n}`;
+    // The next number to try for each name, so many sheets wanting one name are named in time in proportion.
+    let next = nextSuffix.get(taken);
+    if (!next) nextSuffix.set(taken, next = new Map());
+    let n = next.get(base.toLowerCase()) ?? 2;
+    while (taken.has(name.toLowerCase())) { name = `${cutTo(base, 31 - String(n).length - 1).trim()} ${n}`; n++; }
+    next.set(base.toLowerCase(), n);
     taken.add(name.toLowerCase());
     return name;
 }
@@ -201,6 +208,8 @@ function widthsOf(rows: WorkRow[]): number[] {
 export interface WorkbookSource {
     textOf(node: OfficeContentNode): Promise<string>;
     keep(node: OfficeContentNode): Promise<boolean | string>;
+    /** A chart's data as a table (its labels down, its series across), or undefined where it has none. */
+    chartTable?(node: OfficeContentNode): OfficeContentNode | undefined;
 }
 
 /** A cell of `text` alone at `col`, typed from it. */
@@ -281,7 +290,7 @@ async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadshe
             }
             out.push({ cells, ...hiddenRow(row) });
         }
-        return out;
+        return withinRows(out);
     }
     // Laid out as a table is: a row onNode gave text for is one cell, in the row's first column.
     const stand = new Map<OfficeContentNode, string>();
@@ -302,41 +311,78 @@ async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadshe
         }
         out.push({ cells, ...hiddenRow(rows[ri].row) });
     }
-    return out;
+    return withinRows(out);
+}
+
+/** A table's rows with each merge held to them: one reaching past its last row overlapped what came next on the sheet. */
+function withinRows(rows: WorkRow[]): WorkRow[] {
+    rows.forEach((row, ri) => { for (const cell of row.cells) if (cell.rowSpan > rows.length - ri) cell.rowSpan = Math.max(1, rows.length - ri); });
+    return rows;
+}
+
+/**
+ * The numbers of a document's footnotes and endnotes (`Footnote 1`, `Endnote 1`), each kind in its order
+ * through the document, as its text cites them (see cellTextProcessor) and the Notes sheet lists them.
+ */
+export function noteLabels(content: OfficeContentNode[]): Map<OfficeContentNode, string> {
+    const labels = new Map<OfficeContentNode, string>();
+    const counts = { footnote: 0, endnote: 0 };
+    const label = (note: OfficeContentNode) => {
+        if (labels.has(note)) return;
+        const end = (note.metadata as { noteType?: string } | undefined)?.noteType === 'endnote';
+        labels.set(note, end ? `Endnote ${++counts.endnote}` : `Footnote ${++counts.footnote}`);
+    };
+    const stack: { nodes: OfficeContentNode[]; at: number; depth: number }[] = [{ nodes: content, at: 0, depth: 0 }];
+    while (stack.length) {
+        const top = stack[stack.length - 1];
+        if (top.at >= top.nodes.length) { stack.pop(); continue; }
+        const node = top.nodes[top.at++];
+        if (node.type === 'note') label(node);
+        if (node.type !== 'slide') for (const note of node.notes || []) {
+            label(note);
+            if (top.depth < 32 && note.children?.length) stack.push({ nodes: note.children, at: 0, depth: top.depth + 1 });
+        }
+        if (top.depth < 32 && node.children?.length) stack.push({ nodes: node.children, at: 0, depth: top.depth + 1 });
+    }
+    return labels;
 }
 
 /**
  * The notes a document holds, as rows of a sheet: each footnote and endnote (cited in its text, or a
- * block of the page) by its number, and each slide's speaker notes by the slide, with their text.
+ * block of the page) by its number, each slide's speaker notes by the slide, and each comment by its
+ * author, with their text.
  */
-async function notesOf(content: OfficeContentNode[], source: WorkbookSource): Promise<WorkRow[]> {
+async function notesOf(content: OfficeContentNode[], source: WorkbookSource, labels: Map<OfficeContentNode, string>): Promise<WorkRow[]> {
     const rows: WorkRow[] = [];
     const seen = new Set<OfficeContentNode>();
-    const counts = { footnote: 0, endnote: 0 };
-    const add = async (note: OfficeContentNode, label: () => string) => {
+    const add = async (note: OfficeContentNode, label: string) => {
         if (seen.has(note) || rows.length >= MAX_ROWS) return;
         seen.add(note);
         if (await source.keep(note) === false) return;
-        const text = (await source.textOf(note)).trim();
-        if (text) rows.push({ cells: [textCell(0, label()), { ...textCell(1, text), value: { kind: 'text' } }] });
+        // (A comment's blocks one by one: a comment itself, in a run's text, writes nothing there.)
+        const text = (note.children?.length
+            ? note.type === 'comment' ? (await Promise.all(note.children.map(c => source.textOf(c)))).join('\n') : await source.textOf(note)
+            : note.text ?? '').trim();
+        if (text) rows.push({ cells: [textCell(0, label), { ...textCell(1, text), value: { kind: 'text' } }] });
     };
-    // Each kind numbered in its order, as a document numbers them (a note's id is the file's, not its number).
-    const noteLabel = (note: OfficeContentNode) => {
-        const end = (note.metadata as { noteType?: string } | undefined)?.noteType === 'endnote';
-        return end ? `Endnote ${++counts.endnote}` : `Footnote ${++counts.footnote}`;
+    const commentLabel = (comment: OfficeContentNode) => {
+        const author = (comment.metadata as CommentMetadata | undefined)?.author;
+        return typeof author === 'string' && author.trim() ? `Comment (${author.trim()})` : 'Comment';
     };
     const visit = async (nodes: OfficeContentNode[], depth: number) => {
         for (const node of nodes) {
             if (seen.has(node)) continue;
-            if (node.type === 'note') await add(node, () => noteLabel(node));
+            if (node.type === 'note') await add(node, labels.get(node) ?? 'Footnote');
+            else if (node.type === 'comment') { await add(node, commentLabel(node)); continue; }
             else if (node.type === 'slide') {
                 const slideNumber = (node.metadata as SlideMetadata | undefined)?.slideNumber;
-                for (const note of node.notes || []) await add(note, () => `Slide ${slideNumber ?? ''}`.trim());
+                for (const note of node.notes || []) await add(note, `Slide ${slideNumber ?? ''}`.trim());
             } else for (const note of node.notes || []) {
-                await add(note, () => noteLabel(note));
+                await add(note, labels.get(note) ?? 'Footnote');
                 // A note cited inside a note.
                 if (depth < 32 && note.children?.length) await visit(note.children, depth + 1);
             }
+            for (const comment of node.comments || []) await add(comment, commentLabel(comment));
             if (depth < 32 && node.children?.length) await visit(node.children, depth + 1);
         }
     };
@@ -350,7 +396,7 @@ async function notesOf(content: OfficeContentNode[], source: WorkbookSource): Pr
  * sheet of its own (`includeText`), a block a row. Pictures and charts, which a cell cannot hold, are
  * counted for the writer's warning.
  */
-export async function buildWorkbook(content: OfficeContentNode[], source: WorkbookSource, options: { sheetPerTable: boolean; includeText: boolean; includeCharts: boolean; imageMode: ImageMode; includeFormatting: boolean }): Promise<{ sheets: WorkSheet[]; unrepresentable: Set<string> }> {
+export async function buildWorkbook(content: OfficeContentNode[], source: WorkbookSource, options: { sheetPerTable: boolean; includeText: boolean; includeCharts: boolean; imageMode: ImageMode; includeFormatting: boolean; noteLabels: Map<OfficeContentNode, string> }): Promise<{ sheets: WorkSheet[]; unrepresentable: Set<string> }> {
     const sheets: WorkSheet[] = [];
     const taken = new Set<string>();
     const unrepresentable = new Set<string>();
@@ -360,11 +406,20 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
     const lost = (node: OfficeContentNode) => { if (node.type === 'image') { if (picturesWanted) unrepresentable.add('pictures'); } else if (node.type === 'chart' && options.includeCharts) unrepresentable.add('charts'); };
     // The notes, on a sheet of their own after the others.
     const withNotes = async () => {
-        const notes = await notesOf(content, source);
+        const notes = await notesOf(content, source, options.noteLabels);
         if (notes.length) sheets.push({ name: sheetName('Notes', taken, 'Notes'), rows: notes, widths: [12, Math.min(120, Math.max(8, longestOf(notes, 1)))] });
         // No bold where the caller asked for no formatting (includeFormatting: false).
         if (!options.includeFormatting) for (const sheet of sheets) for (const row of sheet.rows) for (const cell of row.cells) cell.bold = false;
         return { sheets, unrepresentable };
+    };
+    // A chart as a sheet of its data (its labels down, its series across), where it has data; else lost.
+    let charts = 0;
+    const chartRows = async (node: OfficeContentNode): Promise<WorkRow[] | undefined> => {
+        if (!options.includeCharts) return undefined;
+        const table = source.chartTable?.(node);
+        if (!table) { lost(node); return undefined; }
+        charts++;
+        return gridOf(table, source, false);
     };
     const sheetNodes = content.filter(n => n.type === 'sheet');
     if (sheetNodes.length) {
@@ -372,8 +427,15 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
             if (await source.keep(node) === false) continue;
             const meta = node.metadata as SheetMetadata | undefined;
             const rows = await gridOf(node, source, true);
-            for (const c of node.children || []) lost(c);
-            sheets.push({ name: sheetName(meta?.sheetName ?? '', taken, `Sheet${i + 1}`), rows, ...(meta?.hidden ? { hidden: true } : {}), widths: widthsOf(rows) });
+            const name = sheetName(meta?.sheetName ?? '', taken, `Sheet${i + 1}`);
+            sheets.push({ name, rows, ...(meta?.hidden ? { hidden: true } : {}), widths: widthsOf(rows) });
+            // Its charts, each a sheet of its data after it; its pictures, which a cell cannot hold, reported.
+            for (const c of node.children || []) {
+                if (c.type !== 'chart') { lost(c); continue; }
+                if (await source.keep(c) === false) continue;
+                const chart = await chartRows(c);
+                if (chart) sheets.push({ name: sheetName(`${name} Chart ${charts}`, taken, `Chart ${charts}`), rows: chart, widths: widthsOf(chart) });
+            }
         }
         return withNotes();
     }
@@ -392,13 +454,37 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
                 else { if (together.length) together.push({ cells: [] }); for (const r of rows) together.push(r); }
                 continue;
             }
-            if (node.type === 'image' || node.type === 'chart' || node.type === 'drawing') { lost(node); continue; }
+            if (node.type === 'image') {
+                // A picture a cell cannot hold (reported): its words in its place (see pictureWords).
+                const words = pictureWords(node, options.imageMode);
+                if (words && options.includeText && text.length < MAX_ROWS) text.push({ cells: [{ ...textCell(0, words), value: { kind: 'text' } }] });
+                lost(node);
+                continue;
+            }
+            if (node.type === 'chart') {
+                const rows = await chartRows(node);
+                if (!rows) continue;
+                if (options.sheetPerTable) sheets.push({ name: sheetName(heading ? `${heading} Chart` : '', taken, `Chart ${charts}`), rows, widths: widthsOf(rows) });
+                else { if (together.length) together.push({ cells: [] }); for (const r of rows) together.push(r); }
+                continue;
+            }
+            if (node.type === 'drawing') continue;
+            // An embedded video or page: its address.
+            if (node.type === 'embed') {
+                const url = (node.metadata as { url?: string } | undefined)?.url ?? node.text;
+                if (typeof url === 'string' && url.trim() && options.includeText && text.length < MAX_ROWS) text.push({ cells: [{ ...textCell(0, url.trim()), value: { kind: 'text' } }] });
+                continue;
+            }
+            // Comments are written on the Notes sheet (see notesOf).
+            if (node.type === 'comment') continue;
             // Notes are written on their own sheet (see notesOf).
             if (node.type === 'note') continue;
             const blockText = typeof kept === 'string' ? kept : null;
             if (['paragraph', 'heading', 'list', 'code', 'definitionTerm', 'definitionDescription'].includes(node.type)) {
-                const t = (blockText ?? await source.textOf(node)).trim();
+                let t = (blockText ?? await source.textOf(node)).trim();
                 if (node.type === 'heading' && t) heading = t;
+                // A list item with its marker as the document shows it.
+                if (node.type === 'list' && t && blockText === null) { const marker = listMarker(node.metadata as ListMetadata | undefined); if (marker) t = `${marker} ${t}`; }
                 if (t && options.includeText && text.length < MAX_ROWS) text.push({ cells: [{ ...textCell(0, t, node.type === 'heading'), value: { kind: 'text' } }] });
                 // A picture in the text, which a cell cannot hold.
                 const walk = (n: OfficeContentNode, d: number) => { if (n.type === 'image' && picturesWanted) unrepresentable.add('pictures'); if (d < 16) for (const c of n.children || []) walk(c, d + 1); };
@@ -426,13 +512,37 @@ function longestOf(rows: WorkRow[], col: number): number {
  * block and break, and a picture's recognized (OCR) text where the caller asks for it (includeImages
  * 'ocr-text-only' or 'image+ocr-text'); a picture itself a cell cannot hold.
  */
-export function cellTextProcessor(imageMode: ImageMode): (n: OfficeContentNode, childrenOutput: string) => string {
+export function cellTextProcessor(imageMode: ImageMode, labels?: Map<OfficeContentNode, string>): (n: OfficeContentNode, childrenOutput: string) => string {
     const ocr = imageMode === 'ocr-text-only' || imageMode === 'image+ocr-text';
+    // The notes a run cites, by their numbers on the Notes sheet.
+    const cites = (n: OfficeContentNode) => (n.notes || []).map(note => labels?.get(note)).filter(Boolean).map(l => ` [${l}]`).join('');
     return (n, co) => {
-        if (n.type === 'text' || n.type === 'code') return n.text || '';
-        if (n.type === 'image') return ocr ? ((n.metadata as { ocrText?: string } | undefined)?.ocrText ?? '').trim() : '';
+        if (n.type === 'text' || n.type === 'code') return (n.text || '') + cites(n);
+        if (n.type === 'embed') return ((n.metadata as { url?: string } | undefined)?.url ?? n.text ?? '').trim();
+        if (n.type === 'comment') return '';
+        if (n.type === 'image') return pictureWords(n, imageMode);
         if (n.type === 'break') return (n.metadata as { breakType?: string } | undefined)?.breakType === 'section' ? '' : '\n';
         if ((n.type === 'paragraph' || n.type === 'heading' || n.type === 'list') && co) return co + '\n';
         return co;
     };
+}
+
+/** A list item's marker as the document shows it: its own, else its number or a bullet. */
+function listMarker(meta: ListMetadata | undefined): string {
+    if (typeof meta?.marker === 'string') return meta.marker.replace(/\s+/g, ' ').trim();
+    return meta?.listType === 'ordered' ? `${(typeof meta.itemIndex === 'number' && Number.isFinite(meta.itemIndex) ? Math.max(0, Math.trunc(meta.itemIndex)) : 0) + 1}.` : '•';
+}
+
+/**
+ * A picture's words, which a cell holds where it cannot hold the picture: its alternative text (and its
+ * recognized text, under includeImages 'image+ocr-text'), its recognized text alone under 'ocr-text-only',
+ * none under 'none'.
+ */
+function pictureWords(node: OfficeContentNode, imageMode: ImageMode): string {
+    const m = node.metadata as { altText?: string; ocrText?: string } | undefined;
+    const alt = typeof m?.altText === 'string' ? m.altText.trim() : '', ocr = typeof m?.ocrText === 'string' ? m.ocrText.trim() : '';
+    if (imageMode === 'none') return '';
+    if (imageMode === 'ocr-text-only') return ocr;
+    if (imageMode === 'image+ocr-text') return [alt, ocr].filter(Boolean).join(' ');
+    return alt;
 }

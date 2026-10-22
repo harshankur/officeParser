@@ -5,7 +5,7 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { DRAWINGML_PRESETS } from '../utils/shapeNames.js';
 import { decodeBase64, hexColor, ooxmlCustomPropertiesXml, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
-import { buildDeck, Box, DeckItem, DeckParagraph, DeckRun, DeckSlide } from './slides/deck.js';
+import { buildDeck, bulletMargin, Box, DeckItem, DeckParagraph, DeckRun, DeckSlide } from './slides/deck.js';
 
 /** Escapes text content for an XML part after stripping XML-illegal characters. */
 /** A size in points as a text size PowerPoint takes (hundredths of a point, 1 to 4,000 points). */
@@ -209,10 +209,10 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
             const bytes = a?.data ? decodeBase64(a.data) : undefined;
             const target = this.mediaFor(item.attachment, bytes ?? undefined, a?.mimeType);
             if (!target) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: item.attachment, reason: a ? 'a picture a slide cannot hold (PNG, JPEG, GIF and BMP it can)' : 'missing attachment' }); return ''; }
-            // Fitted into its box, keeping its shape, centred.
+            // Fitted into its box, keeping its shape, centred (unless it fills it, as its page drew it).
             const size = bytes ? sniffImageSize(bytes) : null;
             let box = item.box;
-            if (size && size.w > 0 && size.h > 0) {
+            if (!item.fill && size && size.w > 0 && size.h > 0) {
                 const scale = Math.min(box.w / size.w, box.h / size.h);
                 const w = size.w * scale, h = size.h * scale;
                 box = { x: box.x + (box.w - w) / 2, y: box.y + (box.h - h) / 2, w, h };
@@ -288,7 +288,7 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
         const algn = p.align === 'center' ? ' algn="ctr"' : p.align === 'right' ? ' algn="r"' : p.align === 'justify' ? ' algn="just"' : '';
         const b = p.bullet;
         const first = p.firstIndent;
-        const indent = b ? ` marL="${emu(18 * (b.level + 1))}" indent="${emu(-14)}"${b.level ? ` lvl="${Math.min(8, b.level)}"` : ''}`
+        const indent = b ? ` marL="${emu(bulletMargin(b.level))}" indent="${emu(-14)}"${b.level ? ` lvl="${Math.min(8, b.level)}"` : ''}`
             : first ? ` marL="${emu(Math.max(0, -first))}" indent="${emu(first)}"` : '';
         // A number is written as the item shows it (each item a paragraph or a box of its own, an automatic
         // number restarted at 1 in each).
