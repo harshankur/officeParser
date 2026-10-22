@@ -5708,6 +5708,29 @@ async function testPdfRuledTables(): Promise<void> {
     const rtlTable = collectAllNodes(await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'hebrew_table_borderless_libreoffice.pdf')), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST);
     const rtlCells = rtlTable.filter(n => n.type === 'cell').map(n => n.text);
     assert.ok(rtlTable.some(n => n.type === 'table') && rtlCells.includes('מעבד תמלילים (גרסה 2021)') && rtlCells.includes('עורך מסמכים בדפדפן Chrome') && rtlCells.includes('Notepad'), `a borderless right-to-left table with wrapped cells is read as one; got ${JSON.stringify(rtlCells)}`);
+    // Paragraphs are read whole: a quotation's lines, lines beside a picture and ragged lines whose next word is
+    // wide stop short of the block's widest line and are no paragraph's end; a two-column paper set with a
+    // narrow gutter is read column by column (it was read across, line by line); English paragraphs in a Hebrew
+    // page keep their lines. Each of these documents' paragraphs starts "P<n>.".
+    const authored = async (file: string) => {
+        const blocks = (await readText(file)).split('\n').filter(t => t.trim());
+        return { blocks, apart: blocks.filter(t => !/^P\d+\./.test(t)), joined: blocks.filter(t => (t.match(/\bP\d+\./g) || []).length > 1) };
+    };
+    for (const [file, pageBreaks] of [['indented_quote_libreoffice.pdf', 0], ['text_beside_picture_libreoffice.pdf', 0], ['ragged_prose_libreoffice.pdf', 3], ['two_columns_narrow_latex.pdf', 5]] as const) {
+        const read = await authored(file);
+        // (A paragraph a page break cuts reads as two.)
+        assert.ok(read.apart.length <= pageBreaks && !read.joined.length, `${file}: each paragraph is read whole; got ${read.apart.length} pieces and ${read.joined.length} joined: ${JSON.stringify([...read.apart, ...read.joined].slice(0, 4))}`);
+    }
+    const englishInHebrew = await authored('english_in_hebrew_libreoffice.pdf');
+    assert.ok(!englishInHebrew.joined.length && englishInHebrew.blocks.filter(t => /^P\d+\./.test(t)).length === 8, `English paragraphs in a Hebrew page keep their lines; got ${JSON.stringify(englishInHebrew.blocks.map(t => t.slice(0, 30)))}`);
+    // A borderless table's sparse rows stay rows, and the text under it stays under it.
+    const tableRows = async (file: string) => collectAllNodes(await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', file)), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).filter(n => n.type === 'row').map(n => n.text);
+    assert.deepStrictEqual(await tableRows('sparse_table_libreoffice.pdf'), ['Item Qty Price Supplier', 'Apples 3 1.00 Acme', 'Bananas 0.50', 'Cherries 12 4.25 Bolt', 'Dates Corex', 'Figs 7 2.10 Acme', 'Grapes 9'], 'a sparse row is a row of its own');
+    const underRows = await tableRows('table_then_text_libreoffice.pdf');
+    assert.ok(underRows.at(-1) === 'West 880 1%' && (await readText('table_then_text_libreoffice.pdf')).includes('Source: internal sales data.'), `the text under a table stays out of it; got ${JSON.stringify(underRows)}`);
+    // Chinese and Japanese lines are joined without a space.
+    const cjk = await readText('cjk_wrapped_chrome.pdf');
+    assert.ok(cjk.includes('来年度の予算と計画') && cjk.includes('研讨会很有用'), `wrapped CJK lines join without a space; got ${JSON.stringify(cjk.slice(0, 200))}`);
     // Paragraphs set with neither space between them nor an indent are read apart where a line stops short.
     const flush = (await readText('paragraphs_flush_libreoffice.pdf')).split('\n').filter(t => /^Paragraph \d+:/.test(t));
     assert.ok(flush.length >= 12, `paragraphs set flush are read apart; got ${flush.length}`);

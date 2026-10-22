@@ -77,6 +77,10 @@ export interface PdfLine {
     /** True when the line's visible text ends in a hyphen (candidate for de-hyphenation). */
     endsWithHyphen: boolean;
     dir: 'ltr' | 'rtl';
+    /** True when the line reads right to left, as its paragraph does (see textLayout's directionsOf). */
+    rtl?: boolean;
+    /** The x of a column gutter the line was cut at, beside it (see textLayout's columnGutters). */
+    gutter?: number;
 }
 
 /** An image placed on a page, in viewport space. */

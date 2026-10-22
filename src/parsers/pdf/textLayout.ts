@@ -55,6 +55,8 @@ function sameLink(a: TextMetadata | undefined, b: TextMetadata | undefined): boo
 
 interface Cluster {
     runs: RawRun[];
+    /** The x of a column gutter the piece was cut at, beside it (see columnGutters). */
+    gutter?: number;
     baseline: number;
     weight: number;
     fontSize: number;
@@ -86,7 +88,7 @@ export function buildLines(runs: RawRun[], cfg: PdfLayoutConfig, pageLean = 0, k
         for (const r of pieces[i].runs) { const k = known.get(r); if (k === true) yes++; else if (k === false) no++; }
         return yes + no ? yes > no : own;
     });
-    const lines = pieces.map((c, i) => clusterToLine(c.runs, cfg, rtl[i]));
+    const lines = pieces.map((c, i) => { const line = clusterToLine(c.runs, cfg, rtl[i]); if (c.gutter !== undefined) line.gutter = c.gutter; return line; });
     // Top to bottom; lines on one baseline (a line cut at a wide gap) left to right.
     return inReadingOrder(lines);
 }
@@ -148,11 +150,20 @@ function linePieces(runs: RawRun[], cfg: PdfLayoutConfig): Cluster[] {
 
     clusters = mergeSuperSubClusters(clusters, maxFontSize);
 
-    return clusters.flatMap(c => segmentsOf(c.runs, cfg).map(runs => {
-        let minX = Infinity, maxX = -Infinity;
-        for (const r of runs) { minX = Math.min(minX, r.x); maxX = Math.max(maxX, r.x + r.width); }
-        return { runs, baseline: c.baseline, weight: c.weight, fontSize: c.fontSize, minX, maxX };
-    }));
+    const gutters = columnGutters(clusters);
+    return clusters.flatMap(c => {
+        const pieces: Cluster[] = segmentsOf(c.runs, cfg, gutters).map(runs => {
+            let minX = Infinity, maxX = -Infinity;
+            for (const r of runs) { minX = Math.min(minX, r.x); maxX = Math.max(maxX, r.x + r.width); }
+            return { runs, baseline: c.baseline, weight: c.weight, fontSize: c.fontSize, minX, maxX };
+        });
+        // (The pieces either side of a gutter marked with it, for the blocks' cut: see xyCut.)
+        for (let i = 1; i < pieces.length && gutters.length; i++) {
+            const g = gutters.find(x => pieces[i - 1].maxX <= x && x <= pieces[i].minX);
+            if (g !== undefined) pieces[i - 1].gutter = pieces[i].gutter = g;
+        }
+        return pieces;
+    });
 }
 
 /**
@@ -233,17 +244,58 @@ function mergeSuperSubClusters(clusters: Cluster[], maxFontSize: number): Cluste
 }
 
 /**
- * Splits one baseline cluster's runs into visual sub-lines at wide horizontal gaps. A wide gap (much
+ * The page's column gutters narrower than a wide gap (see segmentsOf): an x where many baselines have a gap
+ * of half an em or more, with a column's worth of text (eight ems) on each side, and few baselines run
+ * across it. Two columns set close (LaTeX's ten points, a conference paper's twelve) were read across,
+ * line by line. At most four, the most crossed first.
+ */
+function columnGutters(clusters: Cluster[]): number[] {
+    const gaps: { from: number; to: number }[] = [];
+    for (const c of clusters) {
+        if (c.runs.length < 2) continue;
+        const em = c.fontSize || 10, runs = [...c.runs].filter(r => r.text.trim()).sort((a, b) => a.x - b.x);
+        for (let i = 1; i < runs.length; i++) {
+            const from = runs[i - 1].x + runs[i - 1].width, to = runs[i].x;
+            if (to - from >= 0.5 * em && from - c.minX >= 8 * em && c.maxX - to >= 8 * em) gaps.push({ from, to });
+        }
+    }
+    if (gaps.length < 6) return [];
+    const gutters: number[] = [];
+    const used = new Set<number>();
+    for (let round = 0; round < 4; round++) {
+        // The x most gaps cover (a sweep over their edges), of the gaps not taken by a gutter found before.
+        const events: [number, number][] = [];
+        gaps.forEach((g, i) => { if (!used.has(i)) events.push([g.from, 1], [g.to, -1]); });
+        events.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+        let count = 0, best = 0, at = 0;
+        for (let i = 0; i < events.length; i++) {
+            count += events[i][1];
+            if (count > best && i + 1 < events.length) { best = count; at = (events[i][0] + events[i + 1][0]) / 2; }
+        }
+        if (best < 6) break;
+        // (Few baselines run across it: a page of one column's justified text has no such x.)
+        let across = 0;
+        for (const c of clusters) if (c.minX < at && c.maxX > at && c.runs.some(r => r.text.trim() && r.x < at && r.x + r.width > at)) across++;
+        if (across > 0.25 * best) break;
+        gutters.push(at);
+        gaps.forEach((g, i) => { if (g.from <= at && g.to >= at) used.add(i); });
+    }
+    return gutters;
+}
+
+/**
+ * Splits one baseline cluster's runs into visual sub-lines at wide horizontal gaps (and at the page's column
+ * gutters, see columnGutters). A wide gap (much
  * larger than a space) marks a column or table-cell boundary, so the pieces become separate atoms the
  * block segmenter can place independently.
  */
-function segmentsOf(clusterRuns: RawRun[], cfg: PdfLayoutConfig): RawRun[][] {
+function segmentsOf(clusterRuns: RawRun[], cfg: PdfLayoutConfig, gutters: readonly number[] = []): RawRun[][] {
     const runs = [...clusterRuns].sort((a, b) => a.x - b.x);
     const fs = dominantFontSize(runs);
     const wideGap = Math.max(18, 4 * cfg.spaceToleranceFactor * fs, 1.5 * fs);
     const segments: RawRun[][] = [];
     let cur: RawRun[] = [];
-    let last: RawRun | undefined;
+    let last: RawRun | undefined, lastText: RawRun | undefined;
     for (let i = 0; i < runs.length; i++) {
         const r = runs[i];
         const isBlank = r.text.trim().length === 0;
@@ -252,7 +304,9 @@ function segmentsOf(clusterRuns: RawRun[], cfg: PdfLayoutConfig): RawRun[][] {
         // pdf.js put after glyphs whose width it lost (an Indic conjunct's) lies over the text after them.
         const wideBlank = isBlank && r.width >= wideGap && !(runs[i + 1] && runs[i + 1].x < r.x + r.width - 1);
         const coordGap = last ? r.x - (last.x + last.width) : 0;
-        if (cur.length && (wideBlank || coordGap >= wideGap)) {
+        // (From the last run with text: a blank one pdf.js set over the gutter bridges it.)
+        const atGutter = !!lastText && !isBlank && gutters.some(g => lastText!.x + lastText!.width <= g && g <= r.x);
+        if (cur.length && (wideBlank || coordGap >= wideGap || atGutter)) {
             segments.push(cur);
             cur = [];
         }
@@ -260,10 +314,14 @@ function segmentsOf(clusterRuns: RawRun[], cfg: PdfLayoutConfig): RawRun[][] {
         if (isBlank && r.width >= wideGap) continue; // nor keep one over text
         cur.push(r);
         last = r;
+        if (!isBlank) lastText = r;
     }
     if (cur.length) segments.push(cur);
     return segments.filter(seg => seg.some(r => r.text.trim().length));
 }
+
+/** Chinese and Japanese characters (Han, kana, their punctuation and full-width forms): text set without spaces between words. */
+const CJK_CHAR = /[\u3000-\u303F\u3040-\u30FF\u31F0-\u31FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]/;
 
 /** Letters of the scripts written right to left (Hebrew, Arabic, Syriac, Thaana, NKo, and their presentation forms). */
 const RTL_LETTER = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
@@ -503,7 +561,7 @@ function clusterToLine(clusterRuns: RawRun[], cfg: PdfLayoutConfig, rtl = false)
     const endsWithHyphen = /[-­]$/.test(visible);
 
     return {
-        fragments: keptFragments, dir, baseline, fontSize: lineFontSize,
+        fragments: keptFragments, dir, ...(rtl ? { rtl } : {}), baseline, fontSize: lineFontSize,
         bold: totalChars > 0 && boldChars * 2 > totalChars,
         endsWithHyphen,
         x: bounds.x, yTop: bounds.y, width: bounds.width, height: bounds.height,
@@ -537,7 +595,8 @@ function xyCut(lines: PdfLine[], medianH: number, gutterUnit: number, out: PdfLi
     const V_MIN = Math.max(12, 1.5 * gutterUnit);
 
     const hOk = h && h.gap >= H_MIN;
-    const vOk = v && v.gap >= V_MIN;
+    // (Or narrower where it is a column gutter the lines were cut at: see columnGutters.)
+    const vOk = v && (v.gap >= V_MIN || (v.gap >= 4 && lines.some(l => l.gutter !== undefined && Math.abs(l.gutter - v.at) <= v.gap / 2 + 0.5)));
 
     // Prefer a horizontal band split; only take a vertical gutter when it is clearly the stronger cut
     // and no adequate horizontal split exists, so single-column text is never carved into columns.
@@ -673,13 +732,17 @@ function lineTextOf(l: PdfLine): string {
     return l.fragments.map(f => f.text).join('');
 }
 
-/** Rough width of a line's first word, from its first fragment's average character width. */
+/**
+ * Rough width of a line's first word, from its first fragment's average letter width (its spaces left out:
+ * they are narrower than letters, and a word of wide ones, "timesheets", came out a third short).
+ */
 function firstWordWidth(l: PdfLine): number {
     const f = l.fragments[0];
     const text = (f?.text ?? '').trim();
     if (!f || !text) return 0;
     const word = text.split(/\s+/)[0] ?? '';
-    return (f.bounds.width / text.length) * word.length;
+    const letters = text.replace(/\s/g, '').length;
+    return letters ? (f.bounds.width / letters) * word.length : 0;
 }
 
 /**
@@ -730,7 +793,7 @@ function hasHangingIndents(lines: PdfLine[], marked: boolean[], preSplit: boolea
  * @param firstIsItem - whether the group being accumulated starts on a line carrying a list marker
  * @param hanging - whether this block's paragraphs start at the outdented edge
  */
-function startsNewParagraph(l: PdfLine, prev: PdfLine, firstIsItem: boolean, hanging: boolean, edgeTol: number, blockLeft: number, maxRight: number): boolean {
+function startsNewParagraph(l: PdfLine, prev: PdfLine, firstIsItem: boolean, hanging: boolean, edgeTol: number, blockLeft: number, maxRight: number, localRight?: number): boolean {
     if (prev.endsWithHyphen) return false;               // mid-word wrap: never a boundary
     // Inside a list item, indentation says nothing: a hanging indent puts the item's wrapped lines
     // right of its marker, a flush one keeps them at it. Only a line the item could actually have
@@ -738,9 +801,17 @@ function startsNewParagraph(l: PdfLine, prev: PdfLine, firstIsItem: boolean, han
     // item, whose own marker may be a picture the text layer cannot see, or a new paragraph).
     if (firstIsItem) return !couldWrap(prev, blockLeft, maxRight);
     const dx = l.x - prev.x;
-    // Same left edge: a continuation line, unless the line above stopped short (it had room for this line's
-    // first word): paragraphs set with neither space between them nor an indent were read as one.
-    if (Math.abs(dx) <= edgeTol) return !wrappedInto(prev, l, maxRight);
+    // Same left edge: a continuation line, unless the line above stopped plainly short of the lines around it
+    // that share its edge (where they end: `localRight`) and of this one, with room for this line's first word and more:
+    // paragraphs set with neither space between them nor an indent were read as one. (Not the block's right
+    // edge: a quotation's, a picture's side, one line set past the margin made every line stop short.)
+    if (Math.abs(dx) <= edgeTol) {
+        if (localRight === undefined) return false;
+        // (And this line runs on past it as far: a line beside a picture, as short as the one above it, is no
+        // new paragraph's first.)
+        const word = firstWordWidth(l), room = Math.max(1.4 * word, word + prev.fontSize), end = prev.x + prev.width;
+        return localRight - end > room && l.x + l.width - end > room;
+    }
     // Otherwise the block's indent style says which side starts a paragraph, and the line above has
     // to corroborate a continuation: one that still had room for this line's first word ended its
     // paragraph there, whatever the indent (a heading, or any short line, above an indented one).
@@ -751,19 +822,35 @@ function startsNewParagraph(l: PdfLine, prev: PdfLine, firstIsItem: boolean, han
 function groupParagraphs(block: PdfLine[]): ParaGroup[] {
     // Top to bottom; lines on one baseline (a line cut at a wide gap) left to right.
     const read = inReadingOrder([...block]);
-    // A block read right to left has its edges mirrored: its lines start at the right and stop short at the
-    // left (their indents, their wrapping were read at the wrong side).
-    const mirrored = read.filter(l => l.dir === 'rtl').length * 2 > read.length;
-    const lines = mirrored ? read.map(l => ({ ...l, x: -(l.x + l.width) })) : read;
+    // Each line from the edge it starts at: a line read right to left starts at the right and stops short at
+    // the left (its indents, its wrapping were read at the wrong side). Its distance from the block's start
+    // edge for its direction, so lines of both directions in one block compare.
+    let left = Infinity, right = -Infinity;
+    for (const l of read) { left = Math.min(left, l.x); right = Math.max(right, l.x + l.width); }
+    const lines = read.map(l => ({ ...l, x: l.rtl ? right - (l.x + l.width) : l.x - left }));
     const deltas: number[] = [];
     for (let i = 1; i < lines.length; i++) deltas.push(lines[i].baseline - lines[i - 1].baseline);
     const leading = median(deltas) || (lines[0]?.height ?? 12) * 1.2;
     const spaceGuess = 0.25 * (lines[0]?.fontSize ?? 12);
-    // Two lines share a left edge when they start within a few spaces of each other; the block's
-    // right margin is what tells a wrapped line from one that ended its paragraph.
-    const edgeTol = Math.max(2, 4 * spaceGuess);
-    const blockLeft = Math.min(...lines.map(l => l.x));
-    const maxRight = Math.max(...lines.map(l => l.x + l.width));
+    // Two lines share a left edge when they start within a few spaces of each other (under LaTeX's paragraph
+    // indent of an em, which a tolerance of an em took for the same edge); the block's right margin is what
+    // tells a wrapped line from one that ended its paragraph.
+    const edgeTol = Math.max(2, 2.8 * spaceGuess);
+    let blockLeft = Infinity, maxRight = -Infinity;
+    for (const l of lines) { blockLeft = Math.min(blockLeft, l.x); maxRight = Math.max(maxRight, l.x + l.width); }
+    // Where the lines just above one and itself that share the start edge and direction of the line before it
+    // end, for the same-edge test (see startsNewParagraph): the second furthest of them, as one line set past
+    // the margin moves it not; none below, as a picture's side ending above them makes the lines beside it
+    // short.
+    const localRight = (i: number): number | undefined => {
+        const prev = lines[i - 1], ends: number[] = [];
+        for (let j = Math.max(0, i - 6); j <= i; j++) {
+            if (j === i - 1 || !!lines[j].rtl !== !!prev.rtl || Math.abs(lines[j].x - prev.x) > edgeTol) continue;
+            ends.push(lines[j].x + lines[j].width);
+        }
+        ends.sort((a, b) => b - a);
+        return ends.length ? ends[Math.min(1, ends.length - 1)] : undefined;
+    };
     // A line carries a marker when it starts with one and its item text follows ("• item", "1.
     // item"); it *is* a marker when the whole line is one ("1.1.1."), which a producer emits as its
     // own atom in the hanging indent beside the item text. Both start a group; only the first kind
@@ -786,6 +873,8 @@ function groupParagraphs(block: PdfLine[]): ParaGroup[] {
         // into the margin: a heading a little larger than its text, or bold at its size, above it.
         if ((Math.abs(l.fontSize - prev.fontSize) >= 0.75 || l.bold !== prev.bold) && !wrappedInto(prev, l, maxRight)) return true;
         if (gap <= 0.5 * Math.min(l.fontSize, prev.fontSize)) return true;
+        // (A line of the other direction: another paragraph, its edges another side's.)
+        if (!!l.rtl !== !!prev.rtl) return true;
         if (/\.{4,}/.test(texts[i])) return true;
         return anyMarker[i] && !prev.endsWithHyphen;
     });
@@ -796,7 +885,7 @@ function groupParagraphs(block: PdfLine[]): ParaGroup[] {
     let firstIdx = 0;
     for (let i = 0; i < lines.length; i++) {
         const l = lines[i];
-        if (cur.length && (preSplit[i] || startsNewParagraph(l, lines[i - 1], marked[firstIdx], hanging, edgeTol, blockLeft, maxRight))) {
+        if (cur.length && (preSplit[i] || startsNewParagraph(l, lines[i - 1], marked[firstIdx], hanging, edgeTol, blockLeft, maxRight, localRight(i)))) {
             groups.push(finishGroup(cur));
             cur = [];
         }
@@ -954,8 +1043,9 @@ function cellFromLine(lines: PdfLine[], row: number, col: number, page: PageCont
         texts.push(line.fragments.map(f => f.text).join('').trim());
     }
     const cell: OfficeContentNode = { type: 'cell', text: texts.join(' ').trim(), children, metadata: { row, col } };
-    const left = Math.min(...lines.map(l => l.x)), top = Math.min(...lines.map(l => l.yTop));
-    const box = { x: left, y: top, width: Math.max(...lines.map(l => l.x + l.width)) - left, height: Math.max(...lines.map(l => l.yTop + l.height)) - top };
+    let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+    for (const l of lines) { left = Math.min(left, l.x); top = Math.min(top, l.yTop); right = Math.max(right, l.x + l.width); bottom = Math.max(bottom, l.yTop + l.height); }
+    const box = { x: left, y: top, width: right - left, height: bottom - top };
     CELL_PAGE_BOX.set(cell, box);
     const cb = emitBounds(box, page, cfg);
     if (cb) cell.bounds = cb;
@@ -990,9 +1080,12 @@ export function detectTables(lines: PdfLine[], page: PageContext, doc: DocContex
         else rows.push([l]);
     }
     for (const r of rows) r.sort((a, b) => a.x - b.x);
-    // A row of fewer lines just under one of cells, each line under one cell of it and within a line's
-    // height of that cell's last line, is those cells' text wrapped onto another line: a row of one cell
-    // ended the table's run of rows, and a table of wrapped cells was read as loose paragraphs.
+    // A row of fewer lines just under one of cells is those cells' text wrapped onto another line where each
+    // line is under one cell of it, within a line's height of that cell's last line, starting where it starts
+    // (or centred under it) and ending within its column, and that cell's last line had no room for its first
+    // word (before the next cell, or its column's end): a row of one cell ended the table's run of rows, and a
+    // table of wrapped cells was read as loose paragraphs. (A sparse row, a label's row, the text under the
+    // table are not.)
     const wrapped = new Map<PdfLine, PdfLine[]>();
     const cellRows: PdfLine[][] = [];
     for (const r of rows) {
@@ -1001,8 +1094,23 @@ export function detectTables(lines: PdfLine[], page: PageContext, doc: DocContex
             const owners = r.map(l => { const under = above.filter(c => c.x < l.x + l.width && l.x < c.x + c.width); return under.length === 1 ? under[0] : undefined; });
             const fits = owners.every((o, k) => {
                 if (!o || owners.indexOf(o) !== k) return false;
-                const tail = wrapped.get(o)?.at(-1) ?? o, gap = r[k].baseline - tail.baseline;
-                return gap > 0 && gap <= 1.6 * Math.max(tail.height, r[k].height);
+                const line = r[k], tail = wrapped.get(o)?.at(-1) ?? o, gap = line.baseline - tail.baseline, em = o.fontSize || 10;
+                if (!(gap > 0 && gap <= 1.6 * Math.max(tail.height, line.height))) return false;
+                const startsUnder = (o.rtl ? Math.abs(line.x + line.width - (o.x + o.width)) : Math.abs(line.x - o.x)) <= 0.7 * em
+                    || Math.abs(line.x + line.width / 2 - (o.x + o.width / 2)) <= em;
+                if (!startsUnder) return false;
+                // Where the cell's text could run to: the next cell's start (the one before it read right to left), else
+                // its column's end, as far as the rows above set it.
+                const at = above.indexOf(o), word = firstWordWidth(line) + 0.25 * em;
+                let end: number;
+                if (o.rtl) {
+                    end = at > 0 ? above[at - 1].x + above[at - 1].width + 0.5 * em : o.x;
+                    if (at <= 0) for (const row of cellRows.slice(-8)) for (const c of row) if (c.x < o.x + o.width && o.x < c.x + c.width) end = Math.min(end, c.x);
+                    return tail.x - word < end && line.x >= end - 0.5 * em;
+                }
+                end = at < above.length - 1 ? above[at + 1].x - 0.5 * em : o.x + o.width;
+                if (at === above.length - 1) for (const row of cellRows.slice(-8)) for (const c of row) if (c.x < o.x + o.width && o.x < c.x + c.width) end = Math.max(end, c.x + c.width);
+                return tail.x + tail.width + word > end && line.x + line.width <= end + 0.5 * em;
             });
             if (fits) { owners.forEach((o, k) => { const more = wrapped.get(o!); if (more) more.push(r[k]); else wrapped.set(o!, [r[k]]); }); continue; }
         }
@@ -1419,7 +1527,8 @@ export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContex
     const groups = groupParagraphs(block);
     const N = groups.length;
     const baseOf = (g: ParaGroup) => g.lines[0]?.baseline ?? 0;
-    const leftOf = (g: ParaGroup) => Math.min(...g.lines.map(l => l.x));
+    // (Loops, not spreads: a group of hundreds of thousands of lines overflowed the stack.)
+    const leftOf = (g: ParaGroup) => g.lines.reduce((m, l) => Math.min(m, l.x), Infinity);
 
     const dropped = new Array<boolean>(N).fill(false);
     const attached: (ListMarker | null)[] = new Array(N).fill(null); // separate marker merged onto a group
@@ -1542,7 +1651,7 @@ export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContex
             const g = groups[last];
             Object.assign(carry, {
                 listId, type: effective[last]!.type, left: Math.min(listLeft, markerLeft[last] ?? leftOf(g)), itemInList,
-                bottom: Math.max(...g.lines.map(l => l.yTop + l.height)), lineHeight: Math.max(...g.lines.map(l => l.height)) || 12,
+                bottom: g.lines.reduce((m, l) => Math.max(m, l.yTop + l.height), -Infinity), lineHeight: g.lines.reduce((m, l) => Math.max(m, l.height), 0) || 12,
             });
         } else carry.listId = null;
     }
@@ -1600,6 +1709,12 @@ function paragraphNode(group: ParaGroup, page: PageContext, doc: DocContext, for
             const bothDigits = /^\d+$/.test(prevText.trim()) && /^\d+$/.test(curText);
             const lowerContinuation = /^[\p{Ll}]/u.test(curText);
             const glyphStack = shortPrev && shortCur && stacked && (bothDigits || lowerContinuation);
+            // Chinese and Japanese set no spaces between words: a line of them wrapped onto the next is joined
+            // without one, as is a line of them with no space in it whose break fell in a Latin word (a space went
+            // into words: "研讨会很有 用", "Go ogle"). Korean sets spaces, and keeps its join.
+            const prevEnd = prevText.trimEnd();
+            const cjkJoin = (CJK_CHAR.test(prevEnd.slice(-1)) && CJK_CHAR.test(curText.charAt(0)))
+                || (CJK_CHAR.test(prevEnd) && !/\s/.test(prevEnd.trim()) && /^[\p{L}\p{N}]/u.test(curText) && /[\p{L}\p{N}]$/u.test(prevEnd));
             if (cfg.mergeHyphenatedWords && (softHyphen || (hardHyphen && nextStartsLower))) {
                 // drop the trailing hyphen from the last emitted child and join with no space
                 const lastChild = children[children.length - 1];
@@ -1607,7 +1722,7 @@ function paragraphNode(group: ParaGroup, page: PageContext, doc: DocContext, for
                 let last = parts.length - 1;
                 while (last >= 0 && parts[last] === '') last--;
                 if (last >= 0) parts[last] = parts[last].replace(/[-­]$/, '');
-            } else if (!glyphStack) {
+            } else if (!glyphStack && !cjkJoin) {
                 const lastChild = children[children.length - 1];
                 if (lastChild?.text && !lastChild.text.endsWith(' ')) lastChild.text += ' ';
                 parts.push(' ');
