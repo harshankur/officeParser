@@ -238,8 +238,9 @@
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
                 <td><strong>Page Geometry</strong>: When true, the geometric layout data (each node's <code>bounds</code> box,
-                    its <code>{ x, y, width, height }</code> on the page, plus page dimensions) is omitted.
-                    Currently produced by the PDF parser; page geometry is emitted by default
+                    its <code>{ x, y, width, height }</code> on the page or slide, plus page dimensions, page setups
+                    and slides' <code>drawing</code> nodes and backgrounds) is omitted. Produced by the PDF, PPTX, ODP,
+                    DOCX, ODT and XLSX parsers; page geometry is emitted by default
                     (<code>ignorePageGeometry</code> defaults to false).</td>
             </tr>
             <tr>
@@ -312,9 +313,10 @@
             <tr>
                 <td><code>csvDelimiter</code></td>
                 <td><code>string</code></td>
-                <td><code>,</code></td>
-                <td><strong>Data Parsing</strong>: Custom delimiter for CSV files (e.g., <code>;</code> or
-                    <code>\t</code>).</td>
+                <td><code>'auto'</code></td>
+                <td><strong>Data Parsing</strong>: Delimiter of CSV files. <code>'auto'</code> reads it from the file
+                    (comma, semicolon, tab or bar, counted outside quotes); any other value (e.g., <code>;</code> or
+                    <code>\t</code>) is used as given.</td>
             </tr>
             <tr>
                 <td><code>decompressionLimits</code></td>

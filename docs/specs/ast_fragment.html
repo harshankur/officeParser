@@ -127,7 +127,8 @@
             <tr>
                 <td><code>bounds</code></td>
                 <td><code>NodeBounds</code></td>
-                <td>Geometric page coordinates for this node in PDF page space. Present unless <code>ignorePageGeometry</code> is set.</td>
+                <td>Where the node is: its box on its PDF page, or on its PPTX or ODP slide (a shape's box, which the
+                    shape's paragraphs, pictures, tables and charts share). Present unless <code>ignorePageGeometry</code> is set.</td>
             </tr>
             <tr>
                 <td><code>rawContent</code></td>
@@ -149,6 +150,10 @@
         <li><code>listId</code>: A unique identifier for the list group. Use this to determine if adjacent items belong
             to the same logical list.</li>
         <li><code>itemIndex</code>: (Ordered lists only) The 0-based index of the item.</li>
+        <li><code>marker</code>: The item's marker as the document shows it, where that is other than its number and a
+            dot or a round bullet (<code>'a)'</code>, <code>'1.1.1.'</code>, <code>'iv.'</code>, <code>'▪'</code>,
+            <code>'◦'</code>, or <code>''</code> for none). Read from Word numbering, ODF list styles, HTML's
+            <code>&lt;ol type&gt;</code> and <code>list-style-type</code>, and a PDF's printed markers.</li>
     </ul>
     <blockquote>
         [!TIP]
@@ -168,8 +173,28 @@
         <li><strong><code>cell</code></strong>: A container for other content (paragraphs, images, or even nested
             tables). Use <code>metadata</code> for <code>rowSpan</code>, <code>colSpan</code>, and
             <code>backgroundColor</code> (populated from DOCX <code>w:shd</code> fills; also read from HTML
-            <code>colspan</code>/<code>rowspan</code> attributes so merged cells survive an HTML round-trip).</li>
+            <code>colspan</code>/<code>rowspan</code> attributes so merged cells survive an HTML round-trip, and from
+            XLSX merged ranges). A spreadsheet cell can also carry <code>shownText</code> (what its number format
+            shows: <code>'19%'</code>, <code>'€120.00'</code>) and <code>hidden</code> (in a hidden row or column).</li>
     </ul>
+
+    <h3>2a. Paragraph Layout</h3>
+    <p><code>paragraph</code> and <code>heading</code> metadata carry the paragraph's layout where the document sets it:
+        <code>alignment</code>, <code>paragraphIndentation</code> (<code>left</code>, <code>right</code>,
+        <code>firstLine</code>, <code>hanging</code>, in twips) and <code>spacing</code> (a <code>ParagraphSpacing</code>:
+        <code>before</code> and <code>after</code> in points, <code>lineMultiple</code> for proportional line spacing,
+        or <code>lineHeight</code> in points, with <code>lineAtLeast</code> for a least height). A PDF paragraph whose
+        text is turned on its page has <code>rotation</code> (degrees clockwise).</p>
+
+    <h3>2b. Pages and Sections</h3>
+    <p><code>ast.metadata.pageSetup</code> (a <code>PageSetup</code>: <code>width</code>, <code>height</code>,
+        <code>margin</code>, <code>headerDistance</code>, <code>footerDistance</code> in points, and
+        <code>differentFirstPage</code>) is the document's page: a Word document's first section, an ODT document's
+        first master page, a presentation's slide size, a PDF's first page. With <code>includeBreakNodes</code>, the
+        <code>break</code> that starts each later section carries <code>metadata.section</code> (1 for the second) and
+        its <code>pageSetup</code>. A sheet's print setup is <code>SheetMetadata.pageSetup</code>. A page field's text
+        (a page number, the page count, a slide number) is marked <code>TextMetadata.field</code>
+        (<code>'page'</code> or <code>'pages'</code>): it is the number when the file was saved.</p>
 
     <h3>3. Structural Containers</h3>
     <p>These nodes represent large-scale document sections:</p>
@@ -181,7 +206,14 @@
         <li><strong><code>page</code></strong>: Container for PDF pages. <code>metadata.pageNumber</code> provides the
             position.</li>
         <li><strong><code>sheet</code></strong>: Container for XLSX/ODS spreadsheets. <code>metadata.sheetName</code>
-            provides the label.</li>
+            provides the label; <code>metadata.hidden</code> marks a sheet the workbook hides (and
+            <code>RowMetadata.hidden</code> a hidden row).</li>
+        <li><strong><code>drawing</code></strong>: A shape on a PPTX or ODP slide, before the nodes of its text (which
+            share its <code>bounds</code>). Carries <code>ShapeMetadata</code>: <code>geometry</code> (DrawingML's
+            preset name), <code>fill</code>, <code>line</code>, <code>rotation</code> (degrees clockwise),
+            <code>flipH</code>, <code>flipV</code>, <code>textAnchor</code> and <code>textInsets</code>. A slide's
+            <code>metadata.background</code> is its fill colour. Writers write nothing for a <code>drawing</code>
+            without children (its text is in the nodes after it); one given children writes them.</li>
     </ul>
 
     <p><strong>Title blocks.</strong> A document's typeset title is content, not only metadata: a Word paragraph
@@ -204,7 +236,11 @@
     <ul>
         <li><strong><code>header</code></strong>: A running page header: DOCX headers, ODT master-page headers, RTF
             <code>\header</code> groups, a PDF's top-band running header, or LaTeX <code>fancyhdr</code> fields. Carries
-            <code>HeaderFooterMetadata.type</code> (<code>'default'</code>, <code>'first'</code>, <code>'even'</code>).
+            <code>HeaderFooterMetadata.type</code> (<code>'default'</code>, <code>'first'</code>, <code>'even'</code>; RTF's
+            <code>\headerf</code> and <code>\headerl</code> are the first and even pages'),
+            and, for DOCX and ODT, <code>section</code> (the section it belongs to, where sections differ) and
+            <code>hidden</code> (a part the document keeps but does not show). One node per part, its blocks as children;
+            a PDF's are one node per line read, each with the <code>page</code> it was read from.
             Found in <code>ast.auxiliary.headers[]</code>.</li>
         <li><strong><code>footer</code></strong>: A running page footer, from the same sources. Same metadata. Found in
             <code>ast.auxiliary.footers[]</code>.</li>
@@ -269,8 +305,8 @@
             carries them on <code>TextMetadata</code>.</li>
         <li><strong><code>chart</code></strong>: References a chart attachment. Contains structured
             <code>chartData</code> in metadata if requested.</li>
-        <li><strong><code>drawing</code></strong>: A vector drawing or shape. A member of the node-type union;
-            it carries no type-specific <code>metadata</code> (undefined/none).</li>
+        <li><strong><code>drawing</code></strong>: A vector drawing or shape, in the content tree: see
+            <code>drawing</code> above (<code>ShapeMetadata</code>).</li>
     </ul>
 
     <h3>5. Breaks (The <code>break</code> Node)</h3>

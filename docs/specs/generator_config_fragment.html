@@ -97,7 +97,8 @@
                 <td><code>ignoreInternalLinks</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Cleanup</strong>: Suppresses all internal bookmarks and anchor references.</td>
+                <td><strong>Cleanup</strong>: Suppresses all internal bookmarks and anchor references (the native
+                    PDF engine's links into the document too).</td>
             </tr>
             <tr>
                 <td><code>ignoreDefaultStyleMap</code></td>
@@ -505,9 +506,11 @@ await ast.to('md', {
             <tr>
                 <td><code>format</code></td>
                 <td><code>PaperFormat</code></td>
-                <td><code>'A4'</code></td>
+                <td><code>'auto'</code></td>
                 <td>Paper format (<code>'A4'</code>, <code>'Letter'</code>, <code>'Legal'</code>, <code>'A3'</code>,
-                    <code>'Ledger'</code>, etc.).</td>
+                    <code>'Ledger'</code>, etc.). <code>'auto'</code> is the document's own pages
+                    (<code>metadata.pageSetup</code>; the native engine gives each section and sheet its own and
+                    takes unset margins from the document), else A4.</td>
             </tr>
             <tr>
                 <td><code>width</code></td>
@@ -570,6 +573,18 @@ await ast.to('md', {
                 <td><code>30000</code></td>
                 <td><strong>Timeout</strong>: The PDF rendering timeout in milliseconds. Set to <code>0</code> to disable.</td>
             </tr>
+            <tr>
+                <td><code>printHidden</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Print hidden sheets, rows and columns, which a printout leaves out. Both engines.</td>
+            </tr>
+            <tr>
+                <td><code>printSpeakerNotes</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Print each slide's speaker notes after it; a printout leaves them out. Both engines.</td>
+            </tr>
         </tbody>
     </table>
 
@@ -592,8 +607,9 @@ await ast.to('md', {
             <tr>
                 <td><code>format</code></td>
                 <td><code>PaperFormat</code></td>
-                <td><code>'A4'</code></td>
-                <td>Page size for the document section (<code>w:pgSz</code>). The same names <code>pdfConfig.format</code>
+                <td><code>'auto'</code></td>
+                <td>Page size for the document section (<code>w:pgSz</code>). <code>'auto'</code> is the document's own
+                    page (<code>metadata.pageSetup</code>), else A4; or the names <code>pdfConfig.format</code>
                     accepts (<code>A4</code>, <code>Letter</code>, <code>Legal</code>, <code>A3</code>, <code>Tabloid</code>,
                     <code>Ledger</code>, …; case-insensitive).</td>
             </tr>
@@ -606,10 +622,10 @@ await ast.to('md', {
             <tr>
                 <td><code>margin</code></td>
                 <td><code>object</code></td>
-                <td><code>{72,72,72,72}</code></td>
+                <td>the document's, else <code>72</code></td>
                 <td>Page margins (<code>top</code>, <code>right</code>, <code>bottom</code>, <code>left</code>). Each is a
                     number of points (1/72 inch) or a unit string (<code>'1in'</code>, <code>'2cm'</code>,
-                    <code>'36pt'</code>); 72 = Word's standard one inch.</td>
+                    <code>'36pt'</code>). A side left unset is the document's own margin under <code>format: 'auto'</code>, else 72 (one inch).</td>
             </tr>
         </tbody>
     </table>
@@ -633,8 +649,9 @@ await ast.to('md', {
             <tr>
                 <td><code>format</code></td>
                 <td><code>PaperFormat</code></td>
-                <td><code>'A4'</code></td>
-                <td>Page size for the page layout (<code>style:page-layout</code>). The same names
+                <td><code>'auto'</code></td>
+                <td>Page size for the page layout (<code>style:page-layout</code>). <code>'auto'</code> is the
+                    document's own page, else A4; or the names
                     <code>pdfConfig.format</code> accepts (<code>A4</code>, <code>Letter</code>, <code>Legal</code>,
                     <code>A3</code>, <code>Tabloid</code>, <code>Ledger</code>, …; case-insensitive).</td>
             </tr>
@@ -647,10 +664,10 @@ await ast.to('md', {
             <tr>
                 <td><code>margin</code></td>
                 <td><code>object</code></td>
-                <td><code>{72,72,72,72}</code></td>
+                <td>the document's, else <code>72</code></td>
                 <td>Page margins (<code>top</code>, <code>right</code>, <code>bottom</code>, <code>left</code>). Each is a
                     number of points (1/72 inch) or a unit string (<code>'1in'</code>, <code>'2cm'</code>,
-                    <code>'36pt'</code>).</td>
+                    <code>'36pt'</code>). A side left unset is the document's own margin under <code>format: 'auto'</code>, else 72 (one inch).</td>
             </tr>
         </tbody>
     </table>
@@ -729,9 +746,9 @@ await ast.to('md', {
             <tr>
                 <td><code>format</code></td>
                 <td><code>PaperFormat</code></td>
-                <td><code>'A4'</code></td>
-                <td>Paper size, written as a <code>geometry</code> option. The same names <code>pdfConfig.format</code>
-                    accepts. Ignored by <code>beamer</code>.</td>
+                <td><code>'auto'</code></td>
+                <td>Paper size, written as a <code>geometry</code> option. <code>'auto'</code> is the document's own
+                    page, else A4; or the names <code>pdfConfig.format</code> accepts. Ignored by <code>beamer</code>.</td>
             </tr>
             <tr>
                 <td><code>landscape</code></td>
@@ -742,9 +759,9 @@ await ast.to('md', {
             <tr>
                 <td><code>margin</code></td>
                 <td><code>object</code></td>
-                <td><code>{72,72,72,72}</code></td>
+                <td>the document's, else <code>72</code></td>
                 <td>Page margins (<code>top</code>, <code>right</code>, <code>bottom</code>, <code>left</code>), each a
-                    number of points or a unit string (<code>'1in'</code>, <code>'2cm'</code>, <code>'36pt'</code>).
+                    number of points or a unit string (<code>'1in'</code>, <code>'2cm'</code>, <code>'36pt'</code>). A side left unset is the document's own margin under <code>format: 'auto'</code>, else 72 (one inch).
                     Ignored by <code>beamer</code>.</td>
             </tr>
         </tbody>

@@ -151,6 +151,24 @@
                 <td>Write a bookmark outline from the headings (both PDF engines).</td>
             </tr>
             <tr>
+                <td><code>--pdfConfig.format</code></td>
+                <td><code>auto | A4 | Letter | ...</code></td>
+                <td><code>auto</code></td>
+                <td>Paper format. <code>auto</code> is the document's own pages (each section's, each sheet's, a slide's size), else A4.</td>
+            </tr>
+            <tr>
+                <td><code>--pdfConfig.printHidden</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Print hidden sheets, rows and columns, which a printout leaves out.</td>
+            </tr>
+            <tr>
+                <td><code>--pdfConfig.printSpeakerNotes</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Print each slide's speaker notes after it.</td>
+            </tr>
+            <tr>
                 <td><code>--pdfConfig.subsetFonts</code></td>
                 <td><code>boolean</code></td>
                 <td><code>true</code></td>
@@ -177,8 +195,8 @@
             <tr>
                 <td><code>--csvDelimiter</code></td>
                 <td>string</td>
-                <td><code>,</code></td>
-                <td>Custom delimiter character for CSV files.</td>
+                <td><code>auto</code></td>
+                <td>Delimiter of CSV files. <code>auto</code> reads it from the file (comma, semicolon, tab or bar).</td>
             </tr>
             <tr>
                 <td><code>--includeRawContent</code></td>

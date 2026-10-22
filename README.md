@@ -165,7 +165,7 @@ npx officeparser my_document --fileType=docx --to=json
 | `--ignoreSlideMasters` | boolean | `false` | Ignore slide masters |
 | `--ignoreInternalLinks` | boolean | `false` | Ignore internal links |
 | `--newlineDelimiter` | string | `\n` | Delimiter between lines/blocks in plaintext outputs |
-| `--csvDelimiter` | string | `,` | Custom delimiter for CSV files |
+| `--csvDelimiter` | string | `auto` | Delimiter of CSV files; `auto` reads it from the file (comma, semicolon, tab or bar) |
 | `--includeRawContent` | boolean | `false` | Include raw XML/RTF in nodes |
 | `--serializeRawContent` | boolean | `true` | Include stringified XML in metadata |
 | `--preserveXmlWhitespace` | boolean | `false` | Keep raw formatting space |
@@ -198,6 +198,9 @@ npx officeparser my_document --fileType=docx --to=json
 | `--pdfConfig.fallbackFonts` | file paths, comma-separated | (none) | Font files tried in order for the characters the fonts before them lack (native engine) |
 | `--pdfConfig.subsetFonts` | boolean | `true` | `false` embeds whole font files, not only the glyphs used |
 | `--pdfConfig.outline` | boolean | `false` | Write a bookmark outline from the headings |
+| `--pdfConfig.format` | `auto\|A4\|Letter\|...` | `auto` | Paper format; `auto` is the document's own pages (each section's, each sheet's, a slide's size), else A4 |
+| `--pdfConfig.printHidden` | boolean | `false` | Print hidden sheets, rows and columns |
+| `--pdfConfig.printSpeakerNotes` | boolean | `false` | Print each slide's speaker notes after it |
 | `--texConfig.bundle` | boolean | `false` | LaTeX: write a zip of `main.tex` plus its `images/` instead of the `.tex` alone |
 | `--texConfig.embedImages` | boolean | `true` | LaTeX: `false` refers to `images/` files instead of carrying PNG and JPEG images inside the `.tex` |
 | `--texConfig.documentClass` | `auto\|article\|report\|book\|beamer` | `auto` | LaTeX document class (`auto` = `beamer` for presentations, `article` otherwise) |
@@ -714,18 +717,19 @@ interface OfficeChunk {
 ```text
 OfficeParserAST
 ├── type: 'docx' | 'pdf' | 'xlsx' | 'csv' | 'md' | 'epub' | 'tex' | ...  (14 formats)
-├── metadata: { author, title, created, modified, keywords, customProperties, nativeProperties, styleMap, ... }
+├── metadata: { author, title, created, modified, keywords, customProperties, nativeProperties, styleMap, pageSetup, ... }
 ├── content: [ OfficeContentNode ]
-│   ├── type: 'paragraph' | 'heading' | 'table' | 'list' | 'image' | 'chart' | 'comment' | 'admonition' | 'embed' | 'definitionList' | ...
+│   ├── type: 'paragraph' | 'heading' | 'table' | 'list' | 'image' | 'chart' | 'drawing' | 'comment' | 'admonition' | 'embed' | 'definitionList' | ...
 │   ├── text: string  (concatenated text of node + all descendants)
 │   ├── children: [ OfficeContentNode ]  (recursive structural children)
 │   ├── notes: [ OfficeContentNode ]     (footnotes/endnotes/slide notes attached to this node; see below)
 │   ├── comments: [ OfficeContentNode ] (inline comments attached to this node)
 │   ├── formatting: { bold, italic, underline, color, size, font, alignment, ... }
-│   └── metadata: { level, listId, row, col, rowSpan, colSpan, backgroundColor, style, ... }
+│   ├── bounds?: { x, y, width, height }  (place on its page or slide: PDF, PPTX, ODP)
+│   └── metadata: { level, listId, marker, row, col, rowSpan, colSpan, backgroundColor, spacing, style, ... }
 ├── auxiliary?: OfficeAuxiliaryContent   (out-of-band layout elements)
-│   ├── headers?: OfficeContentNode[]   (DOCX, PDF top band, ODT master pages, LaTeX fancyhdr)
-│   ├── footers?: OfficeContentNode[]   (DOCX, PDF bottom band, ODT master pages, LaTeX fancyhdr)
+│   ├── headers?: OfficeContentNode[]   ('header' nodes: DOCX parts, PDF top band, ODT master pages, LaTeX fancyhdr; metadata { type, section, hidden })
+│   ├── footers?: OfficeContentNode[]   ('footer' nodes, likewise)
 │   ├── slideMasters?: OfficeContentNode[] (PPTX slide masters)
 │   └── outline?: OfficeContentNode[]   (PDF bookmark outline)
 ├── attachments: [ OfficeAttachment ]  (populated when extractAttachments: true)
@@ -1432,9 +1436,9 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `preserveXmlWhitespace` | `boolean` | `false` | Preserve original XML whitespace during serialization |
 | `includeBreakNodes` | `boolean` | `false` | Include layout break nodes: DOCX page, column and last-rendered-page breaks, ODF `fo:break-before`/`fo:break-after` and `text:soft-page-break`, LaTeX `\newpage`/`\clearpage`. A line break the author typed (DOCX `w:br`/`w:cr`, ODF `text:line-break`, a LaTeX `\\` or `\newline`, HTML `<br>`) is always a `break` node inside its paragraph, and a DOCX tab is always a `\t` in the text |
 | `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal cross-references from AST (now honored for PDF too) |
-| `ignorePageGeometry` | `boolean` | `false` | Omit the geometric layout data: per-node bounding boxes (`node.bounds`) and page dimensions. Currently produced by the PDF parser |
+| `ignorePageGeometry` | `boolean` | `false` | Omit the geometric layout data: per-node bounding boxes (`node.bounds`: PDF pages, PPTX and ODP slides), page dimensions and page setups (`metadata.pageSetup`, a section's or sheet's `pageSetup`), and slides' `drawing` nodes and backgrounds |
 | `fileType` | `SupportedFileType \| FileTypeAlias \| null` | `null` | **Required for text-based binary data** (`'md'`, `'html'`, `'csv'`, `'tex'`) as these lack magic bytes. Also accepts the names the matching extensions route by (`FileTypeAlias`): `'latex'`/`'ltx'` for `tex`, the ODF template names `'ott'`/`'ots'`/`'otp'`/`'otg'`, and `'zip'` (parsed as whatever the archive holds). |
-| `csvDelimiter` | `string` | `','` | Input delimiter when parsing CSV files |
+| `csvDelimiter` | `string` | `'auto'` | Delimiter of CSV input: `'auto'` reads it from the file (comma, semicolon, tab or bar, counted outside quotes); any other value is used as given. CSV output writes the delimiter read |
 | `decompressionLimits` | `DecompressionLimits` | `{ maxUncompressedBytes: 512MB, maxZipEntries: 10000, maxTableCells: 1000000, maxXmlElements: 2000000, maxRepeatedContent: 16777216, maxRawContentLength: 67108864 }` | Limits applied during ZIP extraction (and to the cells an ODF or XLSX document yields, the content a document repeats by reference, the `rawContent` nodes carry, and the XML elements a document's parts may hold; past `maxXmlElements` the parse rejects with `XML_ELEMENT_LIMIT_EXCEEDED`) to protect against excessive memory and resource usage. `maxTableCells` and `maxRepeatedContent` grow by one cell and 16 characters per byte of the document, so a large document is not cut short for its size while a small crafted one stays bounded |
 | `htmlParserConfig` | `HtmlParserConfig` | `{}` | HTML/XHTML/EPUB parsing options **(and Markdown input: `preserveIframes`/`embedFolkForms` govern raw `<iframe>` blocks and folk embeds in `.md` too)**. `preserveAttributes` (`boolean`, default `false`): keep generic source attributes no typed field consumed on `node.htmlAttributes`. `preserveIframes` (`boolean \| string[]`, default `false`): preserve non-YouTube `<iframe>` embeds (otherwise dropped) as `embed` nodes: `true` for any, or a hostname allowlist; the src is scheme-checked on generation. `embedFolkForms` (`boolean`, default `false`): opt in to importing ambiguous folk embed forms (Obsidian `![](youtube-url)`, thumbnail-link) as YouTube embeds. `preserveComments` (`boolean`, default `false`): keep `<!-- ... -->` comments in HTML and EPUB input as `comment` nodes (`metadata.sourceSyntax: 'html'`) instead of dropping them; conditional comments (`<!--[if …]>`) are always dropped. The `data-html-comment` shape `sourceAttributes` emits is always read. |
 | `pdfWorkerSrc` | `string` | CDN (jsDelivr) | Path/URL to `pdf.worker.min.mjs` (required in browser) |
@@ -1482,7 +1486,7 @@ Options shared by all generator formats. Pass to `OfficeGenerator.generate(ast, 
 | `includeImages` | `boolean \| 'image-only' \| 'image+ocr-text' \| 'ocr-text-only' \| 'none'` | `true` | How to render an image node. `true`=`'image-only'` (embed the image, no OCR text); `'image+ocr-text'` (image then its recognized/OCR text); `'ocr-text-only'` (OCR text, no image); `false`=`'none'` (omit). In plain-text output an image becomes an `[Image: name]` placeholder (plus OCR text for `'image+ocr-text'`), or just the OCR text for `'ocr-text-only'`. In chunks a picture is `[Image: alt]` for its alt text, with its OCR text, except under `'none'` and `'ocr-text-only'` (OCR text only) |
 | `maxInlineImageBytes` | `number` | `1500000` | Max decoded image size, in bytes, that is inlined as a `data:` URI (HTML/Markdown); the base64 URI itself is ~1/3 larger, so a scanned page cannot emit a multi-megabyte line that breaks downstream parsers. Under the default `image-only` mode an image over the cap renders its recognized/OCR text when it has any (multi-line OCR as a fenced block in Markdown), otherwise a compact name reference; Markdown still emits the `IMAGE_NOT_INLINED` warning. Plain text follows the same rule. **Standalone HTML inlines whatever the cap**: a self-contained document has nowhere else to resolve the image from. In every mode (standalone HTML and `Infinity` included), the pictures one document writes inline stop at 128 MB in all (a picture is inlined at every place showing it); the rest are name references, with `IMAGE_NOT_INLINED`. `0` never inlines, `Infinity` inlines every picture within those 128 MB |
 | `includeCharts` | `boolean` | `true` | Include charts: HTML renders an interactive Chart.js canvas (or, with no `chartJsSrc`, the chart's data as a table), DOCX/ODT/LaTeX render the chart's data as a table, plain text and the native PDF engine render the chart's data text; Markdown and RTF render nothing for a chart. `false` omits charts in every generator |
-| `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal anchors from output (HTML, Markdown, DOCX, ODT, LaTeX, RTF) |
+| `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal anchors from output (HTML, Markdown, DOCX, ODT, LaTeX, RTF, and the native PDF engine's links into the document) |
 | `ignoreDefaultStyleMap` | `boolean` | `false` | Disable built-in style mappings (e.g., "Heading 1" → h1) |
 | `styleMap` | `string[] \| StructuredStyleMapping[]` | `[]` | Custom semantic style mappings |
 | `onNode` | `(node) => string \| false \| void` | (none) | Per-node callback for filtering, overriding, or mutating |
@@ -1666,7 +1670,7 @@ Each character is drawn in the first font that has it, so one document can mix s
 | `subsetFonts` | `boolean` | `true` | Native engine: embed only the glyphs used of each font given. `false` embeds the whole files |
 | `tagged` | `boolean` | `true` | Emit a tagged, PDF/UA-accessible PDF (structure tree). HTML engine only; the native engine ignores it |
 | `outline` | `boolean` | `false` | Emit a bookmark outline from the document's headings, nested by heading level. Both engines |
-| `format` | `string` | `'A4'` | Paper format (`'A4'`, `'Letter'`, `'Legal'`, etc.) |
+| `format` | `string` | `'auto'` | Paper format (`'A4'`, `'Letter'`, `'Legal'`, etc.). `'auto'`: the document's own pages (`metadata.pageSetup`; the native engine gives each section and sheet its own and takes unset margins from the document), else A4 |
 | `width` | `string \| number` | `''` | Paper width (e.g., `'5in'`, `'3cm'`) or pixels |
 | `height` | `string \| number` | `''` | Paper height (e.g., `'5in'`, `'3cm'`) or pixels |
 | `landscape` | `boolean` | `false` | Landscape page orientation (both engines) |
@@ -1678,11 +1682,15 @@ Each character is drawn in the first font that has it, so one document can mix s
 | `scale` | `number` | `1` | Rendering scale factor. **HTML engine only** |
 | `launchOptions` | `object` | headless defaults | Puppeteer launch options (e.g., `executablePath`). **HTML engine only** |
 | `timeout` | `number` | `30000` | PDF rendering timeout in milliseconds. Set to `0` to disable. **HTML engine only** |
+| `printHidden` | `boolean` | `false` | Print hidden sheets, rows and columns, which a printout leaves out. Both engines |
+| `printSpeakerNotes` | `boolean` | `false` | Print each slide's speaker notes after it; a printout leaves them out. Both engines |
 
 > **Native engine (`engine: 'native'`) differences beyond fidelity:** it ignores the Puppeteer-only
-> options above (and `tagged`), uses a non-zero default `margin`, writes a chart as its data in text
-> (with a `CONTENT_NOT_REPRESENTABLE` warning), and does not apply `renderMetadata`. Choose it to avoid the headless browser; choose `'html'` for
-> pixel-matching fidelity, charts, print headers/footers and PDF/UA tags.
+> options above (and `tagged`), uses a non-zero default `margin` (the document's own, where it sets
+> one), draws a chart as a bar chart of its data, and does not apply `renderMetadata`. It draws the
+> document's own headers and footers on every page, footnotes at the foot of their page, clickable
+> links, and slides as they are laid out. Choose it to avoid the headless browser; choose `'html'` for
+> pixel-matching fidelity, other chart kinds and PDF/UA tags.
 
 ### DocxGeneratorConfig
 
@@ -1690,9 +1698,9 @@ Pass as `docxConfig` inside `GeneratorConfig`. The DOCX generator writes a real 
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `format` | `PaperFormat` | `'A4'` | Page size for the document section (`w:pgSz`). Same names as `pdfConfig.format` (`A4`, `Letter`, `Legal`, `A3`, `Tabloid`, …; case-insensitive) |
+| `format` | `PaperFormat` | `'auto'` | Page size for the document section (`w:pgSz`). `'auto'` is the document's own page (`metadata.pageSetup`), else A4; or the names `pdfConfig.format` takes (`A4`, `Letter`, `Legal`, `A3`, `Tabloid`, …; case-insensitive) |
 | `landscape` | `boolean` | `false` | Landscape orientation (swaps page dimensions and sets `w:orient`) |
-| `margin` | `object` | `{72,72,72,72}` | Page margins (`top`, `right`, `bottom`, `left`). Each is a number of points (1/72 inch) or a unit string (`'1in'`, `'2cm'`, `'36pt'`); 72 = Word's standard one inch |
+| `margin` | `object` | the document's, else `72` | Page margins (`top`, `right`, `bottom`, `left`). Each is a number of points (1/72 inch) or a unit string (`'1in'`, `'2cm'`, `'36pt'`). A side left unset is the document's own margin under `format: 'auto'`, else 72 (one inch) |
 
 ```typescript
 import { OfficeConverter } from 'officeparser';
@@ -1711,9 +1719,9 @@ Pass as `odtConfig` inside `GeneratorConfig`. The ODT generator writes a real Op
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `format` | `PaperFormat` | `'A4'` | Page size for the page layout (`style:page-layout`). Same names as `pdfConfig.format` (`A4`, `Letter`, `Legal`, `A3`, `Tabloid`, …; case-insensitive) |
+| `format` | `PaperFormat` | `'auto'` | Page size for the page layout (`style:page-layout`). `'auto'` is the document's own page (`metadata.pageSetup`), else A4; or the names `pdfConfig.format` takes (`A4`, `Letter`, `Legal`, `A3`, `Tabloid`, …; case-insensitive) |
 | `landscape` | `boolean` | `false` | Landscape orientation (swaps page dimensions and sets `style:print-orientation`) |
-| `margin` | `object` | `{72,72,72,72}` | Page margins (`top`, `right`, `bottom`, `left`). Each is a number of points (1/72 inch) or a unit string (`'1in'`, `'2cm'`, `'36pt'`) |
+| `margin` | `object` | the document's, else `72` | Page margins (`top`, `right`, `bottom`, `left`). Each is a number of points (1/72 inch) or a unit string (`'1in'`, `'2cm'`, `'36pt'`). A side left unset is the document's own margin under `format: 'auto'`, else 72 (one inch) |
 
 ```typescript
 import { OfficeConverter } from 'officeparser';
@@ -1735,9 +1743,9 @@ Pass as `texConfig` inside `GeneratorConfig`. The LaTeX generator turns any pars
 | `bundle` | `boolean` | `false` | `true` returns a zip holding `main.tex` and every image as a file under `images/`, ready to compile or upload to Overleaf. With `false` the result is the `.tex` alone, carrying its PNG and JPEG images inside it (see `embedImages`) |
 | `embedImages` | `boolean` | `true` | Carry each PNG and JPEG image inside the `.tex`, so the one file compiles with its pictures (see **Images inside the `.tex`** below). `false` refers to `images/<name>` files instead, and an `IMAGES_NOT_BUNDLED` warning names the files to place there (their bytes are in `ast.attachments`). Ignored with `bundle` |
 | `numberSections` | `boolean` | `false` | Number sections (`1`, `1.1`, ...). Off by default, matching office documents, whose headings are unnumbered |
-| `format` | `PaperFormat` | `'A4'` | Paper size, written as a `geometry` option. Same names as `pdfConfig.format`. Ignored by `beamer` |
+| `format` | `PaperFormat` | `'auto'` | Paper size, written as a `geometry` option. `'auto'` is the document's own page, else A4; or the names `pdfConfig.format` takes. Ignored by `beamer` |
 | `landscape` | `boolean` | `false` | Landscape orientation. Ignored by `beamer` |
-| `margin` | `object` | `{72,72,72,72}` | Page margins (`top`, `right`, `bottom`, `left`), each a number of points or a unit string (`'1in'`, `'2cm'`, `'36pt'`). Ignored by `beamer` |
+| `margin` | `object` | the document's, else `72` | Page margins (`top`, `right`, `bottom`, `left`), each a number of points or a unit string (`'1in'`, `'2cm'`, `'36pt'`). A side left unset is the document's own margin under `format: 'auto'`, else 72 (one inch). Ignored by `beamer` |
 
 ```typescript
 import { OfficeConverter } from 'officeparser';
