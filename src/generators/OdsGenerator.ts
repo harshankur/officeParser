@@ -3,7 +3,7 @@ import { ConversionResult, GeneratorConfig, OfficeContentNode, OfficeParserAST, 
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { odfUserDefinedXml, resolveZipInstant, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
-import { buildWorkbook, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
+import { buildWorkbook, cellTextProcessor, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
 
 /** Escapes text content for an XML part after stripping XML-illegal characters. */
 function xmlText(s: string | undefined): string {
@@ -88,16 +88,11 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
 
     private async write(): Promise<ConversionResult<'ods'>> {
         const cfg = this.config.odsConfig;
-        const textProcessor = (n: OfficeContentNode, co: string) => {
-            if (n.type === 'text' || n.type === 'code') return n.text || '';
-            if (n.type === 'break') return (n.metadata as { breakType?: string } | undefined)?.breakType === 'section' ? '' : '\n';
-            if ((n.type === 'paragraph' || n.type === 'heading' || n.type === 'list') && co) return co + '\n';
-            return co;
-        };
+        const textProcessor = cellTextProcessor(this.imageMode());
         const { sheets, unrepresentable } = await buildWorkbook(this.ast.content, {
             textOf: async node => (await this.processNodeRecursive(node, textProcessor)).replace(/\n+$/, ''),
             keep: async node => { const v = await this.handleOnNode(node); return v === false ? false : typeof v === 'string' ? v : true; },
-        }, { sheetPerTable: cfg.sheetPerTable !== false, includeText: cfg.includeText !== false, includeCharts: this.config.includeCharts !== false });
+        }, { sheetPerTable: cfg.sheetPerTable !== false, includeText: cfg.includeText !== false, includeCharts: this.config.includeCharts !== false, imageMode: this.imageMode(), includeFormatting: this.config.includeFormatting !== false });
         for (const feature of unrepresentable) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'ods' });
         if (!sheets.length) {
             this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'a document with no table or text', format: 'ods' });

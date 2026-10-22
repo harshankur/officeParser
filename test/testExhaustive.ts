@@ -5754,6 +5754,42 @@ async function testPresentationWriters(): Promise<void> {
         assert.strictEqual((item11?.metadata as any)?.col, 1, `${format}: a merge running past a slide's end keeps the cells after it in their columns`);
     }
 
+    // includeImages and includeFormatting: a picture, its recognized text, both or neither; plain runs.
+    const scanned = { type: 'docx', metadata: {}, attachments: [{ type: 'image', name: 'scan.png', mimeType: 'image/png', extension: 'png', data: png.toString('base64') }], content: [
+        { type: 'heading', metadata: { level: 2 }, children: [{ type: 'text', text: 'Scan' }] },
+        { type: 'paragraph', children: [{ type: 'text', text: 'Bold words', formatting: { bold: true } }, { type: 'image', metadata: { attachmentName: 'scan.png', ocrText: 'RECOGNISED TEXT' } }] },
+        { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'Head', formatting: { bold: true } }] }] }] }] },
+    ] } as any;
+    for (const format of ['pptx', 'odp', 'xlsx', 'ods'] as const) {
+        const textAndMedia = async (config: any) => {
+            const out = await OfficeGenerator.generate(scanned, format, config);
+            const parts = unzipSync(new Uint8Array(out.value as unknown as Uint8Array));
+            const xml = Object.keys(parts).filter(k => /\.xml$/.test(k)).map(k => strFromU8(parts[k])).join('');
+            return { xml, media: Object.keys(parts).some(k => /media\/|Pictures\//.test(k)), lost: (out.messages || []).some((m: any) => m.details?.feature === 'pictures') };
+        };
+        const none = await textAndMedia({ includeImages: 'none' });
+        assert.ok(!none.media && !none.lost && !none.xml.includes('RECOGNISED'), `${format}: includeImages 'none' leaves pictures out, unreported`);
+        const ocr = await textAndMedia({ includeImages: 'ocr-text-only' });
+        assert.ok(!ocr.media && !ocr.lost && ocr.xml.includes('RECOGNISED TEXT'), `${format}: includeImages 'ocr-text-only' writes the picture's recognized text instead`);
+        if (format === 'pptx' || format === 'odp') {
+            const both = await textAndMedia({ includeImages: 'image+ocr-text' });
+            assert.ok(both.media && both.xml.includes('RECOGNISED TEXT'), `${format}: includeImages 'image+ocr-text' writes both`);
+        }
+        // The document's own runs (a slide's title is bold by the slide's design, not the document's).
+        const plain = await textAndMedia({ includeFormatting: false });
+        // A workbook's bold, read back.
+        const boldRead = new Set<string>();
+        if (format === 'xlsx' || format === 'ods') {
+            const back = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(scanned, format, { includeFormatting: false } as any)).value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+            for (const n of collectAllNodes(back)) if (n.type === 'text' && n.formatting?.bold) boldRead.add((n.text || '').trim());
+        }
+        const boldRun = (xml: string, text: string) => format === 'pptx' ? xml.split('<a:r>').some(r => r.includes(`<a:t>${text}</a:t>`) && / b="1"/.test(r))
+            : format === 'odp' ? [...xml.matchAll(new RegExp(`<text:span text:style-name="([^"]+)">${text}<`, 'g'))].some(m => new RegExp(`style:name="${m[1]}"[^>]*>[^<]*<style:text-properties[^>]*fo:font-weight="bold"`).test(xml))
+            : boldRead.has(text);
+        assert.ok(!boldRun(plain.xml, 'Bold words') && !boldRun(plain.xml, 'Head'), `${format}: includeFormatting false writes the document's runs plain`);
+        if (format === 'pptx') assert.ok(boldRun((await textAndMedia({})).xml, 'Bold words'), 'pptx: a bold run is bold by default');
+    }
+
 }
 
 async function testNativePdfFurnitureLimits(): Promise<void> {

@@ -16,7 +16,7 @@
  * @module generators/slides/deck
  */
 
-import { HeadingMetadata, ListMetadata, NodeBounds, OfficeContentNode, OfficeMetadata, ShapeMetadata, SlideMetadata, TextFormatting, TextMetadata } from '../../types.js';
+import { HeadingMetadata, ImageMode, ListMetadata, NodeBounds, OfficeContentNode, OfficeMetadata, ShapeMetadata, SlideMetadata, TextFormatting, TextMetadata } from '../../types.js';
 import { lengthToPt } from '../../utils/officeGenUtils.js';
 import { layoutTableRows } from '../../utils/tableLayout.js';
 
@@ -48,6 +48,10 @@ export interface DeckSource {
     keep(node: OfficeContentNode): Promise<boolean | string>;
     /** Whether charts are written (includeCharts): a chart left out is not reported. */
     includeCharts: boolean;
+    /** How pictures are written (includeImages): the picture, its recognized text, both, or neither. */
+    imageMode: ImageMode;
+    /** Whether runs keep their looks (includeFormatting): bold, italic, sizes, colours, fonts. */
+    includeFormatting: boolean;
     /** A chart's data as a table (its labels down, its series across), or undefined where it has none. */
     chartTable(node: OfficeContentNode): OfficeContentNode | undefined;
 }
@@ -192,12 +196,12 @@ function placedGroups(node: OfficeContentNode, p: DeckParagraph): { paragraph: D
 }
 
 /** The pictures in a node, with their alternative text. */
-function picturesIn(node: OfficeContentNode): { attachment: string; alt?: string }[] {
-    const out: { attachment: string; alt?: string }[] = [];
+function picturesIn(node: OfficeContentNode): { attachment: string; alt?: string; ocr?: string }[] {
+    const out: { attachment: string; alt?: string; ocr?: string }[] = [];
     const walk = (n: OfficeContentNode, d: number) => {
         if (n.type === 'image') {
-            const m = n.metadata as { attachmentName?: string; altText?: string } | undefined;
-            if (m?.attachmentName) out.push({ attachment: m.attachmentName, ...(typeof m.altText === 'string' && m.altText.trim() ? { alt: m.altText.trim() } : {}) });
+            const m = n.metadata as { attachmentName?: string; altText?: string; ocrText?: string } | undefined;
+            if (m?.attachmentName) out.push({ attachment: m.attachmentName, ...(typeof m.altText === 'string' && m.altText.trim() ? { alt: m.altText.trim() } : {}), ...(typeof m.ocrText === 'string' && m.ocrText.trim() ? { ocr: m.ocrText.trim() } : {}) });
         }
         if (d < 16) for (const c of n.children ?? []) walk(c, d + 1);
     };
@@ -213,7 +217,10 @@ async function paragraphOf(node: OfficeContentNode, source: DeckSource, notes: {
     const pitch = lines && pitchOf(lines);
     const meta = node.metadata as (ListMetadata & { alignment?: string }) | undefined;
     const align = meta?.alignment === 'center' || meta?.alignment === 'right' || meta?.alignment === 'justify' ? meta.alignment : undefined;
-    const p: DeckParagraph = { runs: lines ? joinLines(lines) : read, ...(align ? { align } : {}), ...(pitch ? { lineSpacing: pitch } : {}) };
+    const joined = lines ? joinLines(lines) : read;
+    // Plain runs where the caller asked for no formatting: their text, links and breaks.
+    const plain = source.includeFormatting ? joined : joined.map(r => ({ text: r.text, ...(r.link ? { link: r.link } : {}), ...(r.lineBreak ? { lineBreak: true } : {}) }));
+    const p: DeckParagraph = { runs: plain, ...(align ? { align } : {}), ...(pitch ? { lineSpacing: pitch } : {}) };
     if (node.type === 'list') {
         const index = typeof meta?.itemIndex === 'number' && Number.isFinite(meta.itemIndex) ? Math.max(0, Math.trunc(meta.itemIndex)) : 0;
         p.bullet = { level: Math.max(0, Math.min(8, meta?.indentation ?? 0)), ...(meta?.listType === 'ordered'
@@ -265,7 +272,7 @@ async function tableOf(node: OfficeContentNode, source: DeckSource, notes: { lis
                     paragraphs.push(await paragraphOf(child, source, notes));
                 }
             } else paragraphs.push(await paragraphOf(cell, source, notes, keptText.get(cell) ?? true));
-            cells.push({ paragraphs, colSpan: slot.colSpan, rowSpan: slot.rowSpan, bold: meta?.style === 'header', ...(meta?.backgroundColor ? { fill: meta.backgroundColor } : {}), col: slot.col });
+            cells.push({ paragraphs, colSpan: slot.colSpan, rowSpan: slot.rowSpan, bold: source.includeFormatting && meta?.style === 'header', ...(meta?.backgroundColor ? { fill: meta.backgroundColor } : {}), col: slot.col });
             placed.push({ row: ri, col: slot.col, colSpan: slot.colSpan, rowSpan: slot.rowSpan, len: paragraphs.map(p => p.runs.map(x => x.text).join('')).join(' ').length, bounds: cell.bounds });
             cols = Math.max(cols, slot.col + slot.colSpan);
         }
@@ -292,6 +299,8 @@ const boxOf = (b: NodeBounds | undefined, scale = 1, dx = 0, dy = 0): Box | unde
 export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMetadata, source: DeckSource, options: { backgrounds?: (Uint8Array | undefined | null)[] }): Promise<Deck> {
     const unrepresentable = new Set<string>();
     const notes = { list: [] as DeckParagraph[], seen: new Map<OfficeContentNode, number>() };
+    const wantPicture = source.imageMode === 'image-only' || source.imageMode === 'image+ocr-text';
+    const wantOcr = source.imageMode === 'ocr-text-only' || source.imageMode === 'image+ocr-text';
     const slideNodes = content.filter(n => n.type === 'slide');
     const pageNodes = content.filter(n => n.type === 'page');
     const placed = (nodes: OfficeContentNode[]) => nodes.some(n => (n.children ?? []).some(c => c.bounds));
@@ -397,9 +406,15 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
                     continue;
                 }
                 if (child.type === 'image') {
-                    const [picture] = picturesIn(child);
-                    if (picture && box) slide.items.push({ kind: 'picture', box, ...picture });
-                    else if (picture) unrepresentable.add('pictures without a place');
+                    const [found] = picturesIn(child);
+                    if (!found) continue;
+                    const { ocr, ...picture } = found;
+                    if (wantPicture) { if (box) slide.items.push({ kind: 'picture', box, ...picture }); else unrepresentable.add('pictures without a place'); }
+                    // Its recognized text where asked: in its place instead of it, or beside it in the slide's notes.
+                    if (wantOcr && ocr) {
+                        if (!wantPicture && box) slide.items.push({ kind: 'text', box, paragraphs: [{ runs: [{ text: ocr }] }] });
+                        else slide.notes = [...(slide.notes ?? []), { runs: [{ text: ocr }] }];
+                    }
                     continue;
                 }
                 if (child.type === 'table') {
@@ -408,7 +423,7 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
                     if (slide.picture && !isSlides && await cellsPlaced(child)) continue;
                     const t = await tableOf(child, source, notes);
                     if (box) slide.items.push({ kind: 'table', box, ...t });
-                    if (picturesIn(child).length) unrepresentable.add('pictures inside table cells');
+                    if (wantPicture && picturesIn(child).length) unrepresentable.add('pictures inside table cells');
                     continue;
                 }
                 if (child.type === 'chart') {
@@ -532,6 +547,15 @@ async function flowDeck(content: OfficeContentNode[], metadata: OfficeMetadata, 
         body = []; used = 0;
     };
     const flushBody = () => { if (body.length) flush(); };
+    // A node's pictures on slides of their own, and their recognized text where asked (includeImages).
+    const wantPicture = source.imageMode === 'image-only' || source.imageMode === 'image+ocr-text';
+    const wantOcr = source.imageMode === 'ocr-text-only' || source.imageMode === 'image+ocr-text';
+    const pictureSlides = (node: OfficeContentNode) => {
+        for (const { ocr, ...picture } of picturesIn(node)) {
+            if (wantPicture) { flushBody(); put([{ kind: 'picture', box: BODY_BOX, ...picture }]); }
+            if (wantOcr && ocr) add({ runs: [{ text: ocr }] });
+        }
+    };
     // A table's slides: at most ten rows a slide, the first row (its header) repeated.
     const tableSlides = async (node: OfficeContentNode) => {
         flushBody();
@@ -558,7 +582,7 @@ async function flowDeck(content: OfficeContentNode[], metadata: OfficeMetadata, 
             rest.slice(at, end).forEach((row, i) => { for (const cell of row.cells) if (at + i + cell.rowSpan > end) open.push({ row: at + i, cell }); });
         }
         // The pictures in its cells, which a slide's table cannot hold, on slides of their own after it.
-        for (const picture of picturesIn(node)) put([{ kind: 'picture', box: BODY_BOX, ...picture }]);
+        pictureSlides(node);
     };
     const add = (p: DeckParagraph) => {
         const size = BODY_SIZE;
@@ -602,11 +626,11 @@ async function flowDeck(content: OfficeContentNode[], metadata: OfficeMetadata, 
                 const p = await paragraphOf(node, source, notes, kept);
                 if (p.runs.some(r => r.text.trim())) add(p);
                 // Its pictures on slides of their own.
-                for (const picture of picturesIn(node)) { flushBody(); put([{ kind: 'picture', box: BODY_BOX, ...picture }]); }
+                pictureSlides(node);
                 continue;
             }
             if (node.type === 'image') {
-                for (const picture of picturesIn(node)) { flushBody(); put([{ kind: 'picture', box: BODY_BOX, ...picture }]); }
+                pictureSlides(node);
                 continue;
             }
             if (node.type === 'table') {

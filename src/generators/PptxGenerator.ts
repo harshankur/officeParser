@@ -69,6 +69,8 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
             // Every node a slide takes is asked for here, so the signal is heard node by node.
             keep: async node => { checkAbortSignal(this.config.abortSignal); const v = await this.handleOnNode(node); return v === false ? false : typeof v === 'string' ? v : true; },
             includeCharts: this.config.includeCharts !== false,
+            imageMode: this.imageMode(),
+            includeFormatting: this.config.includeFormatting !== false,
             chartTable: node => {
                 const data = this.attachmentsByName.get((node.metadata as { attachmentName?: string } | undefined)?.attachmentName ?? '')?.chartData;
                 return data ? this.chartTable(data, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode)) : undefined;

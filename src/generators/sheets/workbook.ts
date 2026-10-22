@@ -10,7 +10,7 @@
  * @module generators/sheets/workbook
  */
 
-import { CellMetadata, OfficeContentNode, RowMetadata, SheetMetadata, SlideMetadata } from '../../types.js';
+import { CellMetadata, ImageMode, OfficeContentNode, RowMetadata, SheetMetadata, SlideMetadata } from '../../types.js';
 import { stripInvalidXmlChars } from '../../utils/sanitize.js';
 import { layoutTableRows } from '../../utils/tableLayout.js';
 
@@ -350,16 +350,20 @@ async function notesOf(content: OfficeContentNode[], source: WorkbookSource): Pr
  * sheet of its own (`includeText`), a block a row. Pictures and charts, which a cell cannot hold, are
  * counted for the writer's warning.
  */
-export async function buildWorkbook(content: OfficeContentNode[], source: WorkbookSource, options: { sheetPerTable: boolean; includeText: boolean; includeCharts: boolean }): Promise<{ sheets: WorkSheet[]; unrepresentable: Set<string> }> {
+export async function buildWorkbook(content: OfficeContentNode[], source: WorkbookSource, options: { sheetPerTable: boolean; includeText: boolean; includeCharts: boolean; imageMode: ImageMode; includeFormatting: boolean }): Promise<{ sheets: WorkSheet[]; unrepresentable: Set<string> }> {
     const sheets: WorkSheet[] = [];
     const taken = new Set<string>();
     const unrepresentable = new Set<string>();
-    // A chart left out by the caller (includeCharts: false) is not one lost.
-    const lost = (node: OfficeContentNode) => { if (node.type === 'image') unrepresentable.add('pictures'); else if (node.type === 'chart' && options.includeCharts) unrepresentable.add('charts'); };
+    // A chart or picture left out by the caller (includeCharts: false, includeImages 'none' or 'ocr-text-only')
+    // is not one lost.
+    const picturesWanted = options.imageMode === 'image-only' || options.imageMode === 'image+ocr-text';
+    const lost = (node: OfficeContentNode) => { if (node.type === 'image') { if (picturesWanted) unrepresentable.add('pictures'); } else if (node.type === 'chart' && options.includeCharts) unrepresentable.add('charts'); };
     // The notes, on a sheet of their own after the others.
     const withNotes = async () => {
         const notes = await notesOf(content, source);
         if (notes.length) sheets.push({ name: sheetName('Notes', taken, 'Notes'), rows: notes, widths: [12, Math.min(120, Math.max(8, longestOf(notes, 1)))] });
+        // No bold where the caller asked for no formatting (includeFormatting: false).
+        if (!options.includeFormatting) for (const sheet of sheets) for (const row of sheet.rows) for (const cell of row.cells) cell.bold = false;
         return { sheets, unrepresentable };
     };
     const sheetNodes = content.filter(n => n.type === 'sheet');
@@ -397,7 +401,7 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
                 if (node.type === 'heading' && t) heading = t;
                 if (t && options.includeText && text.length < MAX_ROWS) text.push({ cells: [{ ...textCell(0, t, node.type === 'heading'), value: { kind: 'text' } }] });
                 // A picture in the text, which a cell cannot hold.
-                const walk = (n: OfficeContentNode, d: number) => { if (n.type === 'image') unrepresentable.add('pictures'); if (d < 16) for (const c of n.children || []) walk(c, d + 1); };
+                const walk = (n: OfficeContentNode, d: number) => { if (n.type === 'image' && picturesWanted) unrepresentable.add('pictures'); if (d < 16) for (const c of n.children || []) walk(c, d + 1); };
                 walk(node, 0);
                 continue;
             }
@@ -415,4 +419,20 @@ function longestOf(rows: WorkRow[], col: number): number {
     let longest = 0;
     for (const r of rows) for (const c of r.cells) if (c.col === col && c.text.length > longest) longest = c.text.length;
     return longest;
+}
+
+/**
+ * A node's text as a cell holds it, for the spreadsheet writers' traversal: its runs, a line for each
+ * block and break, and a picture's recognized (OCR) text where the caller asks for it (includeImages
+ * 'ocr-text-only' or 'image+ocr-text'); a picture itself a cell cannot hold.
+ */
+export function cellTextProcessor(imageMode: ImageMode): (n: OfficeContentNode, childrenOutput: string) => string {
+    const ocr = imageMode === 'ocr-text-only' || imageMode === 'image+ocr-text';
+    return (n, co) => {
+        if (n.type === 'text' || n.type === 'code') return n.text || '';
+        if (n.type === 'image') return ocr ? ((n.metadata as { ocrText?: string } | undefined)?.ocrText ?? '').trim() : '';
+        if (n.type === 'break') return (n.metadata as { breakType?: string } | undefined)?.breakType === 'section' ? '' : '\n';
+        if ((n.type === 'paragraph' || n.type === 'heading' || n.type === 'list') && co) return co + '\n';
+        return co;
+    };
 }
