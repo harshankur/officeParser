@@ -5125,6 +5125,13 @@ async function testFormatsReadAsTheyShow(): Promise<void> {
     };
     assert.deepStrictEqual(await looks(''), ['#111111', '#EEEEEE'], 'a master\'s colour map makes the background dark and the text light');
     assert.deepStrictEqual(await looks('<p:clrMapOvr><a:overrideClrMapping bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2"/></p:clrMapOvr>'), ['#EEEEEE', '#111111'], 'a layout\'s own colour map is used over its master\'s');
+    // A notes page is in its notes master's colours: a dark slide master's light text is no notes' colour.
+    const darkDeck = unzipSync(new Uint8Array(fs.readFileSync(path.join(__dirname, 'files', 'test.pptx'))));
+    const notesPath = Object.keys(darkDeck).find(name => /^ppt\/notesSlides\/notesSlide\d+\.xml$/.test(name))!;
+    darkDeck[notesPath] = strToU8(strFromU8(darkDeck[notesPath]).replace(/<a:rPr([^>]*?)\/>/, '<a:rPr$1><a:solidFill><a:schemeClr val="tx1"/></a:solidFill></a:rPr>').replace(/<a:rPr([^>]*?)>(?!<a:solidFill>)/, '<a:rPr$1><a:solidFill><a:schemeClr val="tx1"/></a:solidFill>'));
+    for (const name of Object.keys(darkDeck).filter(n => /^ppt\/slideMasters\/slideMaster\d+\.xml$/.test(n))) darkDeck[name] = strToU8(strFromU8(darkDeck[name]).replace(/<p:clrMap [^>]*\/>/, '<p:clrMap bg1="dk1" tx1="lt1" bg2="dk2" tx2="lt2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>'));
+    const darkNotes = collectAllNodes({ content: ((await OfficeParser.parseOffice(Buffer.from(zipSync(darkDeck)), { fileType: 'pptx' } as any)) as OfficeParserAST).content.flatMap(slide => slide.notes ?? []) } as any).filter(n => n.type === 'text' && n.formatting?.color);
+    assert.ok(darkNotes.length && darkNotes.every(n => n.formatting!.color !== '#FFFFFF'), `notes are in their notes master's colours, not the slide master's; got ${JSON.stringify(darkNotes.map(n => n.formatting?.color))}`);
     const flatSlide = (await OfficeParser.parseOffice(deck(''), { fileType: 'pptx', ignorePageGeometry: true } as any) as OfficeParserAST).content[0];
     assert.strictEqual(collectAllNodes({ content: [flatSlide] } as any).find(n => n.type === 'text')?.formatting?.color, '#EEEEEE', 'a run\'s theme colour is read without the slide\'s geometry too');
 
@@ -5150,6 +5157,10 @@ async function testFormatsReadAsTheyShow(): Promise<void> {
     const runs = styled.content.map(n => n.children![0].formatting);
     assert.deepStrictEqual([runs[0]?.color, runs[0]?.backgroundColor, runs[1]?.color, (styled.content[1].metadata as any)?.alignment, runs[2]?.bold], ['red', '#ff0', 'green', 'center', true],
         'an !important rule wins over the element\'s style, and the element\'s own !important over it');
+
+    const quoted = await OfficeParser.parseOffice(Buffer.from('<style>.q { background: url("img (1).png") yellow } .s { background: url(\'a).png\'); color: green }</style><p><span class="q" style="color: blue; font-weight: bold">Q</span> <span class="s" style="font-weight: bold">S</span></p>'), { fileType: 'html' } as any) as OfficeParserAST;
+    const [q, , sRun] = quoted.content[0].children!.map(c => c.formatting);
+    assert.deepStrictEqual([q?.color, q?.bold, q?.backgroundColor, sRun?.color, sRun?.bold], ['blue', true, 'yellow', 'green', true], 'a `)` in a quoted url() address does not swallow the declarations after it');
 
     const csv = async (text: string) => collectAllNodes(await OfficeParser.parseOffice(Buffer.from(text), { fileType: 'csv' } as any) as OfficeParserAST).filter(n => n.type === 'cell').map(c => c.text);
     assert.deepStrictEqual(await csv('Müller;1,5\nSchmidt;2,25\n'), ['Müller', '1,5', 'Schmidt', '2,25'], 'a CSV of `;` and decimal commas is read with `;`');

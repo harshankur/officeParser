@@ -111,6 +111,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     // gives no place of its own is, the background a slide takes on, and the theme's colours.
     const slideLayoutRegex = /ppt\/slideLayouts\/(?:_rels\/)?slideLayout\d+\.xml(?:\.rels)?$/;
     const themeRegex = /ppt\/theme\/theme\d+\.xml$/;
+    // A notes master and its relationships: its colour map and theme give the notes' colours.
+    const notesMasterRegex = /ppt\/notesMasters\/(?:_rels\/)?notesMaster\d+\.xml(?:\.rels)?$/;
     const diagramDataRegex = /ppt\/diagrams\/data\d+\.xml/;
 
     const files = await extractFiles(
@@ -125,6 +127,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             (!config.ignoreComments && (!!x.match(commentsFileRegex) || !!x.match(commentAuthorsRegex))) ||
             // (The masters, layouts and themes give the slides' places and their text's colours.)
             !!x.match(slideMastersRegex) || !!x.match(slideMasterRelsRegex) || slideLayoutRegex.test(x) || themeRegex.test(x) ||
+            (!config.ignoreNotes && notesMasterRegex.test(x)) ||
             !!x.match(presentationFileRegex) ||
             !!x.match(presentationRelsRegex) ||
             !!x.match(diagramDataRegex) ||
@@ -581,7 +584,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         return part ?? undefined;
     };
     /** The part a slide's or layout's relationships name as its layout or master. */
-    const templateOf = (path: string, kind: 'layout' | 'master' | 'theme'): string | undefined =>
+    const templateOf = (path: string, kind: 'layout' | 'master' | 'theme' | 'notesMaster'): string | undefined =>
         Object.values(relsByPart.get(path) ?? {}).find(rel => rel.type === kind)?.path;
     /** Each master's theme's colours, read once. */
     const themes = new Map<string, Map<string, string>>();
@@ -1143,6 +1146,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             else if (typeAttr.endsWith("relationships/slideLayout")) simplifiedType = "layout";
             else if (typeAttr.endsWith("relationships/slideMaster")) simplifiedType = "master";
             else if (typeAttr.endsWith("relationships/theme")) simplifiedType = "theme";
+            else if (typeAttr.endsWith("relationships/notesMaster")) simplifiedType = "notesMaster";
             else if (typeAttr.includes("relationships/slide")) simplifiedType = "slide";
             else if (typeAttr.includes("relationships/notesSlide")) simplifiedType = "notes";
             else if (typeAttr.includes("relationships/comments")) simplifiedType = "comments";
@@ -1272,7 +1276,15 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             const notesFile = rel.type === "notes" && rel.path ? fileByPath.get(rel.path) : undefined;
             if (!notesFile || readNotesPages.has(notesFile)) continue;
             readNotesPages.add(notesFile);
-            const note = readPart(notesFile, { type: 'note', children: [], metadata: { slideNumber, noteId: `slide-note-${slideNumber}` } });
+            // In its notes master's colours, not the slide's: a dark slide master's light text is no
+            // colour for notes on a white page.
+            const notesMaster = templatePart(templateOf(notesFile.path, 'notesMaster'));
+            const notesTheme = (own?: Element) => mappedTheme(themeOf(notesMaster?.path), notesMaster?.path ?? '', [notesMaster?.colorMap, own]);
+            partTheme = notesTheme();
+            const note = readPart(notesFile, { type: 'note', children: [], metadata: { slideNumber, noteId: `slide-note-${slideNumber}` } }, xml => {
+                const own = colorMapOf(xml);
+                if (own) partTheme = notesTheme(own);
+            });
             if (note.children!.length > 0) (slideNode.notes ??= []).push(note);
         }
 

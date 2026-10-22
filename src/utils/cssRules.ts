@@ -54,7 +54,12 @@ function withoutAddresses(value: string): string {
     const lower = value.toLowerCase();
     let out = '', at = 0;
     for (let open = lower.indexOf('url(', at); open >= 0; open = lower.indexOf('url(', at)) {
-        const close = value.indexOf(')', open + 4);
+        // A quoted address ends at its quote, whatever `)` it holds (`url("img (1).png")`).
+        let from = open + 4;
+        while (from < value.length && /\s/.test(value[from])) from++;
+        const quote = value[from] === '"' || value[from] === "'" ? value[from] : '';
+        const end = quote ? value.indexOf(quote, from + 1) : from - 1;
+        const close = end < 0 ? -1 : value.indexOf(')', end + 1);
         out += value.slice(at, open) + 'url()';
         at = close < 0 ? value.length : close + 1;
     }
