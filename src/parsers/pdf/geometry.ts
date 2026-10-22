@@ -65,13 +65,18 @@ export function unionAll(boxes: (NodeBounds | undefined)[]): NodeBounds | undefi
     return acc;
 }
 
-/** Snaps an angle in radians to the nearest quarter turn when within ~0.5 degrees, else -1. */
+/**
+ * Snaps an angle in radians to the nearest quarter turn when within ~0.5 degrees, else -1; text within
+ * 15 degrees of level (a scan's skewed text layer, a stamp's slight tilt) is level text, read in its
+ * lines: read apart as turned text, it was taken out of the paragraphs it is part of.
+ */
 export function snapAngle(radians: number): RunAngle | -1 {
     let deg = (radians * 180) / Math.PI;
     deg = ((deg % 360) + 360) % 360;
     for (const cand of [0, 90, 180, 270] as const) {
         if (Math.abs(deg - cand) <= 0.5 || Math.abs(deg - (cand + 360)) <= 0.5) return cand;
     }
+    if (deg <= 15 || deg >= 345) return 0;
     return -1;
 }
 

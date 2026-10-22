@@ -285,6 +285,7 @@ import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
 import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
+import { inRanges } from '../utils/sheetUtils.js';
 
 /**
  * Helper to clean and extract attachment name from xlink:href or paths.
@@ -2086,7 +2087,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         if (isHiddenVisibility(column.getAttribute("table:visibility"))) hiddenColumns.push([columnAt, columnAt + repeat - 1]);
                         columnAt += repeat;
                     }
-                    const columnHidden = (col: number) => hiddenColumns.some(([first, last]) => col >= first && col <= last);
+                    const columnHidden = inRanges(hiddenColumns);
 
                     const tableRows = getOutermostElements(table, "table:table-row");
                     let rowIndex = 0;

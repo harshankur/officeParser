@@ -2679,6 +2679,27 @@ async function parserHardeningTests() {
     // once, cost in proportion; a stylesheet of many rules over many elements too (see the HTML cases).
     const footnoted = () => astWith(Array.from({ length: n(3000) }, (_, i) => ({ type: 'paragraph', children: [{ type: 'text', text: `Cited ${i}`, notes: [{ type: 'note', metadata: { noteType: i % 3 ? 'footnote' : 'endnote' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: `Note ${i} text.` }] }] }] }] })));
     await timed('pdf: 3,000 cited footnotes and endnotes are placed', () => OfficeGenerator.generate(footnoted(), 'pdf' as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any));
+    // A number format is read once for all the cells sharing it, and hidden columns are found by halving.
+    const shownCells = Array.from({ length: n(100000) }, (_, i) => `<row r="${i + 1}"><c r="A${i + 1}" s="0"><v>${i}.5</v></c></row>`).join('');
+    await timed('xlsx: 100k cells sharing a 255-character number format show their text', () => parseQuiet(repack('test.xlsx', z => {
+        z['xl/styles.xml'] = enc(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="&quot;${'x'.repeat(240)}&quot;#,##0.00"/></numFmts><cellXfs count="1"><xf numFmtId="164"/></cellXfs></styleSheet>`);
+        z['xl/worksheets/sheet1.xml'] = enc(sheetXml.replace(/<cols>[\s\S]*?<\/cols>/, '').replace(/<sheetData>[\s\S]*<\/sheetData>|<sheetData\/>/, `<sheetData>${shownCells}</sheetData>`));
+    }), 'xlsx'));
+    const columnName = (index: number) => { let name = ''; for (let k = index + 1; k > 0; k = Math.floor((k - 1) / 26)) name = String.fromCharCode(65 + ((k - 1) % 26)) + name; return name; };
+    await timed('xlsx: 8,000 hidden column ranges over 80k cells are found', () => parseQuiet(repack('test.xlsx', z => {
+        const ranges = n(8000);
+        const cols = Array.from({ length: ranges }, (_, i) => `<col min="${2 * i + 2}" max="${2 * i + 2}" hidden="1"/>`).join('');
+        const rows = Array.from({ length: n(8000) }, (_, i) => `<row r="${i + 1}">${Array.from({ length: 10 }, (_, j) => `<c r="${columnName((i * 10 + j) % (2 * ranges))}${i + 1}"><v>1</v></c>`).join('')}</row>`).join('');
+        z['xl/worksheets/sheet1.xml'] = enc(sheetXml.replace(/<cols>[\s\S]*?<\/cols>/, '').replace(/<sheetData>[\s\S]*<\/sheetData>|<sheetData\/>/, `<cols>${cols}</cols><sheetData>${rows}</sheetData>`));
+    }), 'xlsx'));
+    // A stylesheet keeps only the properties reading looks at, each once: 32 rules of 8 KB each over
+    // every element gave each element a quarter of a megabyte of style. A child combinator in a long
+    // run of spaces is found in one pass.
+    const wideRules = Array.from({ length: 32 }, (_, i) => `.w { color: red; ${Array.from({ length: 400 }, (_, j) => `--v${i}-${j}: 1`).join('; ')} }`).join('\n');
+    await linear('html: 32 wide rules over 20,000 elements give each a short style', () => OfficeParser.parseOffice(Buffer.from(`<style>${wideRules}</style>${'<p class="w">x</p>'.repeat(n(20000))}`), { fileType: 'html' } as any),
+        { label: 'html: 32 wide rules over 20,000 elements hold the heap', limit: 400e6 });
+    await timed('html: a selector of 200 KB of spaces around a > reads', () => parseQuiet(Buffer.from(`<style>.a${' '.repeat(n(200000))}>${' '.repeat(n(200000))}.b { color: red }</style><p class="a">x</p>`), 'html'));
+    await timed('html: a declaration of 200k unclosed url( reads', () => parseQuiet(Buffer.from(`<style>.a { background: ${'url('.repeat(n(200000))} }</style><p class="a">x</p>`), 'html'));
     await timed('md: block math of 200 KB of spaces is written inline', () => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'a' }, { type: 'code', text: 'x' + ' '.repeat(n(200000)) + 'y', metadata: { math: 'block' } }] }]), 'md' as any, { onWarning: () => {} } as any));
 
     // Raw HTML in Markdown, read as links and pictures, passes the writers' URL checks like any other.

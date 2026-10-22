@@ -123,8 +123,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             !!x.match(slideRelsRegex) ||
             (!config.ignoreNotes && !!x.match(notesRelsRegex)) ||
             (!config.ignoreComments && (!!x.match(commentsFileRegex) || !!x.match(commentAuthorsRegex))) ||
-            ((!config.ignoreSlideMasters || !config.ignorePageGeometry) && (!!x.match(slideMastersRegex) || !!x.match(slideMasterRelsRegex))) ||
-            (!config.ignorePageGeometry && (slideLayoutRegex.test(x) || themeRegex.test(x))) ||
+            // (The masters, layouts and themes give the slides' places and their text's colours.)
+            !!x.match(slideMastersRegex) || !!x.match(slideMasterRelsRegex) || slideLayoutRegex.test(x) || themeRegex.test(x) ||
             !!x.match(presentationFileRegex) ||
             !!x.match(presentationRelsRegex) ||
             !!x.match(diagramDataRegex) ||
@@ -346,14 +346,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                                     const sz = rPr.getAttribute("sz");
                                     if (sz) formatting.size = (parseInt(sz) / 100).toString() + 'pt';
 
-                                    const solidFill = getFirstElementByTagName(rPr, "a:solidFill");
-                                    if (solidFill) {
-                                        const srgbClr = getFirstElementByTagName(solidFill, "a:srgbClr");
-                                        if (srgbClr) {
-                                            const val = srgbClr.getAttribute("val");
-                                            if (val) formatting.color = '#' + val;
-                                        }
-                                    }
+                                    const color = runColor(rPr);
+                                    if (color) formatting.color = color;
 
                                     const latin = getFirstElementByTagName(rPr, "a:latin");
                                     if (latin) {
@@ -562,7 +556,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     // (ShapeMetadata) before them, and the slide its background: a deck was laid out as flowing text.
 
     /** A slide layout's or master's placeholders (by `idx` and by type), background, text styles and part. */
-    interface TemplatePart { byIdx: Map<string, Element>; byType: Map<string, Element>; background?: Element; txStyles?: Element; path: string }
+    interface TemplatePart { byIdx: Map<string, Element>; byType: Map<string, Element>; background?: Element; txStyles?: Element; colorMap?: Element; path: string }
     const templateParts = new Map<string, TemplatePart | null>();
     const templatePart = (path: string | undefined): TemplatePart | undefined => {
         if (!path) return undefined;
@@ -581,6 +575,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                 if (!part.byType.has(type)) part.byType.set(type, sp);
             }
             part.background = getFirstElementByTagName(doc, "p:bg") ?? undefined;
+            part.colorMap = colorMapOf(doc);
         }
         templateParts.set(path, part);
         return part ?? undefined;
@@ -601,6 +596,33 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         }
         return colors;
     };
+    /**
+     * A master's (`p:clrMap`), or a layout's or slide's overriding (`p:clrMapOvr`), colour map: which of
+     * the theme's colours a shape's `bg1`, `tx1`, `bg2` and `tx2` are. A dark master maps the text to the
+     * light colour, which read as the dark one drew its text in the background's colour.
+     */
+    function colorMapOf(doc: Document): Element | undefined {
+        const root = doc.documentElement;
+        const own = root ? getDirectChildren(root, "p:clrMap")[0] : undefined;
+        if (own) return own;
+        const override = root ? getDirectChildren(root, "p:clrMapOvr")[0] : undefined;
+        return override ? getDirectChildren(override, "a:overrideClrMapping")[0] : undefined;
+    }
+    /** The theme's colours under the colour maps given (the last given that has one is used). */
+    const mappedThemes = new Map<string, Map<string, string>>();
+    function mappedTheme(theme: Map<string, string>, themeKey: string, maps: (Element | undefined)[]): Map<string, string> {
+        const map = [...maps].reverse().find(Boolean);
+        if (!map) return theme;
+        const pairs = Array.from(map.attributes).map(a => [a.name, a.value] as const).filter(([name]) => /^[a-zA-Z0-9]+$/.test(name));
+        const key = `${themeKey}\u0000${pairs.map(([n, v]) => `${n}=${v}`).join(';')}`;
+        let mapped = mappedThemes.get(key);
+        if (!mapped) {
+            mapped = new Map(theme);
+            for (const [name, value] of pairs) { const color = theme.get(value); if (color) mapped.set(name, color); }
+            mappedThemes.set(key, mapped);
+        }
+        return mapped;
+    }
     /** A slide's, layout's or master's background colour (its `p:bg`), in the theme's colours. */
     function backgroundOf(bg: Element | undefined, theme: Map<string, string>): string | undefined {
         if (!bg) return undefined;
@@ -615,6 +637,17 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
 
     /** The slide being read: its layout, its master and their theme (see placeShape); undefined elsewhere. */
     let placing: { layout?: TemplatePart; master?: TemplatePart; theme: Map<string, string> } | undefined;
+    /** The theme's colours, under its colour maps, of the slide or master being read (empty elsewhere). */
+    let partTheme = new Map<string, string>();
+    /**
+     * A run's own colour (`a:solidFill`): a colour of its own, or one of its theme's (`a:schemeClr`, as
+     * its colour map maps it), with its shades and tints. A theme's colour was not read.
+     */
+    function runColor(rPr: Element): string | undefined {
+        const fill = getDirectChildren(rPr, "a:solidFill")[0];
+        const hex = fill ? rgbOf(Array.from(fill.childNodes).filter(isElement)[0], placing?.theme ?? partTheme) : undefined;
+        return hex ? `#${hex}` : undefined;
+    }
 
     /** The placeholder of the layout and of the master a slide's placeholder takes what it does not say from. */
     const placeholderChain = (sp: Element): Element[] => {
@@ -884,15 +917,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                                 const sz = rPr.getAttribute("sz");
                                 if (sz) formatting.size = (parseInt(sz) / 100).toString() + "pt";
 
-                                // Color extraction
-                                const solidFill = getFirstElementByTagName(rPr, "a:solidFill");
-                                if (solidFill) {
-                                    const srgbClr = getFirstElementByTagName(solidFill, "a:srgbClr");
-                                    if (srgbClr) {
-                                        const val = srgbClr.getAttribute("val");
-                                        if (val) formatting.color = "#" + val;
-                                    }
-                                }
+                                const color = runColor(rPr);
+                                if (color) formatting.color = color;
 
                                 // Highlight extraction
                                 const highlight = getFirstElementByTagName(rPr, "a:highlight");
@@ -1179,6 +1205,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         if (!file.path.match(slideMastersRegex)) continue;
         checkAbortSignal(config.abortSignal);
         const masterMatch = file.path.match(/slideMaster(\d+)\.xml/);
+        partTheme = mappedTheme(themeOf(file.path), file.path, [templatePart(file.path)?.colorMap]);
         const master = readPart(file, { type: 'slideMaster', children: [], metadata: { slideNumber: masterMatch ? parseInt(masterMatch[1]) : 0 } });
         if (master.children!.length > 0) slideMasters.push(master);
     }
@@ -1191,15 +1218,25 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         const file = deck[index];
         // A slide's number is its place in the presentation, as PowerPoint numbers it.
         const slideNumber = index + 1;
-        if (!config.ignorePageGeometry) {
+        {
             const layout = templatePart(templateOf(file.path, 'layout'));
             const master = layout ? templatePart(templateOf(layout.path, 'master')) : undefined;
-            placing = { layout, master, theme: themeOf(master?.path) };
+            const masterPath = master?.path;
+            partTheme = mappedTheme(themeOf(masterPath), masterPath ?? '', [master?.colorMap, layout?.colorMap]);
+            if (!config.ignorePageGeometry) placing = { layout, master, theme: partTheme };
         }
         let slideNode: OfficeContentNode;
         try {
             const metadata: SlideMetadata = { slideNumber };
             slideNode = readPart(file, { type: 'slide', children: [], metadata }, xml => {
+                // A slide's own colour map, over its layout's and master's.
+                const slideMap = colorMapOf(xml);
+                if (slideMap) {
+                    const layout = templatePart(templateOf(file.path, 'layout'));
+                    const master = layout ? templatePart(templateOf(layout.path, 'master')) : undefined;
+                    partTheme = mappedTheme(themeOf(master?.path), master?.path ?? '', [master?.colorMap, layout?.colorMap, slideMap]);
+                    if (placing) placing.theme = partTheme;
+                }
                 if (!placing) return;
                 const background = backgroundOf(getFirstElementByTagName(xml, "p:bg") ?? undefined, placing.theme)
                     ?? backgroundOf(placing.layout?.background, placing.theme) ?? backgroundOf(placing.master?.background, placing.theme);

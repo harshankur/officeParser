@@ -421,7 +421,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
             partRelsRegex.test(x) ||
             !!x.match(stylesFileRegex) ||
             (!config.ignoreComments && !!x.match(commentsFileRegex)) ||
-            (!config.ignoreHeadersAndFooters && (!!x.match(headerFileRegex) || !!x.match(footerFileRegex))) ||
+            // (The settings say whether even pages' headers are shown.)
+            (!config.ignoreHeadersAndFooters && (!!x.match(headerFileRegex) || !!x.match(footerFileRegex) || x === 'word/settings.xml')) ||
             (!!config.extractAttachments && !!x.match(mediaFileRegex)) ||
             diagramDataRegex.test(x),
         // A DOCX read as a chunk inflates within what the enclosing document left.

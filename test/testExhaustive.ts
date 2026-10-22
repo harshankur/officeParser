@@ -12,6 +12,7 @@ import { excelShownText } from '../src/utils/excelFormat';
 import { OfficeTemplate } from '../src/OfficeTemplate';
 import { OfficeConverter } from '../src/OfficeConverter';
 import { zipSync, strToU8, unzipSync, strFromU8 } from 'fflate';
+import { PDFDocument, StandardFonts, degrees } from 'pdf-lib';
 import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -4565,6 +4566,10 @@ async function testXlsxShownText(): Promise<void> {
         ['-1250.5', '#,##0.00;[Red](#,##0.00)', '(1,250.50)'], ['0', '#,##0.00;(#,##0.00);"-"', '-'], ['1234567', '#,##0,"K"', '1,235K'],
         ['46296.5', 'mmm d, yyyy h:mm AM/PM', 'Oct 1, 2026 12:00 PM'], ['0.5', 'hh:mm:ss', '12:00:00'], ['1234.5', '#,##0.00 _€;-#,##0.00 _€', '1,234.50'],
         ['12', 'General', undefined], ['3', '@', undefined], ['1.5', '# ?/?', undefined], ['1.5', '0.00E+00', undefined], ['30', '[h]:mm', undefined],
+        // An empty section shows nothing, `mmmmm` the month's letter, and a fill (`*x`) is a space.
+        ['0', '0;-0;;@', ''], ['46296', 'mmmmm', 'O'], ['46296', 'mmmmm yy', 'O 26'],
+        ['0', '_($* #,##0_);_($* (#,##0);_($* "-"_);_(@_)', '$ -'], ['1234', '_($* #,##0_);_($* (#,##0);_($* "-"_);_(@_)', '$ 1,234'],
+        ['0', '_("$"* #,##0.00_);_("$"* \\(#,##0.00\\);_("$"* "-"??_);_(@_)', '$ -'], ['1', '0'.repeat(300), undefined],
     ];
     for (const [value, code, shown] of cases) assert.strictEqual(excelShownText(value, code, false), shown, `${value} through ${code}`);
     const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
@@ -5063,6 +5068,94 @@ async function testSlidesDrawnAsLaidOut(): Promise<void> {
  * crashed the conversion), a slide after other content starts a page, and a deck's titles are in the
  * outline.
  */
+/**
+ * Formats are read as their applications show them: Word's even pages' headers are shown where its
+ * settings say so (its settings were not read, so they were always hidden), PDF text a few degrees off
+ * level is read in its lines, a PowerPoint master's colour map picks the theme's colours a shape's
+ * `tx1` and `bg1` are, a sheet's print setup is not a custom view's, a CSV of `;` and decimal commas is
+ * read with `;`, hidden columns are found among many ranges, and a page's stylesheet keeps only what
+ * reading looks at, each property once, with `!important` ones over an element's own `style`.
+ */
+async function testFormatsReadAsTheyShow(): Promise<void> {
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const para = (text: string) => `<w:p><w:r><w:t>${text}</w:t></w:r></w:p>`;
+    const word = (settings: boolean) => Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/_rels/document.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="h1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/><Relationship Id="h2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header2.xml"/></Relationships>'),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${W}><w:body>${para('Body')}<w:sectPr><w:headerReference w:type="default" r:id="h1"/><w:headerReference w:type="even" r:id="h2"/></w:sectPr></w:body></w:document>`),
+        'word/header1.xml': strToU8(`<?xml version="1.0"?><w:hdr ${W}>${para('Odd header')}</w:hdr>`),
+        'word/header2.xml': strToU8(`<?xml version="1.0"?><w:hdr ${W}>${para('Even header')}</w:hdr>`),
+        ...(settings ? { 'word/settings.xml': strToU8(`<?xml version="1.0"?><w:settings ${W}><w:evenAndOddHeaders/></w:settings>`) } : {}),
+    }));
+    const evenShown = async (settings: boolean) => ((await OfficeParser.parseOffice(word(settings), { fileType: 'docx' } as any) as OfficeParserAST).auxiliary!.headers!.find(h => h.text === 'Even header')!.metadata as any).hidden;
+    assert.deepStrictEqual([await evenShown(true), await evenShown(false)], [undefined, true], 'an even pages\' header is shown where the settings say so, and hidden where they do not');
+
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    const page = pdf.addPage([400, 300]);
+    page.drawText('Level words before', { x: 40, y: 250, size: 12, font });
+    page.drawText('Tilted scan line', { x: 40, y: 200, size: 12, font, rotate: degrees(4) });
+    page.drawText('Turned well apart', { x: 200, y: 100, size: 12, font, rotate: degrees(40) });
+    const read = await OfficeParser.parseOffice(Buffer.from(await pdf.save()), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const paragraphs = collectAllNodes(read).filter(n => n.type === 'paragraph');
+    const tilted = paragraphs.find(n => (n.text || '').includes('Tilted scan line')), turned = paragraphs.find(n => (n.text || '').includes('Turned well apart'));
+    assert.deepStrictEqual([(tilted?.metadata as any)?.rotation, (turned?.metadata as any)?.rotation], [undefined, 320], 'text a few degrees off level is read as level text, text well apart with its angle');
+    assert.ok(paragraphs.findIndex(n => n === tilted) === paragraphs.findIndex(n => (n.text || '').includes('Level words before')) + 1, 'the tilted line is read in its place, after the line above it');
+
+    const P = 'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const rel = (id: string, type: string, target: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${target}"/>`;
+    const rels = (...items: string[]) => strToU8(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${items.join('')}</Relationships>`);
+    const deck = (layoutOverride: string) => Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>'),
+        'ppt/presentation.xml': strToU8(`<?xml version="1.0"?><p:presentation ${P}><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:sldSz cx="9144000" cy="5143500"/></p:presentation>`),
+        'ppt/_rels/presentation.xml.rels': rels(rel('rId1', 'slide', 'slides/slide1.xml')),
+        'ppt/slides/slide1.xml': strToU8(`<?xml version="1.0"?><p:sld ${P}><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="T"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:solidFill><a:schemeClr val="bg1"/></a:solidFill></p:spPr><p:txBody><a:bodyPr/><a:p><a:r><a:rPr><a:solidFill><a:schemeClr val="tx1"/></a:solidFill></a:rPr><a:t>On the dark master</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>`),
+        'ppt/slides/_rels/slide1.xml.rels': rels(rel('rId1', 'slideLayout', '../slideLayouts/slideLayout1.xml')),
+        'ppt/slideLayouts/slideLayout1.xml': strToU8(`<?xml version="1.0"?><p:sldLayout ${P}><p:cSld><p:spTree/></p:cSld>${layoutOverride}</p:sldLayout>`),
+        'ppt/slideLayouts/_rels/slideLayout1.xml.rels': rels(rel('rId1', 'slideMaster', '../slideMasters/slideMaster1.xml')),
+        'ppt/slideMasters/slideMaster1.xml': strToU8(`<?xml version="1.0"?><p:sldMaster ${P}><p:cSld><p:spTree/></p:cSld><p:clrMap bg1="dk1" tx1="lt1" bg2="dk2" tx2="lt2" accent1="accent1" hlink="hlink" folHlink="folHlink"/></p:sldMaster>`),
+        'ppt/slideMasters/_rels/slideMaster1.xml.rels': rels(rel('rId1', 'theme', '../theme/theme1.xml')),
+        'ppt/theme/theme1.xml': strToU8(`<?xml version="1.0"?><a:theme ${P}><a:themeElements><a:clrScheme name="t"><a:dk1><a:srgbClr val="111111"/></a:dk1><a:lt1><a:srgbClr val="EEEEEE"/></a:lt1><a:dk2><a:srgbClr val="222222"/></a:dk2><a:lt2><a:srgbClr val="DDDDDD"/></a:lt2></a:clrScheme></a:themeElements></a:theme>`),
+    }));
+    const looks = async (override: string) => {
+        const slide = (await OfficeParser.parseOffice(deck(override), { fileType: 'pptx' } as any) as OfficeParserAST).content[0];
+        const text = collectAllNodes({ content: [slide] } as any).find(n => n.type === 'text' && n.text === 'On the dark master')!;
+        return [(slide.children!.find(n => n.type === 'drawing')?.metadata as any)?.fill, text.formatting?.color];
+    };
+    assert.deepStrictEqual(await looks(''), ['#111111', '#EEEEEE'], 'a master\'s colour map makes the background dark and the text light');
+    assert.deepStrictEqual(await looks('<p:clrMapOvr><a:overrideClrMapping bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2"/></p:clrMapOvr>'), ['#EEEEEE', '#111111'], 'a layout\'s own colour map is used over its master\'s');
+    const flatSlide = (await OfficeParser.parseOffice(deck(''), { fileType: 'pptx', ignorePageGeometry: true } as any) as OfficeParserAST).content[0];
+    assert.strictEqual(collectAllNodes({ content: [flatSlide] } as any).find(n => n.type === 'text')?.formatting?.color, '#EEEEEE', 'a run\'s theme colour is read without the slide\'s geometry too');
+
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const cols = Array.from({ length: 2000 }, (_, i) => `<col min="${2 * i + 2}" max="${2 * i + 2}" hidden="1"/>`).join('');
+    const xlsx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+        'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><cols>${cols}</cols><sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c><c r="C1"><v>3</v></c><c r="ZZ1"><v>4</v></c></row></sheetData>`
+            + '<customSheetViews><customSheetView guid="{00000000-0000-0000-0000-000000000000}"><pageMargins left="2" right="2" top="2" bottom="2" header="1" footer="1"/><pageSetup paperSize="5" orientation="landscape"/></customSheetView></customSheetViews>'
+            + '<pageMargins left="0.5" right="0.5" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><pageSetup paperSize="9"/></worksheet>'),
+    }));
+    const book = await OfficeParser.parseOffice(xlsx, { fileType: 'xlsx' } as any) as OfficeParserAST;
+    assert.deepStrictEqual([(book.content[0].metadata as any).pageSetup.width, (book.content[0].metadata as any).pageSetup.margin.left], [595.28, 36], 'the sheet\'s print setup is its own, not a custom view\'s');
+    const cells = collectAllNodes(book).filter(n => n.type === 'cell');
+    assert.deepStrictEqual(cells.map(c => [c.text, (c.metadata as any).hidden]), [['1', undefined], ['2', true], ['3', undefined], ['4', true]], 'hidden columns are found among many ranges');
+
+    const html = `<html><head><style>.a { color: red !important; color: blue; background: #ff0 url(data:image/png;base64,${'A'.repeat(4000)}) no-repeat; content: "x" }
+        p.b { text-align: center }  #c   >   span { font-weight: bold }</style></head>
+        <body><p class="a" style="color: green">Red</p><p class="a b" style="color: green !important">Green</p><div id="c"><span>Bold</span></div></body></html>`;
+    const styled = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' } as any) as OfficeParserAST;
+    const runs = styled.content.map(n => n.children![0].formatting);
+    assert.deepStrictEqual([runs[0]?.color, runs[0]?.backgroundColor, runs[1]?.color, (styled.content[1].metadata as any)?.alignment, runs[2]?.bold], ['red', '#ff0', 'green', 'center', true],
+        'an !important rule wins over the element\'s style, and the element\'s own !important over it');
+
+    const csv = async (text: string) => collectAllNodes(await OfficeParser.parseOffice(Buffer.from(text), { fileType: 'csv' } as any) as OfficeParserAST).filter(n => n.type === 'cell').map(c => c.text);
+    assert.deepStrictEqual(await csv('Müller;1,5\nSchmidt;2,25\n'), ['Müller', '1,5', 'Schmidt', '2,25'], 'a CSV of `;` and decimal commas is read with `;`');
+    assert.deepStrictEqual(await csv('a,b\nc,d\n'), ['a', 'b', 'c', 'd'], 'a comma CSV is read with `,`');
+}
+
 async function testNativePdfFurnitureLimits(): Promise<void> {
     const t = (text: string, more: any = {}) => ({ type: 'text', text, ...more });
     const p = (...children: any[]) => ({ type: 'paragraph', children });
@@ -6955,6 +7048,7 @@ async function runTests(): Promise<void> {
         ['Native PDF inline pictures', testNativePdfInlinePictures],
         ['Slides drawn as laid out', testSlidesDrawnAsLaidOut],
         ['Native PDF furniture limits', testNativePdfFurnitureLimits],
+        ['Formats read as they show', testFormatsReadAsTheyShow],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

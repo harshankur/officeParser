@@ -12,7 +12,7 @@ import { appendAll } from '../utils/nodeListUtils.js';
 import { textDecoder } from '../utils/encodingUtils.js';
 import { lengthToPt } from '../utils/officeGenUtils.js';
 import { cssColorHex } from '../utils/colorUtils.js';
-import { declarationsFor, isEmptyStylesheet, readStylesheet } from '../utils/cssRules.js';
+import { declarationsFor, isEmptyStylesheet, readDeclarations, readStylesheet, writeDeclarations } from '../utils/cssRules.js';
 import { cssListStyle, formatListNumber, NumberFormat } from '../utils/listMarkers.js';
 
 /**
@@ -1055,10 +1055,14 @@ const applyDocumentStylesheet = (root: HtmlNode): void => {
     const sheet = readStylesheet(texts);
     if (isEmptyStylesheet(sheet)) return;
     for (const element of elements) {
-        const declarations = declarationsFor(sheet, element);
-        if (!declarations) continue;
+        const { normal, important } = declarationsFor(sheet, element);
+        if (!normal && !important) continue;
+        // The stylesheet's, then the element's own, then the stylesheet's `!important` ones, then the
+        // element's own `!important` ones: each later one wins, as in a browser.
         const own = element.attributes?.style;
-        element.attributes = { ...element.attributes, style: own ? `${declarations}; ${own}` : declarations };
+        const ownImportant = own && important ? writeDeclarations(readDeclarations(own).important) : '';
+        const style = [normal, own, important, ownImportant].filter(Boolean).join('; ');
+        element.attributes = { ...element.attributes, style };
     }
 };
 

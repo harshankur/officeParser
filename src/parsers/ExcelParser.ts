@@ -34,6 +34,7 @@ import { chargeRawContent, decodeXmlEntities, getChildElements, getElementsByTag
 import { MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
 import { BUILTIN_NUMBER_FORMATS, excelShownText } from '../utils/excelFormat.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
+import { inRanges } from '../utils/sheetUtils.js';
 
 /** Whether the character at `at` of `xml` can continue a tag name (so `<c` there opens `<col`, not `<c`). */
 const continuesName = (xml: string, at: number): boolean => /[\w:.-]/.test(xml[at] ?? '');
@@ -136,6 +137,12 @@ const PAPER_SIZES: Record<string, [number, number]> = {
  * sheet that sets neither.
  */
 function sheetPageSetup(sheetXml: string): PageSetup | undefined {
+    // A custom view's own print setup (`customSheetViews`) is no part of the sheet's.
+    const views = sheetXml.indexOf('<customSheetViews');
+    if (views >= 0) {
+        const close = sheetXml.indexOf('</customSheetViews>', views);
+        sheetXml = sheetXml.slice(0, views) + (close >= 0 ? sheetXml.slice(close + '</customSheetViews>'.length) : '');
+    }
     const setup = /<pageSetup\b[^>]*>/.exec(sheetXml)?.[0];
     const margins = /<pageMargins\b[^>]*>/.exec(sheetXml)?.[0];
     if (!setup && !margins) return undefined;
@@ -835,7 +842,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             const hiddenColumns = hiddenColumnRanges(sheetXml);
             // Merged ranges, as the spans of their first cells: a merged title was one narrow cell.
             const merged = mergeSpans(sheetXml);
-            const columnHidden = (col: number) => hiddenColumns.some(([first, last]) => col >= first && col <= last);
+            const columnHidden = inRanges(hiddenColumns);
 
             /** Helper to convert Excel column string (A, B, AA, etc.) to 0-based index */
             const colToNumber = (col: string): number => {

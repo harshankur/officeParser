@@ -107,7 +107,8 @@ export function rgbOf(color: Element | undefined, theme: Map<string, string>): s
     const val = color.getAttribute('val') || '';
     switch (color.tagName) {
         case 'a:srgbClr': hex = val; break;
-        case 'a:schemeClr': hex = theme.get(SCHEME_NAMES[val] ?? val); break;
+        // (`bg1` and the like as a colour map maps them, where one is read; else as the default one does.)
+        case 'a:schemeClr': hex = theme.get(val) ?? theme.get(SCHEME_NAMES[val] ?? val); break;
         case 'a:sysClr': hex = color.getAttribute('lastClr') || (val === 'window' ? 'FFFFFF' : val === 'windowText' ? '000000' : undefined); break;
         case 'a:prstClr': hex = PRESET_COLORS[val]; break;
         case 'a:scrgbClr': {

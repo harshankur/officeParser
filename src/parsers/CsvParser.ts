@@ -128,13 +128,16 @@ const SNIFF_CHARACTERS = 64 * 1024;
  * The delimiter a CSV file is written with, as LibreOffice and Python's csv.Sniffer find it: of `,`, `;`,
  * tab and `|`, counted outside quotes in each of the first records, the one that splits the most records
  * into the same number of fields (more than one). German, French and other European spreadsheets write
- * `;` with decimal commas: read with `,`, `Müller;1.234,56` split the number. A comma when none does.
+ * `;` with decimal commas: read with `,`, `Müller;1.234,56` split the number. A tie between `,` and `;`
+ * goes to `;` where every comma is between two digits (`a;1,5`), a decimal comma. A comma when none does.
  */
 export function sniffDelimiter(text: string): string {
     const counts = CANDIDATE_DELIMITERS.map(() => [] as number[]);
     let current = CANDIDATE_DELIMITERS.map(() => 0);
     let inQuotes = false;
     let records = 0;
+    // Whether every comma outside quotes is between two digits, as a decimal comma is.
+    let decimalCommas = true;
     const end = Math.min(text.length, SNIFF_CHARACTERS);
     const finishRecord = () => {
         if (current.some(n => n > 0)) current.forEach((n, i) => counts[i].push(n));
@@ -148,15 +151,17 @@ export function sniffDelimiter(text: string): string {
         if (ch === '\n') { finishRecord(); continue; }
         const at = CANDIDATE_DELIMITERS.indexOf(ch as typeof CANDIDATE_DELIMITERS[number]);
         if (at >= 0) current[at]++;
+        if (ch === ',' && !(/\d/.test(text[i - 1] ?? '') && /\d/.test(text[i + 1] ?? ''))) decimalCommas = false;
     }
     if (records < SNIFF_RECORDS && !inQuotes) finishRecord();
     let best = 0, bestScore = 0;
-    counts.forEach((perRecord, i) => {
+    const scores = counts.map(perRecord => {
         // The records that split into the most common number of fields, when that number is above one.
         const tally = new Map<number, number>();
         for (const n of perRecord) if (n > 0) tally.set(n, (tally.get(n) ?? 0) + 1);
-        const score = Math.max(0, ...tally.values());
-        if (score > bestScore) { best = i; bestScore = score; }
+        return Math.max(0, ...tally.values());
     });
+    scores.forEach((score, i) => { if (score > bestScore) { best = i; bestScore = score; } });
+    if (best === 0 && bestScore > 0 && scores[1] === bestScore && decimalCommas) return ';';
     return CANDIDATE_DELIMITERS[best];
 }

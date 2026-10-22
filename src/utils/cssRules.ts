@@ -4,8 +4,10 @@
  * styled by classes lost all of it. Selectors are compounds of a type, classes and an id (`.note`,
  * `td.total`, `#title`, `.box td`), joined by descendant and child combinators, and name a class or an
  * id somewhere: a rule for every element of a type is the page's theme. A rule with any other selector
- * (attributes, pseudo-classes, siblings) is passed over, as are at-rules. Everything is bounded: a
- * stylesheet's size, its rules, a selector's parts and the rules any one element takes.
+ * (attributes, pseudo-classes, siblings) is passed over, as are at-rules. Only the properties reading
+ * looks at are kept, each once a rule, and an `!important` one wins over an element's own `style`.
+ * Everything is bounded: a stylesheet's size, its rules, a selector's parts, a value's length and the
+ * rules any one element takes.
  */
 
 /** At most this much stylesheet text is read. */
@@ -18,6 +20,75 @@ const MAX_COMPOUNDS = 4;
 const MAX_CANDIDATES = 32;
 /** At most this many ancestors are looked through for a descendant combinator's compound. */
 const MAX_ANCESTORS = 16;
+/** At most this long a value is kept (a `url()`'s address is left out of it first). */
+const MAX_VALUE_LENGTH = 256;
+
+/** The properties reading looks at (and their `-webkit-` and other vendors' names). */
+const READ_PROPERTIES = new Set([
+    'color', 'background', 'background-color', 'font-family', 'font-size', 'font-style', 'font-weight',
+    'text-align', 'text-decoration', 'text-decoration-line', 'margin', 'margin-top', 'margin-bottom',
+    'margin-left', 'margin-right', 'line-height', 'width', 'list-style', 'list-style-type',
+]);
+
+/** A rule's declarations as kept: the properties read, the last of each, in two by `!important`. */
+export interface Declarations { normal: Map<string, string>; important: Map<string, string> }
+
+/** Splits declarations at `;` outside quotes and parentheses. */
+function splitDeclarations(text: string): string[] {
+    const out: string[] = [];
+    let depth = 0, quote = '', start = 0;
+    for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (quote) { if (c === quote) quote = ''; }
+        else if (c === '"' || c === "'") quote = c;
+        else if (c === '(') depth++;
+        else if (c === ')') { if (depth) depth--; }
+        else if (c === ';' && !depth) { out.push(text.slice(start, i)); start = i + 1; }
+    }
+    out.push(text.slice(start));
+    return out;
+}
+
+/** A value with each `url(...)`'s address left out (`url()`): a picture's data is no colour or size. */
+function withoutAddresses(value: string): string {
+    const lower = value.toLowerCase();
+    let out = '', at = 0;
+    for (let open = lower.indexOf('url(', at); open >= 0; open = lower.indexOf('url(', at)) {
+        const close = value.indexOf(')', open + 4);
+        out += value.slice(at, open) + 'url()';
+        at = close < 0 ? value.length : close + 1;
+    }
+    return out + value.slice(at);
+}
+
+/** The declarations of a rule's body (or a `style`) reading looks at, the last of each, by `!important`. */
+export function readDeclarations(text: string): Declarations {
+    const kept: Declarations = { normal: new Map(), important: new Map() };
+    for (const declaration of splitDeclarations(text)) {
+        const colon = declaration.indexOf(':');
+        if (colon < 0) continue;
+        const property = declaration.slice(0, colon).trim().toLowerCase();
+        if (!READ_PROPERTIES.has(property.replace(/^-(?:webkit|moz|ms|o)-/, ''))) continue;
+        let value = withoutAddresses(declaration.slice(colon + 1)).trim();
+        // A trailing `!important`, found from the end.
+        let important = false;
+        if (value.toLowerCase().endsWith('important')) {
+            let bang = value.length - 'important'.length;
+            while (bang > 0 && /\s/.test(value[bang - 1])) bang--;
+            if (value[bang - 1] === '!') { value = value.slice(0, bang - 1).trim(); important = true; }
+        }
+        if (!value || value.length > MAX_VALUE_LENGTH) continue;
+        // (A later normal one does not undo an `!important` one.)
+        if (important) { kept.important.set(property, value); kept.normal.delete(property); }
+        else if (!kept.important.has(property)) kept.normal.set(property, value);
+    }
+    return kept;
+}
+
+/** Declarations written as a `style`. */
+export function writeDeclarations(declarations: Map<string, string>): string {
+    return [...declarations].map(([property, value]) => `${property}: ${value}`).join('; ');
+}
 
 /** One compound selector: a type (or any), classes and an id, all of which an element must have. */
 interface Compound { tag?: string; classes: string[]; id?: string }
@@ -29,7 +100,7 @@ interface Selector {
     combinators: ('descendant' | 'child')[];
     specificity: number;
     order: number;
-    declarations: string;
+    declarations: Declarations;
 }
 
 /** A stylesheet's selectors, indexed by what their rightmost compound needs most. */
@@ -62,8 +133,9 @@ function readCompound(text: string): Compound | undefined {
     return compound;
 }
 
-function readSelector(text: string, declarations: string, order: number): Selector | undefined {
-    const tokens = text.trim().replace(/\s*>\s*/g, ' > ').split(/\s+/).filter(Boolean);
+function readSelector(text: string, declarations: Declarations, order: number): Selector | undefined {
+    // (Whitespace collapsed first: `\s*>\s*` over a long run of spaces is tried at each of them.)
+    const tokens = text.replace(/\s+/g, ' ').replace(/ ?> ?/g, ' > ').split(' ').filter(Boolean);
     const compounds: Compound[] = [];
     const combinators: ('descendant' | 'child')[] = [];
     let pending: 'descendant' | 'child' | undefined;
@@ -105,8 +177,10 @@ export function readStylesheet(texts: string[]): Stylesheet {
         const body = css.slice(open + 1, end - 1);
         at = end;
         if (!prelude || prelude.startsWith('@') || body.includes('{')) continue;
+        const declarations = readDeclarations(body);
+        if (!declarations.normal.size && !declarations.important.size) continue;
         for (const text of prelude.split(',')) {
-            const selector = readSelector(text, body, count);
+            const selector = readSelector(text, declarations, count);
             if (!selector) continue;
             count++;
             const right = selector.compounds[0];
@@ -165,10 +239,11 @@ function matches(element: StyledElement, selector: Selector): boolean {
 }
 
 /**
- * The declarations the stylesheet gives an element, in the order a browser applies them (least specific
- * first, then in document order), to stand before its own `style`, which comes after and so wins.
+ * The declarations the stylesheet gives an element, as a browser applies them (least specific first,
+ * then in document order, the last of each property kept): the normal ones, to stand before its own
+ * `style`, which comes after and so wins, and the `!important` ones, to stand after it.
  */
-export function declarationsFor(sheet: Stylesheet, element: StyledElement): string {
+export function declarationsFor(sheet: Stylesheet, element: StyledElement): { normal: string; important: string } {
     const candidates: Selector[] = [];
     const add = (list: Selector[] | undefined) => { if (list) for (const s of list) { if (candidates.length >= MAX_CANDIDATES) return; candidates.push(s); } };
     const id = element.attributes?.id;
@@ -177,7 +252,12 @@ export function declarationsFor(sheet: Stylesheet, element: StyledElement): stri
     if (element.tagName) add(sheet.byTag.get(element.tagName.toLowerCase()));
     add(sheet.any);
     const matched = [...new Set(candidates)].filter(s => matches(element, s));
-    if (!matched.length) return '';
+    if (!matched.length) return { normal: '', important: '' };
     matched.sort((a, b) => a.specificity - b.specificity || a.order - b.order);
-    return matched.map(s => s.declarations.trim()).filter(Boolean).join('; ');
+    const normal = new Map<string, string>(), important = new Map<string, string>();
+    for (const s of matched) {
+        for (const [property, value] of s.declarations.normal) { normal.delete(property); normal.set(property, value); }
+        for (const [property, value] of s.declarations.important) { important.delete(property); important.set(property, value); }
+    }
+    return { normal: writeDeclarations(normal), important: writeDeclarations(important) };
 }
