@@ -341,16 +341,21 @@ class NativeLayout {
     private onPagesOf(setup: PageSetup | undefined, always: boolean, orDocument = false): void {
         const before = { w: this.pageW, h: this.pageH, margin: this.margin };
         const pages = setup ?? (orDocument ? this.ast.metadata?.pageSetup : undefined);
-        if (this.sectionPage && (setup || orDocument)) {
-            const page = this.sectionPage(pages);
-            this.pageW = page.w; this.pageH = page.h; this.margin = page.margin;
-            this.headerDistance = pages?.headerDistance;
-            this.footerDistance = pages?.footerDistance;
-        }
-        const changed = before.w !== this.pageW || before.h !== this.pageH || JSON.stringify(before.margin) !== JSON.stringify(this.margin);
+        const next = this.sectionPage && (setup || orDocument) ? this.sectionPage(pages) : undefined;
+        const fit = next ? this.withFurnitureRoom(next.margin, pages?.headerDistance, pages?.footerDistance) : undefined;
+        const nextMargin = fit ? fit.margin : before.margin;
+        const changed = !!next && (before.w !== next.w || before.h !== next.h || JSON.stringify(before.margin) !== JSON.stringify(nextMargin));
         if (!always && !changed) return;
         const record = this.pageRecords[this.pageRecords.length - 1];
-        if (record && record.page === this.page && this.y <= before.margin.top + 0.5 && !this.pageFootnotes.length) {
+        const reuse = !!record && record.page === this.page && this.y <= before.margin.top + 0.5 && !this.pageFootnotes.length;
+        // The page that ends draws its footnotes in its own margins, before the next pages' take over.
+        if (!reuse) this.drawPageFootnotes();
+        if (next && fit) {
+            this.pageW = next.w; this.pageH = next.h; this.margin = nextMargin;
+            this.headerDistance = fit.headerDistance;
+            this.footerDistance = fit.footerDistance;
+        }
+        if (reuse) {
             this.page.setSize(this.pageW, this.pageH);
             Object.assign(record, { section: this.section, firstOfSection: record.firstOfSection || this.startingSection, w: this.pageW, h: this.pageH, margin: { ...this.margin }, headerDistance: this.headerDistance, footerDistance: this.footerDistance, differentFirstPage: this.differentFirstPage });
             this.startingSection = false;
@@ -383,6 +388,9 @@ class NativeLayout {
     private async drawSlide(node: OfficeContentNode): Promise<void> {
         const meta = node.metadata as SlideMetadata | undefined;
         const children = node.children || [];
+        // On a page of its own (after other content too), the slide's anchors at its top.
+        if (this.y > this.margin.top + 0.5) this.newPage();
+        if (this.pendingAnchors.length) this.placeAnchors();
         // The slide's size (the presentation's page), and its place on this page.
         const slideW = this.ast.metadata?.pageSetup?.width || this.pageW, slideH = this.ast.metadata?.pageSetup?.height || this.pageH;
         const scale = Math.min(this.pageW / slideW, this.pageH / slideH);
@@ -413,7 +421,8 @@ class NativeLayout {
                 } else if (child.type === 'table' || child.type === 'chart') {
                     this.margin = { top: box.y, left: box.x, right: this.pageW - box.x - box.width, bottom: 0 };
                     this.y = box.y;
-                    await this.render(child);
+                    this.chartRoom = child.type === 'chart' ? box.height : undefined;
+                    try { await this.render(child); } finally { this.chartRoom = undefined; }
                 } else {
                     const text: OfficeContentNode[] = [child];
                     while (i + 1 < children.length && children[i + 1].type !== 'drawing' && sameBox(children[i + 1].bounds, child.bounds)) text.push(children[++i]);
@@ -509,15 +518,60 @@ class NativeLayout {
      * first page's where it has one, and its even pages' where it has those. They were drawn once,
      * headers before the body and footers after it, each section's and each kind's all together.
      */
-    async drawRunningContent(): Promise<void> {
-        const furniture = (nodes: OfficeContentNode[] | undefined, kind: 'header' | 'footer') => {
-            const wrapped = (nodes || []).filter(n => n.type === kind);
-            const loose = (nodes || []).filter(n => n.type !== kind);
-            // Loose blocks (a reader that gives one list) are one header or footer for every page.
-            if (loose.length) wrapped.push({ type: kind, children: loose, metadata: { type: 'default' } } as OfficeContentNode);
-            return wrapped.filter(n => !(n.metadata as HeaderFooterMetadata | undefined)?.hidden);
+    /** The headers or footers drawn on pages: shown ones, loose blocks (a reader giving one list) as one. */
+    private furnitureNodes(kind: 'header' | 'footer'): OfficeContentNode[] {
+        const nodes = kind === 'header' ? this.ast.auxiliary?.headers : this.ast.auxiliary?.footers;
+        const wrapped = (nodes || []).filter(n => n.type === kind);
+        const loose = (nodes || []).filter(n => n.type !== kind);
+        if (loose.length) wrapped.push({ type: kind, children: loose, metadata: { type: 'default' } } as OfficeContentNode);
+        return wrapped.filter(n => !(n.metadata as HeaderFooterMetadata | undefined)?.hidden);
+    }
+
+    /** The tallest header's and footer's heights (see fitRunningContent). */
+    private headerRoom = 0;
+    private footerRoom = 0;
+
+    /**
+     * Margins with room for the headers and footers below and above the body, as a word processor makes
+     * it, and the distances they are drawn at (a third of the margin where the document gives none).
+     */
+    private withFurnitureRoom(margin: { top: number; right: number; bottom: number; left: number }, headerDistance: number | undefined, footerDistance: number | undefined) {
+        const header = headerDistance || Math.max(12, margin.top / 3), footer = footerDistance || Math.max(12, margin.bottom / 3);
+        return {
+            margin: {
+                ...margin,
+                top: this.headerRoom ? Math.max(margin.top, header + this.headerRoom + 4) : margin.top,
+                bottom: this.footerRoom ? Math.max(margin.bottom, footer + this.footerRoom + 4) : margin.bottom,
+            },
+            headerDistance: this.headerRoom ? header : headerDistance,
+            footerDistance: this.footerRoom ? footer : footerDistance,
         };
-        const headers = furniture(this.ast.auxiliary?.headers, 'header'), footers = furniture(this.ast.auxiliary?.footers, 'footer');
+    }
+
+    /**
+     * Measures the headers and footers before the body is laid out, and keeps the body clear of them: a
+     * header taller than the top margin ran into the body, and a footer taller than the bottom one off
+     * the page.
+     */
+    async fitRunningContent(): Promise<void> {
+        for (const kind of ['header', 'footer'] as const) {
+            let tallest = 0;
+            for (const node of this.furnitureNodes(kind)) tallest = Math.max(tallest, await this.measured(async () => { await this.render(node); }));
+            if (kind === 'header') this.headerRoom = Math.min(tallest, this.pageH / 3); else this.footerRoom = Math.min(tallest, this.pageH / 3);
+        }
+        if (!this.headerRoom && !this.footerRoom) return;
+        const before = this.margin.top;
+        const fit = this.withFurnitureRoom(this.margin, this.headerDistance, this.footerDistance);
+        this.margin = fit.margin;
+        this.headerDistance = fit.headerDistance;
+        this.footerDistance = fit.footerDistance;
+        if (this.y <= before + 0.5) this.y = this.margin.top;
+        const record = this.pageRecords[this.pageRecords.length - 1];
+        if (record) Object.assign(record, { margin: { ...this.margin }, headerDistance: this.headerDistance, footerDistance: this.footerDistance });
+    }
+
+    async drawRunningContent(): Promise<void> {
+        const headers = this.furnitureNodes('header'), footers = this.furnitureNodes('footer');
         if (!headers.length && !footers.length) return;
         const pick = (list: OfficeContentNode[], section: number, type: string): OfficeContentNode | undefined => {
             let best: OfficeContentNode | undefined, bestSection = -2;
@@ -543,6 +597,9 @@ class NativeLayout {
         const saved = { page: this.page, y: this.y, w: this.pageW, h: this.pageH, margin: this.margin };
         this.fieldPages = this.pageRecords.length;
         this.fixedPage = true;
+        this.furniture = true;
+        // Each footer's height at each page width, measured once (a page number's own width aside).
+        const footerHeights = new Map<OfficeContentNode, Map<number, number>>();
         try {
             for (const [index, record] of this.pageRecords.entries()) {
                 this.fieldPage = index + 1;
@@ -555,7 +612,10 @@ class NativeLayout {
                 }
                 if (footer) {
                     // Measured first, on a page made for it and taken away: it ends at its distance from the bottom.
-                    const height = await this.measured(async () => { await this.render(footer); });
+                    let heights = footerHeights.get(footer);
+                    if (!heights) footerHeights.set(footer, heights = new Map());
+                    let height = heights.get(record.w);
+                    if (height === undefined) heights.set(record.w, height = await this.measured(async () => { await this.render(footer); }));
                     this.page = record.page;
                     // Ending at its distance from the bottom, but never above the body's margin, where the
                     // page's last lines and footnotes are (its height counts the space after its paragraphs).
@@ -565,6 +625,7 @@ class NativeLayout {
             }
         } finally {
             this.fixedPage = false;
+            this.furniture = false;
             this.fieldPage = this.fieldPages = undefined;
             Object.assign(this, { page: saved.page, y: saved.y, pageW: saved.w, pageH: saved.h, margin: saved.margin });
         }
@@ -575,18 +636,28 @@ class NativeLayout {
      * behind (links, anchors, characters counted as lost) taken back.
      */
     private async measured(draw: () => Promise<void> | void): Promise<number> {
-        const saved = { page: this.page, y: this.y, fixed: this.fixedPage, links: this.linkBoxes.length, lost: this.lostCharacters, sample: this.lostSample.length, pending: [...this.pendingAnchors], outline: this.outlineEntries.length };
+        const saved = { page: this.page, y: this.y, fixed: this.fixedPage, furniture: this.furniture, links: this.linkBoxes.length, lost: this.lostCharacters, sample: this.lostSample.length, pending: [...this.pendingAnchors], outline: this.outlineEntries.length };
         const pagesBefore = this.pdf.getPageCount();
         this.fixedPage = true;
+        this.furniture = true;
         try {
             this.page = this.pdf.addPage([this.pageW, this.pageH]);
             this.y = 0;
             await draw();
             return this.y;
         } finally {
-            const scratch = new Set(this.pdf.getPages().slice(pagesBefore));
+            // The page made for it, and what was drawn on it, taken out of the file: removed from the
+            // page list alone, its objects were still written (a footer's on every page doubled the file).
+            const context = this.pdf.context;
+            for (const page of this.pdf.getPages().slice(pagesBefore)) {
+                const contents = page.node.get(this.lib.PDFName.of('Contents'));
+                const refs = contents instanceof this.lib.PDFArray ? contents.asArray() : contents ? [contents] : [];
+                for (const ref of refs) if (ref instanceof this.lib.PDFRef) context.delete(ref);
+            }
+            const scratch = this.pdf.getPages().slice(pagesBefore).map((page: any) => page.ref);
             while (this.pdf.getPageCount() > pagesBefore) this.pdf.removePage(this.pdf.getPageCount() - 1);
-            for (const [id, at] of [...this.anchors]) if (scratch.has(at.page)) this.anchors.delete(id);
+            for (const ref of scratch) context.delete(ref);
+            this.furniture = saved.furniture;
             this.fixedPage = saved.fixed;
             this.page = saved.page;
             this.y = saved.y;
@@ -607,13 +678,21 @@ class NativeLayout {
 
     /** Notes a node's anchor ids, placed where the next thing drawn is (see placeAnchors). */
     private markAnchors(node: OfficeContentNode): void {
-        if (this.config.ignoreInternalLinks) return;
+        // What is measured, or drawn on every page (a header), holds no place a link goes to.
+        if (this.config.ignoreInternalLinks || this.furniture) return;
         const ids = (node.metadata as { anchorIds?: unknown } | undefined)?.anchorIds;
         if (Array.isArray(ids)) for (const id of ids) if (typeof id === 'string' && id && !this.anchors.has(id)) this.pendingAnchors.push(id);
     }
 
+    /** Notes the anchor ids of a node and of what it holds (a note's, read before its page is known). */
+    private markTreeAnchors(node: OfficeContentNode, depth = 0): void {
+        this.markAnchors(node);
+        if (depth < 32) for (const child of node.children || []) this.markTreeAnchors(child, depth + 1);
+    }
+
     /** Places the anchors met so far at the cursor: called once the page the next thing goes on is known. */
-    private placeAnchors(): void {
+    placeAnchors(): void {
+        if (this.furniture) return;
         for (const id of this.pendingAnchors) if (!this.anchors.has(id)) this.anchors.set(id, { page: this.page, top: this.pageH - this.y });
         this.pendingAnchors = [];
     }
@@ -693,6 +772,8 @@ class NativeLayout {
     private readonly placedNotes = new Set<OfficeContentNode>();
     /** Set while footnotes are measured or drawn: no page is started, and no footnote placed. */
     private fixedPage = false;
+    /** Set while something is measured, or a header or footer drawn: no anchor or outline entry is made. */
+    private furniture = false;
     /** The rule over a page's footnotes and the space around it. */
     private static readonly FOOTNOTE_RULE = 12;
 
@@ -708,11 +789,26 @@ class NativeLayout {
      */
     async measureFootnotes(): Promise<void> {
         const notes = this.collectedNotes.filter(n => (n.metadata as { noteType?: string } | undefined)?.noteType !== 'endnote' && this.noteLabels.has(n));
+        if (!notes.length) return;
+        // At the narrowest text any section or sheet has, so a note never takes more room than is kept.
+        let width = this.contentWidth;
+        if (this.sectionPage) {
+            for (const node of this.ast.content) {
+                const setup = node.type === 'break' ? (node.metadata as BreakMetadata | undefined)?.pageSetup : node.type === 'sheet' ? (node.metadata as SheetMetadata | undefined)?.pageSetup : undefined;
+                if (!setup) continue;
+                const page = this.sectionPage(setup);
+                width = Math.min(width, Math.max(36, page.w - page.margin.left - page.margin.right));
+            }
+        }
         for (const note of notes) {
-            const runs = [{ text: `${this.noteLabels.get(note)} `, fmt: { size: '9pt', superscript: true } } as Run,
-                ...(await this.collectRuns(note)).map(r => ({ ...r, fmt: { ...r.fmt, size: '9pt' } }))];
+            let runs: Run[] = [];
+            const height = await this.measured(async () => {
+                runs = [{ text: `${this.noteLabels.get(note)} `, fmt: { size: '9pt', superscript: true } } as Run,
+                    ...(await this.collectRuns(note)).map(r => ({ ...r, fmt: { ...r.fmt, size: '9pt' } }))];
+                this.drawRuns(runs, this.margin.left, width);
+            });
             this.footnoteRuns.set(note, runs);
-            this.footnoteHeights.set(note, await this.measured(() => this.drawRuns(runs, this.margin.left, this.contentWidth)) + 2);
+            this.footnoteHeights.set(note, height + 2);
         }
     }
 
@@ -722,9 +818,13 @@ class NativeLayout {
      */
     private reserveFootnote(note: OfficeContentNode, fresh = false): void {
         const height = this.footnoteHeights.get(note);
-        if (height === undefined || height > (this.pageH - this.margin.top - this.margin.bottom) / 2) return;
+        const body = this.pageH - this.margin.top - this.margin.bottom;
+        if (height === undefined || height > body / 2) return;
         const needed = height + (this.pageFootnotes.length ? 0 : NativeLayout.FOOTNOTE_RULE);
-        if (!fresh && this.y + needed > this.bottom) { this.carriedFootnotes.push(note); this.placedNotes.add(note); return; }
+        // No more than most of a page's body for its footnotes; past that (or past what is left below the
+        // line citing it) a note goes to the next page, and from there on, as long as pages are full.
+        const full = this.footReserve + needed > body * 0.6;
+        if (full || (!fresh && this.y + needed > this.bottom)) { this.carriedFootnotes.push(note); this.placedNotes.add(note); return; }
         this.footReserve += needed;
         this.pageFootnotes.push(note);
         this.placedNotes.add(note);
@@ -749,6 +849,8 @@ class NativeLayout {
             this.page.drawLine({ start: { x: this.margin.left, y: yy }, end: { x: this.margin.left + Math.min(180, this.contentWidth), y: yy }, thickness: 0.5, color: this.lib.rgb(0.7, 0.7, 0.7) });
             this.y += NativeLayout.FOOTNOTE_RULE / 2;
             for (const note of notes) {
+                // The anchors in the note (its runs were read before the pages were known) are here.
+                this.markTreeAnchors(note);
                 this.drawRuns(this.footnoteRuns.get(note)!, this.margin.left, this.contentWidth);
                 this.y += 2;
             }
@@ -913,8 +1015,9 @@ class NativeLayout {
         const walk = async (n: OfficeContentNode, inherited: TextFormatting, inheritedLink: string | undefined, isRoot: boolean): Promise<void> => {
             let text = n.text;
             let override: string | false | void = undefined;
-            // A picture drawn in its cell, or a chart after its table, is no text of the cell's (see table).
-            if (!isRoot && this.drawnApart.has(n)) return;
+            // A picture drawn in its cell, or a chart after its table, is no text of the cell's (see table),
+            // but for a picture's recognized text where that is drawn too.
+            if (!isRoot && this.drawnApart.has(n)) { const ocr = this.ocrBesidePicture(n); if (ocr) out.push({ text: ocr, fmt: inherited }); return; }
             if (!isRoot) {
                 override = await this.onNodeValue(n);
                 if (override === false) return;
@@ -989,15 +1092,15 @@ class NativeLayout {
                 if (override === false) continue;
                 let t: string;
                 if (typeof override === 'string') t = override;
-                else if (this.drawnApart.has(c)) t = '';
+                else if (this.drawnApart.has(c)) t = this.ocrBesidePicture(c);
                 else if (c.type === 'image') t = this.cellImageText(c);
-                else t = (await this.collectRuns(c)).map(r => r.text).join('').replace(/\f/g, '\n');
+                else t = (await this.collectRuns(c)).map(r => r.note ? this.raisedLabel(r.text) : r.text).join('').replace(/\f/g, '\n');
                 if (t !== '') lines.push(t);
             }
             if (lines.length) return lines.join('\n');
         }
         // A page break inside a cell is a line break there: a cell cannot start a page.
-        const flat = (await this.collectRuns(node)).map(r => r.text).join('').replace(/\f/g, '\n');
+        const flat = (await this.collectRuns(node)).map(r => r.note ? this.raisedLabel(r.text) : r.text).join('').replace(/\f/g, '\n');
         return flat || node.text || '';
     }
 
@@ -1024,6 +1127,32 @@ class NativeLayout {
      * the table (a chart in a sheet's cell printed as its data's text, in the cell).
      */
     private drawnApart = new Set<OfficeContentNode>();
+
+    /** A picture's recognized text, where the image mode draws it beside the picture ('image+ocr-text'). */
+    private ocrBesidePicture(node: OfficeContentNode): string {
+        return node.type === 'image' && this.imageMode === 'image+ocr-text' ? (node.text || '').trim() : '';
+    }
+
+    /**
+     * A footnote's number in a cell's text, where formatting is not drawn: in superscript digits the font
+     * has, else in brackets. It was glued to the text as plain digits ("100" and note 1 read "1001").
+     */
+    private raisedLabel(label: string): string {
+        const raised = [...label].map(ch => '⁰¹²³⁴⁵⁶⁷⁸⁹'[Number(ch)] ?? '').join('');
+        return raised.length === [...label].length && [...raised].every(ch => this.fonts.regular.some(face => face.covers(ch.codePointAt(0)!))) ? raised : `[${label}]`;
+    }
+
+    /** The footnotes a table cell's text cites (they are drawn at the page's foot when its row is drawn). */
+    private notesCitedIn(cell: OfficeContentNode): OfficeContentNode[] {
+        const found: OfficeContentNode[] = [];
+        const walk = (n: OfficeContentNode, depth: number) => {
+            if (depth > 16 || found.length > 64) return;
+            for (const note of n.notes || []) if (this.noteLabels.has(note) && !found.includes(note)) found.push(note);
+            for (const child of n.children || []) if (child.type !== 'table') walk(child, depth + 1);
+        };
+        walk(cell, 0);
+        return found;
+    }
 
     /** A cell's charts (its own and its blocks'), drawn after its table. */
     private chartsIn(cell: OfficeContentNode): OfficeContentNode[] {
@@ -1149,7 +1278,8 @@ class NativeLayout {
             const gaps = items.filter(it => !it.p).length;
             const stretch = layout.align === 'justify' && !last && gaps ? free / gaps : 0;
             const align = layout.align === 'center' || layout.align === 'right' ? layout.align : baseRtl ? 'right' : 'left';
-            let x = left + lineStart() + (align === 'center' ? free / 2 : align === 'right' ? free : 0);
+            // (A justified line fills its width: its spaces take what is free, so it starts at the left.)
+            let x = left + lineStart() + (stretch ? 0 : align === 'center' ? free / 2 : align === 'right' ? free : 0);
             // Backgrounds first, under the words: a word's and the gap after it, where the next word has
             // the same one, so a highlighted phrase is one band.
             const ordered = visualOrder(items, baseRtl);
@@ -1374,6 +1504,9 @@ class NativeLayout {
         }
     }
 
+    /** The height a chart has to be drawn in (its box on a slide), or undefined for a chart in the flow. */
+    private chartRoom?: number;
+
     /**
      * Draws a chart from its data (ChartData on its attachment) as a bar chart, as the HTML engine draws
      * one: a bar for each series at each label, a value axis with its ticks, the title, the labels and a
@@ -1392,15 +1525,19 @@ class NativeLayout {
         const values = series.flat().filter(n => !Number.isNaN(n));
         let low = Math.min(0, ...values), high = Math.max(0, ...values);
         if (low === high) high = low + 1;
-        // Ticks at a round step: 1, 2 or 5 times a power of ten, about five of them.
+        // Ticks at a round step: 1, 2 or 5 times a power of ten, about five of them. Values whose range no
+        // number holds, or too small to step through, are written as text (they crashed the conversion).
         const rough = (high - low) / 5, power = 10 ** Math.floor(Math.log10(rough));
         const step = [1, 2, 5, 10].map(m => m * power).find(t => t >= rough) ?? rough;
+        if (!(Number.isFinite(rough) && rough > 0 && Number.isFinite(step) && step > 0 && Number.isFinite(low / step) && Number.isFinite(high / step))) return false;
         low = Math.floor(low / step) * step; high = Math.ceil(high / step) * step;
         const tickText = (v: number) => this.enc(String(+v.toFixed(6)), 'regular', false);
         const ticks: number[] = [];
         for (let v = low; v <= high + step / 2 && ticks.length < 50; v += step) ticks.push(v);
         const legendRows = data.dataSets.length > 1 ? Math.ceil(data.dataSets.length / 4) : 0;
-        const titleH = data.title ? 20 : 0, labelH = 24, legendH = legendRows * 14, plotH = 180;
+        const titleH = data.title ? 20 : 0, labelH = 24, legendH = legendRows * 14;
+        // As tall as its box on a slide allows, else 180.
+        const plotH = this.chartRoom !== undefined ? Math.max(40, this.chartRoom - titleH - labelH - legendH - (data.xAxisTitle ? 14 : 0) - 10) : 180;
         const height = titleH + plotH + labelH + legendH + (data.xAxisTitle ? 14 : 0) + 10;
         this.ensureSpace(height);
         if (this.pendingAnchors.length) this.placeAnchors();
@@ -1470,7 +1607,7 @@ class NativeLayout {
         // Bold, at the level's size unless its runs have their own (a slide's title, a style's size).
         const runs = (await this.collectRuns(node)).map(r => ({ ...r, fmt: { ...r.fmt, bold: true, size: r.fmt.size ?? `${size}pt` } }));
         const title = (runs.length ? runs.map(r => r.text).join('') : node.text || '').replace(/\s+/g, ' ').trim();
-        if (title && !this.fixedPage) this.outlineEntries.push({ title, level, page: this.page, top: this.pageH - this.y });
+        if (title && !this.furniture) this.outlineEntries.push({ title, level, page: this.page, top: this.pageH - this.y });
         this.drawRuns(runs.length ? runs : [{ text: node.text || '', fmt: { bold: true, size: `${size}pt` } }], left, width, false, layout);
         this.y += this.spaceBelow(spacing?.after, size * 0.35);
     }
@@ -1493,6 +1630,8 @@ class NativeLayout {
                 this.spaceAbove(spacing?.before);
                 this.drawRuns(runs, left, width, false, layout);
                 this.y += this.spaceBelow(spacing?.after, 6);
+                // 'image+ocr-text': the pictures' recognized text after the paragraph, as after a picture of its own.
+                for (const image of images) { const ocr = this.ocrBesidePicture(image); if (ocr) await this.drawOcrText(ocr); }
                 return;
             }
         }
@@ -1816,9 +1955,10 @@ class NativeLayout {
         const border = this.lib.rgb(0.6, 0.6, 0.6);
 
         // First the cells' texts and places, then the columns' widths from them, then the rows drawn.
-        type Placed = { col: number; span: number; rowSpan: number; text: string; header: boolean; lines: string[]; fill?: string; align?: TextAlignment; ink?: string; pictures?: { img: any; w: number; h: number }[] };
+        type Placed = { col: number; span: number; rowSpan: number; text: string; header: boolean; lines: string[]; fill?: string; align?: TextAlignment; ink?: string; pictures?: { img: any; w: number; h: number }[]; notes?: OfficeContentNode[] };
         const grid: Placed[][] = [];
         const chartsAfter: OfficeContentNode[] = [];
+        const picturesAfter: { img: any; w: number; h: number }[] = [];
         // Grid occupancy: column -> rows still covered by a rowspan from above, so a spanning cell
         // reserves its column(s) below instead of letting later rows slide left under it.
         const carry = new Map<number, number>();
@@ -1889,7 +2029,8 @@ class NativeLayout {
                 // is not drawn: its box would cut through the merged one.
                 if (!text.trim() && (spanned.has(col) || (carry.get(col) || 0) > 0)) continue;
                 const header = rowIsHeader || meta?.style === 'header';
-                placed.push({ col, span, rowSpan: Math.max(1, meta?.rowSpan || 1), text, header, lines: [], ...cellLook(cell), ...(pictures.length ? { pictures } : {}) });
+                const notes = this.notesCitedIn(cell);
+                placed.push({ col, span, rowSpan: Math.max(1, meta?.rowSpan || 1), text, header, lines: [], ...cellLook(cell), ...(pictures.length ? { pictures } : {}), ...(notes.length ? { notes } : {}) });
                 for (let c = col + 1; c < col + span && c < cols; c++) spanned.add(c);
                 cursor = col + span;
             }
@@ -1930,15 +2071,26 @@ class NativeLayout {
             const lineH = size * 1.35;
             // A row with pictures is drawn whole, on a page of its own when it does not fit this one: each
             // cell's text, then its pictures, scaled to its width (and to half a page at most).
+            // A row with a cell whose text alone takes most of a page has its pictures drawn after the table,
+            // and is drawn in bands as any other (drawn whole, it ran off the page).
+            const pageBody = this.pageH - this.margin.top - this.margin.bottom - this.footReserve - 2 * pad;
+            if (placed.some(p => p.lines.length * lineH > pageBody - 40)) for (const p of placed) if (p.pictures?.length) { picturesAfter.push(...p.pictures); p.pictures = undefined; }
             if (placed.some(p => p.pictures?.length)) {
-                const most = (this.bottom - this.margin.top) / 2;
-                const sized = placed.map(p => (p.pictures || []).map(pic => {
-                    const scale = Math.min(1, Math.max(1, spanWidth(p.col, p.span) - 2 * pad) / pic.w, most / pic.h);
-                    return { img: pic.img, w: pic.w * scale, h: pic.h * scale };
-                }));
+                const sized = placed.map(p => {
+                    const pics = (p.pictures || []).map(pic => {
+                        const scale = Math.min(1, Math.max(1, spanWidth(p.col, p.span) - 2 * pad) / pic.w);
+                        return { img: pic.img, w: pic.w * scale, h: pic.h * scale };
+                    });
+                    // All of a cell's pictures, and its text, on one page: scaled down together where they are taller.
+                    const room = pageBody - p.lines.length * lineH - 4 * pics.length;
+                    const total = pics.reduce((sum, pic) => sum + pic.h, 0);
+                    const fit = total > room && total > 0 ? Math.max(0.01, room / total) : 1;
+                    return pics.map(pic => ({ img: pic.img, w: pic.w * fit, h: pic.h * fit }));
+                });
                 const heightOf = (i: number) => placed[i].lines.length * lineH + sized[i].reduce((sum, pic) => sum + pic.h + 4, 0);
                 const rowH = Math.max(size * 1.4, ...placed.map((_, i) => heightOf(i))) + 2 * pad;
-                if (this.y + rowH > this.bottom && this.y > this.margin.top) this.newPage();
+                // (The table's top gap is not something drawn: a row starting there needs no new page.)
+                if (this.y + rowH > this.bottom && this.y > this.margin.top + 3) this.newPage();
                 if (this.pendingAnchors.length) this.placeAnchors();
                 const topY = this.pageH - this.y;
                 placed.forEach((p, i) => {
@@ -1948,8 +2100,10 @@ class NativeLayout {
                     const face: FaceKey = p.header ? 'bold' : 'regular';
                     let ty = topY - pad - size;
                     for (const line of p.lines) {
-                        const free = p.align ? Math.max(0, room - this.widthOf(line, face, size)) : 0;
-                        this.drawLine(line, face, x + pad + (p.align === 'center' ? free / 2 : p.align === 'right' ? free : 0), ty, size, (p.ink && this.color(p.ink)) || this.lib.rgb(0.12, 0.12, 0.12), room);
+                        const width = this.widthOf(line, face, size);
+                        const free = p.align ? Math.max(0, room - width) : 0;
+                        // An aligned line is placed here: drawn in its own width, a right-to-left one is not set right again.
+                        this.drawLine(line, face, x + pad + (p.align === 'center' ? free / 2 : p.align === 'right' ? free : 0), ty, size, (p.ink && this.color(p.ink)) || this.lib.rgb(0.12, 0.12, 0.12), p.align ? width : room);
                         ty -= lineH;
                     }
                     let py = topY - pad - p.lines.length * lineH;
@@ -1960,6 +2114,7 @@ class NativeLayout {
                     }
                 });
                 this.y += rowH;
+                for (const p of placed) for (const note of p.notes || []) this.citeFootnote(note);
                 continue;
             }
             const rowH = Math.max(size * 1.4, ...placed.map(p => p.lines.length * lineH)) + 2 * pad;
@@ -1993,16 +2148,26 @@ class NativeLayout {
                     const room = spanWidth(p.col, p.span) - 2 * pad;
                     let ty = topY - pad - size;
                     for (let li = lineOffset; li < lineOffset + bandLines && li < p.lines.length; li++) {
-                        const free = p.align ? Math.max(0, room - this.widthOf(p.lines[li], face, size)) : 0;
+                        const width = this.widthOf(p.lines[li], face, size);
+                        const free = p.align ? Math.max(0, room - width) : 0;
                         const lx = x + pad + (p.align === 'center' ? free / 2 : p.align === 'right' ? free : 0);
-                        this.drawLine(p.lines[li], face, lx, ty, size, (p.ink && this.color(p.ink)) || this.lib.rgb(0.12, 0.12, 0.12), room); ty -= lineH;
+                        this.drawLine(p.lines[li], face, lx, ty, size, (p.ink && this.color(p.ink)) || this.lib.rgb(0.12, 0.12, 0.12), p.align ? width : room); ty -= lineH;
                     }
                 }
                 this.y += bandH;
                 lineOffset += bandLines;
             }
+            // The footnotes its cells cite, given room at the foot of the page the row ends on.
+            for (const p of placed) for (const note of p.notes || []) this.citeFootnote(note);
         }
         this.y += 6;
+        for (const picture of picturesAfter) {
+            const scale = Math.min(1, this.contentWidth / picture.w, (this.pageH - this.margin.top - this.margin.bottom) * 0.9 / picture.h);
+            const w = picture.w * scale, h = picture.h * scale;
+            this.ensureSpace(h + 6);
+            this.page.drawImage(picture.img, { x: this.margin.left, y: this.pageH - this.y - h, width: w, height: h });
+            this.y += h + 6;
+        }
         for (const chart of chartsAfter) await this.render(chart);
     }
 
@@ -2374,10 +2539,13 @@ async function drawDocument(pdf: any, lib: any, fonts: Fonts, customFonts: boole
         auto ? sectionPage : null, first?.headerDistance, first?.footerDistance, ast.metadata?.pageSetup?.differentFirstPage);
     // Gather footnote/endnote bodies from the whole content tree first (they attach to text runs, deep
     // in the tree, so a render()-level sweep would miss them), then render the body, then draw them.
+    await layout.fitRunningContent();
     for (const node of ast.content) layout.collectNotes(node);
     await layout.measureFootnotes();
     for (const node of ast.content) await layout.render(node, true);
     await layout.flushNotes();
+    // The anchors last met take their place on the last page, before the headers are drawn on the pages.
+    layout.placeAnchors();
     // Each page's header and footer, once the pages are known (ast.auxiliary, where parsing kept them).
     await layout.drawRunningContent();
     layout.reportLostCharacters();

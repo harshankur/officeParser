@@ -5055,6 +5055,57 @@ async function testSlidesDrawnAsLaidOut(): Promise<void> {
 }
 
 /**
+ * The native PDF engine's page furniture and footnotes hold up at their limits: footnotes too many for
+ * one page carry on to the next (they were drawn above the page and over its text), a tall header and
+ * footer push the body clear of them (they ran into it and off the page), a section's last footnotes keep
+ * its margins, a footnote cited in a table cell is raised there and placed at its page's foot, a row of
+ * large pictures beside a long cell loses no line, extreme chart values are written as text (they
+ * crashed the conversion), a slide after other content starts a page, and a deck's titles are in the
+ * outline.
+ */
+async function testNativePdfFurnitureLimits(): Promise<void> {
+    const t = (text: string, more: any = {}) => ({ type: 'text', text, ...more });
+    const p = (...children: any[]) => ({ type: 'paragraph', children });
+    const docOf = (content: any[], extra: any = {}) => ({ type: 'docx', metadata: extra.metadata ?? {}, attachments: extra.attachments ?? [], content, auxiliary: extra.auxiliary }) as any;
+    const pdfOf = async (ast: any, pdfConfig: any = {}) => (await OfficeGenerator.generate(ast, 'pdf', { pdfConfig: { engine: 'native', ...pdfConfig } } as any)).value as Uint8Array;
+    const read = async (pdf: Uint8Array) => OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as Promise<OfficeParserAST>;
+    const texts = (ast: OfficeParserAST) => collectAllNodes(ast).filter(n => n.type === 'text' && n.bounds);
+
+    // Twenty long footnotes cited in one paragraph: every one printed whole, inside its page.
+    const long = Array.from({ length: 150 }, (_, i) => `w${i}`).join(' ');
+    const notes = Array.from({ length: 20 }, (_, i) => t(`cite${i} `, { notes: [{ type: 'note', metadata: { noteType: 'footnote' }, children: [p(t(`N${i}START ${long} N${i}END`))] }] }));
+    const carried = await read(await pdfOf(docOf([p(...notes), { type: 'break', metadata: { breakType: 'page' } }, p(t('after'))])));
+    const all = String((await carried.to('text')).value);
+    assert.deepStrictEqual(Array.from({ length: 20 }, (_, i) => all.includes(`N${i}END`)).filter(x => !x).length, 0, 'every carried footnote is printed');
+    assert.ok(texts(carried).every(n => n.bounds!.y >= 0 && n.bounds!.y + n.bounds!.height <= 842), 'nothing is drawn off its page');
+
+    // A header and a footer of four lines each: the body below the one, every footer line on the page.
+    const lines = (word: string) => Array.from({ length: 4 }, (_, i) => p(t(`${word}${i}`)));
+    const furnished = await read(await pdfOf(docOf([p(t('Body first line'))], { auxiliary: { headers: [{ type: 'header', metadata: { type: 'default' }, children: lines('HEAD') }], footers: [{ type: 'footer', metadata: { type: 'default' }, children: lines('FOOT') }] } })));
+    const at = (word: string) => texts(furnished).find(n => (n.text || '').includes(word))?.bounds;
+    assert.ok(at('HEAD3')!.y + at('HEAD3')!.height <= at('Body first')!.y, 'the body starts below a tall header');
+    assert.ok([0, 1, 2, 3].every(i => at(`FOOT${i}`) && at(`FOOT${i}`)!.y + at(`FOOT${i}`)!.height <= 842), 'a tall footer is on its page');
+
+    // A footnote cited in a table cell: raised in the cell, at the foot of its page.
+    const cellNote = { type: 'note', metadata: { noteType: 'footnote' }, children: [p(t('CELL-NOTE-TEXT'))] };
+    const table = await read(await pdfOf(docOf([{ type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [p(t('100', { notes: [cellNote] }))] }] }] }, p(t('After the table'))])));
+    const tableText = String((await table.to('text')).value);
+    assert.ok(!tableText.includes('1001') && tableText.indexOf('CELL-NOTE-TEXT') > tableText.indexOf('After the table'), `the cell's footnote is raised, at the page's foot; got ${JSON.stringify(tableText)}`);
+
+    // Extreme chart values are written as the chart's text; a slide after other content has its own page.
+    const chart = { type: 'docx', metadata: {}, content: [{ type: 'chart', text: 'CHART-TEXT', metadata: { attachmentName: 'c' } }], attachments: [{ type: 'chart', name: 'c', mimeType: 'application/xml', extension: 'xml', data: '', chartData: { labels: ['a', 'b'], dataSets: [{ values: ['1.7e308', '-1.7e308'], pointLabels: [] }], rawTexts: [] } }] } as any;
+    assert.ok(String((await (await read(await pdfOf(chart))).to('text')).value).includes('CHART-TEXT'), 'a chart no axis can hold is written as its text');
+    const slide = { type: 'slide', metadata: { slideNumber: 1 }, children: [{ ...p(t('SLIDE-ONE')), bounds: { x: 40, y: 40, width: 400, height: 40 } }] };
+    const mixed = await read(await pdfOf(docOf([p(t('INTRO')), slide], { metadata: { pageSetup: { width: 960, height: 540 } } })));
+    assert.strictEqual(mixed.content.length, 2, 'a slide after a paragraph starts a page of its own');
+
+    // A deck's titles make its outline (pdfConfig.outline).
+    const deck = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.pptx')), { fileType: 'pptx' } as any) as OfficeParserAST;
+    const outlined = await read(await pdfOf(deck, { outline: true }));
+    assert.ok((outlined.auxiliary?.outline?.length ?? 0) > 0, 'a deck drawn as laid out still has its outline');
+}
+
+/**
  * The native PDF engine draws GIF (its first frame) and uncompressed BMP pictures, turned into PNG: a PDF
  * holds neither, and both were dropped with IMAGE_PROCESSING_FAILED.
  */
@@ -6903,6 +6954,7 @@ async function runTests(): Promise<void> {
         ['Native PDF charts and cell pictures', testNativePdfChartsAndCellPictures],
         ['Native PDF inline pictures', testNativePdfInlinePictures],
         ['Slides drawn as laid out', testSlidesDrawnAsLaidOut],
+        ['Native PDF furniture limits', testNativePdfFurnitureLimits],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],
