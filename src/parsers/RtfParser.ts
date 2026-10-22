@@ -678,6 +678,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     type SectionState = Partial<Record<'w' | 'h' | 'ml' | 'mr' | 'mt' | 'mb' | 'hy' | 'fy' | 'cols' | 'colsx', number>> & { landscape?: boolean; line?: boolean; start?: 'none' | 'page'; title?: boolean; widths: Map<number, number>; colNo: number };
     const newSection = (): SectionState => ({ widths: new Map(), colNo: 1 });
     let section = newSection();
+    // Each section's state by its number, so a part is shown as its own section says (its `\titlepg`).
+    const sectionStates: SectionState[] = [section];
     const firstSection = section;
     let sectionNumber = 0, pageStated = false;
     const sectionBreaks: { node: OfficeContentNode; state: SectionState }[] = [];
@@ -1957,6 +1959,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 flushParagraph();
                 sectionNumber++;
                 section = newSection();
+                sectionStates.push(section);
                 if (config.includeBreakNodes) {
                     const brk: OfficeContentNode = { type: 'break', metadata: { breakType: 'page', section: sectionNumber } as BreakMetadata };
                     content.push(brk);
@@ -2308,7 +2311,9 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
     for (const part of [...headers, ...footers]) {
         const meta = part.metadata as HeaderFooterMetadata;
-        if ((meta.type === 'first' && !titlePage) || (meta.type === 'even' && !facingPages)) meta.hidden = true;
+        // A first page's part shown where its own section has a title page (`\titlepg`), as Word shows it.
+        const own = sectionStates[partSections.get(part) ?? 0];
+        if ((meta.type === 'first' && !(own ? own.title : titlePage)) || (meta.type === 'even' && !facingPages)) meta.hidden = true;
         // A document of sections gives each part its section, as Word's are.
         if (sectionNumber > 0) meta.section = partSections.get(part) ?? 0;
     }

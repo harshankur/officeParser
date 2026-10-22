@@ -67,7 +67,7 @@ export interface SvgPicture {
 type Matrix = [number, number, number, number, number, number];
 const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
 
-interface Rule { tag?: string; classes: string[]; id?: string; specificity: number; order: number; declarations: Map<string, string> }
+interface Rule { tag?: string; classes: string[]; id?: string; specificity: number; order: number; declarations: Map<string, string>; /** Its `!important` ones, over every other and `style`'s own. */ important: Map<string, string> }
 
 /** The style an element draws with, inherited from its parents where SVG inherits it. */
 interface Style {
@@ -173,15 +173,16 @@ function transformOf(v: string | null): Matrix {
     return m.every(Number.isFinite) ? m : IDENTITY;
 }
 
-/** Declarations (`fill: red; stroke: blue`), the properties drawing reads. */
-function declarations(text: string, into = new Map<string, string>()): Map<string, string> {
+/** Declarations (`fill: red; stroke: blue`), the properties drawing reads; `!important` ones into `important` where given. */
+function declarations(text: string, into = new Map<string, string>(), important?: Map<string, string>): Map<string, string> {
     for (const part of text.split(';')) {
         const colon = part.indexOf(':');
         if (colon < 0) continue;
         const name = part.slice(0, colon).trim().toLowerCase();
         if (!PROPERTIES.has(name)) continue;
-        const value = part.slice(colon + 1).replace(/!\s*important\s*$/i, '').trim();
-        if (value && value.length <= 256) into.set(name, value);
+        const raw = part.slice(colon + 1);
+        const value = raw.replace(/!\s*important\s*$/i, '').trim();
+        if (value && value.length <= 256) (important && value !== raw.trim() ? important : into).set(name, value);
     }
     return into;
 }
@@ -197,9 +198,18 @@ function readRules(css: string): Rule[] {
         const close = text.indexOf('}', open);
         const prelude = text.slice(at, open).trim(), body = text.slice(open + 1, close < 0 ? text.length : close);
         at = close < 0 ? text.length : close + 1;
-        if (!prelude || prelude.startsWith('@')) continue;
-        const decls = declarations(body);
-        if (!decls.size) continue;
+        // An at-rule's block (a media query's rules inside it) skipped whole: its braces counted, or the rule
+        // after it read as part of its prelude and was lost.
+        if (prelude.startsWith('@')) {
+            let depth = 0, k = open;
+            for (; k < text.length; k++) { if (text[k] === '{') depth++; else if (text[k] === '}' && --depth === 0) break; }
+            at = k + 1;
+            continue;
+        }
+        if (!prelude) continue;
+        const important = new Map<string, string>();
+        const decls = declarations(body, new Map(), important);
+        if (!decls.size && !important.size) continue;
         for (const selector of prelude.split(',')) {
             const m = /^\s*([a-zA-Z][\w-]*|\*)?((?:[.#][\w-]+)*)\s*$/.exec(selector);
             if (!m || (!m[1] && !m[2])) continue;
@@ -208,7 +218,7 @@ function readRules(css: string): Rule[] {
             for (const part of m[2].match(/[.#][\w-]+/g) ?? []) part[0] === '.' ? (classes.includes(part.slice(1)) || classes.length > MAX_SELECTOR_CLASSES || classes.push(part.slice(1))) : (id = part.slice(1));
             if (classes.length > MAX_SELECTOR_CLASSES) continue;
             const tag = m[1] && m[1] !== '*' ? m[1] : undefined;
-            rules.push({ tag, classes, id, specificity: (id ? 10_000 : 0) + classes.length * 100 + (tag ? 1 : 0), order: rules.length, declarations: decls });
+            rules.push({ tag, classes, id, specificity: (id ? 10_000 : 0) + classes.length * 100 + (tag ? 1 : 0), order: rules.length, declarations: decls, important });
             if (rules.length >= MAX_RULES) break;
         }
     }
@@ -464,9 +474,9 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
         if (rule.id) ruleIds.add(rule.id);
         for (const c of rule.classes) ruleClasses.add(c);
     });
-    const matched = new Map<string, Map<string, string>>();
-    const noRules = new Map<string, string>();
-    const matchedRules = (el: Element): Map<string, string> => {
+    const matched = new Map<string, { normal: Map<string, string>; important: Map<string, string> }>();
+    const noRules = { normal: new Map<string, string>(), important: new Map<string, string>() };
+    const matchedRules = (el: Element): { normal: Map<string, string>; important: Map<string, string> } => {
         if (!svg.rules.length) return noRules;
         const tag = localName(el);
         const ownId = el.getAttribute('id') || undefined;
@@ -481,14 +491,16 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
         // (In the stylesheet's order of precedence, as the rules are sorted.)
         candidates.sort((a, b) => a - b);
         // The properties drawing reads alone, each its last value: bounded by them, however many rules match.
-        const out = new Map<string, string>();
+        const out = new Map<string, string>(), important = new Map<string, string>();
         for (const i of candidates) {
             const rule = svg.rules[i];
             if ((rule.tag && rule.tag !== tag) || (rule.id && rule.id !== id) || !rule.classes.every(c => has.has(c))) continue;
             for (const [k, v] of rule.declarations) if (PROPERTIES.has(k)) out.set(k, v);
+            for (const [k, v] of rule.important) if (PROPERTIES.has(k)) important.set(k, v);
         }
-        matched.set(key, out);
-        return out;
+        const found = { normal: out, important };
+        matched.set(key, found);
+        return found;
     };
 
     /** The style an element draws with: its parent's inherited, then rules, attributes, `style`. */
@@ -496,9 +508,14 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
         const own = new Map<string, string>();
         // Presentation attributes first, then the stylesheet's rules over them, then `style` over both.
         for (const name of PROPERTIES) { const v = el.getAttribute(name); if (v != null && v.length <= 256) own.set(name, v.trim()); }
-        for (const [k, v] of matchedRules(el)) own.set(k, v);
+        const rules = matchedRules(el);
+        for (const [k, v] of rules.normal) own.set(k, v);
         const inline = el.getAttribute('style');
-        if (inline) declarations(inline.slice(0, 4096), own);
+        const inlineImportant = new Map<string, string>();
+        if (inline) declarations(inline.slice(0, 4096), own, inlineImportant);
+        // `!important` declarations over all of those: the rules', then `style`'s own.
+        for (const [k, v] of rules.important) own.set(k, v);
+        for (const [k, v] of inlineImportant) own.set(k, v);
         const style: Style = { ...parent, opacity: 1 };
         const get = (k: string) => { const v = own.get(k); return v === undefined || v === 'inherit' ? undefined : v; };
         // (A shorthand longer than any font names is cut: its pattern tells sizes from digits.)

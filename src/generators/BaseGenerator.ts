@@ -1,7 +1,7 @@
 import { ChartData, OfficeAttachment, OfficeIssue, ConversionResult, FullGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, StructuredStyleMapping, UniversalGeneratorFormat } from '../types.js';
 import { resolveGeneratorConfig } from '../utils/configUtils.js';
 import { checkAbortSignal, getWarningMessage } from '../utils/errorUtils.js';
-import { resolveImageMode } from '../utils/officeGenUtils.js';
+import { forgetFurniture, resolveImageMode } from '../utils/officeGenUtils.js';
 import { StyleMapper } from '../utils/styleMapper.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { gridPositionsFor } from '../utils/sheetGridUtils.js';
@@ -145,6 +145,8 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
         // Problems with the configuration itself are among the result's messages too.
         this.config = resolveGeneratorConfig(destination, ast.config, config, issue => this.messages.push(issue));
         this.ast = ast;
+        // (A header list edited in place since the last generation is read afresh.)
+        forgetFurniture(ast.auxiliary?.headers, ast.auxiliary?.footers);
         this.styleMapper = new StyleMapper(this.config.styleMap, this.config.ignoreDefaultStyleMap, this.config);
         this.paddingCellsLeft = this.paddingLimit = gridPositionsFor(ast);
     }

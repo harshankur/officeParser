@@ -1,7 +1,7 @@
 import { zipSync, Zippable } from 'fflate';
 import { UniqueNames } from '../utils/uniqueNames.js';
 import { layoutTableRows } from '../utils/tableLayout.js';
-import { BreakMetadata, ConversionResult, GeneratorConfig, ImageMode, OdtGeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting } from '../types.js';
+import { BreakMetadata, ConversionResult, GeneratorConfig, HeaderFooterMetadata, ImageMode, OdtGeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { heldColumns } from '../utils/columnUtils.js';
@@ -1145,16 +1145,22 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         // paragraph: an empty `style:header` is read as none, and its left pages' with it), or
         // on the first page alone: then the first page's master (the document starts on `Standard`)
         // hands over to one for the rest (`style:next-style-name`), as a word processor's first-page style.
+        // Where the document's even pages have parts of their own (Word's even and odd headers), a kind with
+        // none of its own shows none there, as Word shows them: an empty left page's part, not the odd pages'.
+        const facing = [...(this.ast.auxiliary?.headers ?? []), ...(this.ast.auxiliary?.footers ?? [])]
+            .some(n => (n.metadata as HeaderFooterMetadata | undefined)?.type === 'even' && !(n.metadata as HeaderFooterMetadata | undefined)?.hidden);
+        const noLeft = (tag: 'header' | 'footer') => facing ? `<style:${tag}-left><text:p/></style:${tag}-left>` : '';
         const part = (tag: 'header' | 'footer', xml: string, kind: string, page: 'first' | 'rest') => {
             if (!xml) return '';
             if (kind === 'first') return page === 'first' ? `<style:${tag}>${xml}</style:${tag}>` : '';
             if (kind === 'even') return page === 'first' && headerKind !== 'first' && footerKind !== 'first' || page === 'rest' ? `<style:${tag}><text:p/></style:${tag}><style:${tag}-left>${xml}</style:${tag}-left>` : '';
-            return `<style:${tag}>${xml}</style:${tag}>`;
+            return `<style:${tag}>${xml}</style:${tag}>${noLeft(tag)}`;
         };
         // A master's parts from a section's own: every page's (an empty one written as an empty paragraph:
         // an empty part is read as none), even pages' (`-left`), and its first page's where it is that page's.
-        const own = (tag: 'header' | 'footer', every: string | undefined, even: string | undefined) => (every === undefined && even === undefined ? ''
-            : `<style:${tag}>${every || '<text:p/>'}</style:${tag}>`) + (even !== undefined ? `<style:${tag}-left>${even || '<text:p/>'}</style:${tag}-left>` : '');
+        // (A first page's master shows its part on whichever side it falls: no left page's part of its own.)
+        const own = (tag: 'header' | 'footer', every: string | undefined, even: string | undefined, firstPage = false) => (every === undefined && even === undefined ? ''
+            : `<style:${tag}>${every || '<text:p/>'}</style:${tag}>`) + (even !== undefined ? `<style:${tag}-left>${even || '<text:p/>'}</style:${tag}-left>` : every !== undefined && !firstPage ? noLeft(tag) : '');
         const body = this.bodyOwnParts;
         const plain = headerKind === 'default' && footerKind === 'default';
         const bodyFirst = plain && (body.firstHeader !== undefined || body.firstFooter !== undefined || !!this.ast.metadata?.pageSetup?.differentFirstPage);
@@ -1163,7 +1169,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         const masters = (page: 'first' | 'rest') => plain
             ? page === 'first'
                 // (A title page shows its own first page's parts, and none of a type it has none of, as Word does.)
-                ? own('header', body.firstHeader ?? (this.writesHeader ? '' : undefined), undefined) + own('footer', body.firstFooter ?? (this.writesFooter ? '' : undefined), undefined)
+                ? own('header', body.firstHeader ?? (this.writesHeader ? '' : undefined), undefined, true) + own('footer', body.firstFooter ?? (this.writesFooter ? '' : undefined), undefined, true)
                 : own('header', headerXml || undefined, body.evenHeader) + own('footer', footerXml || undefined, body.evenFooter)
             : part('header', headerXml, headerKind, page) + part('footer', footerXml, footerKind, page);
         const masterPage = firstOwn
@@ -1180,8 +1186,8 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         const sectionParts = (p: SectionPage) => sectionSide('header', p.headerXml, p.evenHeaderXml, headerKind, headerXml) + sectionSide('footer', p.footerXml, p.evenFooterXml, footerKind, footerXml);
         // (A section's title page: the first page's parts in force, none of a type it has none of, as Word does.)
         // (An empty one where the document has them elsewhere: a page without one stood its body higher.)
-        const firstParts = (p: SectionPage) => (p.firstHeaderXml !== undefined && (p.firstHeaderXml || this.writesHeader) ? own('header', p.firstHeaderXml, undefined) : '')
-            + (p.firstFooterXml !== undefined && (p.firstFooterXml || this.writesFooter) ? own('footer', p.firstFooterXml, undefined) : '');
+        const firstParts = (p: SectionPage) => (p.firstHeaderXml !== undefined && (p.firstHeaderXml || this.writesHeader) ? own('header', p.firstHeaderXml, undefined, true) : '')
+            + (p.firstFooterXml !== undefined && (p.firstFooterXml || this.writesFooter) ? own('footer', p.firstFooterXml, undefined, true) : '');
         const sectionMasters = this.sectionPages.map((p, i) => (p.firstHeaderXml !== undefined || p.firstFooterXml !== undefined
             ? `<style:master-page style:name="${p.name}First" style:page-layout-name="pm${i + 2}" style:next-style-name="${p.name}">${firstParts(p)}</style:master-page>` : '')
             + `<style:master-page style:name="${p.name}" style:page-layout-name="pm${i + 2}">${sectionParts(p)}</style:master-page>`).join('')

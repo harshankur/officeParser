@@ -221,6 +221,14 @@ export function runningFurniture(nodes: OfficeContentNode[] | undefined, kind: '
 }
 const runningByList = new WeakMap<OfficeContentNode[], Map<string, OfficeContentNode[]>>();
 
+/**
+ * The furniture found for these lists forgotten (see runningFurniture, sectionFurnitureIndex): asked
+ * at the start of each generation, so a list edited in place since the last is read afresh.
+ */
+export function forgetFurniture(...lists: (OfficeContentNode[] | undefined)[]): void {
+    for (const nodes of lists) if (nodes) { runningByList.delete(nodes); furnitureIndexes.delete(nodes); }
+}
+
 function findRunningFurniture(nodes: OfficeContentNode[], kind: 'header' | 'footer'): OfficeContentNode[] {
     const loose = nodes.filter(n => n.type !== kind);
     if (loose.length) return loose;
@@ -229,7 +237,10 @@ function findRunningFurniture(nodes: OfficeContentNode[], kind: 'header' | 'foot
     const filled = (n: OfficeContentNode, depth = 0): boolean => !!(n.text || '').trim() || (depth < 8 && (n.children || []).some(c => c.type === 'image' || c.type === 'chart' || filled(c, depth + 1)));
     const shown = nodes.filter(n => !meta(n)?.hidden && filled(n));
     const first = shown.filter(n => (meta(n)?.section ?? 0) === 0);
-    const pick = first.find(n => (meta(n)?.type ?? 'default') === 'default') ?? first[0] ?? shown[0];
+    // (A document of sections whose first has none of its own has none on its first pages: a later
+    // section's is that section's, not the first's.)
+    const sectioned = nodes.some(n => typeof meta(n)?.section === 'number' && meta(n)!.section! > 0);
+    const pick = first.find(n => (meta(n)?.type ?? 'default') === 'default') ?? first[0] ?? (sectioned ? undefined : shown[0]);
     if (!pick) return [];
     // A header read from a page (a PDF's) is that page's paragraphs, each a node: all of them.
     const page = meta(pick)?.page;

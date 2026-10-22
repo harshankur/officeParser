@@ -1,5 +1,5 @@
 import { BreakMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, IndentationMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphMetadata, TextMetadata } from '../types.js';
-import { isPageSize } from '../utils/pageLimits.js';
+import { isPageSize, MAX_PAGE_PT } from '../utils/pageLimits.js';
 import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
@@ -684,8 +684,8 @@ function columnsRtf(given: PageSetup['columns'] | undefined, setup: PageSetup | 
     return `\\cols${count}\\colsx${gap}${columns.separator ? '\\linebetcol' : ''}${own}`;
 }
 
-/** A twips value RTF takes (a whole number within its range). */
-const twips = (pt: number) => Number.isFinite(pt) ? Math.max(0, Math.min(31680, Math.round(pt * 20))) : 0;
+/** A twips value RTF takes (a whole number, at most a page's largest: A0 and larger papers are kept, as Word keeps them). */
+const twips = (pt: number) => Number.isFinite(pt) ? Math.max(0, Math.min(MAX_PAGE_PT * 20, Math.round(pt * 20))) : 0;
 
 /**
  * A page as RTF output writes it: none where its size is no page (an inch to two hundred inches each way,

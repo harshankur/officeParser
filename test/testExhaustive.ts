@@ -5333,6 +5333,11 @@ async function testNativePdfSvgPictures(): Promise<void> {
     const classes = await drawn(`<style>${'.a'.repeat(5000)} { fill: #ff0000 }</style><rect class="a" width="50" height="50"/>`);
     assert.ok(/1 0 0 rg/.test(classes.streams), 'a selector repeating one class matches it');
 
+    // A rule after a media query's block, and !important declarations, are read as a browser reads them.
+    for (const body of ['<style>@media print{rect{fill:red}} rect{fill:#00ff00}</style><rect width="20" height="20"/>',
+        '<style>rect{fill:#00ff00 !important} #a{fill:red}</style><rect id="a" width="20" height="20" style="fill:blue"/>']) {
+        assert.ok(/0 1 0 rg/.test((await drawn(body)).streams), `an SVG's cascade draws green: ${body}`);
+    }
 }
 
 /**
@@ -5850,6 +5855,30 @@ async function testColumns(): Promise<void> {
         content: Array.from({ length: 12 }, (_, i) => ({ type: 'paragraph', children: [{ type: 'text', text: `Para${i} lorem ipsum dolor sit amet consectetur adipiscing elit sed do` }] })) } as any;
     const sixBack = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(sixDoc, 'pdf', { pdfConfig: { engine: 'native', format: 'auto' } } as any)).value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
     assert.ok(collectAllNodes(sixBack).filter(n => n.type === 'text' && n.bounds).every(n => n.bounds!.x >= 71.5), 'native pdf: no line starts left of its column');
+
+    // A first section with no header of its own has none (a later section's is that section's); an A1 page
+    // keeps its size through RTF; a header list edited in place is read afresh; a section's first-page part
+    // shows only where that section has a title page.
+    const sp = (t: string) => ({ type: 'paragraph', children: [{ type: 'text', text: t }] });
+    const sh = (kind: string, type: string, section: number, text: string) => ({ type: kind, text, metadata: { type, section }, children: [sp(text)] });
+    const a1 = { width: 2384, height: 1684, margin: { top: 72, right: 72, bottom: 72, left: 72 } };
+    const bare = { type: 'docx', metadata: { pageSetup: { width: 612, height: 792, margin: { top: 72, right: 72, bottom: 72, left: 72 } } }, attachments: [],
+        content: [sp('Cover'), { type: 'break', metadata: { breakType: 'page', section: 1, pageSetup: a1 } }, sp('Body')],
+        auxiliary: { headers: [sh('header', 'default', 1, 'H2DEFAULT')] } } as any;
+    for (const format of ['docx', 'odt', 'rtf'] as const) {
+        const back = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(bare, format)).value as unknown as Uint8Array), { fileType: format, includeBreakNodes: true } as any) as OfficeParserAST;
+        const heads = (back.auxiliary?.headers ?? []).filter(h => !(h.metadata as any)?.hidden && (h.text || '').trim());
+        assert.ok(heads.every(h => ((h.metadata as any)?.section ?? 0) >= 1), `${format}: the first section has no header of a later one; got ${JSON.stringify(heads.map(h => [h.text, h.metadata]))}`);
+        const brk = back.content.find(n => n.type === 'break' && (n.metadata as any)?.pageSetup?.width > 2000);
+        assert.ok(brk && Math.round((brk.metadata as any).pageSetup.height) === 1684, `${format}: an A1 landscape section keeps its page`);
+    }
+    const edited = { ...bare, auxiliary: { headers: [sh('header', 'default', 0, 'BEFORE')] } } as any;
+    await OfficeGenerator.generate(edited, 'tex');
+    edited.auxiliary.headers[0] = sh('header', 'default', 0, 'EDITED');
+    assert.ok(String((await OfficeGenerator.generate(edited, 'tex')).value).includes('EDITED'), 'a header list edited in place is read afresh');
+    const rtfFirst = '{\\rtf1\\ansi{\\header H1DEFAULT\\par} First\\par\\sect\\sectd{\\headerf H2FIRST\\par}{\\header H2DEFAULT\\par} Second\\par}';
+    const rtfFirstBack = await OfficeParser.parseOffice(Buffer.from(rtfFirst), { fileType: 'rtf' } as any) as OfficeParserAST;
+    assert.ok((rtfFirstBack.auxiliary?.headers ?? []).some(h => h.text === 'H2FIRST' && (h.metadata as any)?.hidden), 'rtf: a section\'s first-page header without its own \\titlepg is not shown');
 
 }
 
