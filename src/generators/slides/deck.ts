@@ -18,6 +18,7 @@
 
 import { CommentMetadata, HeadingMetadata, ImageMode, ListMetadata, NodeBounds, OfficeContentNode, OfficeMetadata, ShapeMetadata, SlideMetadata, TextFormatting, TextMetadata } from '../../types.js';
 import { lengthToPt } from '../../utils/officeGenUtils.js';
+import { sanitizeOfficePackageUrl } from '../../utils/sanitize.js';
 import { layoutTableRows } from '../../utils/tableLayout.js';
 
 /** A box on a slide, in points from its top left. */
@@ -73,10 +74,12 @@ const sizeOf = (fmt: TextFormatting | undefined): number | undefined => {
     return pt != null && pt > 0 && pt < 4000 ? Math.round(pt * 100) / 100 : undefined;
 };
 
-/** A link a slide can open: a web, mail or phone address. */
+/** A link a slide can open: a web, mail or phone address, or one relative to the file, as DOCX output takes them. */
 const linkOf = (meta: TextMetadata | undefined): string | undefined => {
     const url = (meta as { link?: string } | undefined)?.link;
-    return typeof url === 'string' && /^(https?:|mailto:|tel:)/i.test(url.trim()) ? url.trim() : undefined;
+    if (typeof url !== 'string' || url.trim().startsWith('#')) return undefined;
+    const held = sanitizeOfficePackageUrl(url);
+    return held || undefined;
 };
 
 /**

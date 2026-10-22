@@ -4,7 +4,7 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { encUrl, odfUserDefinedXml, resolveZipInstant, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
-import { buildWorkbook, cellTextProcessor, noteLabels, sheetRef, writableLink, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
+import { buildWorkbook, cellTextProcessor, noteLabels, sheetIndex, sheetRef, writableLink, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
 
 /** Escapes text content for an XML part after stripping XML-illegal characters. */
 function xmlText(s: string | undefined): string {
@@ -109,7 +109,7 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
             sheets.push({ name: 'Sheet1', rows: [], widths: [] });
         }
         if (sheets.every(s => s.hidden)) delete sheets[0].hidden;
-        const sheetNames = sheets.map(sh => sh.name);
+        const sheetNames = sheetIndex(sheets.map(sh => sh.name));
         const tables = sheets.map(sheet => this.tableXml(sheet, sheetNames)).join('');
         for (const feature of this.linkLosses) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'ods' });
         const { iso, mtime } = resolveZipInstant(this.effectiveMetadata.modified);
@@ -141,7 +141,7 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
     /** Whether a link to a place no written sheet holds was left out (reported once). */
     private readonly linkLosses = new Set<string>();
 
-    private tableXml(sheet: WorkSheet, sheetNames: readonly string[]): string {
+    private tableXml(sheet: WorkSheet, sheetNames: ReadonlyMap<string, string>): string {
         const hiddenCols = hiddenColumns(sheet);
         const tableStyle = sheet.hidden ? this.styleNamed('ta|hidden', 'ta', name => `<style:style style:name="${name}" style:family="table"><style:table-properties table:display="false"/></style:style>`) : undefined;
         const columns = sheet.widths.map((w, i) => {
@@ -181,9 +181,9 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
                 // (A place in the workbook as ODF names a cell, `#Sheet.A1`, where the sheet is written; else reported.)
                 // (The first of its links a workbook holds, see writableLink; the rest reported.)
                 const chosen = writableLink(cell.links, sheetNames);
-                if (chosen.writable > 1) this.linkLosses.add('links past a cell\'s first');
-                if (chosen.lostPlace) this.linkLosses.add('links to places outside the workbook\'s sheets');
-                const href = chosen.place ? `#${sheetRef(chosen.place.sheet)}.${chosen.place.cell}` : chosen.link ? encUrl(chosen.link) : undefined;
+                for (const why of chosen.lost) this.linkLosses.add(why);
+                // (A range as ODF writes one: each end on its sheet.)
+                const href = chosen.place ? `#${sheetRef(chosen.place.sheet)}.${chosen.place.cell}${chosen.place.to ? `:${sheetRef(chosen.place.sheet)}.${chosen.place.to}` : ''}` : chosen.link ? encUrl(chosen.link) : undefined;
                 const linked = (line: string) => href ? `<text:a xlink:type="simple" xlink:href="${xmlText(href)}">${xmlText(line)}</text:a>` : xmlText(line);
                 const paragraphs = cell.shown ? cell.shown.split('\n').map(line => `<text:p>${linked(line)}</text:p>`).join('') : '';
                 out.push(`<table:table-cell${attrs}>${paragraphs}</table:table-cell>`);

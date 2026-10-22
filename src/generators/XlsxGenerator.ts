@@ -4,7 +4,7 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { encUrl, ooxmlCustomPropertiesXml, resolveZipInstant, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
-import { buildWorkbook, cellTextProcessor, noteLabels, sheetRef, writableLink, MAX_LINK_LENGTH, MAX_SHEET_LINKS, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
+import { buildWorkbook, cellTextProcessor, noteLabels, sheetIndex, sheetRef, writableLink, MAX_LINK_LENGTH, MAX_SHEET_LINKS, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
 
 /** Escapes text content for an XML part after stripping XML-illegal characters. */
 function xmlText(s: string | undefined): string {
@@ -97,7 +97,7 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
         if (sheets.every(s => s.hidden)) delete sheets[0].hidden;
 
         const styles = new StyleTable();
-        const sheetNames = sheets.map(sh => sh.name);
+        const sheetNames = sheetIndex(sheets.map(sh => sh.name));
         const sheetParts = sheets.map(sheet => this.sheetXml(sheet, styles, sheetNames));
         for (const feature of this.linkLosses) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'xlsx' });
         const { iso, mtime } = resolveZipInstant(this.effectiveMetadata.modified);
@@ -143,7 +143,7 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
     /** The links left out (each kind reported once). */
     private readonly linkLosses = new Set<string>();
 
-    private sheetXml(sheet: WorkSheet, styles: StyleTable, sheetNames: readonly string[]): { xml: string; rels?: string } {
+    private sheetXml(sheet: WorkSheet, styles: StyleTable, sheetNames: ReadonlyMap<string, string>): { xml: string; rels?: string } {
         const hiddenCols = hiddenColumns(sheet);
         const cols = sheet.widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"${hiddenCols.has(i) ? ' hidden="1"' : ''}/>`).join('');
         const merges: string[] = [], links: string[] = [], rels: string[] = [];
@@ -154,11 +154,9 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
                 // The first of its links the workbook holds (a place on a sheet written, or an address Excel
                 // opens), the rest reported; at most MAX_SHEET_LINKS a sheet, as Excel opens.
                 const chosen = writableLink(cell.links, sheetNames, MAX_LINK_LENGTH);
-                if (chosen.writable > 1) this.linkLosses.add('links past a cell\'s first');
-                if (chosen.lostPlace) this.linkLosses.add('links to places outside the workbook\'s sheets');
-                if (chosen.tooLong) this.linkLosses.add('links of more than 2,079 characters');
+                for (const why of chosen.lost) this.linkLosses.add(why);
                 if (chosen.link && links.length >= MAX_SHEET_LINKS) this.linkLosses.add('links past a sheet\'s 65,530');
-                else if (chosen.place) links.push(`<hyperlink ref="${ref}" location="${xmlText(`${sheetRef(chosen.place.sheet)}!${chosen.place.cell}`)}"/>`);
+                else if (chosen.place) links.push(`<hyperlink ref="${ref}" location="${xmlText(`${sheetRef(chosen.place.sheet)}!${chosen.place.cell}${chosen.place.to ? `:${chosen.place.to}` : ''}`)}"/>`);
                 else if (chosen.link) {
                     const id = `rId${rels.length + 1}`;
                     rels.push(`<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${xmlText(encUrl(chosen.link))}" TargetMode="External"/>`);

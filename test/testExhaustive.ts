@@ -5978,6 +5978,21 @@ async function testSpreadsheetWriters(): Promise<void> {
     const sheetLinks = strFromU8(linkParts['xl/worksheets/sheet1.xml']) + strFromU8(linkParts['xl/worksheets/_rels/sheet1.xml.rels'] ?? new Uint8Array());
     assert.ok(sheetLinks.includes('Target="https://example.com/"') && sheetLinks.includes('location="&apos;Q1&apos;!B2"') && !sheetLinks.includes('aaaaaaaaaa'), `xlsx: the first writable link, ODF's place form, a quoted cell-like sheet; got ${sheetLinks.slice(0, 600)}`);
     assert.ok((xlsxLinks.messages || []).some((m: any) => m.details?.feature === 'links of more than 2,079 characters'), 'xlsx: an address past Excel\'s length is reported');
+    // Every link not written is reported, the written one counted; a range keeps its span; a relative link
+    // is written (a script's is not).
+    const moreLinks = { type: 'xlsx', metadata: {}, attachments: [], content: [
+        { type: 'sheet', metadata: { sheetName: 'Other' }, children: [{ type: 'row', children: [
+            { type: 'cell', metadata: { row: 0, col: 0 }, children: [tl('Site', 'https://a.example/'), tl(' toc', '#_Toc123')] },
+            { type: 'cell', metadata: { row: 0, col: 1 }, children: [tl('Range', '#Other!A1:C3')] },
+            { type: 'cell', metadata: { row: 0, col: 2 }, children: [tl('Readme', 'docs/readme.html'), tl(' bad', 'javascript:alert(1)')] },
+        ] }] },
+    ] } as any;
+    for (const format of ['xlsx', 'ods'] as const) {
+        const out = await OfficeGenerator.generate(moreLinks, format);
+        const all = Object.values(unzipSync(new Uint8Array(out.value as unknown as Uint8Array))).map(v => strFromU8(v)).join('');
+        assert.ok((out.messages || []).some((m: any) => m.details?.feature === 'links to places outside the workbook\'s sheets'), `${format}: a bookmark beside a written link is reported`);
+        assert.ok(all.includes(format === 'xlsx' ? 'Other!A1:C3' : '#Other.A1:Other.C3') && all.includes('docs/readme.html') && !all.includes('javascript'), `${format}: a range, a relative link, no script`);
+    }
     // An address already encoded is kept as given (it was encoded again: a%2520b), in every writer that encodes.
     const encoded = await OfficeParser.parseOffice(Buffer.from('<p><a href="https://example.com/a%20b?q=x%26y">Encoded</a></p><table><tr><td><a href="https://example.com/a%20b?q=x%26y">Cell</a></td></tr></table>'), { fileType: 'html' } as any) as OfficeParserAST;
     for (const format of ['xlsx', 'ods', 'pptx', 'odp', 'docx', 'odt'] as const) {

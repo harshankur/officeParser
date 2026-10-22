@@ -11,7 +11,8 @@
  */
 
 import { CellMetadata, CommentMetadata, ImageMode, ListMetadata, NodeBounds, OfficeContentNode, RowMetadata, SheetMetadata, SlideMetadata } from '../../types.js';
-import { stripInvalidXmlChars } from '../../utils/sanitize.js';
+import { sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../../utils/sanitize.js';
+import { encUrl } from '../../utils/officeGenUtils.js';
 import { layoutTableRows } from '../../utils/tableLayout.js';
 
 /** How a cell's value is held and shown. */
@@ -364,41 +365,52 @@ async function mediaIn(node: OfficeContentNode, source: WorkbookSource, media: C
     }
 }
 
-/** The links a cell takes: a web, mail or phone address, or a place in the document (`#Sheet!A1`, `#bookmark`). */
-const LINK_KINDS = /^(https?:|mailto:|tel:|#.)/i;
+/**
+ * Whether a link is one a cell takes: a place in the document (`#Sheet!A1`, `#bookmark`), or an address a
+ * package holds (a web, mail or phone address, or one relative to the file), as DOCX output takes them.
+ */
+const linkable = (url: string) => url.startsWith('#') ? url.length > 1 : sanitizeOfficePackageUrl(url) !== '';
+
+/** A workbook's sheets by their names as a spreadsheet compares them (case aside), for finding the places links name. */
+export const sheetIndex = (names: readonly string[]): Map<string, string> => new Map(names.map(n => [n.toLowerCase(), n]));
+
+/** A place on a sheet: its sheet, its first cell, and its last where it names a range. */
+export interface SheetPlace { sheet: string; cell: string; to?: string }
 
 /**
- * A place in the workbook a link names (`#Sheet2!B4`, `#'Q1 sales'!A1`, `#Sheet2`) on a sheet written, as
- * that sheet's name and the cell (A1 where it names none); undefined for a link elsewhere, or to a sheet
- * no longer there (a document's bookmark).
+ * A place in the workbook a link names (`#Sheet2!B4`, `#'Q1 sales'!A1`, a range `#Sheet2!A1:C3`, ODF's
+ * `#Sheet2.B4` and `#$Sheet2.$A$1`, a sheet alone `#Sheet2`) on a sheet written, as that sheet's name and
+ * the cell (A1 where it names none); undefined for a link elsewhere, or to a sheet no longer there (a
+ * document's bookmark, a defined name).
  */
-export function placeOf(link: string, sheetNames: readonly string[]): { sheet: string; cell: string } | undefined {
-    if (!link.startsWith('#')) return undefined;
+export function placeOf(link: string, sheets: ReadonlyMap<string, string>): SheetPlace | undefined {
+    if (!link.startsWith('#') || link.length > 512) return undefined;
     // Excel's form (`#Sheet!A1`) or ODF's (`#Sheet.A1`, its name's own dots kept: the last one is the cell's).
-    const m = /^#(?:'((?:[^']|'')+)'|([^!]+?))(?:[!.]\$?([A-Za-z]{1,3})\$?(\d{1,7}))?$/.exec(link);
+    const m = /^#\$?(?:'((?:[^']|'')+)'|([^!]+?))(?:[!.]\$?([A-Za-z]{1,3})\$?(\d{1,7})(?::(?:\$?(?:'(?:[^']|'')+'|[^!.:]+)[!.])?\$?([A-Za-z]{1,3})\$?(\d{1,7}))?)?$/.exec(link);
     if (!m) return undefined;
-    const wanted = (m[1] !== undefined ? m[1].replace(/''/g, "'") : m[2]).toLowerCase();
-    const sheet = sheetNames.find(n => n.toLowerCase() === wanted);
-    return sheet ? { sheet, cell: m[3] ? `${m[3].toUpperCase()}${m[4]}` : 'A1' } : undefined;
+    const sheet = sheets.get((m[1] !== undefined ? m[1].replace(/''/g, "'") : m[2]).toLowerCase());
+    if (!sheet) return undefined;
+    return { sheet, cell: m[3] ? `${m[3].toUpperCase()}${m[4]}` : 'A1', ...(m[5] ? { to: `${m[5].toUpperCase()}${m[6]}` } : {}) };
 }
 
 /**
- * The first of a cell's links a workbook can hold: a web, mail or phone address (at most `maxLength`
- * characters: XLSX's MAX_LINK_LENGTH, as Excel opens), or a place on a sheet written; and how many could be (more than one: the
- * rest are reported), and whether a place no sheet holds was among them.
+ * The first of a cell's links a workbook can hold (an address of at most `maxLength` characters as it is
+ * written, XLSX's MAX_LINK_LENGTH as Excel opens it; or a place on a sheet written), and why each other
+ * was not written, every one reported: one past the cell's first, a place no sheet holds, an address too long.
  */
-export function writableLink(links: readonly string[] | undefined, sheetNames: readonly string[], maxLength = Infinity): { link?: string; place?: { sheet: string; cell: string }; writable: number; lostPlace: boolean; tooLong: boolean } {
-    let first: { link: string; place?: { sheet: string; cell: string } } | undefined, writable = 0, lostPlace = false, tooLong = false;
+export function writableLink(links: readonly string[] | undefined, sheets: ReadonlyMap<string, string>, maxLength = Infinity): { link?: string; place?: SheetPlace; lost: string[] } {
+    let first: { link: string; place?: SheetPlace } | undefined;
+    const lost = new Set<string>();
     for (const link of links ?? []) {
+        let place: SheetPlace | undefined;
         if (link.startsWith('#')) {
-            const place = placeOf(link, sheetNames);
-            if (!place) { lostPlace = true; continue; }
-            writable++;
-            if (!first) first = { link, place };
-        } else if (link.length > maxLength) tooLong = true;
-        else { writable++; if (!first) first = { link }; }
+            place = placeOf(link, sheets);
+            if (!place) { lost.add('links to places outside the workbook\'s sheets'); continue; }
+        } else if (encUrl(link).length > maxLength) { lost.add('links of more than 2,079 characters'); continue; }
+        if (first) lost.add('links past a cell\'s first');
+        else first = { link, ...(place ? { place } : {}) };
     }
-    return { ...(first ?? {}), writable, lostPlace: lostPlace && !first, tooLong: tooLong && !first };
+    return { ...(first ?? {}), lost: [...lost] };
 }
 
 /** The longest address Excel opens a link to, and the most links a sheet holds. */
@@ -423,12 +435,12 @@ async function linksIn(node: OfficeContentNode, keep: (node: OfficeContentNode) 
             const k = await keep(c);
             if (k === false || typeof k === 'string') continue;
             const url = (c.metadata as { link?: unknown } | undefined)?.link;
-            if (typeof url === 'string' && LINK_KINDS.test(url.trim()) && !out.includes(url.trim())) out.push(url.trim());
+            if (typeof url === 'string' && linkable(url.trim()) && !out.includes(url.trim())) out.push(url.trim());
             if (depth < 32) await walk(c, depth + 1);
         }
     };
     const own = (node.metadata as { link?: unknown } | undefined)?.link;
-    if (typeof own === 'string' && LINK_KINDS.test(own.trim())) out.push(own.trim());
+    if (typeof own === 'string' && linkable(own.trim())) out.push(own.trim());
     await walk(node, 0);
     return out;
 }
