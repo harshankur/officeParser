@@ -41,6 +41,14 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
     private readonly mediaByKey = new Map<string, number>();
     private readonly attachmentsByName = new Map<string, OfficeAttachment>();
 
+    /** Reports, once, a table's cells that found no place in its grid. */
+    private pastGridReported = false;
+    private cellsPastGrid(): void {
+        if (this.pastGridReported) return;
+        this.pastGridReported = true;
+        this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'table cells past their table\'s columns', format: 'odp' });
+    }
+
     private styleNamed(key: string, prefix: string, xml: (name: string) => string): string {
         let style = this.styles.get(key);
         if (!style) {
@@ -223,8 +231,12 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
             const out: string[] = [];
             for (const cell of row.cells) {
                 while (col < cols && covered.has(`${r},${col}`)) { out.push('<table:covered-table-cell/>'); col++; }
-                if (col >= cols) break;
-                const span = Math.min(cell.colSpan, cols - col), down = Math.min(cell.rowSpan, rows - r);
+                // (A cell past the grid is reported: none of its rows' merges left it a place.)
+                if (col >= cols) { this.cellsPastGrid(); break; }
+                let span = Math.min(cell.colSpan, cols - col), down = Math.min(cell.rowSpan, rows - r);
+                // Its merge held to the positions no earlier cell's covers: a cell inside another's merge is none a reader keeps.
+                for (let dc = 1; dc < span; dc++) if (covered.has(`${r},${col + dc}`)) { span = dc; break; }
+                for (let dr = 1; dr < down; dr++) for (let dc = 0; dc < span; dc++) if (covered.has(`${r + dr},${col + dc}`)) { down = dr; break; }
                 for (let dr = 0; dr < down; dr++) for (let dc = 0; dc < span; dc++) if (dr || dc) covered.add(`${r + dr},${col + dc}`);
                 const paragraphs = cell.paragraphs.map(p => this.paragraphXml(cell.bold ? { ...p, runs: p.runs.map(x => ({ ...x, bold: true })) } : p, 12)).join('') || '<text:p/>';
                 out.push(`<table:table-cell table:style-name="${cellStyleOf(cell.fill)}"${span > 1 ? ` table:number-columns-spanned="${span}"` : ''}${down > 1 ? ` table:number-rows-spanned="${down}"` : ''}>${paragraphs}</table:table-cell>`);

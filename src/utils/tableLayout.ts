@@ -33,8 +33,12 @@ export function layoutTableRows(rows: OfficeContentNode[], limit = Infinity): Ta
     // Pending vertical merges by their left column, and the rightmost of them (-1 for none): asked of
     // every position, a scan of all of them made a row of a thousand merges cost a million steps.
     const active = new Map<number, { remaining: number; span: number }>();
+    // Every column a pending merge holds (its left one's too), so a cell's span stops before one.
+    const held = new Set<number>();
     let rightmost = -1;
     const end = (col: number) => {
+        const merge = active.get(col);
+        if (merge) for (let c = col; c < col + merge.span; c++) held.delete(c);
         active.delete(col);
         if (col === rightmost) { rightmost = -1; for (const left of active.keys()) if (left > rightmost) rightmost = left; }
     };
@@ -73,12 +77,16 @@ export function layoutTableRows(rows: OfficeContentNode[], limit = Infinity): Ta
             }
             const cell = cells[ci++];
             const meta = cell.metadata as { colSpan?: unknown; rowSpan?: unknown } | undefined;
-            const colSpan = Math.max(1, Math.min(MAX_LAYOUT_COLUMNS, Math.floor(Number(meta?.colSpan)) || 1));
+            let colSpan = Math.max(1, Math.min(MAX_LAYOUT_COLUMNS, Math.floor(Number(meta?.colSpan)) || 1));
+            // (A span reaching into columns an earlier row's merge still holds stops before them: the two
+            // merges overlapped, which a reader repairs or reads as a shifted row.)
+            for (let c = col + 1; c < col + colSpan; c++) if (held.has(c)) { colSpan = c - col; break; }
             const rowSpan = Math.max(1, Math.min(MAX_LAYOUT_ROW_SPAN, Math.floor(Number(meta?.rowSpan)) || 1));
             slots.push({ kind: 'cell', cell, col, colSpan, rowSpan });
             positions += colSpan;
             if (rowSpan > 1) {
                 active.set(col, { remaining: rowSpan - 1, span: colSpan });
+                for (let c = col; c < col + colSpan; c++) held.add(c);
                 if (col > rightmost) rightmost = col;
             }
             col += colSpan;

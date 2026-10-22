@@ -3,8 +3,9 @@
  * spreadsheet's), or each of its tables as a sheet (or all on one), and its text outside them on a sheet
  * of its own; each cell typed as a spreadsheet types it, a number as a number with the format it is
  * shown in (a percentage, a currency, grouped thousands, its decimals), a date or a time as one, other
- * text as text. A spreadsheet's cell keeps its value and is shown as it was (CellMetadata.shownText); a
- * table's cell is read from its text (`19%`, `€1,250.00`, `2026-10-01`), a number with leading zeros
+ * text as text. A spreadsheet's cell keeps the value and the kind of value it holds (CellMetadata.valueType,
+ * CellMetadata.value) and is shown as it was (CellMetadata.shownText); a cell whose source does not say (a
+ * table's, a CSV's) is read from its text (`19%`, `€1,250.00`, `2026-10-01`), a number with leading zeros
  * or more digits than a spreadsheet keeps (`007`, a card number) staying text.
  *
  * @module generators/sheets/workbook
@@ -17,30 +18,32 @@ import { layoutTableRows } from '../../utils/tableLayout.js';
 
 /** How a cell's value is held and shown. */
 export interface CellValue {
-    kind: 'number' | 'percent' | 'currency' | 'date' | 'datetime' | 'time' | 'text';
-    /** The number held: a number's, a percentage's fraction, a date's or time's day count (1900 system) or day fraction. */
+    kind: 'number' | 'percent' | 'currency' | 'date' | 'datetime' | 'time' | 'boolean' | 'error' | 'text';
+    /** The number held: a number's, a percentage's fraction, a date's or time's day count (1900 system) or day fraction (a duration's days), a truth value's 1 or 0. */
     number?: number;
-    /** A date's or time's ISO text, as ODF holds it. */
+    /** A date's or time's ISO text, as ODF holds it (a time's as a duration, `PT30H0M0S`). */
     iso?: string;
     /** Decimals shown, thousands grouped, and a currency's symbol (before or after the number). */
     decimals?: number;
     grouping?: boolean;
     symbol?: string;
     symbolAfter?: boolean;
+    /** The spreadsheet's own number format code (CellMetadata.numberFormat), which XLSX output writes as it is. */
+    code?: string;
 }
 
 /** A cell: its text (a spreadsheet's stored value), what it shows (its value in its format), its value typed. */
 export interface WorkCell { col: number; text: string; shown: string; value: CellValue; bold: boolean; colSpan: number; rowSpan: number; hidden?: boolean; /** Its links in order (a few at most): a writer writes the first it can (see writableLink). */ links?: string[] }
 export interface WorkRow { cells: WorkCell[]; hidden?: boolean }
-export interface WorkSheet { name: string; rows: WorkRow[]; hidden?: boolean; widths: number[] }
+export interface WorkSheet { name: string; rows: WorkRow[]; hidden?: boolean; widths: number[]; /** A spreadsheet's sheet's own name, where the name written is another (cut, made unique): links name it. */ source?: string }
 
 /** Spreadsheets' limits: rows, columns, a sheet name's length. */
 export const MAX_ROWS = 1_048_576;
 export const MAX_COLS = 16_384;
+/** What is reported of content past them. */
+const PAST_ROWS = 'rows past a sheet\'s 1,048,576', PAST_COLS = 'columns past a sheet\'s 16,384';
 
 const NUMBER = /^-?(?:\d+(?:\.\d+)?|\.\d+)$/;
-/** A number as a spreadsheet stores it: its exponent too (`1E-10`), and up to seventeen digits (`0.30000000000000004`). */
-const STORED_NUMBER = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 const GROUPED = /^-?\d{1,3}(?:,\d{3})+(?:\.\d+)?$/;
 const CURRENCY_SYMBOLS = '$€£¥₹₩₽₺₪฿₫';
 
@@ -91,41 +94,73 @@ function isoValue(text: string): CellValue | undefined {
     return undefined;
 }
 
-/**
- * A spreadsheet's stored number (`stored`: a cell of a sheet, its text the value held) as a number, or
- * undefined: any finite number as a spreadsheet writes one, exponents and all seventeen digits a double
- * holds, but not a code with leading zeros (`007`, which a sheet holds as text) or more digits than a
- * double keeps (a card number).
- */
-function storedNumber(text: string): number | undefined {
-    const bare = text.replace(/^-/, '');
-    if (/^0\d/.test(bare)) return undefined;
-    const mantissa = bare.replace(/[eE].*$/, '').replace(/\D/g, '').replace(/^0+/, '');
-    if (mantissa.length > 17) return undefined;
-    const n = Number(text);
-    return Number.isFinite(n) ? n : undefined;
+/** The errors a spreadsheet cell holds, as Excel writes them. */
+const ERRORS = new Set(['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A', '#GETTING_DATA']);
+
+/** A day count (1900 system) as ISO text: a date, or a date and time. */
+function isoOfDays(days: number, withTime: boolean): string {
+    const ms = Math.round(days * 86_400_000 / 1000) * 1000;
+    const at = new Date(Date.UTC(1899, 11, 30) + ms).toISOString();
+    return withTime ? at.slice(0, 19) : at.slice(0, 10);
 }
 
 /**
- * A cell's value from its text, and from what a spreadsheet showed for it (`shown`, where its text is
- * its stored value; `stored`, a sheet's cell, whose text is a value as the sheet holds it): a number, a
- * percentage, a currency amount, a date or a time, else text.
+ * A spreadsheet's cell as the value its file says it holds (CellMetadata.valueType: `held`, the value
+ * itself, CellMetadata.value or its text), shown as it showed (`shown`): a number in the format read from
+ * what it showed, a date or a time as one, a truth value, an error, or text however it reads.
  */
-export function cellValue(text: string, shown?: string, stored = shown !== undefined): CellValue {
-    const s = text.trim();
-    if (!s || s.length > 64) return { kind: 'text' };
-    const iso = isoValue(s);
-    if (iso) return iso;
-    // A spreadsheet's number, shown through its format: the value held, the format read from what it showed.
-    if (stored && STORED_NUMBER.test(s)) {
-        const n = storedNumber(s);
-        if (n !== undefined) {
-            if (shown === undefined) return { kind: 'number', number: n };
+export function typedValue(valueType: NonNullable<CellMetadata['valueType']>, held: string, shown: string, code?: string): CellValue {
+    const v = typedKind(valueType, held, shown);
+    return code && v.kind !== 'text' && v.kind !== 'boolean' && v.kind !== 'error' ? { ...v, code } : v;
+}
+
+function typedKind(valueType: NonNullable<CellMetadata['valueType']>, held: string, shown: string): CellValue {
+    const n = Number(held.trim());
+    switch (valueType) {
+        case 'number': {
+            if (!held.trim() || !Number.isFinite(n)) return { kind: 'text' };
             const look = cellValue(shown);
             if (look.kind === 'percent' || look.kind === 'currency' || (look.kind === 'number' && (look.grouping || look.decimals))) return { ...look, number: n };
             return { kind: 'number', number: n };
         }
-        if (shown !== undefined) return { kind: 'text' };
+        case 'date': {
+            // (Before 1900-03-01 the 1900 system counts a day that never was: such a date stays its text.)
+            if (!held.trim() || !Number.isFinite(n) || n < 61 || n >= 2_958_466) return { kind: 'text' };
+            const whole = Math.abs(n - Math.round(n)) < 1e-9;
+            return whole ? { kind: 'date', number: Math.round(n), iso: isoOfDays(n, false) } : { kind: 'datetime', number: n, iso: isoOfDays(n, true) };
+        }
+        case 'time': {
+            if (!held.trim() || !Number.isFinite(n) || n < 0) return { kind: 'text' };
+            const seconds = Math.round(n * 86400);
+            return { kind: 'time', number: n, iso: `PT${Math.floor(seconds / 3600)}H${Math.floor(seconds / 60) % 60}M${seconds % 60}S` };
+        }
+        case 'boolean': {
+            const truth = /^(true|1)$/i.test(held.trim()) ? 1 : /^(false|0)$/i.test(held.trim()) ? 0 : undefined;
+            return truth === undefined ? { kind: 'text' } : { kind: 'boolean', number: truth };
+        }
+        case 'error': return ERRORS.has(held.trim().toUpperCase()) ? { kind: 'error' } : { kind: 'text' };
+        default: return { kind: 'text' };
+    }
+}
+
+/**
+ * A cell's value from its text (a table's, a CSV's: its source says nothing of it), and from what a
+ * spreadsheet showed for it where its text is a value held (`shown`): a number of at most fifteen
+ * significant digits, a percentage, a currency amount, a date or a time, else text.
+ */
+export function cellValue(text: string, shown?: string): CellValue {
+    const s = text.trim();
+    if (!s || s.length > 64) return { kind: 'text' };
+    const iso = isoValue(s);
+    if (iso) return iso;
+    // A number shown through a format: the value held, the format read from what it showed.
+    if (shown !== undefined && shown !== text && (NUMBER.test(s) || GROUPED.test(s))) {
+        const n = plainNumber(s);
+        if (n !== undefined) {
+            const look = cellValue(shown);
+            if (look.kind === 'percent' || look.kind === 'currency' || (look.kind === 'number' && (look.grouping || look.decimals))) return { ...look, number: n };
+            return { kind: 'number', number: n };
+        }
     }
     if (NUMBER.test(s) || GROUPED.test(s)) {
         const n = plainNumber(s);
@@ -159,23 +194,23 @@ function cutTo(text: string, max: number): string {
 }
 
 /**
- * A sheet name a spreadsheet takes: at most 31 characters (cut at a whole character), none of
- * `[]:*?/\` nor what XML cannot hold, not blank, unique as a spreadsheet compares names (case aside).
+ * A sheet name a spreadsheet takes: at most `max` characters (Excel's 31; cut at a whole character), none
+ * of `[]:*?/\` nor what XML cannot hold, not blank, unique as a spreadsheet compares names (case aside).
  */
 const nextSuffix = new WeakMap<Set<string>, Map<string, number>>();
 
-export function sheetName(wanted: string, taken: Set<string>, fallback: string): string {
+export function sheetName(wanted: string, taken: Set<string>, fallback: string, max = 31): string {
     // (Neither end an apostrophe nor a blank, after every cut too: a name cut to 31 could end in one.)
     const ends = (text: string) => text.replace(/^[\s']+|[\s']+$/g, '');
-    const clean = (name: string) => ends(cutTo(ends(stripInvalidXmlChars(name).replace(/[[\]:*?/\\\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ')), 31));
+    const clean = (name: string) => ends(cutTo(ends(stripInvalidXmlChars(name).replace(/[[\]:*?/\\\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ')), max));
     let base = clean(wanted) || clean(fallback) || 'Sheet';
-    if (base.toLowerCase() === 'history') base = `${cutTo(base, 29)} 1`;
+    if (base.toLowerCase() === 'history') base = `${cutTo(base, max - 2)} 1`;
     let name = base;
     // The next number to try for each name, so many sheets wanting one name are named in time in proportion.
     let next = nextSuffix.get(taken);
     if (!next) nextSuffix.set(taken, next = new Map());
     let n = next.get(base.toLowerCase()) ?? 2;
-    while (taken.has(name.toLowerCase())) { name = `${ends(cutTo(base, 31 - String(n).length - 1)) || 'Sheet'} ${n}`; n++; }
+    while (taken.has(name.toLowerCase())) { name = `${ends(cutTo(base, max - String(n).length - 1)) || 'Sheet'} ${n}`; n++; }
     next.set(base.toLowerCase(), n);
     taken.add(name.toLowerCase());
     return name;
@@ -238,7 +273,7 @@ function allBold(node: OfficeContentNode): boolean {
  * merged down holds its columns in the rows below and no two merges overlap. A row onNode gives text
  * for is one cell holding it; a cell onNode gives text for holds that text.
  */
-async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadsheet: boolean, media?: CellMedia): Promise<WorkRow[]> {
+async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadsheet: boolean, lost: Set<string>, media?: CellMedia): Promise<WorkRow[]> {
     // The rows and cells kept, and the text onNode gave for any.
     const rows: { row: OfficeContentNode; cells: OfficeContentNode[]; text?: string }[] = [];
     const given = new Map<OfficeContentNode, string>();
@@ -264,11 +299,14 @@ async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadshe
         const own = given.get(cell);
         const text = own ?? await source.textOf(cell);
         const shown = spreadsheet && typeof cm?.shownText === 'string' ? cm.shownText : undefined;
+        // The kind of value its file says it holds, and the value (its text, else what it shows; see CellMetadata.value).
+        const type = spreadsheet && typeof cm?.valueType === 'string' ? cm.valueType : undefined;
+        const held = typeof cm?.value === 'string' ? cm.value : text;
         // Its pictures and charts, which a cell cannot hold (see CellMedia), and its first link.
         if (own === undefined && media) await mediaIn(cell, source, media);
         const links = own === undefined ? await linksIn(cell, source.keep) : [];
         return {
-            col, text, shown: shown ?? text, value: cellValue(text, shown, spreadsheet), bold: cm?.style === 'header' || allBold(cell),
+            col, text, shown: shown ?? text, value: type ? typedValue(type, held, shown ?? text, typeof cm?.numberFormat === 'string' ? cm.numberFormat : undefined) : cellValue(text, shown), bold: cm?.style === 'header' || allBold(cell),
             colSpan: Math.max(1, Math.min(MAX_COLS - col, colSpan)), rowSpan: Math.max(1, Math.min(MAX_ROWS - rowIndex, rowSpan)),
             ...(cm?.hidden ? { hidden: true } : {}), ...(links.length ? { links } : {}),
         };
@@ -281,7 +319,8 @@ async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadshe
             // A spreadsheet's row number, where its cells give it (gaps kept as empty rows), else the next.
             const own = (row.children || []).map(c => (c.metadata as CellMetadata | undefined)?.row).find((r): r is number => typeof r === 'number');
             rowIndex = typeof own === 'number' && own > rowIndex ? own : rowIndex + 1;
-            if (rowIndex >= MAX_ROWS) break;
+            // (Rows and columns past a spreadsheet's are reported, not written.)
+            if (rowIndex >= MAX_ROWS) { lost.add(PAST_ROWS); break; }
             while (out.length < rowIndex) out.push({ cells: [] });
             const cells: WorkCell[] = [];
             if (text !== undefined) {
@@ -292,7 +331,7 @@ async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadshe
             for (const cell of kept) {
                 const cm = cell.metadata as CellMetadata;
                 col = cm.col > col ? cm.col : col + 1;
-                if (col >= MAX_COLS) break;
+                if (col >= MAX_COLS) { lost.add(PAST_COLS); break; }
                 const colSpan = Math.max(1, Math.floor(cm.colSpan ?? 1));
                 cells.push(await workCell(cell, col, rowIndex, colSpan, Math.max(1, Math.floor(cm.rowSpan ?? 1))));
                 col += colSpan - 1;
@@ -311,10 +350,11 @@ async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadshe
     });
     const layout = layoutTableRows(laidRows);
     for (const [ri, slots] of (layout?.rows ?? []).entries()) {
-        if (ri >= MAX_ROWS) break;
+        if (ri >= MAX_ROWS) { lost.add(PAST_ROWS); break; }
         const cells: WorkCell[] = [];
         for (const slot of slots) {
-            if (slot.kind !== 'cell' || slot.col >= MAX_COLS) continue;
+            if (slot.kind !== 'cell') continue;
+            if (slot.col >= MAX_COLS) { lost.add(PAST_COLS); continue; }
             const text = stand.get(slot.cell);
             cells.push(text !== undefined ? textCell(slot.col, text) : await workCell(slot.cell, slot.col, ri, slot.colSpan, slot.rowSpan));
         }
@@ -371,8 +411,18 @@ async function mediaIn(node: OfficeContentNode, source: WorkbookSource, media: C
  */
 const linkable = (url: string) => url.startsWith('#') ? url.length > 1 : sanitizeOfficePackageUrl(url) !== '';
 
-/** A workbook's sheets by their names as a spreadsheet compares them (case aside), for finding the places links name. */
-export const sheetIndex = (names: readonly string[]): Map<string, string> => new Map(names.map(n => [n.toLowerCase(), n]));
+/**
+ * A workbook's sheets by their names as a spreadsheet compares them (case aside), for finding the places
+ * links name: by the names written, and by a spreadsheet's own where it was written under another (cut,
+ * made unique), whose links name it so.
+ */
+export function sheetIndex(sheets: readonly { name: string; source?: string }[]): Map<string, string> {
+    const index = new Map<string, string>();
+    for (const s of sheets) if (s.source) index.set(s.source.toLowerCase(), s.name);
+    // (A name written is that sheet's, whatever sheet was once called so.)
+    for (const s of sheets) index.set(s.name.toLowerCase(), s.name);
+    return index;
+}
 
 /** A place on a sheet: its sheet, its first cell, and its last where it names a range. */
 export interface SheetPlace { sheet: string; cell: string; to?: string }
@@ -482,11 +532,12 @@ export async function noteLabels(content: OfficeContentNode[], keep: (node: Offi
  * block of the page) by its number, each slide's speaker notes by the slide, and each comment by its
  * author, with their text.
  */
-async function notesOf(content: OfficeContentNode[], source: WorkbookSource, labels: Map<OfficeContentNode, string>): Promise<WorkRow[]> {
+async function notesOf(content: OfficeContentNode[], source: WorkbookSource, labels: Map<OfficeContentNode, string>, lost: Set<string>): Promise<WorkRow[]> {
     const rows: WorkRow[] = [];
     const seen = new Set<OfficeContentNode>();
     const add = async (note: OfficeContentNode, label: string) => {
-        if (seen.has(note) || rows.length >= MAX_ROWS) return;
+        if (seen.has(note)) return;
+        if (rows.length >= MAX_ROWS) { lost.add(PAST_ROWS); return; }
         seen.add(note);
         const kept = await source.keep(note);
         if (kept === false) return;
@@ -494,7 +545,9 @@ async function notesOf(content: OfficeContentNode[], source: WorkbookSource, lab
         const text = (typeof kept === 'string' ? kept : note.children?.length
             ? note.type === 'comment' ? (await Promise.all(note.children.map(c => source.textOf(c)))).join('\n') : await source.textOf(note)
             : note.text ?? '').trim();
-        if (text) rows.push({ cells: [textCell(0, label), { ...textCell(1, text), value: { kind: 'text' } }] });
+        // (Its first link the cell's, as a block's is on the Text sheet; a note onNode replaced has none.)
+        const links = typeof kept === 'string' ? [] : await linksIn(note, source.keep);
+        if (text) rows.push({ cells: [textCell(0, label), { ...textCell(1, text), value: { kind: 'text' }, ...(links.length ? { links } : {}) }] });
     };
     // (A comment onNode replaced is its text alone, no author.)
     const commentLabel = async (comment: OfficeContentNode) => {
@@ -531,9 +584,10 @@ async function notesOf(content: OfficeContentNode[], source: WorkbookSource, lab
  * sheet of its own (`includeText`), a block a row. Pictures and charts, which a cell cannot hold, are
  * counted for the writer's warning.
  */
-export async function buildWorkbook(content: OfficeContentNode[], source: WorkbookSource, options: { sheetPerTable: boolean; includeText: boolean; includeCharts: boolean; imageMode: ImageMode; includeFormatting: boolean; noteLabels: Map<OfficeContentNode, string> }): Promise<{ sheets: WorkSheet[]; unrepresentable: Set<string> }> {
+export async function buildWorkbook(content: OfficeContentNode[], source: WorkbookSource, options: { sheetPerTable: boolean; includeText: boolean; includeCharts: boolean; imageMode: ImageMode; includeFormatting: boolean; noteLabels: Map<OfficeContentNode, string>; /** The longest sheet name the format takes (Excel's 31). */ sheetNameLength?: number }): Promise<{ sheets: WorkSheet[]; unrepresentable: Set<string> }> {
     const sheets: WorkSheet[] = [];
     const taken = new Set<string>();
+    const nameOf = (wanted: string, fallback: string) => sheetName(wanted, taken, fallback, options.sheetNameLength);
     const unrepresentable = new Set<string>();
     // A chart or picture left out by the caller (includeCharts: false, includeImages 'none' or 'ocr-text-only')
     // is not one lost.
@@ -547,7 +601,7 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
         media.pictures = 0;
         for (const c of charts) {
             const rows = await chartRows(c);
-            if (rows) sheets.push({ name: sheetName(chartName(c, after), taken, `Chart ${chartCount}`), rows, widths: widthsOf(rows) });
+            if (rows) sheets.push({ name: nameOf(chartName(c, after), `Chart ${chartCount}`), rows, widths: widthsOf(rows) });
         }
     };
     // A chart's sheet is named for its title, else for what it follows.
@@ -557,8 +611,8 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
     };
     // The notes, on a sheet of their own after the others.
     const withNotes = async () => {
-        const notes = await notesOf(content, source, options.noteLabels);
-        if (notes.length) sheets.push({ name: sheetName('Notes', taken, 'Notes'), rows: notes, widths: [12, Math.min(120, Math.max(8, longestOf(notes, 1)))] });
+        const notes = await notesOf(content, source, options.noteLabels, unrepresentable);
+        if (notes.length) sheets.push({ name: nameOf('Notes', 'Notes'), rows: notes, widths: [12, Math.min(120, Math.max(8, longestOf(notes, 1)))] });
         // No bold where the caller asked for no formatting (includeFormatting: false).
         if (!options.includeFormatting) for (const sheet of sheets) for (const row of sheet.rows) for (const cell of row.cells) cell.bold = false;
         return { sheets, unrepresentable };
@@ -570,20 +624,23 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
         const table = source.chartTable?.(node);
         if (!table) { lost(node); return undefined; }
         chartCount++;
-        return gridOf(table, source, false);
+        return gridOf(table, source, false, unrepresentable);
     };
     // A node onNode gives a string for, where a table or sheet stood: one cell of it.
     const oneCell = (text: string): WorkRow[] => [{ cells: [{ ...textCell(0, text), value: { kind: 'text' } }] }];
+    // Whether a sheet has a row left (one past its last is reported, not written).
+    const room = (rows: WorkRow[]) => rows.length < MAX_ROWS || (unrepresentable.add(PAST_ROWS), false);
     const sheetNodes = content.filter(n => n.type === 'sheet');
     if (sheetNodes.length) {
         for (const [i, node] of sheetNodes.entries()) {
             const kept = await source.keep(node);
             if (kept === false) continue;
             const meta = node.metadata as SheetMetadata | undefined;
-            const rows = typeof kept === 'string' ? oneCell(kept) : await gridOf(node, source, true, media);
+            const rows = typeof kept === 'string' ? oneCell(kept) : await gridOf(node, source, true, unrepresentable, media);
             // (A sheet onNode gives a string for is that string alone, under no name of its own.)
-            const name = sheetName(typeof kept === 'string' ? '' : meta?.sheetName ?? '', taken, `Sheet${i + 1}`);
-            sheets.push({ name, rows, ...(meta?.hidden ? { hidden: true } : {}), widths: widthsOf(rows) });
+            const name = nameOf(typeof kept === 'string' ? '' : meta?.sheetName ?? '', `Sheet${i + 1}`);
+            const own = typeof kept === 'string' ? undefined : meta?.sheetName;
+            sheets.push({ name, rows, ...(meta?.hidden ? { hidden: true } : {}), widths: widthsOf(rows), ...(own && own !== name ? { source: own } : {}) });
             if (typeof kept === 'string') continue;
             // Its charts and pictures (on it, or in its cells): each chart a sheet of its data after it; its
             // pictures, which a cell cannot hold, reported.
@@ -592,7 +649,7 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
                 const k = await source.keep(c);
                 if (k === false) continue;
                 // (One onNode gives a string for: a row of that text on the sheet, after its own.)
-                if (typeof k === 'string') { if (k.trim() && rows.length < MAX_ROWS) rows.push({ cells: [{ ...textCell(0, k), value: { kind: 'text' } }] }); continue; }
+                if (typeof k === 'string') { if (k.trim() && room(rows)) rows.push({ cells: [{ ...textCell(0, k), value: { kind: 'text' } }] }); continue; }
                 if (c.type === 'image') media.pictures++; else media.charts.push(c);
             }
             await settle(name);
@@ -618,15 +675,15 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
             if (typeof kept === 'string' && !['paragraph', 'heading', 'list', 'code', 'definitionTerm', 'definitionDescription'].includes(node.type)) {
                 if (node.type === 'table' || node.type === 'chart') {
                     tables++;
-                    if (options.sheetPerTable) sheets.push({ name: sheetName(heading, taken, `Table ${tables}`), rows: oneCell(kept), widths: [Math.min(80, kept.length + 2)] });
+                    if (options.sheetPerTable) sheets.push({ name: nameOf(heading, `Table ${tables}`), rows: oneCell(kept), widths: [Math.min(80, kept.length + 2)] });
                     else { if (together.length) together.push({ cells: [] }); together.push(...oneCell(kept)); }
-                } else if (kept.trim() && options.includeText && text.length < MAX_ROWS) text.push(...oneCell(kept));
+                } else if (kept.trim() && options.includeText && room(text)) text.push(...oneCell(kept));
                 continue;
             }
             if (node.type === 'table') {
-                const rows = await gridOf(node, source, false, media);
+                const rows = await gridOf(node, source, false, unrepresentable, media);
                 tables++;
-                if (options.sheetPerTable) sheets.push({ name: sheetName(heading, taken, `Table ${tables}`), rows, widths: widthsOf(rows) });
+                if (options.sheetPerTable) sheets.push({ name: nameOf(heading, `Table ${tables}`), rows, widths: widthsOf(rows) });
                 else { if (together.length) together.push({ cells: [] }); for (const r of rows) together.push(r); }
                 await settle(heading);
                 continue;
@@ -634,14 +691,14 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
             if (node.type === 'image') {
                 // A picture a cell cannot hold (reported): its words in its place (see pictureWords).
                 const words = pictureWords(node, options.imageMode);
-                if (words && options.includeText && text.length < MAX_ROWS) text.push({ cells: [{ ...textCell(0, words), value: { kind: 'text' } }] });
+                if (words && options.includeText && room(text)) text.push({ cells: [{ ...textCell(0, words), value: { kind: 'text' } }] });
                 lost(node);
                 continue;
             }
             if (node.type === 'chart') {
                 const rows = await chartRows(node);
                 if (!rows) continue;
-                if (options.sheetPerTable) sheets.push({ name: sheetName(chartName(node, heading), taken, `Chart ${chartCount}`), rows, widths: widthsOf(rows) });
+                if (options.sheetPerTable) sheets.push({ name: nameOf(chartName(node, heading), `Chart ${chartCount}`), rows, widths: widthsOf(rows) });
                 else { if (together.length) together.push({ cells: [] }); for (const r of rows) together.push(r); }
                 continue;
             }
@@ -649,7 +706,7 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
             // An embedded video or page: its address.
             if (node.type === 'embed') {
                 const url = (node.metadata as { url?: string } | undefined)?.url ?? node.text;
-                if (typeof url === 'string' && url.trim() && options.includeText && text.length < MAX_ROWS) text.push({ cells: [{ ...textCell(0, url.trim()), value: { kind: 'text' } }] });
+                if (typeof url === 'string' && url.trim() && options.includeText && room(text)) text.push({ cells: [{ ...textCell(0, url.trim()), value: { kind: 'text' } }] });
                 continue;
             }
             // Comments are written on the Notes sheet (see notesOf).
@@ -664,7 +721,7 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
                 if (node.type === 'list' && t && blockText === null) { const marker = listMarker(node.metadata as ListMetadata | undefined); if (marker) t = `${marker} ${t}`; }
                 // Its first link the row's; a picture or chart in the text, which a cell cannot hold, reported or a sheet of its data.
                 const links = blockText === null ? await linksIn(node, source.keep) : [];
-                if (t && options.includeText && text.length < MAX_ROWS) text.push({ cells: [{ ...textCell(0, t, node.type === 'heading'), value: { kind: 'text' }, ...(links.length ? { links } : {}) }] });
+                if (t && options.includeText && room(text)) text.push({ cells: [{ ...textCell(0, t, node.type === 'heading'), value: { kind: 'text' }, ...(links.length ? { links } : {}) }] });
                 if (blockText === null) await mediaIn(node, source, media);
                 await settle(heading);
                 continue;
@@ -673,8 +730,14 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
         }
     };
     await visit(sheetNodes.length ? content.filter(n => n.type !== 'sheet') : content, 0);
-    if (!options.sheetPerTable && together.length) sheets.push({ name: sheetName('Tables', taken, 'Tables'), rows: together, widths: widthsOf(together) });
-    if (text.length) sheets.push({ name: sheetName('Text', taken, 'Text'), rows: text, widths: [Math.min(120, Math.max(8, longestOf(text, 0)))] });
+    // (The tables one after another past a sheet's rows: the rest reported, a merge held to the last row.)
+    if (together.length > MAX_ROWS) {
+        together.length = MAX_ROWS;
+        unrepresentable.add(PAST_ROWS);
+        together.forEach((row, ri) => { for (const cell of row.cells) cell.rowSpan = Math.min(cell.rowSpan, MAX_ROWS - ri); });
+    }
+    if (!options.sheetPerTable && together.length) sheets.push({ name: nameOf('Tables', 'Tables'), rows: together, widths: widthsOf(together) });
+    if (text.length) sheets.push({ name: nameOf('Text', 'Text'), rows: text, widths: [Math.min(120, Math.max(8, longestOf(text, 0)))] });
     return withNotes();
 }
 

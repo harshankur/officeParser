@@ -3063,6 +3063,28 @@ export interface CellMetadata {
      */
     shownText?: string;
     /**
+     * The kind of value a spreadsheet's cell holds, as its file says (XLSX's cell type and number format,
+     * ODS's `office:value-type`): a number (a percentage or a currency amount included), a date (a date and
+     * time included), a time (a duration included), a truth value, an error, or text. A spreadsheet writer
+     * holds the cell as that kind: text stays text however it reads (a code `1E5`, a card number), a number
+     * is the number held. Not set where the source does not say (CSV, a document's tables), whose cells are
+     * read from their text.
+     */
+    valueType?: 'number' | 'date' | 'time' | 'boolean' | 'error' | 'text';
+    /**
+     * The value the cell holds, where it is other than `text`: a number in full (`10.456`, where ODS's `text`
+     * is what the sheet shows, `10.46`); a date's or time's count of days in the 1900 date system, as Excel
+     * counts them (`45000` for 2023-03-15, `45000.5` at noon, `0.25` for 06:00, `1.25` for a duration of 30
+     * hours), whatever text the cell shows; `true` or `false` for a truth value.
+     */
+    value?: string;
+    /**
+     * The number format the sheet shows the cell's value in, as Excel writes one (XLSX's format code:
+     * `0.0 "kg"`, `mm/dd/yyyy`, `#,##0.00 [$€-407]`), where it has one other than General. XLSX output
+     * writes it as it is; other spreadsheet output shows the value in the format read from `shownText`.
+     */
+    numberFormat?: string;
+    /**
      * The sheet does not show the cell: its row or its column is hidden. It is read as any cell (text,
      * CSV, chunks and every other output keep it as data); a printout leaves it out, as PDF output does
      * unless `pdfConfig.printHidden` is set.

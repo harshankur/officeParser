@@ -11,6 +11,9 @@ function xmlText(s: string | undefined): string {
     return escapeXml(stripInvalidXmlChars(s ?? ''));
 }
 
+/** The longest sheet name ODS output writes (ODF sets none; Excel's 31 is XLSX's alone). */
+const MAX_SHEET_NAME = 255;
+
 const ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
     + 'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" '
     + 'xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" '
@@ -63,7 +66,11 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
             case 'datetime':
                 return this.styleNamed('dt', 'N', name => `<number:date-style style:name="${name}"><number:year number:style="long"/><number:text>-</number:text><number:month number:style="long"/><number:text>-</number:text><number:day number:style="long"/><number:text> </number:text><number:hours number:style="long"/><number:text>:</number:text><number:minutes number:style="long"/><number:text>:</number:text><number:seconds number:style="long"/></number:date-style>`);
             case 'time':
+                // (A duration of a day or more in its hours: `number:truncate-on-overflow` off.)
+                if ((v.number ?? 0) >= 1) return this.styleNamed('th', 'N', name => `<number:time-style style:name="${name}" number:truncate-on-overflow="false"><number:hours/><number:text>:</number:text><number:minutes number:style="long"/><number:text>:</number:text><number:seconds number:style="long"/></number:time-style>`);
                 return this.styleNamed('t', 'N', name => `<number:time-style style:name="${name}"><number:hours number:style="long"/><number:text>:</number:text><number:minutes number:style="long"/><number:text>:</number:text><number:seconds number:style="long"/></number:time-style>`);
+            case 'boolean':
+                return this.styleNamed('b', 'N', name => `<number:boolean-style style:name="${name}"><number:boolean/></number:boolean-style>`);
             default: return undefined;
         }
     }
@@ -102,14 +109,14 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
             chartTitle: node => chartData(node)?.title,
             textOf: async node => (await this.processNodeRecursive(node, textProcessor)).replace(/\n+$/, ''),
             keep,
-        }, { sheetPerTable: cfg.sheetPerTable !== false, includeText: cfg.includeText !== false, includeCharts: this.config.includeCharts !== false, imageMode: this.imageMode(), includeFormatting: this.config.includeFormatting !== false, noteLabels: labels });
+        }, { sheetPerTable: cfg.sheetPerTable !== false, includeText: cfg.includeText !== false, includeCharts: this.config.includeCharts !== false, imageMode: this.imageMode(), includeFormatting: this.config.includeFormatting !== false, noteLabels: labels, sheetNameLength: MAX_SHEET_NAME });
         for (const feature of unrepresentable) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'ods' });
         if (!sheets.length) {
             this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'a document with no table or text', format: 'ods' });
             sheets.push({ name: 'Sheet1', rows: [], widths: [] });
         }
         if (sheets.every(s => s.hidden)) delete sheets[0].hidden;
-        const sheetNames = sheetIndex(sheets.map(sh => sh.name));
+        const sheetNames = sheetIndex(sheets);
         const tables = sheets.map(sheet => this.tableXml(sheet, sheetNames)).join('');
         for (const feature of this.linkLosses) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'ods' });
         const { iso, mtime } = resolveZipInstant(this.effectiveMetadata.modified);
@@ -158,41 +165,68 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
                 lastCovered.set(r + dr, Math.max(lastCovered.get(r + dr) ?? -1, c.col + dc));
             }
         }
-        const rows = sheet.rows.map((row, r) => {
-            const out: string[] = [];
-            let col = 0;
-            const byCol = new Map(row.cells.map(c => [c.col, c]));
-            // Empty positions as one repeated cell; covered ones as covered cells.
-            let empty = 0;
-            const flush = () => { if (empty) { out.push(`<table:table-cell${empty > 1 ? ` table:number-columns-repeated="${empty}"` : ''}/>`); empty = 0; } };
-            let last = lastCovered.get(r) ?? -1;
-            for (const c of row.cells) last = Math.max(last, c.col + c.colSpan - 1);
-            for (; col <= last; col++) {
-                const cell = byCol.get(col);
-                if (covered.has(`${r},${col}`) && !cell) { flush(); out.push('<table:covered-table-cell/>'); continue; }
-                if (!cell) { empty++; continue; }
-                flush();
-                const style = this.cellStyle(cell.value, cell.bold, cell.text.includes('\n'));
-                const attrs = (style ? ` table:style-name="${style}"` : '')
-                    + (cell.colSpan > 1 ? ` table:number-columns-spanned="${cell.colSpan}"` : '') + (cell.rowSpan > 1 ? ` table:number-rows-spanned="${cell.rowSpan}"` : '')
-                    + valueAttrs(cell.value);
-                // (What the cell shows: a spreadsheet's number in its format, as ODF holds it beside the value.)
-                // Its link on its text, line by line.
-                // (A place in the workbook as ODF names a cell, `#Sheet.A1`, where the sheet is written; else reported.)
-                // (The first of its links a workbook holds, see writableLink; the rest reported.)
-                const chosen = writableLink(cell.links, sheetNames);
-                for (const why of chosen.lost) this.linkLosses.add(why);
-                // (A range as ODF writes one: each end on its sheet.)
-                const href = chosen.place ? `#${sheetRef(chosen.place.sheet)}.${chosen.place.cell}${chosen.place.to ? `:${sheetRef(chosen.place.sheet)}.${chosen.place.to}` : ''}` : chosen.link ? encUrl(chosen.link) : undefined;
-                const linked = (line: string) => href ? `<text:a xlink:type="simple" xlink:href="${xmlText(href)}">${xmlText(line)}</text:a>` : xmlText(line);
-                const paragraphs = cell.shown ? cell.shown.split('\n').map(line => `<text:p>${linked(line)}</text:p>`).join('') : '';
-                out.push(`<table:table-cell${attrs}>${paragraphs}</table:table-cell>`);
+        // Rows in order, a run of empty ones (nothing in them, none covered) one row repeated: a sheet of two
+        // cells a million rows apart wrote a million rows.
+        const rowOf = (row: WorkSheet['rows'][number], r: number) => this.rowXml(row, r, covered, lastCovered, sheetNames);
+        const rowXml: string[] = [];
+        let emptyRows = 0, emptyHidden = false;
+        const flushRows = () => {
+            if (!emptyRows) return;
+            rowXml.push(`<table:table-row${emptyRows > 1 ? ` table:number-rows-repeated="${emptyRows}"` : ''}${emptyHidden ? ' table:visibility="collapse"' : ''}><table:table-cell/></table:table-row>`);
+            emptyRows = 0;
+        };
+        for (const [r, row] of sheet.rows.entries()) {
+            if (!row.cells.length && !lastCovered.has(r)) {
+                if (emptyRows && emptyHidden !== !!row.hidden) flushRows();
+                emptyHidden = !!row.hidden;
+                emptyRows++;
+                continue;
             }
-            if (!out.length && !empty) out.push('<table:table-cell/>');
-            flush();
-            return `<table:table-row${row.hidden ? ' table:visibility="collapse"' : ''}>${out.join('')}</table:table-row>`;
-        }).join('');
+            flushRows();
+            rowXml.push(rowOf(row, r));
+        }
+        flushRows();
+        const rows = rowXml.join('');
         return `<table:table table:name="${xmlText(sheet.name)}"${tableStyle ? ` table:style-name="${tableStyle}"` : ''}>${columns || '<table:table-column/>'}${rows || '<table:table-row><table:table-cell/></table:table-row>'}</table:table>`;
+    }
+
+    /** A row of a sheet's table: its cells, empty positions and those merges cover. */
+    private rowXml(row: WorkSheet['rows'][number], r: number, covered: Set<string>, lastCovered: Map<number, number>, sheetNames: ReadonlyMap<string, string>): string {
+        const out: string[] = [];
+        let col = 0;
+        const byCol = new Map(row.cells.map(c => [c.col, c]));
+        // Empty positions as one repeated cell; covered ones as covered cells.
+        let empty = 0;
+        const flush = () => { if (empty) { out.push(`<table:table-cell${empty > 1 ? ` table:number-columns-repeated="${empty}"` : ''}/>`); empty = 0; } };
+        let last = lastCovered.get(r) ?? -1;
+        for (const c of row.cells) last = Math.max(last, c.col + c.colSpan - 1);
+        for (; col <= last; col++) {
+            const cell = byCol.get(col);
+            if (covered.has(`${r},${col}`) && !cell) { flush(); out.push('<table:covered-table-cell/>'); continue; }
+            if (!cell) { empty++; continue; }
+            flush();
+            // A value under another cell's merge (a spreadsheet keeps one there, hidden) is a covered cell
+            // holding it, as ODF has it: a cell of its own there overlapped the merge.
+            const tag = covered.has(`${r},${col}`) ? 'table:covered-table-cell' : 'table:table-cell';
+            const style = this.cellStyle(cell.value, cell.bold, cell.text.includes('\n'));
+            const attrs = (style ? ` table:style-name="${style}"` : '')
+                + (tag === 'table:table-cell' && cell.colSpan > 1 ? ` table:number-columns-spanned="${cell.colSpan}"` : '') + (tag === 'table:table-cell' && cell.rowSpan > 1 ? ` table:number-rows-spanned="${cell.rowSpan}"` : '')
+                + valueAttrs(cell.value);
+            // (What the cell shows: a spreadsheet's number in its format, as ODF holds it beside the value.)
+            // Its link on its text, line by line.
+            // (A place in the workbook as ODF names a cell, `#Sheet.A1`, where the sheet is written; else reported.)
+            // (The first of its links a workbook holds, see writableLink; the rest reported.)
+            const chosen = writableLink(cell.links, sheetNames);
+            for (const why of chosen.lost) this.linkLosses.add(why);
+            // (A range as ODF writes one: each end on its sheet.)
+            const href = chosen.place ? `#${sheetRef(chosen.place.sheet)}.${chosen.place.cell}${chosen.place.to ? `:${sheetRef(chosen.place.sheet)}.${chosen.place.to}` : ''}` : chosen.link ? encUrl(chosen.link) : undefined;
+            const linked = (line: string) => href ? `<text:a xlink:type="simple" xlink:href="${xmlText(href)}">${xmlText(line)}</text:a>` : xmlText(line);
+            const paragraphs = cell.shown ? cell.shown.split('\n').map(line => `<text:p>${linked(line)}</text:p>`).join('') : '';
+            out.push(`<${tag}${attrs}>${paragraphs}</${tag}>`);
+        }
+        if (!out.length && !empty) out.push('<table:table-cell/>');
+        flush();
+        return `<table:table-row${row.hidden ? ' table:visibility="collapse"' : ''}>${out.join('')}</table:table-row>`;
     }
 }
 
@@ -204,6 +238,7 @@ function valueAttrs(v: CellValue): string {
         case 'currency': return ` office:value-type="currency" office:value="${v.number}"`;
         case 'date': case 'datetime': return ` office:value-type="date" office:date-value="${v.iso}"`;
         case 'time': return ` office:value-type="time" office:time-value="${v.iso}"`;
+        case 'boolean': return ` office:value-type="boolean" office:boolean-value="${v.number ? 'true' : 'false'}"`;
         default: return ' office:value-type="string"';
     }
 }

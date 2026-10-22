@@ -25,7 +25,10 @@ const CLR_MAP = '<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="acce
 const GROUP = '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>';
 
 /** The picture formats a slide holds, by their media types. */
-const PICTURE_TYPES: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpeg', 'image/jpg': 'jpeg', 'image/gif': 'gif', 'image/bmp': 'bmp', 'image/tiff': 'tiff' };
+const PICTURE_TYPES = new Map<string, string>([['image/png', 'png'], ['image/jpeg', 'jpeg'], ['image/jpg', 'jpeg'], ['image/gif', 'gif'], ['image/bmp', 'bmp'], ['image/tiff', 'tiff'],
+    ['image/x-emf', 'emf'], ['image/emf', 'emf'], ['image/x-wmf', 'wmf'], ['image/wmf', 'wmf']]);
+/** A picture part's content type by its extension (EMF's and WMF's are not `image/<ext>`). */
+const PICTURE_CONTENT_TYPES = new Map<string, string>([['emf', 'image/x-emf'], ['wmf', 'image/x-wmf']]);
 
 /** A theme with Office's colours and fonts, as a presentation needs one. */
 function themeXml(name: string): string {
@@ -80,12 +83,12 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
         for (const feature of deck.unrepresentable) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'pptx' });
         const files: Zippable = {};
         const enc = (s: string) => new TextEncoder().encode(s);
-        const slideXml: string[] = [], slideRels: string[] = [], notesXml: (string | undefined)[] = [];
+        const slideXml: string[] = [], slideRels: string[] = [], notesXml: (string | undefined)[] = [], notesRels: string[][] = [];
         deck.slides.forEach((slide, i) => {
             const rels: string[] = [`<Relationship Id="rId1" Type="${REL}/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>`];
             const rel = (type: string, target: string, external = false) => { const id = `rId${rels.length + 1}`; rels.push(`<Relationship Id="${id}" Type="${REL}/${type}" Target="${xmlText(target)}"${external ? ' TargetMode="External"' : ''}/>`); return id; };
             slideXml.push(this.slideXml(slide, rel));
-            if (slide.notes?.length) { rel('notesSlide', `../notesSlides/notesSlide${i + 1}.xml`); notesXml[i] = this.notesXml(slide.notes); }
+            if (slide.notes?.length) { rel('notesSlide', `../notesSlides/notesSlide${i + 1}.xml`); const n = this.notesXml(slide.notes); notesXml[i] = n.xml; notesRels[i] = n.rels; }
             slideRels.push(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join('')}</Relationships>`);
         });
         const hasNotes = notesXml.some(Boolean);
@@ -123,7 +126,7 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
             notesXml.forEach((xml, i) => {
                 if (!xml) return;
                 files[`ppt/notesSlides/notesSlide${i + 1}.xml`] = enc(xml);
-                files[`ppt/notesSlides/_rels/notesSlide${i + 1}.xml.rels`] = enc(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/notesMaster" Target="../notesMasters/notesMaster1.xml"/><Relationship Id="rId2" Type="${REL}/slide" Target="../slides/slide${i + 1}.xml"/></Relationships>`);
+                files[`ppt/notesSlides/_rels/notesSlide${i + 1}.xml.rels`] = enc(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/notesMaster" Target="../notesMasters/notesMaster1.xml"/><Relationship Id="rId2" Type="${REL}/slide" Target="../slides/slide${i + 1}.xml"/>${(notesRels[i] ?? []).join('')}</Relationships>`);
             });
         }
         for (const m of this.media) files[m.path] = m.bytes;
@@ -141,7 +144,7 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
         const pml = 'application/vnd.openxmlformats-officedocument.presentationml';
         files['[Content_Types].xml'] = enc(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">`
             + `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>`
-            + exts.map(e => `<Default Extension="${e}" ContentType="image/${e}"/>`).join('')
+            + exts.map(e => `<Default Extension="${e}" ContentType="${PICTURE_CONTENT_TYPES.get(e) ?? `image/${e}`}"/>`).join('')
             + `<Override PartName="/ppt/presentation.xml" ContentType="${pml}.presentation.main+xml"/>`
             + `<Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="${pml}.slideMaster+xml"/>`
             + `<Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="${pml}.slideLayout+xml"/>`
@@ -161,8 +164,12 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
         let at = this.mediaByAttachment.get(key);
         if (at === undefined) {
             if (!bytes || !bytes.length) return undefined;
-            const sniffed = bytes[0] === 0x89 && bytes[1] === 0x50 ? 'png' : bytes[0] === 0xff && bytes[1] === 0xd8 ? 'jpeg' : bytes[0] === 0x47 && bytes[1] === 0x49 ? 'gif' : bytes[0] === 0x42 && bytes[1] === 0x4d ? 'bmp' : undefined;
-            const ext = sniffed ?? (mime ? PICTURE_TYPES[mime.toLowerCase()] : undefined);
+            // (Its bytes say what it is first: EMF by its signature at 40, a placeable WMF by its key.)
+            const sniffed = bytes[0] === 0x89 && bytes[1] === 0x50 ? 'png' : bytes[0] === 0xff && bytes[1] === 0xd8 ? 'jpeg' : bytes[0] === 0x47 && bytes[1] === 0x49 ? 'gif' : bytes[0] === 0x42 && bytes[1] === 0x4d ? 'bmp'
+                : bytes[0] === 1 && bytes[1] === 0 && bytes[2] === 0 && bytes[3] === 0 && bytes[40] === 0x20 && bytes[41] === 0x45 && bytes[42] === 0x4d && bytes[43] === 0x46 ? 'emf'
+                : bytes[0] === 0xd7 && bytes[1] === 0xcd && bytes[2] === 0xc6 && bytes[3] === 0x9a ? 'wmf' : undefined;
+            // (A type named by the attachment, looked up as a type alone: one that is a name every object has, `constructor`, is none.)
+            const ext = sniffed ?? (mime ? PICTURE_TYPES.get(mime.toLowerCase()) : undefined);
             if (!ext) return undefined;
             at = this.media.length;
             this.media.push({ path: `ppt/media/image${at + 1}.${ext}`, bytes, ext });
@@ -209,7 +216,13 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
             const a = this.attachmentsByName.get(item.attachment);
             const bytes = a?.data ? decodeBase64(a.data) : undefined;
             const target = this.mediaFor(item.attachment, bytes ?? undefined, a?.mimeType);
-            if (!target) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: item.attachment, reason: a ? 'a picture a slide cannot hold (PNG, JPEG, GIF and BMP it can)' : 'missing attachment' }); return ''; }
+            if (!target) {
+                // (An SVG picture PowerPoint shows only beside a PNG copy, which is not made here; another kind PPTX
+                // holds none of. Its alternative text in its place.)
+                const svg = /svg/i.test(a?.mimeType ?? '') || /\.svg$/i.test(item.attachment);
+                this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: item.attachment, reason: !a ? 'missing attachment' : svg ? 'an SVG picture (PPTX output holds one only with a PNG copy of it)' : 'a picture of a kind PPTX output does not hold (PNG, JPEG, GIF, BMP, TIFF, EMF and WMF it does)' });
+                return item.alt ? this.itemXml({ kind: 'text', box: item.box, paragraphs: [{ runs: [{ text: item.alt }] }] }, next, rel) : '';
+            }
             // Fitted into its box, keeping its shape, centred (unless it fills it, as its page drew it).
             const size = bytes ? sniffImageSize(bytes) : null;
             let box = item.box;
@@ -232,6 +245,14 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
         return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${item.role === 'title' ? 'Title' : 'Text'} ${id}"/><p:cNvSpPr${shape ? '' : ' txBox="1"'}/><p:nvPr/></p:nvSpPr>`
             + `<p:spPr>${this.xfrm(item.box, item.rotation ?? shape?.rotation, shape?.flipH, shape?.flipV)}<a:prstGeom prst="${this.preset(shape?.geometry)}"><a:avLst/></a:prstGeom>${this.looks(shape?.fill, shape?.line)}</p:spPr>`
             + `<p:txBody>${body}<a:lstStyle/>${item.paragraphs.map(p => this.paragraphXml(p, rel, size)).join('') || '<a:p/>'}</p:txBody></p:sp>`;
+    }
+
+    /** Reports, once, a table's cells that found no place in its grid. */
+    private pastGridReported = false;
+    private cellsPastGrid(): void {
+        if (this.pastGridReported) return;
+        this.pastGridReported = true;
+        this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'table cells past their table\'s columns', format: 'pptx' });
     }
 
     /** A shape's preset: its own where DrawingML has it, else a rectangle, reported once a name. */
@@ -260,8 +281,12 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
             let col = 0;
             for (const cell of row.cells) {
                 while (col < cols && grid[r][col]) col++;
-                if (col >= cols) break;
-                const span = Math.min(cell.colSpan, cols - col), down = Math.min(cell.rowSpan, rows - r);
+                // (A cell past the grid is reported: none of its rows' merges left it a place.)
+                if (col >= cols) { this.cellsPastGrid(); break; }
+                let span = Math.min(cell.colSpan, cols - col), down = Math.min(cell.rowSpan, rows - r);
+                // Its merge held to the positions no earlier cell's holds: two that overlap, PowerPoint repairs.
+                for (let dc = 1; dc < span; dc++) if (grid[r][col + dc]) { span = dc; break; }
+                for (let dr = 1; dr < down; dr++) if (grid[r + dr].slice(col, col + span).some(Boolean)) { down = dr; break; }
                 for (let dr = 0; dr < down; dr++) for (let dc = 0; dc < span; dc++) if ((dr || dc) && !grid[r + dr][col + dc]) grid[r + dr][col + dc] = { h: dc > 0, v: dr > 0 };
                 grid[r][col] = { cell, span, down };
                 col += span;
@@ -314,12 +339,18 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
         return `<a:r><a:rPr ${attrs}>${color}${font}${link}</a:rPr><a:t>${xmlText(r.text)}</a:t></a:r>`;
     }
 
-    /** A notes page: the slide's notes in its body. */
-    private notesXml(notes: DeckParagraph[]): string {
-        const none = () => '';
-        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<p:notes ${NS}><p:cSld><p:spTree>${GROUP}`
+    /** A notes page: the slide's notes in its body, and the relationships of their links (after its master's and slide's). */
+    private notesXml(notes: DeckParagraph[]): { xml: string; rels: string[] } {
+        const rels: string[] = [];
+        const rel = (type: string, target: string, external = false) => {
+            const id = `rId${rels.length + 3}`;
+            rels.push(`<Relationship Id="${id}" Type="${REL}/${type}" Target="${xmlText(target)}"${external ? ' TargetMode="External"' : ''}/>`);
+            return id;
+        };
+        const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<p:notes ${NS}><p:cSld><p:spTree>${GROUP}`
             + `<p:sp><p:nvSpPr><p:cNvPr id="2" name="Notes"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr><p:spPr/>`
-            + `<p:txBody><a:bodyPr/><a:lstStyle/>${notes.map(p => this.paragraphXml({ ...p, runs: p.runs.map(r => ({ ...r, link: undefined })) }, none)).join('') || '<a:p/>'}</p:txBody></p:sp></p:spTree></p:cSld></p:notes>`;
+            + `<p:txBody><a:bodyPr/><a:lstStyle/>${notes.map(p => this.paragraphXml(p, rel)).join('') || '<a:p/>'}</p:txBody></p:sp></p:spTree></p:cSld></p:notes>`;
+        return { xml, rels };
     }
 
     private coreProps(iso: string): string {

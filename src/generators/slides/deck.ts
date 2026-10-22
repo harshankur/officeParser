@@ -95,11 +95,21 @@ async function noteComment(comment: OfficeContentNode, source: DeckSource, notes
     // As onNode has it: left out, or its text replaced.
     const kept = await source.keep(comment);
     if (kept === false) return;
-    const text = (typeof kept === 'string' ? kept : comment.children?.length ? (await runsOf(comment, source, notes, {}, 1)).map(r => r.lineBreak ? '\n' : r.text).join('') : comment.text ?? '').trim();
-    if (!text) return;
+    // Its runs, their links kept (a comment's text joined as plain text lost them).
+    const runs = trimmed(typeof kept === 'string' ? [{ text: kept }] : comment.children?.length ? await runsOf(comment, source, notes, {}, 1) : [{ text: comment.text ?? '' }]);
+    if (!runs.length) return;
     // (Its author is the comment's, which a replacement is not.)
     const author = typeof kept === 'string' ? undefined : (comment.metadata as CommentMetadata | undefined)?.author;
-    notes.comments.push({ runs: [{ text: `Comment${typeof author === 'string' && author.trim() ? ` (${author.trim()})` : ''}: ${text}` }] });
+    notes.comments.push({ runs: [{ text: `Comment${typeof author === 'string' && author.trim() ? ` (${author.trim()})` : ''}: ` }, ...runs] });
+}
+
+/** Runs with the blanks that start the first of them and end the last taken off, and none left empty (a paragraph's text trimmed). */
+function trimmed(runs: DeckRun[]): DeckRun[] {
+    const out = runs.map(r => ({ ...r }));
+    while (out.length && (out[0].lineBreak || !out[0].text.replace(/^\s+/, ''))) out.shift();
+    while (out.length && (out[out.length - 1].lineBreak || !out[out.length - 1].text.replace(/\s+$/, ''))) out.pop();
+    if (out.length) { out[0].text = out[0].text.replace(/^\s+/, ''); out[out.length - 1].text = out[out.length - 1].text.replace(/\s+$/, ''); }
+    return out;
 }
 
 /** A block's runs: its text with their looks, line breaks kept, notes cited by their numbers. */
@@ -138,8 +148,9 @@ async function runsOf(node: OfficeContentNode, source: DeckSource, notes: NoteSt
                 if (noteKept === false) continue;
                 n = notes.list.length + 1;
                 notes.seen.set(note, n);
-                const text = typeof noteKept === 'string' ? noteKept.trim() : (await runsOf(note, source, notes, {}, depth + 1)).map(r => r.text).join('').trim();
-                notes.list.push({ runs: [{ text: `${n}. ${text}`, size: 14 }] });
+                // (Its runs, their links kept, on one line: a note's text joined as plain text lost them.)
+                const noteRuns = trimmed(typeof noteKept === 'string' ? [{ text: noteKept }] : (await runsOf(note, source, notes, {}, depth + 1)).filter(r => !r.lineBreak));
+                notes.list.push({ runs: [{ text: `${n}. `, size: 14 }, ...noteRuns.map(r => ({ ...r, size: 14 }))] });
             }
             runs.push({ text: String(n), superscript: true });
         }
@@ -427,7 +438,33 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
             if (picture) slide.picture = picture;
             // A page's block in its place: its lines kept as the page broke and spaced them, a paragraph whose
             // lines start at more than one edge (beside a floating table or picture) a box for each group of them.
+            // The pictures in a block of text, which a slide's text box cannot hold: each in its own place where
+            // it has one, else reported (they were left out); its recognized text in the slide's notes where asked.
+            const picturesIn = async (block: OfficeContentNode) => {
+                const walk = async (n: OfficeContentNode, d: number) => {
+                    for (const c of n.children ?? []) {
+                        if (c.type !== 'image' && c.type !== 'chart' && !c.children?.length) continue;
+                        const k = await source.keep(c);
+                        if (k === false || typeof k === 'string') continue;
+                        if (c.type === 'image') {
+                            const found = pictureOf(c);
+                            if (found && !found.attachment) unrepresentable.add('pictures known only by their address');
+                            else if (found?.attachment && wantPicture) {
+                                const at = boxOf(c.bounds, scale, dx, dy);
+                                const { ocr: _ocr, url: _url, ...rest } = found;
+                                // (One without a place: reported, its alternative text in the slide's notes.)
+                                if (at) slide.items.push({ kind: 'picture', box: at, ...rest, attachment: found.attachment, fill: true });
+                                else { unrepresentable.add('pictures inside text'); if (found.alt) slide.notes = [...(slide.notes ?? []), { runs: [{ text: found.alt }] }]; }
+                            }
+                            if (found?.ocr && wantOcr) slide.notes = [...(slide.notes ?? []), { runs: [{ text: found.ocr }] }];
+                        } else if (c.type === 'chart' && source.includeCharts) unrepresentable.add('charts inside text');
+                        if (d < 16) await walk(c, d + 1);
+                    }
+                };
+                await walk(block, 0);
+            };
             const placeBlock = async (block: OfficeContentNode, kept: true | string) => {
+                if (kept === true) await picturesIn(block);
                 // Its turn: its own, else its page's (a page shown turned: its text runs down it).
                 const own = (block.metadata as { rotation?: number } | undefined)?.rotation;
                 const rotation = own ?? (pageTurn || undefined);
@@ -512,7 +549,7 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
                     if (!isSlides) { await placeBlock(child, kept); continue; }
                     const rotation = (child.metadata as { rotation?: number } | undefined)?.rotation;
                     const paragraphs = [];
-                    for (const g of group) { const k = g === child ? kept : await source.keep(g); if (k !== false) paragraphs.push(await paragraphOf(g, source, notes, k)); }
+                    for (const g of group) { const k = g === child ? kept : await source.keep(g); if (k !== false) { paragraphs.push(await paragraphOf(g, source, notes, k)); if (k === true) await picturesIn(g); } }
                     if (!paragraphs.some(p => p.runs.some(r => r.text.trim()))) continue;
                     if (box) slide.items.push({ kind: 'text', box, paragraphs, ...(rotation ? { rotation } : {}) });
                     else slide.items.push({ kind: 'text', box: { ...BODY_BOX, x: width * 0.05, w: width * 0.9, y: height * 0.1 + slide.items.length * 24, h: 24 }, paragraphs });
@@ -771,8 +808,10 @@ async function flowDeck(content: OfficeContentNode[], metadata: OfficeMetadata, 
             if (node.type === 'heading') {
                 const level = (node.metadata as HeadingMetadata | undefined)?.level ?? 1;
                 const p = await paragraphOf(node, source, notes, kept);
-                if (level <= 2) { flush(); title = p; shown = false; first = false; continue; }
-                add({ ...p, runs: p.runs.map(r => ({ ...r, bold: true })) });
+                if (level <= 2) { flush(); title = p; shown = false; first = false; }
+                else add({ ...p, runs: p.runs.map(r => ({ ...r, bold: true })) });
+                // Its pictures on slides of their own, as a paragraph's (a heading's logo was left out).
+                if (kept === true) await pictureSlides(node);
                 continue;
             }
             if (node.type === 'sheet') {

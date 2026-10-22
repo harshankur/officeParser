@@ -22,7 +22,7 @@
  * @see https://www.ecma-international.org/publications-and-standards/standards/ecma-376/
  */
 
-import { ChartMetadata, FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting, TextMetadata } from '../types.js';
+import { CellMetadata, ChartMetadata, FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
@@ -134,13 +134,16 @@ function cellLinks(sheetXml: string, targets: Map<string, string>): Map<string, 
     const links = new Map<string, { link: string; linkType: 'internal' | 'external' }>();
     const block = firstElementContent(sheetXml, 'hyperlinks');
     if (!block) return links;
-    const attr = (attrs: string, name: string) => new RegExp(`(?:^|\\s)${name}\\s*=\\s*["']([^"']*)["']`).exec(attrs)?.[1];
+    // (Its quotes matched: a place on a sheet whose name has a space is quoted itself, `location="'Q1 Sales'!B3"`.)
+    const attr = (attrs: string, name: string) => { const m = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(attrs); return m ? m[1] ?? m[2] : undefined; };
     let visited = 0;
     for (const h of xmlElements(block, 'hyperlink')) {
         const id = attr(h.attrs, 'r:id'), location = attr(h.attrs, 'location');
         const target = id ? targets.get(id) : undefined;
         // (A relationship's target is read decoded already; an attribute of the sheet's text is not.)
-        const value = target ? { link: target, linkType: 'external' as const } : location ? { link: `#${decodeXmlEntities(location)}`, linkType: 'internal' as const } : undefined;
+        // (A web address's place in its page is its `location`, as Excel writes it: `#section-2` after the address.)
+        const value = target ? { link: location && !target.includes('#') ? `${target}#${decodeXmlEntities(location)}` : target, linkType: 'external' as const }
+            : location ? { link: `#${decodeXmlEntities(location)}`, linkType: 'internal' as const } : undefined;
         const [from, to] = (attr(h.attrs, 'ref') ?? '').split(':').map(cellAt);
         if (!value || !from) continue;
         const last = to ?? from;
@@ -943,6 +946,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     // What the sheet shows for a number, through its style's number format, where that
                     // differs from the value read (see CellMetadata.shownText).
                     let shownText: string | undefined;
+                    // The kind of value it holds, and the value where the text is another (see CellMetadata.valueType).
+                    let valueType: CellMetadata['valueType'] = type === 's' || type === 'inlineStr' || type === 'str' ? 'text' : type === 'e' ? 'error' : undefined;
+                    let value: string | undefined, numberFormat: string | undefined;
                     let cellNodes: OfficeContentNode[] = [];
 
                     // Shared rich-text runs, merged with this cell's style below (the runs themselves are shared).
@@ -983,12 +989,25 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     } else if (type === 'b' && vContent !== undefined) {
                         // A boolean is stored as 1 or 0 and shown as TRUE or FALSE.
                         text = vContent.trim() === '1' ? 'TRUE' : vContent.trim() === '0' ? 'FALSE' : vContent.trim();
+                        if (text === 'TRUE' || text === 'FALSE') { valueType = 'boolean'; value = text === 'TRUE' ? 'true' : 'false'; } else valueType = 'text';
                     } else if (vContent !== undefined) {
                         text = vContent.trim();
                         // A number in a date or time style is a day count: show the date or time instead
                         const dateFormatKind = type === 'n' && styleIdx !== undefined ? cellDateFormatMap[styleIdx] : undefined;
-                        if (dateFormatKind) text = formatDateSerial(text, dateFormatKind, date1904) ?? text;
+                        if (dateFormatKind) {
+                            const shown = formatDateSerial(text, dateFormatKind, date1904);
+                            // (Its day count in the 1900 date system, as a spreadsheet writer holds it: a 1904
+                            // workbook's counts 1,462 days fewer.)
+                            if (shown !== undefined) { valueType = dateFormatKind === 'date' || dateFormatKind === 'datetime' ? 'date' : 'time'; value = String(date1904 ? Number(text) + 1462 : Number(text)); text = shown; }
+                        }
+                        if (type === 'd') {
+                            // An ISO date cell (`t="d"`): its day count from the date.
+                            const at = Date.parse(/[zZ]|[+-]\d{2}:?\d{2}$/.test(text) ? text : `${text}${text.includes('T') ? 'Z' : 'T00:00:00Z'}`);
+                            if (Number.isFinite(at)) { valueType = 'date'; value = String((at - Date.UTC(1899, 11, 30)) / 86_400_000); } else valueType = 'text';
+                        } else if (!valueType) valueType = type === 'n' && Number.isFinite(Number(text)) && text !== '' ? 'number' : 'text';
                         const formatCode = type === 'n' && styleIdx !== undefined ? cellNumberFormatMap[styleIdx] : undefined;
+                        // (Its format as Excel writes it, for a spreadsheet writer to keep; Excel holds 255 characters of one.)
+                        if (formatCode !== undefined && formatCode.trim() && formatCode !== 'General' && formatCode.length <= 255) numberFormat = formatCode;
                         if (formatCode !== undefined) {
                             const shown = excelShownText(vContent.trim(), formatCode, date1904);
                             if (shown !== undefined && shown !== text) shownText = shown;
@@ -1055,6 +1074,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                                 ...(span && span.colSpan > 1 ? { colSpan: span.colSpan } : {}),
                                 ...(span && span.rowSpan > 1 ? { rowSpan: span.rowSpan } : {}),
                                 ...(shownText !== undefined ? { shownText } : {}),
+                                ...(valueType ? { valueType } : {}),
+                                ...(value !== undefined ? { value } : {}),
+                                ...(numberFormat !== undefined ? { numberFormat } : {}),
                                 ...(rowHidden || columnHidden(colIndex) ? { hidden: true } : {}),
                             }
                         };

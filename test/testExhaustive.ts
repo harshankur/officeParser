@@ -6215,8 +6215,9 @@ async function testSpreadsheetWriters(): Promise<void> {
     assert.ok(/<c r="B2"[^>]*><is><t[^>]*>Q1</.test(mergedXml) && /<c r="C2"[^>]*><is><t[^>]*>Q2</.test(mergedXml) && /<c r="B4"[^>]*><is><t[^>]*>Total</.test(mergedXml), `cells take the columns merges leave them; got ${mergedXml}`);
     assert.deepStrictEqual(mergedXml.match(/<mergeCell ref="[^"]+"/g), ['<mergeCell ref="A1:A2"', '<mergeCell ref="B1:C1"', '<mergeCell ref="A3:A4"', '<mergeCell ref="B4:C4"'], 'no two merges overlap');
 
-    // A sheet's stored numbers are numbers (exponents, all seventeen digits); a leading plus stays text; a long id is shown in full.
-    const stored = { type: 'xlsx', metadata: {}, attachments: [], content: [{ type: 'sheet', metadata: { sheetName: 'N' }, children: [{ type: 'row', children: ['0.30000000000000004', '1E-10', '+4915112345678'].map((text, col) => ({ type: 'cell', text, metadata: { row: 0, col }, children: [{ type: 'text', text }] })) }] }] } as any;
+    // A sheet's stored numbers (its file says they are) are numbers (exponents, all seventeen digits); a leading
+    // plus whose kind no file says stays text; a long id is shown in full.
+    const stored = { type: 'xlsx', metadata: {}, attachments: [], content: [{ type: 'sheet', metadata: { sheetName: 'N' }, children: [{ type: 'row', children: ['0.30000000000000004', '1E-10', '+4915112345678'].map((text, col) => ({ type: 'cell', text, metadata: { row: 0, col, ...(col < 2 ? { valueType: 'number' } : {}) }, children: [{ type: 'text', text }] })) }] }] } as any;
     const storedXml = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(stored, 'xlsx')).value as unknown as Uint8Array))['xl/worksheets/sheet1.xml']);
     assert.ok(/<c r="A1"><v>0.30000000000000004<\/v>/.test(storedXml) && /<c r="B1"><v>1e-10<\/v>/.test(storedXml) && /<c r="C1" t="inlineStr"><is><t[^>]*>\+4915112345678</.test(storedXml), `a sheet's stored numbers are numbers, a phone number text; got ${storedXml}`);
     const ids = await OfficeParser.parseOffice(Buffer.from('<table><tr><td>123456789012</td><td>+5</td></tr></table>'), { fileType: 'html' } as any) as OfficeParserAST;
@@ -6261,6 +6262,70 @@ async function testSpreadsheetWriters(): Promise<void> {
         const meta = format === 'xlsx' ? strFromU8(parts['docProps/custom.xml'] ?? new Uint8Array()) : strFromU8(parts['meta.xml']);
         assert.ok(/Acme/.test(meta) && (format === 'xlsx' || /<meta:keyword>beta<\/meta:keyword>/.test(meta)), `${format}: custom properties and keywords are written`);
     }
+
+    // A cell holds the kind of value its file says (CellMetadata.valueType, CellMetadata.value): text stays text
+    // however it reads, a number the number held (not what the sheet shows), a date, a truth value and a
+    // duration as such, an XLSX number format as Excel wrote it. A cell whose source says nothing (a CSV's)
+    // is read as a table's is: no exponent, at most fifteen digits.
+    const typedCell = (col: number, text: string, meta: Record<string, unknown>) => ({ type: 'cell', text, metadata: { row: 0, col, ...meta }, children: [{ type: 'text', text }] });
+    const typed = { type: 'xlsx', metadata: {}, attachments: [], content: [{ type: 'sheet', metadata: { sheetName: 'Typed' }, children: [{ type: 'row', children: [
+        typedCell(0, '1E5', { valueType: 'text' }), typedCell(1, '10.46', { valueType: 'number', value: '10.456' }), typedCell(2, '03/15/2023', { valueType: 'date', value: '45000' }),
+        typedCell(3, 'TRUE', { valueType: 'boolean', value: 'true' }), typedCell(4, '30:00:00', { valueType: 'time', value: '1.25' }), typedCell(5, '12.5', { valueType: 'number', numberFormat: '0.0 "kg"', shownText: '12.5 kg' }),
+        typedCell(6, '4111111111111111', {}), typedCell(7, '2E3', {}), typedCell(8, '#DIV/0!', { valueType: 'error' })] }] }] } as any;
+    const typedXlsx = unzipSync(new Uint8Array((await OfficeGenerator.generate(typed, 'xlsx')).value as Uint8Array));
+    const typedSheet = strFromU8(typedXlsx['xl/worksheets/sheet1.xml']);
+    const xlsxCell = (ref: string) => new RegExp(`<c r="${ref}"[^>]*>(.*?)</c>`).exec(typedSheet)?.[0] ?? '';
+    assert.ok(/inlineStr/.test(xlsxCell('A1')) && /<v>10\.456<\/v>/.test(xlsxCell('B1')) && /<v>45000<\/v>/.test(xlsxCell('C1')) && /t="b"><v>1<\/v>/.test(xlsxCell('D1')) && /<v>1\.25<\/v>/.test(xlsxCell('E1')), `XLSX: cells hold the kinds of value their file says; got ${typedSheet}`);
+    assert.ok(/inlineStr/.test(xlsxCell('G1')) && /inlineStr/.test(xlsxCell('H1')) && /t="e"><v>#DIV\/0!<\/v>/.test(xlsxCell('I1')), `XLSX: a CSV's card number and code stay text, an error is one; got ${typedSheet}`);
+    const typedStyles = strFromU8(typedXlsx['xl/styles.xml']);
+    assert.ok(/formatCode="0\.0 &quot;kg&quot;"/.test(typedStyles) && /formatCode="\[h\]:mm:ss"/.test(typedStyles), `XLSX: a cell's own number format is kept, a duration shown in its hours; got ${typedStyles}`);
+    const typedOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(typed, 'ods')).value as Uint8Array))['content.xml']);
+    assert.ok(/office:value="10\.456"/.test(typedOds) && /office:date-value="2023-03-15"/.test(typedOds) && /office:boolean-value="true"/.test(typedOds) && /office:time-value="PT30H0M0S"/.test(typedOds), `ODS: cells hold the kinds of value their file says; got ${typedOds.slice(0, 3000)}`);
+    // XLSX reading says what each cell holds; a place on a sheet whose name is quoted is read as a link.
+    const placed = { type: 'xlsx', metadata: {}, attachments: [], content: [
+        { type: 'sheet', metadata: { sheetName: 'Index' }, children: [{ type: 'row', children: [{ type: 'cell', text: 'Go', metadata: { row: 0, col: 0 }, children: [{ type: 'text', text: 'Go', metadata: { link: "#'Q1 Sales'!B3" } }] }, typedCell(1, '1E5', { valueType: 'text' }), typedCell(2, '7', { valueType: 'number' })] }] },
+        { type: 'sheet', metadata: { sheetName: 'Q1 Sales' }, children: [{ type: 'row', children: [typedCell(0, 'x', { valueType: 'text' })] }] }] } as any;
+    const placedBack = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(placed, 'xlsx')).value as Uint8Array), { fileType: 'xlsx' } as any) as OfficeParserAST;
+    const placedCells = collectAllNodes(placedBack).filter(n => n.type === 'cell');
+    assert.deepStrictEqual(placedCells.slice(0, 3).map(c => (c.metadata as any).valueType), ['text', 'text', 'number'], 'XLSX reading: each cell\'s kind of value');
+    assert.ok(collectAllNodes(placedBack).some(n => (n.metadata as any)?.link === "#'Q1 Sales'!B3"), 'XLSX reading: a link to a quoted sheet name is read');
+    // A link to a sheet written under another name (cut to Excel's 31, made unique) goes to it; ODS keeps long names.
+    const longName = 'Revenue by region and quarter 2026 (final)';
+    const renamed = { type: 'xlsx', metadata: {}, attachments: [], content: [
+        { type: 'sheet', metadata: { sheetName: 'Index' }, children: [{ type: 'row', children: [{ type: 'cell', text: 'Go', metadata: { row: 0, col: 0 }, children: [{ type: 'text', text: 'Go', metadata: { link: `#'${longName}'!B2` } }] }] }] },
+        { type: 'sheet', metadata: { sheetName: longName }, children: [{ type: 'row', children: [typedCell(0, 'x', { valueType: 'text' })] }] }] } as any;
+    const renamedXlsx = await OfficeGenerator.generate(renamed, 'xlsx');
+    assert.ok(/location="&apos;Revenue by region and quarter 2&apos;!B2"/.test(strFromU8(unzipSync(new Uint8Array(renamedXlsx.value as Uint8Array))['xl/worksheets/sheet1.xml'])) && !renamedXlsx.messages.length, 'XLSX: a link to a sheet whose name was cut goes to it');
+    assert.ok(new RegExp(`table:name="${longName.replace(/[()]/g, '\\$&')}"`).test(strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(renamed, 'ods')).value as Uint8Array))['content.xml'])), 'ODS: a long sheet name is kept');
+    // Columns past a sheet's 16,384 are reported, not lost unsaid; a sheet's empty rows are one repeated row in ODS.
+    const wide = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [{ type: 'row', children: Array.from({ length: 16_390 }, (_, i) => ({ type: 'cell', children: [{ type: 'text', text: `v${i}` }] })) }] }] } as any;
+    for (const format of ['xlsx', 'ods'] as const) assert.ok((await OfficeGenerator.generate(wide, format)).messages.some((m: any) => /columns past/.test(m.details?.feature ?? '')), `${format}: columns past a sheet's are reported`);
+    const sparse = { type: 'xlsx', metadata: {}, attachments: [], content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [
+        { type: 'row', children: [typedCell(0, 'top', { valueType: 'text' })] }, { type: 'row', children: [{ ...typedCell(0, 'far', { valueType: 'text' }), metadata: { row: 500_000, col: 0, valueType: 'text' } }] }] }] } as any;
+    const sparseOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(sparse, 'ods')).value as Uint8Array))['content.xml']);
+    assert.ok(sparseOds.length < 10_000 && /table:number-rows-repeated="499999"/.test(sparseOds), `ODS: empty rows are one repeated row; got ${sparseOds.length} characters`);
+    // A footnote's link is written on the Notes sheet.
+    const noted = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', children: [{ type: 'text', text: 'Body', notes: [{ type: 'note', metadata: { noteType: 'footnote' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'See site', metadata: { link: 'https://footnote.example/' } }] }] }] }] }] } as any;
+    const notedXlsx = unzipSync(new Uint8Array((await OfficeGenerator.generate(noted, 'xlsx')).value as Uint8Array));
+    assert.ok(Object.entries(notedXlsx).some(([k, v]) => /sheet\d+\.xml\.rels$/.test(k) && /footnote\.example/.test(strFromU8(v))), 'XLSX: a footnote\'s link is written on the Notes sheet');
+
+    // An ODS cell holds its value, not the text the sheet shows: a number in full, a date, a duration, a truth
+    // value, an error (they were read from the shown text, 123456 shown as 1.23E+05 written as 123000).
+    const odsNs = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:calcext="urn:org:documentfoundation:names:experimental:calc:xmlns:calcext:1.0"';
+    const odsCell = (attrs: string, shown: string) => `<table:table-row><table:table-cell ${attrs}><text:p>${shown}</text:p></table:table-cell></table:table-row>`;
+    const odsHeldFile = Buffer.from(zipSync({ 'mimetype': strToU8('application/vnd.oasis.opendocument.spreadsheet'),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${odsNs}><office:body><office:spreadsheet><table:table table:name="Values">`
+            + odsCell('office:value-type="float" office:value="10.456"', '10.46') + odsCell('office:value-type="float" office:value="123456"', '1.23E+05')
+            + odsCell('office:value-type="date" office:date-value="2023-03-15T12:00:00"', '03/15/2023 12:00') + odsCell('office:value-type="time" office:time-value="PT30H00M00S"', '30:00:00')
+            + odsCell('office:value-type="boolean" office:boolean-value="true"', 'TRUE') + odsCell('office:value-type="string" calcext:value-type="error"', '#DIV/0!')
+            + odsCell('office:value-type="string"', '1E5') + '</table:table></office:spreadsheet></office:body></office:document-content>') }));
+    const odsHeldAst = await OfficeParser.parseOffice(odsHeldFile, { fileType: 'ods' } as any) as OfficeParserAST;
+    const odsHeldCells = collectAllNodes(odsHeldAst).filter(n => n.type === 'cell').map(c => [c.text, (c.metadata as any).valueType, (c.metadata as any).value]);
+    assert.deepStrictEqual(odsHeldCells, [['10.46', 'number', '10.456'], ['1.23E+05', 'number', '123456'], ['03/15/2023 12:00', 'date', '45000.5'], ['30:00:00', 'time', '1.25'],
+        ['TRUE', 'boolean', 'true'], ['#DIV/0!', 'error', undefined], ['1E5', 'text', undefined]], 'ODS: each cell holds its value and says its kind');
+    const odsHeldXlsx = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(odsHeldAst, 'xlsx')).value as Uint8Array))['xl/worksheets/sheet1.xml']);
+    for (const held of ['<v>10.456</v>', '<v>123456</v>', '<v>45000.5</v>', '<v>1.25</v>']) assert.ok(odsHeldXlsx.includes(held), `XLSX output of an ODS writes the value it holds (${held}); got ${odsHeldXlsx.slice(0, 1500)}`);
+    assert.ok(/t="b"[^>]*><v>1<\/v>/.test(odsHeldXlsx) && /t="e"/.test(odsHeldXlsx), 'XLSX output of an ODS writes a truth value and an error as such');
 }
 
 /**
@@ -6559,6 +6624,32 @@ async function testPresentationWriters(): Promise<void> {
     // A link to a place in the document, which a slide's text cannot open, is reported.
     const placeLink = await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', children: [{ type: 'text', text: 'see', metadata: { link: '#intro', linkType: 'internal' } }] }] } as any, 'pptx');
     assert.ok((placeLink.messages || []).some((m: any) => m.details?.feature === 'links to places in the document'), 'pptx: a link to a place in the document is reported');
+
+    // A footnote's, a comment's and a speaker note's links are kept on the notes they go to.
+    const tinyPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    const linkedNotes = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', children: [{ type: 'text', text: 'Body',
+        notes: [{ type: 'note', metadata: { noteType: 'footnote' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'note', metadata: { link: 'https://footnote.example/' } }] }] }],
+        comments: [{ type: 'comment', metadata: { author: 'A' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'see', metadata: { link: 'https://comment.example/' } }] }] }] }] }] } as any;
+    for (const format of ['pptx', 'odp'] as const) {
+        const parts = unzipSync(new Uint8Array((await OfficeGenerator.generate(linkedNotes, format)).value as unknown as Uint8Array));
+        const all = Object.values(parts).map(v => strFromU8(v)).join('\n');
+        assert.ok(/footnote\.example/.test(all) && /comment\.example/.test(all), `${format}: links in footnotes and comments are kept`);
+    }
+    // A heading's picture is written (a logo in a title was left out); one whose type is a name every object has is none.
+    const headed = { type: 'html', metadata: {}, attachments: [{ type: 'image', name: 'logo.png', mimeType: 'image/png', extension: 'png', data: tinyPng }, { type: 'image', name: 'odd', mimeType: 'constructor', extension: 'x', data: Buffer.from('not a picture').toString('base64') }],
+        content: [{ type: 'heading', metadata: { level: 1 }, children: [{ type: 'text', text: 'Title' }, { type: 'image', metadata: { attachmentName: 'logo.png', altText: 'Company logo' } }] },
+            { type: 'paragraph', children: [{ type: 'image', metadata: { attachmentName: 'odd', altText: 'Odd' } }] }] } as any;
+    const headedOut = await OfficeGenerator.generate(headed, 'pptx');
+    const headedParts = Object.keys(unzipSync(new Uint8Array(headedOut.value as Uint8Array)));
+    assert.ok(headedParts.includes('ppt/media/image1.png') && headedParts.filter(p => p.startsWith('ppt/media/')).every(p => /^ppt\/media\/image\d+\.[a-z]+$/.test(p)) && headedOut.messages.some((m: any) => /kind PPTX output does not hold/.test(m.details?.reason ?? '')), `pptx: a heading's picture is written, a type no picture has reported; got ${headedParts}`);
+    // EMF and WMF pictures are held, with their content types.
+    const emf = new Uint8Array(88); emf[0] = 1; emf.set([0x20, 0x45, 0x4d, 0x46], 40);
+    const emfOut = unzipSync(new Uint8Array((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [{ type: 'image', name: 'a.emf', mimeType: 'image/x-emf', extension: 'emf', data: Buffer.from(emf).toString('base64') }], content: [{ type: 'image', metadata: { attachmentName: 'a.emf' } }] } as any, 'pptx')).value as Uint8Array));
+    assert.ok(emfOut['ppt/media/image1.emf'] && /Extension="emf" ContentType="image\/x-emf"/.test(strFromU8(emfOut['[Content_Types].xml'])), 'pptx: an EMF picture is held');
+    // A cell spanning across columns an earlier row's merge holds stops before them: merges never overlap.
+    const crossed = await OfficeParser.parseOffice(Buffer.from('<table><tr><td>A</td><td rowspan="3">B</td><td>C</td></tr><tr><td colspan="3">D wide</td></tr><tr><td>E</td><td>F</td></tr></table>'), { fileType: 'html' } as any) as OfficeParserAST;
+    const crossedSlide = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(crossed, 'pptx')).value as Uint8Array))['ppt/slides/slide1.xml']);
+    assert.ok(!/gridSpan="3"/.test(crossedSlide) && /D wide/.test(crossedSlide), `pptx: a span stops before a merge from above; got ${crossedSlide.slice(0, 2000)}`);
 }
 
 async function testNativePdfFurnitureLimits(): Promise<void> {

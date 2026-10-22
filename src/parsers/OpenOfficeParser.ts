@@ -320,6 +320,42 @@ function cellTextLooks(style: TextFormatting | undefined): TextFormatting | unde
     return Object.keys(looks).length ? looks : undefined;
 }
 
+/**
+ * What an ODS cell holds (see CellMetadata.valueType and CellMetadata.value), from its `office:value-type`:
+ * a number (a percentage's or a currency amount's too) as written, a date as Excel counts its days (from
+ * 1899-12-30, with the day's fraction for its time), a time (a duration) in days, a truth value, an error;
+ * text where it is a string or says nothing. Its shown text is the cell's `text`: values were read from it, a
+ * number shown as 1.23E+05 written as 123000.
+ */
+function heldValue(cell: Element): Pick<CellMetadata, 'valueType' | 'value'> {
+    // (An error is a string to ODF; LibreOffice says which it is.)
+    if (cell.getAttribute('calcext:value-type') === 'error') return { valueType: 'error' };
+    const type = cell.getAttribute('office:value-type') || cell.getAttribute('calcext:value-type') || '';
+    // (Days to ten places: a second is about a hundred thousandth of one.)
+    const days = (n: number) => String(Number(n.toFixed(10)));
+    if (type === 'float' || type === 'percentage' || type === 'currency') {
+        const value = (cell.getAttribute('office:value') || '').trim();
+        return value && Number.isFinite(Number(value)) ? { valueType: 'number', value } : { valueType: 'text' };
+    }
+    if (type === 'date') {
+        const m = /^(-?\d{4,})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?)?/.exec(cell.getAttribute('office:date-value') || '');
+        if (!m) return { valueType: 'text' };
+        const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4] || 0), Number(m[5] || 0)) + Number(m[6] || 0) * 1000;
+        return Number.isFinite(ms) ? { valueType: 'date', value: days((ms - Date.UTC(1899, 11, 30)) / 86_400_000) } : { valueType: 'text' };
+    }
+    if (type === 'time') {
+        const m = /^(-)?P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec((cell.getAttribute('office:time-value') || '').trim());
+        if (!m || !(m[2] || m[3] || m[4] || m[5])) return { valueType: 'text' };
+        const total = Number(m[2] || 0) + (Number(m[3] || 0) + (Number(m[4] || 0) + Number(m[5] || 0) / 60) / 60) / 24;
+        return Number.isFinite(total) ? { valueType: 'time', value: days(m[1] ? -total : total) } : { valueType: 'text' };
+    }
+    if (type === 'boolean') {
+        const value = (cell.getAttribute('office:boolean-value') || '').trim().toLowerCase();
+        return value === 'true' || value === 'false' ? { valueType: 'boolean', value } : { valueType: 'text' };
+    }
+    return { valueType: 'text' };
+}
+
 export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
     // Honour cancellation requests immediately, before extracting the ZIP archive.
     // ODF containers (ODT/ODS/ODP) bundle content.xml, styles.xml, and media files;
@@ -2343,6 +2379,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             // that spin was itself a CPU denial-of-service, unbounded by the cell
                             // budget because it created no cells to charge against.
                             const willMaterialize = (cellText || children.length > 0 || cellComments.length > 0 || fileType !== 'ods');
+                            // What a sheet's cell holds, as its file says (`text` is what the sheet shows: 10.46, 1.23E+05).
+                            const held = fileType === 'ods' && willMaterialize ? heldValue(cell) : undefined;
                             if (!willMaterialize) {
                                 colIndex += colsRepeated;
                             } else {
@@ -2359,6 +2397,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                         text: cellText,
                                         children: children,
                                         metadata: {
+                                            ...held,
                                             row: rowIndex,
                                             col: colIndex,
                                             // Merged cells: the spans were not read, so the merge was lost.

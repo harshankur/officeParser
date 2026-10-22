@@ -19,7 +19,7 @@ function columnName(index: number): string {
 }
 
 /** Excel's built-in number formats a cell is shown in, by their codes. */
-const BUILTIN_FORMATS: Record<string, number> = { 'General': 0, '0': 1, '0.00': 2, '#,##0': 3, '#,##0.00': 4, '0%': 9, '0.00%': 10 };
+const BUILTIN_FORMATS = new Map<string, number>([['General', 0], ['0', 1], ['0.00', 2], ['#,##0', 3], ['#,##0.00', 4], ['0%', 9], ['0.00%', 10]]);
 
 /** The most characters a cell holds in Excel. */
 const MAX_CELL_TEXT = 32_767;
@@ -34,6 +34,8 @@ function cutTo(text: string, max: number): string {
 
 /** The number format code a value is shown in. */
 function formatCode(v: CellValue): string {
+    // (The spreadsheet's own, as Excel wrote it.)
+    if (v.code) return v.code;
     const digits = (v.grouping ? '#,##0' : '0') + (v.decimals ? '.' + '0'.repeat(Math.min(v.decimals, 15)) : '');
     switch (v.kind) {
         // (A whole number of twelve to fifteen digits, an id, is shown in full, where General shows 1.23457E+11.)
@@ -45,7 +47,10 @@ function formatCode(v: CellValue): string {
         }
         case 'date': return 'yyyy\\-mm\\-dd';
         case 'datetime': return 'yyyy\\-mm\\-dd\\ hh:mm:ss';
-        case 'time': return 'hh:mm:ss';
+        // (A duration of a day or more in its hours, as a clock would turn over.)
+        case 'time': return (v.number ?? 0) >= 1 ? '[h]:mm:ss' : 'hh:mm:ss';
+        // (Excel shows a truth value as one whatever its format; a reader that shows the 1 it holds is told to.)
+        case 'boolean': return '"TRUE";"TRUE";"FALSE"';
         default: return 'General';
     }
 }
@@ -97,7 +102,7 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
         if (sheets.every(s => s.hidden)) delete sheets[0].hidden;
 
         const styles = new StyleTable();
-        const sheetNames = sheetIndex(sheets.map(sh => sh.name));
+        const sheetNames = sheetIndex(sheets);
         const sheetParts = sheets.map(sheet => this.sheetXml(sheet, styles, sheetNames));
         for (const feature of this.linkLosses) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'xlsx' });
         const { iso, mtime } = resolveZipInstant(this.effectiveMetadata.modified);
@@ -164,8 +169,11 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
                 }
                 if (cell.colSpan > 1 || cell.rowSpan > 1) merges.push(`${ref}:${columnName(cell.col + cell.colSpan - 1)}${r + cell.rowSpan}`);
                 const wrap = cell.text.includes('\n');
-                const style = styles.index(cell.value.kind === 'text' ? 'General' : formatCode(cell.value), cell.bold, wrap);
+                const style = styles.index(formatCode(cell.value), cell.bold, wrap);
                 const s = style ? ` s="${style}"` : '';
+                // A truth value and an error as a spreadsheet holds them (`t="b"`, `t="e"`).
+                if (cell.value.kind === 'boolean') return `<c r="${ref}"${s} t="b"><v>${cell.value.number ? 1 : 0}</v></c>`;
+                if (cell.value.kind === 'error') return `<c r="${ref}"${s} t="e"><v>${xmlText(cell.text.trim().toUpperCase())}</v></c>`;
                 if (cell.value.kind !== 'text' && typeof cell.value.number === 'number') return `<c r="${ref}"${s}><v>${cell.value.number}</v></c>`;
                 if (!cell.text) return style ? `<c r="${ref}"${s}/>` : '';
                 // Excel holds 32,767 characters a cell: the rest is reported, not written.
@@ -204,7 +212,7 @@ class StyleTable {
 
     /** The index of a cell format, added where new; 0 is the plain one. */
     index(code: string, bold: boolean, wrap: boolean): number {
-        let id = BUILTIN_FORMATS[code];
+        let id = BUILTIN_FORMATS.get(code);
         if (id === undefined) {
             id = this.formats.get(code) ?? 164 + this.formats.size;
             this.formats.set(code, id);
