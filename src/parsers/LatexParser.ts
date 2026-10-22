@@ -26,6 +26,8 @@ const MAX_MACRO_EXPANSIONS = 200000;
 const MAX_EXPANDED_CHARS = 5000000;
 const MAX_INPUT_FRAMES = 128;
 const MAX_INCLUDE_DEPTH = 16;
+/** Most page styles kept by name (see `\fancypagestyle`): a document of sections has two each. */
+const MAX_PAGE_STYLES = 100000;
 /** Deepest nesting of groups and environments interpreted; deeper content is read as plain text. */
 const MAX_NESTING_DEPTH = 128;
 /** Deepest nesting of tables (a table inside a cell) interpreted; deeper tables are read as plain text. */
@@ -1069,6 +1071,8 @@ class LatexReader {
     /** What decoding PDF pictures into images may cost this document, across all of them. */
     private readonly decodeBudget = newDecodeBudget();
     private headerFields = new Map<string, string>();
+    /** The page styles defined (`\\fancypagestyle`), by name: their fields, read where the pages are set in one. */
+    private readonly pageStyles = new Map<string, string>();
     private footerFields = new Map<string, string>();
     private graphicsPaths: string[] = [];
 
@@ -2673,12 +2677,28 @@ class LatexReader {
                 if (list && /^enum(i|ii|iii|iv)$/.test(c) && Number.isFinite(v)) list.nextIndex = Math.max(0, v);
                 return;
             }
-            // A page style defined (`\\fancypagestyle{name}[base]{...}`) is not the pages' own until a page is
-            // set in it: its fields were read as the document's header and footer, over them.
+            // A page style defined (`\\fancypagestyle{name}[base]{...}`) is not the pages' own until the pages are
+            // set in it (`\\pagestyle{name}`, before the document's text: its first page's style): its fields were
+            // read as the document's header and footer, over them. One page's style (`\\thispagestyle`) is that page's.
             case 'fancypagestyle': {
-                sc.readRawGroup();
+                const styleName = (sc.readRawGroup() ?? '').trim();
+                sc.readRawOptional();
+                const body = sc.readRawGroup();
+                if (styleName && body !== null && this.pageStyles.size < MAX_PAGE_STYLES) this.pageStyles.set(styleName, body);
+                return;
+            }
+            case 'pagestyle': {
+                const body = this.pageStyles.get((sc.readRawGroup() ?? '').trim());
+                const doc = this.docFlow;
+                if (body !== undefined && (!this.bodyStarted || !doc || (!doc.blocks.length && !doc.inline.length))) this.expand(sc, body);
+                return;
+            }
+            // Every field emptied, as the fields set after it (a page style's own, most often) start from none.
+            case 'fancyhf': {
                 sc.readRawOptional();
                 sc.readRawGroup();
+                this.headerFields.clear();
+                this.footerFields.clear();
                 return;
             }
             case 'fancyhead': case 'fancyfoot': case 'lhead': case 'chead': case 'rhead': case 'lfoot': case 'cfoot': case 'rfoot': {
@@ -4167,16 +4187,21 @@ class LatexReader {
             for (const pos of ['L', 'C', 'R']) {
                 let raw = fields.get(pos);
                 if (!raw || !raw.replace(/\\thepage|\\hfill|\s/g, '')) continue;
-                let kind = 'default';
+                // (On odd pages alone, `\\ifodd\\value{page} {...}\\fi`, the pages' own where even pages have theirs;
+                // and both, `\\ifodd\\value{page} {...}\\else {...}\\fi`: they were read as text, "page" and all.)
+                const both = /^\s*\\ifodd\\value\{page\} ?\{([\s\S]*)\}\\else ?\{([\s\S]*)\}\\fi\s*$/.exec(raw);
                 const first = /^\s*\\ifnum\\value\{page\}=1 ?\{([\s\S]*)\}\\fi\s*$/.exec(raw), even = /^\s*\\ifodd\\value\{page\}\\else ?\{([\s\S]*)\}\\fi\s*$/.exec(raw);
-                if (first) { kind = 'first'; raw = first[1]; } else if (even) { kind = 'even'; raw = even[1]; }
+                const odd = /^\s*\\ifodd\\value\{page\} ?\{([\s\S]*)\}\\fi\s*$/.exec(raw);
+                const kinds: [string, string][] = both ? [['default', both[1]], ['even', both[2]]] : first ? [['first', first[1]]] : even ? [['even', even[1]]] : odd ? [['default', odd[1]]] : [['default', raw]];
                 const align: TextAlignment = pos === 'C' ? 'center' : pos === 'R' ? 'right' : 'left';
-                const blocks = this.parseBlocksOf(raw);
-                let paragraphs = parts.get(kind);
-                if (!paragraphs) parts.set(kind, paragraphs = []);
-                for (const b of blocks) {
-                    if (b.type === 'paragraph') (b.metadata ??= {} as any) && ((b.metadata as any).alignment = align);
-                    paragraphs.push(b);
+                for (const [kind, text] of kinds) {
+                    const blocks = this.parseBlocksOf(text);
+                    let paragraphs = parts.get(kind);
+                    if (!paragraphs) parts.set(kind, paragraphs = []);
+                    for (const b of blocks) {
+                        if (b.type === 'paragraph') (b.metadata ??= {} as any) && ((b.metadata as any).alignment = align);
+                        paragraphs.push(b);
+                    }
                 }
             }
             return [...parts].filter(([, paragraphs]) => paragraphs.length).map(([kind, paragraphs]) => ({ type, metadata: { type: kind } as any, children: paragraphs }));

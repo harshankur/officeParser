@@ -193,14 +193,29 @@ function readRules(css: string): Rule[] {
     const text = css.slice(0, MAX_CSS_LENGTH).replace(/\/\*[\s\S]*?(?:\*\/|$)/g, ' ');
     let at = 0;
     while (at < text.length && rules.length < MAX_RULES) {
-        const open = text.indexOf('{', at);
+        let start = at;
+        while (start < text.length && /\s/.test(text[start])) start++;
+        // An at-rule statement (`@import url(x);`, `@charset "utf-8";`) ends at its semicolon, one in a string or
+        // in brackets (`url(a;b.css)`) aside: the rule after it was read as its block and lost. Read once from its
+        // start to its end (looking for the semicolon on to the stylesheet's end at each at-rule took time in
+        // the square of its length).
+        let open = -1, statementEnd = -1;
+        if (text[start] === '@') {
+            let quote = '', depth = 0;
+            for (let k = start; k < text.length; k++) {
+                const ch = text[k];
+                if (quote) { if (ch === '\\') k++; else if (ch === quote) quote = ''; continue; }
+                if (ch === '"' || ch === "'") quote = ch;
+                else if (ch === '(') depth++;
+                else if (ch === ')') depth = Math.max(0, depth - 1);
+                else if (ch === ';' && !depth) { statementEnd = k; break; }
+                else if (ch === '{') { open = k; break; }
+            }
+            if (statementEnd >= 0) { at = statementEnd + 1; continue; }
+        } else open = text.indexOf('{', at);
         if (open < 0) break;
         const close = text.indexOf('}', open);
         const prelude = text.slice(at, open).trim(), body = text.slice(open + 1, close < 0 ? text.length : close);
-        // An at-rule statement (`@import url(x);`, `@charset "utf-8";`) ends at its semicolon: the rule after it
-        // was read as its block and lost.
-        const semicolon = prelude.startsWith('@') ? text.indexOf(';', at) : -1;
-        if (semicolon >= 0 && semicolon < open) { at = semicolon + 1; continue; }
         at = close < 0 ? text.length : close + 1;
         // An at-rule's block (a media query's rules inside it) skipped whole: its braces counted, or the rule
         // after it read as part of its prelude and was lost.

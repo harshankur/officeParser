@@ -63,6 +63,7 @@
 import { attachmentLookup } from '../utils/repeatUtils.js';
 import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { MAX_PAGE_PT } from '../utils/pageLimits.js';
+import { titlePagesTakeHiddenFirsts } from '../utils/officeGenUtils.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError, logWarning } from '../utils/errorUtils.js';
 import { createAttachment, renameAttachments } from '../utils/imageUtils.js';
@@ -1777,16 +1778,29 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         const settingsDoc = settings ? parseXmlString(settings.content.toString(), { config }) : undefined;
         const evenAndOdd = isOn(settingsDoc ? getFirstElementByTagName(settingsDoc, "w:evenAndOddHeaders") : undefined);
         const rels = relsOf(documentPath);
-        const read = new Set<string>();
+        // Each part read once, and a node for every reference to it, with that reference's section and type:
+        // a part two sections refer to (or one section, for two types, as a writer that writes a part once
+        // gives it) was read for its first reference alone, and the later section showed another's.
+        const byPath = new Map(files.map(f => [f.path, f]));
+        const read = new Map<string, OfficeContentNode[] | null>();
+        const given = new Set<string>();
         const readInto = async (path: string, kind: 'header' | 'footer', metadata: HeaderFooterMetadata) => {
-            const partFile = files.find(f => f.path === path);
-            if (!partFile || read.has(path)) return;
-            read.add(path);
-            const partXml = partFile.content.toString();
-            const partDoc = parseXmlString(partXml, { config });
-            if (!partDoc.documentElement) return;
-            const children: OfficeContentNode[] = [];
-            await readPart(partFile.path, partDoc.documentElement, () => readBlocks(partDoc.documentElement, partXml, children));
+            const partFile = byPath.get(path);
+            if (!partFile) return;
+            const key = `${path}|${kind}|${metadata.type}|${metadata.section ?? ''}`;
+            if (given.has(key)) return;
+            given.add(key);
+            let children = read.get(path);
+            if (children === undefined) {
+                read.set(path, children = null);
+                const partXml = partFile.content.toString();
+                const partDoc = parseXmlString(partXml, { config });
+                if (!partDoc.documentElement) return;
+                const blocks: OfficeContentNode[] = [];
+                await readPart(partFile.path, partDoc.documentElement, () => readBlocks(partDoc.documentElement, partXml, blocks));
+                read.set(path, children = blocks);
+            } else if (children) children = structuredClone(children);
+            if (!children) return;
             (kind === 'header' ? headers : footers).push({ type: kind, text: children.map(c => c.text || '').join('\n'), children, metadata });
         };
         for (const [index, sectPr] of sections.entries()) {
@@ -1800,8 +1814,22 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     { type, ...(sections.length > 1 ? { section: index } : {}), ...(hidden ? { hidden: true } : {}) });
             }
         }
+        // Even and odd pages' parts set on with no even pages' part anywhere: even pages show none, as Word shows
+        // them (they showed every page's), an empty even pages' part of each kind the document has.
+        const shownEven = (n: OfficeContentNode) => (n.metadata as HeaderFooterMetadata).type === 'even' && !(n.metadata as HeaderFooterMetadata).hidden;
+        if (evenAndOdd && !headers.some(shownEven) && !footers.some(shownEven)) {
+            for (const [list, kind] of [[headers, 'header'], [footers, 'footer']] as const) {
+                if (list.some(n => !(n.metadata as HeaderFooterMetadata).hidden)) list.push({ type: kind, text: '', children: [], metadata: { type: 'even', ...(sections.length > 1 ? { section: 0 } : {}) } });
+            }
+        }
+        // (A later title page takes on a first page's part an earlier section keeps hidden.)
+        if (sections.length > 1) {
+            const titled = sections.map(sectPr => isOn(getDirectChildren(sectPr, "w:titlePg")[0]));
+            titlePagesTakeHiddenFirsts(headers, 'header', titled);
+            titlePagesTakeHiddenFirsts(footers, 'footer', titled);
+        }
         for (const [regex, kind] of [[headerFileRegex, 'header'], [footerFileRegex, 'footer']] as const) {
-            for (const partFile of files.filter(f => regex.test(f.path))) {
+            for (const partFile of files.filter(f => regex.test(f.path) && !read.has(f.path))) {
                 await readInto(partFile.path, kind, sections.length ? { type: 'default', hidden: true } : { type: 'default' });
             }
         }

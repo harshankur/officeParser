@@ -2869,6 +2869,12 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         // Only the first master page's two were read, as loose paragraphs.
         const masters = [firstMaster, ...sectionMasters];
         const sectioned = new Set(masters).size > 1;
+        // Whether any of the document's master pages (or one a first page's hands over to) has a left part of
+        // its own: then every section has even pages' parts, as Word's even and odd pages are the document's.
+        const facing = [...new Set(masters)].some(name => {
+            const master = masterPages.get(name), next = master?.getAttribute('style:next-style-name');
+            return [master, next && next !== name ? masterPages.get(next) : undefined].some(m => shown(m, 'style:header-left') || shown(m, 'style:footer-left'));
+        });
         masters.forEach((name, section) => {
             if (section > 0 && name === masters[section - 1]) return;
             const master = masterPages.get(name);
@@ -2885,12 +2891,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     ...own.filter(([, , type]) => type !== 'first').map(([tag, kind, type]) => [rest, tag, kind, type] as const)]
                 : own.map(([tag, kind, type]) => [master, tag, kind, type] as const);
             // A left or first part ODF leaves out (or hides) is the right page's, where Word's (which the
-            // header and footer nodes follow) shows nothing: a kind with its own left (first) part makes the
-            // other kind's default part that kind's left (first) part too, or it was lost on those pages.
+            // header and footer nodes follow) shows nothing: where the document has left parts (any master
+            // page's), each kind's default part is its left part too where it has none; where this master page
+            // has a first page's part of one kind, the other kind's default part is its first page's too. They
+            // were lost on those pages, and a later section on this master page showed another's left part.
             // (A first page's master page that hands over shows its own parts alone.)
             const found = parts.map(([from, tag, kind, type]) => [shown(from, tag), kind, type] as const);
             for (const type of ['even', 'first'] as const) {
-                if ((type === 'first' && rest) || !found.some(([el, , t]) => el && t === type)) continue;
+                if (type === 'even' ? !facing : rest || !found.some(([el, , t]) => el && t === type)) continue;
                 for (const kind of ['header', 'footer'] as const) {
                     const index = found.findIndex(([, k, t]) => k === kind && t === type);
                     const fallback = found.find(([el, k, t]) => el && k === kind && t === 'default')?.[0];

@@ -4987,6 +4987,57 @@ async function testTitleAndEvenPagesAsWordShows(): Promise<void> {
     const rtfAst = await OfficeParser.parseOffice(Buffer.from(rtf), { fileType: 'rtf', includeBreakNodes: true } as any) as OfficeParserAST;
     const second = rtfAst.content.find(n => (n.metadata as any)?.section === 1);
     assert.strictEqual((second?.metadata as any)?.pageSetup?.width ?? rtfAst.metadata.pageSetup?.width, 792, 'an RTF section keeps the section before\'s page until its \\sectd');
+    // ... but a page size of its own is that section's page, a landscape page kept from before turning it no more.
+    const portrait = await OfficeParser.parseOffice(Buffer.from(rtf.replace('\\sect Two.', '\\sect\\pgwsxn12240\\pghsxn15840 Two.')), { fileType: 'rtf', includeBreakNodes: true } as any) as OfficeParserAST;
+    const portraitBreak = portrait.content.find(n => (n.metadata as any)?.section === 1);
+    assert.deepStrictEqual([(portraitBreak?.metadata as any)?.pageSetup?.width, (portraitBreak?.metadata as any)?.pageSetup?.height], [612, 792], 'an RTF section\'s own portrait size is not turned by the landscape page before it');
+
+    // DOCX: sections of their own parts, as a list of sections each `[references, title page]`, the parts by id.
+    const sectioned = (secs: [string, boolean][], texts: Record<string, string>, evenAndOdd = false) => {
+        const ids = Object.keys(texts);
+        const body = secs.map(([refs, title], i) => {
+            const sectPr = `<w:sectPr>${refs}<w:pgSz w:w="12240" w:h="15840"/>${title ? '<w:titlePg/>' : ''}</w:sectPr>`;
+            return Array.from({ length: 3 }, (_, k) => para(`Section ${i} paragraph ${k}.`)).join('') + (i < secs.length - 1 ? `<w:p><w:pPr>${sectPr}</w:pPr></w:p>` : sectPr);
+        }).join('');
+        return Buffer.from(zipSync({
+            '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+            '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+            'word/_rels/document.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                + ids.map(id => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${id.startsWith('header') ? 'header' : 'footer'}" Target="${id}.xml"/>`).join('')
+                + '<Relationship Id="st" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/></Relationships>'),
+            'word/settings.xml': strToU8(`<?xml version="1.0"?><w:settings ${W}>${evenAndOdd ? '<w:evenAndOddHeaders/>' : ''}</w:settings>`),
+            'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${W}><w:body>${body}</w:body></w:document>`),
+            ...Object.fromEntries(ids.map(id => [`word/${id}.xml`, strToU8(`<?xml version="1.0"?><w:${id.startsWith('header') ? 'hdr' : 'ftr'} ${W}>${para(texts[id])}</w:${id.startsWith('header') ? 'hdr' : 'ftr'}>`)])),
+        }));
+    };
+    const furniture = (a: OfficeParserAST) => (a.auxiliary?.headers ?? []).map(h => `${(h.metadata as any).section}${(h.metadata as any).type}${(h.metadata as any).hidden ? 'H' : ''}:${collectAllNodes({ content: [h] } as any).filter(n => n.type === 'text').map(n => n.text).join('')}`).sort();
+    const ref = (type: string, id: string) => `<w:headerReference w:type="${type}" r:id="${id}"/>`;
+    // A part two sections refer to is each one's (the second section showed the first's part read once, or another's).
+    const shared = await OfficeParser.parseOffice(sectioned([[ref('default', 'header1'), false], [ref('default', 'header2'), false], [ref('default', 'header1'), false]], { header1: 'HA', header2: 'HB' }), { fileType: 'docx', includeBreakNodes: true } as any) as OfficeParserAST;
+    assert.deepStrictEqual(furniture(shared), ['0default:HA', '1default:HB', '2default:HA'], 'a DOCX part two sections refer to is read for each');
+    const sharedBack = await OfficeParser.parseOffice(Buffer.from((await shared.to('docx')).value as any), { fileType: 'docx' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(furniture(sharedBack), furniture(shared), 'DOCX output\'s parts written once for two sections read back for both');
+    // A later title page takes on a first page's part a section without one keeps (hidden).
+    const inherited = await OfficeParser.parseOffice(sectioned([[ref('default', 'header1') + ref('first', 'header2'), false], [ref('default', 'header3'), true]], { header1: 'HD', header2: 'HF', header3: 'HD2' }), { fileType: 'docx' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(furniture(inherited), ['0default:HD', '0firstH:HF', '1default:HD2', '1first:HF'], 'a later title page takes on the first page\'s part an earlier section keeps hidden');
+    // Even and odd pages' parts set on with none anywhere: even pages show none.
+    const noEven = await OfficeParser.parseOffice(sectioned([[ref('default', 'header1'), false]], { header1: 'HD' }, true), { fileType: 'docx' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(furniture(noEven), ['undefineddefault:HD', 'undefinedeven:'], 'even and odd pages set on with no even part leave even pages without one');
+
+    // ODT: master pages of which one has left parts: every section's even pages have their own (the others' every-page ones).
+    const masterOf = (name: string, left: boolean) => `<style:master-page style:name="${name}"><style:header><text:p>${name}H</text:p></style:header>${left ? `<style:header-left><text:p>${name}L</text:p></style:header-left>` : ''}</style:master-page>`;
+    const twoMasters = Buffer.from(zipSync({ 'mimetype': strToU8('application/vnd.oasis.opendocument.text'),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:master-page-name="M2"/><style:style style:name="P2" style:family="paragraph" style:master-page-name="Standard"/></office:automatic-styles><office:body><office:text><text:p>One.</text:p><text:p text:style-name="P1">Two.</text:p><text:p text:style-name="P2">Three.</text:p></office:text></office:body></office:document-content>`),
+        'styles.xml': strToU8(`<?xml version="1.0"?><office:document-styles ${NS}><office:master-styles>${masterOf('Standard', false)}${masterOf('M2', true)}</office:master-styles></office:document-styles>`) }));
+    const twoMastersAst = await OfficeParser.parseOffice(twoMasters, { fileType: 'odt' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(furniture(twoMastersAst), ['0default:StandardH', '0even:StandardH', '1default:M2H', '1even:M2L', '2default:StandardH', '2even:StandardH'], 'an ODT master page without left parts shows its own on left pages, where another has left parts');
+
+    // LaTeX: a page style defined and set (`\fancypagestyle{main}{...}\pagestyle{main}`) is the pages' own; one
+    // only defined is not; a field on odd pages, or odd and even pages, is read as their parts.
+    const texFurniture = async (src: string) => furniture(await OfficeParser.parseOffice(Buffer.from(src), { fileType: 'tex' } as any) as OfficeParserAST);
+    assert.deepStrictEqual(await texFurniture('\\documentclass{article}\\usepackage{fancyhdr}\\fancypagestyle{main}{\\fancyhf{}\\fancyhead[L]{MAIN}}\\pagestyle{main}\\begin{document}Body.\\end{document}'), ['undefineddefault:MAIN'], 'a LaTeX page style set is read');
+    assert.deepStrictEqual(await texFurniture('\\documentclass{article}\\usepackage{fancyhdr}\\pagestyle{fancy}\\fancyhead[L]{FANCY}\\fancypagestyle{plain}{\\fancyhf{}\\fancyhead[L]{PLAIN}}\\begin{document}Body.\\end{document}'), ['undefineddefault:FANCY'], 'a LaTeX page style only defined is not the pages\'');
+    assert.deepStrictEqual(await texFurniture('\\documentclass{article}\\usepackage{fancyhdr}\\pagestyle{fancy}\\fancyhead[L]{\\ifodd\\value{page} {ODD}\\else {EVEN}\\fi}\\begin{document}Body.\\end{document}'), ['undefineddefault:ODD', 'undefinedeven:EVEN'], 'a LaTeX field of odd and even pages is read as their parts');
 }
 
 /**
@@ -5404,10 +5455,16 @@ async function testNativePdfSvgPictures(): Promise<void> {
     // colour from a rule are read as a browser reads them.
     for (const body of ['<style>@media print{rect{fill:red}} rect{fill:#00ff00}</style><rect width="20" height="20"/>',
         '<style>@import url(a.css); rect{fill:#00ff00}</style><rect width="20" height="20" fill="red"/>',
+        '<style>@import url(a;b.css); rect{fill:#00ff00}</style><rect width="20" height="20" fill="red"/>',
+        '<style>@import "a;b.css"; rect{fill:#00ff00}</style><rect width="20" height="20" fill="red"/>',
         '<style>.s{stop-color:#00ff00}</style><defs><linearGradient id="g"><stop class="s" offset="0"/><stop class="s" offset="1"/></linearGradient></defs><rect width="20" height="20" fill="url(#g)"/>',
         '<style>rect{fill:#00ff00 !important} #a{fill:red}</style><rect id="a" width="20" height="20" style="fill:blue"/>']) {
         assert.ok(/0 1 0 rg/.test((await drawn(body)).streams), `an SVG's cascade draws green: ${body}`);
     }
+    // A stylesheet of many at-rules is read in time in its length (each looked for its semicolon to the end).
+    const atRulesStarted = Date.now();
+    await drawn(`<style>${'@a{}'.repeat(60000)}</style><rect width="20" height="20" fill="#00ff00"/>`);
+    assert.ok(Date.now() - atRulesStarted < 5000, `a stylesheet of many at-rules is read quickly; took ${Date.now() - atRulesStarted}ms`);
 }
 
 /**

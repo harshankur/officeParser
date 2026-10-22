@@ -9,7 +9,7 @@
  * @module officeGenUtils
  */
 
-import { CellMetadata, EmbedMetadata, ImageMode, OfficeContentNode, OfficeParserAST, PageSetup, ParagraphSpacing, RowMetadata, SheetMetadata } from '../types.js';
+import { CellMetadata, EmbedMetadata, HeaderFooterMetadata, ImageMode, OfficeContentNode, OfficeParserAST, PageSetup, ParagraphSpacing, RowMetadata, SheetMetadata } from '../types.js';
 import { cssColorHex } from './colorUtils.js';
 import { escapeXml, stripInvalidXmlChars } from './sanitize.js';
 import { lookupTable } from './lookupUtils.js';
@@ -284,6 +284,28 @@ export function sectionFurnitureIndex(nodes: OfficeContentNode[], kind: 'header'
         byKind.set(`${kind}|${type}`, index);
     }
     return index;
+}
+
+/**
+ * A title page's first page's parts where its section has none of its own: the latest earlier section's,
+ * shown or not (one a section without a title page has, kept hidden, is still the one a later title page
+ * takes on, as Word gives it), as a part of the titled section's own where that one is hidden: the later
+ * title page showed none, or an older section's. `titled` says whether each section has a title page;
+ * a reader of sections calls it once its parts are read, for each kind.
+ */
+export function titlePagesTakeHiddenFirsts(parts: OfficeContentNode[], kind: 'header' | 'footer', titled: readonly boolean[]): void {
+    const meta = (n: OfficeContentNode) => n.metadata as { type?: string; section?: number; hidden?: boolean } | undefined;
+    const bySection = new Map<number, OfficeContentNode>();
+    for (const n of parts) if (n.type === kind && meta(n)?.type === 'first' && typeof meta(n)?.section === 'number' && !bySection.has(meta(n)!.section!)) bySection.set(meta(n)!.section!, n);
+    let latest: OfficeContentNode | undefined;
+    for (let section = 0; section < titled.length; section++) {
+        const own = bySection.get(section);
+        if (own) { latest = own; continue; }
+        if (titled[section] && latest && meta(latest)?.hidden) {
+            const copy: OfficeContentNode = { type: kind, text: latest.text, children: structuredClone(latest.children ?? []), metadata: { type: 'first', section } as HeaderFooterMetadata };
+            parts.push(latest = copy);
+        }
+    }
 }
 
 /**

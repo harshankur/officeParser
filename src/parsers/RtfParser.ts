@@ -42,6 +42,7 @@
 
 import { BreakMetadata, CellMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, IndentationMetadata, ListMetadata, ParagraphSpacing, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, PageSetup, TextFormatting } from '../types.js';
 import { MAX_PAGE_PT } from '../utils/pageLimits.js';
+import { titlePagesTakeHiddenFirsts } from '../utils/officeGenUtils.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
@@ -675,7 +676,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // twips: a section's state from its `\sectd` on; and the break (with includeBreakNodes) each `\sect`
     // ends one with, given the next section's page once its properties are read (see sectionSetup).
     const page: Partial<Record<'w' | 'h' | 'ml' | 'mr' | 'mt' | 'mb' | 'hy' | 'fy', number>> & { landscape?: boolean } = {};
-    type SectionState = Partial<Record<'w' | 'h' | 'ml' | 'mr' | 'mt' | 'mb' | 'hy' | 'fy' | 'cols' | 'colsx', number>> & { landscape?: boolean; line?: boolean; start?: 'none' | 'page'; title?: boolean; widths: Map<number, number>; colNo: number };
+    type SectionState = Partial<Record<'w' | 'h' | 'ml' | 'mr' | 'mt' | 'mb' | 'hy' | 'fy' | 'cols' | 'colsx', number>> & { landscape?: boolean; ownLandscape?: boolean; ownSize?: boolean; line?: boolean; start?: 'none' | 'page'; title?: boolean; widths: Map<number, number>; colNo: number };
     const newSection = (): SectionState => ({ widths: new Map(), colNo: 1 });
     let section = newSection();
     // Each section's state by its number, so a part is shown as its own section says (its `\titlepg`).
@@ -1939,9 +1940,10 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             else if (SECTION_WORDS.has(node.value) && node.param !== undefined && node.param >= 0) {
                 const key = SECTION_WORDS.get(node.value)!;
                 (section as any)[key] = node.param;
+                if (key === 'w' || key === 'h') section.ownSize = true;
                 if (key !== 'cols' && key !== 'colsx') pageStated = true;
             }
-            else if (node.value === 'lndscpsxn') { section.landscape = true; pageStated = true; }
+            else if (node.value === 'lndscpsxn') { section.landscape = section.ownLandscape = true; pageStated = true; }
             else if (node.value === 'linebetcol') section.line = true;
             else if (node.value === 'colno' && node.param !== undefined) section.colNo = Math.max(1, Math.min(16, node.param));
             else if (node.value === 'colw' && node.param !== undefined && node.param > 0) section.widths.set(section.colNo, node.param);
@@ -1959,7 +1961,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 flushParagraph();
                 sectionNumber++;
                 // (The next section has the one before's properties until its `\\sectd`, as the RTF specification gives it.)
-                section = { ...section, widths: new Map(section.widths) };
+                section = { ...section, widths: new Map(section.widths), ownLandscape: false, ownSize: false };
                 sectionStates.push(section);
                 if (config.includeBreakNodes) {
                     const brk: OfficeContentNode = { type: 'break', metadata: { breakType: 'page', section: sectionNumber } as BreakMetadata };
@@ -2318,6 +2320,20 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         // A document of sections gives each part its section, as Word's are.
         if (sectionNumber > 0) meta.section = partSections.get(part) ?? 0;
     }
+    // Facing pages (`\\facingp`) with no left pages' part anywhere: even pages show none, as Word shows them
+    // (they showed every page's), an empty even pages' part of each kind the document has.
+    const shownEven = (n: OfficeContentNode) => (n.metadata as HeaderFooterMetadata).type === 'even' && !(n.metadata as HeaderFooterMetadata).hidden;
+    if (facingPages && !headers.some(shownEven) && !footers.some(shownEven)) {
+        for (const [list, kind] of [[headers, 'header'], [footers, 'footer']] as const) {
+            if (list.some(n => !(n.metadata as HeaderFooterMetadata).hidden)) list.push({ type: kind, text: '', children: [], metadata: { type: 'even', ...(sectionNumber > 0 ? { section: 0 } : {}) } as HeaderFooterMetadata });
+        }
+    }
+    // (A later title page takes on a first page's part an earlier section keeps hidden.)
+    if (sectionNumber > 0) {
+        const titled = sectionStates.map(state => !!state.title);
+        titlePagesTakeHiddenFirsts(headers, 'header', titled);
+        titlePagesTakeHiddenFirsts(footers, 'footer', titled);
+    }
     // A section's page in points: its own size, margins and columns, else the document's (RTF's defaults,
     // Letter with margins of an inch and a quarter across, where it states none). Held as Word's reader
     // holds a page: none where its size is no page (up to two hundred inches each way), margins at most a
@@ -2328,7 +2344,9 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         const pt = (twips: number | undefined, fallback: number) => (twips ?? fallback) / 20;
         let width = pt(state.w ?? page.w, 12240), height = pt(state.h ?? page.h, 15840);
         if (!(width > 0 && height > 0 && width <= MAX_PAGE_PT && height <= MAX_PAGE_PT)) return undefined;
-        if ((state.landscape || (state.w === undefined && page.landscape)) && width < height) [width, height] = [height, width];
+        // (A landscape page kept from the section before turns a size of its own no more: that size is its page.)
+        const landscape = state.landscape && (state.ownLandscape || !state.ownSize);
+        if ((landscape || (state.w === undefined && page.landscape)) && width < height) [width, height] = [height, width];
         const margin = (twips: number | undefined, fallback: number) => Math.min(pt(twips, fallback), Math.min(width, height) / 3);
         const setup: PageSetup = {
             width, height,
