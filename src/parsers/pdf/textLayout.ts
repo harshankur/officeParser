@@ -367,6 +367,8 @@ export interface DocContext {
     bodyFontSize: number;
     /** Heading level (1..6) for a rounded font size, or 0 when that size is body text. */
     headingLevelForSize: (roundedSize: number) => number;
+    /** The level of a bold heading at the body's size: below every larger size's. */
+    bodyHeadingLevel: number;
     newlineDelimiter: string;
     /** Monotonic counter giving each reconstructed geometric list a unique `listId`. */
     listCounter: { n: number };
@@ -392,10 +394,15 @@ function emitBounds(box: NodeBounds, page: PageContext, cfg: PdfLayoutConfig): N
  */
 export function computeDocContext(allRuns: RawRun[], cfg: PdfLayoutConfig, newlineDelimiter: string): DocContext {
     const bodyFontSize = dominantFontSize(allRuns) || 12;
+    // The sizes above the body's (by three quarters of a point: a heading a little larger, as a word
+    // processor's are, counts) that set some text, not one letter alone: a drop cap's size took the
+    // first level, and the document's title came second.
     const headingSizes = new Set<number>();
     if (cfg.headingDetection !== 'off') {
-        for (const s of new Set(allRuns.map(r => roundSize(r.fontSize)))) {
-            if (s >= 1.2 * bodyFontSize) headingSizes.add(s);
+        for (const r of allRuns) {
+            if (r.angle !== 0) continue;
+            const s = roundSize(r.fontSize);
+            if (s >= bodyFontSize + 0.75 && !headingSizes.has(s) && r.text.trim().length >= 2) headingSizes.add(s);
         }
     }
     const ranked = [...headingSizes].sort((a, b) => b - a);
@@ -404,6 +411,7 @@ export function computeDocContext(allRuns: RawRun[], cfg: PdfLayoutConfig, newli
     return {
         cfg, bodyFontSize, newlineDelimiter,
         headingLevelForSize: (s: number) => levelForSize.get(s) ?? 0,
+        bodyHeadingLevel: Math.min(6, ranked.length + 1),
         listCounter: { n: 0 },
     };
 }
@@ -522,6 +530,9 @@ function groupParagraphs(block: PdfLine[]): ParaGroup[] {
         const gap = l.baseline - prev.baseline;
         if (gap > 1.45 * leading) return true;
         if (Math.abs(l.fontSize - prev.fontSize) / Math.max(prev.fontSize, 1) > 0.15) return true;
+        // A change of size (by three quarters of a point) or of weight after a line that did not run
+        // into the margin: a heading a little larger than its text, or bold at its size, above it.
+        if ((Math.abs(l.fontSize - prev.fontSize) >= 0.75 || l.bold !== prev.bold) && !wrappedInto(prev, l, maxRight)) return true;
         if (gap <= 0.5 * Math.min(l.fontSize, prev.fontSize)) return true;
         if (/\.{4,}/.test(texts[i])) return true;
         return anyMarker[i] && !prev.endsWithHyphen;
@@ -1053,6 +1064,8 @@ export interface ListCarry {
     /** The marker the block before ended with, and the one the next block starts with. */
     prev: ListMarker | null;
     next: ListMarker | null;
+    /** The next block's first line: the text a heading at the end of this block stands over. */
+    nextLine?: PdfLine | null;
     /** The page's indent levels, from every item's marker on it. */
     levelFor?: (x: number) => number;
 }
@@ -1165,7 +1178,8 @@ export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContex
     // A group starting with a number is not a list item when it is really a numbered heading (its font
     // is heading-sized) or a table-of-contents entry (dot leaders "... 3"). Stripping the number there
     // would corrupt a heading or TOC. Bullet glyphs are exempt (a heading rarely starts with one).
-    const headingSized = (g: ParaGroup) => doc.cfg.headingDetection !== 'off' && g.fontSize >= 1.25 * doc.bodyFontSize;
+    const headingSized = (g: ParaGroup) => doc.cfg.headingDetection !== 'off'
+        && (g.fontSize >= 1.25 * doc.bodyFontSize || (g.fontSize >= doc.bodyFontSize + 0.75 && g.lines.every(l => l.bold)));
     const isItem = effective.map((m, i) => {
         if (dropped[i] || !m) return false;
         if (m.type === 'ordered' && (headingSized(groups[i]) || /\.{4,}/.test(groupText(groups[i])))) return false;
@@ -1188,7 +1202,14 @@ export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContex
         if (dropped[i]) continue;
         if (!isItem[i]) {
             listId = null; prevWasItem = false;
-            const node = paragraphNode(groups[i], page, doc);
+            // Body text after it, the group alone on its baseline (not a bold cell beside others): what a
+            // bold heading at the body's size needs.
+            let j = i + 1;
+            while (j < N && dropped[j]) j++;
+            const after = groups[j]?.lines[0] ?? carry?.nextLine;
+            const bodyFollows = !!after && !after.bold && Math.abs(after.fontSize - doc.bodyFontSize) < 0.75
+                && (byBaseline.get(Math.round(baseOf(groups[i])))?.length ?? 1) === 1;
+            const node = paragraphNode(groups[i], page, doc, undefined, bodyFollows);
             if (node && (node.text || '').trim().length) nodes.push(node);
             continue;
         }
@@ -1252,7 +1273,7 @@ export function runsToParagraph(runs: RawRun[], page: PageContext, doc: DocConte
     return paragraphNode(finishGroup(lines), page, doc, forcedLevel);
 }
 
-function paragraphNode(group: ParaGroup, page: PageContext, doc: DocContext, forcedLevel?: number): OfficeContentNode | null {
+function paragraphNode(group: ParaGroup, page: PageContext, doc: DocContext, forcedLevel?: number, bodyFollows = false): OfficeContentNode | null {
     const cfg = doc.cfg;
     const children: OfficeContentNode[] = [];
     const boxes: NodeBounds[] = [];
@@ -1321,12 +1342,13 @@ function paragraphNode(group: ParaGroup, page: PageContext, doc: DocContext, for
     if (!children.length) return null;
     const text = parts.join('');
     // A forced level is the tag's own (see `taggedHeadingLevel`); anything else is the heuristic's.
-    const level = forcedLevel !== undefined ? forcedLevel : headingLevel(group, doc);
+    const level = forcedLevel !== undefined ? forcedLevel : headingLevel(group, doc, bodyFollows);
     const container = emitBounds(unionAll(boxes)!, page, cfg);
 
     if (level > 0) {
         const levelSource = forcedLevel !== undefined ? 'tags' : 'font-size';
         const node: OfficeContentNode = { type: 'heading', text, children, metadata: { level, levelSource } };
+        if (levelSource === 'font-size') HEADING_SIZE.set(node, roundSize(group.fontSize));
         if (container) node.bounds = container;
         return node;
     }
@@ -1335,16 +1357,47 @@ function paragraphNode(group: ParaGroup, page: PageContext, doc: DocContext, for
     return node;
 }
 
+/** The size of each heading the heuristic made, for {@link relevelHeadings}. */
+const HEADING_SIZE = new WeakMap<OfficeContentNode, number>();
+
 /**
- * The heading level the font-size and weight heuristic gives a group (0 = paragraph). Under
- * `headingDetection: 'tags'` only a tagged heading is a heading, so the heuristic gives none.
+ * The levels of the headings the heuristic made, once the whole document is read: ranked by the sizes
+ * of those headings alone, larger first. Ranked by every size the document sets text in, a caption in
+ * a table, larger than the headings, took a level, and the document's headings came third and fourth.
  */
-function headingLevel(group: ParaGroup, doc: DocContext): number {
+export function relevelHeadings(content: OfficeContentNode[]): void {
+    const headings: OfficeContentNode[] = [];
+    const stack = [...content];
+    while (stack.length) {
+        const n = stack.pop()!;
+        if (n.type === 'heading' && HEADING_SIZE.has(n)) headings.push(n);
+        for (const c of n.children || []) stack.push(c);
+    }
+    const sizes = [...new Set(headings.map(h => HEADING_SIZE.get(h)!))].sort((a, b) => b - a);
+    for (const h of headings) (h.metadata as { level: number }).level = Math.min(6, sizes.indexOf(HEADING_SIZE.get(h)!) + 1);
+}
+
+/**
+ * The heading level a paragraph group's size and weight give it, or 0 (under `headingDetection:
+ * 'tags'` only a tagged heading is a heading, so it gives none). A group of up to three lines
+ * (two at the body's size) is a heading where it is:
+ * - a fifth larger than the body's text, and bold or a third larger;
+ * - larger by three quarters of a point at least, and bold throughout;
+ * - at the body's size, bold throughout, with body text after it (`bodyFollows`), not ending a
+ *   sentence, a table-of-contents line or one letter.
+ * A word processor's headings are often a point or two larger than its text, or only bold: they were
+ * read as paragraphs, and a heading set over a list was read into it.
+ */
+function headingLevel(group: ParaGroup, doc: DocContext, bodyFollows = false): number {
     if (doc.cfg.headingDetection === 'off' || doc.cfg.headingDetection === 'tags') return 0;
-    const size = group.fontSize;
-    if (size < 1.2 * doc.bodyFontSize) return 0;
-    const chars = group.lines.reduce((s, l) => s + l.fragments.reduce((t, f) => t + f.text.length, 0), 0);
-    if (group.lines.length > 3 || chars >= 200) return 0;
-    if (!(group.bold || size >= 1.35 * doc.bodyFontSize)) return 0;
-    return doc.headingLevelForSize(size) || 1;
+    const size = group.fontSize, body = doc.bodyFontSize;
+    const text = groupText(group);
+    const chars = text.length;
+    if (group.lines.length > 3 || chars >= 200 || chars < 2 || /\.{4,}/.test(text)) return 0;
+    if (size >= 1.2 * body) return group.bold || size >= 1.35 * body ? doc.headingLevelForSize(size) || 1 : 0;
+    const allBold = group.lines.every(l => l.bold);
+    if (!allBold || chars > 150 || /[.,;]$/.test(text)) return 0;
+    if (size >= body + 0.75) return doc.headingLevelForSize(size) || doc.bodyHeadingLevel;
+    if (Math.abs(size - body) >= 0.75 || group.lines.length > 2 || chars > 120 || /[:!]$/.test(text) || !bodyFollows) return 0;
+    return doc.bodyHeadingLevel;
 }

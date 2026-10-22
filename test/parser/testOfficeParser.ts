@@ -3395,13 +3395,17 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
         const fsH = collectHeadings(await OfficeParser.parseOffice(getFilePath('pdf'), { ocr: false, pdfParserConfig: { headingDetection: 'font-size' } }));
         // 'auto' trusts the tags: the calibre fixture tags many body-sized headings (e.g. "Text Formatting").
         add("headingDetection:'auto' trusts tagged headings", isH(autoH, 'Text Formatting'), '"Text Formatting" is a heading', isH(autoH, 'Text Formatting') ? 'heading' : 'not heading');
-        // 'font-size' ignores the tag levels and applies the size/weight heuristic instead, so a body-sized
-        // tagged heading is demoted and the count drops below 'auto'. Before the option was wired up, this
-        // produced the identical result to 'auto' (the option did nothing).
+        // 'font-size' ignores the tag levels and applies the size/weight heuristic instead: the fixture's
+        // headings are a point or two larger than its text and bold (14pt and 13pt over 12pt), so it finds
+        // the same ones, levelled by their sizes (the 26pt title first), not by the tags (which make the
+        // title and "Text Formatting" both level 1). Before the option was wired up, this produced the
+        // identical result to 'auto' (the option did nothing).
+        const levelOf = (hs: any[], t: string) => hs.find((h: any) => String(h.text || '').startsWith(t))?.metadata?.level;
+        const fsLevels = [levelOf(fsH, 'Demonstration'), levelOf(fsH, 'Text Formatting'), levelOf(fsH, 'Inline formatting')];
         add("headingDetection:'font-size' overrides tags via size heuristic",
-            fsH.length > 0 && fsH.length < autoH.length && !isH(fsH, 'Text Formatting'),
-            `fewer than ${autoH.length} headings, "Text Formatting" demoted`,
-            `${fsH.length} headings, "Text Formatting" heading=${isH(fsH, 'Text Formatting')}`);
+            fsH.length === autoH.length && JSON.stringify(fsLevels) === '[1,2,3]' && levelOf(autoH, 'Text Formatting') === 1 && fsH.every((h: any) => h.metadata?.levelSource === 'font-size'),
+            `${autoH.length} headings, levelled 1, 2, 3 by size`,
+            `${fsH.length} headings, levels ${JSON.stringify(fsLevels)}`);
     } catch (e: any) {
         add("headingDetection font-size", false, 'ran', e?.message || String(e));
     }

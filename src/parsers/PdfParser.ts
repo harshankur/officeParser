@@ -44,7 +44,7 @@ import { collectColorMarks, ColorLookup, makeColorLookup } from './pdf/pdfColor.
 import { collectShapes, shapeBullets } from './pdf/pdfShapes.js';
 import { computeRunBox, identityMatrix, mulMatrix, roundBounds, rotateBoundsToRendered, toMatrix6, unionAll } from './pdf/geometry.js';
 import { PageExtract, PdfImage, PdfLayoutConfig, RawRun, ResolvedFont } from './pdf/pdfTypes.js';
-import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, indentLevels as indentLevelsOf, joinMarkerLines, leadingMarker, ListCarry, markerLefts, PageContext, recoverTaggedGrids, runsToParagraph, segmentIntoBlocks } from './pdf/textLayout.js';
+import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, indentLevels as indentLevelsOf, joinMarkerLines, leadingMarker, ListCarry, markerLefts, PageContext, recoverTaggedGrids, relevelHeadings, runsToParagraph, segmentIntoBlocks } from './pdf/textLayout.js';
 import { buildTaggedNodes } from './pdf/structTree.js';
 import { setOwn } from '../utils/lookupUtils.js';
 import { acquirePdfProcess, PdfProcess } from './pdf/pdfProcess.js';
@@ -1822,6 +1822,8 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     // Now that every page's headings and their positions are known, point each internal link at the
     // nearest heading on its target page (falling back to the page itself), rather than a page jump.
     resolveSectionLinks(content, extracts, sectionLinks, [content, auxHeaders, auxFooters, outline ?? []]);
+    // The headings read by size and weight, levelled by the sizes of those headings (see relevelHeadings).
+    relevelHeadings(content);
 
     const auxiliary = (auxHeaders.length || auxFooters.length || outline)
         ? { ...(auxHeaders.length ? { headers: auxHeaders } : {}), ...(auxFooters.length ? { footers: auxFooters } : {}), ...(outline ? { outline } : {}) }
@@ -1849,6 +1851,7 @@ function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext
     const carry: ListCarry = { listId: null, type: null, left: 0, bottom: 0, lineHeight: 12, itemInList: 0, prev: null, next: null, ...(lefts.length ? { levelFor: indentLevelsOf(lefts) } : {}) };
     blocks.forEach((block, k) => {
         carry.next = k + 1 < blocks.length ? leadingMarker(blocks[k + 1]) : null;
+        carry.nextLine = k + 1 < blocks.length ? blocks[k + 1][0] : null;
         appendAll(out, blockToNodes(block, pageCtx, docCtx, carry));
     });
     // Splice each detected table into the flow at its vertical position.

@@ -5324,6 +5324,38 @@ async function testPdfListsReadWhole(): Promise<void> {
     assert.ok(!collectAllNodes(ast).some(n => n.type === 'paragraph' && /^(Apples|Wash|1\.1)/.test(n.text || '')), 'no item is left a paragraph');
 }
 
+/**
+ * An untagged PDF's headings are found by size and weight as a word processor sets them: a point or two
+ * larger than the text and bold, or bold at its size over a paragraph, levelled by the headings' own
+ * sizes; a drop cap, a bold lead-in, a bold table header row, a table of contents and a caption are not
+ * headings. LibreOffice's PDF of a document gave 2 of its 17 headings.
+ */
+async function testPdfHeadingsBySizeAndWeight(): Promise<void> {
+    const pdf = await PDFDocument.create();
+    const regular = await pdf.embedFont(StandardFonts.Helvetica), bold = await pdf.embedFont(StandardFonts.HelveticaBold), italic = await pdf.embedFont(StandardFonts.HelveticaOblique);
+    const page = pdf.addPage([500, 760]);
+    let y = 720;
+    const body = 'Body text runs across the page in sentences that fill the line from margin to margin, as prose does.';
+    const put = (text: string, font: any, size: number, x = 50, gapAfter = 6) => { page.drawText(text, { x, y, size, font }); y -= size * 1.25 + gapAfter; };
+    const paragraph = () => { put(body.slice(0, 70), regular, 11, 50, 2); put(body.slice(70), regular, 11, 50, 10); };
+    put('Report Title', regular, 24, 50, 12);
+    put('1. Introduction', bold, 13.5, 50, 4); paragraph();
+    put('1.1 Background', bold, 12.5, 50, 4); paragraph();
+    put('Scope', bold, 11, 50, 4); paragraph();
+    page.drawText('D', { x: 50, y: y - 20, size: 40, font: regular }); put('rop capped paragraph starts with a large letter and runs on.', regular, 11, 80, 2); put('It continues here.', regular, 11, 80, 24);
+    page.drawText('Lead-in.', { x: 50, y, size: 11, font: bold }); put(' The rest of the paragraph is regular text after it.', regular, 11, 95, 10);
+    page.drawText('Name', { x: 50, y, size: 11, font: bold }); put('Value', bold, 11, 250, 2);
+    page.drawText('Alpha', { x: 50, y, size: 11, font: regular }); put('1', regular, 11, 250, 10);
+    put('Contents ....................... 3', bold, 11, 50, 10);
+    put('Figure 1: a caption under a picture', italic, 11, 50, 10);
+    put('2. Methods', bold, 13.5, 50, 4); paragraph();
+    const ast = await OfficeParser.parseOffice(Buffer.from(await pdf.save()), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const headings = collectAllNodes(ast).filter(n => n.type === 'heading').map(n => [n.text, (n.metadata as any).level, (n.metadata as any).levelSource]);
+    assert.deepStrictEqual(headings, [['Report Title', 1, 'font-size'], ['1. Introduction', 2, 'font-size'], ['1.1 Background', 3, 'font-size'], ['Scope', 4, 'font-size'], ['2. Methods', 2, 'font-size']],
+        `the headings, levelled by their sizes, and nothing else; got ${JSON.stringify(headings)}`);
+    assert.ok(!collectAllNodes(ast).some(n => n.type === 'list' && /Introduction|Methods/.test(n.text || '')), 'a numbered heading is no list item');
+}
+
 async function testNativePdfFurnitureLimits(): Promise<void> {
     const t = (text: string, more: any = {}) => ({ type: 'text', text, ...more });
     const p = (...children: any[]) => ({ type: 'paragraph', children });
@@ -7220,6 +7252,7 @@ async function runTests(): Promise<void> {
         ['Writers hold up', testWritersHoldUp],
         ['Native PDF SVG pictures', testNativePdfSvgPictures],
         ['PDF lists read whole', testPdfListsReadWhole],
+        ['PDF headings by size and weight', testPdfHeadingsBySizeAndWeight],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],
