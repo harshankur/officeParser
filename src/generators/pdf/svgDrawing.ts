@@ -197,6 +197,10 @@ function readRules(css: string): Rule[] {
         if (open < 0) break;
         const close = text.indexOf('}', open);
         const prelude = text.slice(at, open).trim(), body = text.slice(open + 1, close < 0 ? text.length : close);
+        // An at-rule statement (`@import url(x);`, `@charset "utf-8";`) ends at its semicolon: the rule after it
+        // was read as its block and lost.
+        const semicolon = prelude.startsWith('@') ? text.indexOf(';', at) : -1;
+        if (semicolon >= 0 && semicolon < open) { at = semicolon + 1; continue; }
         at = close < 0 ? text.length : close + 1;
         // An at-rule's block (a media query's rules inside it) skipped whole: its braces counted, or the rule
         // after it read as part of its prelude and was lost.
@@ -503,8 +507,8 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
         return found;
     };
 
-    /** The style an element draws with: its parent's inherited, then rules, attributes, `style`. */
-    const styleOf = (el: Element, parent: Style): { style: Style; own: Map<string, string> } => {
+    /** An element's own properties: its attributes, then the rules over them, then `style`, then `!important` ones. */
+    const ownProperties = (el: Element): Map<string, string> => {
         const own = new Map<string, string>();
         // Presentation attributes first, then the stylesheet's rules over them, then `style` over both.
         for (const name of PROPERTIES) { const v = el.getAttribute(name); if (v != null && v.length <= 256) own.set(name, v.trim()); }
@@ -516,6 +520,12 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
         // `!important` declarations over all of those: the rules', then `style`'s own.
         for (const [k, v] of rules.important) own.set(k, v);
         for (const [k, v] of inlineImportant) own.set(k, v);
+        return own;
+    };
+
+    /** The style an element draws with: its parent's inherited, then its own properties (see ownProperties). */
+    const styleOf = (el: Element, parent: Style): { style: Style; own: Map<string, string> } => {
+        const own = ownProperties(el);
         const style: Style = { ...parent, opacity: 1 };
         const get = (k: string) => { const v = own.get(k); return v === undefined || v === 'inherit' ? undefined : v; };
         // (A shorthand longer than any font names is cut: its pattern tells sizes from digits.)
@@ -563,8 +573,9 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
             g = href?.startsWith('#') ? svg.ids.get(href.slice(1)) : undefined;
         }
         const colours = stops.map(s => {
-            const own = declarations(s.getAttribute('style') || '');
-            return { c: parseCssColor(own.get('stop-color') ?? s.getAttribute('stop-color') ?? 'black'), a: num(own.get('stop-opacity') ?? s.getAttribute('stop-opacity') ?? '1') };
+            // (Its attribute, the stylesheet's rules and its `style`, as any element's.)
+            const own = ownProperties(s);
+            return { c: parseCssColor(own.get('stop-color') ?? 'black'), a: num(own.get('stop-opacity') ?? '1') };
         }).filter(s => s.c);
         if (!colours.length) return undefined;
         const mean = [0, 2, 4].map(i => colours.reduce((sum, s) => sum + parseInt(s.c!.hex.slice(i, i + 2), 16), 0) / colours.length / 255);
