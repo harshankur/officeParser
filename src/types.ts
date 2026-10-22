@@ -2769,6 +2769,11 @@ export interface SheetMetadata {
      * `pdfConfig.printHidden` is set.
      */
     hidden?: boolean;
+    /**
+     * How the sheet prints: its paper, orientation and margins (XLSX `pageSetup` and `pageMargins`, an
+     * ODS sheet's master page). PDF output prints the sheet on these pages (pdfConfig.format 'auto').
+     */
+    pageSetup?: PageSetup;
 }
 
 /** Metadata for a row of a sheet. */

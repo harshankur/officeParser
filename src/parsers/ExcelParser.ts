@@ -22,7 +22,7 @@
  * @see https://www.ecma-international.org/publications-and-standards/standards/ecma-376/
  */
 
-import { ChartMetadata, FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
+import { ChartMetadata, FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
@@ -88,7 +88,7 @@ const attributeOf = (attrs: string, name: 'val' | 'rgb'): string | undefined => 
 };
 
 /** An attribute's value by its (plain, unprefixed) name in the attributes of an element, or undefined. */
-const attributeNamed = (attrs: string, name: 'hidden' | 'min' | 'max'): string | undefined => {
+const attributeNamed = (attrs: string, name: string): string | undefined => {
     const match = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(attrs);
     return match ? (match[1] ?? match[2]) : undefined;
 };
@@ -123,6 +123,35 @@ function mergeSpans(sheetXml: string): Map<string, { colSpan: number; rowSpan: n
         });
     }
     return spans;
+}
+
+/** Excel's paper sizes (`pageSetup paperSize`) in points, upright: the common ones. */
+const PAPER_SIZES: Record<string, [number, number]> = {
+    '1': [612, 792], '3': [792, 1224], '4': [1224, 792], '5': [612, 1008], '8': [841.89, 1190.55], '9': [595.28, 841.89], '11': [419.53, 595.28], '70': [297.64, 419.53],
+};
+
+/**
+ * How a sheet prints (see SheetMetadata.pageSetup): its `pageSetup`'s paper (Letter when it names none,
+ * as Excel's default is) turned by its orientation, and its `pageMargins` (inches). Undefined for a
+ * sheet that sets neither.
+ */
+function sheetPageSetup(sheetXml: string): PageSetup | undefined {
+    const setup = /<pageSetup\b[^>]*>/.exec(sheetXml)?.[0];
+    const margins = /<pageMargins\b[^>]*>/.exec(sheetXml)?.[0];
+    if (!setup && !margins) return undefined;
+    const paper = PAPER_SIZES[setup ? attributeNamed(setup.slice(10), 'paperSize') ?? '1' : '1'] ?? PAPER_SIZES['1'];
+    const landscape = setup ? attributeNamed(setup.slice(10), 'orientation') === 'landscape' : false;
+    const [w, h] = landscape ? [Math.max(...paper), Math.min(...paper)] : [Math.min(...paper), Math.max(...paper)];
+    const result: PageSetup = { width: w, height: h };
+    if (margins) {
+        const inch = (name: string) => { const v = Number(attributeNamed(margins.slice(12), name)); return Number.isFinite(v) && v >= 0 && v < 22 ? Math.round(v * 7200) / 100 : undefined; };
+        const [top, right, bottom, left] = ['top', 'right', 'bottom', 'left'].map(inch);
+        if (top !== undefined && right !== undefined && bottom !== undefined && left !== undefined) result.margin = { top, right, bottom, left };
+        const header = inch('header'), footer = inch('footer');
+        if (header !== undefined) result.headerDistance = header;
+        if (footer !== undefined) result.footerDistance = footer;
+    }
+    return result;
 }
 
 /**
@@ -1066,10 +1095,11 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             const sheetFileName = file.path.split('/').pop() || 'Sheet';
             const sheetName = sheetNameMap[sheetFileName] || sheetFileName;
 
+            const pageSetup = config.ignorePageGeometry ? undefined : sheetPageSetup(sheetXml);
             content.push({
                 type: 'sheet',
                 children: rows,
-                metadata: { sheetName, ...(hiddenSheets.has(sheetFileName) ? { hidden: true } : {}) },
+                metadata: { sheetName, ...(hiddenSheets.has(sheetFileName) ? { hidden: true } : {}), ...(pageSetup ? { pageSetup } : {}) },
                 rawContent: config.includeRawContent ? chargeRawContent(file.content.toString(), config) : undefined
             });
         }

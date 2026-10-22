@@ -4907,6 +4907,33 @@ async function testOdtMasterPagesInPdf(): Promise<void> {
 }
 
 /**
+ * A sheet prints on its own paper, orientation and margins (XLSX pageSetup and pageMargins), and a
+ * presentation's slides on pages of their size: every page printed A4 portrait.
+ */
+async function testSheetAndSlidePages(): Promise<void> {
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const sheet = (setup: string) => strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>${setup}</worksheet>`);
+    const xlsx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="Wide" sheetId="1" r:id="rId1"/><sheet name="Plain" sheetId="2" r:id="rId2"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/><Relationship Id="rId2" Target="worksheets/sheet2.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+        'xl/worksheets/sheet1.xml': sheet('<pageMargins left="0.5" right="0.5" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="landscape"/>'),
+        'xl/worksheets/sheet2.xml': sheet(''),
+    }));
+    const book = await OfficeParser.parseOffice(xlsx, { fileType: 'xlsx' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(book.content.map(n => (n.metadata as any).pageSetup), [{ width: 841.89, height: 595.28, margin: { top: 54, right: 36, bottom: 54, left: 36 }, headerDistance: 21.6, footerDistance: 21.6 }, undefined], 'a sheet\'s print setup is read');
+    const pdf = (await book.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.deepStrictEqual(back.content.filter(n => n.type === 'page').map(p => [(p.metadata as any).pageWidth, (p.metadata as any).pageHeight]), [[841.89, 595.28], [595.28, 841.89]], 'each sheet prints on its own paper, a sheet with none on A4');
+    const pptx = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.pptx')), { fileType: 'pptx' } as any) as OfficeParserAST;
+    const slide = pptx.metadata.pageSetup!;
+    assert.ok(slide.width > slide.height && !slide.margin, `a presentation's page is its slide's size; got ${JSON.stringify(slide)}`);
+    const deck = (await pptx.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const deckBack = await OfficeParser.parseOffice(Buffer.from(deck), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.ok(deckBack.content.filter(n => n.type === 'page').every(p => Math.abs((p.metadata as any).pageWidth - slide.width) < 1), 'its slides print on pages of their size');
+}
+
+/**
  * The native PDF engine draws GIF (its first frame) and uncompressed BMP pictures, turned into PNG: a PDF
  * holds neither, and both were dropped with IMAGE_PROCESSING_FAILED.
  */
@@ -6751,6 +6778,7 @@ async function runTests(): Promise<void> {
         ['Native PDF footnotes', testNativePdfFootnotes],
         ['DOCX sections in PDF', testDocxSectionsInPdf],
         ['ODT master pages in PDF', testOdtMasterPagesInPdf],
+        ['Sheet and slide pages', testSheetAndSlidePages],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

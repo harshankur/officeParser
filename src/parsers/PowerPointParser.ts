@@ -144,6 +144,14 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         const customProperties = parseOOXMLCustomProperties(customPropsFile.content.toString(), config);
         if (Object.keys(customProperties).length > 0) metadata.customProperties = customProperties;
     }
+    // The slides' size (`p:sldSz`, in EMU) is the presentation's page: its slides print one to a page of it.
+    if (!config.ignorePageGeometry) {
+        const presentation = files.find(f => f.path.match(presentationFileRegex))?.content.toString() ?? '';
+        const size = /<p:sldSz\b[^>]*>/.exec(presentation)?.[0] ?? '';
+        const emu = (name: string) => Number(new RegExp(`\\b${name}="(\\d{1,12})"`).exec(size)?.[1]);
+        const width = emu('cx') / 12700, height = emu('cy') / 12700;
+        if (width > 0 && height > 0 && width <= 4032 && height <= 4032) metadata.pageSetup = { width: Math.round(width * 100) / 100, height: Math.round(height * 100) / 100 };
+    }
     const appPropsFile = files.find(f => f.path.match(appPropsFileRegex));
     if (appPropsFile) {
         const appProperties = parseOOXMLAppProperties(appPropsFile.content.toString(), config);

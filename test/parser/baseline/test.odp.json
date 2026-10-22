@@ -93,13 +93,7 @@
     },
     "pageSetup": {
       "width": 960,
-      "height": 540,
-      "margin": {
-        "top": 0,
-        "right": 0,
-        "bottom": 0,
-        "left": 0
-      }
+      "height": 540
     },
     "styleMap": {
       "a755": {

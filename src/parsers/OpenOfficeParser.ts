@@ -2242,10 +2242,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         }
                     }
 
+                    // How the sheet prints: its table style's master page's pages.
+                    // (A sheet whose style names none prints on the Default page style, as Calc prints it.)
+                    const sheetMaster = paragraphStyleMap[table.getAttribute("table:style-name") || '']?.masterPage ?? (masterPages.has('Default') ? 'Default' : firstMaster);
+                    const sheetPage = config.ignorePageGeometry ? undefined : odfPageSetup(sheetMaster);
                     const sheetNode: OfficeContentNode = {
                         type: 'sheet',
                         children: rows,
-                        metadata: { sheetName, ...(sheetHidden ? { hidden: true } : {}) } as SheetMetadata
+                        metadata: { sheetName, ...(sheetHidden ? { hidden: true } : {}), ...(sheetPage ? { pageSetup: sheetPage } : {}) } as SheetMetadata
                     };
                     if (config.includeRawContent) {
                         sheetNode.rawContent = getRawContent(table, xmlString, config);
@@ -2690,7 +2694,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             };
         }
     }
-    const pageSetup = config.ignorePageGeometry ? undefined : odfPageSetup(firstMaster);
+    // A presentation's page is its slide's size alone: slides are laid out as they are, not within margins.
+    const firstPage = config.ignorePageGeometry ? undefined : odfPageSetup(firstMaster);
+    const pageSetup = firstPage && fileType === 'odp' ? { width: firstPage.width, height: firstPage.height } : firstPage;
 
     return createAST(
         fileType,

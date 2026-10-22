@@ -17,7 +17,7 @@
  * @module generators/pdf/nativePdfEngine
  */
 
-import { EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, TextAlignment, TextFormatting, BreakMetadata, HeaderFooterMetadata } from '../../types.js';
+import { EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, SheetMetadata, TextAlignment, TextFormatting, BreakMetadata, HeaderFooterMetadata } from '../../types.js';
 import { getAbortError, getOfficeError } from '../../utils/errorUtils.js';
 import { documentLanguage, embedUrl, isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize, writableSpacing } from '../../utils/officeGenUtils.js';
 import { decodeBmp, decodeGif, encodePng } from '../../utils/rasterUtils.js';
@@ -330,16 +330,29 @@ class NativeLayout {
         this.section = section;
         this.startingSection = true;
         this.differentFirstPage = setup?.differentFirstPage;
-        if (this.sectionPage && setup) {
-            const page = this.sectionPage(setup);
+        this.onPagesOf(setup, true);
+    }
+
+    /**
+     * Lays the pages that follow out as `setup` has them (pdfConfig.format 'auto'), or with none, as the
+     * document's first pages are (`orDocument`): on this page when nothing is drawn on it yet, else on a
+     * new one. `always` starts a page even when the size is the same.
+     */
+    private onPagesOf(setup: PageSetup | undefined, always: boolean, orDocument = false): void {
+        const before = { w: this.pageW, h: this.pageH, margin: this.margin };
+        const pages = setup ?? (orDocument ? this.ast.metadata?.pageSetup : undefined);
+        if (this.sectionPage && (setup || orDocument)) {
+            const page = this.sectionPage(pages);
             this.pageW = page.w; this.pageH = page.h; this.margin = page.margin;
-            this.headerDistance = setup.headerDistance;
-            this.footerDistance = setup.footerDistance;
+            this.headerDistance = pages?.headerDistance;
+            this.footerDistance = pages?.footerDistance;
         }
+        const changed = before.w !== this.pageW || before.h !== this.pageH || JSON.stringify(before.margin) !== JSON.stringify(this.margin);
+        if (!always && !changed) return;
         const record = this.pageRecords[this.pageRecords.length - 1];
-        if (record && record.page === this.page && this.y <= this.margin.top + 0.5 && !this.pageFootnotes.length && record.section !== section) {
+        if (record && record.page === this.page && this.y <= before.margin.top + 0.5 && !this.pageFootnotes.length) {
             this.page.setSize(this.pageW, this.pageH);
-            Object.assign(record, { section, firstOfSection: true, w: this.pageW, h: this.pageH, margin: { ...this.margin }, headerDistance: this.headerDistance, footerDistance: this.footerDistance, differentFirstPage: this.differentFirstPage });
+            Object.assign(record, { section: this.section, firstOfSection: record.firstOfSection || this.startingSection, w: this.pageW, h: this.pageH, margin: { ...this.margin }, headerDistance: this.headerDistance, footerDistance: this.footerDistance, differentFirstPage: this.differentFirstPage });
             this.startingSection = false;
             this.y = this.margin.top;
             return;
@@ -1123,6 +1136,8 @@ class NativeLayout {
                 // Each sheet on pages of its own, under its name when the workbook has more than one, as a
                 // workbook prints: they ran on one after another with nothing between them.
                 if (this.sheetsDrawn++ > 0 && this.y > this.margin.top) this.newPage();
+                // Printed on its own pages' paper, orientation and margins (pdfConfig.format 'auto').
+                this.onPagesOf((node.metadata as SheetMetadata | undefined)?.pageSetup, false, true);
                 const sheetName = (node.metadata as any)?.sheetName;
                 if (sheetName && this.ast.content.filter(n => n.type === 'sheet').length > 1) {
                     await this.heading({ type: 'heading', metadata: { level: 2 }, children: [{ type: 'text', text: String(sheetName) }] } as OfficeContentNode);
