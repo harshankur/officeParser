@@ -5557,6 +5557,17 @@ async function testColumns(): Promise<void> {
     const cellText = JSON.stringify(await OfficeParser.parseOffice(sectionInCell, { fileType: 'odt' } as any));
     assert.ok(cellText.includes('SECTION IN CELL') && cellText.includes('LIST IN CELL'), 'ODT: a section and a list inside a table cell are read');
 
+    // A section on a page of its own (landscape, its own columns) keeps it through ODT: a master page of its own.
+    const landscapeDoc = { type: 'docx', metadata: { pageSetup: { width: 612, height: 792, margin: { top: 72, right: 72, bottom: 72, left: 72 } } }, attachments: [], content: [
+        { type: 'paragraph', children: [{ type: 'text', text: 'Portrait first.' }] },
+        { type: 'break', metadata: { breakType: 'page', section: 1, pageSetup: { width: 792, height: 612, margin: { top: 72, right: 72, bottom: 72, left: 72 }, columns: { count: 2, gap: 36 } } } },
+        { type: 'paragraph', children: [{ type: 'text', text: 'Landscape after.' }] },
+    ] } as any;
+    const landOdt = Buffer.from((await OfficeGenerator.generate(landscapeDoc, 'odt')).value as unknown as Uint8Array);
+    const landBack = await OfficeParser.parseOffice(landOdt, { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+    const landBreak = landBack.content.find(n => n.type === 'break' && (n.metadata as any)?.pageSetup?.width === 792);
+    assert.ok(landBreak && (landBreak.metadata as any).pageSetup.height === 612 && (landBreak.metadata as any).pageSetup.columns?.count === 2, `odt: a landscape section of two columns keeps its page; got ${JSON.stringify(landBack.content.filter(n => n.type === 'break').map(n => n.metadata))}`);
+
 }
 
 /**

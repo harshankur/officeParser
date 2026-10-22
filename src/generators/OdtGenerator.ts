@@ -839,6 +839,30 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     /** Whether a section of columns of its own is open, and how many there have been. */
     private openSection = false;
     private sections = 0;
+    /**
+     * The pages of sections set on other pages than the first's (a landscape section, other margins), each
+     * a master page of its own, with its columns; and whether a section returns to the first's (`Body`).
+     */
+    private sectionPages: { name: string; setup: PageSetup }[] = [];
+    private bodyMasterUsed = false;
+    private onSectionPage = false;
+    /** The columns the current page is set in (null: the body's, before any section page). */
+    private pageColumns: PageSetup['columns'] | null = null;
+
+    /** The section page's paper as the document's first page's is resolved (format, landscape, margins). */
+    private paperOf(setup: PageSetup | undefined) {
+        const cfg = this.config.odtConfig;
+        return resolvePaper(cfg.format, cfg.landscape, setup, cfg.margin);
+    }
+
+    /** A page layout of a paper and columns, as ODF writes it. */
+    private pageLayoutXml(name: string, paper: ReturnType<typeof resolvePaper>, columns: PageSetup['columns'] | undefined): string {
+        const mar = paper.margin;
+        return `<style:page-layout style:name="${name}"><style:page-layout-properties`
+            + ` fo:page-width="${fmtIn(paper.w / 72)}" fo:page-height="${fmtIn(paper.h / 72)}" style:print-orientation="${paper.landscape ? 'landscape' : 'portrait'}"`
+            + ` fo:margin-top="${fmtPt(mar.top)}" fo:margin-bottom="${fmtPt(mar.bottom)}"`
+            + ` fo:margin-left="${fmtPt(mar.left)}" fo:margin-right="${fmtPt(mar.right)}"${(columns?.count ?? 1) > 1 ? `>${this.columnsXml(columns)}</style:page-layout-properties>` : '/>'}</style:page-layout>`;
+    }
 
     /** Columns as ODF writes them (`style:columns`): their number, gap, widths where they differ, a line between. */
     private columnsXml(columns: PageSetup['columns'] | undefined): string {
@@ -860,10 +884,29 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         if (sectionStart) {
             // A section starting on this page (or on the next, after its page break), in its own columns:
             // a text:section of them, where they are not the page's (which the page layout has).
-            const columns = (node.metadata as BreakMetadata | undefined)?.pageSetup?.columns;
-            const pageColumns = this.ast.metadata?.pageSetup?.columns;
+            const setup = (node.metadata as BreakMetadata | undefined)?.pageSetup;
+            const columns = setup?.columns;
             let out = this.openSection ? '</text:section>' : '';
-            if (t === 'page') out += `<text:p text:style-name="${this.pageBreakStyle()}"/>`;
+            if (t === 'page') {
+                // A section on a page of its own size or margins: a master page of them (and its columns),
+                // which the break's paragraph turns to; back on the first page's, the body's master.
+                const first = this.paperOf(this.ast.metadata?.pageSetup), own = setup ? this.paperOf(setup) : first;
+                const samePaper = (a: typeof first, b: typeof first) => Math.abs(a.w - b.w) < 0.5 && Math.abs(a.h - b.h) < 0.5
+                    && (['top', 'right', 'bottom', 'left'] as const).every(k => Math.abs(a.margin[k] - b.margin[k]) < 0.5);
+                let master: string | undefined;
+                if (setup && !samePaper(first, own)) {
+                    const key = JSON.stringify([own.w, own.h, own.margin, columns ?? null]);
+                    master = this.sectionPages.find(p => JSON.stringify([this.paperOf(p.setup).w, this.paperOf(p.setup).h, this.paperOf(p.setup).margin, p.setup.columns ?? null]) === key)?.name;
+                    if (!master) { master = `Section${this.sectionPages.length + 1}`; this.sectionPages.push({ name: master, setup }); }
+                } else if (this.onSectionPage) { master = 'Body'; this.bodyMasterUsed = true; }
+                this.onSectionPage = !!master && master !== 'Body';
+                // The columns the page itself is set in: a section master's own, else the body's.
+                this.pageColumns = this.onSectionPage ? columns : this.ast.metadata?.pageSetup?.columns;
+                out += master
+                    ? `<text:p text:style-name="${this.activeStyles.intern('paragraph', 'P', '<style:paragraph-properties fo:break-before="page"/>', ` style:parent-style-name="Standard" style:master-page-name="${master}"`)}"/>`
+                    : `<text:p text:style-name="${this.pageBreakStyle()}"/>`;
+            }
+            const pageColumns = this.pageColumns === null ? this.ast.metadata?.pageSetup?.columns : this.pageColumns;
             this.openSection = (columns?.count ?? 1) !== (pageColumns?.count ?? 1) || (columns?.gap ?? 0) !== (pageColumns?.gap ?? 0);
             if (this.openSection) {
                 const style = this.activeStyles.intern('section', 'Sect', `<style:section-properties>${this.columnsXml(columns)}</style:section-properties>`);
@@ -991,12 +1034,16 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             ? `<style:master-page style:name="Standard" style:page-layout-name="pm1" style:next-style-name="Rest">${masters('first')}</style:master-page>`
                 + `<style:master-page style:name="Rest" style:page-layout-name="pm1">${masters('rest')}</style:master-page>`
             : `<style:master-page style:name="Standard" style:page-layout-name="pm1">${masters('rest')}</style:master-page>`;
+        // Sections' own pages, and the body's page to return to after them, each with the body's header and footer.
+        const sectionLayouts = this.sectionPages.map((p, i) => this.pageLayoutXml(`pm${i + 2}`, this.paperOf(p.setup), p.setup.columns)).join('');
+        const sectionMasters = this.sectionPages.map((p, i) => `<style:master-page style:name="${p.name}" style:page-layout-name="pm${i + 2}">${masters('rest')}</style:master-page>`).join('')
+            + (this.bodyMasterUsed ? `<style:master-page style:name="Body" style:page-layout-name="pm1">${masters('rest')}</style:master-page>` : '');
         return `<?xml version="1.0" encoding="UTF-8"?>\n`
             + `<office:document-styles ${ODF_NS} office:version="1.2">`
             + `<office:font-face-decls>${this.stylesFileStyles.fontFaceDeclsXml()}</office:font-face-decls>`
             + `<office:styles>${NAMED_STYLES}</office:styles>`
-            + `<office:automatic-styles>${pageLayout}${this.stylesFileStyles.automaticStylesXml()}</office:automatic-styles>`
-            + `<office:master-styles>${masterPage}</office:master-styles>`
+            + `<office:automatic-styles>${pageLayout}${sectionLayouts}${this.stylesFileStyles.automaticStylesXml()}</office:automatic-styles>`
+            + `<office:master-styles>${masterPage}${sectionMasters}</office:master-styles>`
             + `</office:document-styles>`;
     }
 
