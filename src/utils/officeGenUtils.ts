@@ -187,6 +187,22 @@ export function documentLanguage(metadata: { language?: string; nativeProperties
 export const PAPER_FORMAT_NAMES: readonly string[] = [...Object.keys(PAPER_SIZES_PT), 'auto'];
 
 /**
+ * The header or footer a writer with one for the whole document writes (DOCX, ODT, RTF, LaTeX): the
+ * first section's default one, shown, once; else the first shown one. A reader that gives loose blocks
+ * (no header or footer node) gives them all. Every part's and every page's copy were written into the
+ * one header: a Word document's three parts, a PDF's header on each of its pages.
+ */
+export function runningFurniture(nodes: OfficeContentNode[] | undefined, kind: 'header' | 'footer'): OfficeContentNode[] {
+    if (!nodes?.length) return [];
+    const loose = nodes.filter(n => n.type !== kind);
+    if (loose.length) return loose;
+    const shown = nodes.filter(n => !(n.metadata as { hidden?: boolean } | undefined)?.hidden);
+    const meta = (n: OfficeContentNode) => n.metadata as { type?: string; section?: number } | undefined;
+    const pick = shown.find(n => (meta(n)?.type ?? 'default') === 'default' && (meta(n)?.section ?? 0) === 0) ?? shown[0];
+    return pick ? [pick] : [];
+}
+
+/**
  * The paper a writer lays its pages on, in points: the format's, turned by `landscape`; under 'auto' the
  * document's own first page (OfficeMetadata.pageSetup, turned by `landscape` when it is upright), else
  * A4. `name` is the format whose paper it is, upright, where it is one (for writers that name paper).

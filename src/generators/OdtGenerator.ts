@@ -4,7 +4,7 @@ import { layoutTableRows } from '../utils/tableLayout.js';
 import { ConversionResult, GeneratorConfig, ImageMode, OdtGeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, resolvePaper, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
 import { markerPattern, MarkerPattern, odfNumFormat } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
@@ -163,11 +163,12 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         const metaBlock = this.config.renderMetadata ? this.renderMetadataBlock() : '';
         const body = await this.renderBlocks(this.ast.content);
 
-        const hasHeader = !!(this.ast.auxiliary?.headers?.length);
-        const hasFooter = !!(this.ast.auxiliary?.footers?.length);
+        const headers = runningFurniture(this.ast.auxiliary?.headers, 'header'), footers = runningFurniture(this.ast.auxiliary?.footers, 'footer');
+        const hasHeader = headers.length > 0;
+        const hasFooter = footers.length > 0;
         this.activeStyles = this.stylesFileStyles;
-        const headerXml = hasHeader ? await this.renderBlocks(this.ast.auxiliary!.headers!) : '';
-        const footerXml = hasFooter ? await this.renderBlocks(this.ast.auxiliary!.footers!) : '';
+        const headerXml = hasHeader ? await this.renderBlocks(headers) : '';
+        const footerXml = hasFooter ? await this.renderBlocks(footers) : '';
         this.activeStyles = this.contentStyles;
 
         // Serialize list styles into their owning file's registry (learned during render).

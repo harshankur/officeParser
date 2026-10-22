@@ -3,7 +3,7 @@ import { UniqueNames } from '../utils/uniqueNames.js';
 import { trimEndChars } from '../utils/textUtils.js';
 import { AdmonitionMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TexDocumentClass, TextFormatting, TextMetadata } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, resolvePaper, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { LatexMathPlan, LatexScripts, LatexUnicodePlan, LISTINGS_LANGUAGES, mathCommandsOf, planLatexMath, planLatexUnicode, withLatexMathMacros } from '../utils/latexUtils.js';
 import { escapeLatex, latexComment, latexSourceComment, sanitizeLatexImagePath, sanitizeLatexMath, sanitizeLatexUrl } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
@@ -2064,9 +2064,9 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
 
     // ── page headers & footers ───────────────────────────────────────────────────────────────────
 
-    private pickHeaderFooter(nodes: OfficeContentNode[] | undefined): OfficeContentNode | undefined {
-        if (!nodes || nodes.length === 0) return undefined;
-        return nodes.find(n => (n.metadata as any)?.type === 'default') ?? nodes[0];
+    private pickHeaderFooter(nodes: OfficeContentNode[] | undefined, kind: 'header' | 'footer'): OfficeContentNode | undefined {
+        const picked = runningFurniture(nodes, kind);
+        return picked.length > 1 ? { type: kind, children: picked } as OfficeContentNode : picked[0];
     }
 
     /** One header/footer's content as the lines of a `fancyhdr` field, plus its horizontal position. */
@@ -2109,8 +2109,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
 
     /** `fancyhdr` setup reproducing the document's running header and footer, or '' when it has none. */
     private async pageHeaderSetup(): Promise<string> {
-        const header = this.pickHeaderFooter(this.ast.auxiliary?.headers);
-        const footer = this.pickHeaderFooter(this.ast.auxiliary?.footers);
+        const header = this.pickHeaderFooter(this.ast.auxiliary?.headers, 'header');
+        const footer = this.pickHeaderFooter(this.ast.auxiliary?.footers, 'footer');
         if (!header && !footer) return '';
         const head = header ? await this.headerFieldContent(header) : null;
         const foot = footer ? await this.headerFieldContent(footer) : null;

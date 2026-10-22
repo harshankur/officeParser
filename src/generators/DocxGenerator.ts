@@ -4,7 +4,7 @@ import { layoutTableRows } from '../utils/tableLayout.js';
 import { ConversionResult, DocxGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, resolvePaper, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
 import { markerPattern, MarkerPattern } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
@@ -178,10 +178,11 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         const metaBlock = this.config.renderMetadata ? this.renderMetadataBlock() : '';
         const body = await this.renderBlocks(this.ast.content);
 
-        const hasHeader = !!(this.ast.auxiliary?.headers?.length);
-        const hasFooter = !!(this.ast.auxiliary?.footers?.length);
-        const headerXml = hasHeader ? await this.withRelOwner('word/header1.xml', () => this.renderHdrFtr('hdr', this.ast.auxiliary!.headers!)) : '';
-        const footerXml = hasFooter ? await this.withRelOwner('word/footer1.xml', () => this.renderHdrFtr('ftr', this.ast.auxiliary!.footers!)) : '';
+        const headers = runningFurniture(this.ast.auxiliary?.headers, 'header'), footers = runningFurniture(this.ast.auxiliary?.footers, 'footer');
+        const hasHeader = headers.length > 0;
+        const hasFooter = footers.length > 0;
+        const headerXml = hasHeader ? await this.withRelOwner('word/header1.xml', () => this.renderHdrFtr('hdr', headers)) : '';
+        const footerXml = hasFooter ? await this.withRelOwner('word/footer1.xml', () => this.renderHdrFtr('ftr', footers)) : '';
         const headerRid = hasHeader ? this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/header', 'header1.xml') : '';
         const footerRid = hasFooter ? this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer', 'footer1.xml') : '';
 
@@ -1022,8 +1023,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         if (o.hasFootnotes) overrides += `<Override PartName="/word/footnotes.xml" ContentType="${wml}.footnotes+xml"/>`;
         if (o.hasEndnotes) overrides += `<Override PartName="/word/endnotes.xml" ContentType="${wml}.endnotes+xml"/>`;
         if (o.hasComments) overrides += `<Override PartName="/word/comments.xml" ContentType="${wml}.comments+xml"/>`;
-        if (this.ast.auxiliary?.headers?.length) overrides += `<Override PartName="/word/header1.xml" ContentType="${wml}.header+xml"/>`;
-        if (this.ast.auxiliary?.footers?.length) overrides += `<Override PartName="/word/footer1.xml" ContentType="${wml}.footer+xml"/>`;
+        if (runningFurniture(this.ast.auxiliary?.headers, 'header').length) overrides += `<Override PartName="/word/header1.xml" ContentType="${wml}.header+xml"/>`;
+        if (runningFurniture(this.ast.auxiliary?.footers, 'footer').length) overrides += `<Override PartName="/word/footer1.xml" ContentType="${wml}.footer+xml"/>`;
         overrides += `<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>`
             + `<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>`;
         if (o.hasCustom) overrides += `<Override PartName="/docProps/custom.xml" ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml"/>`;

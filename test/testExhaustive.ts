@@ -4874,6 +4874,13 @@ async function testDocxSectionsInPdf(): Promise<void> {
     assert.ok(printed.includes('Title page header') && printed.includes('Running header') && printed.includes('Landscape header') && !printed.includes('Even header not shown'), 'each page prints its section\'s header, its first page its own, and an unused part none');
     for (let i = 1; i < n; i++) assert.ok(printed.includes(`Page ${i} of ${n}`), `page ${i}'s footer is numbered for it; got ${JSON.stringify(printed.slice(0, 200))}`);
     assert.strictEqual((printed.match(/Title page header/g) || []).length, 1, 'the first page\'s header is on the first page alone');
+
+    // A writer with one header for the whole document writes the first section's default one, once.
+    const docxOut = unzipSync(new Uint8Array((await ast.to('docx')).value as any));
+    assert.strictEqual(strFromU8(docxOut['word/header1.xml']).replace(/<[^>]+>/g, '').trim(), 'Running header', 'DOCX output writes the document\'s running header alone');
+    const perPage = { ...ast, auxiliary: { headers: [1, 2, 3].map(() => ({ type: 'header', text: 'Same on every page', metadata: { type: 'default' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'Same on every page' }] }] })) } } as any;
+    const odtOut = unzipSync(new Uint8Array((await OfficeGenerator.generate(perPage, 'odt', {} as any)).value as any));
+    assert.strictEqual((strFromU8(odtOut['styles.xml']).match(/Same on every page/g) || []).length, 1, 'a header given for each page (as a PDF gives it) is written once');
 }
 
 /**

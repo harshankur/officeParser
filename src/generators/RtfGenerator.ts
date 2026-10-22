@@ -3,7 +3,7 @@ import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
-import { base64ByteLength, decodeBase64, embedUrl, hexColor, isHeaderRow, writableSpacing } from '../utils/officeGenUtils.js';
+import { base64ByteLength, decodeBase64, embedUrl, hexColor, isHeaderRow, runningFurniture, writableSpacing } from '../utils/officeGenUtils.js';
 
 /** Each byte's two hex digits. */
 const HEX_BYTES = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
@@ -500,8 +500,9 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         // The header and footer (the AST's auxiliary) first, so a note in one is listed with the body's.
         // Written into one header and one footer, as DOCX and ODT write them; they were left out.
         let running = '';
-        for (const [kind, nodes] of [['header', ast.auxiliary?.headers], ['footer', ast.auxiliary?.footers]] as const) {
-            if (nodes?.length) running += `{\\${kind} ${await this.renderApart(nodes)}}\n`;
+        for (const kind of ['header', 'footer'] as const) {
+            const nodes = runningFurniture(kind === 'header' ? ast.auxiliary?.headers : ast.auxiliary?.footers, kind);
+            if (nodes.length) running += `{\\${kind} ${await this.renderApart(nodes)}}\n`;
         }
 
         for (const node of ast.content) {
