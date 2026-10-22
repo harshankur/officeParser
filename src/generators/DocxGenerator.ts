@@ -1048,12 +1048,10 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     private buildDocumentXml(body: string, headerRid: string, footerRid: string,
         furniture: { headerKind: string; footerKind: string; titlePage: boolean; evenPages: boolean; firstOwn?: { refs: string; titlePage: boolean } } = { headerKind: 'default', footerKind: 'default', titlePage: false, evenPages: false },
         lastRefs: { refs: string; titlePage: boolean } = { refs: '', titlePage: false }): string {
-        // The kinds of page a part is on: every page's is also the title page's, where a first page's own
-        // part of the other kind made one (the first section's own first and even pages' parts, and every
-        // page's for them where a kind has none of its own, are in firstOwn).
+        // A part on the pages of its kind alone: a title page that a first page's part of the other kind made
+        // shows none of this kind, as Word shows it (the first section's own first and even pages' parts are in firstOwn).
         const ownTitle = !!furniture.firstOwn?.titlePage;
-        const kinds = (kind: string) => kind !== 'default' ? [kind] : ['default', ...(furniture.titlePage && !ownTitle ? ['first'] : [])];
-        const references = (tag: 'header' | 'footer', rid: string, kind: string) => rid ? kinds(kind).map(type => `<w:${tag}Reference w:type="${type}" r:id="${rid}"/>`).join('') : '';
+        const references = (tag: 'header' | 'footer', rid: string, kind: string) => rid ? `<w:${tag}Reference w:type="${kind}" r:id="${rid}"/>` : '';
         // The header and footer are the first section's (a later one takes them on), with its title page.
         const first = references('header', headerRid, furniture.headerKind) + references('footer', footerRid, furniture.footerKind) + (furniture.firstOwn?.refs ?? '');
         const firstTitle = furniture.titlePage || ownTitle || !!this.ast.metadata?.pageSetup?.differentFirstPage;

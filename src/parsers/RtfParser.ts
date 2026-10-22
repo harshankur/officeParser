@@ -1958,7 +1958,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 flushRun();
                 flushParagraph();
                 sectionNumber++;
-                section = newSection();
+                // (The next section has the one before's properties until its `\\sectd`, as the RTF specification gives it.)
+                section = { ...section, widths: new Map(section.widths) };
                 sectionStates.push(section);
                 if (config.includeBreakNodes) {
                     const brk: OfficeContentNode = { type: 'break', metadata: { breakType: 'page', section: sectionNumber } as BreakMetadata };

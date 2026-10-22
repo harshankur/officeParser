@@ -1150,28 +1150,25 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         const facing = [...(this.ast.auxiliary?.headers ?? []), ...(this.ast.auxiliary?.footers ?? [])]
             .some(n => (n.metadata as HeaderFooterMetadata | undefined)?.type === 'even' && !(n.metadata as HeaderFooterMetadata | undefined)?.hidden);
         const noLeft = (tag: 'header' | 'footer') => facing ? `<style:${tag}-left><text:p/></style:${tag}-left>` : '';
-        const part = (tag: 'header' | 'footer', xml: string, kind: string, page: 'first' | 'rest') => {
-            if (!xml) return '';
-            if (kind === 'first') return page === 'first' ? `<style:${tag}>${xml}</style:${tag}>` : '';
-            if (kind === 'even') return page === 'first' && headerKind !== 'first' && footerKind !== 'first' || page === 'rest' ? `<style:${tag}><text:p/></style:${tag}><style:${tag}-left>${xml}</style:${tag}-left>` : '';
-            return `<style:${tag}>${xml}</style:${tag}>${noLeft(tag)}`;
-        };
+        // A section's running part where it has none of its own: on every page, or on even pages alone (a first page's shows on none).
+        const part = (tag: 'header' | 'footer', xml: string, kind: string) => !xml || kind === 'first' ? ''
+            : kind === 'even' ? `<style:${tag}><text:p/></style:${tag}><style:${tag}-left>${xml}</style:${tag}-left>` : `<style:${tag}>${xml}</style:${tag}>${noLeft(tag)}`;
         // A master's parts from a section's own: every page's (an empty one written as an empty paragraph:
         // an empty part is read as none), even pages' (`-left`), and its first page's where it is that page's.
         // (A first page's master shows its part on whichever side it falls: no left page's part of its own.)
         const own = (tag: 'header' | 'footer', every: string | undefined, even: string | undefined, firstPage = false) => (every === undefined && even === undefined ? ''
             : `<style:${tag}>${every || '<text:p/>'}</style:${tag}>`) + (even !== undefined ? `<style:${tag}-left>${even || '<text:p/>'}</style:${tag}-left>` : every !== undefined && !firstPage ? noLeft(tag) : '');
+        // The first section's parts of each kind: the running one where it is of its type, else its own.
         const body = this.bodyOwnParts;
-        const plain = headerKind === 'default' && footerKind === 'default';
-        const bodyFirst = plain && (body.firstHeader !== undefined || body.firstFooter !== undefined || !!this.ast.metadata?.pageSetup?.differentFirstPage);
-        const firstOwn = headerKind === 'first' || footerKind === 'first' || bodyFirst;
-        // (Where the running parts are every page's, the first section's own first and even pages' join them.)
-        const masters = (page: 'first' | 'rest') => plain
-            ? page === 'first'
-                // (A title page shows its own first page's parts, and none of a type it has none of, as Word does.)
-                ? own('header', body.firstHeader ?? (this.writesHeader ? '' : undefined), undefined, true) + own('footer', body.firstFooter ?? (this.writesFooter ? '' : undefined), undefined, true)
-                : own('header', headerXml || undefined, body.evenHeader) + own('footer', footerXml || undefined, body.evenFooter)
-            : part('header', headerXml, headerKind, page) + part('footer', footerXml, footerKind, page);
+        const ofKind = (kind: string, xml: string, type: 'first' | 'even', own: string | undefined) => kind === type ? xml : own;
+        const first = { header: ofKind(headerKind, headerXml, 'first', body.firstHeader), footer: ofKind(footerKind, footerXml, 'first', body.firstFooter) };
+        const even = { header: ofKind(headerKind, headerXml, 'even', body.evenHeader), footer: ofKind(footerKind, footerXml, 'even', body.evenFooter) };
+        const every = { header: headerKind === 'default' ? headerXml || undefined : undefined, footer: footerKind === 'default' ? footerXml || undefined : undefined };
+        const firstOwn = first.header !== undefined || first.footer !== undefined || !!this.ast.metadata?.pageSetup?.differentFirstPage;
+        const masters = (page: 'first' | 'rest') => page === 'first'
+            // (A title page shows its own first page's parts, and none of a type it has none of, as Word does.)
+            ? own('header', first.header ?? (this.writesHeader ? '' : undefined), undefined, true) + own('footer', first.footer ?? (this.writesFooter ? '' : undefined), undefined, true)
+            : own('header', every.header, even.header) + own('footer', every.footer, even.footer);
         const masterPage = firstOwn
             ? `<style:master-page style:name="Standard" style:page-layout-name="pm1" style:next-style-name="Rest">${masters('first')}</style:master-page>`
                 + `<style:master-page style:name="Rest" style:page-layout-name="pm1">${masters('rest')}</style:master-page>`
@@ -1182,7 +1179,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         // Even pages' and a first page's of its own too: its first page on a master of its own (`<name>First`)
         // that hands over to the section's.
         const sectionSide = (tag: 'header' | 'footer', every: string | undefined, even: string | undefined, kind: string, running: string) =>
-            every !== undefined || even !== undefined ? own(tag, every ?? (kind === 'default' ? running || undefined : undefined), even) : part(tag, running, kind, 'rest');
+            every !== undefined || even !== undefined ? own(tag, every ?? (kind === 'default' ? running || undefined : undefined), even) : part(tag, running, kind);
         const sectionParts = (p: SectionPage) => sectionSide('header', p.headerXml, p.evenHeaderXml, headerKind, headerXml) + sectionSide('footer', p.footerXml, p.evenFooterXml, footerKind, footerXml);
         // (A section's title page: the first page's parts in force, none of a type it has none of, as Word does.)
         // (An empty one where the document has them elsewhere: a page without one stood its body higher.)

@@ -2673,6 +2673,14 @@ class LatexReader {
                 if (list && /^enum(i|ii|iii|iv)$/.test(c) && Number.isFinite(v)) list.nextIndex = Math.max(0, v);
                 return;
             }
+            // A page style defined (`\\fancypagestyle{name}[base]{...}`) is not the pages' own until a page is
+            // set in it: its fields were read as the document's header and footer, over them.
+            case 'fancypagestyle': {
+                sc.readRawGroup();
+                sc.readRawOptional();
+                sc.readRawGroup();
+                return;
+            }
             case 'fancyhead': case 'fancyfoot': case 'lhead': case 'chead': case 'rhead': case 'lfoot': case 'cfoot': case 'rfoot': {
                 const pos = name.startsWith('fancy') ? (sc.readRawOptional() ?? 'LCR') : name[0].toUpperCase();
                 const raw = sc.readRawGroup() ?? '';

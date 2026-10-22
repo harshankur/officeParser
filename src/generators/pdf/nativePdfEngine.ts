@@ -798,13 +798,18 @@ class NativeLayout {
             while (low <= high) { const mid = (low + high) >> 1; if (parts[mid].section <= section) { best = parts[mid].node; low = mid + 1; } else high = mid - 1; }
             return best;
         };
-        // A first page's own: where its section has a different first page (or, not said, where the
-        // first-page part is the section's own).
-        const firstOf = (list: OfficeContentNode[], record: typeof this.pageRecords[number]) => {
-            const first = record.firstOfSection ? pick(list, record.section, 'first') : undefined;
+        // A section's title page: where its section has a different first page (or, not said, where a
+        // first page's part of either kind is the section's own). It shows the first page's parts in force
+        // alone, none of a kind with none, as Word shows it.
+        const ownFirst = (list: OfficeContentNode[], section: number) => {
+            const first = pick(list, section, 'first');
             const own = (first?.metadata as HeaderFooterMetadata | undefined)?.section;
-            return first && (record.differentFirstPage ?? (own === undefined || own === record.section)) ? first : undefined;
+            return !!first && (own === undefined || own === section);
         };
+        const titled = (record: typeof this.pageRecords[number]) => record.firstOfSection
+            && (record.differentFirstPage ?? (ownFirst(headers, record.section) || ownFirst(footers, record.section)));
+        // Even pages' parts anywhere: then an even page shows its even part in force alone, as Word's even and odd pages' parts.
+        const facing = [...headers, ...footers].some(n => (n.metadata as HeaderFooterMetadata | undefined)?.type === 'even');
         // A PDF's: that of the page whose content the page holds, else of the nearest page before it with
         // one (a PDF's page laid out on several, a page with none of its own).
         const byPage = new Map<OfficeContentNode[], { page: number; node: OfficeContentNode }[]>();
@@ -828,9 +833,9 @@ class NativeLayout {
             return known;
         };
         const choose = (list: OfficeContentNode[], record: typeof this.pageRecords[number], number: number) =>
-            paged(list) ? ofPage(list, record.sourcePage ?? number) : firstOf(list, record)
-            ?? (number % 2 === 0 ? pick(list, record.section, 'even') : undefined)
-            ?? pick(list, record.section, 'default');
+            paged(list) ? ofPage(list, record.sourcePage ?? number)
+            : titled(record) ? pick(list, record.section, 'first')
+            : pick(list, record.section, facing && number % 2 === 0 ? 'even' : 'default');
         const saved = { page: this.page, y: this.y, w: this.pageW, h: this.pageH, margin: this.margin };
         this.fieldPages = this.pageRecords.length;
         this.fixedPage = true;

@@ -4877,7 +4877,9 @@ async function testDocxSectionsInPdf(): Promise<void> {
     const printed = String((await back.to('text')).value) + ' ' + collectAllNodes({ content: [...(back.auxiliary?.headers ?? []), ...(back.auxiliary?.footers ?? [])] } as any).filter(x => x.type === 'text').map(x => x.text).join(' ');
     const n = pages.length;
     assert.ok(printed.includes('Title page header') && printed.includes('Running header') && printed.includes('Landscape header') && !printed.includes('Even header not shown'), 'each page prints its section\'s header, its first page its own, and an unused part none');
-    for (let i = 1; i < n; i++) assert.ok(printed.includes(`Page ${i} of ${n}`), `page ${i}'s footer is numbered for it; got ${JSON.stringify(printed.slice(0, 200))}`);
+    // (The title page has no first page's footer: none, as Word shows it.)
+    for (let i = 2; i < n; i++) assert.ok(printed.includes(`Page ${i} of ${n}`), `page ${i}'s footer is numbered for it; got ${JSON.stringify(printed.slice(0, 200))}`);
+    assert.ok(!printed.includes(`Page 1 of ${n}`), 'the title page shows no footer of its own');
     assert.strictEqual((printed.match(/Title page header/g) || []).length, 1, 'the first page\'s header is on the first page alone');
 
     // A writer with one header for the whole document writes the first section's default one, once.
@@ -4920,6 +4922,71 @@ async function testOdtMasterPagesInPdf(): Promise<void> {
     assert.ok(sizes.length >= 2 && sizes[0][0] === 612 && sizes[sizes.length - 1][0] === 792, `Letter pages, then a landscape one; got ${JSON.stringify(sizes)}`);
     const printed = String((await back.to('text')).value) + collectAllNodes({ content: [...(back.auxiliary?.headers ?? []), ...(back.auxiliary?.footers ?? [])] } as any).map(n => n.text || '').join(' ');
     assert.ok(printed.includes(`Page 1 of ${pages.length}`) && !printed.includes('Page 7 of 7'), 'page fields are filled in for each page');
+}
+
+/**
+ * A title page and even pages show only their own parts, as Word shows them: a title page made by one
+ * kind's first page's part shows none of the other kind, and an even page none of a kind with no even
+ * part, in every writer; ODF's left or first part left out is the right page's; and an RTF section
+ * keeps the one before's properties until its `\sectd`.
+ */
+async function testTitleAndEvenPagesAsWordShows(): Promise<void> {
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const para = (text: string) => `<w:p><w:r><w:t>${text}</w:t></w:r></w:p>`;
+    const parts: [string, 'header' | 'footer', string, string][] = [['header1', 'header', 'first', 'HFIRST'], ['footer1', 'footer', 'even', 'FEVEN'], ['footer2', 'footer', 'default', 'FDEF']];
+    const body = Array.from({ length: 140 }, (_, i) => para(`Body paragraph ${i + 1} with enough words to fill a line or so.`)).join('')
+        + `<w:sectPr>${parts.map(([id, kind, type]) => `<w:${kind}Reference w:type="${type}" r:id="${id}"/>`).join('')}<w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/><w:titlePg/></w:sectPr>`;
+    const docx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/_rels/document.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            + parts.map(([id, kind]) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${kind}" Target="${id}.xml"/>`).join('')
+            + '<Relationship Id="st" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/></Relationships>'),
+        'word/settings.xml': strToU8(`<?xml version="1.0"?><w:settings ${W}><w:evenAndOddHeaders/></w:settings>`),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${W}><w:body>${body}</w:body></w:document>`),
+        ...Object.fromEntries(parts.map(([id, kind, , text]) => [`word/${id}.xml`, strToU8(`<?xml version="1.0"?><w:${kind === 'header' ? 'hdr' : 'ftr'} ${W}>${para(text)}</w:${kind === 'header' ? 'hdr' : 'ftr'}>`)])),
+    }));
+    const ast = await OfficeParser.parseOffice(docx, { fileType: 'docx', includeBreakNodes: true } as any) as OfficeParserAST;
+
+    // DOCX: the default footer is not the title page's.
+    const docxXml = strFromU8(unzipSync(new Uint8Array((await ast.to('docx')).value as any))['word/document.xml']);
+    assert.ok(!/footerReference w:type="first"/.test(docxXml) && /headerReference w:type="first"/.test(docxXml) && /footerReference w:type="even"/.test(docxXml), `DOCX output gives the title page no default footer; got ${docxXml.match(/<w:sectPr>[\s\S]*?<\/w:sectPr>/)?.[0]}`);
+    // ODT: the even pages' footer is written, and the title page's master has no default footer.
+    const odtStyles = strFromU8(unzipSync(new Uint8Array((await ast.to('odt')).value as any))['styles.xml']);
+    const masters = Object.fromEntries((odtStyles.match(/<style:master-page [\s\S]*?<\/style:master-page>/g) || []).map(m => [/style:name="([^"]+)"/.exec(m)![1], m]));
+    assert.ok(/<style:footer-left>[\s\S]*FEVEN[\s\S]*<\/style:footer-left>/.test(masters.Rest ?? '') && /<style:footer>[\s\S]*FDEF/.test(masters.Rest ?? ''), `ODT output writes the even pages' footer beside the default one; got ${masters.Rest}`);
+    assert.ok(/HFIRST/.test(masters.Standard ?? '') && !/FDEF/.test(masters.Standard ?? ''), `ODT output's title page shows its header alone; got ${masters.Standard}`);
+    // LaTeX: the even pages' footer on even pages, the title page's header alone on the title page.
+    const tex = String((await ast.to('tex' as any)).value);
+    const style = (name: string) => tex.match(new RegExp(`\\\\fancypagestyle\\{${name}\\}\\{.*`))?.[0] ?? '';
+    assert.ok(/FEVEN/.test(style('osec0')) && /FDEF/.test(style('osec0')) && /HFIRST/.test(style('osec0first')) && !/FDEF/.test(style('osec0first')), `LaTeX output's page styles follow the title and even pages; got ${style('osec0')} / ${style('osec0first')}`);
+    // Native PDF: each page's parts.
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const doc = await PDFDocument.load(pdf);
+    const pageTexts: string[] = [];
+    for (let i = 0; i < Math.min(4, doc.getPageCount()); i++) {
+        const one = await PDFDocument.create();
+        const [copied] = await one.copyPages(doc, [i]);
+        one.addPage(copied);
+        const back = await OfficeParser.parseOffice(Buffer.from(await one.save()), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+        pageTexts.push(collectAllNodes({ content: [...back.content, ...(back.auxiliary?.headers ?? []), ...(back.auxiliary?.footers ?? [])] } as any).filter(n => n.type === 'text').map(n => n.text).join(' '));
+    }
+    const marks = pageTexts.map(t => (t.match(/HFIRST|FEVEN|FDEF/g) || []).join(','));
+    assert.deepStrictEqual(marks, ['HFIRST', 'FEVEN', 'FDEF', 'FEVEN'], 'native PDF output shows each page its own parts alone');
+
+    // ODF: a master page with its own left header and one footer shows that footer on left pages too.
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"';
+    const odt = Buffer.from(zipSync({ 'mimetype': strToU8('application/vnd.oasis.opendocument.text'),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:body><office:text><text:p>Body.</text:p></office:text></office:body></office:document-content>`),
+        'styles.xml': strToU8(`<?xml version="1.0"?><office:document-styles ${NS}><office:master-styles><style:master-page style:name="Standard"><style:header><text:p>HODD</text:p></style:header><style:header-left><text:p>HLEFT</text:p></style:header-left><style:footer><text:p>FSHARED</text:p></style:footer></style:master-page></office:master-styles></office:document-styles>`) }));
+    const odtAst = await OfficeParser.parseOffice(odt, { fileType: 'odt' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(odtAst.auxiliary!.footers!.map(f => [f.text, (f.metadata as any).type]), [['FSHARED', 'default'], ['FSHARED', 'even']], 'an ODF footer with no left part of its own is the left pages\' too');
+
+    // RTF: a section after `\sect` without `\sectd` keeps the one before's landscape page.
+    const rtf = '{\\rtf1\\ansi{\\fonttbl{\\f0 Times;}}\\paperw12240\\paperh15840\\sectd\\lndscpsxn\\pgwsxn15840\\pghsxn12240 One.\\par\\sect Two.\\par}';
+    const rtfAst = await OfficeParser.parseOffice(Buffer.from(rtf), { fileType: 'rtf', includeBreakNodes: true } as any) as OfficeParserAST;
+    const second = rtfAst.content.find(n => (n.metadata as any)?.section === 1);
+    assert.strictEqual((second?.metadata as any)?.pageSetup?.width ?? rtfAst.metadata.pageSetup?.width, 792, 'an RTF section keeps the section before\'s page until its \\sectd');
 }
 
 /**
@@ -5191,7 +5258,7 @@ async function testWritersHoldUp(): Promise<void> {
     const letterhead = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', text: 'Body', children: [{ type: 'text', text: 'Body' }] }],
         auxiliary: { headers: [furnitureOf('header', '', 'default'), furnitureOf('header', 'Letterhead', 'first')], footers: [furnitureOf('footer', 'Foot', 'default')] } } as any;
     const lhDoc = docxParts((await OfficeGenerator.generate(letterhead, 'docx')).value as Uint8Array)['word/document.xml'];
-    assert.ok(/<w:headerReference w:type="first"/.test(lhDoc) && !/<w:headerReference w:type="default"/.test(lhDoc) && /<w:footerReference w:type="default"[^>]*\/><w:footerReference w:type="first"/.test(lhDoc) && /<w:titlePg\/>/.test(lhDoc), 'DOCX: a letterhead is the title page\'s header, the footer on every page');
+    assert.ok(/<w:headerReference w:type="first"/.test(lhDoc) && !/<w:headerReference w:type="default"/.test(lhDoc) && /<w:footerReference w:type="default"/.test(lhDoc) && !/<w:footerReference w:type="first"/.test(lhDoc) && /<w:titlePg\/>/.test(lhDoc), 'DOCX: a letterhead is the title page\'s header, the footer on the other pages (a title page shows its own parts alone, as Word shows it)');
     for (const format of ['docx', 'odt', 'rtf', 'tex'] as const) {
         const back = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(letterhead, format)).value as any), { fileType: format } as any) as OfficeParserAST;
         const heads = runningFurniture(back.auxiliary?.headers, 'header');
@@ -5333,8 +5400,11 @@ async function testNativePdfSvgPictures(): Promise<void> {
     const classes = await drawn(`<style>${'.a'.repeat(5000)} { fill: #ff0000 }</style><rect class="a" width="50" height="50"/>`);
     assert.ok(/1 0 0 rg/.test(classes.streams), 'a selector repeating one class matches it');
 
-    // A rule after a media query's block, and !important declarations, are read as a browser reads them.
+    // A rule after a media query's block or an at-rule statement, !important declarations, and a gradient stop's
+    // colour from a rule are read as a browser reads them.
     for (const body of ['<style>@media print{rect{fill:red}} rect{fill:#00ff00}</style><rect width="20" height="20"/>',
+        '<style>@import url(a.css); rect{fill:#00ff00}</style><rect width="20" height="20" fill="red"/>',
+        '<style>.s{stop-color:#00ff00}</style><defs><linearGradient id="g"><stop class="s" offset="0"/><stop class="s" offset="1"/></linearGradient></defs><rect width="20" height="20" fill="url(#g)"/>',
         '<style>rect{fill:#00ff00 !important} #a{fill:red}</style><rect id="a" width="20" height="20" style="fill:blue"/>']) {
         assert.ok(/0 1 0 rg/.test((await drawn(body)).streams), `an SVG's cascade draws green: ${body}`);
     }
@@ -8292,6 +8362,7 @@ async function runTests(): Promise<void> {
         ['HTML stylesheet and shading', testHtmlStylesheetAndShading],
         ['Native PDF footnotes', testNativePdfFootnotes],
         ['DOCX sections in PDF', testDocxSectionsInPdf],
+        ['Title and even pages as Word shows them', testTitleAndEvenPagesAsWordShows],
         ['ODT master pages in PDF', testOdtMasterPagesInPdf],
         ['Sheet and slide pages', testSheetAndSlidePages],
         ['Native PDF charts and cell pictures', testNativePdfChartsAndCellPictures],

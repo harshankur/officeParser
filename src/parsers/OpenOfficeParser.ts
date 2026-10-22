@@ -2884,8 +2884,20 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 ? [...(['header', 'footer'] as const).map(kind => [master, shown(master, `style:${kind}-first`) ? `style:${kind}-first` : `style:${kind}`, kind, 'first'] as const),
                     ...own.filter(([, , type]) => type !== 'first').map(([tag, kind, type]) => [rest, tag, kind, type] as const)]
                 : own.map(([tag, kind, type]) => [master, tag, kind, type] as const);
-            for (const [from, tag, kind, type] of parts) {
-                const el = shown(from, tag);
+            // A left or first part ODF leaves out (or hides) is the right page's, where Word's (which the
+            // header and footer nodes follow) shows nothing: a kind with its own left (first) part makes the
+            // other kind's default part that kind's left (first) part too, or it was lost on those pages.
+            // (A first page's master page that hands over shows its own parts alone.)
+            const found = parts.map(([from, tag, kind, type]) => [shown(from, tag), kind, type] as const);
+            for (const type of ['even', 'first'] as const) {
+                if ((type === 'first' && rest) || !found.some(([el, , t]) => el && t === type)) continue;
+                for (const kind of ['header', 'footer'] as const) {
+                    const index = found.findIndex(([, k, t]) => k === kind && t === type);
+                    const fallback = found.find(([el, k, t]) => el && k === kind && t === 'default')?.[0];
+                    if (index >= 0 && !found[index][0] && fallback) found[index] = [fallback, kind, type];
+                }
+            }
+            for (const [el, kind, type] of found) {
                 if (!el && !(sectioned && section > 0 && type === 'default')) continue;
                 const children: OfficeContentNode[] = [];
                 if (el) traverse(el, children, false, stylesXmlStr);

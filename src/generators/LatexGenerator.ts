@@ -2131,8 +2131,16 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     /** A field's text on the pages its part is on: the first page alone, or the even pages alone. */
     private onItsPages(text: string, nodes: OfficeContentNode[] | undefined, kind: 'header' | 'footer'): string {
         const on = furnitureKind(runningFurniture(nodes, kind), kind);
-        return on === 'first' ? `\\ifnum\\value{page}=1 {${text}}\\fi` : on === 'even' ? `\\ifodd\\value{page}\\else {${text}}\\fi` : text;
+        // (Every page's where the document has even pages' parts: on odd pages alone, as Word shows a kind with no even part.)
+        return on === 'first' ? `\\ifnum\\value{page}=1 {${text}}\\fi` : on === 'even' || this.facing() ? `\\ifodd\\value{page}${on === 'even' ? '\\else ' : ' '}{${text}}\\fi` : text;
     }
+
+    /** Whether the document has even pages' parts of their own anywhere (Word's even and odd pages' headers). */
+    private facing(): boolean {
+        return this.facingKnown ??= [...(this.ast.auxiliary?.headers ?? []), ...(this.ast.auxiliary?.footers ?? [])]
+            .some(n => (n.metadata as { type?: string; hidden?: boolean } | undefined)?.type === 'even' && !(n.metadata as { hidden?: boolean } | undefined)?.hidden);
+    }
+    private facingKnown: boolean | undefined;
 
     /** One header/footer's content as the lines of a `fancyhdr` field, plus its horizontal position. */
     private async headerFieldContent(node: OfficeContentNode): Promise<{ text: string; lines: number; position: 'L' | 'C' | 'R' }> {
@@ -2186,8 +2194,9 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
      */
     private sectionStyleSwitch(section: number, setup: PageSetup | undefined, continuous = false): string {
         const lists = { header: this.ast.auxiliary?.headers, footer: this.ast.auxiliary?.footers };
-        if (section === 0 && (['header', 'footer'] as const).some(kind => !!lists[kind]?.length && furnitureKind(runningFurniture(lists[kind], kind), kind) !== 'default')) return '';
-        const own = (type: 'default' | 'first' | 'even') => (['header', 'footer'] as const).some(kind => !!sectionFurniture(lists[kind], kind, section, type));
+        // (The first section's first page's and even pages' parts include the running one where it is of that type.)
+        const own = (type: 'default' | 'first' | 'even') => (['header', 'footer'] as const).some(kind => !!(section === 0 && type !== 'default'
+            ? this.partInForce(kind, 0, type) : sectionFurniture(lists[kind], kind, section, type)));
         const every = (section > 0 && own('default')) || own('even'), first = !continuous && (own('first') || !!setup?.differentFirstPage);
         if (!every && !first) return '';
         this.sectionStyles.set(section, { every: every || (this.sectionStyles.get(section)?.every ?? false), first: first || (this.sectionStyles.get(section)?.first ?? false) });
@@ -2231,7 +2240,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                     if (even?.text && every?.text && even.position === every.position) parts.push(`\\${command}[${every.position}]{\\ifodd\\value{page} {${every.text}}\\else {${even.text}}\\fi}`);
                     else {
                         if (even?.text) parts.push(`\\${command}[${even.position}]{\\ifodd\\value{page}\\else {${even.text}}\\fi}`);
-                        if (every?.text) parts.push(`\\${command}[${every.position}]{${even?.text ? `\\ifodd\\value{page} {${every.text}}\\fi` : every.text}}`);
+                        if (every?.text) parts.push(`\\${command}[${every.position}]{${even?.text || (type === 'every' && this.facing()) ? `\\ifodd\\value{page} {${every.text}}\\fi` : every.text}}`);
                         else if (kind === 'footer' && !even?.text && type === 'every') parts.push('\\fancyfoot[C]{\\thepage}');
                     }
                 }
