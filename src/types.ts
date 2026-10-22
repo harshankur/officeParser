@@ -690,8 +690,9 @@ export interface PdfParserConfig {
     maxTextItems?: number;
     /**
      * Base of the drawing operators kept from one PDF (for images, text color and font styles); the
-     * limit is this plus four per byte of the file. Only what is kept counts: paths, which are not,
-     * cost nothing, so a drawing of thousands of shapes is read whole, and a shown string counts once
+     * limit is this plus four per byte of the file. Paths do not count (they are read, up to a bound of
+     * their own, for tables' ruling lines, cells' shading and bullets drawn as shapes), so a drawing of
+     * thousands of shapes is read whole, and a shown string counts once
      * more for each 64 glyphs it holds. Nested forms multiply operators as they multiply text items
      * (see `maxTextItems`). Past the limit no more operators are read: from that page on, the
      * document's images, text colors and font styles are missing, its text is still read, and a

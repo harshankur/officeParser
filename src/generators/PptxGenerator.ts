@@ -2,11 +2,15 @@ import { zipSync, Zippable } from 'fflate';
 import { ConversionResult, GeneratorConfig, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType } from '../types.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
-import { decodeBase64, hexColor, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
+import { DRAWINGML_PRESETS } from '../utils/shapeNames.js';
+import { decodeBase64, hexColor, ooxmlCustomPropertiesXml, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { buildDeck, Box, DeckItem, DeckParagraph, DeckRun, DeckSlide } from './slides/deck.js';
 
 /** Escapes text content for an XML part after stripping XML-illegal characters. */
+/** A size in points as a text size PowerPoint takes (hundredths of a point, 1 to 4,000 points). */
+const pptSize = (pt: number) => Math.max(100, Math.min(400000, Math.round(pt * 100)));
+
 function xmlText(s: string | undefined): string {
     return escapeXml(stripInvalidXmlChars(s ?? ''));
 }
@@ -54,12 +58,18 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
     private readonly attachmentsByName = new Map<string, OfficeAttachment>();
 
     async generate(): Promise<ConversionResult<'pptx'>> {
+        // onNode is asked once for each node, however often the deck consults it.
+        this.onNodeMemo = new WeakMap();
+        try { return await this.generateDeck(); } finally { this.onNodeMemo = null; }
+    }
+
+    private async generateDeck(): Promise<ConversionResult<'pptx'>> {
         for (const a of this.ast.attachments ?? []) if (a?.name) this.attachmentsByName.set(a.name, a);
         const deck = await buildDeck(this.ast.content, this.ast.metadata ?? {}, {
             // Every node a slide takes is asked for here, so the signal is heard node by node.
             keep: async node => { checkAbortSignal(this.config.abortSignal); const v = await this.handleOnNode(node); return v === false ? false : typeof v === 'string' ? v : true; },
+            includeCharts: this.config.includeCharts !== false,
             chartTable: node => {
-                if (this.config.includeCharts === false) return undefined;
                 const data = this.attachmentsByName.get((node.metadata as { attachmentName?: string } | undefined)?.attachmentName ?? '')?.chartData;
                 return data ? this.chartTable(data, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode)) : undefined;
             },
@@ -116,11 +126,14 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
         for (const m of this.media) files[m.path] = m.bytes;
         const { iso, mtime } = resolveZipInstant(this.effectiveMetadata.modified);
         files['docProps/core.xml'] = enc(this.coreProps(iso));
+        const custom = ooxmlCustomPropertiesXml(this.effectiveMetadata.customProperties);
+        if (custom) files['docProps/custom.xml'] = enc(custom);
         files['docProps/app.xml'] = enc(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>officeParser</Application><Slides>${n}</Slides></Properties>`);
         files['_rels/.rels'] = enc(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
             + `<Relationship Id="rId1" Type="${REL}/officeDocument" Target="ppt/presentation.xml"/>`
             + `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>`
-            + `<Relationship Id="rId3" Type="${REL}/extended-properties" Target="docProps/app.xml"/></Relationships>`);
+            + `<Relationship Id="rId3" Type="${REL}/extended-properties" Target="docProps/app.xml"/>`
+            + (custom ? `<Relationship Id="rId4" Type="${REL}/custom-properties" Target="docProps/custom.xml"/>` : '') + '</Relationships>');
         const exts = [...new Set(this.media.map(m => m.ext))];
         const pml = 'application/vnd.openxmlformats-officedocument.presentationml';
         files['[Content_Types].xml'] = enc(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">`
@@ -135,7 +148,8 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
             + `<Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>`
             + `<Override PartName="/ppt/presProps.xml" ContentType="${pml}.presProps+xml"/><Override PartName="/ppt/viewProps.xml" ContentType="${pml}.viewProps+xml"/>`
             + `<Override PartName="/ppt/tableStyles.xml" ContentType="${pml}.tableStyles+xml"/>`
-            + `<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`);
+            + `<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>`
+            + (custom ? '<Override PartName="/docProps/custom.xml" ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml"/>' : '') + '</Types>');
         return { value: zipSync(files, { mtime }), messages: this.messages };
     }
 
@@ -186,7 +200,7 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
         if (item.kind === 'shape') {
             const s = item.shape;
             const id = next();
-            return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="Shape ${id}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${this.xfrm(item.box, s.rotation, s.flipH, s.flipV)}<a:prstGeom prst="${xmlText(s.geometry || 'rect')}"><a:avLst/></a:prstGeom>${this.looks(s.fill, s.line)}</p:spPr></p:sp>`;
+            return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="Shape ${id}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${this.xfrm(item.box, s.rotation, s.flipH, s.flipV)}<a:prstGeom prst="${this.preset(s.geometry)}"><a:avLst/></a:prstGeom>${this.looks(s.fill, s.line)}</p:spPr></p:sp>`;
         }
         if (item.kind === 'picture') {
             const a = this.attachmentsByName.get(item.attachment);
@@ -202,7 +216,7 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
                 box = { x: box.x + (box.w - w) / 2, y: box.y + (box.h - h) / 2, w, h };
             }
             const id = next();
-            return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="Picture ${id}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="${rel('image', target)}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>${this.xfrm(box, item.rotation)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`;
+            return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="Picture ${id}"${item.alt ? ` descr="${xmlText(item.alt)}"` : ''}/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="${rel('image', target)}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>${this.xfrm(box, item.rotation)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`;
         }
         if (item.kind === 'table') return this.tableXml(item, next, rel);
         // A text box: exactly placed (a page's paragraph: no insets, no fitting) or a body or title, or a shape's text.
@@ -213,8 +227,16 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
         const id = next();
         const size = item.role === 'body' ? 18 : undefined;
         return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${item.role === 'title' ? 'Title' : 'Text'} ${id}"/><p:cNvSpPr${shape ? '' : ' txBox="1"'}/><p:nvPr/></p:nvSpPr>`
-            + `<p:spPr>${this.xfrm(item.box, item.rotation ?? shape?.rotation, shape?.flipH, shape?.flipV)}<a:prstGeom prst="${xmlText(shape?.geometry || 'rect')}"><a:avLst/></a:prstGeom>${this.looks(shape?.fill, shape?.line)}</p:spPr>`
+            + `<p:spPr>${this.xfrm(item.box, item.rotation ?? shape?.rotation, shape?.flipH, shape?.flipV)}<a:prstGeom prst="${this.preset(shape?.geometry)}"><a:avLst/></a:prstGeom>${this.looks(shape?.fill, shape?.line)}</p:spPr>`
             + `<p:txBody>${body}<a:lstStyle/>${item.paragraphs.map(p => this.paragraphXml(p, rel, size)).join('') || '<a:p/>'}</p:txBody></p:sp>`;
+    }
+
+    /** A shape's preset: its own where DrawingML has it, else a rectangle, reported once a name. */
+    private readonly unknownShapes = new Set<string>();
+    private preset(geometry: string | undefined): string {
+        if (!geometry || DRAWINGML_PRESETS.has(geometry)) return geometry || 'rect';
+        if (!this.unknownShapes.has(geometry)) { this.unknownShapes.add(geometry); this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: `a ${geometry.slice(0, 40)} shape (drawn as a rectangle)`, format: 'pptx' }); }
+        return 'rect';
     }
 
     /** A table: a column grid, rows of cells, merged cells' covered positions marked as merged, thin rules. */
@@ -266,19 +288,23 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
         const first = p.firstIndent;
         const indent = b ? ` marL="${emu(18 * (b.level + 1))}" indent="${emu(-14)}"${b.level ? ` lvl="${Math.min(8, b.level)}"` : ''}`
             : first ? ` marL="${emu(Math.max(0, -first))}" indent="${emu(first)}"` : '';
-        const bullet = !b ? '<a:buNone/>' : b.numbered ? '<a:buFont typeface="+mj-lt"/><a:buAutoNum type="arabicPeriod"/>' : b.char ? `<a:buFont typeface="Arial"/><a:buChar char="${xmlText([...b.char][0])}"/>` : '<a:buNone/>';
-        const runs = p.runs.map(r => this.runXml(r, rel, defaultSize, p.mono)).join('');
+        // A number is written as the item shows it (each item a paragraph or a box of its own, an automatic
+        // number restarted at 1 in each).
+        const bullet = !b || b.numbered ? '<a:buNone/>' : b.char ? `<a:buFont typeface="Arial"/><a:buChar char="${xmlText([...b.char][0])}"/>` : '<a:buNone/>';
+        const lead = p.runs.find(r => r.text && !r.lineBreak);
+        const number: DeckRun[] = b?.numbered && b.text ? [{ text: `${b.text}\t`, ...(lead?.size ? { size: lead.size } : {}), ...(lead?.font ? { font: lead.font } : {}), ...(lead?.color ? { color: lead.color } : {}) }] : [];
+        const runs = [...number, ...p.runs].map(r => this.runXml(r, rel, defaultSize, p.mono)).join('');
         const size = p.runs.find(r => r.size)?.size ?? defaultSize;
         // Lines as far apart as the source set them (spcPts holds at most 1,584 points).
         const spacing = p.lineSpacing && p.lineSpacing > 0 ? `<a:lnSpc><a:spcPts val="${Math.round(Math.min(1584, p.lineSpacing) * 100)}"/></a:lnSpc>` : '';
-        return `<a:p><a:pPr${algn}${indent}>${spacing}${bullet}</a:pPr>${runs}<a:endParaRPr lang="en-US"${size ? ` sz="${Math.round(size * 100)}"` : ''} dirty="0"/></a:p>`;
+        return `<a:p><a:pPr${algn}${indent}>${spacing}${bullet}</a:pPr>${runs}<a:endParaRPr lang="en-US"${size ? ` sz="${pptSize(size)}"` : ''} dirty="0"/></a:p>`;
     }
 
     private runXml(r: DeckRun, rel: (type: string, target: string, external?: boolean) => string, defaultSize?: number, mono?: boolean): string {
         if (r.lineBreak) return '<a:br><a:rPr lang="en-US" dirty="0"/></a:br>';
         if (!r.text) return '';
         const size = r.size ?? defaultSize;
-        const attrs = `lang="en-US"${size ? ` sz="${Math.max(100, Math.min(400000, Math.round(size * 100)))}"` : ''}${r.bold ? ' b="1"' : ''}${r.italic ? ' i="1"' : ''}${r.underline ? ' u="sng"' : ''}${r.strike ? ' strike="sngStrike"' : ''}${r.superscript ? ' baseline="30000"' : r.subscript ? ' baseline="-25000"' : ''} dirty="0"`;
+        const attrs = `lang="en-US"${size ? ` sz="${pptSize(size)}"` : ''}${r.bold ? ' b="1"' : ''}${r.italic ? ' i="1"' : ''}${r.underline ? ' u="sng"' : ''}${r.strike ? ' strike="sngStrike"' : ''}${r.superscript ? ' baseline="30000"' : r.subscript ? ' baseline="-25000"' : ''} dirty="0"`;
         const color = r.color && hexColor(r.color) ? `<a:solidFill><a:srgbClr val="${hexColor(r.color)}"/></a:solidFill>` : '';
         const font = r.font || mono ? `<a:latin typeface="${xmlText(r.font || 'Courier New')}"/>` : '';
         const link = r.link ? `<a:hlinkClick r:id="${rel('hyperlink', r.link, true)}"/>` : '';

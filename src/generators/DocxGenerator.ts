@@ -4,7 +4,7 @@ import { layoutTableRows } from '../utils/tableLayout.js';
 import { BreakMetadata, ConversionResult, DocxGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, ooxmlCustomPropertiesXml, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
 import { markerPattern, MarkerPattern } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
@@ -1125,20 +1125,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     }
 
     private customProps(): string | null {
-        const props = this.effectiveMetadata.customProperties;
-        if (!props || !Object.keys(props).length) return null;
-        let entries = '', pid = 2;
-        for (const [key, value] of Object.entries(props)) {
-            let v: string;
-            if (typeof value === 'boolean') v = `<vt:bool>${value ? 'true' : 'false'}</vt:bool>`;
-            else if (typeof value === 'number') v = `<vt:r8>${value}</vt:r8>`;
-            else if (value instanceof Date) v = `<vt:filetime>${value.toISOString().replace(/\.\d+Z$/, 'Z')}</vt:filetime>`;
-            else v = `<vt:lpwstr>${xmlText(String(value))}</vt:lpwstr>`;
-            entries += `<property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="${pid++}" name="${xmlText(key)}">${v}</property>`;
-        }
-        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n`
-            + `<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" `
-            + `xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">${entries}</Properties>`;
+        return ooxmlCustomPropertiesXml(this.effectiveMetadata.customProperties);
     }
 }
 

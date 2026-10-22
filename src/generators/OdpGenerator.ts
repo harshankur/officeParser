@@ -2,7 +2,8 @@ import { zipSync, Zippable } from 'fflate';
 import { ConversionResult, GeneratorConfig, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType } from '../types.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
-import { decodeBase64, hexColor, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
+import { PRESET_TO_ODF } from '../utils/shapeNames.js';
+import { decodeBase64, hexColor, odfUserDefinedXml, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { buildDeck, Box, DeckItem, DeckParagraph, DeckRun, DeckSlide } from './slides/deck.js';
 
@@ -22,7 +23,6 @@ const ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" 
     + 'xmlns:dc="http://purl.org/dc/elements/1.1/"';
 
 /** DrawingML's preset outlines ODF draws as its own shapes. */
-const ODF_SHAPES: Record<string, string> = { rect: 'rectangle', roundRect: 'round-rectangle', ellipse: 'ellipse', triangle: 'isosceles-triangle', rtTriangle: 'right-triangle', diamond: 'diamond', hexagon: 'hexagon', octagon: 'octagon', pentagon: 'pentagon', star5: 'star5', rightArrow: 'right-arrow', leftArrow: 'left-arrow', upArrow: 'up-arrow', downArrow: 'down-arrow', parallelogram: 'parallelogram', trapezoid: 'trapezoid' };
 
 /**
  * Generates ODP presentations from an AST, as PptxGenerator does PPTX (see buildDeck): a deck's slides
@@ -51,12 +51,18 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
     }
 
     async generate(): Promise<ConversionResult<'odp'>> {
+        // onNode is asked once for each node, however often the deck consults it.
+        this.onNodeMemo = new WeakMap();
+        try { return await this.generateDeck(); } finally { this.onNodeMemo = null; }
+    }
+
+    private async generateDeck(): Promise<ConversionResult<'odp'>> {
         for (const a of this.ast.attachments ?? []) if (a?.name) this.attachmentsByName.set(a.name, a);
         const deck = await buildDeck(this.ast.content, this.ast.metadata ?? {}, {
             // Every node a slide takes is asked for here, so the signal is heard node by node.
             keep: async node => { checkAbortSignal(this.config.abortSignal); const v = await this.handleOnNode(node); return v === false ? false : typeof v === 'string' ? v : true; },
+            includeCharts: this.config.includeCharts !== false,
             chartTable: node => {
-                if (this.config.includeCharts === false) return undefined;
                 const data = this.attachmentsByName.get((node.metadata as { attachmentName?: string } | undefined)?.attachmentName ?? '')?.chartData;
                 return data ? this.chartTable(data, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode)) : undefined;
             },
@@ -80,7 +86,9 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
                 + `<style:style style:name="Mdp1" style:family="drawing-page"><style:drawing-page-properties draw:background-size="border" draw:fill="none"/></style:style></office:automatic-styles>`
                 + `<office:master-styles><style:master-page style:name="Default" style:page-layout-name="PM1" draw:style-name="Mdp1"/></office:master-styles></office:document-styles>`),
             'meta.xml': enc(`<?xml version="1.0" encoding="UTF-8"?>\n<office:document-meta ${ODF_NS} office:version="1.2"><office:meta>`
-                + el('dc:title', m.title) + el('meta:initial-creator', m.author) + el('dc:creator', m.author) + el('dc:subject', m.subject) + el('dc:description', m.description)
+                + el('dc:title', m.title) + el('meta:initial-creator', m.author) + el('dc:creator', m.lastModifiedBy || m.author) + el('dc:subject', m.subject) + el('dc:description', m.description)
+                + el('dc:language', m.language) + String(m.keywords ?? '').split(',').map(k => k.trim()).filter(Boolean).map(k => `<meta:keyword>${xmlText(k)}</meta:keyword>`).join('')
+                + odfUserDefinedXml(m.customProperties)
                 + `<meta:creation-date>${toW3CDTF(m.created) ?? iso}</meta:creation-date><dc:date>${iso}</dc:date><meta:generator>officeParser</meta:generator></office:meta></office:document-meta>`),
         };
         for (const pic of this.media) files[pic.path] = pic.bytes;
@@ -144,7 +152,7 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
     private itemXml(item: DeckItem): string {
         if (item.kind === 'shape') {
             const s = item.shape;
-            const kind = s.geometry ? ODF_SHAPES[s.geometry] : 'rectangle';
+            const kind = s.geometry ? PRESET_TO_ODF[s.geometry] : 'rectangle';
             const style = this.graphicStyle(s.fill, s.line);
             if (s.geometry === 'line') return `<draw:line draw:style-name="${style}" svg:x1="${pt(item.box.x)}" svg:y1="${pt(item.box.y)}" svg:x2="${pt(item.box.x + item.box.w)}" svg:y2="${pt(item.box.y + item.box.h)}"/>`;
             if (!kind) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: `a ${s.geometry} shape (drawn as a rectangle)`, format: 'odp' });
@@ -161,7 +169,7 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
                 const scale = Math.min(box.w / size.w, box.h / size.h);
                 box = { x: box.x + (box.w - size.w * scale) / 2, y: box.y + (box.h - size.h * scale) / 2, w: size.w * scale, h: size.h * scale };
             }
-            return `<draw:frame${this.frameAttrs(box, item.rotation)}><draw:image xlink:href="${xmlText(href)}" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/></draw:frame>`;
+            return `<draw:frame${this.frameAttrs(box, item.rotation)}><draw:image xlink:href="${xmlText(href)}" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/>${item.alt ? `<svg:desc>${xmlText(item.alt)}</svg:desc>` : ''}</draw:frame>`;
         }
         if (item.kind === 'table') return this.tableXml(item);
         const s = item.shape;
@@ -170,7 +178,7 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
         const paragraphs = item.paragraphs.map(p => this.paragraphXml(p, size)).join('') || '<text:p/>';
         if (s && (s.geometry && s.geometry !== 'rect' || s.fill || s.line)) {
             // A shape with its text.
-            const kind = s.geometry ? ODF_SHAPES[s.geometry] ?? 'rectangle' : 'rectangle';
+            const kind = s.geometry ? PRESET_TO_ODF[s.geometry] ?? 'rectangle' : 'rectangle';
             return `<draw:custom-shape draw:style-name="${this.graphicStyle(s.fill, s.line, item.anchor, insets)}"${this.frameAttrs(item.box, item.rotation ?? s.rotation)}>${paragraphs}<draw:enhanced-geometry svg:viewBox="0 0 21600 21600" draw:type="${kind}"/></draw:custom-shape>`;
         }
         return `<draw:frame draw:style-name="${this.graphicStyle(undefined, undefined, item.anchor, insets, !item.exact, item.exact)}"${this.frameAttrs(item.box, item.rotation)}><draw:text-box>${paragraphs}</draw:text-box></draw:frame>`;
@@ -226,7 +234,8 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
         const spacing = p.lineSpacing && p.lineSpacing > 0 ? Math.min(1584, p.lineSpacing) : 0;
         const pStyle = align || p.bullet || first || spacing ? this.styleNamed(`p|${align}|${p.bullet?.level ?? ''}|${first.toFixed(2)}|${spacing.toFixed(2)}`, 'P', name => `<style:style style:name="${name}" style:family="paragraph"><style:paragraph-properties${align ? ` fo:text-align="${align}"` : ''}${spacing ? ` fo:line-height="${pt(spacing)}"` : ''}${p.bullet ? ` fo:margin-left="${pt(18 * (p.bullet.level + 1))}" fo:text-indent="${pt(-14)}"` : first ? ` fo:margin-left="${pt(Math.max(0, -first))}" fo:text-indent="${pt(first)}"` : ''}/></style:style>`) : undefined;
         const spans = p.runs.map(r => this.spanXml(r, defaultSize, p.mono)).join('');
-        const marker = p.bullet ? (p.bullet.numbered ? '' : `${xmlText(p.bullet.char ? [...p.bullet.char][0] : '')}<text:tab/>`) : '';
+        // A number is written as the item shows it, as a bullet's character is.
+        const marker = p.bullet ? (p.bullet.numbered ? (p.bullet.text ? `${xmlText(p.bullet.text)}<text:tab/>` : '') : `${xmlText(p.bullet.char ? [...p.bullet.char][0] : '')}<text:tab/>`) : '';
         return `<text:p${pStyle ? ` text:style-name="${pStyle}"` : ''}>${marker}${spans}</text:p>`;
     }
 

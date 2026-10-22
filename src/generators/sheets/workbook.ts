@@ -10,7 +10,9 @@
  * @module generators/sheets/workbook
  */
 
-import { CellMetadata, OfficeContentNode, RowMetadata, SheetMetadata } from '../../types.js';
+import { CellMetadata, OfficeContentNode, RowMetadata, SheetMetadata, SlideMetadata } from '../../types.js';
+import { stripInvalidXmlChars } from '../../utils/sanitize.js';
+import { layoutTableRows } from '../../utils/tableLayout.js';
 
 /** How a cell's value is held and shown. */
 export interface CellValue {
@@ -35,19 +37,26 @@ export interface WorkSheet { name: string; rows: WorkRow[]; hidden?: boolean; wi
 export const MAX_ROWS = 1_048_576;
 export const MAX_COLS = 16_384;
 
-const NUMBER = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/;
-const GROUPED = /^[+-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?$/;
+const NUMBER = /^-?(?:\d+(?:\.\d+)?|\.\d+)$/;
+/** A number as a spreadsheet stores it: its exponent too (`1E-10`), and up to seventeen digits (`0.30000000000000004`). */
+const STORED_NUMBER = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+const GROUPED = /^-?\d{1,3}(?:,\d{3})+(?:\.\d+)?$/;
 const CURRENCY_SYMBOLS = '$€£¥₹₩₽₺₪฿₫';
+
+/** Whether a number is a whole one too long for a General format to show in full (twelve to fifteen digits, an id). */
+export const wholeInFull = (v: CellValue): boolean => v.kind === 'number' && typeof v.number === 'number' && Number.isInteger(v.number) && Math.abs(v.number) >= 1e11 && Math.abs(v.number) < 1e15;
 
 /** Decimals written after a number's point. */
 const decimalsOf = (digits: string) => { const dot = digits.indexOf('.'); return dot < 0 ? 0 : digits.length - dot - 1; };
 
 /**
  * A number's text as a number, or undefined: no leading zero but before a point (`007`, a code, stays
- * text), at most fifteen significant digits (more, a card number, a spreadsheet would round).
+ * text), at most fifteen significant digits (more, a card number, a spreadsheet would round). A leading
+ * plus (`+4915112345678`, a phone number) is not a number's: such text stays text.
  */
 function plainNumber(text: string): number | undefined {
-    const bare = text.replace(/^[+-]/, '').replace(/,/g, '');
+    if (text.startsWith('+')) return undefined;
+    const bare = text.replace(/^-/, '').replace(/,/g, '');
     if (/^0\d/.test(bare)) return undefined;
     if (bare.replace(/\D/g, '').replace(/^0+/, '').length > 15) return undefined;
     const n = Number(text.replace(/,/g, ''));
@@ -82,21 +91,40 @@ function isoValue(text: string): CellValue | undefined {
 }
 
 /**
- * A cell's value from its text, and from what a spreadsheet showed for it (`shown`, where its text is
- * its stored value): a number, a percentage, a currency amount, a date or a time, else text.
+ * A spreadsheet's stored number (`stored`: a cell of a sheet, its text the value held) as a number, or
+ * undefined: any finite number as a spreadsheet writes one, exponents and all seventeen digits a double
+ * holds, but not a code with leading zeros (`007`, which a sheet holds as text) or more digits than a
+ * double keeps (a card number).
  */
-export function cellValue(text: string, shown?: string): CellValue {
+function storedNumber(text: string): number | undefined {
+    const bare = text.replace(/^-/, '');
+    if (/^0\d/.test(bare)) return undefined;
+    const mantissa = bare.replace(/[eE].*$/, '').replace(/\D/g, '').replace(/^0+/, '');
+    if (mantissa.length > 17) return undefined;
+    const n = Number(text);
+    return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * A cell's value from its text, and from what a spreadsheet showed for it (`shown`, where its text is
+ * its stored value; `stored`, a sheet's cell, whose text is a value as the sheet holds it): a number, a
+ * percentage, a currency amount, a date or a time, else text.
+ */
+export function cellValue(text: string, shown?: string, stored = shown !== undefined): CellValue {
     const s = text.trim();
     if (!s || s.length > 64) return { kind: 'text' };
     const iso = isoValue(s);
     if (iso) return iso;
     // A spreadsheet's number, shown through its format: the value held, the format read from what it showed.
-    if (shown !== undefined && NUMBER.test(s)) {
-        const n = plainNumber(s);
-        if (n === undefined) return { kind: 'text' };
-        const look = cellValue(shown);
-        if (look.kind === 'percent' || look.kind === 'currency' || (look.kind === 'number' && (look.grouping || look.decimals))) return { ...look, number: n };
-        return { kind: 'number', number: n };
+    if (stored && STORED_NUMBER.test(s)) {
+        const n = storedNumber(s);
+        if (n !== undefined) {
+            if (shown === undefined) return { kind: 'number', number: n };
+            const look = cellValue(shown);
+            if (look.kind === 'percent' || look.kind === 'currency' || (look.kind === 'number' && (look.grouping || look.decimals))) return { ...look, number: n };
+            return { kind: 'number', number: n };
+        }
+        if (shown !== undefined) return { kind: 'text' };
     }
     if (NUMBER.test(s) || GROUPED.test(s)) {
         const n = plainNumber(s);
@@ -122,14 +150,39 @@ export function cellValue(text: string, shown?: string): CellValue {
     return { kind: 'text' };
 }
 
-/** A sheet name a spreadsheet takes: at most 31 characters, none of `[]:*?/\`, not blank, unique (case aside). */
+/** `text` cut to at most `max` UTF-16 units, at a whole character (never half of a surrogate pair). */
+function cutTo(text: string, max: number): string {
+    let out = '';
+    for (const ch of text) { if (out.length + ch.length > max) break; out += ch; }
+    return out;
+}
+
+/**
+ * A sheet name a spreadsheet takes: at most 31 characters (cut at a whole character), none of
+ * `[]:*?/\` nor what XML cannot hold, not blank, unique as a spreadsheet compares names (case aside).
+ */
 export function sheetName(wanted: string, taken: Set<string>, fallback: string): string {
-    let base = wanted.replace(/[[\]:*?/\\\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().replace(/^'+|'+$/g, '').slice(0, 31).trim() || fallback;
-    if (base.toLowerCase() === 'history') base = `${base} 1`;
+    const clean = (name: string) => cutTo(stripInvalidXmlChars(name).replace(/[[\]:*?/\\\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().replace(/^'+|'+$/g, '').trim(), 31).trim();
+    let base = clean(wanted) || clean(fallback) || 'Sheet';
+    if (base.toLowerCase() === 'history') base = `${cutTo(base, 29)} 1`;
     let name = base;
-    for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${base.slice(0, 31 - String(n).length - 1)} ${n}`;
+    for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${cutTo(base, 31 - String(n).length - 1).trim()} ${n}`;
     taken.add(name.toLowerCase());
     return name;
+}
+
+/**
+ * The columns a sheet hides: those whose every cell in a row it shows is hidden. A parser marks a cell
+ * hidden for its row or its column alike, so a hidden row's cells say nothing of their columns.
+ */
+export function hiddenColumns(sheet: WorkSheet): Set<number> {
+    const shown = new Set<number>(), hidden = new Set<number>();
+    for (const row of sheet.rows) {
+        if (row.hidden) continue;
+        for (const cell of row.cells) (cell.hidden ? hidden : shown).add(cell.col);
+    }
+    for (const col of shown) hidden.delete(col);
+    return hidden;
 }
 
 /** Each column's width in characters, from its longest line of text (at least 8, at most 80). */
@@ -137,7 +190,8 @@ function widthsOf(rows: WorkRow[]): number[] {
     const widths: number[] = [];
     for (const row of rows) for (const cell of row.cells) {
         if (cell.colSpan > 1) continue;
-        const longest = Math.max(0, ...cell.shown.split('\n').map(l => l.length));
+        let longest = 0;
+        for (const line of cell.shown.split('\n')) if (line.length > longest) longest = line.length;
         widths[cell.col] = Math.max(widths[cell.col] ?? 8, Math.min(80, longest + 2));
     }
     return Array.from({ length: widths.length }, (_, i) => widths[i] ?? 8);
@@ -148,6 +202,9 @@ export interface WorkbookSource {
     textOf(node: OfficeContentNode): Promise<string>;
     keep(node: OfficeContentNode): Promise<boolean | string>;
 }
+
+/** A cell of `text` alone at `col`, typed from it. */
+const textCell = (col: number, text: string, bold = false): WorkCell => ({ col, text, shown: text, value: cellValue(text), bold, colSpan: 1, rowSpan: 1 });
 
 /** Whether all of a node's text is bold. */
 function allBold(node: OfficeContentNode): boolean {
@@ -160,40 +217,131 @@ function allBold(node: OfficeContentNode): boolean {
     return any && all;
 }
 
-/** A table's or sheet's rows as a sheet's: its cells placed by their columns, typed, spans kept. */
+/**
+ * A table's or sheet's rows as a sheet's: its cells placed, typed, spans kept. A spreadsheet's cells are
+ * where their own rows and columns put them (gaps kept as empty rows and columns); a table's, and a
+ * sheet's whose cells name no columns, as DOCX and ODT lay a table out (see layoutTableRows), so a cell
+ * merged down holds its columns in the rows below and no two merges overlap. A row onNode gives text
+ * for is one cell holding it; a cell onNode gives text for holds that text.
+ */
 async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadsheet: boolean): Promise<WorkRow[]> {
-    const out: WorkRow[] = [];
-    let rowIndex = -1;
+    // The rows and cells kept, and the text onNode gave for any.
+    const rows: { row: OfficeContentNode; cells: OfficeContentNode[]; text?: string }[] = [];
+    const given = new Map<OfficeContentNode, string>();
     for (const row of node.children || []) {
         if (row.type !== 'row') continue;
         const kept = await source.keep(row);
         if (kept === false) continue;
-        const meta = row.metadata as (RowMetadata & { row?: number }) | undefined;
-        // A spreadsheet's row number, where its cells give it (gaps kept as empty rows), else the next.
-        const own = (row.children || []).map(c => (c.metadata as CellMetadata | undefined)?.row).find((r): r is number => typeof r === 'number');
-        rowIndex = spreadsheet && typeof own === 'number' && own > rowIndex ? own : rowIndex + 1;
-        if (rowIndex >= MAX_ROWS) break;
-        while (out.length < rowIndex) out.push({ cells: [] });
-        const cells: WorkCell[] = [];
-        let col = -1;
-        for (const cell of row.children || []) {
-            if (cell.type !== 'cell') continue;
-            if (await source.keep(cell) === false) continue;
-            const cm = cell.metadata as CellMetadata | undefined;
-            col = typeof cm?.col === 'number' && cm.col > col ? cm.col : col + 1;
-            if (col >= MAX_COLS) break;
-            const text = typeof kept === 'string' ? kept : await source.textOf(cell);
-            const value = cellValue(text, spreadsheet && typeof cm?.shownText === 'string' ? cm.shownText : undefined);
-            cells.push({
-                col, text, shown: spreadsheet && typeof cm?.shownText === 'string' ? cm.shownText : text, value, bold: cm?.style === 'header' || allBold(cell),
-                colSpan: Math.max(1, Math.min(MAX_COLS - col, Math.floor(cm?.colSpan ?? 1))), rowSpan: Math.max(1, Math.min(MAX_ROWS - rowIndex, Math.floor(cm?.rowSpan ?? 1))),
-                ...(cm?.hidden ? { hidden: true } : {}),
-            });
-            col += Math.max(1, Math.floor(cm?.colSpan ?? 1)) - 1;
+        const cells: OfficeContentNode[] = [];
+        if (typeof kept !== 'string') {
+            for (const cell of row.children || []) {
+                if (cell.type !== 'cell') continue;
+                const k = await source.keep(cell);
+                if (k === false) continue;
+                if (typeof k === 'string') given.set(cell, k);
+                cells.push(cell);
+            }
         }
-        out.push({ cells, ...((meta as RowMetadata | undefined)?.hidden ? { hidden: true } : {}) });
+        rows.push({ row, cells, ...(typeof kept === 'string' ? { text: kept } : {}) });
+    }
+    const hiddenRow = (row: OfficeContentNode) => (row.metadata as RowMetadata | undefined)?.hidden ? { hidden: true } : {};
+    const workCell = async (cell: OfficeContentNode, col: number, rowIndex: number, colSpan: number, rowSpan: number): Promise<WorkCell> => {
+        const cm = cell.metadata as CellMetadata | undefined;
+        const text = given.get(cell) ?? await source.textOf(cell);
+        const shown = spreadsheet && typeof cm?.shownText === 'string' ? cm.shownText : undefined;
+        return {
+            col, text, shown: shown ?? text, value: cellValue(text, shown, spreadsheet), bold: cm?.style === 'header' || allBold(cell),
+            colSpan: Math.max(1, Math.min(MAX_COLS - col, colSpan)), rowSpan: Math.max(1, Math.min(MAX_ROWS - rowIndex, rowSpan)),
+            ...(cm?.hidden ? { hidden: true } : {}),
+        };
+    };
+    const out: WorkRow[] = [];
+    const placed = spreadsheet && rows.every(r => r.cells.every(c => typeof (c.metadata as CellMetadata | undefined)?.col === 'number'));
+    if (placed) {
+        let rowIndex = -1;
+        for (const { row, cells: kept, text } of rows) {
+            // A spreadsheet's row number, where its cells give it (gaps kept as empty rows), else the next.
+            const own = (row.children || []).map(c => (c.metadata as CellMetadata | undefined)?.row).find((r): r is number => typeof r === 'number');
+            rowIndex = typeof own === 'number' && own > rowIndex ? own : rowIndex + 1;
+            if (rowIndex >= MAX_ROWS) break;
+            while (out.length < rowIndex) out.push({ cells: [] });
+            const cells: WorkCell[] = [];
+            if (text !== undefined) {
+                const first = (row.children || []).map(c => (c.metadata as CellMetadata | undefined)?.col).find((c): c is number => typeof c === 'number');
+                cells.push(textCell(Math.min(MAX_COLS - 1, Math.max(0, first ?? 0)), text));
+            }
+            let col = -1;
+            for (const cell of kept) {
+                const cm = cell.metadata as CellMetadata;
+                col = cm.col > col ? cm.col : col + 1;
+                if (col >= MAX_COLS) break;
+                const colSpan = Math.max(1, Math.floor(cm.colSpan ?? 1));
+                cells.push(await workCell(cell, col, rowIndex, colSpan, Math.max(1, Math.floor(cm.rowSpan ?? 1))));
+                col += colSpan - 1;
+            }
+            out.push({ cells, ...hiddenRow(row) });
+        }
+        return out;
+    }
+    // Laid out as a table is: a row onNode gave text for is one cell, in the row's first column.
+    const stand = new Map<OfficeContentNode, string>();
+    const laidRows = rows.map(r => {
+        if (r.text === undefined) return { type: 'row', children: r.cells } as OfficeContentNode;
+        const cell: OfficeContentNode = { type: 'cell', text: r.text, children: [{ type: 'text', text: r.text }] };
+        stand.set(cell, r.text);
+        return { type: 'row', children: [cell] } as OfficeContentNode;
+    });
+    const layout = layoutTableRows(laidRows);
+    for (const [ri, slots] of (layout?.rows ?? []).entries()) {
+        if (ri >= MAX_ROWS) break;
+        const cells: WorkCell[] = [];
+        for (const slot of slots) {
+            if (slot.kind !== 'cell' || slot.col >= MAX_COLS) continue;
+            const text = stand.get(slot.cell);
+            cells.push(text !== undefined ? textCell(slot.col, text) : await workCell(slot.cell, slot.col, ri, slot.colSpan, slot.rowSpan));
+        }
+        out.push({ cells, ...hiddenRow(rows[ri].row) });
     }
     return out;
+}
+
+/**
+ * The notes a document holds, as rows of a sheet: each footnote and endnote (cited in its text, or a
+ * block of the page) by its number, and each slide's speaker notes by the slide, with their text.
+ */
+async function notesOf(content: OfficeContentNode[], source: WorkbookSource): Promise<WorkRow[]> {
+    const rows: WorkRow[] = [];
+    const seen = new Set<OfficeContentNode>();
+    const counts = { footnote: 0, endnote: 0 };
+    const add = async (note: OfficeContentNode, label: () => string) => {
+        if (seen.has(note) || rows.length >= MAX_ROWS) return;
+        seen.add(note);
+        if (await source.keep(note) === false) return;
+        const text = (await source.textOf(note)).trim();
+        if (text) rows.push({ cells: [textCell(0, label()), { ...textCell(1, text), value: { kind: 'text' } }] });
+    };
+    // Each kind numbered in its order, as a document numbers them (a note's id is the file's, not its number).
+    const noteLabel = (note: OfficeContentNode) => {
+        const end = (note.metadata as { noteType?: string } | undefined)?.noteType === 'endnote';
+        return end ? `Endnote ${++counts.endnote}` : `Footnote ${++counts.footnote}`;
+    };
+    const visit = async (nodes: OfficeContentNode[], depth: number) => {
+        for (const node of nodes) {
+            if (seen.has(node)) continue;
+            if (node.type === 'note') await add(node, () => noteLabel(node));
+            else if (node.type === 'slide') {
+                const slideNumber = (node.metadata as SlideMetadata | undefined)?.slideNumber;
+                for (const note of node.notes || []) await add(note, () => `Slide ${slideNumber ?? ''}`.trim());
+            } else for (const note of node.notes || []) {
+                await add(note, () => noteLabel(note));
+                // A note cited inside a note.
+                if (depth < 32 && note.children?.length) await visit(note.children, depth + 1);
+            }
+            if (depth < 32 && node.children?.length) await visit(node.children, depth + 1);
+        }
+    };
+    await visit(content, 0);
+    return rows;
 }
 
 /**
@@ -202,20 +350,28 @@ async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadshe
  * sheet of its own (`includeText`), a block a row. Pictures and charts, which a cell cannot hold, are
  * counted for the writer's warning.
  */
-export async function buildWorkbook(content: OfficeContentNode[], source: WorkbookSource, options: { sheetPerTable: boolean; includeText: boolean }): Promise<{ sheets: WorkSheet[]; unrepresentable: Set<string> }> {
+export async function buildWorkbook(content: OfficeContentNode[], source: WorkbookSource, options: { sheetPerTable: boolean; includeText: boolean; includeCharts: boolean }): Promise<{ sheets: WorkSheet[]; unrepresentable: Set<string> }> {
     const sheets: WorkSheet[] = [];
     const taken = new Set<string>();
     const unrepresentable = new Set<string>();
+    // A chart left out by the caller (includeCharts: false) is not one lost.
+    const lost = (node: OfficeContentNode) => { if (node.type === 'image') unrepresentable.add('pictures'); else if (node.type === 'chart' && options.includeCharts) unrepresentable.add('charts'); };
+    // The notes, on a sheet of their own after the others.
+    const withNotes = async () => {
+        const notes = await notesOf(content, source);
+        if (notes.length) sheets.push({ name: sheetName('Notes', taken, 'Notes'), rows: notes, widths: [12, Math.min(120, Math.max(8, longestOf(notes, 1)))] });
+        return { sheets, unrepresentable };
+    };
     const sheetNodes = content.filter(n => n.type === 'sheet');
     if (sheetNodes.length) {
         for (const [i, node] of sheetNodes.entries()) {
             if (await source.keep(node) === false) continue;
             const meta = node.metadata as SheetMetadata | undefined;
             const rows = await gridOf(node, source, true);
-            for (const c of node.children || []) if (c.type === 'image' || c.type === 'chart') unrepresentable.add(c.type === 'chart' ? 'charts' : 'pictures');
+            for (const c of node.children || []) lost(c);
             sheets.push({ name: sheetName(meta?.sheetName ?? '', taken, `Sheet${i + 1}`), rows, ...(meta?.hidden ? { hidden: true } : {}), widths: widthsOf(rows) });
         }
-        return { sheets, unrepresentable };
+        return withNotes();
     }
     // A document: its tables, and its text between them.
     const text: WorkRow[] = [];
@@ -232,12 +388,14 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
                 else { if (together.length) together.push({ cells: [] }); for (const r of rows) together.push(r); }
                 continue;
             }
-            if (node.type === 'image' || node.type === 'chart' || node.type === 'drawing') { if (node.type !== 'drawing') unrepresentable.add(node.type === 'chart' ? 'charts' : 'pictures'); continue; }
+            if (node.type === 'image' || node.type === 'chart' || node.type === 'drawing') { lost(node); continue; }
+            // Notes are written on their own sheet (see notesOf).
+            if (node.type === 'note') continue;
             const blockText = typeof kept === 'string' ? kept : null;
             if (['paragraph', 'heading', 'list', 'code', 'definitionTerm', 'definitionDescription'].includes(node.type)) {
                 const t = (blockText ?? await source.textOf(node)).trim();
                 if (node.type === 'heading' && t) heading = t;
-                if (t && options.includeText && text.length < MAX_ROWS) text.push({ cells: [{ col: 0, text: t, shown: t, value: { kind: 'text' }, bold: node.type === 'heading', colSpan: 1, rowSpan: 1 }] });
+                if (t && options.includeText && text.length < MAX_ROWS) text.push({ cells: [{ ...textCell(0, t, node.type === 'heading'), value: { kind: 'text' } }] });
                 // A picture in the text, which a cell cannot hold.
                 const walk = (n: OfficeContentNode, d: number) => { if (n.type === 'image') unrepresentable.add('pictures'); if (d < 16) for (const c of n.children || []) walk(c, d + 1); };
                 walk(node, 0);
@@ -248,6 +406,13 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
     };
     await visit(content, 0);
     if (!options.sheetPerTable && together.length) sheets.push({ name: sheetName('Tables', taken, 'Tables'), rows: together, widths: widthsOf(together) });
-    if (text.length) sheets.push({ name: sheetName('Text', taken, 'Text'), rows: text, widths: [Math.min(120, Math.max(8, ...text.map(r => r.cells[0].text.length)))] });
-    return { sheets, unrepresentable };
+    if (text.length) sheets.push({ name: sheetName('Text', taken, 'Text'), rows: text, widths: [Math.min(120, Math.max(8, longestOf(text, 0)))] });
+    return withNotes();
+}
+
+/** The longest text of the cells at `col` of `rows`. */
+function longestOf(rows: WorkRow[], col: number): number {
+    let longest = 0;
+    for (const r of rows) for (const c of r.cells) if (c.col === col && c.text.length > longest) longest = c.text.length;
+    return longest;
 }

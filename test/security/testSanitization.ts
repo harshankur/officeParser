@@ -28,6 +28,7 @@ import { terminateOcr } from '../../src/utils/ocrUtils';
 import { OfficeErrorType } from '../../src/types';
 import { buildTaggedNodes } from '../../src/parsers/pdf/structTree';
 import { computeDocContext } from '../../src/parsers/pdf/textLayout';
+import { MarkedContent } from '../../src/parsers/pdf/actualText';
 
 let passed = 0;
 let failed = 0;
@@ -4109,6 +4110,34 @@ async function pdfProcessTests(h: {
     zeros.write('BT /F1 10 Tf 40 800 Td (Past the zeros) Tj ET', zeros.length - 64);
     const bombRun = await withinTime(20_000, () => read(markedPage(zeros)));
     check('pdf: a content stream inflating past the marked-content bound is read in time', !bombRun.result.error && bombRun.within && bombRun.result.text.includes('Past the zeros'), `${bombRun.ms}ms ${bombRun.result.error}`);
+    // Marked content is read for a page as it is read: a form of marked content drawn by many pages, or one
+    // stream they share, is read once, the document's events bounded (a 187 KB file of a form drawn by a
+    // thousand pages ran the process out of memory, every page's events made at once), and a page range
+    // reads its own pages alone. Inflating stops at its bound: a megabyte inflating to a gigabyte was
+    // inflated whole, then dropped.
+    const formPages = (pages: number, marks: number) => pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>',
+        `<< /Type /Pages /Kids [${Array.from({ length: pages }, (_, i) => `${6 + i} 0 R`).join(' ')}] /Count ${pages} >>`,
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', flate(Buffer.from('BT /F1 10 Tf 40 800 Td (Shared page) Tj ET /X0 Do')),
+        flate(Buffer.from('/A BMC EMC\n'.repeat(marks)), '/Type /XObject /Subtype /Form /BBox [0 0 10 10]'),
+        ...Array.from({ length: pages }, () => '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 842] /Resources << /Font << /F1 3 0 R >> /XObject << /X0 5 0 R >> >> /Contents 4 0 R >>')]);
+    await linear('pdf: a form of 20,000 marked-content spans drawn by 400 pages is read page by page', () => {
+        const pages = n(400), mc = new MarkedContent(new Uint8Array(formPages(pages, 20_000)), pages);
+        for (let i = 0; i < pages; i++) mc.eventsOf(i);
+    }, { label: 'pdf: a form drawn by 400 pages holds the heap', limit: 400e6 });
+    const ofThousand = formPages(1000, 250_000);
+    const allPages = new MarkedContent(new Uint8Array(ofThousand), 1000);
+    let documentEvents = 0;
+    for (let i = 0; i < 1000; i++) documentEvents += allPages.eventsOf(i)?.length ?? 0;
+    check('pdf: a document\'s marked-content events are bounded', documentEvents <= 10_500_000, `${documentEvents}`);
+    const rangeRun = await withinTime(5_000, () => read(ofThousand, { pdfParserConfig: { pageRange: '1' } }));
+    check('pdf: a page range reads the marked content of its pages alone', !rangeRun.result.error && rangeRun.within && rangeRun.result.text.includes('Shared page'), `${rangeRun.ms}ms ${rangeRun.result.error}`);
+    const quarterGigabyte = (require('zlib') as typeof import('zlib')).deflateSync(Buffer.alloc(256 * 1024 * 1024, 0x20), { level: 9 });
+    const bombDoc = pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>', '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>',
+        Buffer.concat([Buffer.from(`<< /Length ${quarterGigabyte.length} /Filter /FlateDecode >>\nstream\n`), quarterGigabyte, Buffer.from('\nendstream')])]);
+    const buffersBefore = process.memoryUsage().arrayBuffers, inflateStarted = performance.now();
+    new MarkedContent(new Uint8Array(bombDoc), 1).eventsOf(0);
+    const inflateMs = performance.now() - inflateStarted, inflateGrew = process.memoryUsage().arrayBuffers - buffersBefore;
+    check('pdf: a stream inflating to 256 MB is read no further than the inflate bound', inflateMs < 1500 && inflateGrew < 200e6, `${Math.round(inflateMs)}ms ${Math.round(inflateGrew / 1e6)}MB`);
     check('pdf: a plan of 3,000 symbols is read whole, its paths costing none of the operator budget', !planned.error && planned.pages === 21 && planned.text.includes('Note 20.50') && !planned.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED') && !planned.codes.includes('PDF_NO_TEXT_EXTRACTED'), `${planned.pages} pages ${planned.codes} ${planned.error}`);
     const operatorChecks = async (separateProcess: boolean) => {
         const where = separateProcess ? 'separate process' : 'in process';

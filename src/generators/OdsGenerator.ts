@@ -1,9 +1,9 @@
 import { zipSync, Zippable } from 'fflate';
 import { ConversionResult, GeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType } from '../types.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { resolveZipInstant, toW3CDTF } from '../utils/officeGenUtils.js';
+import { odfUserDefinedXml, resolveZipInstant, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
-import { buildWorkbook, CellValue, WorkSheet } from './sheets/workbook.js';
+import { buildWorkbook, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
 
 /** Escapes text content for an XML part after stripping XML-illegal characters. */
 function xmlText(s: string | undefined): string {
@@ -47,7 +47,8 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
     private dataStyle(v: CellValue): string | undefined {
         switch (v.kind) {
             case 'number':
-                if (!v.grouping && !v.decimals) return undefined;
+                // (A whole number of twelve to fifteen digits, an id, is shown in full, not in scientific notation.)
+                if (!v.grouping && !v.decimals && !wholeInFull(v)) return undefined;
                 return this.styleNamed(`n|${v.decimals}|${v.grouping}`, 'N', name => `<number:number-style style:name="${name}">${OdsGenerator.numberXml(v)}</number:number-style>`);
             case 'percent':
                 return this.styleNamed(`p|${v.decimals}|${v.grouping}`, 'N', name => `<number:percentage-style style:name="${name}">${OdsGenerator.numberXml(v)}<number:text>%</number:text></number:percentage-style>`);
@@ -76,6 +77,16 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
     }
 
     async generate(): Promise<ConversionResult<'ods'>> {
+        // onNode is asked once a node: a cell's verdict is read when it is kept and again for its text.
+        this.onNodeMemo = new WeakMap();
+        try {
+            return await this.write();
+        } finally {
+            this.onNodeMemo = null;
+        }
+    }
+
+    private async write(): Promise<ConversionResult<'ods'>> {
         const cfg = this.config.odsConfig;
         const textProcessor = (n: OfficeContentNode, co: string) => {
             if (n.type === 'text' || n.type === 'code') return n.text || '';
@@ -86,7 +97,7 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
         const { sheets, unrepresentable } = await buildWorkbook(this.ast.content, {
             textOf: async node => (await this.processNodeRecursive(node, textProcessor)).replace(/\n+$/, ''),
             keep: async node => { const v = await this.handleOnNode(node); return v === false ? false : typeof v === 'string' ? v : true; },
-        }, { sheetPerTable: cfg.sheetPerTable !== false, includeText: cfg.includeText !== false });
+        }, { sheetPerTable: cfg.sheetPerTable !== false, includeText: cfg.includeText !== false, includeCharts: this.config.includeCharts !== false });
         for (const feature of unrepresentable) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'ods' });
         if (!sheets.length) {
             this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'a document with no table or text', format: 'ods' });
@@ -107,7 +118,9 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
             'styles.xml': enc(`<?xml version="1.0" encoding="UTF-8"?>\n<office:document-styles ${ODF_NS} office:version="1.2"><office:styles>`
                 + `<style:style style:name="Default" style:family="table-cell"/></office:styles></office:document-styles>`),
             'meta.xml': enc(`<?xml version="1.0" encoding="UTF-8"?>\n<office:document-meta ${ODF_NS} office:version="1.2"><office:meta>`
-                + el('dc:title', m.title) + el('meta:initial-creator', m.author) + el('dc:creator', m.author) + el('dc:subject', m.subject) + el('dc:description', m.description)
+                + el('dc:title', m.title) + el('meta:initial-creator', m.author) + el('dc:creator', m.lastModifiedBy || m.author) + el('dc:subject', m.subject) + el('dc:description', m.description)
+                + (m.keywords ? String(m.keywords).split(',').map(k => k.trim()).filter(Boolean).map(k => `<meta:keyword>${xmlText(k)}</meta:keyword>`).join('') : '')
+                + odfUserDefinedXml(m.customProperties)
                 + `<meta:creation-date>${toW3CDTF(m.created) ?? iso}</meta:creation-date><dc:date>${iso}</dc:date><meta:generator>officeParser</meta:generator></office:meta></office:document-meta>`),
             'META-INF/manifest.xml': enc(`<?xml version="1.0" encoding="UTF-8"?>\n<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2">`
                 + `<manifest:file-entry manifest:full-path="/" manifest:version="1.2" manifest:media-type="application/vnd.oasis.opendocument.spreadsheet"/>`
@@ -119,8 +132,7 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
 
     /** A sheet as a table: its columns' widths (hidden ones collapsed), its rows and cells, merges covering cells. */
     private tableXml(sheet: WorkSheet): string {
-        const hiddenCols = new Set<number>();
-        for (const row of sheet.rows) for (const cell of row.cells) if (cell.hidden) hiddenCols.add(cell.col);
+        const hiddenCols = hiddenColumns(sheet);
         const tableStyle = sheet.hidden ? this.styleNamed('ta|hidden', 'ta', name => `<style:style style:name="${name}" style:family="table"><style:table-properties table:display="false"/></style:style>`) : undefined;
         const columns = sheet.widths.map((w, i) => {
             const style = this.styleNamed(`co|${w}`, 'co', name => `<style:style style:name="${name}" style:family="table-column"><style:table-column-properties style:column-width="${(w * 0.19).toFixed(3)}cm"/></style:style>`);

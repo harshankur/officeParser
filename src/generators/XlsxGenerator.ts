@@ -1,9 +1,9 @@
 import { zipSync, Zippable } from 'fflate';
 import { ConversionResult, GeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType } from '../types.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { resolveZipInstant, toW3CDTF } from '../utils/officeGenUtils.js';
+import { ooxmlCustomPropertiesXml, resolveZipInstant, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
-import { buildWorkbook, CellValue, WorkSheet } from './sheets/workbook.js';
+import { buildWorkbook, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
 
 /** Escapes text content for an XML part after stripping XML-illegal characters. */
 function xmlText(s: string | undefined): string {
@@ -20,11 +20,23 @@ function columnName(index: number): string {
 /** Excel's built-in number formats a cell is shown in, by their codes. */
 const BUILTIN_FORMATS: Record<string, number> = { 'General': 0, '0': 1, '0.00': 2, '#,##0': 3, '#,##0.00': 4, '0%': 9, '0.00%': 10 };
 
+/** The most characters a cell holds in Excel. */
+const MAX_CELL_TEXT = 32_767;
+
+/** `text` cut to at most `max` UTF-16 units, at a whole character. */
+function cutTo(text: string, max: number): string {
+    if (text.length <= max) return text;
+    let end = max;
+    if (/[\ud800-\udbff]/.test(text[end - 1])) end--;
+    return text.slice(0, end);
+}
+
 /** The number format code a value is shown in. */
 function formatCode(v: CellValue): string {
     const digits = (v.grouping ? '#,##0' : '0') + (v.decimals ? '.' + '0'.repeat(Math.min(v.decimals, 15)) : '');
     switch (v.kind) {
-        case 'number': return v.grouping || v.decimals ? digits : 'General';
+        // (A whole number of twelve to fifteen digits, an id, is shown in full, where General shows 1.23457E+11.)
+        case 'number': return v.grouping || v.decimals ? digits : wholeInFull(v) ? '0' : 'General';
         case 'percent': return `${digits}%`;
         case 'currency': {
             const symbol = `"${(v.symbol ?? '').replace(/"/g, '')}"`;
@@ -49,6 +61,16 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
     }
 
     async generate(): Promise<ConversionResult<'xlsx'>> {
+        // onNode is asked once a node: a cell's verdict is read when it is kept and again for its text.
+        this.onNodeMemo = new WeakMap();
+        try {
+            return await this.write();
+        } finally {
+            this.onNodeMemo = null;
+        }
+    }
+
+    private async write(): Promise<ConversionResult<'xlsx'>> {
         const cfg = this.config.xlsxConfig;
         const textProcessor = (n: OfficeContentNode, co: string) => {
             if (n.type === 'text' || n.type === 'code') return n.text || '';
@@ -59,7 +81,7 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
         const { sheets, unrepresentable } = await buildWorkbook(this.ast.content, {
             textOf: async node => (await this.processNodeRecursive(node, textProcessor)).replace(/\n+$/, ''),
             keep: async node => { const v = await this.handleOnNode(node); return v === false ? false : typeof v === 'string' ? v : true; },
-        }, { sheetPerTable: cfg.sheetPerTable !== false, includeText: cfg.includeText !== false });
+        }, { sheetPerTable: cfg.sheetPerTable !== false, includeText: cfg.includeText !== false, includeCharts: this.config.includeCharts !== false });
         for (const feature of unrepresentable) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'xlsx' });
         // A workbook has a sheet at least: an empty one where the document held nothing a sheet takes.
         if (!sheets.length) {
@@ -73,6 +95,7 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
         const sheetXml = sheets.map(sheet => this.sheetXml(sheet, styles));
         const { iso, mtime } = resolveZipInstant(this.effectiveMetadata.modified);
         const enc = (s: string) => new TextEncoder().encode(s);
+        const custom = ooxmlCustomPropertiesXml(this.effectiveMetadata.customProperties);
         const files: Zippable = {
             '[Content_Types].xml': enc(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">`
                 + `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>`
@@ -80,11 +103,13 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
                 + `<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>`
                 + sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')
                 + `<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>`
-                + `<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`),
+                + `<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>`
+                + (custom ? `<Override PartName="/docProps/custom.xml" ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml"/>` : '') + `</Types>`),
             '_rels/.rels': enc(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
                 + `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>`
                 + `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>`
-                + `<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>`),
+                + `<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>`
+                + (custom ? `<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties" Target="docProps/custom.xml"/>` : '') + `</Relationships>`),
             'xl/workbook.xml': enc(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`
                 + `<bookViews><workbookView activeTab="${Math.max(0, sheets.findIndex(s => !s.hidden))}"/></bookViews><sheets>`
                 + sheets.map((s, i) => `<sheet name="${xmlText(s.name)}" sheetId="${i + 1}"${s.hidden ? ' state="hidden"' : ''} r:id="rId${i + 1}"/>`).join('')
@@ -96,14 +121,17 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
             'docProps/core.xml': enc(this.coreProps(iso)),
             'docProps/app.xml': enc(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>officeParser</Application></Properties>`),
         };
+        if (custom) files['docProps/custom.xml'] = enc(custom);
         sheetXml.forEach((xml, i) => { files[`xl/worksheets/sheet${i + 1}.xml`] = enc(xml); });
         return { value: zipSync(files, { mtime }), messages: this.messages };
     }
 
+    /** Whether a cell cut to Excel's 32,767 characters was reported (once an output). */
+    private cutCellReported = false;
+
     /** A sheet's part: its columns' widths (hidden ones hidden), its rows and cells, its merged ranges. */
     private sheetXml(sheet: WorkSheet, styles: StyleTable): string {
-        const hiddenCols = new Set<number>();
-        for (const row of sheet.rows) for (const cell of row.cells) if (cell.hidden) hiddenCols.add(cell.col);
+        const hiddenCols = hiddenColumns(sheet);
         const cols = sheet.widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"${hiddenCols.has(i) ? ' hidden="1"' : ''}/>`).join('');
         const merges: string[] = [];
         const rows = sheet.rows.map((row, r) => {
@@ -116,7 +144,9 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
                 const s = style ? ` s="${style}"` : '';
                 if (cell.value.kind !== 'text' && typeof cell.value.number === 'number') return `<c r="${ref}"${s}><v>${cell.value.number}</v></c>`;
                 if (!cell.text) return style ? `<c r="${ref}"${s}/>` : '';
-                return `<c r="${ref}"${s} t="inlineStr"><is><t xml:space="preserve">${xmlText(cell.text)}</t></is></c>`;
+                // Excel holds 32,767 characters a cell: the rest is reported, not written.
+                if (cell.text.length > MAX_CELL_TEXT && !this.cutCellReported && (this.cutCellReported = true)) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'cell text past 32,767 characters', format: 'xlsx' });
+                return `<c r="${ref}"${s} t="inlineStr"><is><t xml:space="preserve">${xmlText(cutTo(cell.text, MAX_CELL_TEXT))}</t></is></c>`;
             }).join('');
             return `<row r="${r + 1}"${row.hidden ? ' hidden="1"' : ''}>${cells}</row>`;
         }).join('');

@@ -11,6 +11,7 @@
 
 import { CellMetadata, EmbedMetadata, ImageMode, OfficeContentNode, OfficeParserAST, PageSetup, ParagraphSpacing, RowMetadata, SheetMetadata } from '../types.js';
 import { cssColorHex } from './colorUtils.js';
+import { escapeXml, stripInvalidXmlChars } from './sanitize.js';
 import { lookupTable } from './lookupUtils.js';
 
 /**
@@ -552,4 +553,40 @@ export function withoutHiddenSheetContent(ast: OfficeParserAST): OfficeParserAST
         return [{ ...node, children: kept }];
     });
     return changed ? { ...ast, content } : ast;
+}
+
+const propText = (s: string): string => escapeXml(stripInvalidXmlChars(s));
+
+/**
+ * A document's custom properties as an OOXML package's `docProps/custom.xml` (DOCX, XLSX, PPTX), each typed
+ * as it is held (a flag, a number, a date, else text); null where there are none.
+ */
+export function ooxmlCustomPropertiesXml(props: Record<string, unknown> | undefined): string | null {
+    if (!props || !Object.keys(props).length) return null;
+    let entries = '', pid = 2;
+    for (const [key, value] of Object.entries(props)) {
+        let v: string;
+        if (typeof value === 'boolean') v = `<vt:bool>${value ? 'true' : 'false'}</vt:bool>`;
+        else if (typeof value === 'number' && Number.isFinite(value)) v = `<vt:r8>${value}</vt:r8>`;
+        else if (value instanceof Date && !isNaN(value.getTime())) v = `<vt:filetime>${value.toISOString().replace(/\.\d+Z$/, 'Z')}</vt:filetime>`;
+        else v = `<vt:lpwstr>${propText(String(value))}</vt:lpwstr>`;
+        entries += `<property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="${pid++}" name="${propText(key)}">${v}</property>`;
+    }
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n`
+        + `<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" `
+        + `xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">${entries}</Properties>`;
+}
+
+/** A document's custom properties as ODF `meta:user-defined` elements (ODT, ODS, ODP), each typed as it is held. */
+export function odfUserDefinedXml(props: Record<string, unknown> | undefined): string {
+    let meta = '';
+    for (const [key, value] of Object.entries(props || {})) {
+        let type = 'string', v: string;
+        if (typeof value === 'boolean') { type = 'boolean'; v = value ? 'true' : 'false'; }
+        else if (typeof value === 'number' && Number.isFinite(value)) { type = 'float'; v = String(value); }
+        else if (value instanceof Date && !isNaN(value.getTime())) { type = 'date'; v = value.toISOString().replace(/\.\d+Z$/, 'Z'); }
+        else v = String(value);
+        meta += `<meta:user-defined meta:name="${propText(key)}" meta:value-type="${type}">${propText(v)}</meta:user-defined>`;
+    }
+    return meta;
 }

@@ -5412,6 +5412,26 @@ async function testPdfRuledTables(): Promise<void> {
     ], `a merged title, a cell spanning rows, empty cells and a table inside a cell are read; got ${JSON.stringify(shape(tables[1]))}`);
     assert.ok(!tables.slice(2).some(t => collectAllNodes({ content: [t] } as any).some(n => n.type === 'cell' && /Books[\s\S]*Pens/.test(n.text || ''))), 'a table with partial borders is not read as one merged cell');
     assert.ok(!ast.content[0].children!.some(n => n.type === 'paragraph' && /^(Width|Team|Q1)/.test(n.text || '')), 'the tables\' text is in their cells, not the page\'s paragraphs');
+
+    // A box with rules between its rows and none between its columns (as spreadsheets print), and a table
+    // whose first column numbers its rows (`1.`, `2.`): read by their columns, a cell a column.
+    const second = await PDFDocument.create();
+    const font2 = await second.embedFont(StandardFonts.Helvetica);
+    const p2 = second.addPage([500, 700]);
+    const t2 = (t: string, x: number, y: number) => p2.drawText(t, { x, y, size: 10, font: font2 });
+    p2.drawText('Quarterly results by region.', { x: 40, y: 660, size: 11, font: font2 });
+    for (const y of [640, 622, 604, 586, 568]) p2.drawLine({ start: { x: 40, y }, end: { x: 440, y }, thickness: 0.75, color: black });
+    for (const x of [40, 440]) p2.drawLine({ start: { x, y: 568 }, end: { x, y: 640 }, thickness: 0.75, color: black });
+    [['Region', 'Revenue', 'Cost', 'Margin'], ['North', '1200', '800', '400'], ['South', '950', '700', '250'], ['East', '1430', '1000', '430']]
+        .forEach((row, r) => row.forEach((v, c) => t2(v, 45 + c * 100, 628 - r * 18)));
+    p2.drawText('The store room, counted on Monday.', { x: 40, y: 520, size: 11, font: font2 });
+    [['No.', 'Item', 'Quantity', 'Location'], ['1.', 'Apples', '30', 'Shelf A'], ['2.', 'Bananas', '12', 'Shelf B'], ['3.', 'Cherries', '7', 'Shelf C']]
+        .forEach((row, r) => row.forEach((v, c) => t2(v, [45, 110, 220, 320][c], 500 - r * 16)));
+    const read2 = await OfficeParser.parseOffice(Buffer.from(await second.save()), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const rowsOf = (t: OfficeContentNode) => t.children!.map(r => r.children!.map(c => c.text));
+    const [boxed, numbered] = read2.content[0].children!.filter(n => n.type === 'table');
+    assert.deepStrictEqual(boxed && rowsOf(boxed)[1], ['North', '1200', '800', '400'], `a box ruled between its rows alone is read by its columns; got ${boxed && JSON.stringify(rowsOf(boxed))}`);
+    assert.deepStrictEqual(numbered && rowsOf(numbered), [['No.', 'Item', 'Quantity', 'Location'], ['1.', 'Apples', '30', 'Shelf A'], ['2.', 'Bananas', '12', 'Shelf B'], ['3.', 'Cherries', '7', 'Shelf C']], `a table's numbered first column keeps its cells; got ${numbered && JSON.stringify(rowsOf(numbered))}`);
 }
 
 /**
@@ -5535,6 +5555,70 @@ async function testSpreadsheetWriters(): Promise<void> {
     assert.ok((written.messages || []).some((m: any) => m.code === 'CONTENT_NOT_REPRESENTABLE' && m.details?.feature === 'pictures'), 'a picture, which a cell cannot hold, is reported');
     const together = unzipSync(new Uint8Array((await OfficeGenerator.generate(doc, 'xlsx', { xlsxConfig: { sheetPerTable: false, includeText: false } } as any)).value as Uint8Array));
     assert.deepStrictEqual(strFromU8(together['xl/workbook.xml']).match(/<sheet name="[^"]+"/g), ['<sheet name="Tables"'], 'sheetPerTable false and includeText false: the tables on one sheet, no text sheet');
+
+    // A hidden row hides that row, not the columns its cells are in (a parser marks a hidden row's cells hidden).
+    const rowHidden = await OfficeParser.parseOffice(Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+        'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Name</t></is></c><c r="B1"><v>1</v></c></row><row r="2" hidden="1"><c r="A2" t="inlineStr"><is><t>Draft</t></is></c><c r="B2"><v>2</v></c></row></sheetData></worksheet>`),
+    })), { fileType: 'xlsx' } as any) as OfficeParserAST;
+    const rowHiddenXlsx = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(rowHidden, 'xlsx')).value as unknown as Uint8Array))['xl/worksheets/sheet1.xml']);
+    const rowHiddenOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(rowHidden, 'ods')).value as unknown as Uint8Array))['content.xml']);
+    assert.ok(!/<col [^>]*hidden/.test(rowHiddenXlsx) && /<row r="2" hidden="1">/.test(rowHiddenXlsx) && !/table-column[^>]*collapse/.test(rowHiddenOds) && /table-row table:visibility="collapse"/.test(rowHiddenOds), 'a hidden row hides its row, not its columns');
+
+    // Cells that name no column are laid out as a table is: a cell merged down holds its column below, merges never overlap.
+    const merged = await OfficeParser.parseOffice(Buffer.from('<table><tr><th rowspan="2">Region</th><th colspan="2">Sales</th></tr><tr><th>Q1</th><th>Q2</th></tr><tr><td rowspan="2">A</td><td>B</td><td>C</td></tr><tr><td colspan="2">Total</td></tr></table>'), { fileType: 'html' } as any) as OfficeParserAST;
+    const mergedXml = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(merged, 'xlsx')).value as unknown as Uint8Array))['xl/worksheets/sheet1.xml']);
+    assert.ok(/<c r="B2"[^>]*><is><t[^>]*>Q1</.test(mergedXml) && /<c r="C2"[^>]*><is><t[^>]*>Q2</.test(mergedXml) && /<c r="B4"[^>]*><is><t[^>]*>Total</.test(mergedXml), `cells take the columns merges leave them; got ${mergedXml}`);
+    assert.deepStrictEqual(mergedXml.match(/<mergeCell ref="[^"]+"/g), ['<mergeCell ref="A1:A2"', '<mergeCell ref="B1:C1"', '<mergeCell ref="A3:A4"', '<mergeCell ref="B4:C4"'], 'no two merges overlap');
+
+    // A sheet's stored numbers are numbers (exponents, all seventeen digits); a leading plus stays text; a long id is shown in full.
+    const stored = { type: 'xlsx', metadata: {}, attachments: [], content: [{ type: 'sheet', metadata: { sheetName: 'N' }, children: [{ type: 'row', children: ['0.30000000000000004', '1E-10', '+4915112345678'].map((text, col) => ({ type: 'cell', text, metadata: { row: 0, col }, children: [{ type: 'text', text }] })) }] }] } as any;
+    const storedXml = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(stored, 'xlsx')).value as unknown as Uint8Array))['xl/worksheets/sheet1.xml']);
+    assert.ok(/<c r="A1"><v>0.30000000000000004<\/v>/.test(storedXml) && /<c r="B1"><v>1e-10<\/v>/.test(storedXml) && /<c r="C1" t="inlineStr"><is><t[^>]*>\+4915112345678</.test(storedXml), `a sheet's stored numbers are numbers, a phone number text; got ${storedXml}`);
+    const ids = await OfficeParser.parseOffice(Buffer.from('<table><tr><td>123456789012</td><td>+5</td></tr></table>'), { fileType: 'html' } as any) as OfficeParserAST;
+    const idParts = unzipSync(new Uint8Array((await OfficeGenerator.generate(ids, 'xlsx')).value as unknown as Uint8Array));
+    assert.ok(/<c r="A1" s="(\d+)"><v>123456789012<\/v>/.test(strFromU8(idParts['xl/worksheets/sheet1.xml'])) && /<xf numFmtId="1"/.test(strFromU8(idParts['xl/styles.xml'])) && /<c r="B1" t="inlineStr"><is><t[^>]*>\+5</.test(strFromU8(idParts['xl/worksheets/sheet1.xml'])), 'a twelve-digit id is shown in full, a leading plus kept');
+
+    // Notes: footnotes and endnotes, and slides' speaker notes, on a sheet of their own.
+    for (const [file, wanted] of [['test.docx', /^Footnote 1 In paged media/], ['test.pptx', /^Slide 1 Slide Note 1/]] as const) {
+        const src = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', file)), { fileType: file.split('.')[1] } as any) as OfficeParserAST;
+        for (const format of ['xlsx', 'ods'] as const) {
+            const back = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(src, format)).value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+            const notes = back.content.find(s => (s.metadata as any)?.sheetName === 'Notes');
+            const first = (notes?.children?.[0]?.children ?? []).map(c => c.text || '').join(' ').replace(/\s+/g, ' ');
+            assert.ok(wanted.test(first), `${format}: ${file}'s notes are on a Notes sheet; got ${first}`);
+        }
+    }
+
+    // Sheet names cut at whole characters and unique; a long cell cut to what Excel holds, and reported.
+    const long = 'Quarterly revenue by region 20';
+    const named = { type: 'xlsx', metadata: {}, attachments: [], content: [`${long}\u{1F600} extra`, long].map(sheetName => ({ type: 'sheet', metadata: { sheetName }, children: [{ type: 'row', children: [{ type: 'cell', text: 'x'.repeat(40_000), metadata: { row: 0, col: 0 }, children: [{ type: 'text', text: 'x'.repeat(40_000) }] }] }] })) } as any;
+    const namedOut = await OfficeGenerator.generate(named, 'xlsx');
+    const namedParts = unzipSync(new Uint8Array(namedOut.value as unknown as Uint8Array));
+    const names = [...strFromU8(namedParts['xl/workbook.xml']).matchAll(/<sheet name="([^"]+)"/g)].map(m => m[1]);
+    assert.ok(names.length === 2 && names[0].toLowerCase() !== names[1].toLowerCase() && names.every(n => n.length <= 31 && !/[\ud800-\udfff]/.test(n)), `sheet names are whole and unique; got ${names}`);
+    assert.ok(/<t xml:space="preserve">x{32767}<\/t>/.test(strFromU8(namedParts['xl/worksheets/sheet1.xml'])) && namedOut.messages.filter((m: any) => m.details?.feature === 'cell text past 32,767 characters').length === 1, 'a cell past 32,767 characters is cut and reported once');
+
+    // onNode once a node; a row's text one cell; charts left out when asked, unreported; custom properties kept.
+    let asked = 0;
+    const seen = new Set<unknown>();
+    let twice = false;
+    await OfficeGenerator.generate(doc, 'xlsx', { onNode: (n: any) => { asked++; if (seen.has(n)) twice = true; seen.add(n); return undefined; } } as any);
+    assert.ok(asked > 0 && !twice, 'onNode is asked once a node');
+    const rowAst = { type: 'docx', metadata: { keywords: 'alpha, beta', customProperties: { Client: 'Acme' } }, attachments: [], content: [{ type: 'table', children: [
+        { type: 'row', children: ['h1', 'h2'].map(text => ({ type: 'cell', children: [{ type: 'text', text }] })) },
+        { type: 'row', metadata: { tag: 'R' }, children: ['a', 'b'].map(text => ({ type: 'cell', children: [{ type: 'text', text }] })) }] }, { type: 'chart', metadata: { attachmentName: 'c' } }] } as any;
+    for (const format of ['xlsx', 'ods'] as const) {
+        const out = await OfficeGenerator.generate(rowAst, format, { includeCharts: false, onNode: (n: any) => n.metadata?.tag === 'R' ? 'ROW TEXT' : undefined } as any);
+        const parts = unzipSync(new Uint8Array(out.value as unknown as Uint8Array));
+        const body = format === 'xlsx' ? strFromU8(parts['xl/worksheets/sheet1.xml']) : strFromU8(parts['content.xml']);
+        assert.strictEqual((body.match(/ROW TEXT/g) || []).length, 1, `${format}: a row onNode gives text for is one cell`);
+        assert.ok(!out.messages.some((m: any) => m.details?.feature === 'charts'), `${format}: charts left out (includeCharts: false) are not reported`);
+        const meta = format === 'xlsx' ? strFromU8(parts['docProps/custom.xml'] ?? new Uint8Array()) : strFromU8(parts['meta.xml']);
+        assert.ok(/Acme/.test(meta) && (format === 'xlsx' || /<meta:keyword>beta<\/meta:keyword>/.test(meta)), `${format}: custom properties and keywords are written`);
+    }
 }
 
 /**
@@ -5624,6 +5708,52 @@ async function testPresentationWriters(): Promise<void> {
         const slide = format === 'pptx' ? strFromU8(parts['ppt/slides/slide1.xml']) : strFromU8(parts['content.xml']);
         assert.ok(format === 'pptx' ? /<p:bg><p:bgPr><a:blipFill/.test(slide) : slide.includes(media[0]), `${format}: the slide is drawn on the picture`);
     }
+    // onNode is asked once a node; charts left out (includeCharts: false) are not reported; custom properties kept.
+    for (const format of ['pptx', 'odp'] as const) {
+        const asked = new Map<OfficeContentNode, number>();
+        const out = await OfficeGenerator.generate(deck, format, { onNode: (n: OfficeContentNode) => { asked.set(n, (asked.get(n) ?? 0) + 1); return undefined; },
+            includeCharts: false, metadataOverrides: { keywords: 'alpha, beta', custom: { Project: 'Atlas' } } } as any);
+        assert.strictEqual([...asked.values()].filter(v => v > 1).length, 0, `${format}: onNode is asked once for each node`);
+        assert.ok(!(out.messages || []).some((m: any) => /chart/.test(m.details?.feature ?? '')), `${format}: charts left out are not reported`);
+        const parts = unzipSync(new Uint8Array(out.value as unknown as Uint8Array));
+        const props = format === 'pptx' ? strFromU8(parts['docProps/custom.xml'] ?? new Uint8Array()) : strFromU8(parts['meta.xml']);
+        assert.ok(props.includes('Atlas') && (format === 'pptx' || props.includes('<meta:keyword>beta</meta:keyword>')), `${format}: custom properties and keywords are kept`);
+        const back = await OfficeParser.parseOffice(Buffer.from(out.value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+        assert.strictEqual((back.metadata.customProperties as any)?.Project, 'Atlas', `${format}: a custom property reads back`);
+    }
+    // A deck read without its geometry flows onto slides, its speaker notes kept; pictures behind flowing slides.
+    const flowing = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.pptx')), { fileType: 'pptx', ignorePageGeometry: true } as any) as OfficeParserAST;
+    for (const format of ['pptx', 'odp'] as const) {
+        const out = await OfficeGenerator.generate(flowing, format, { [`${format}Config`]: { backgrounds: [new Uint8Array(png)] } } as any);
+        const back = await OfficeParser.parseOffice(Buffer.from(out.value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+        assert.ok(notesOf(back).includes('Slide Note 1'), `${format}: a flowing deck keeps its speaker notes`);
+        const parts = unzipSync(new Uint8Array(out.value as unknown as Uint8Array));
+        assert.ok(Object.keys(parts).some(k => /media\/|Pictures\//.test(k)), `${format}: a flowing deck takes its backgrounds`);
+    }
+    // ODF shapes are written as DrawingML presets; a PDF's numbered list keeps its numbers; a page's notes are kept.
+    const odpDeck = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.odp')), { fileType: 'odp', extractAttachments: true } as any) as OfficeParserAST;
+    const fromOdp = unzipSync(new Uint8Array((await OfficeGenerator.generate(odpDeck, 'pptx')).value as unknown as Uint8Array));
+    const presets = Object.keys(fromOdp).filter(k => /^ppt\/slides\/slide\d+\.xml$/.test(k)).flatMap(k => [...strFromU8(fromOdp[k]).matchAll(/prst="([^"]+)"/g)].map(m => m[1]));
+    assert.ok(presets.length > 0 && presets.every(p => /^[a-zA-Z0-9]+$/.test(p) && p !== 'non') && !presets.includes('non-primitive'), `an ODP's shapes are DrawingML presets; got ${[...new Set(presets)]}`);
+    const pdfDeck = unzipSync(new Uint8Array((await OfficeGenerator.generate(pdf, 'pptx')).value as Uint8Array));
+    const allPdfText = Object.keys(pdfDeck).filter(k => /^ppt\/slides\/slide\d+\.xml$/.test(k)).map(k => strFromU8(pdfDeck[k])).join('');
+    assert.ok(/<a:t>1\.1\.\t<\/a:t>/.test(allPdfText) && /<a:t>ii\.\t<\/a:t>/.test(allPdfText), 'a PDF\'s numbered items keep their own numbers');
+    assert.ok(allPdfText.includes('Endnotes are typically used'), 'a page\'s notes are written in their place');
+    // A numbered list's numbers, a picture's alternative text, a merge across a slide break, a tiny size.
+    const listDoc = await OfficeParser.parseOffice(Buffer.from('<h2>List</h2><ol><li>first</li><li>second</li></ol><p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" alt="A red dot"></p>'
+        + '<h2>Spans</h2><table><tr><th>Group</th><th>Item</th></tr>' + Array.from({ length: 12 }, (_, i) => i === 9 ? '<tr><td rowspan="3">G</td><td>item10</td></tr>' : i === 10 || i === 11 ? `<tr><td>item${i + 1}</td></tr>` : `<tr><td>g${i + 1}</td><td>item${i + 1}</td></tr>`).join('') + '</table><p style="font-size:0.5pt">tiny</p>'), { fileType: 'html', extractAttachments: true } as any) as OfficeParserAST;
+    for (const format of ['pptx', 'odp'] as const) {
+        const out = await OfficeGenerator.generate(listDoc, format);
+        const parts = unzipSync(new Uint8Array(out.value as unknown as Uint8Array));
+        const xml = format === 'pptx' ? Object.keys(parts).filter(k => /^ppt\/slides\/slide\d+\.xml$/.test(k)).map(k => strFromU8(parts[k])).join('') : strFromU8(parts['content.xml']);
+        assert.ok(/2\.(\t|<text:tab\/>)/.test(xml), `${format}: a numbered list's numbers are written`);
+        assert.ok(format === 'pptx' ? xml.includes('descr="A red dot"') : xml.includes('<svg:desc>A red dot</svg:desc>'), `${format}: a picture keeps its alternative text`);
+        if (format === 'pptx') assert.ok(![...xml.matchAll(/ sz="(\d+)"/g)].some(m => Number(m[1]) < 100), 'pptx: no text size under a point');
+        const back = await OfficeParser.parseOffice(Buffer.from(out.value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+        const item11 = collectAllNodes(back).find(n => n.type === 'cell' && n.text === 'item11');
+        assert.strictEqual((item11?.metadata as any)?.col, 1, `${format}: a merge running past a slide's end keeps the cells after it in their columns`);
+    }
+
 }
 
 async function testNativePdfFurnitureLimits(): Promise<void> {

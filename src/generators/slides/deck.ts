@@ -24,12 +24,12 @@ import { layoutTableRows } from '../../utils/tableLayout.js';
 export interface Box { x: number; y: number; w: number; h: number }
 
 export interface DeckRun { text: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; size?: number; color?: string; font?: string; link?: string; superscript?: boolean; subscript?: boolean; lineBreak?: boolean }
-export interface DeckParagraph { runs: DeckRun[]; align?: 'left' | 'center' | 'right' | 'justify'; bullet?: { level: number; char?: string; numbered?: boolean } ; mono?: boolean; /** The first line's indent past the others, in points (negative: hanging). */ firstIndent?: number; /** From baseline to baseline, in points, where the source measured it. */ lineSpacing?: number }
+export interface DeckParagraph { runs: DeckRun[]; align?: 'left' | 'center' | 'right' | 'justify'; bullet?: { level: number; char?: string; numbered?: boolean; /** A numbered item's marker as it is shown (`2.`, `1.1.`, `iv.`), written as text: each item is a paragraph, often a box, of its own. */ text?: string } ; mono?: boolean; /** The first line's indent past the others, in points (negative: hanging). */ firstIndent?: number; /** From baseline to baseline, in points, where the source measured it. */ lineSpacing?: number }
 
 export type DeckItem =
     | { kind: 'text'; box: Box; paragraphs: DeckParagraph[]; anchor?: 'top' | 'middle' | 'bottom'; insets?: { top: number; right: number; bottom: number; left: number }; exact?: boolean; shape?: ShapeMetadata; rotation?: number; role?: 'title' | 'body' }
-    | { kind: 'picture'; box: Box; attachment: string; rotation?: number }
-    | { kind: 'table'; box: Box; rows: { cells: { paragraphs: DeckParagraph[]; colSpan: number; rowSpan: number; bold: boolean; fill?: string }[] }[]; widths: number[]; heights?: number[] }
+    | { kind: 'picture'; box: Box; attachment: string; rotation?: number; /** Its alternative text. */ alt?: string }
+    | { kind: 'table'; box: Box; rows: { cells: { paragraphs: DeckParagraph[]; colSpan: number; rowSpan: number; bold: boolean; fill?: string; col?: number }[] }[]; widths: number[]; heights?: number[] }
     | { kind: 'shape'; box: Box; shape: ShapeMetadata };
 
 export interface DeckSlide { items: DeckItem[]; background?: string; picture?: Uint8Array; notes?: DeckParagraph[] }
@@ -46,6 +46,8 @@ const TITLE_SIZE = 28, BODY_SIZE = 18;
 /** What the deck needs of a writer: whether a node is written (onNode, a string its text instead). */
 export interface DeckSource {
     keep(node: OfficeContentNode): Promise<boolean | string>;
+    /** Whether charts are written (includeCharts): a chart left out is not reported. */
+    includeCharts: boolean;
     /** A chart's data as a table (its labels down, its series across), or undefined where it has none. */
     chartTable(node: OfficeContentNode): OfficeContentNode | undefined;
 }
@@ -189,6 +191,20 @@ function placedGroups(node: OfficeContentNode, p: DeckParagraph): { paragraph: D
     });
 }
 
+/** The pictures in a node, with their alternative text. */
+function picturesIn(node: OfficeContentNode): { attachment: string; alt?: string }[] {
+    const out: { attachment: string; alt?: string }[] = [];
+    const walk = (n: OfficeContentNode, d: number) => {
+        if (n.type === 'image') {
+            const m = n.metadata as { attachmentName?: string; altText?: string } | undefined;
+            if (m?.attachmentName) out.push({ attachment: m.attachmentName, ...(typeof m.altText === 'string' && m.altText.trim() ? { alt: m.altText.trim() } : {}) });
+        }
+        if (d < 16) for (const c of n.children ?? []) walk(c, d + 1);
+    };
+    walk(node, 0);
+    return out;
+}
+
 /** A block as a paragraph: its runs, its alignment, a list item's bullet and level. */
 async function paragraphOf(node: OfficeContentNode, source: DeckSource, notes: { list: DeckParagraph[]; seen: Map<OfficeContentNode, number> }, kept: true | string = true, asPlaced = false): Promise<DeckParagraph> {
     const read = typeof kept === 'string' ? [{ text: kept }] : await runsOf(node, source, notes);
@@ -198,7 +214,12 @@ async function paragraphOf(node: OfficeContentNode, source: DeckSource, notes: {
     const meta = node.metadata as (ListMetadata & { alignment?: string }) | undefined;
     const align = meta?.alignment === 'center' || meta?.alignment === 'right' || meta?.alignment === 'justify' ? meta.alignment : undefined;
     const p: DeckParagraph = { runs: lines ? joinLines(lines) : read, ...(align ? { align } : {}), ...(pitch ? { lineSpacing: pitch } : {}) };
-    if (node.type === 'list') p.bullet = { level: Math.max(0, Math.min(8, meta?.indentation ?? 0)), ...(meta?.listType === 'ordered' ? { numbered: true } : { char: typeof meta?.marker === 'string' && meta.marker ? meta.marker : '•' }) };
+    if (node.type === 'list') {
+        const index = typeof meta?.itemIndex === 'number' && Number.isFinite(meta.itemIndex) ? Math.max(0, Math.trunc(meta.itemIndex)) : 0;
+        p.bullet = { level: Math.max(0, Math.min(8, meta?.indentation ?? 0)), ...(meta?.listType === 'ordered'
+            ? { numbered: true, text: typeof meta?.marker === 'string' ? meta.marker.replace(/\s+/g, ' ').trim().slice(0, 64) : `${index + 1}.` }
+            : { char: typeof meta?.marker === 'string' && meta.marker ? meta.marker : '•' }) };
+    }
     if (node.type === 'code') p.mono = true;
     return p;
 }
@@ -209,7 +230,7 @@ async function paragraphOf(node: OfficeContentNode, source: DeckSource, notes: {
  * covering what they span), with its columns' widths, and its rows' heights where its source measured them.
  */
 async function tableOf(node: OfficeContentNode, source: DeckSource, notes: { list: DeckParagraph[]; seen: Map<OfficeContentNode, number> }) {
-    type DeckCell = { paragraphs: DeckParagraph[]; colSpan: number; rowSpan: number; bold: boolean; fill?: string };
+    type DeckCell = { paragraphs: DeckParagraph[]; colSpan: number; rowSpan: number; bold: boolean; fill?: string; col: number };
     // The rows and cells kept, laid out.
     const kept: OfficeContentNode[] = [];
     const keptText = new Map<OfficeContentNode, true | string>();
@@ -233,7 +254,7 @@ async function tableOf(node: OfficeContentNode, source: DeckSource, notes: { lis
         const cells: DeckCell[] = [];
         for (const slot of slots) {
             if (slot.kind === 'covered') continue;
-            if (slot.kind === 'gap') { cells.push({ paragraphs: [], colSpan: 1, rowSpan: 1, bold: false }); cols = Math.max(cols, slot.col + 1); continue; }
+            if (slot.kind === 'gap') { cells.push({ paragraphs: [], colSpan: 1, rowSpan: 1, bold: false, col: slot.col }); cols = Math.max(cols, slot.col + 1); continue; }
             const cell = slot.cell;
             const meta = cell.metadata as { style?: string; backgroundColor?: string } | undefined;
             const paragraphs: DeckParagraph[] = [];
@@ -244,7 +265,7 @@ async function tableOf(node: OfficeContentNode, source: DeckSource, notes: { lis
                     paragraphs.push(await paragraphOf(child, source, notes));
                 }
             } else paragraphs.push(await paragraphOf(cell, source, notes, keptText.get(cell) ?? true));
-            cells.push({ paragraphs, colSpan: slot.colSpan, rowSpan: slot.rowSpan, bold: meta?.style === 'header', ...(meta?.backgroundColor ? { fill: meta.backgroundColor } : {}) });
+            cells.push({ paragraphs, colSpan: slot.colSpan, rowSpan: slot.rowSpan, bold: meta?.style === 'header', ...(meta?.backgroundColor ? { fill: meta.backgroundColor } : {}), col: slot.col });
             placed.push({ row: ri, col: slot.col, colSpan: slot.colSpan, rowSpan: slot.rowSpan, len: paragraphs.map(p => p.runs.map(x => x.text).join('')).join(' ').length, bounds: cell.bounds });
             cols = Math.max(cols, slot.col + slot.colSpan);
         }
@@ -376,9 +397,9 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
                     continue;
                 }
                 if (child.type === 'image') {
-                    const name = (child.metadata as { attachmentName?: string } | undefined)?.attachmentName;
-                    if (name && box) slide.items.push({ kind: 'picture', box, attachment: name });
-                    else if (name) unrepresentable.add('pictures without a place');
+                    const [picture] = picturesIn(child);
+                    if (picture && box) slide.items.push({ kind: 'picture', box, ...picture });
+                    else if (picture) unrepresentable.add('pictures without a place');
                     continue;
                 }
                 if (child.type === 'table') {
@@ -387,14 +408,24 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
                     if (slide.picture && !isSlides && await cellsPlaced(child)) continue;
                     const t = await tableOf(child, source, notes);
                     if (box) slide.items.push({ kind: 'table', box, ...t });
+                    if (picturesIn(child).length) unrepresentable.add('pictures inside table cells');
                     continue;
                 }
                 if (child.type === 'chart') {
+                    if (!source.includeCharts) continue;
                     // A chart as a table of its data, in its place.
                     const table = source.chartTable(child);
                     if (table && box) { const t = await tableOf(table, source, notes); slide.items.push({ kind: 'table', box, rows: t.rows, widths: t.widths }); }
                     else unrepresentable.add('charts without their data');
                     continue;
+                }
+                // Any other block that holds text (a page's notes, printed at its foot): its blocks in their places.
+                if (child.type !== 'break' && (child.text || child.children?.length)) {
+                    const blocks: OfficeContentNode[] = [];
+                    const walk = (n: OfficeContentNode, d: number) => { for (const c of n.children ?? []) { if (['paragraph', 'heading', 'list', 'code'].includes(c.type)) blocks.push(c); else if (d < 16) walk(c, d + 1); } };
+                    walk(child, 0);
+                    if (!blocks.length && (child.text || '').trim()) blocks.push(child);
+                    for (const b of blocks) { const k = b === child ? kept : await source.keep(b); if (k !== false) await placeBlock(b, k); }
                 }
             }
             // The notes cited here that the page printed (their blocks placed): in their places, numbered.
@@ -414,7 +445,7 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
             }
             // A slide's speaker notes.
             const own: DeckParagraph[] = [];
-            for (const note of node.notes ?? []) for (const block of note.children ?? []) own.push(await paragraphOf(block, source, notes));
+            for (const note of node.notes ?? []) { if (await source.keep(note) === false) continue; for (const block of note.children ?? []) own.push(await paragraphOf(block, source, notes)); }
             if (own.length) slide.notes = own;
             slides.push(slide);
         }
@@ -423,7 +454,10 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
     }
 
     // A flowing document: slides of its headings.
-    return flowDeck(content, metadata, source, notes, unrepresentable);
+    const deck = await flowDeck(content, metadata, source, notes, unrepresentable);
+    // Pictures behind the slides, one a slide in order.
+    deck.slides.forEach((slide, i) => { const picture = options.backgrounds?.[i]; if (picture) slide.picture = picture; });
+    return deck;
 }
 
 /** Whether two bounds are one box. */
@@ -502,12 +536,29 @@ async function flowDeck(content: OfficeContentNode[], metadata: OfficeMetadata, 
     const tableSlides = async (node: OfficeContentNode) => {
         flushBody();
         const t = await tableOf(node, source, notes);
-        const header = t.rows[0];
-        const rest = t.rows.slice(1);
+        // The header: the first row and the rows its merges reach into (a header of two rows), at most three.
+        let head = t.rows.length ? 1 : 0;
+        for (let r = 0; r < head && r < t.rows.length; r++) for (const c of t.rows[r].cells) head = Math.max(head, Math.min(t.rows.length, r + c.rowSpan));
+        if (head > 3) head = 0;
+        const header = t.rows.slice(0, head), rest = t.rows.slice(head);
+        // A merge running on past a slide's last row: its place on the next slide is an empty cell, so the
+        // cells after it keep their columns (open: the merges begun on earlier slides, with the row each began in).
+        let open: { row: number; cell: typeof rest[number]['cells'][number] }[] = [];
         for (let at = 0; at === 0 || at < rest.length; at += 10) {
             if (slides.length >= MAX_SLIDES) { unrepresentable.add('slides past the deck\'s limit'); break; }
-            put([{ kind: 'table', box: BODY_BOX, rows: header ? [header, ...rest.slice(at, at + 10)] : [], widths: t.widths }]);
+            const rows = rest.slice(at, at + 10).map((row, i) => {
+                const covered = open.filter(o => o.row + o.cell.rowSpan > at + i);
+                if (!covered.length) return row;
+                const filler = covered.map(o => ({ paragraphs: [], colSpan: o.cell.colSpan, rowSpan: 1, bold: false, col: o.cell.col ?? 0 }));
+                return { cells: [...row.cells, ...filler].sort((a, b) => (a.col ?? 0) - (b.col ?? 0)) };
+            });
+            put([{ kind: 'table', box: BODY_BOX, rows: [...header, ...rows], widths: t.widths }]);
+            const end = at + 10;
+            open = open.filter(o => o.row + o.cell.rowSpan > end);
+            rest.slice(at, end).forEach((row, i) => { for (const cell of row.cells) if (at + i + cell.rowSpan > end) open.push({ row: at + i, cell }); });
         }
+        // The pictures in its cells, which a slide's table cannot hold, on slides of their own after it.
+        for (const picture of picturesIn(node)) put([{ kind: 'picture', box: BODY_BOX, ...picture }]);
     };
     const add = (p: DeckParagraph) => {
         const size = BODY_SIZE;
@@ -551,15 +602,11 @@ async function flowDeck(content: OfficeContentNode[], metadata: OfficeMetadata, 
                 const p = await paragraphOf(node, source, notes, kept);
                 if (p.runs.some(r => r.text.trim())) add(p);
                 // Its pictures on slides of their own.
-                const pictures: string[] = [];
-                const walk = (n: OfficeContentNode, d: number) => { if (n.type === 'image') { const a = (n.metadata as { attachmentName?: string } | undefined)?.attachmentName; if (a) pictures.push(a); } if (d < 16) for (const c of n.children ?? []) walk(c, d + 1); };
-                walk(node, 0);
-                for (const a of pictures) { flushBody(); put([{ kind: 'picture', box: BODY_BOX, attachment: a }]); }
+                for (const picture of picturesIn(node)) { flushBody(); put([{ kind: 'picture', box: BODY_BOX, ...picture }]); }
                 continue;
             }
             if (node.type === 'image') {
-                const a = (node.metadata as { attachmentName?: string } | undefined)?.attachmentName;
-                if (a) { flushBody(); put([{ kind: 'picture', box: BODY_BOX, attachment: a }]); }
+                for (const picture of picturesIn(node)) { flushBody(); put([{ kind: 'picture', box: BODY_BOX, ...picture }]); }
                 continue;
             }
             if (node.type === 'table') {
@@ -567,6 +614,7 @@ async function flowDeck(content: OfficeContentNode[], metadata: OfficeMetadata, 
                 continue;
             }
             if (node.type === 'chart') {
+                if (!source.includeCharts) continue;
                 const table = source.chartTable(node);
                 if (!table) { unrepresentable.add('charts without their data'); continue; }
                 flushBody();
@@ -574,7 +622,21 @@ async function flowDeck(content: OfficeContentNode[], metadata: OfficeMetadata, 
                 put([{ kind: 'table', box: BODY_BOX, rows: t.rows, widths: t.widths }]);
                 continue;
             }
-            if (node.type === 'slide' || node.type === 'page') { flush(); if (depth < 16) await visit(node.children ?? [], depth + 1); flush(); continue; }
+            if (node.type === 'slide' || node.type === 'page') {
+                flush();
+                const before = slides.length;
+                if (depth < 16) await visit(node.children ?? [], depth + 1);
+                flush();
+                // A slide's speaker notes go with the last slide its content made (one of their own if it made none).
+                const own: DeckParagraph[] = [];
+                for (const note of node.notes ?? []) { if (await source.keep(note) === false) continue; for (const block of note.children ?? []) own.push(await paragraphOf(block, source, notes)); }
+                if (own.length) {
+                    if (slides.length === before) put([]);
+                    const last = slides[slides.length - 1];
+                    if (last) last.notes = [...(last.notes ?? []), ...own];
+                }
+                continue;
+            }
             if (depth < 16 && node.children?.length) await visit(node.children, depth + 1);
         }
     };

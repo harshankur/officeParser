@@ -21,6 +21,7 @@
  * @module OpenOfficeParser
  */
 
+import { presetOfOdfShape } from '../utils/shapeNames.js';
 import { BreakMetadata, CellMetadata, ChartData, ChartMetadata, CodeMetadata, FullOfficeParserConfig, HeaderFooterMetadata, HeadingMetadata, ImageMetadata, IndentationMetadata, ListMetadata, PageSetup, ParagraphSpacing, ShapeMetadata, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, PageMetadata, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { chartRawTexts, extractChartData, MAX_CHART_VALUES } from '../utils/chartUtils.js';
@@ -1582,8 +1583,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             const prop = (attr: string) => styleProperty(doc, style, "style:graphic-properties", attr);
             const isShape = element.tagName !== 'draw:frame';
             const geometryType = getFirstElementByTagName(element, "draw:enhanced-geometry")?.getAttribute("draw:type");
-            const geometry = element.tagName === 'draw:ellipse' || element.tagName === 'draw:circle' || geometryType === 'ellipse' ? 'ellipse'
-                : geometryType === 'round-rectangle' ? 'roundRect' : geometryType && geometryType !== 'rectangle' ? geometryType : 'rect';
+            // As DrawingML names it (ShapeMetadata.geometry); a shape of a path of its own, which no preset is, a rectangle.
+            const geometry = element.tagName === 'draw:ellipse' || element.tagName === 'draw:circle' ? 'ellipse' : presetOfOdfShape(geometryType) ?? 'rect';
             const fill = isShape && prop("draw:fill") !== 'none' ? prop("draw:fill-color") : prop("draw:fill") === 'solid' ? prop("draw:fill-color") : undefined;
             const stroked = isShape ? prop("draw:stroke") !== 'none' : prop("draw:stroke") === 'solid';
             const strokeColor = stroked ? (prop("svg:stroke-color") ?? (isShape ? '#000000' : undefined)) : undefined;
