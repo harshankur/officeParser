@@ -29,7 +29,7 @@ export interface CellValue {
 }
 
 /** A cell: its text (a spreadsheet's stored value), what it shows (its value in its format), its value typed. */
-export interface WorkCell { col: number; text: string; shown: string; value: CellValue; bold: boolean; colSpan: number; rowSpan: number; hidden?: boolean; /** Its first web, mail or phone link. */ link?: string }
+export interface WorkCell { col: number; text: string; shown: string; value: CellValue; bold: boolean; colSpan: number; rowSpan: number; hidden?: boolean; /** Its links in order (a few at most): a writer writes the first it can (see writableLink). */ links?: string[] }
 export interface WorkRow { cells: WorkCell[]; hidden?: boolean }
 export interface WorkSheet { name: string; rows: WorkRow[]; hidden?: boolean; widths: number[] }
 
@@ -266,11 +266,10 @@ async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadshe
         // Its pictures and charts, which a cell cannot hold (see CellMedia), and its first link.
         if (own === undefined && media) await mediaIn(cell, source, media);
         const links = own === undefined ? await linksIn(cell, source.keep) : [];
-        if (links.length > 1 && media) media.extraLinks = true;
         return {
             col, text, shown: shown ?? text, value: cellValue(text, shown, spreadsheet), bold: cm?.style === 'header' || allBold(cell),
             colSpan: Math.max(1, Math.min(MAX_COLS - col, colSpan)), rowSpan: Math.max(1, Math.min(MAX_ROWS - rowIndex, rowSpan)),
-            ...(cm?.hidden ? { hidden: true } : {}), ...(links[0] ? { link: links[0] } : {}),
+            ...(cm?.hidden ? { hidden: true } : {}), ...(links.length ? { links } : {}),
         };
     };
     const out: WorkRow[] = [];
@@ -351,7 +350,7 @@ function withinRows(rows: WorkRow[]): WorkRow[] {
 const MAX_MERGE_POSITIONS = 2_000_000;
 
 /** The pictures and charts met in cells (a cell holds neither), and whether a cell held more than one link. */
-export interface CellMedia { pictures: number; charts: OfficeContentNode[]; extraLinks: boolean }
+export interface CellMedia { pictures: number; charts: OfficeContentNode[] }
 
 /** The pictures and charts under a node, each asked of onNode: one left out, or replaced by a string, is none. */
 async function mediaIn(node: OfficeContentNode, source: WorkbookSource, media: CellMedia, depth = 0): Promise<void> {
@@ -375,7 +374,8 @@ const LINK_KINDS = /^(https?:|mailto:|tel:|#.)/i;
  */
 export function placeOf(link: string, sheetNames: readonly string[]): { sheet: string; cell: string } | undefined {
     if (!link.startsWith('#')) return undefined;
-    const m = /^#(?:'((?:[^']|'')+)'|([^!]+))(?:!\$?([A-Za-z]{1,3})\$?(\d{1,7}))?$/.exec(link);
+    // Excel's form (`#Sheet!A1`) or ODF's (`#Sheet.A1`, its name's own dots kept: the last one is the cell's).
+    const m = /^#(?:'((?:[^']|'')+)'|([^!]+?))(?:[!.]\$?([A-Za-z]{1,3})\$?(\d{1,7}))?$/.exec(link);
     if (!m) return undefined;
     const wanted = (m[1] !== undefined ? m[1].replace(/''/g, "'") : m[2]).toLowerCase();
     const sheet = sheetNames.find(n => n.toLowerCase() === wanted);
@@ -383,14 +383,43 @@ export function placeOf(link: string, sheetNames: readonly string[]): { sheet: s
 }
 
 /**
- * A node's distinct web, mail and phone links, in order (two at most: whether there is more than one is
- * all that is asked); a part onNode leaves out or replaces has none (its link went with it).
+ * The first of a cell's links a workbook can hold: a web, mail or phone address (at most `maxLength`
+ * characters: XLSX's MAX_LINK_LENGTH, as Excel opens), or a place on a sheet written; and how many could be (more than one: the
+ * rest are reported), and whether a place no sheet holds was among them.
+ */
+export function writableLink(links: readonly string[] | undefined, sheetNames: readonly string[], maxLength = Infinity): { link?: string; place?: { sheet: string; cell: string }; writable: number; lostPlace: boolean; tooLong: boolean } {
+    let first: { link: string; place?: { sheet: string; cell: string } } | undefined, writable = 0, lostPlace = false, tooLong = false;
+    for (const link of links ?? []) {
+        if (link.startsWith('#')) {
+            const place = placeOf(link, sheetNames);
+            if (!place) { lostPlace = true; continue; }
+            writable++;
+            if (!first) first = { link, place };
+        } else if (link.length > maxLength) tooLong = true;
+        else { writable++; if (!first) first = { link }; }
+    }
+    return { ...(first ?? {}), writable, lostPlace: lostPlace && !first, tooLong: tooLong && !first };
+}
+
+/** The longest address Excel opens a link to, and the most links a sheet holds. */
+export const MAX_LINK_LENGTH = 2079;
+export const MAX_SHEET_LINKS = 65_530;
+
+/** A sheet's name in a reference to a place on it: quoted where it is more than a plain word, or reads as a cell or a truth. */
+export function sheetRef(name: string): string {
+    const plain = /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !/^[A-Za-z]{1,3}\d+$/.test(name) && !/^R\d*C\d*$/i.test(name) && !/^(true|false)$/i.test(name);
+    return plain ? name : `'${name.replace(/'/g, "''")}'`;
+}
+
+/**
+ * A node's distinct links (web, mail, phone, a place), in order, a few at most (the writer takes the first
+ * it can hold, see writableLink); a part onNode leaves out or replaces has none (its link went with it).
  */
 async function linksIn(node: OfficeContentNode, keep: (node: OfficeContentNode) => Promise<boolean | string>): Promise<string[]> {
     const out: string[] = [];
     const walk = async (n: OfficeContentNode, depth: number) => {
         for (const c of n.children || []) {
-            if (out.length > 1) return;
+            if (out.length >= 8) return;
             const k = await keep(c);
             if (k === false || typeof k === 'string') continue;
             const url = (c.metadata as { link?: unknown } | undefined)?.link;
@@ -499,12 +528,11 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
     const picturesWanted = options.imageMode === 'image-only' || options.imageMode === 'image+ocr-text';
     const lost = (node: OfficeContentNode) => { if (node.type === 'image') { if (picturesWanted) unrepresentable.add('pictures'); } else if (node.type === 'chart' && options.includeCharts) unrepresentable.add('charts'); };
     // What cells and text held that a cell cannot: their pictures reported, their charts sheets of their data.
-    const media: CellMedia = { pictures: 0, charts: [], extraLinks: false };
+    const media: CellMedia = { pictures: 0, charts: [] };
     const settle = async (after: string) => {
         if (media.pictures && picturesWanted) unrepresentable.add('pictures');
-        if (media.extraLinks) unrepresentable.add('links past a cell\'s first');
         const charts = media.charts.splice(0);
-        media.pictures = 0; media.extraLinks = false;
+        media.pictures = 0;
         for (const c of charts) {
             const rows = await chartRows(c);
             if (rows) sheets.push({ name: sheetName(chartName(c, after), taken, `Chart ${chartCount}`), rows, widths: widthsOf(rows) });
@@ -624,8 +652,7 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
                 if (node.type === 'list' && t && blockText === null) { const marker = listMarker(node.metadata as ListMetadata | undefined); if (marker) t = `${marker} ${t}`; }
                 // Its first link the row's; a picture or chart in the text, which a cell cannot hold, reported or a sheet of its data.
                 const links = blockText === null ? await linksIn(node, source.keep) : [];
-                if (links.length > 1) media.extraLinks = true;
-                if (t && options.includeText && text.length < MAX_ROWS) text.push({ cells: [{ ...textCell(0, t, node.type === 'heading'), value: { kind: 'text' }, ...(links[0] ? { link: links[0] } : {}) }] });
+                if (t && options.includeText && text.length < MAX_ROWS) text.push({ cells: [{ ...textCell(0, t, node.type === 'heading'), value: { kind: 'text' }, ...(links.length ? { links } : {}) }] });
                 if (blockText === null) await mediaIn(node, source, media);
                 await settle(heading);
                 continue;
