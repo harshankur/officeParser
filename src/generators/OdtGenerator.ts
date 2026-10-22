@@ -845,7 +845,11 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         if (!columns || columns.count < 2) return '<style:columns fo:column-count="1" fo:column-gap="0pt"/>';
         const sep = columns.separator ? '<style:column-sep style:width="0.5pt" style:color="#000000" style:height="100%" style:style="solid"/>' : '';
         const own = columns.widths?.length === columns.count
-            ? columns.widths.map((w, i) => `<style:column style:rel-width="${Math.max(1, Math.round(w * 20))}*" fo:start-indent="${i ? fmtPt(columns.gap / 2) : '0pt'}" fo:end-indent="${i < columns.count - 1 ? fmtPt(columns.gap / 2) : '0pt'}"/>`).join('')
+            ? columns.widths.map((w, i) => {
+                // A column's relative width holds its indents (the halves of the gaps beside it), as office suites read it.
+                const start = i ? columns.gap / 2 : 0, end = i < columns.count - 1 ? columns.gap / 2 : 0;
+                return `<style:column style:rel-width="${Math.max(1, Math.round((w + start + end) * 20))}*" fo:start-indent="${fmtPt(start)}" fo:end-indent="${fmtPt(end)}"/>`;
+            }).join('')
             : '';
         return `<style:columns fo:column-count="${columns.count}" fo:column-gap="${fmtPt(columns.gap)}">${sep}${own}</style:columns>`;
     }

@@ -9,7 +9,8 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { strFromU8, unzipSync, zipSync, zlibSync } from 'fflate';
+import { strFromU8, unzipSync, unzlibSync, zipSync, zlibSync } from 'fflate';
+import { PDFDocument, PDFName, PDFRawStream } from 'pdf-lib';
 import { OfficeGenerator } from '../../src/OfficeGenerator';
 import { OfficeParser } from '../../src/OfficeParser';
 import { OfficeTemplate } from '../../src/OfficeTemplate';
@@ -2676,6 +2677,22 @@ async function parserHardeningTests() {
     const bigGif = await OfficeGenerator.generate(pictureAst(gifWith(65535, 65535, Buffer.alloc(16))), 'pdf' as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any);
     check('pdf: a GIF declaring 65535 x 65535 pixels is refused before decoding, its alt text drawn', (bigGif.messages || []).some((m: any) => m.code === 'IMAGE_PROCESSING_FAILED'), JSON.stringify(bigGif.messages));
     await timed('pdf: a 2000 x 2000 GIF of 1 MB of noise is decoded', () => OfficeGenerator.generate(pictureAst(gifWith(n(2000), n(2000), Buffer.from(Array.from({ length: n(1_000_000) }, (_, i) => (i * 2654435761) >>> 24)))), 'pdf' as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any));
+    // An SVG drawn by the native PDF engine: a path, a polyline and text of hundreds of thousands of parts
+    // drawn in time in proportion (their operators pushed a slice at a time, never spread into one call),
+    // numbers no page holds written finite, and groups nested far past the limit stopped and reported.
+    const svgAst = (svg: string) => ({ type: 'docx', metadata: {}, content: [{ type: 'image', metadata: { attachmentName: 'a.svg' } }], attachments: [{ type: 'image', name: 'a.svg', mimeType: 'image/svg+xml', extension: 'svg', data: Buffer.from(svg).toString('base64') }] }) as any;
+    const svgOf = (body: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">${body}</svg>`;
+    await timed('pdf: an SVG path of 400k segments is drawn', () => OfficeGenerator.generate(svgAst(svgOf(`<path stroke="black" d="M0 0${' L1 1'.repeat(n(400_000))}"/>`)), 'pdf' as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any));
+    await timed('pdf: an SVG polyline of 300k points is drawn', () => OfficeGenerator.generate(svgAst(svgOf(`<polyline stroke="black" points="${'1 1 '.repeat(n(300_000))}"/>`)), 'pdf' as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any));
+    await timed('pdf: an SVG text of 50k spans is drawn', () => OfficeGenerator.generate(svgAst(svgOf(`<text x="1" y="20">${'<tspan dx="1">w</tspan>'.repeat(n(50_000))}</text>`)), 'pdf' as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any));
+    const lostLong = await OfficeGenerator.generate(svgAst(svgOf(`<path stroke="black" d="M0 0${' L1 1'.repeat(100_000)}"/>`)), 'pdf' as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any);
+    check('pdf: an SVG path of 100k segments is drawn, not lost', !(lostLong.messages || []).some((m: any) => m.code === 'IMAGE_PROCESSING_FAILED'), JSON.stringify(lostLong.messages));
+    const deepSvg = await OfficeGenerator.generate(svgAst(svgOf('<g>'.repeat(5000) + '<rect width="1" height="1"/>' + '</g>'.repeat(5000))), 'pdf' as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any);
+    check('pdf: SVG groups nested 5,000 deep are stopped at the limit and reported', (deepSvg.messages || []).some((m: any) => /nested past/.test(m.details?.feature ?? '')), JSON.stringify(deepSvg.messages));
+    const hugeSvg = Buffer.from((await OfficeGenerator.generate(svgAst(svgOf('<rect width="1e999" height="1e308"/><g transform="scale(1e300) scale(1e300)"><circle r="1e999"/></g><text x="1e999" y="-1e999" font-size="1e999">x</text>')), 'pdf' as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any)).value as Uint8Array);
+    const hugeDoc = await PDFDocument.load(hugeSvg);
+    const nonFinite = hugeDoc.context.enumerateIndirectObjects().some(([, obj]: any) => obj instanceof PDFRawStream && /NaN|Infinity|\de[+-]\d/.test(Buffer.from((() => { try { return String(obj.dict.get(PDFName.of('Filter'))) === '/FlateDecode' ? unzlibSync(obj.contents) : obj.contents; } catch { return obj.contents; } })()).toString('latin1')));
+    check('pdf: numbers in an SVG no page holds are written finite', !nonFinite);
     // Footnotes are measured once each and given a page as they are cited: many of them, each cited
     // once, cost in proportion; a stylesheet of many rules over many elements too (see the HTML cases).
     const footnoted = () => astWith(Array.from({ length: n(3000) }, (_, i) => ({ type: 'paragraph', children: [{ type: 'text', text: `Cited ${i}`, notes: [{ type: 'note', metadata: { noteType: i % 3 ? 'footnote' : 'endnote' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: `Note ${i} text.` }] }] }] }] })));

@@ -112,7 +112,7 @@ Next, we have something a little more complex, a nested table, i.e. a table in
 <table>
   <tr>
     <td colspan="13"><p><span style="color: #365f91; font-size: 0.16667in">December 2007 </span></p></td>
-    <td></td>
+    <td><p></p></td>
   </tr>
   <tr>
     <td><p><span style="color: #365f91; font-size: 0.16667in">Sun </span></p></td>

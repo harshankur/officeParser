@@ -17012,7 +17012,17 @@
                 {
                   "type": "cell",
                   "text": "",
-                  "children": [],
+                  "children": [
+                    {
+                      "type": "paragraph",
+                      "text": "",
+                      "children": [],
+                      "metadata": {
+                        "style": "a1352"
+                      },
+                      "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1352\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1351\" text:class-names=\"\"/></text:p>"
+                    }
+                  ],
                   "metadata": {
                     "row": 0,
                     "col": 13

@@ -26,6 +26,13 @@ import { cssColorHex } from '../../utils/colorUtils.js';
 import { formatListNumber } from '../../utils/listMarkers.js';
 import { drawSvg, readSvg } from './svgDrawing.js';
 
+/** The largest of `values` and `floor`, without spreading them into one call (which a long list overflows). */
+function maxOf(values: readonly number[], floor: number): number {
+    let m = floor;
+    for (const v of values) if (v > m) m = v;
+    return m;
+}
+
 /**
  * Megapixel ceiling for an embedded image. `embedPng`/`embedJpg` decode the full bitmap, so a
  * decompression-bomb image (a few header bytes declaring enormous dimensions) would force a multi-GB,
@@ -112,7 +119,7 @@ function visualOrder<T extends LineItem>(items: T[], baseRtl: boolean): T[] {
         i = j - 1;
     }
     const order = items.map((_, i) => i);
-    for (let level = Math.max(...levels); level >= 1; level--) {
+    for (let level = maxOf(levels, 0); level >= 1; level--) {
         for (let i = 0; i < order.length; i++) {
             if (levels[order[i]] < level) continue;
             let j = i;
@@ -977,7 +984,11 @@ class NativeLayout {
         // No more than most of a page's body for its footnotes; past that (or past what is left below the
         // line citing it) a note goes to the next page, and from there on, as long as pages are full.
         const full = this.footReserve + needed > body * 0.6;
-        if (full || (!fresh && this.y + needed > this.bottom)) { this.carriedFootnotes.push(note); this.placedNotes.add(note); return; }
+        // In columns, the note goes under the lowest line any column on the page has reached: the columns
+        // before this one are drawn down to there already.
+        const lowest = this.columns ? Math.max(this.y, this.columnsBottom) : this.y;
+        const pageBottom = this.pageH - (this.pageMargin ?? this.margin).bottom - this.footReserve;
+        if (full || (!fresh && (this.y + needed > this.bottom || lowest + needed > pageBottom))) { this.carriedFootnotes.push(note); this.placedNotes.add(note); return; }
         this.footReserve += needed;
         this.pageFootnotes.push(note);
         this.placedNotes.add(note);
@@ -1133,9 +1144,28 @@ class NativeLayout {
         const segs = this.segments(text, key);
         if (segs.length > 1 && directionOf(text) === 'rtl') segs.reverse();
         for (const seg of segs) {
-            this.page.drawText(seg.text, { x, y, size, font: seg.face.font, color });
+            this.useFont(seg.face.font);
+            this.page.drawText(seg.text, { x, y, size, color });
             x += seg.face.font.widthOfTextAtSize(seg.text, size);
         }
+    }
+
+    /** Each page's resource name for each font it draws in, made once. */
+    private readonly fontKeys = new WeakMap<object, Map<object, unknown>>();
+    /**
+     * Sets the page's font for the text drawn next. pdf-lib names a font anew in the page's resources each
+     * time text is drawn with a font of its own, each name found by looking through all the names before:
+     * a picture of 50,000 spans of text took time in their square.
+     */
+    private useFont(font: any): void {
+        const page = this.page as { font?: unknown; fontKey?: unknown; setFont(font: unknown): void };
+        if (page.font === font && page.fontKey) return;
+        let keys = this.fontKeys.get(page);
+        if (!keys) this.fontKeys.set(page, keys = new Map());
+        const key = keys.get(font);
+        if (key) { page.font = font; page.fontKey = key; return; }
+        page.setFont(font);
+        keys.set(font, page.fontKey);
     }
 
     /**
@@ -1351,8 +1381,8 @@ class NativeLayout {
      * needed. Returns nothing; advances the cursor to just below the last line.
      */
     private drawRuns(runs: Run[], left: number, width: number, mono = false, layout: LineLayout = {}): void {
-        // The column's left edge the paragraph starts at (see flush).
-        let columnLeft = this.margin.left;
+        // The column's left edge and width the paragraph starts at (see flush).
+        let columnLeft = this.margin.left, columnWidth = this.contentWidth;
         // Expand runs into per-word pieces (a trailing-space flag lets us re-insert inter-word gaps).
         // A piece is a word, or (`brk`) a forced break: a new line, or a new page.
         const pieces: { p: Piece; space: boolean; brk?: 'line' | 'page' }[] = [];
@@ -1412,15 +1442,35 @@ class NativeLayout {
             return natural;
         };
 
+        /** Whether the text has run on into a column of another place or width: its lines then follow it. */
+        const followColumn = (): boolean => {
+            if (this.margin.left === columnLeft && this.contentWidth === columnWidth) return false;
+            left += this.margin.left - columnLeft;
+            width = Math.max(1, width + this.contentWidth - columnWidth);
+            columnLeft = this.margin.left;
+            columnWidth = this.contentWidth;
+            return true;
+        };
+
         const flush = (last: boolean) => {
             if (!line.length) return;
             // A picture in the line stands on its baseline, and the line is as tall as it needs.
-            const tallest = Math.max(0, ...line.map(it => it.p.picture?.h ?? 0));
-            const textSize = Math.max(...line.filter(it => !it.p.picture).map(it => it.p.size), tallest ? 0 : 11);
+            const tallest = maxOf(line.map(it => it.p.picture?.h ?? 0), 0);
+            const textSize = maxOf(line.filter(it => !it.p.picture).map(it => it.p.size), tallest ? 0 : 11);
             const lh = Math.max(lineAdvance(textSize || 11), tallest + (textSize || 11) * 0.35);
             this.ensureSpace(lh);
-            // Run on into another column: its lines move with it.
-            if (this.margin.left !== columnLeft) { left += this.margin.left - columnLeft; columnLeft = this.margin.left; }
+            // Run on into another column: its lines move with it, as wide as that column lets them (its
+            // indents kept), and the words of this line that no longer fit go on to the next.
+            let leftover: typeof line = [];
+            if (followColumn()) {
+                let used = 0, k = 0;
+                for (; k < line.length; k++) {
+                    const add = (k && line[k - 1].space ? spaceWidth(line[k - 1].p) : 0) + line[k].w;
+                    if (k && used + add > lineRoom()) break;
+                    used += add;
+                }
+                if (k < line.length) { leftover = line.slice(k); line = line.slice(0, k); last = false; }
+            }
             const baseline = this.pageH - this.y - Math.max(textSize, tallest);
             // Words and the gaps between them, in reading order, then in the order they are seen.
             const items: { p?: Piece; w: number; dir: 'ltr' | 'rtl' | 'neutral' }[] = [];
@@ -1467,17 +1517,13 @@ class NativeLayout {
             line = [];
             lineWidth = 0;
             firstOfParagraph = false;
-        };
-
-        for (const piece of pieces) {
-            if (piece.brk) {
-                // A line ended here: the next starts below it. Two in a row leave an empty line.
-                if (line.length) flush(true);
-                else { const lh = lineAdvance(piece.p.size); this.ensureSpace(lh); this.y += lh; firstOfParagraph = false; }
-                if (piece.brk === 'page') this.newPage();
-                continue;
+            if (leftover.length) {
+                for (const it of leftover) place(it.p, it.space, it.w);
+                if (last) flush(true);
             }
-            const w = piece.p.picture ? piece.p.picture.w : this.widthOf(piece.p.text, piece.p.face, piece.p.size);
+        };
+        /** Adds a word to the line, drawing the line first where the word does not fit after it. */
+        const place = (p: Piece, space: boolean, w: number) => {
             // Only the previous piece's OWN trailing space counts toward width: a word split across two
             // runs (or a splitToWidth chunk) has space:false and draws with no gap, so measuring one
             // there wrapped such lines slightly early and disagreed with what flush() draws.
@@ -1485,7 +1531,18 @@ class NativeLayout {
             if (prev && lineWidth + (prev.space ? spaceWidth(prev.p) : 0) + w > lineRoom()) flush(false);
             const prevAfter = line[line.length - 1];
             lineWidth += (prevAfter && prevAfter.space ? spaceWidth(prevAfter.p) : 0) + w;
-            line.push({ p: piece.p, space: piece.space, w });
+            line.push({ p, space, w });
+        };
+
+        for (const piece of pieces) {
+            if (piece.brk) {
+                // A line ended here: the next starts below it. Two in a row leave an empty line.
+                if (line.length) flush(true);
+                else { const lh = lineAdvance(piece.p.size); this.ensureSpace(lh); followColumn(); this.y += lh; firstOfParagraph = false; }
+                if (piece.brk === 'page') this.newPage();
+                continue;
+            }
+            place(piece.p, piece.space, piece.p.picture ? piece.p.picture.w : this.widthOf(piece.p.text, piece.p.face, piece.p.size));
         }
         flush(true);
     }
@@ -1532,11 +1589,15 @@ class NativeLayout {
      * runs, table rows and cells - where a returned string is spliced in as text rather than drawn as
      * its own paragraph, so no "not representable" warning is owed.
      */
+    /** onNode's verdict on each node, asked once: a node laid out twice (measured, then drawn) is not asked again. */
+    private readonly onNodeVerdicts = new WeakMap<OfficeContentNode, false | string | undefined>();
     private async onNodeValue(node: OfficeContentNode): Promise<false | string | undefined> {
         if (!this.config.onNode) return undefined;
+        if (this.onNodeVerdicts.has(node)) return this.onNodeVerdicts.get(node);
         const override = await this.config.onNode(node);
-        if (override === false) return false;
-        return typeof override === 'string' ? override : undefined;
+        const verdict = override === false ? false : typeof override === 'string' ? override : undefined;
+        this.onNodeVerdicts.set(node, verdict);
+        return verdict;
     }
 
     private onNodeWarned = false;
@@ -1549,7 +1610,7 @@ class NativeLayout {
      */
     private async applyOnNode(node: OfficeContentNode): Promise<boolean> {
         if (!this.config.onNode) return false;
-        const override = await this.config.onNode(node);
+        const override = await this.onNodeValue(node);
         if (override === false) return true;
         if (typeof override === 'string') {
             if (!this.onNodeWarned) {
@@ -1684,12 +1745,13 @@ class NativeLayout {
         const data = (name ? this.attachmentsByName.get(name) as { chartData?: ChartData } | undefined : undefined)?.chartData;
         if (!data || !Array.isArray(data.dataSets) || !Array.isArray(data.labels)) return false;
         const series = data.dataSets.slice(0, 12).map(set => (Array.isArray(set.values) ? set.values : []).map(v => { const n = Number(String(v).replace(/,/g, '')); return Number.isFinite(n) ? n : NaN; }));
-        const groups = Math.max(data.labels.length, ...series.map(v => v.length));
+        const groups = maxOf(series.map(v => v.length), data.labels.length);
         if (!groups || groups > 120 || data.dataSets.length > 12 || !series.some(v => v.some(n => !Number.isNaN(n)))) return false;
         const ink = this.lib.rgb(0.12, 0.12, 0.12), grid = this.lib.rgb(0.85, 0.85, 0.85);
         const palette = [[255, 99, 132], [54, 162, 235], [255, 206, 86], [75, 192, 192], [153, 102, 255], [255, 159, 64]].map(([r, g, b]) => this.lib.rgb(r / 255, g / 255, b / 255));
         const values = series.flat().filter(n => !Number.isNaN(n));
-        let low = Math.min(0, ...values), high = Math.max(0, ...values);
+        let low = 0, high = 0;
+        for (const v of values) { if (v < low) low = v; if (v > high) high = v; }
         if (low === high) high = low + 1;
         // Ticks at a round step: 1, 2 or 5 times a power of ten, about five of them. Values whose range no
         // number holds, or too small to step through, are written as text (they crashed the conversion).
@@ -1713,7 +1775,7 @@ class NativeLayout {
             const w = this.widthOf(title, 'bold', 12);
             this.drawText(title, 'bold', this.margin.left + Math.max(0, (this.contentWidth - w) / 2), top - 14, 12, ink);
         }
-        const axisW = Math.max(...ticks.map(t => this.widthOf(tickText(t), 'regular', 8))) + 6 + (data.yAxisTitle ? 14 : 0);
+        const axisW = maxOf(ticks.map(t => this.widthOf(tickText(t), 'regular', 8)), -Infinity) + 6 + (data.yAxisTitle ? 14 : 0);
         const left = this.margin.left + axisW, width = this.contentWidth - axisW;
         const plotTop = top - titleH, plotBottom = plotTop - plotH;
         const yOf = (v: number) => plotBottom + (v - low) / (high - low) * plotH;
@@ -1725,7 +1787,10 @@ class NativeLayout {
         }
         this.page.drawLine({ start: { x: left, y: plotBottom }, end: { x: left, y: plotTop }, thickness: 0.6, color: ink });
         this.page.drawLine({ start: { x: left, y: yOf(0) }, end: { x: left + width, y: yOf(0) }, thickness: 0.6, color: ink });
-        if (data.yAxisTitle) this.page.drawText(this.enc(String(data.yAxisTitle), 'regular').slice(0, 60), { x: this.margin.left + 8, y: plotBottom + plotH / 2 - this.widthOf(this.enc(String(data.yAxisTitle), 'regular').slice(0, 60), 'regular', 8) / 2, size: 8, font: this.fonts.regular[0].font, color: ink, rotate: this.lib.degrees(90) });
+        if (data.yAxisTitle) {
+            this.useFont(this.fonts.regular[0].font);
+            this.page.drawText(this.enc(String(data.yAxisTitle), 'regular').slice(0, 60), { x: this.margin.left + 8, y: plotBottom + plotH / 2 - this.widthOf(this.enc(String(data.yAxisTitle), 'regular').slice(0, 60), 'regular', 8) / 2, size: 8, color: ink, rotate: this.lib.degrees(90) });
+        }
         const groupW = width / groups, barW = groupW * 0.8 / series.length;
         series.forEach((values, s) => values.forEach((v, g) => {
             if (Number.isNaN(v)) return;
@@ -1852,7 +1917,7 @@ class NativeLayout {
         // 11pt would otherwise sit below its own marker), and reserve one line's height BEFORE drawing
         // the marker so a body that has to break to the next page carries its marker along instead of
         // orphaning it on this page.
-        const bodySize = bodyRuns.length ? Math.max(...bodyRuns.map(r => parseFontSize(r.fmt.size) ?? 11)) : 11;
+        const bodySize = bodyRuns.length ? maxOf(bodyRuns.map(r => parseFontSize(r.fmt.size) ?? 11), -Infinity) : 11;
         const size = bodySize > 0 ? bodySize : 11;
         this.ensureSpace(size * 1.35);
         // Draw the marker, then the item body hanging-indented past it. Space is already reserved, so
@@ -2271,11 +2336,23 @@ class NativeLayout {
         // left. A table whose words alone are wider than the page is set smaller, down to 6pt, as a
         // printout fits a wide sheet to the page width; past that a word is broken where it must be.
         // Equal columns broke 104 into "10" over "4", and a narrow column's text a letter at a time.
-        const { widths, size } = this.columnWidths(grid, cols, pad);
-        const xs = [this.margin.left];
-        for (const w of widths) xs.push(xs[xs.length - 1] + w);
-        // A row run on into another column is drawn in it (its cells' edges move with the column's).
-        const tableLeft = this.margin.left;
+        let { size } = this.columnWidths(grid, cols, pad);
+        let xs: number[] = [];
+        // A row run on into another column is drawn in it (its cells' edges move with the column's), and
+        // in a column of another width the table is laid out again at that width (see relayout).
+        let tableLeft = this.margin.left, layoutWidth = this.contentWidth;
+        const place = (widths: number[]) => { xs = [this.margin.left]; for (const w of widths) xs.push(xs[xs.length - 1] + w); };
+        place(this.columnWidths(grid, cols, pad).widths);
+        /** Lays the table out again where the text has moved into a column of another width; whether it did. */
+        const relayout = (): boolean => {
+            if (this.contentWidth === layoutWidth) return false;
+            const again = this.columnWidths(grid, cols, pad);
+            size = again.size;
+            place(again.widths);
+            tableLeft = this.margin.left;
+            layoutWidth = this.contentWidth;
+            return true;
+        };
         const spanWidth = (col: number, span: number) => xs[Math.min(col + span, cols)] - xs[Math.min(col, cols)];
         /** Wraps a cell's (un-encoded) text to the width of the columns it spans. */
         // A header cell is drawn bold, so it is wrapped at the bold font's widths.
@@ -2286,6 +2363,7 @@ class NativeLayout {
 
         this.y += 2;
         for (const placed of grid) {
+            relayout();
             for (const p of placed) p.lines = wrap(p.text, p.col, p.span, p.header);
             const lineH = size * 1.35;
             // A row with pictures is drawn whole, on a page of its own when it does not fit this one: each
@@ -2310,6 +2388,8 @@ class NativeLayout {
                 const rowH = Math.max(size * 1.4, ...placed.map((_, i) => heightOf(i))) + 2 * pad;
                 // (The table's top gap is not something drawn: a row starting there needs no new page.)
                 if (this.y + rowH > this.bottom && this.y > this.margin.top + 3) this.nextColumnOrPage();
+                // (Moved into a column of another width, the row is drawn at the table's old width there:
+                // its pictures were sized for it. A row of pictures is rare in columns of unequal widths.)
                 if (this.pendingAnchors.length) this.placeAnchors();
                 const topY = this.pageH - this.y;
                 placed.forEach((p, i) => {
@@ -2336,13 +2416,13 @@ class NativeLayout {
                 for (const p of placed) for (const note of p.notes || []) this.citeFootnote(note);
                 continue;
             }
-            const rowH = Math.max(size * 1.4, ...placed.map(p => p.lines.length * lineH)) + 2 * pad;
+            let rowH = Math.max(size * 1.4, ...placed.map(p => p.lines.length * lineH)) + 2 * pad;
             // Draw the row in vertical bands so a row taller than a whole page is split across pages
             // rather than drawn off the bottom (which silently lost the overflowing text). A normal row
             // is a single band. Each band redraws every cell's border and its slice of the wrapped
             // lines, so the cell continues cleanly on the next page.
             const fullBand = Math.max(1, Math.floor((this.bottom - this.margin.top - 2 * pad) / lineH));
-            const maxLines = Math.max(1, ...placed.map(p => p.lines.length));
+            let maxLines = Math.max(1, ...placed.map(p => p.lines.length));
             let lineOffset = 0;
             while (lineOffset < maxLines) {
                 const remaining = maxLines - lineOffset;
@@ -2354,7 +2434,17 @@ class NativeLayout {
                 let bandLines: number;
                 if (fitLines >= remaining) bandLines = remaining;               // the rest fits here
                 else if (this.y > this.margin.top && fitLines >= 1) bandLines = fitLines; // fill this page
-                else if (this.y > this.margin.top) { this.nextColumnOrPage(); continue; } // nothing fits: the next column or page
+                else if (this.y > this.margin.top) {
+                    // Nothing fits: the next column or page. In a column of another width, what is left of the
+                    // row's cells is wrapped again at the widths the table has there.
+                    this.nextColumnOrPage();
+                    if (relayout()) {
+                        for (const p of placed) p.lines = [...p.lines.slice(0, lineOffset), ...wrap(p.lines.slice(lineOffset).join(' '), p.col, p.span, p.header)];
+                        maxLines = Math.max(1, ...placed.map(p => p.lines.length));
+                        rowH = Math.max(size * 1.4, ...placed.map(p => p.lines.length * lineH)) + 2 * pad;
+                    }
+                    continue;
+                }
                 else bandLines = Math.min(remaining, fullBand);                  // at page top: a full band
                 const whole = lineOffset === 0 && bandLines === maxLines;
                 const bandH = whole ? rowH : bandLines * lineH + 2 * pad;
@@ -2700,7 +2790,17 @@ function writeOutline(pdf: any, lib: any, entries: OutlineEntry[]): void {
  *
  * @returns the PDF as bytes.
  */
-export async function renderNativePdf(ast: OfficeParserAST, config: FullGeneratorConfig, metadata: OfficeMetadata, reportWarning: (type: OfficeWarningType, info?: any) => void): Promise<Uint8Array> {
+export async function renderNativePdf(ast: OfficeParserAST, config: FullGeneratorConfig, metadata: OfficeMetadata, report: (type: OfficeWarningType, info?: any) => void): Promise<Uint8Array> {
+    // Each warning once: what is laid out twice (a balanced section, measured, then drawn) met the same
+    // problem twice.
+    const reported = new Set<string>();
+    const reportWarning = (type: OfficeWarningType, info?: any) => {
+        let key: string;
+        try { key = `${type}|${JSON.stringify(info ?? null)}`; } catch { key = `${type}|${String(info)}`; }
+        if (reported.has(key)) return;
+        reported.add(key);
+        report(type, info);
+    };
     const lib = await loadPdfLib(ast.config);
     // updateMetadata:false stops pdf-lib stamping CreationDate/ModDate with the current time: dates
     // come only from the document's own metadata (via applyMetadata), so a source with no dates

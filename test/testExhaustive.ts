@@ -11,8 +11,8 @@ import { decodeBmp, decodeGif } from '../src/utils/rasterUtils';
 import { excelShownText } from '../src/utils/excelFormat';
 import { OfficeTemplate } from '../src/OfficeTemplate';
 import { OfficeConverter } from '../src/OfficeConverter';
-import { zipSync, strToU8, unzipSync, strFromU8 } from 'fflate';
-import { PDFDocument, PDFHexString, PDFName, PDFOperator, StandardFonts, degrees, rgb } from 'pdf-lib';
+import { zipSync, strToU8, unzipSync, unzlibSync, strFromU8 } from 'fflate';
+import { PDFDocument, PDFHexString, PDFName, PDFOperator, PDFRawStream, StandardFonts, degrees, rgb } from 'pdf-lib';
 import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -5284,6 +5284,35 @@ async function testNativePdfSvgPictures(): Promise<void> {
     assert.ok(label && label.y > before.y && label.y < after.y && after.y - before.y > 100, `the SVG stands between the paragraphs at its size, its text drawn; got ${JSON.stringify([before, label, after])}`);
     const unreadable = await OfficeGenerator.generate(ast('<svg><g>', 'b.svg'), 'pdf', { pdfConfig: { engine: 'native' } } as any);
     assert.ok((unreadable.messages || []).some((m: any) => m.code === 'IMAGE_PROCESSING_FAILED'), 'an SVG that cannot be read is reported');
+    // Text placed by tspan offsets, text in a link and along a path, numbers no page holds, a path of
+    // hundreds of thousands of segments, groups nested past the limit.
+    const drawn = async (body: string) => {
+        const out = await OfficeGenerator.generate(ast(`<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">${body}</svg>`), 'pdf', { pdfConfig: { engine: 'native' } } as any);
+        const bytes = Buffer.from(out.value as Uint8Array);
+        const doc = await PDFDocument.load(bytes);
+        let streams = '';
+        for (const [, obj] of doc.context.enumerateIndirectObjects()) {
+            if (!(obj instanceof PDFRawStream)) continue;
+            let raw: Uint8Array = obj.contents;
+            if (String(obj.dict.get(PDFName.of('Filter'))) === '/FlateDecode') { try { raw = unzlibSync(raw); } catch { /* not a content stream */ } }
+            if (!String(obj.dict.get(PDFName.of('Subtype'))).includes('Image')) streams += Buffer.from(raw).toString('latin1');
+        }
+        const read = await OfficeParser.parseOffice(bytes, { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+        return { messages: (out.messages || []).map((m: any) => `${m.code}:${m.details?.reason ?? ''}:${m.details?.feature ?? ''}`), streams, nodes: collectAllNodes(read).filter(n => n.type === 'text' && n.bounds) };
+    };
+    const lines = await drawn('<text x="10" y="20">Line one<tspan x="10" dy="1.2em">Line two</tspan><tspan x="10" dy="1.2em">Line three</tspan><tspan dx="30">Shifted</tspan></text>');
+    const y = (t: string) => lines.nodes.find(n => (n.text || '').includes(t))?.bounds;
+    assert.ok(y('one') && y('two') && y('three') && y('one')!.y < y('two')!.y && y('two')!.y < y('three')!.y && y('Shifted')!.x > y('three')!.x + y('three')!.width + 10,
+        `tspan dy sets lines below one another, dx moves on from the text before; got ${JSON.stringify(['one', 'two', 'three', 'Shifted'].map(y))}`);
+    const children = await drawn('<path id="p" d="M10 80 L190 80"/><text><textPath href="#p">AlongPath</textPath></text><text x="10" y="40"><a href="#x">LinkedText</a></text>');
+    assert.ok(['AlongPath', 'LinkedText'].every(t => children.nodes.some(n => (n.text || '').includes(t))) && children.messages.some(m => m.includes('text along paths')), `text in a textPath and a link is drawn, the path's shape reported; got ${JSON.stringify(children.messages)}`);
+    const huge = await drawn('<rect width="1e999" height="10"/><path d="M0 0 L1e300 5"/><line x2="10" y2="10" stroke="red" stroke-width="1e999"/><g transform="scale(1e300)"><rect width="1" height="1"/></g><text x="10" y="50" font-size="1e999">Big</text><path d="M10 10 A 1e-200 1e-200 0 0 1 50 50" stroke="black"/><text x="10" y="90">StillHere</text>');
+    assert.ok(!/NaN|Infinity|\de[+-]\d/.test(huge.streams) && huge.nodes.some(n => (n.text || '').includes('StillHere')), 'numbers no page holds are held to finite ones, and what follows is drawn');
+    const long = await drawn(`<path stroke="black" d="M0 0${' L1 1'.repeat(100_000)}"/><text x="10" y="50">AfterPath</text>`);
+    assert.ok(!long.messages.some(m => m.startsWith('IMAGE_PROCESSING_FAILED')) && long.nodes.some(n => (n.text || '').includes('AfterPath')), `a path of 100,000 segments is drawn; got ${JSON.stringify(long.messages)}`);
+    const deep = await drawn('<g>'.repeat(200) + '<rect width="5" height="5"/>' + '</g>'.repeat(200) + '<g id="a"><use href="#b"/></g><g id="b"><use href="#a"/></g>');
+    assert.ok(deep.messages.some(m => m.includes('groups nested past')) && deep.messages.some(m => m.includes('inside itself')), `groups past the depth limit and a use cycle are reported; got ${JSON.stringify(deep.messages)}`);
+
 }
 
 /**
@@ -5480,6 +5509,54 @@ async function testColumns(): Promise<void> {
     assert.ok(/\\sect\\sectd\\sbknone\\cols2\\colsx720\\linebetcol/.test(String((await OfficeGenerator.generate(ast, 'rtf')).value)), 'RTF: a section of two columns');
     const tex = String((await OfficeGenerator.generate(ast, 'tex')).value);
     assert.ok(/\\usepackage\{multicol\}/.test(tex) && /\\begin\{multicols\}\{2\}[^]*Column paragraph 6[^]*\\end\{multicols\}/.test(tex), 'LaTeX: the columns are a multicols');
+
+    // A footnote cited in the second column goes under the lowest line of both columns (else to the next page).
+    const P = (text: string, extra: any = {}) => ({ type: 'paragraph', children: [{ type: 'text', text, ...extra }] });
+    const columnsOf = (columns: any, content: any[]) => ({ type: 'docx', metadata: { pageSetup: { columns } }, attachments: [], content }) as any;
+    const pdfRead = async (doc: any, extra: any = {}) => {
+        const out = await OfficeGenerator.generate(doc, 'pdf', { pdfConfig: { engine: 'native' }, ...extra } as any);
+        return { out, read: await OfficeParser.parseOffice(Buffer.from(out.value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST };
+    };
+    const many = Array.from({ length: 40 }, (_, i) => P(`Para ${i}. ${lorem}`));
+    many[22] = P('CITES NOTE here. ' + lorem, { notes: [{ type: 'note', metadata: { noteType: 'footnote' }, children: [P('FOOTNOTE BODY ' + lorem + ' ' + lorem)] }] });
+    const noted = (await pdfRead(columnsOf({ count: 2, gap: 18 }, many))).read;
+    for (const page of noted.content) {
+        const texts = collectAllNodes({ ...noted, content: [page] }).filter(n => n.type === 'text' && n.bounds);
+        const note = texts.find(n => (n.text || '').includes('FOOTNOTE BODY'));
+        if (!note) continue;
+        const body = texts.filter(n => /^Para |CITES/.test(n.text || ''));
+        assert.ok(body.every(n => n.bounds!.y + n.bounds!.height <= note.bounds!.y + 1), 'a footnote cited in a column is drawn under every column\'s text, not over it');
+    }
+    assert.ok(collectAllNodes(noted).some(n => (n.text || '').includes('FOOTNOTE BODY')), 'the footnote is drawn');
+    // Columns of unequal widths: a paragraph and a table running on into the narrow one are as wide as it.
+    const table = { type: 'table', children: Array.from({ length: 30 }, (_, r) => ({ type: 'row', children: [0, 1, 2].map(c => ({ type: 'cell', children: [P(`r${r}c${c} some longer words in a cell`)] })) })) };
+    for (const content of [[...many.slice(0, 18).map((p, i) => i === 17 ? P('LONG ' + Array.from({ length: 12 }, () => lorem).join(' ')) : p)], [...many.slice(0, 17), table]]) {
+        const { read } = await pdfRead(columnsOf({ count: 2, gap: 18, widths: [400, 100] }, content));
+        const past = collectAllNodes(read).filter(n => n.type === 'text' && n.bounds && n.bounds.x + n.bounds.width > 595.28 - 30);
+        assert.strictEqual(past.length, 0, `text running on into a narrower column is laid out at its width; ${past.length} past the page's margin`);
+    }
+    // Balancing a section measures it without asking onNode again or warning twice.
+    const balanced = [P('Title'), { type: 'break', metadata: { breakType: 'section', pageSetup: { columns: { count: 2, gap: 18 } } } }, P('One'), P('Two'),
+        { type: 'image', metadata: { attachmentName: 'missing.png' } }, { type: 'break', metadata: { breakType: 'section', pageSetup: {} } }, P('After')];
+    const asked = new Map<unknown, number>();
+    const { out: balancedOut } = await pdfRead({ type: 'docx', metadata: {}, attachments: [], content: balanced }, { onNode: (n: unknown) => { asked.set(n, (asked.get(n) ?? 0) + 1); return undefined; } });
+    assert.ok([...asked.values()].every(v => v === 1) && (balancedOut.messages || []).filter((m: any) => m.code === 'IMAGE_PROCESSING_FAILED').length === 1, 'a balanced section asks onNode once a node and warns once');
+    // LaTeX: a table in columns is a tabular (multicols takes no longtable); a page break ends and reopens the
+    // columns; a section break inside a table cell opens none there.
+    const texCols = String((await OfficeGenerator.generate(columnsOf({ count: 2, gap: 18 }, [P('Intro'), table, { type: 'break', metadata: { breakType: 'page' } }, P('Next page')]), 'tex')).value);
+    const inCols = texCols.slice(texCols.indexOf('\\begin{multicols}'));
+    assert.ok(!inCols.includes('\\begin{longtable}') && inCols.includes('\\begin{tabular}') && /\\end\{multicols\}\}\n\\clearpage\n\{[^\n]*\\begin\{multicols\}\{2\}/.test(inCols), 'LaTeX: tables in columns are tabular, a page break ends and reopens them');
+    const texCell = String((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [P('x'), { type: 'break', metadata: { breakType: 'section', pageSetup: { columns: { count: 2, gap: 10 } } } }, P('y')] }] }] }] } as any, 'tex')).value);
+    assert.ok(!texCell.includes('multicols'), 'LaTeX: a section break inside a table cell opens no columns there');
+    // ODT: columns of their own widths read back; a section inside a table cell is read.
+    const widthsBack = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(columnsOf({ count: 3, gap: 18, widths: [100, 200, 350] }, [P('Wide'), P('Text')]), 'odt')).value as Uint8Array), { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+    assert.deepStrictEqual(widthsBack.metadata.pageSetup?.columns?.widths, [100, 200, 350], 'ODT: columns of their own widths read back');
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"';
+    const sectionInCell = Buffer.from(zipSync({ mimetype: strToU8('application/vnd.oasis.opendocument.text'),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:body><office:text><table:table><table:table-column/><table:table-row><table:table-cell><text:p>x</text:p><text:section text:name="S1"><text:p>SECTION IN CELL</text:p></text:section><text:list><text:list-item><text:p>LIST IN CELL</text:p></text:list-item></text:list></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>`) }));
+    const cellText = JSON.stringify(await OfficeParser.parseOffice(sectionInCell, { fileType: 'odt' } as any));
+    assert.ok(cellText.includes('SECTION IN CELL') && cellText.includes('LIST IN CELL'), 'ODT: a section and a list inside a table cell are read');
+
 }
 
 /**

@@ -287,14 +287,16 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         math: false, amssymb: false, graphics: false, tables: false, longtable: false, multirow: false,
         ulem: false, xcolor: false, colortbl: false, listings: false, endnotes: false, paragraphFix: false, captionof: false, multicol: false,
     };
-    /** Whether a `multicols` environment (a section's columns) is open in the body. */
+    /** Whether a `multicols` environment (a section's columns) is open in the body, and its columns. */
     private openColumns = false;
+    private openColumnsSetup: PageSetup['columns'] | undefined;
 
     /** Opens a section's columns (`multicols`), closing the open one first; none for one column. */
     private columnsSwitch(columns: PageSetup['columns'] | undefined): string {
         // (Each in a group of its own, which keeps its column gap and rule to it.)
         let out = this.openColumns ? '\\end{multicols}}' : '';
         this.openColumns = !this.beamer && !!columns && columns.count > 1;
+        this.openColumnsSetup = this.openColumns ? columns : undefined;
         if (this.openColumns) {
             this.uses.multicol = true;
             out += `${out ? '\n' : ''}{\\setlength{\\columnsep}{${fmtPt(columns!.gap)}}${columns!.separator ? '\\setlength{\\columnseprule}{0.4pt}' : ''}\\begin{multicols}{${Math.min(columns!.count, 10)}}`;
@@ -1485,7 +1487,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
 
     /** One `longtable`/`tabular` holding a band of at most {@link MAX_TABLE_BAND_COLUMNS} columns. */
     private async tableBand(rows: OfficeContentNode[], rowOverrides: (string | false | void)[], grid: TableSlot[][], cols: number, firstBand: boolean): Promise<string> {
-        const longtable = this.ctx.longtable;
+        // (multicols takes no longtable: a table in columns is a tabular, as one in a cell is.)
+        const longtable = this.ctx.longtable && !this.openColumns;
         if (longtable) this.uses.longtable = true;
         // Where footnotes are written in place (the body, a longtable's cell), a tabular's notes are
         // marks whose texts it writes after itself; in a tabular within a tabular, the outer one
@@ -1916,11 +1919,19 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
 
     private blockBreak(node: OfficeContentNode): string {
         const t = (node.metadata as any)?.breakType;
+        // Columns change only in the body itself: a section break inside a table cell, a list item or a
+        // note opened a multicols there, which LaTeX cannot set.
+        const body = this.ctx.sections;
         // A section starting on this page, in its own columns.
-        if (t === 'section') return this.columnsSwitch((node.metadata as BreakMetadata | undefined)?.pageSetup?.columns);
+        if (t === 'section') return body ? this.columnsSwitch((node.metadata as BreakMetadata | undefined)?.pageSetup?.columns) : '';
         // A section starting on a new page, in its own columns: the columns before end, the page breaks.
-        if (t === 'page' && !this.beamer && typeof (node.metadata as BreakMetadata | undefined)?.section === 'number') {
+        if (t === 'page' && !this.beamer && body && typeof (node.metadata as BreakMetadata | undefined)?.section === 'number') {
             return [this.columnsSwitch(undefined), '\\clearpage', this.columnsSwitch((node.metadata as BreakMetadata | undefined)?.pageSetup?.columns)].filter(Boolean).join('\n');
+        }
+        // A page break in columns: they end on the page, and go on, the same, on the next.
+        if (t === 'page' && !this.beamer && body && this.openColumns) {
+            const columns = this.openColumnsSetup;
+            return [this.columnsSwitch(undefined), '\\clearpage', this.columnsSwitch(columns)].filter(Boolean).join('\n');
         }
         if (t === 'page') return this.beamer ? '' : '\\clearpage';
         if (t === 'thematic') return '\\begin{center}\\rule{0.5\\linewidth}{0.5pt}\\end{center}';

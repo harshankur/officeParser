@@ -199,6 +199,10 @@ const ownParagraphs = (container: Element): Element[] => getOutermostElements(co
  * ignored), hidden text, a script, the list number the writers number lists with themselves, and blocks
  * that a paragraph cannot hold.
  */
+/** What a table cell holds paragraphs in, read through: a section, a list and its items, an index's body. */
+const CELL_CONTAINERS: ReadonlySet<string> = new Set(['text:section', 'text:list', 'text:list-item', 'text:list-header', 'text:index-body',
+    'text:table-of-content', 'text:illustration-index', 'text:table-index', 'text:object-index', 'text:user-index', 'text:alphabetical-index', 'text:bibliography']);
+
 const INLINE_NOT_SHOWN: ReadonlySet<string> = new Set(['text:note', 'text:hidden-text', 'text:hidden-paragraph', 'text:script', 'text:number', 'text:p', 'text:h', 'text:list', 'text:section', 'text:tracked-changes']);
 /**
  * What a paragraph's text, read whole when its content made no runs, leaves out: what shows nothing
@@ -558,7 +562,16 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         if (!columns || count < 2) return undefined;
         const gap = lengthToPt(columns.getAttribute("fo:column-gap") || undefined);
         const sep = getDirectChildren(columns, "style:column-sep")[0];
-        return { count, gap: gap != null && gap >= 0 && gap < 1584 ? Math.round(gap * 100) / 100 : 0, ...(sep && (sep.getAttribute("style:style") ?? 'solid') !== 'none' ? { separator: true } : {}) };
+        // Each column's width where they are given (style:column): its relative width, in twentieths of a
+        // point as office suites write it, holds the column's indents (the halves of the gaps beside it).
+        const own = getDirectChildren(columns, "style:column");
+        const widths = own.map(c => {
+            const rel = parseFloat(c.getAttribute("style:rel-width") || '');
+            const indents = (lengthToPt(c.getAttribute("fo:start-indent") || undefined) ?? 0) + (lengthToPt(c.getAttribute("fo:end-indent") || undefined) ?? 0);
+            return Number.isFinite(rel) && rel > 0 ? Math.round((rel / 20 - indents) * 100) / 100 : 0;
+        });
+        const differ = widths.length === count && widths.every(w => w > 0 && w < 1e5) && widths.some(w => Math.abs(w - widths[0]) > 0.5);
+        return { count, gap: gap != null && gap >= 0 && gap < 1584 ? Math.round(gap * 100) / 100 : 0, ...(differ ? { widths } : {}), ...(sep && (sep.getAttribute("style:style") ?? 'solid') !== 'none' ? { separator: true } : {}) };
     }
     /** Each section style's columns (`style:section-properties`), by its name. */
     const sectionColumns = new Map<string, PageSetup['columns'] | undefined>();
@@ -1376,8 +1389,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 // Recursive call for nested table
                                 const nestedTableNode = parseTable(element, paraStyleMap, styleMap, config, sourceXml, cellBudget);
                                 cellChildren.push(nestedTableNode);
-                            } else if (element.tagName === "draw:frame" || element.tagName === "draw:text-box") {
-                                // Recursively process container content (common in ODP)
+                            } else if (element.tagName === "draw:frame" || element.tagName === "draw:text-box" || CELL_CONTAINERS.has(element.tagName)) {
+                                // Recursively process container content: frames (common in ODP), and a section,
+                                // a list or an index the cell holds (their paragraphs were dropped).
                                 processChildren(element);
                             }
                         }

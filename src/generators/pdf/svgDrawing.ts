@@ -85,11 +85,20 @@ const childElements = (el: Element): Element[] => {
     return out;
 };
 
+/** The largest coordinate, length or size written: a number past it (`1e999`, `1e300`) is held to it. */
+const MAX_COORD = 1e7;
+
+/** A number held within the coordinates a PDF can write: NaN stays NaN (no value), infinities and the very large are held to MAX_COORD. */
+const bounded = (n: number): number => Number.isNaN(n) ? NaN : Math.max(-MAX_COORD, Math.min(MAX_COORD, n));
+
+/** A number written to the page: finite, within MAX_COORD (0 where there is none). */
+const coord = (n: number): number => Number.isFinite(n) ? Math.max(-MAX_COORD, Math.min(MAX_COORD, n)) : 0;
+
 /** A number, or NaN. */
 const num = (v: string | null | undefined): number => {
     if (v == null) return NaN;
     const m = /^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/.exec(v);
-    return m ? parseFloat(m[1]) : NaN;
+    return m ? bounded(parseFloat(m[1])) : NaN;
 };
 
 /** A length in user units (CSS pixels): px, pt, pc, mm, cm, in, em, ex, or a percentage of `whole`. */
@@ -97,18 +106,11 @@ function length(v: string | null | undefined, whole: number, fontSize = 16): num
     if (v == null) return NaN;
     const m = /^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*(px|pt|pc|mm|cm|in|em|ex|%)?\s*$/i.exec(v);
     if (!m) return NaN;
-    const n = parseFloat(m[1]);
-    switch ((m[2] || '').toLowerCase()) {
-        case 'pt': return n * 4 / 3;
-        case 'pc': return n * 16;
-        case 'mm': return n * 96 / 25.4;
-        case 'cm': return n * 96 / 2.54;
-        case 'in': return n * 96;
-        case 'em': return n * fontSize;
-        case 'ex': return n * fontSize / 2;
-        case '%': return n * whole / 100;
-        default: return n;
-    }
+    const n = bounded(parseFloat(m[1]));
+    const unit = (m[2] || '').toLowerCase();
+    const factor = unit === 'pt' ? 4 / 3 : unit === 'pc' ? 16 : unit === 'mm' ? 96 / 25.4 : unit === 'cm' ? 96 / 2.54 : unit === 'in' ? 96
+        : unit === 'em' ? fontSize : unit === 'ex' ? fontSize / 2 : unit === '%' ? whole / 100 : 1;
+    return bounded(n * factor);
 }
 
 /** Numbers in a list (`10 20,30`), at most `max`. */
@@ -116,7 +118,7 @@ function numbers(v: string | null | undefined, max = 1 << 20): number[] {
     const out: number[] = [];
     if (!v) return out;
     const re = /[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/g;
-    for (let m = re.exec(v); m && out.length < max; m = re.exec(v)) out.push(parseFloat(m[0]));
+    for (let m = re.exec(v); m && out.length < max; m = re.exec(v)) out.push(bounded(parseFloat(m[0])));
     return out;
 }
 
@@ -253,7 +255,15 @@ function arcToCurves(x1: number, y1: number, rx: number, ry: number, angle: numb
     const phi = angle * Math.PI / 180, cos = Math.cos(phi), sin = Math.sin(phi);
     const dx = (x1 - x2) / 2, dy = (y1 - y2) / 2;
     const x1p = cos * dx + sin * dy, y1p = -sin * dx + cos * dy;
-    const lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
+    let lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
+    // Radii so small their squares vanish: the arc is scaled up to reach its end anyway (as SVG scales
+    // radii too small), so they are taken at their ratio, where the squares hold.
+    if (!Number.isFinite(lambda)) {
+        const m = Math.max(rx, ry);
+        rx = rx / m || 1; ry = ry / m || 1;
+        lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
+        if (!Number.isFinite(lambda)) return [['L', x2, y2]];
+    }
     if (lambda > 1) { rx *= Math.sqrt(lambda); ry *= Math.sqrt(lambda); }
     const num2 = rx * rx * ry * ry - rx * rx * y1p * y1p - ry * ry * x1p * x1p;
     const den = rx * rx * y1p * y1p + ry * ry * x1p * x1p;
@@ -291,7 +301,7 @@ function parsePath(d: string, budget: { left: number }): Segment[] {
     let i = 0;
     const NUMBER = /[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/y;
     const skip = () => { while (i < n && (d[i] === ' ' || d[i] === ',' || d[i] === '\n' || d[i] === '\t' || d[i] === '\r')) i++; };
-    const readNumber = (): number => { skip(); NUMBER.lastIndex = i; const m = NUMBER.exec(d); if (!m) return NaN; i = NUMBER.lastIndex; return parseFloat(m[0]); };
+    const readNumber = (): number => { skip(); NUMBER.lastIndex = i; const m = NUMBER.exec(d); if (!m) return NaN; i = NUMBER.lastIndex; return bounded(parseFloat(m[0])); };
     const readFlag = (): boolean | undefined => { skip(); const c = d[i]; if (c === '0' || c === '1') { i++; return c === '1'; } return undefined; };
     let x = 0, y = 0, sx = 0, sy = 0, cmd = '', lastCtrl: [number, number] | null = null, lastQuad: [number, number] | null = null;
     while (i < n && budget.left > 0) {
@@ -400,6 +410,11 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
     const base: Matrix = multiply([0.75, 0, 0, -0.75, 0, H * 0.75], viewBoxMatrix(svg.viewBox, svg.preserve, W, H));
     const viewport = svg.viewBox ? { w: svg.viewBox[2], h: svg.viewBox[3] } : { w: W, h: H };
     const op = (name: string, ...args: any[]) => lib.PDFOperator.of(name, args);
+    // Operators pushed a slice at a time: a path of tens of thousands of segments spread into one call
+    // passed the engine's limit of arguments, and the picture was lost.
+    const push = (ops: any[]) => { for (let i = 0; i < ops.length; i += 4096) page.pushOperators(...ops.slice(i, i + 4096)); };
+    /** A transformation as the page takes it: every number finite and within bounds. */
+    const cm = (m: readonly number[]) => lib.concatTransformationMatrix(coord(m[0]), coord(m[1]), coord(m[2]), coord(m[3]), coord(m[4]), coord(m[5]));
     const states = new Map<string, any>();
     const opacityState = (fill: number, stroke: number): any => {
         const key = `${fill.toFixed(3)},${stroke.toFixed(3)}`;
@@ -504,22 +519,22 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
         if (fa < 1 || sa < 1) ops.push(op('gs', opacityState(fa, sa)));
         if (fill) ops.push(lib.setFillingRgbColor(fill.color.red, fill.color.green, fill.color.blue));
         if (stroke) {
-            ops.push(lib.setStrokingRgbColor(stroke.color.red, stroke.color.green, stroke.color.blue), lib.setLineWidth(style.strokeWidth));
+            ops.push(lib.setStrokingRgbColor(stroke.color.red, stroke.color.green, stroke.color.blue), lib.setLineWidth(coord(style.strokeWidth)));
             ops.push(op('J', lib.asPDFNumber(style.lineCap === 'round' ? 1 : style.lineCap === 'square' ? 2 : 0)));
             ops.push(op('j', lib.asPDFNumber(style.lineJoin === 'round' ? 1 : style.lineJoin === 'bevel' ? 2 : 0)));
             const dash = style.dash !== 'none' ? numbers(style.dash, 32).filter(n => n >= 0) : [];
-            if (dash.length && dash.some(n => n > 0)) ops.push(lib.setDashPattern(dash.length % 2 ? [...dash, ...dash] : dash, 0));
+            if (dash.length && dash.some(n => n > 0)) ops.push(lib.setDashPattern((dash.length % 2 ? [...dash, ...dash] : dash).map(coord), 0));
         }
         for (const s of segments) {
-            if (s[0] === 'M') ops.push(lib.moveTo(s[1], s[2]));
-            else if (s[0] === 'L') ops.push(lib.lineTo(s[1], s[2]));
-            else if (s[0] === 'C') ops.push(lib.appendBezierCurve(s[1], s[2], s[3], s[4], s[5], s[6]));
+            if (s[0] === 'M') ops.push(lib.moveTo(coord(s[1]), coord(s[2])));
+            else if (s[0] === 'L') ops.push(lib.lineTo(coord(s[1]), coord(s[2])));
+            else if (s[0] === 'C') ops.push(lib.appendBezierCurve(coord(s[1]), coord(s[2]), coord(s[3]), coord(s[4]), coord(s[5]), coord(s[6])));
             else ops.push(lib.closePath());
         }
         const evenOdd = style.fillRule === 'evenodd';
         ops.push(fill && stroke ? op(evenOdd ? 'B*' : 'B') : fill ? op(evenOdd ? 'f*' : 'f') : lib.stroke());
         ops.push(lib.popGraphicsState());
-        page.pushOperators(...ops);
+        push(ops);
     };
 
     const faceOf = (style: Style): SvgFace => {
@@ -537,27 +552,42 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
         let y = length((el.getAttribute('y') || '').split(/[\s,]+/)[0], viewport.h, style.fontSize) || 0;
         x += length((el.getAttribute('dx') || '').split(/[\s,]+/)[0], viewport.w, style.fontSize) || 0;
         y += length((el.getAttribute('dy') || '').split(/[\s,]+/)[0], viewport.h, style.fontSize) || 0;
-        // The runs, each with its style and any position of its own.
-        const runs: { text: string; style: Style; x?: number; y?: number }[] = [];
+        // The runs, each with its style, any position of its own (x, y) and any offset from where the text
+        // before it ended (dx, dy).
+        const runs: { text: string; style: Style; x?: number; y?: number; dx?: number; dy?: number }[] = [];
+        const first = (v: string | null, whole: number, size: number) => length((v || '').split(/[\s,]+/)[0], whole, size);
         const collect = (node: Element, s: Style, depth: number) => {
             for (let n = node.firstChild; n; n = n.nextSibling) {
                 if (n.nodeType === 3 || n.nodeType === 4) {
                     const text = (n.nodeValue || '').replace(/\s+/g, ' ');
                     if (text) runs.push({ text, style: s });
-                } else if (n.nodeType === 1 && localName(n as Element) === 'tspan' && depth < 8 && budget.elements-- > 0) {
-                    const t = n as Element;
-                    const { style: ts } = styleOf(t, s);
-                    const tx = length((t.getAttribute('x') || '').split(/[\s,]+/)[0], viewport.w, ts.fontSize);
-                    const ty = length((t.getAttribute('y') || '').split(/[\s,]+/)[0], viewport.h, ts.fontSize);
-                    const at = runs.length;
-                    collect(t, ts, depth + 1);
-                    if (runs[at]) {
-                        if (Number.isFinite(tx)) runs[at].x = tx;
-                        if (Number.isFinite(ty)) runs[at].y = ty;
-                        const dx = length((t.getAttribute('dx') || '').split(/[\s,]+/)[0], viewport.w, ts.fontSize), dy = length((t.getAttribute('dy') || '').split(/[\s,]+/)[0], viewport.h, ts.fontSize);
-                        if (Number.isFinite(dx)) runs[at].x = (runs[at].x ?? NaN) + dx;
-                        if (Number.isFinite(dy)) runs[at].y = (runs[at].y ?? NaN) + dy;
-                    }
+                    continue;
+                }
+                if (n.nodeType !== 1) continue;
+                const t = n as Element, kind = localName(t);
+                // What a text holds that is not drawn (its title, a description), and what a text holds of its
+                // own: a span, a link, text along a path, any other element's text, in their order.
+                if (NOT_DRAWN.has(kind)) continue;
+                if (depth >= 8 || budget.elements-- <= 0) { left.add('text nested past the picture\'s limits'); continue; }
+                const { style: ts, own } = styleOf(t, s);
+                if (own.get('display') === 'none') continue;
+                let tx = first(t.getAttribute('x'), viewport.w, ts.fontSize), ty = first(t.getAttribute('y'), viewport.h, ts.fontSize);
+                if (kind === 'textPath') {
+                    // Text along a path, set on a straight line from the path's start.
+                    left.add('text along paths (set on a straight line)');
+                    const href = t.getAttribute('href') || t.getAttribute('xlink:href') || '';
+                    const path = href.startsWith('#') ? svg.ids.get(href.slice(1)) : undefined;
+                    const start = path && localName(path) === 'path' ? parsePath(path.getAttribute('d') || '', { left: 1 })[0] : undefined;
+                    if (start && start[0] === 'M') { tx = start[1]; ty = start[2]; }
+                }
+                const at = runs.length;
+                collect(t, ts, depth + 1);
+                if (runs[at]) {
+                    if (Number.isFinite(tx)) runs[at].x = tx;
+                    if (Number.isFinite(ty)) runs[at].y = ty;
+                    const dx = first(t.getAttribute('dx'), viewport.w, ts.fontSize), dy = first(t.getAttribute('dy'), viewport.h, ts.fontSize);
+                    if (Number.isFinite(dx)) runs[at].dx = dx;
+                    if (Number.isFinite(dy)) runs[at].dy = dy;
                 }
             }
         };
@@ -565,16 +595,15 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
         if (!runs.length) return;
         runs[0].text = runs[0].text.replace(/^ /, '');
         runs[runs.length - 1].text = runs[runs.length - 1].text.replace(/ $/, '');
-        // A chunk (runs from one position to the next) is anchored as a whole.
+        // A chunk (runs from one position to the next) is anchored as a whole. A run placed or offset starts
+        // one: at its own x and y, else where the chunk before it ended, moved by its dx and dy.
         const chunks: { x: number; y: number; runs: typeof runs }[] = [];
         for (const run of runs) {
-            const own = run.x !== undefined || run.y !== undefined;
+            const own = run.x !== undefined || run.y !== undefined || run.dx !== undefined || run.dy !== undefined;
             if (!chunks.length || own) {
                 const prev = chunks[chunks.length - 1];
                 const endX = prev ? prev.x + prev.runs.reduce((w, r) => w + canvas.width(r.text, faceOf(r.style), r.style.fontSize), 0) : x;
-                const rx = run.x === undefined ? endX : Number.isFinite(run.x) ? run.x : endX + (run.x ?? 0);
-                const ry = run.y === undefined ? (prev ? prev.y : y) : Number.isFinite(run.y) ? run.y : (prev ? prev.y : y);
-                chunks.push({ x: rx, y: ry, runs: [run] });
+                chunks.push({ x: coord((run.x ?? endX) + (run.dx ?? 0)), y: coord((run.y ?? (prev ? prev.y : y)) + (run.dy ?? 0)), runs: [run] });
             } else chunks[chunks.length - 1].runs.push(run);
         }
         for (const chunk of chunks) {
@@ -587,7 +616,7 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
                 if (fill && run.text.trim()) {
                     const alpha = fill.alpha * run.style.fillOpacity * opacity;
                     page.pushOperators(lib.pushGraphicsState(), ...(alpha < 1 ? [op('gs', opacityState(alpha, alpha))] : []),
-                        lib.concatTransformationMatrix(1, 0, 0, -1, cx, chunk.y));
+                        cm([1, 0, 0, -1, cx, chunk.y]));
                     try { canvas.text(run.text, face, 0, 0, run.style.fontSize, fill.color); } finally { page.pushOperators(lib.popGraphicsState()); }
                 }
                 cx += w;
@@ -608,7 +637,7 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
         if (!img) { left.add('pictures that could not be read'); return; }
         const x = length(el.getAttribute('x'), viewport.w) || 0, y = length(el.getAttribute('y'), viewport.h) || 0;
         page.pushOperators(lib.pushGraphicsState(), ...(opacity < 1 ? [op('gs', opacityState(opacity, opacity))] : []),
-            lib.concatTransformationMatrix(w, 0, 0, -h, x, y + h));
+            cm([w, 0, 0, -h, x, y + h]));
         try { page.drawImage(img, { x: 0, y: 0, width: 1, height: 1 }); } finally { page.pushOperators(lib.popGraphicsState()); }
     };
 
@@ -616,7 +645,8 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
 
     /** Draws an element and what it holds. */
     const draw = async (el: Element, parent: Style, depth: number, uses: number, active: Set<Element>): Promise<void> => {
-        if (budget.elements-- <= 0 || depth > MAX_DEPTH) return;
+        if (budget.elements-- <= 0) return;
+        if (depth > MAX_DEPTH) { left.add('groups nested past the picture\'s limits'); return; }
         const tag = localName(el);
         if (NOT_DRAWN.has(tag)) { if (tag === 'foreignObject') left.add('foreign objects'); return; }
         const { style, own } = styleOf(el, parent);
@@ -635,7 +665,7 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
             if (vb.length === 4 && vb[2] > 0 && vb[3] > 0 && w > 0 && h > 0) matrix = multiply(matrix, viewBoxMatrix(vb as [number, number, number, number], el.getAttribute('preserveAspectRatio') || 'xMidYMid meet', w, h));
         }
         const moved = matrix !== IDENTITY && matrix.some((v, i) => v !== IDENTITY[i]);
-        if (moved) page.pushOperators(lib.pushGraphicsState(), lib.concatTransformationMatrix(...matrix));
+        if (moved) page.pushOperators(lib.pushGraphicsState(), cm(matrix));
         try {
             const inherited = { ...style, inherited: opacity } as Style;
             const L = (k: string, whole: number) => length(el.getAttribute(k), whole, style.fontSize);
@@ -676,9 +706,11 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
                 case 'use': {
                     const href = el.getAttribute('href') || el.getAttribute('xlink:href') || '';
                     const target = href.startsWith('#') ? svg.ids.get(href.slice(1)) : undefined;
-                    if (!target || uses >= MAX_USE_DEPTH || active.has(target)) break;
+                    if (!target) break;
+                    // A use of what is being drawn (a cycle), or of uses past the limit, is named, not followed.
+                    if (uses >= MAX_USE_DEPTH || active.has(target)) { left.add(active.has(target) ? 'uses of an element inside itself' : 'uses nested past the picture\'s limits'); break; }
                     const x = L('x', viewport.w) || 0, y = L('y', viewport.h) || 0;
-                    page.pushOperators(lib.pushGraphicsState(), lib.concatTransformationMatrix(1, 0, 0, 1, x, y));
+                    page.pushOperators(lib.pushGraphicsState(), cm([1, 0, 0, 1, x, y]));
                     active.add(target);
                     try {
                         if (localName(target) === 'symbol') {
@@ -686,7 +718,7 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
                             const vb = numbers(target.getAttribute('viewBox'), 4);
                             const w = L('width', viewport.w), h = L('height', viewport.h);
                             const fit = vb.length === 4 && vb[2] > 0 && vb[3] > 0 && w > 0 && h > 0;
-                            if (fit) page.pushOperators(lib.pushGraphicsState(), lib.concatTransformationMatrix(...viewBoxMatrix(vb as [number, number, number, number], target.getAttribute('preserveAspectRatio') || 'xMidYMid meet', w, h)));
+                            if (fit) page.pushOperators(lib.pushGraphicsState(), cm(viewBoxMatrix(vb as [number, number, number, number], target.getAttribute('preserveAspectRatio') || 'xMidYMid meet', w, h)));
                             try { for (const child of childElements(target)) await draw(child, inherited, depth + 1, uses + 1, active); }
                             finally { if (fit) page.pushOperators(lib.popGraphicsState()); }
                         } else await draw(target, inherited, depth + 1, uses + 1, active);
@@ -703,7 +735,7 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
         }
     };
 
-    page.pushOperators(lib.pushGraphicsState(), lib.concatTransformationMatrix(...base));
+    page.pushOperators(lib.pushGraphicsState(), cm(base));
     try { await draw(svg.root, INITIAL_STYLE, 0, 0, new Set()); }
     finally { page.pushOperators(lib.popGraphicsState()); }
     if (budget.elements <= 0 || budget.path.left <= 0) left.add('what was past the picture\'s limits');
