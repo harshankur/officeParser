@@ -1,6 +1,7 @@
 import { zipSync, Zippable } from 'fflate';
 import { ConversionResult, GeneratorConfig, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType } from '../types.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
+import { checkAbortSignal } from '../utils/errorUtils.js';
 import { decodeBase64, hexColor, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { buildDeck, Box, DeckItem, DeckParagraph, DeckRun, DeckSlide } from './slides/deck.js';
@@ -55,7 +56,8 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
     async generate(): Promise<ConversionResult<'pptx'>> {
         for (const a of this.ast.attachments ?? []) if (a?.name) this.attachmentsByName.set(a.name, a);
         const deck = await buildDeck(this.ast.content, this.ast.metadata ?? {}, {
-            keep: async node => { const v = await this.handleOnNode(node); return v === false ? false : typeof v === 'string' ? v : true; },
+            // Every node a slide takes is asked for here, so the signal is heard node by node.
+            keep: async node => { checkAbortSignal(this.config.abortSignal); const v = await this.handleOnNode(node); return v === false ? false : typeof v === 'string' ? v : true; },
             chartTable: node => {
                 if (this.config.includeCharts === false) return undefined;
                 const data = this.attachmentsByName.get((node.metadata as { attachmentName?: string } | undefined)?.attachmentName ?? '')?.chartData;
