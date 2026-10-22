@@ -5356,6 +5356,64 @@ async function testPdfHeadingsBySizeAndWeight(): Promise<void> {
     assert.ok(!collectAllNodes(ast).some(n => n.type === 'list' && /Introduction|Methods/.test(n.text || '')), 'a numbered heading is no list item');
 }
 
+/**
+ * A PDF's tables drawn with ruling lines are read from the lines: a table of two columns, a merged title
+ * row (colSpan), a cell spanning rows (rowSpan), an empty cell, a header whose cells wrap, and a table
+ * inside a cell. Read from their text alone they were missed, cut up or flattened. A table whose
+ * producer left rules out (partial borders) is not read as merged cells.
+ */
+async function testPdfRuledTables(): Promise<void> {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    const page = pdf.addPage([500, 700]);
+    const black = rgb(0, 0, 0);
+    // A grid's rules: horizontal at ys across [x0, x1], vertical at xs across [y0, y1] (page space, y up).
+    const hline = (y: number, x0: number, x1: number) => page.drawLine({ start: { x: x0, y }, end: { x: x1, y }, thickness: 0.75, color: black });
+    const vline = (x: number, y0: number, y1: number) => page.drawLine({ start: { x, y: y0 }, end: { x, y: y1 }, thickness: 0.75, color: black });
+    const text = (t: string, x: number, y: number) => page.drawText(t, { x, y, size: 10, font });
+    page.drawText('Before the tables.', { x: 40, y: 660, size: 11, font });
+    // A key/value table of two columns, ruled throughout.
+    for (const y of [640, 620, 600, 580]) hline(y, 40, 240);
+    for (const x of [40, 120, 240]) vline(x, 580, 640);
+    text('Width', 45, 626); text('120 mm', 125, 626); text('Height', 45, 606); text('80 mm', 125, 606); text('Weight', 45, 586); text('2.4 kg', 125, 586);
+    // A merged title row, a cell spanning two rows, an empty cell, and a table inside a cell.
+    for (const y of [540, 520, 500, 440, 420]) hline(y, 40, 400);
+    hline(480, 160, 400); // no rule under "Alpha": it spans two rows
+    vline(40, 420, 540); vline(400, 420, 540);
+    for (const x of [160, 280]) vline(x, 420, 520);
+    text('Quarterly figures', 180, 526);
+    text('Team', 45, 506); text('Member', 165, 506); text('Detail', 285, 506);
+    text('Alpha', 45, 470); text('Ann', 165, 486);
+    // The inner table, inset in the third column's cell (480 to 440).
+    for (const y of [475, 460, 445]) hline(y, 290, 390);
+    for (const x of [290, 340, 390]) vline(x, 445, 475);
+    text('Q1', 295, 464); text('10', 345, 464); text('Q2', 295, 449); text('12', 345, 449);
+    text('Bob', 165, 446);
+    text('Beta', 45, 426); text('Dee', 165, 426);
+    // A table with partial borders: an outer frame and a header rule, no rule between its columns below.
+    for (const y of [380, 365, 320]) hline(y, 40, 240);
+    vline(40, 320, 380); vline(240, 320, 380); vline(120, 365, 380);
+    text('Item', 45, 369); text('Count', 125, 369);
+    text('Books', 45, 352); text('1', 125, 352); text('Pens', 45, 337); text('3', 125, 337); text('Paper', 45, 322); text('9', 125, 322);
+    const ast = await OfficeParser.parseOffice(Buffer.from(await pdf.save()), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const shape = (t: OfficeContentNode): any => t.children!.map(r => r.children!.map(c => {
+        const m = c.metadata as any;
+        const inner = c.children?.find(x => x.type === 'table');
+        return [c.text, ...(m.colSpan ? [`cs${m.colSpan}`] : []), ...(m.rowSpan ? [`rs${m.rowSpan}`] : []), ...(inner ? [shape(inner)] : [])];
+    }));
+    const tables = ast.content[0].children!.filter(n => n.type === 'table');
+    assert.deepStrictEqual(shape(tables[0]), [[['Width'], ['120 mm']], [['Height'], ['80 mm']], [['Weight'], ['2.4 kg']]], 'a ruled table of two columns is read');
+    assert.deepStrictEqual(shape(tables[1]), [
+        [['Quarterly figures', 'cs3']],
+        [['Team'], ['Member'], ['Detail']],
+        [['Alpha', 'rs2'], ['Ann'], ['']],
+        [['Bob'], ['Q1 10\nQ2 12', [[['Q1'], ['10']], [['Q2'], ['12']]]]],
+        [['Beta'], ['Dee'], ['']],
+    ], `a merged title, a cell spanning rows, empty cells and a table inside a cell are read; got ${JSON.stringify(shape(tables[1]))}`);
+    assert.ok(!tables.slice(2).some(t => collectAllNodes({ content: [t] } as any).some(n => n.type === 'cell' && /Books[\s\S]*Pens/.test(n.text || ''))), 'a table with partial borders is not read as one merged cell');
+    assert.ok(!ast.content[0].children!.some(n => n.type === 'paragraph' && /^(Width|Team|Q1)/.test(n.text || '')), 'the tables\' text is in their cells, not the page\'s paragraphs');
+}
+
 async function testNativePdfFurnitureLimits(): Promise<void> {
     const t = (text: string, more: any = {}) => ({ type: 'text', text, ...more });
     const p = (...children: any[]) => ({ type: 'paragraph', children });
@@ -7253,6 +7311,7 @@ async function runTests(): Promise<void> {
         ['Native PDF SVG pictures', testNativePdfSvgPictures],
         ['PDF lists read whole', testPdfListsReadWhole],
         ['PDF headings by size and weight', testPdfHeadingsBySizeAndWeight],
+        ['PDF ruled tables', testPdfRuledTables],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

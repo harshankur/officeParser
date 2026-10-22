@@ -4064,6 +4064,18 @@ async function pdfProcessTests(h: {
     // (Separate processes first: pdf.js in this process comes last, at the end.)
     const plan = notes(20, true);
     const planned = await read(plan);
+    // A page of thousands of crossing rules (grid paper, a dense chart) is read in time in proportion: its
+    // rules are joined once, their crossings tested within a bound, and a grid too large is no table.
+    const ruledPage = (count: number) => {
+        let body = '0.5 w\n';
+        for (let i = 0; i < count; i++) body += `20 ${20 + (i * 7) % 800} m 580 ${20 + (i * 7) % 800} l S ${20 + (i * 3) % 560} 20 m ${20 + (i * 3) % 560} 820 l S\n`;
+        body += 'BT /F1 10 Tf 40 830 Td (Grid page) Tj ET\n';
+        return pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [5 0 R] /Count 1 >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', flate(Buffer.from(body)),
+            '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 4 0 R >>']);
+    };
+    let ruled = { error: '', text: '' } as { error: string; text: string };
+    await linear('pdf: a page of 16,000 crossing rules is read', async () => { ruled = await read(ruledPage(n(8000))); });
+    check('pdf: a page of crossing rules keeps its text', !ruled.error && ruled.text.includes('Grid page'), ruled.error);
     check('pdf: a plan of 3,000 symbols is read whole, its paths costing none of the operator budget', !planned.error && planned.pages === 21 && planned.text.includes('Note 20.50') && !planned.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED') && !planned.codes.includes('PDF_NO_TEXT_EXTRACTED'), `${planned.pages} pages ${planned.codes} ${planned.error}`);
     const operatorChecks = async (separateProcess: boolean) => {
         const where = separateProcess ? 'separate process' : 'in process';

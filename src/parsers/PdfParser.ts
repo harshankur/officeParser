@@ -41,10 +41,11 @@ import { crc32, createAttachment } from '../utils/imageUtils.js';
 import { loadPdfJs } from '../utils/moduleLoader.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { collectColorMarks, ColorLookup, makeColorLookup } from './pdf/pdfColor.js';
-import { collectShapes, shapeBullets } from './pdf/pdfShapes.js';
+import { collectShapes, PdfShape, shapeBullets } from './pdf/pdfShapes.js';
+import { ruledFrames, ruledTables } from './pdf/rulings.js';
 import { computeRunBox, identityMatrix, mulMatrix, roundBounds, rotateBoundsToRendered, toMatrix6, unionAll } from './pdf/geometry.js';
 import { PageExtract, PdfImage, PdfLayoutConfig, RawRun, ResolvedFont } from './pdf/pdfTypes.js';
-import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, indentLevels as indentLevelsOf, joinMarkerLines, leadingMarker, ListCarry, markerLefts, PageContext, recoverTaggedGrids, relevelHeadings, runsToParagraph, segmentIntoBlocks } from './pdf/textLayout.js';
+import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, emitBounds, indentLevels as indentLevelsOf, joinMarkerLines, leadingMarker, ListCarry, markerLefts, PageContext, recoverTaggedGrids, relevelHeadings, runsToParagraph, segmentIntoBlocks } from './pdf/textLayout.js';
 import { buildTaggedNodes } from './pdf/structTree.js';
 import { setOwn } from '../utils/lookupUtils.js';
 import { acquirePdfProcess, PdfProcess } from './pdf/pdfProcess.js';
@@ -1755,7 +1756,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
 
         // Geometric fallback (untagged, distrusted, or low coverage).
         // A bullet drawn as a shape reads as its glyph (see shapeBullets).
-        if (!pageContent) pageContent = geometricNodes([...bodyRuns, ...shapeBullets(extract.shapes, bodyRuns)], layoutCtx, docCtx, layoutCfg);
+        if (!pageContent) pageContent = geometricNodes([...bodyRuns, ...shapeBullets(extract.shapes, bodyRuns)], layoutCtx, docCtx, layoutCfg, true, extract.shapes);
 
         // Hybrid recovery: on the tagged path, additionally fold a contiguous run of loose sibling
         // paragraphs whose geometry forms a clean grid (a calendar tagged as one paragraph per day,
@@ -1837,11 +1838,19 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
  * tables from the lines before column segmentation (off for margin artifacts, which are never
  * tables).
  */
-function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext, pdfCfg: PdfLayoutConfig, detectGridTables = true): OfficeContentNode[] {
+function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext, pdfCfg: PdfLayoutConfig, detectGridTables = true, shapes?: PdfShape[]): OfficeContentNode[] {
+    // Tables drawn with ruling lines first, from the lines themselves (see rulings); their text is theirs.
+    const ruled = detectGridTables ? ruledTables(ruledFrames(shapes, pageCtx.authoredW, pageCtx.authoredH), runs, {
+        cfg: pdfCfg,
+        content: cellRuns => blockToNodes(joinMarkerLines(buildLines(cellRuns, pdfCfg)), pageCtx, docCtx),
+        bounds: box => emitBounds(box, pageCtx, pdfCfg),
+    }) : { tables: [], consumed: new Set<RawRun>() };
+    if (ruled.consumed.size) runs = runs.filter(r => !ruled.consumed.has(r));
     const lines = joinMarkerLines(buildLines(runs, pdfCfg));
     const { tables, consumed } = detectGridTables
         ? detectTables(lines, pageCtx, docCtx)
         : { tables: [] as { node: OfficeContentNode; y: number }[], consumed: new Set<typeof lines[number]>() };
+    for (const node of ruled.tables) tables.push({ node, y: node.bounds?.y ?? Infinity });
     const remaining = consumed.size ? lines.filter(l => !consumed.has(l)) : lines;
 
     const out: OfficeContentNode[] = [];
