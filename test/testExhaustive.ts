@@ -4877,6 +4877,36 @@ async function testDocxSectionsInPdf(): Promise<void> {
 }
 
 /**
+ * An ODT document's master pages give its pages: the first's size, margins, header and footer, and a
+ * paragraph whose style names another master page starts a section of that master's pages (only the
+ * first master page's header and footer were read, as loose paragraphs, and every page printed A4).
+ * Page number and count fields are marked and filled in for each page.
+ */
+async function testOdtMasterPagesInPdf(): Promise<void> {
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"';
+    const layout = (name: string, w: string, h: string) => `<style:page-layout style:name="${name}"><style:page-layout-properties fo:page-width="${w}" fo:page-height="${h}" fo:margin-top="0.5in" fo:margin-bottom="0.5in" fo:margin-left="1in" fo:margin-right="1in"/>`
+        + '<style:header-style><style:header-footer-properties fo:min-height="0.2in" fo:margin-bottom="0.1in"/></style:header-style><style:footer-style><style:header-footer-properties fo:min-height="0.2in" fo:margin-top="0.1in"/></style:footer-style></style:page-layout>';
+    const styles = `<?xml version="1.0"?><office:document-styles ${NS}><office:automatic-styles>${layout('pm1', '8.5in', '11in')}${layout('pm2', '11in', '8.5in')}</office:automatic-styles><office:master-styles>`
+        + '<style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>Portrait header</text:p></style:header><style:footer><text:p>Page <text:page-number>7</text:page-number> of <text:page-count>7</text:page-count></text:p></style:footer></style:master-page>'
+        + '<style:master-page style:name="Landscape" style:page-layout-name="pm2"/></office:master-styles></office:document-styles>';
+    const content = `<?xml version="1.0"?><office:document-content ${NS}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:master-page-name="Landscape"/></office:automatic-styles><office:body><office:text>`
+        + Array.from({ length: 60 }, (_, i) => `<text:p>Portrait paragraph ${i}.</text:p>`).join('') + '<text:p text:style-name="P1">Landscape page.</text:p></office:text></office:body></office:document-content>';
+    const odt = Buffer.from(zipSync({ 'mimetype': strToU8('application/vnd.oasis.opendocument.text'), 'content.xml': strToU8(content), 'styles.xml': strToU8(styles) }));
+    const ast = await OfficeParser.parseOffice(odt, { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+    assert.deepStrictEqual([ast.metadata.pageSetup?.width, ast.metadata.pageSetup?.height, ast.metadata.pageSetup?.headerDistance, ast.metadata.pageSetup?.margin?.top], [612, 792, 36, 57.6], 'the first master page\'s pages, the body below its header');
+    assert.deepStrictEqual(ast.auxiliary!.headers!.map(h => [h.text, (h.metadata as any).section]), [['Portrait header', 0], ['', 1]], 'each section\'s master page\'s header, none where it has none');
+    const footerRuns = collectAllNodes({ content: ast.auxiliary!.footers! } as any).filter(n => (n.metadata as any)?.field).map(n => (n.metadata as any).field);
+    assert.deepStrictEqual(footerRuns, ['page', 'pages'], 'page fields are marked');
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const pages = back.content.filter(n => n.type === 'page');
+    const sizes = pages.map(p => [(p.metadata as any).pageWidth, (p.metadata as any).pageHeight]);
+    assert.ok(sizes.length >= 2 && sizes[0][0] === 612 && sizes[sizes.length - 1][0] === 792, `Letter pages, then a landscape one; got ${JSON.stringify(sizes)}`);
+    const printed = String((await back.to('text')).value) + collectAllNodes({ content: [...(back.auxiliary?.headers ?? []), ...(back.auxiliary?.footers ?? [])] } as any).map(n => n.text || '').join(' ');
+    assert.ok(printed.includes(`Page 1 of ${pages.length}`) && !printed.includes('Page 7 of 7'), 'page fields are filled in for each page');
+}
+
+/**
  * The native PDF engine draws GIF (its first frame) and uncompressed BMP pictures, turned into PNG: a PDF
  * holds neither, and both were dropped with IMAGE_PROCESSING_FAILED.
  */
@@ -6720,6 +6750,7 @@ async function runTests(): Promise<void> {
         ['HTML stylesheet and shading', testHtmlStylesheetAndShading],
         ['Native PDF footnotes', testNativePdfFootnotes],
         ['DOCX sections in PDF', testDocxSectionsInPdf],
+        ['ODT master pages in PDF', testOdtMasterPagesInPdf],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

@@ -97,6 +97,16 @@
       "TestNumber": 42,
       "TestBool": true
     },
+    "pageSetup": {
+      "width": 612,
+      "height": 792,
+      "margin": {
+        "top": 72,
+        "right": 72,
+        "bottom": 72,
+        "left": 72
+      }
+    },
     "styleMap": {
       "Heading1": {
         "formatting": {

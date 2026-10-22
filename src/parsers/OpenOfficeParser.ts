@@ -21,7 +21,7 @@
  * @module OpenOfficeParser
  */
 
-import { BreakMetadata, CellMetadata, ChartData, ChartMetadata, CodeMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, IndentationMetadata, ListMetadata, ParagraphSpacing, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, PageMetadata, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
+import { BreakMetadata, CellMetadata, ChartData, ChartMetadata, CodeMetadata, FullOfficeParserConfig, HeaderFooterMetadata, HeadingMetadata, ImageMetadata, IndentationMetadata, ListMetadata, PageSetup, ParagraphSpacing, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, PageMetadata, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { chartRawTexts, extractChartData, MAX_CHART_VALUES } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
@@ -148,6 +148,8 @@ interface ParagraphStyleInfo {
     indentation?: IndentationMetadata;
     /** `fo:margin-top`, `fo:margin-bottom`, `fo:line-height` and `style:line-height-at-least`. */
     spacing?: ParagraphSpacing;
+    /** `style:master-page-name`: a paragraph of this style starts a page of that master page. */
+    masterPage?: string;
     dropCap?: boolean;
     /** `fo:break-before` - a break emitted before the paragraph that carries the style. */
     breakBefore?: 'page' | 'column';
@@ -494,6 +496,58 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             config, { fileType, part: 'content.xml' });
     const stylesFile = files.find(f => f.path === 'styles.xml');
     const stylesDom = stylesFile ? parseXmlString(stylesFile.content.toString(), { config }) : undefined;
+
+    // The master pages (styles.xml), by name, and the page layouts they name: the document's pages.
+    const masterPages = new Map<string, Element>();
+    const pageLayouts = new Map<string, Element>();
+    if (stylesDom) {
+        for (const master of getElementsByTagName(stylesDom, "style:master-page")) {
+            const name = master.getAttribute("style:name");
+            if (name && !masterPages.has(name)) masterPages.set(name, master);
+        }
+        for (const layout of getElementsByTagName(stylesDom, "style:page-layout")) {
+            const name = layout.getAttribute("style:name");
+            if (name && !pageLayouts.has(name)) pageLayouts.set(name, layout);
+        }
+    }
+    /** The master page the document starts on: the first block's style's, else Standard, else the first. */
+    let firstMaster: string | undefined = masterPages.has('Standard') ? 'Standard' : masterPages.keys().next().value;
+    /** The master page of each section after the first, in order; set while the text body is read. */
+    const sectionMasters: string[] = [];
+    let readingBody = false, bodyStarted = false;
+
+    /** Whether a master page shows a header or footer of a kind (`style:header`, `-left`, `-first`). */
+    const shown = (master: Element | undefined, tag: string): Element | undefined => {
+        const el = master ? getDirectChildren(master, tag)[0] : undefined;
+        return el && el.getAttribute("style:display") !== 'false' ? el : undefined;
+    };
+
+    /**
+     * A master page's pages (see PageSetup), from its page layout: the page's size and margins, the body
+     * below its header and above its footer (ODF's top margin is the header's; the header's height and
+     * gap come between it and the body), and whether its first page has a header of its own.
+     */
+    const odfPageSetup = (masterName: string | undefined): PageSetup | undefined => {
+        const master = masterName ? masterPages.get(masterName) : undefined;
+        const layout = master ? pageLayouts.get(master.getAttribute("style:page-layout-name") || '') : undefined;
+        const props = layout ? getDirectChildren(layout, "style:page-layout-properties")[0] : undefined;
+        if (!props) return undefined;
+        const pt = (el: Element | undefined, attr: string) => { const v = lengthToPt(el?.getAttribute(attr) || undefined); return v != null && v >= 0 && v < 1584 ? Math.round(v * 100) / 100 : undefined; };
+        const width = pt(props, "fo:page-width"), height = pt(props, "fo:page-height");
+        if (!width || !height) return undefined;
+        const margin = { top: pt(props, "fo:margin-top") ?? 0, right: pt(props, "fo:margin-right") ?? 0, bottom: pt(props, "fo:margin-bottom") ?? 0, left: pt(props, "fo:margin-left") ?? 0 };
+        const setup: PageSetup = { width, height, margin };
+        // The room a header or footer takes: its height and its gap to the body.
+        const room = (styleTag: string, gapAttr: string) => {
+            const hf = layout ? getDirectChildren(getDirectChildren(layout, styleTag)[0] ?? layout, "style:header-footer-properties")[0] : undefined;
+            if (!hf || !getDirectChildren(layout!, styleTag).length) return 0;
+            return (pt(hf, "fo:min-height") ?? pt(hf, "svg:height") ?? 0) + (pt(hf, gapAttr) ?? 0);
+        };
+        if (shown(master, "style:header")) { setup.headerDistance = margin.top; margin.top += room("style:header-style", "fo:margin-bottom"); }
+        if (shown(master, "style:footer")) { setup.footerDistance = margin.bottom; margin.bottom += room("style:footer-style", "fo:margin-top"); }
+        if (shown(master, "style:header-first") || shown(master, "style:footer-first")) setup.differentFirstPage = true;
+        return setup;
+    };
     const content: OfficeContentNode[] = [];
     const notes: OfficeContentNode[] = [];
 
@@ -539,6 +593,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             if (!name) continue;
 
             const styleInfo: ParagraphStyleInfo = {};
+            const masterPage = style.getAttribute("style:master-page-name");
+            if (masterPage) styleInfo.masterPage = masterPage;
 
             // Parse paragraph properties for alignment and drop caps
             // A style's own properties (children of it, as the schema has them): looked up through the
@@ -773,6 +829,17 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         type: 'break',
                         formatting: parentFormatting,
                         metadata: { breakType: 'textWrapping', ...(linkMetadata || {}) } as BreakMetadata
+                    });
+                } else if (tagName === 'text:page-number' || tagName === 'text:page-count') {
+                    // A page field: its text is the number when the file was saved, marked so that each
+                    // page can show its own (TextMetadata.field).
+                    const text = element.textContent || '';
+                    fullText += text;
+                    children.push({
+                        type: 'text',
+                        text,
+                        formatting: parentFormatting,
+                        metadata: { ...(linkMetadata || {}), field: tagName === 'text:page-number' ? 'page' : 'pages' } as TextMetadata
                     });
                 } else if (tagName === 'text:span') {
                     // Formatted text span
@@ -1469,8 +1536,24 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
          * difference from how DOCX's `<w:br w:type="page"/>` lands.
          */
         const pushStyleBreak = (styleName: string | null, targetArray: OfficeContentNode[], edge: 'before' | 'after') => {
+            const info = styleName ? paragraphStyleMap[styleName] : undefined;
+            // A paragraph of a style naming a master page starts a page of it: the first block's sets the
+            // document's first pages, a later one's starts a section of its own (with its page).
+            if (edge === 'before' && readingBody) {
+                const master = info?.masterPage && masterPages.has(info.masterPage) ? info.masterPage : undefined;
+                if (!bodyStarted) {
+                    bodyStarted = true;
+                    if (master) firstMaster = master;
+                } else if (master) {
+                    sectionMasters.push(master);
+                    if (config.includeBreakNodes) {
+                        const pageSetup = config.ignorePageGeometry ? undefined : odfPageSetup(master);
+                        targetArray.push({ type: 'break', metadata: { breakType: 'page', section: sectionMasters.length, ...(pageSetup ? { pageSetup } : {}) } as BreakMetadata });
+                    }
+                    return;
+                }
+            }
             if (!config.includeBreakNodes || !styleName) return;
-            const info = paragraphStyleMap[styleName];
             const breakType = edge === 'before' ? info?.breakBefore : info?.breakAfter;
             if (!breakType) return;
             targetArray.push({ type: 'break', metadata: { breakType } as BreakMetadata });
@@ -2286,7 +2369,12 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         else {
             const textDoc = getFirstElementByTagName(body, "office:text");
             if (textDoc) {
-                traverse(textDoc, content, false, xmlString);
+                readingBody = true;
+                try {
+                    traverse(textDoc, content, false, xmlString);
+                } finally {
+                    readingBody = false;
+                }
             }
         }
     };
@@ -2552,7 +2640,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     }
     // Also add styles that only have alignment
     for (const styleName in paragraphStyleMap) {
-        if (!combinedStyleMap[styleName]) {
+        // (A style that only names a master page, as a sheet's table style does, has nothing to show.)
+        if (!combinedStyleMap[styleName] && Object.keys(paragraphStyleMap[styleName]).some(key => key !== 'masterPage')) {
             combinedStyleMap[styleName] = {
                 formatting: {},
                 alignment: paragraphStyleMap[styleName]?.alignment
@@ -2568,36 +2657,46 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     // would otherwise leak in as literal header content. Only the first master page's visible
     // header/footer is read, through the same block traversal (the shape WordParser populates).
     let auxiliary: OfficeAuxiliaryContent | undefined;
-    if (!config.ignoreHeadersAndFooters && stylesDom && fileType === 'odt') {
+    if (!config.ignoreHeadersAndFooters && stylesDom && fileType === 'odt' && firstMaster) {
         const stylesXmlStr = stylesFile ? stylesFile.content.toString() : undefined;
-        const masterStyles = getFirstElementByTagName(stylesDom, "office:master-styles");
-        const masterPage = masterStyles ? getFirstElementByTagName(masterStyles, "style:master-page") : undefined;
-        if (masterPage) {
-            const visible = (el: Element | null | undefined): el is Element => !!el && el.getAttribute("style:display") !== "false";
-            const headerEl = getFirstElementByTagName(masterPage, "style:header");
-            const footerEl = getFirstElementByTagName(masterPage, "style:footer");
-            const headers: OfficeContentNode[] = [];
-            const footers: OfficeContentNode[] = [];
-            if (visible(headerEl)) traverse(headerEl, headers, false, stylesXmlStr);
-            if (visible(footerEl)) traverse(footerEl, footers, false, stylesXmlStr);
-            // Resolve any image/chart nodes in the header/footer the same way the body is (OCR text,
-            // chart data, attachment linkage); without this a picture in a master-page header/footer
-            // would carry no data and render blank in every destination.
-            if (headers.length) assignAttachmentData(headers);
-            if (footers.length) assignAttachmentData(footers);
-            if (headers.length || footers.length) {
-                auxiliary = {
-                    ...(headers.length ? { headers } : {}),
-                    ...(footers.length ? { footers } : {}),
-                };
+        const headers: OfficeContentNode[] = [];
+        const footers: OfficeContentNode[] = [];
+        // Each section's master page's headers and footers, as header and footer nodes of their kind
+        // (default; even for a left page's; first): the first section's, and each later one's whose
+        // master page is another (an empty one where it has none, which a section has not carried on).
+        // Only the first master page's two were read, as loose paragraphs.
+        const masters = [firstMaster, ...sectionMasters];
+        const sectioned = new Set(masters).size > 1;
+        masters.forEach((name, section) => {
+            if (section > 0 && name === masters[section - 1]) return;
+            const master = masterPages.get(name);
+            for (const [tag, kind, type] of [['style:header', 'header', 'default'], ['style:header-left', 'header', 'even'], ['style:header-first', 'header', 'first'],
+                ['style:footer', 'footer', 'default'], ['style:footer-left', 'footer', 'even'], ['style:footer-first', 'footer', 'first']] as const) {
+                const el = shown(master, tag);
+                if (!el && !(sectioned && section > 0 && type === 'default')) continue;
+                const children: OfficeContentNode[] = [];
+                if (el) traverse(el, children, false, stylesXmlStr);
+                // Resolve any image/chart nodes the same way the body's are (OCR text, chart data,
+                // attachment linkage): without it a picture in a header would render blank.
+                if (children.length) assignAttachmentData(children);
+                (kind === 'header' ? headers : footers).push({ type: kind, text: children.map(c => c.text || '').join('\n'), children,
+                    metadata: { type, ...(sectioned ? { section } : {}) } as HeaderFooterMetadata });
             }
+        });
+        if (headers.length || footers.length) {
+            auxiliary = {
+                ...(headers.length ? { headers } : {}),
+                ...(footers.length ? { footers } : {}),
+            };
         }
     }
+    const pageSetup = config.ignorePageGeometry ? undefined : odfPageSetup(firstMaster);
 
     return createAST(
         fileType,
         {
             ...metadata,
+            ...(pageSetup ? { pageSetup } : {}),
             styleMap: plainRecord(combinedStyleMap)
         },
         content,

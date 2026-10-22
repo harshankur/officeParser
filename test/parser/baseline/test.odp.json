@@ -91,6 +91,16 @@
       "TestNumber": 42,
       "TestBool": true
     },
+    "pageSetup": {
+      "width": 960,
+      "height": 540,
+      "margin": {
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      }
+    },
     "styleMap": {
       "a755": {
         "formatting": {
@@ -12030,6 +12040,7 @@
                     "font": "Calibri"
                   },
                   "metadata": {
+                    "field": "page",
                     "style": "a823"
                   }
                 }
@@ -12968,6 +12979,7 @@
                     "font": "Calibri"
                   },
                   "metadata": {
+                    "field": "page",
                     "style": "a906"
                   }
                 }
@@ -14894,6 +14906,7 @@
                     "font": "Calibri"
                   },
                   "metadata": {
+                    "field": "page",
                     "style": "a1134"
                   }
                 }
@@ -22649,6 +22662,7 @@
                     "font": "Calibri"
                   },
                   "metadata": {
+                    "field": "page",
                     "style": "a1891"
                   }
                 }
