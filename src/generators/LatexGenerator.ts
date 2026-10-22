@@ -3,7 +3,7 @@ import { UniqueNames } from '../utils/uniqueNames.js';
 import { trimEndChars } from '../utils/textUtils.js';
 import { AdmonitionMetadata, BreakMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, PageSetup, OfficeWarningType, ParagraphMetadata, TexDocumentClass, TextFormatting, TextMetadata } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { LatexMathPlan, LatexScripts, LatexUnicodePlan, LISTINGS_LANGUAGES, mathCommandsOf, planLatexMath, planLatexUnicode, withLatexMathMacros } from '../utils/latexUtils.js';
 import { escapeLatex, latexComment, latexSourceComment, sanitizeLatexImagePath, sanitizeLatexMath, sanitizeLatexUrl } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
@@ -53,9 +53,6 @@ const ENUM_COUNTERS = ['enumi', 'enumii', 'enumiii', 'enumiv'];
 
 /** Guards against a hostile span/column count turning into an enormous grid. */
 const MAX_TABLE_COLUMNS = 1000;
-
-/** At most this many rows a table set inside a section's columns (as a tabular, which cannot break) holds. */
-const MAX_COLUMN_TABLE_ROWS = 20;
 
 /**
  * Widest table written as one `longtable`/`tabular`; a wider one continues below itself in bands
@@ -389,7 +386,10 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         let body = this.beamer ? await this.renderBeamerBody(this.ast.content) : await this.renderFlow(this.ast.content);
         if (opening) body = `${opening}\n${body}`;
         if (this.openColumns) { body += '\n\\end{multicols}}'; this.openColumns = false; }
-        const headerSetup = this.beamer ? this.warnBeamerHeaders() : await this.pageHeaderSetup();
+        const running = this.beamer ? this.warnBeamerHeaders() : await this.pageHeaderSetup();
+        // The sections' own page styles, with the running one (fancyhdr loaded for them where it has none).
+        const sectionStyles = this.beamer ? '' : await this.sectionStyleSetup();
+        const headerSetup = [running, sectionStyles].filter(Boolean).join('\n');
         const endnotes = this.uses.endnotes
             ? (this.beamer ? '\\begin{frame}[allowframebreaks]\n\\theendnotes\n\\end{frame}' : '\\theendnotes')
             : '';
@@ -1440,10 +1440,11 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     private async table(node: OfficeContentNode, rowsOverride?: OfficeContentNode[]): Promise<string> {
         const rows = (rowsOverride ?? (node.children || [])).filter(r => r.type === 'row');
         if (rows.length === 0) return '';
-        // In a section's columns a table is a tabular, which no column or page breaks: a long one (more
-        // rows than a column holds) ran off the page and its rows were lost. Where a longtable may stand,
-        // the columns close for it, it runs across the page, and they open again after it.
-        if (this.openColumns && this.ctx.longtable && rows.length > MAX_COLUMN_TABLE_ROWS) {
+        // In a section's columns a table would be a tabular, which no column or page breaks: one taller
+        // than what is left of a column (a long one, or one of tall rows) ran off the page and its rows
+        // were lost, and how tall a table is cannot be told before TeX sets it. So where a longtable may
+        // stand, the columns close for every table, it runs across the page, and they open again after it.
+        if (this.openColumns && this.ctx.longtable) {
             const columns = this.openColumnsSetup;
             const close = this.columnsSwitch(undefined);
             const table = await this.table(node, rowsOverride);
@@ -1938,7 +1939,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         if (t === 'section') return body ? this.columnsSwitch((node.metadata as BreakMetadata | undefined)?.pageSetup?.columns) : '';
         // A section starting on a new page, in its own columns: the columns before end, the page breaks.
         if (t === 'page' && !this.beamer && body && typeof (node.metadata as BreakMetadata | undefined)?.section === 'number') {
-            return [this.columnsSwitch(undefined), '\\clearpage', this.columnsSwitch((node.metadata as BreakMetadata | undefined)?.pageSetup?.columns)].filter(Boolean).join('\n');
+            return [this.columnsSwitch(undefined), '\\clearpage', this.sectionStyleSwitch((node.metadata as BreakMetadata).section!), this.columnsSwitch((node.metadata as BreakMetadata | undefined)?.pageSetup?.columns)].filter(Boolean).join('\n');
         }
         // A page break in columns: they end on the page, and go on, the same, on the next.
         if (t === 'page' && !this.beamer && body && this.openColumns) {
@@ -2159,6 +2160,65 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         await this.withCtx({ sections: false, verbatim: false, longtable: false, display: false, notes: 'omit', labels: false, imageMaxHeight: IMAGE_MAX_HEIGHT_HEADER },
             async () => { for (const c of node.children || []) await collect(c); });
         return { text: lines.join(' \\\\ '), lines: Math.max(1, lines.length), position: position ?? 'L' };
+    }
+
+    /** The sections whose own headers and footers have a page style of their own (see sectionStyleSwitch), and whether they have a first page's. */
+    private readonly sectionStyles = new Map<number, { every: boolean; first: boolean }>();
+
+    /**
+     * Where a section starts on a new page, its own header and footer from there on: a page style of its
+     * own (`\pagestyle`), and its first page's (`\thispagestyle`) where it has one; nothing where it has
+     * none of its own, which keeps the one before it, as Word gives it. The styles are set up with the
+     * running one (see sectionStyleSetup).
+     */
+    private sectionStyleSwitch(section: number): string {
+        if (section < 1) return '';
+        const lists = { header: this.ast.auxiliary?.headers, footer: this.ast.auxiliary?.footers };
+        const own = (type: 'default' | 'first' | 'even') => (['header', 'footer'] as const).some(kind => !!sectionFurniture(lists[kind], kind, section, type));
+        const every = own('default') || own('even'), first = own('first');
+        if (!every && !first) return '';
+        this.sectionStyles.set(section, { every, first });
+        return `${every ? `\\pagestyle{osec${section}}` : ''}${first ? `\\thispagestyle{osec${section}first}` : ''}`;
+    }
+
+    /** A kind's part of a type in force in a section: its own, else the latest section's before it, else (every page's) the running one. */
+    private partInForce(kind: 'header' | 'footer', section: number, type: 'default' | 'even'): OfficeContentNode | undefined {
+        const nodes = kind === 'header' ? this.ast.auxiliary?.headers : this.ast.auxiliary?.footers;
+        if (!nodes?.length) return undefined;
+        const { bySection, sections } = sectionFurnitureIndex(nodes, kind, type);
+        let lo = 0, hi = sections.length - 1, found = -1;
+        while (lo <= hi) { const mid = (lo + hi) >> 1; if (sections[mid] <= section) { found = sections[mid]; lo = mid + 1; } else hi = mid - 1; }
+        if (found >= 0) return bySection.get(found);
+        return type === 'default' && furnitureKind(runningFurniture(nodes, kind), kind) === 'default' ? this.pickHeaderFooter(nodes, kind) : undefined;
+    }
+
+    /** The page styles of the sections that have their own headers and footers (`\fancypagestyle`). */
+    private async sectionStyleSetup(): Promise<string> {
+        const out: string[] = [];
+        const field = async (node: OfficeContentNode | undefined) => node ? await this.headerFieldContent(node) : null;
+        for (const [section, own] of this.sectionStyles) {
+            const fields = async (type: 'every' | 'first') => {
+                const parts: string[] = ['\\fancyhf{}'];
+                for (const kind of ['header', 'footer'] as const) {
+                    const lists = kind === 'header' ? this.ast.auxiliary?.headers : this.ast.auxiliary?.footers;
+                    const every = await field(type === 'first' ? (sectionFurniture(lists, kind, section, 'first')?.[0] ?? this.partInForce(kind, section, 'default')) : this.partInForce(kind, section, 'default'));
+                    const even = type === 'every' ? await field(this.partInForce(kind, section, 'even')) : null;
+                    const command = kind === 'header' ? 'fancyhead' : 'fancyfoot';
+                    // (Even pages' own where the section has them: on the even pages, every page's on the odd ones;
+                    // one field where both are on one side, as a second field there takes the first's place.)
+                    if (even?.text && every?.text && even.position === every.position) parts.push(`\\${command}[${every.position}]{\\ifodd\\value{page} {${every.text}}\\else {${even.text}}\\fi}`);
+                    else {
+                        if (even?.text) parts.push(`\\${command}[${even.position}]{\\ifodd\\value{page}\\else {${even.text}}\\fi}`);
+                        if (every?.text) parts.push(`\\${command}[${every.position}]{${even?.text ? `\\ifodd\\value{page} {${every.text}}\\fi` : every.text}}`);
+                        else if (kind === 'footer' && !even?.text) parts.push('\\fancyfoot[C]{\\thepage}');
+                    }
+                }
+                return parts.join('');
+            };
+            if (own.every) out.push(`\\fancypagestyle{osec${section}}{${await fields('every')}}`);
+            if (own.first) out.push(`\\fancypagestyle{osec${section}first}{${await fields('first')}}`);
+        }
+        return out.join('\n');
     }
 
     /** `fancyhdr` setup reproducing the document's running header and footer, or '' when it has none. */

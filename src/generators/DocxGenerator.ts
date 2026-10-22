@@ -4,7 +4,8 @@ import { layoutTableRows } from '../utils/tableLayout.js';
 import { BreakMetadata, ConversionResult, DocxGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, ooxmlCustomPropertiesXml, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
+import { heldColumns } from '../utils/columnUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, ooxmlCustomPropertiesXml, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
 import { markerPattern, MarkerPattern } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
@@ -174,10 +175,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         this.warnUnrepresentableCustomMetadata('docx');
         const { iso, mtime } = this.resolveModified();
 
-        // Render body blocks (this also populates rels, media, notes, comments, bookmarks, numbering).
-        const metaBlock = this.config.renderMetadata ? this.renderMetadataBlock() : '';
-        const body = await this.renderBlocks(this.ast.content);
-
+        // The running header and footer, and the first section's first page's and even pages' own, first:
+        // the sections the body ends name them where they have none of their own (see sectionReferences).
         const headers = runningFurniture(this.ast.auxiliary?.headers, 'header'), footers = runningFurniture(this.ast.auxiliary?.footers, 'footer');
         const hasHeader = headers.length > 0;
         const hasFooter = footers.length > 0;
@@ -188,10 +187,20 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         // A first page's own (a letterhead) or even pages' own is written as that kind: on the title
         // page (`w:titlePg`), or on even pages with the settings' `w:evenAndOddHeaders`.
         const headerKind = hasHeader ? furnitureKind(headers, 'header') : 'default', footerKind = hasFooter ? furnitureKind(footers, 'footer') : 'default';
-        const furniture = { headerKind, footerKind, titlePage: headerKind === 'first' || footerKind === 'first', evenPages: headerKind === 'even' || footerKind === 'even' };
+        // Even pages' own parts anywhere: then every section names its even pages' (see sectionReferences).
+        const evenAnywhere = (['header', 'footer'] as const).some(kind => { const list = kind === 'header' ? this.ast.auxiliary?.headers : this.ast.auxiliary?.footers; return !!list?.length && sectionFurnitureIndex(list, kind, 'even').sections.length > 0; });
+        this.evenPages = headerKind === 'even' || footerKind === 'even' || evenAnywhere;
+        this.inForce.header = headerKind === 'default' ? headerRid : '';
+        this.inForce.footer = footerKind === 'default' ? footerRid : '';
+        const firstOwn = await this.sectionReferences(0, false);
+        const furniture = { headerKind, footerKind, titlePage: headerKind === 'first' || footerKind === 'first', evenPages: this.evenPages, firstOwn };
         if (furniture.evenPages) this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings', 'settings.xml');
 
-        const lastRefs = this.sectionsEnded > 0 ? await this.ownReferences() : '';
+        // Render body blocks (this also populates rels, media, notes, comments, bookmarks, numbering).
+        const metaBlock = this.config.renderMetadata ? this.renderMetadataBlock() : '';
+        const body = await this.renderBlocks(this.ast.content);
+
+        const lastRefs = this.sectionsEnded > 0 ? await this.ownReferences() : { refs: '', titlePage: false };
         const documentXml = this.buildDocumentXml(metaBlock + body, headerRid, footerRid, furniture, lastRefs);
         const parts = this.assembleParts({ documentXml, iso, hasHeader, hasFooter, headerXml, footerXml });
         if (furniture.evenPages) parts['word/settings.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:settings ${WML_NS}><w:evenAndOddHeaders/></w:settings>`;
@@ -854,30 +863,59 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     private currentSection = 0;
     private referencedSection = 0;
     private readonly sectionParts: { path: string; kind: 'header' | 'footer'; xml: string }[] = [];
+    /** Section parts written, by kind and content, to the relationship naming each (see sectionReferences). */
+    private readonly writtenParts = new Map<string, string>();
 
     /** The current section's own header and footer references, written once (its later properties take them on). */
-    private async ownReferences(): Promise<string> {
-        if (this.currentSection === this.referencedSection) return '';
+    private async ownReferences(): Promise<{ refs: string; titlePage: boolean }> {
+        if (this.currentSection === this.referencedSection) return { refs: '', titlePage: false };
         this.referencedSection = this.currentSection;
         return this.sectionReferences(this.currentSection);
     }
 
     /**
-     * A later section's own header and footer, as parts of their own and references in its properties; none
-     * where the section has none of its own (Word gives it the one before it).
+     * Each kind's every-page part in force (a section's own, else the one before it, which Word gives the
+     * section): what a section's first page and even pages show where it has none of their own.
      */
-    private async sectionReferences(section: number): Promise<string> {
+    private readonly inForce: Record<'header' | 'footer', string> = { header: '', footer: '' };
+    /** Whether the document has even pages' own parts (`w:evenAndOddHeaders`): then every section names its even pages'. */
+    private evenPages = false;
+
+    /**
+     * A section's own header and footer, as parts of their own and references in its properties: its every
+     * page's (none where it has none of its own: Word gives it the one before it), its first page's (and
+     * the title page, `w:titlePg`, it needs), and its even pages'. Where the section has a first page or the
+     * document even pages, a kind with no part of its own for them names the every-page one in force: Word
+     * would otherwise take the one before it of that type, or none. The first section's every-page parts
+     * are written apart (runningFurniture), so `withDefault` is false for it.
+     */
+    private async sectionReferences(section: number, withDefault = true): Promise<{ refs: string; titlePage: boolean }> {
+        const lists = { header: this.ast.auxiliary?.headers, footer: this.ast.auxiliary?.footers };
+        const own = (kind: 'header' | 'footer', type: 'default' | 'first' | 'even') => sectionFurniture(lists[kind], kind, section, type);
+        const titlePage = !!(own('header', 'first') || own('footer', 'first'));
         let refs = '';
         for (const kind of ['header', 'footer'] as const) {
-            const nodes = sectionFurniture(kind === 'header' ? this.ast.auxiliary?.headers : this.ast.auxiliary?.footers, kind, section);
-            if (!nodes) continue;
-            const name = `${kind}${this.sectionParts.length + 2}.xml`;
-            const xml = await this.withRelOwner(`word/${name}`, () => this.renderHdrFtr(kind === 'header' ? 'hdr' : 'ftr', nodes));
-            this.sectionParts.push({ path: `word/${name}`, kind, xml });
-            const rid = this.addRel(`http://schemas.openxmlformats.org/officeDocument/2006/relationships/${kind}`, name);
-            refs += `<w:${kind}Reference w:type="default" r:id="${rid}"/>`;
+            const write = async (nodes: OfficeContentNode[]) => {
+                const name = `${kind}${this.sectionParts.length + 2}.xml`;
+                const xml = await this.withRelOwner(`word/${name}`, () => this.renderHdrFtr(kind === 'header' ? 'hdr' : 'ftr', nodes));
+                // A part the same as one written before (and naming nothing of its own: no picture, no link) is
+                // that one: thousands of sections of one header were each a part of their own.
+                const same = !this.partRels.get(`word/${name}`)?.length ? this.writtenParts.get(`${kind}:${xml}`) : undefined;
+                if (same) { this.partRels.delete(`word/${name}`); return same; }
+                this.sectionParts.push({ path: `word/${name}`, kind, xml });
+                const rid = this.addRel(`http://schemas.openxmlformats.org/officeDocument/2006/relationships/${kind}`, name);
+                if (!this.partRels.get(`word/${name}`)?.length) this.writtenParts.set(`${kind}:${xml}`, rid);
+                return rid;
+            };
+            const every = withDefault ? own(kind, 'default') : undefined;
+            if (every) { this.inForce[kind] = await write(every); refs += `<w:${kind}Reference w:type="default" r:id="${this.inForce[kind]}"/>`; }
+            const first = own(kind, 'first'), even = own(kind, 'even');
+            if (first) refs += `<w:${kind}Reference w:type="first" r:id="${await write(first)}"/>`;
+            else if (titlePage && this.inForce[kind]) refs += `<w:${kind}Reference w:type="first" r:id="${this.inForce[kind]}"/>`;
+            if (even) refs += `<w:${kind}Reference w:type="even" r:id="${await write(even)}"/>`;
+            else if (this.evenPages && this.inForce[kind]) refs += `<w:${kind}Reference w:type="even" r:id="${this.inForce[kind]}"/>`;
         }
-        return refs;
+        return { refs, titlePage };
     }
 
     /**
@@ -892,7 +930,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         const mar = paper.margin;
         const pgMar = `<w:pgMar w:top="${twips(mar.top)}" w:right="${twips(mar.right)}" w:bottom="${twips(mar.bottom)}" w:left="${twips(mar.left)}" `
             + `w:header="${paper.headerDistance !== undefined ? twips(paper.headerDistance) : 708}" w:footer="${paper.footerDistance !== undefined ? twips(paper.footerDistance) : 708}" w:gutter="0"/>`;
-        const columns = setup?.columns;
+        // (Held to the page: a gap of millions made a file an office suite would not open, see heldColumns.)
+        const columns = heldColumns(setup?.columns, paper.w, paper.w - mar.left - mar.right);
         const cols = columns && columns.count > 1
             ? `<w:cols w:num="${columns.count}" w:space="${twips(columns.gap)}"${columns.separator ? ' w:sep="1"' : ''}${columns.widths?.length === columns.count
                 ? ` w:equalWidth="0">${columns.widths.map((w, i) => `<w:col w:w="${twips(w)}"${i < columns.count - 1 ? ` w:space="${twips(columns.gap)}"` : ''}/>`).join('')}</w:cols>` : '/>'}`
@@ -909,11 +948,11 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         // later one's, its own (if it has them).
         if (t === 'section' || (t === 'page' && typeof meta?.section === 'number')) {
             const first = this.sectionsEnded++ === 0;
-            const refs = first ? FIRST_SECTION : await this.ownReferences();
+            const own = first ? { refs: FIRST_SECTION, titlePage: false } : await this.ownReferences();
             // The section the break starts, as it numbers it (a reader numbering only some breaks leaves the
             // others in the section before, whose header and footer they keep).
             if (typeof meta?.section === 'number') this.currentSection = meta.section;
-            const ended = this.sectionProperties(this.sectionSetup ?? this.ast.metadata?.pageSetup, this.sectionStart, refs, first ? FIRST_SECTION_TITLE : false);
+            const ended = this.sectionProperties(this.sectionSetup ?? this.ast.metadata?.pageSetup, this.sectionStart, own.refs, first ? FIRST_SECTION_TITLE : own.titlePage);
             this.sectionSetup = meta?.pageSetup ?? this.sectionSetup;
             this.sectionStart = t === 'section' ? 'continuous' : 'nextPage';
             return `<w:p><w:pPr>${ended}</w:pPr></w:p>`;
@@ -1017,17 +1056,21 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     // ── part assembly ─────────────────────────────────────────────────────────────
 
     private buildDocumentXml(body: string, headerRid: string, footerRid: string,
-        furniture: { headerKind: string; footerKind: string; titlePage: boolean; evenPages: boolean } = { headerKind: 'default', footerKind: 'default', titlePage: false, evenPages: false }, lastRefs = ''): string {
-        // The kinds of page a part is on: every page's is also the title page's and even pages', where
-        // the document has those.
-        const kinds = (kind: string) => kind !== 'default' ? [kind] : ['default', ...(furniture.titlePage ? ['first'] : []), ...(furniture.evenPages ? ['even'] : [])];
+        furniture: { headerKind: string; footerKind: string; titlePage: boolean; evenPages: boolean; firstOwn?: { refs: string; titlePage: boolean } } = { headerKind: 'default', footerKind: 'default', titlePage: false, evenPages: false },
+        lastRefs: { refs: string; titlePage: boolean } = { refs: '', titlePage: false }): string {
+        // The kinds of page a part is on: every page's is also the title page's, where a first page's own
+        // part of the other kind made one (the first section's own first and even pages' parts, and every
+        // page's for them where a kind has none of its own, are in firstOwn).
+        const ownTitle = !!furniture.firstOwn?.titlePage;
+        const kinds = (kind: string) => kind !== 'default' ? [kind] : ['default', ...(furniture.titlePage && !ownTitle ? ['first'] : [])];
         const references = (tag: 'header' | 'footer', rid: string, kind: string) => rid ? kinds(kind).map(type => `<w:${tag}Reference w:type="${type}" r:id="${rid}"/>`).join('') : '';
         // The header and footer are the first section's (a later one takes them on), with its title page.
-        const first = references('header', headerRid, furniture.headerKind) + references('footer', footerRid, furniture.footerKind);
+        const first = references('header', headerRid, furniture.headerKind) + references('footer', footerRid, furniture.footerKind) + (furniture.firstOwn?.refs ?? '');
+        const firstTitle = furniture.titlePage || ownTitle;
         const sectioned = body.includes(FIRST_SECTION);
-        if (sectioned) body = body.replace(FIRST_SECTION, first).replace(FIRST_SECTION_TITLE, furniture.titlePage ? '<w:titlePg/>' : '');
+        if (sectioned) body = body.replace(FIRST_SECTION, first).replace(FIRST_SECTION_TITLE, firstTitle ? '<w:titlePg/>' : '');
         // The last section's properties close the body.
-        const sectPr = this.sectionProperties(this.sectionSetup ?? this.ast.metadata?.pageSetup, this.sectionStart, sectioned ? lastRefs : first, !sectioned && furniture.titlePage);
+        const sectPr = this.sectionProperties(this.sectionSetup ?? this.ast.metadata?.pageSetup, this.sectionStart, sectioned ? lastRefs.refs : first, sectioned ? lastRefs.titlePage : firstTitle);
         const bodyContent = body.trim() ? body : '<w:p/>';
         return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n`
             + `<w:document ${WML_NS}>`

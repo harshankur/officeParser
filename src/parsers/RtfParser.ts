@@ -2312,33 +2312,41 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         if (sectionNumber > 0) meta.section = partSections.get(part) ?? 0;
     }
     // A section's page in points: its own size, margins and columns, else the document's (RTF's defaults,
-    // Letter with margins of an inch and a quarter across, where it states none).
-    const sectionSetup = (state: SectionState): PageSetup => {
+    // Letter with margins of an inch and a quarter across, where it states none). Held as Word's reader
+    // holds a page: none where its size is no page (up to twenty-two inches each way), margins at most a
+    // third of the page, header and footer distances a third of its height, the gap a quarter of its
+    // width, a column no wider than the page: a page of 2,147,483,647 by 1 lost its text, and a gap of
+    // millions made a file LibreOffice would not open.
+    const sectionSetup = (state: SectionState): PageSetup | undefined => {
         const pt = (twips: number | undefined, fallback: number) => (twips ?? fallback) / 20;
         let width = pt(state.w ?? page.w, 12240), height = pt(state.h ?? page.h, 15840);
+        if (!(width > 0 && height > 0 && width <= 1584 && height <= 1584)) return undefined;
         if ((state.landscape || (state.w === undefined && page.landscape)) && width < height) [width, height] = [height, width];
+        const margin = (twips: number | undefined, fallback: number) => Math.min(pt(twips, fallback), Math.min(width, height) / 3);
         const setup: PageSetup = {
             width, height,
-            margin: { top: pt(state.mt ?? page.mt, 1440), right: pt(state.mr ?? page.mr, 1800), bottom: pt(state.mb ?? page.mb, 1440), left: pt(state.ml ?? page.ml, 1800) },
-            headerDistance: pt(state.hy ?? page.hy, 720), footerDistance: pt(state.fy ?? page.fy, 720),
+            margin: { top: margin(state.mt ?? page.mt, 1440), right: margin(state.mr ?? page.mr, 1800), bottom: margin(state.mb ?? page.mb, 1440), left: margin(state.ml ?? page.ml, 1800) },
+            headerDistance: Math.min(pt(state.hy ?? page.hy, 720), height / 3), footerDistance: Math.min(pt(state.fy ?? page.fy, 720), height / 3),
         };
         const count = Math.min(16, state.cols ?? 1);
         if (count > 1) {
             const widths = Array.from({ length: count }, (_, i) => state.widths.get(i + 1));
-            setup.columns = { count, gap: pt(state.colsx, 720), ...(state.line ? { separator: true } : {}), ...(widths.every(w => w !== undefined) ? { widths: widths.map(w => w! / 20) } : {}) };
+            setup.columns = { count, gap: Math.min(pt(state.colsx, 720), width / 4), ...(state.line ? { separator: true } : {}), ...(widths.every(w => w !== undefined) ? { widths: widths.map(w => Math.min(w! / 20, width)) } : {}) };
         }
         return setup;
     };
     for (const { node, state } of sectionBreaks) {
         const meta = node.metadata as BreakMetadata;
         if (state.start === 'none') meta.breakType = 'section';
-        if (pageStated || (state.cols ?? 1) > 1) meta.pageSetup = sectionSetup(state);
+        const setup = pageStated || (state.cols ?? 1) > 1 ? sectionSetup(state) : undefined;
+        if (setup) meta.pageSetup = setup;
     }
+    const firstSetup = pageStated || (firstSection.cols ?? 1) > 1 ? sectionSetup(firstSection) : undefined;
     const result = createAST(
         'rtf',
         {
             // RTF Limitation: No style map available (RTF uses inline styles)
-            ...(pageStated || (firstSection.cols ?? 1) > 1 ? { pageSetup: sectionSetup(firstSection) } : {}),
+            ...(firstSetup ? { pageSetup: firstSetup } : {}),
         },
         content,
         attachments, // PNG and JPEG images extracted from \\pict groups

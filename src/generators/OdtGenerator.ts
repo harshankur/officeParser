@@ -4,7 +4,8 @@ import { layoutTableRows } from '../utils/tableLayout.js';
 import { BreakMetadata, ConversionResult, GeneratorConfig, ImageMode, OdtGeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, odfUserDefinedXml, resolvePaper, resolveZipInstant, runningFurniture, sectionFurnitureIndex, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
+import { heldColumns } from '../utils/columnUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, odfUserDefinedXml, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
 import { markerPattern, MarkerPattern, odfNumFormat } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
@@ -125,6 +126,13 @@ interface ListDef { name: string; registry: StyleRegistry; levels: Map<number, M
  * the parser with near-zero loss. Unlike DOCX, ODF carries formatting in named automatic styles and
  * keeps notes/comments/headers inline in the same files, so there is no per-part relationship layer.
  */
+/** A section's master page: its page, and its header and footer for every page, its first page and even pages (rendered once). */
+interface SectionPage {
+    name: string; setup: PageSetup | undefined; key: string;
+    header?: OfficeContentNode[]; footer?: OfficeContentNode[]; firstHeader?: OfficeContentNode[]; firstFooter?: OfficeContentNode[]; evenHeader?: OfficeContentNode[]; evenFooter?: OfficeContentNode[];
+    headerXml?: string; footerXml?: string; firstHeaderXml?: string; firstFooterXml?: string; evenHeaderXml?: string; evenFooterXml?: string;
+}
+
 export class OdtGenerator extends BaseGenerator<'odt'> {
     private contentStyles = new StyleRegistry();
     private stylesFileStyles = new StyleRegistry();
@@ -173,7 +181,18 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         for (const page of this.sectionPages) {
             if (page.header) page.headerXml = await this.renderBlocks(page.header);
             if (page.footer) page.footerXml = await this.renderBlocks(page.footer);
+            if (page.firstHeader) page.firstHeaderXml = await this.renderBlocks(page.firstHeader);
+            if (page.firstFooter) page.firstFooterXml = await this.renderBlocks(page.firstFooter);
+            if (page.evenHeader) page.evenHeaderXml = await this.renderBlocks(page.evenHeader);
+            if (page.evenFooter) page.evenFooterXml = await this.renderBlocks(page.evenFooter);
         }
+        // The first section's own first page's and even pages' parts, beside the running ones (see buildStylesXml).
+        const bodyOwn: Record<'firstHeader' | 'firstFooter' | 'evenHeader' | 'evenFooter', string | undefined> = { firstHeader: undefined, firstFooter: undefined, evenHeader: undefined, evenFooter: undefined };
+        for (const [key, kind, type] of [['firstHeader', 'header', 'first'], ['firstFooter', 'footer', 'first'], ['evenHeader', 'header', 'even'], ['evenFooter', 'footer', 'even']] as const) {
+            const own = sectionFurniture(kind === 'header' ? this.ast.auxiliary?.headers : this.ast.auxiliary?.footers, kind, 0, type);
+            if (own) bodyOwn[key] = await this.renderBlocks(own);
+        }
+        this.bodyOwnParts = bodyOwn;
         this.activeStyles = this.contentStyles;
 
         // Serialize list styles into their owning file's registry (learned during render).
@@ -847,24 +866,32 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
      * The pages of sections set on other pages than the first's (a landscape section, other margins), each
      * a master page of its own, with its columns; and whether a section returns to the first's (`Body`).
      */
-    private sectionPages: { name: string; setup: PageSetup | undefined; key: string; header?: OfficeContentNode[]; footer?: OfficeContentNode[]; headerXml?: string; footerXml?: string }[] = [];
+    private sectionPages: SectionPage[] = [];
     private readonly sectionMasterByKey = new Map<string, string>();
+    private readonly sectionPageByName = new Map<string, SectionPage>();
     private bodyMasterUsed = false;
+    /** The first section's own first page's and even pages' parts, rendered (see generate). */
+    private bodyOwnParts: Partial<Record<'firstHeader' | 'firstFooter' | 'evenHeader' | 'evenFooter', string>> = {};
     private onSectionPage = false;
     /** The section being written (counted from 0, as BreakMetadata.section counts), its page, and the master its pages are on ('' the first's). */
     private currentSection = 0;
     private currentSetup: PageSetup | undefined;
     private activeMaster = '';
 
-    /** A section's header or footer: its own, else the nearest earlier section's own, else (undefined) the first section's. */
-    private sectionPart(kind: 'header' | 'footer', section: number): { key: string; nodes: OfficeContentNode[] } | undefined {
+    /**
+     * A section's header or footer of a type: its every page's or even pages' its own, else the nearest
+     * earlier section's own (as Word gives it), else (undefined) the first section's; its first page's its
+     * own alone (a title page is the section's own).
+     */
+    private sectionPart(kind: 'header' | 'footer', section: number, type: 'default' | 'first' | 'even' = 'default'): { key: string; nodes: OfficeContentNode[] } | undefined {
         const nodes = kind === 'header' ? this.ast.auxiliary?.headers : this.ast.auxiliary?.footers;
-        if (!nodes?.length || section < 1) return undefined;
+        if (!nodes?.length || section < (type === 'default' ? 1 : 0)) return undefined;
+        if (type === 'first') { const own = sectionFurniture(nodes, kind, section, 'first'); return own ? { key: `${kind}first${section}`, nodes: own } : undefined; }
         // The latest section at or before this one with its own (found by halving: a document of thousands of sections).
-        const { bySection, sections } = sectionFurnitureIndex(nodes, kind);
+        const { bySection, sections } = sectionFurnitureIndex(nodes, kind, type);
         let lo = 0, hi = sections.length - 1, found = -1;
         while (lo <= hi) { const mid = (lo + hi) >> 1; if (sections[mid] <= section) { found = sections[mid]; lo = mid + 1; } else hi = mid - 1; }
-        return found >= 1 ? { key: `${kind}${found}`, nodes: [bySection.get(found)!] } : undefined;
+        return found >= (type === 'default' ? 1 : 0) ? { key: `${kind}${type}${found}`, nodes: [bySection.get(found)!] } : undefined;
     }
 
     /**
@@ -878,23 +905,36 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         const first = this.paperOf(this.ast.metadata?.pageSetup), own = setup ? this.paperOf(setup) : first;
         const samePaper = Math.abs(first.w - own.w) < 0.5 && Math.abs(first.h - own.h) < 0.5
             && (['top', 'right', 'bottom', 'left'] as const).every(k => Math.abs(first.margin[k] - own.margin[k]) < 0.5);
-        const header = this.sectionPart('header', this.currentSection), footer = this.sectionPart('footer', this.currentSection);
-        let master = '';
-        if (!samePaper || header || footer) {
+        const section = this.currentSection;
+        const header = this.sectionPart('header', section), footer = this.sectionPart('footer', section);
+        // Its first page's own and its even pages' (the first section's are the body's own, see buildStylesXml).
+        const parts = section >= 1 ? {
+            firstHeader: this.sectionPart('header', section, 'first'), firstFooter: this.sectionPart('footer', section, 'first'),
+            evenHeader: this.sectionPart('header', section, 'even'), evenFooter: this.sectionPart('footer', section, 'even'),
+        } : {};
+        const more = Object.values(parts).some(Boolean);
+        let master = '', page: SectionPage | undefined;
+        if (!samePaper || header || footer || more) {
             const columns = samePaper ? this.ast.metadata?.pageSetup?.columns : setup?.columns;
-            const key = JSON.stringify([own.w, own.h, own.margin, columns ?? null, header?.key ?? null, footer?.key ?? null]);
+            const key = JSON.stringify([own.w, own.h, own.margin, columns ?? null, header?.key ?? null, footer?.key ?? null, ...Object.values(parts).map(p => p?.key ?? null)]);
             master = this.sectionMasterByKey.get(key) ?? '';
+            page = this.sectionPageByName.get(master);
             if (!master) {
                 master = `Section${this.sectionPages.length + 1}`;
-                this.sectionPages.push({ name: master, setup: samePaper ? this.ast.metadata?.pageSetup : setup, key, header: header?.nodes, footer: footer?.nodes });
+                page = { name: master, setup: samePaper ? this.ast.metadata?.pageSetup : setup, key, header: header?.nodes, footer: footer?.nodes,
+                    firstHeader: parts.firstHeader?.nodes, firstFooter: parts.firstFooter?.nodes, evenHeader: parts.evenHeader?.nodes, evenFooter: parts.evenFooter?.nodes };
+                this.sectionPages.push(page);
+                this.sectionPageByName.set(master, page);
                 this.sectionMasterByKey.set(key, master);
             }
         }
         // The columns the page itself is set in: a section master's own, else the body's.
         this.onSectionPage = !samePaper;
         this.pageColumns = samePaper ? this.ast.metadata?.pageSetup?.columns : setup?.columns;
-        if (master === this.activeMaster) return `<text:p text:style-name="${this.pageBreakStyle()}"/>`;
-        const name = master || 'Body';
+        // A section of a first page of its own starts on that page's master, which hands over to its own.
+        const startsOnFirst = !!(page && (page.firstHeader || page.firstFooter));
+        if (master === this.activeMaster && !startsOnFirst) return `<text:p text:style-name="${this.pageBreakStyle()}"/>`;
+        const name = startsOnFirst ? `${master}First` : master || 'Body';
         if (!master) this.bodyMasterUsed = true;
         this.activeMaster = master;
         return `<text:p text:style-name="${this.activeStyles.intern('paragraph', 'P', '<style:paragraph-properties fo:break-before="page"/>', ` style:parent-style-name="Standard" style:master-page-name="${name}"`)}"/>`;
@@ -914,12 +954,14 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         return `<style:page-layout style:name="${name}"><style:page-layout-properties`
             + ` fo:page-width="${fmtIn(paper.w / 72)}" fo:page-height="${fmtIn(paper.h / 72)}" style:print-orientation="${paper.landscape ? 'landscape' : 'portrait'}"`
             + ` fo:margin-top="${fmtPt(mar.top)}" fo:margin-bottom="${fmtPt(mar.bottom)}"`
-            + ` fo:margin-left="${fmtPt(mar.left)}" fo:margin-right="${fmtPt(mar.right)}"${(columns?.count ?? 1) > 1 ? `>${this.columnsXml(columns)}</style:page-layout-properties>` : '/>'}</style:page-layout>`;
+            + ` fo:margin-left="${fmtPt(mar.left)}" fo:margin-right="${fmtPt(mar.right)}"${(columns?.count ?? 1) > 1 ? `>${this.columnsXml(columns, paper)}</style:page-layout-properties>` : '/>'}</style:page-layout>`;
     }
 
     /** Columns as ODF writes them (`style:columns`): their number, gap, widths where they differ, a line between. */
-    private columnsXml(columns: PageSetup['columns'] | undefined): string {
-        if (!columns || columns.count < 2) return '<style:columns fo:column-count="1" fo:column-gap="0pt"/>';
+    private columnsXml(given: PageSetup['columns'] | undefined, paper = this.paperOf(this.ast.metadata?.pageSetup)): string {
+        // (Held to the page: a gap of millions made a file LibreOffice would not open, see heldColumns.)
+        const columns = heldColumns(given, paper.w, paper.w - paper.margin.left - paper.margin.right);
+        if (!columns) return '<style:columns fo:column-count="1" fo:column-gap="0pt"/>';
         const sep = columns.separator ? '<style:column-sep style:width="0.5pt" style:color="#000000" style:height="100%" style:style="solid"/>' : '';
         const own = columns.widths?.length === columns.count
             ? columns.widths.map((w, i) => {
@@ -1070,8 +1112,20 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             if (kind === 'even') return page === 'first' && headerKind !== 'first' && footerKind !== 'first' || page === 'rest' ? `<style:${tag}><text:p/></style:${tag}><style:${tag}-left>${xml}</style:${tag}-left>` : '';
             return `<style:${tag}>${xml}</style:${tag}>`;
         };
-        const firstOwn = headerKind === 'first' || footerKind === 'first';
-        const masters = (page: 'first' | 'rest') => part('header', headerXml, headerKind, page) + part('footer', footerXml, footerKind, page);
+        // A master's parts from a section's own: every page's (an empty one written as an empty paragraph:
+        // an empty part is read as none), even pages' (`-left`), and its first page's where it is that page's.
+        const own = (tag: 'header' | 'footer', every: string | undefined, even: string | undefined) => (every === undefined && even === undefined ? ''
+            : `<style:${tag}>${every || '<text:p/>'}</style:${tag}>`) + (even !== undefined ? `<style:${tag}-left>${even || '<text:p/>'}</style:${tag}-left>` : '');
+        const body = this.bodyOwnParts;
+        const plain = headerKind === 'default' && footerKind === 'default';
+        const bodyFirst = plain && (body.firstHeader !== undefined || body.firstFooter !== undefined);
+        const firstOwn = headerKind === 'first' || footerKind === 'first' || bodyFirst;
+        // (Where the running parts are every page's, the first section's own first and even pages' join them.)
+        const masters = (page: 'first' | 'rest') => plain
+            ? page === 'first'
+                ? own('header', body.firstHeader ?? (headerXml || undefined), undefined) + own('footer', body.firstFooter ?? (footerXml || undefined), undefined)
+                : own('header', headerXml || undefined, body.evenHeader) + own('footer', footerXml || undefined, body.evenFooter)
+            : part('header', headerXml, headerKind, page) + part('footer', footerXml, footerKind, page);
         const masterPage = firstOwn
             ? `<style:master-page style:name="Standard" style:page-layout-name="pm1" style:next-style-name="Rest">${masters('first')}</style:master-page>`
                 + `<style:master-page style:name="Rest" style:page-layout-name="pm1">${masters('rest')}</style:master-page>`
@@ -1079,9 +1133,16 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         // Sections' own pages, and the body's page to return to after them, each with the body's header and footer.
         const sectionLayouts = this.sectionPages.map((p, i) => this.pageLayoutXml(`pm${i + 2}`, this.paperOf(p.setup), p.setup?.columns)).join('');
         // A section's own header and footer, else the first section's (as on the body's pages).
-        const sectionParts = (p: typeof this.sectionPages[number]) => (p.headerXml !== undefined ? `<style:header>${p.headerXml || '<text:p/>'}</style:header>` : part('header', headerXml, headerKind, 'rest'))
-            + (p.footerXml !== undefined ? `<style:footer>${p.footerXml || '<text:p/>'}</style:footer>` : part('footer', footerXml, footerKind, 'rest'));
-        const sectionMasters = this.sectionPages.map((p, i) => `<style:master-page style:name="${p.name}" style:page-layout-name="pm${i + 2}">${sectionParts(p)}</style:master-page>`).join('')
+        // Even pages' and a first page's of its own too: its first page on a master of its own (`<name>First`)
+        // that hands over to the section's.
+        const sectionSide = (tag: 'header' | 'footer', every: string | undefined, even: string | undefined, kind: string, running: string) =>
+            every !== undefined || even !== undefined ? own(tag, every ?? (kind === 'default' ? running || undefined : undefined), even) : part(tag, running, kind, 'rest');
+        const sectionParts = (p: SectionPage) => sectionSide('header', p.headerXml, p.evenHeaderXml, headerKind, headerXml) + sectionSide('footer', p.footerXml, p.evenFooterXml, footerKind, footerXml);
+        const firstParts = (p: SectionPage) => (p.firstHeaderXml !== undefined ? own('header', p.firstHeaderXml, undefined) : sectionSide('header', p.headerXml, undefined, headerKind, headerXml))
+            + (p.firstFooterXml !== undefined ? own('footer', p.firstFooterXml, undefined) : sectionSide('footer', p.footerXml, undefined, footerKind, footerXml));
+        const sectionMasters = this.sectionPages.map((p, i) => (p.firstHeaderXml !== undefined || p.firstFooterXml !== undefined
+            ? `<style:master-page style:name="${p.name}First" style:page-layout-name="pm${i + 2}" style:next-style-name="${p.name}">${firstParts(p)}</style:master-page>` : '')
+            + `<style:master-page style:name="${p.name}" style:page-layout-name="pm${i + 2}">${sectionParts(p)}</style:master-page>`).join('')
             + (this.bodyMasterUsed ? `<style:master-page style:name="Body" style:page-layout-name="pm1">${masters('rest')}</style:master-page>` : '');
         return `<?xml version="1.0" encoding="UTF-8"?>\n`
             + `<office:document-styles ${ODF_NS} office:version="1.2">`

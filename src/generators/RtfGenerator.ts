@@ -3,7 +3,8 @@ import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
-import { base64ByteLength, decodeBase64, embedUrl, furnitureKind, hexColor, isHeaderRow, runningFurniture, sectionFurniture, writableSpacing } from '../utils/officeGenUtils.js';
+import { heldColumns } from '../utils/columnUtils.js';
+import { base64ByteLength, decodeBase64, embedUrl, furnitureKind, hexColor, isHeaderRow, runningFurniture, sectionFurniture, sectionFurnitureIndex, writableSpacing } from '../utils/officeGenUtils.js';
 
 /** Each byte's two hex digits. */
 const HEX_BYTES = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
@@ -121,7 +122,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
 
         // 4. The document's page (where it gives one), the first section's columns, the header and footer, then the body
         output += documentPageRtf(this.ast.metadata?.pageSetup);
-        const columns = columnsRtf(this.ast.metadata?.pageSetup?.columns);
+        const columns = columnsRtf(this.ast.metadata?.pageSetup?.columns, this.ast.metadata?.pageSetup);
         if (columns) output += `\\sectd${columns}\n`;
         output += running;
         output += '\\f0\\fs24\n';
@@ -424,12 +425,8 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                         // section before); its own header and footer, written where it starts.
                         const starts = typeof meta.section === 'number' && meta.section !== this.currentSection;
                         if (typeof meta.section === 'number') this.currentSection = meta.section;
-                        let own = '';
-                        for (const kind of starts ? ['header', 'footer'] as const : [] as const) {
-                            const nodes = sectionFurniture(kind === 'header' ? this.ast.auxiliary?.headers : this.ast.auxiliary?.footers, kind, this.currentSection);
-                            if (nodes) own += `{\\${kind} ${await this.renderApart(nodes)}}\n`;
-                        }
-                        return `\\sect\\sectd\\${meta.breakType === 'section' ? 'sbknone' : 'sbkpage'}${sectionPageRtf(meta.pageSetup)}${columnsRtf(meta.pageSetup?.columns)}\n${own}`;
+                        const own = starts ? await this.sectionFurnitureRtf(this.currentSection) : { title: false, rtf: '' };
+                        return `\\sect\\sectd\\${meta.breakType === 'section' ? 'sbknone' : 'sbkpage'}${own.title ? '\\titlepg' : ''}${sectionPageRtf(meta.pageSetup)}${columnsRtf(meta.pageSetup?.columns, meta.pageSetup)}\n${own.rtf}`;
                     }
                     return meta?.breakType === 'page' ? '\\page\n' : '\\line\n';
                 }
@@ -522,19 +519,31 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         // Written into one header and one footer, as DOCX and ODT write them; they were left out.
         // A first page's own (a letterhead) is the title page's (`\titlepg`, `\headerf`), even pages' own
         // the left pages' (`\facingp`, `\headerl`); one on every page is then written for those too.
+        // The first section's own first page's and even pages' parts beside them, and every later section's
+        // (see sectionFurnitureRtf), which a section with none of its own takes on, as Word gives them.
         let running = '';
+        const lists = { header: ast.auxiliary?.headers, footer: ast.auxiliary?.footers };
         const parts = (['header', 'footer'] as const).map(kind => {
-            const nodes = runningFurniture(kind === 'header' ? ast.auxiliary?.headers : ast.auxiliary?.footers, kind);
+            const nodes = runningFurniture(lists[kind], kind);
             return { kind, nodes, on: nodes.length ? furnitureKind(nodes, kind) : 'default' };
         });
-        const titlePage = parts.some(p => p.nodes.length && p.on === 'first'), facing = parts.some(p => p.nodes.length && p.on === 'even');
-        if (facing) running += '\\facingp\n';
+        // Even pages' own parts anywhere: left and right pages (`\facingp`) for the whole document.
+        const evenAnywhere = (['header', 'footer'] as const).some(kind => !!lists[kind]?.length && sectionFurnitureIndex(lists[kind]!, kind, 'even').sections.length > 0);
+        this.facingPages = parts.some(p => p.nodes.length && p.on === 'even') || evenAnywhere;
+        const ownFirst = { header: sectionFurniture(lists.header, 'header', 0, 'first'), footer: sectionFurniture(lists.footer, 'footer', 0, 'first') };
+        const ownEven = { header: sectionFurniture(lists.header, 'header', 0, 'even'), footer: sectionFurniture(lists.footer, 'footer', 0, 'even') };
+        const titlePage = parts.some(p => p.nodes.length && p.on === 'first') || !!(ownFirst.header || ownFirst.footer);
+        if (this.facingPages) running += '\\facingp\n';
         if (titlePage) running += '\\titlepg\n';
         for (const { kind, nodes, on } of parts) {
-            if (!nodes.length) continue;
-            const text = await this.renderApart(nodes);
-            const groups = on === 'first' ? ['f'] : on === 'even' ? ['l'] : [...(facing ? ['l', 'r'] : ['']), ...(titlePage ? ['f'] : [])];
-            for (const group of groups) running += `{\\${kind}${group} ${text}}\n`;
+            if (nodes.length) {
+                const text = await this.renderApart(nodes);
+                if (on === 'default') this.inForce[kind] = text;
+                const groups = on === 'first' ? ['f'] : on === 'even' ? ['l'] : [...(this.facingPages ? (ownEven[kind] ? ['r'] : ['l', 'r']) : ['']), ...(titlePage && !ownFirst[kind] ? ['f'] : [])];
+                for (const group of groups) running += `{\\${kind}${group} ${text}}\n`;
+            }
+            if (ownFirst[kind]) running += `{\\${kind}f ${await this.renderApart(ownFirst[kind]!)}}\n`;
+            if (ownEven[kind]) running += `{\\${kind}l ${await this.renderApart(ownEven[kind]!)}}\n`;
         }
 
         for (const node of ast.content) {
@@ -547,6 +556,34 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
             }
         }
         return { running, body };
+    }
+
+    /** Left and right pages (`\facingp`): the document has even pages' own parts. */
+    private facingPages = false;
+    /** Each kind's every-page part in force, as written: what a section's first page and even pages show where it has none of their own. */
+    private readonly inForce: Record<'header' | 'footer', string> = { header: '', footer: '' };
+
+    /**
+     * A later section's own header and footer, written where it starts: its every page's (none where it has
+     * none of its own: it takes on the one before it), its first page's (and the title page, `\titlepg`,
+     * it needs) and its even pages'; where it has a first page or the document left and right pages, a kind
+     * with no part of its own for them is the every-page one in force.
+     */
+    private async sectionFurnitureRtf(section: number): Promise<{ title: boolean; rtf: string }> {
+        const lists = { header: this.ast.auxiliary?.headers, footer: this.ast.auxiliary?.footers };
+        const own = (kind: 'header' | 'footer', type: 'default' | 'first' | 'even') => sectionFurniture(lists[kind], kind, section, type);
+        const title = !!(own('header', 'first') || own('footer', 'first'));
+        let rtf = '';
+        for (const kind of ['header', 'footer'] as const) {
+            const every = own(kind, 'default'), first = own(kind, 'first'), even = own(kind, 'even');
+            if (every) this.inForce[kind] = await this.renderApart(every);
+            const everyGroups = this.facingPages ? (even ? ['r'] : ['l', 'r']) : [''];
+            if (every || (this.facingPages && this.inForce[kind])) for (const group of everyGroups) rtf += `{\\${kind}${group} ${this.inForce[kind]}}\n`;
+            if (first) rtf += `{\\${kind}f ${await this.renderApart(first)}}\n`;
+            else if (title && this.inForce[kind]) rtf += `{\\${kind}f ${this.inForce[kind]}}\n`;
+            if (even) rtf += `{\\${kind}l ${await this.renderApart(even)}}\n`;
+        }
+        return { title, rtf };
     }
 
     /**
@@ -637,10 +674,15 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
     }
 }
 
-/** Columns as RTF's section controls: their number, the gap in twips, a line between, each one's width where they differ. Nothing for one. */
-function columnsRtf(columns: PageSetup['columns'] | undefined): string {
-    if (!columns || columns.count < 2) return '';
-    const count = Math.min(columns.count, 16), gap = Math.round(columns.gap * 20);
+/**
+ * Columns as RTF's section controls: their number, the gap in twips, a line between, each one's width
+ * where they differ; held to the page they are on (see heldColumns). Nothing for one.
+ */
+function columnsRtf(given: PageSetup['columns'] | undefined, setup: PageSetup | undefined): string {
+    const page = heldPage(setup);
+    const columns = heldColumns(given, page?.width ?? 612, page ? page.width - (page.margin?.left ?? 72) - (page.margin?.right ?? 72) : 468);
+    if (!columns) return '';
+    const count = columns.count, gap = twips(columns.gap);
     const own = columns.widths?.length === columns.count
         ? columns.widths.slice(0, count).map((w, i) => `\\colno${i + 1}\\colw${Math.max(1, Math.round(w * 20))}${i < count - 1 ? `\\colsr${gap}` : ''}`).join('')
         : '';
@@ -648,18 +690,36 @@ function columnsRtf(columns: PageSetup['columns'] | undefined): string {
 }
 
 /** A twips value RTF takes (a whole number within its range). */
-const twips = (pt: number) => Math.max(0, Math.min(31680, Math.round(pt * 20)));
+const twips = (pt: number) => Number.isFinite(pt) ? Math.max(0, Math.min(31680, Math.round(pt * 20))) : 0;
+
+/**
+ * A page as RTF output writes it: none where its size is no page (an inch to twenty-two inches each way,
+ * as Word takes), its margins at most a third of it, its header's and footer's distances a third of its
+ * height: a page of a hundred million points by a twentieth of
+ * one lost its text.
+ */
+function heldPage(setup: PageSetup | undefined): PageSetup | undefined {
+    if (!setup || !(setup.width >= 72 && setup.height >= 72 && setup.width <= 1584 && setup.height <= 1584)) return undefined;
+    const most = Math.min(setup.width, setup.height) / 3;
+    const held = (v: number | undefined) => Math.min(Number.isFinite(v) && v! > 0 ? v! : 0, most);
+    const m = setup.margin;
+    const distance = (v: number | undefined) => v === undefined ? undefined : Math.min(Number.isFinite(v) && v > 0 ? v : 0, setup.height / 3);
+    return { ...setup, ...(m ? { margin: { top: held(m.top), right: held(m.right), bottom: held(m.bottom), left: held(m.left) } } : {}),
+        headerDistance: distance(setup.headerDistance), footerDistance: distance(setup.footerDistance) };
+}
 
 /** The document's page (`\paperw`, `\margl`, ..., `\landscape`) as its first section's setup gives it; nothing where it gives none. */
-function documentPageRtf(setup: PageSetup | undefined): string {
-    if (!setup || !(setup.width > 0) || !(setup.height > 0)) return '';
+function documentPageRtf(given: PageSetup | undefined): string {
+    const setup = heldPage(given);
+    if (!setup) return '';
     const m = setup.margin;
     return `\\paperw${twips(setup.width)}\\paperh${twips(setup.height)}${m ? `\\margl${twips(m.left)}\\margr${twips(m.right)}\\margt${twips(m.top)}\\margb${twips(m.bottom)}` : ''}${setup.width > setup.height ? '\\landscape' : ''}\n`;
 }
 
 /** A section's own page (`\pgwsxn`, `\marglsxn`, ..., `\lndscpsxn`, header and footer distances); nothing where the break gives none. */
-function sectionPageRtf(setup: PageSetup | undefined): string {
-    if (!setup || !(setup.width > 0) || !(setup.height > 0)) return '';
+function sectionPageRtf(given: PageSetup | undefined): string {
+    const setup = heldPage(given);
+    if (!setup) return '';
     const m = setup.margin;
     return `\\pgwsxn${twips(setup.width)}\\pghsxn${twips(setup.height)}${m ? `\\marglsxn${twips(m.left)}\\margrsxn${twips(m.right)}\\margtsxn${twips(m.top)}\\margbsxn${twips(m.bottom)}` : ''}`
         + `${setup.headerDistance !== undefined ? `\\headery${twips(setup.headerDistance)}` : ''}${setup.footerDistance !== undefined ? `\\footery${twips(setup.footerDistance)}` : ''}${setup.width > setup.height ? '\\lndscpsxn' : ''}`;

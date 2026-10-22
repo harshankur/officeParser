@@ -2716,6 +2716,21 @@ async function parserHardeningTests() {
     const hugeDoc = await PDFDocument.load(hugeSvg);
     const nonFinite = hugeDoc.context.enumerateIndirectObjects().some(([, obj]: any) => obj instanceof PDFRawStream && /NaN|Infinity|\de[+-]\d/.test(Buffer.from((() => { try { return String(obj.dict.get(PDFName.of('Filter'))) === '/FlateDecode' ? unzlibSync(obj.contents) : obj.contents; } catch { return obj.contents; } })()).toString('latin1')));
     check('pdf: numbers in an SVG no page holds are written finite', !nonFinite);
+    // A gradient painting ten thousand use copies, each of its stops read once; rules of many classes over
+    // many use copies, each element's matched once.
+    const stops = (count: number) => Array.from({ length: count }, (_, i) => `<stop offset="${i / count}" stop-color="#${(i % 256).toString(16).padStart(2, '0')}0000"/>`).join('');
+    await timed('pdf: an SVG gradient of 4,000 stops painting 10,000 use copies is drawn', svgRun(fanSvg('<rect width="5" height="5" fill="url(#g)"/>', 4).replace('<defs>', `<defs><linearGradient id="g">${stops(n(4_000))}</linearGradient>`)));
+    await timed('pdf: 2,000 SVG rules of classes over 10,000 use copies are matched', svgRun(fanSvg('<rect class="c0 c1 c2 c3" width="5" height="5"/>', 4).replace('<defs>', `<defs><style>${Array.from({ length: n(2_000) }, (_, i) => `.c${i % 4}.x${i}{fill:red}`).join('')}</style>`)));
+    // Sections of their own headers and footers: measured on one page outside the document's, each page put
+    // at its end directly, identical parts written once.
+    const ownSections = () => astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'Start' }] }, ...Array.from({ length: n(4_000) }, (_, i) => [{ type: 'break', metadata: { breakType: 'page', section: i + 1 } }, { type: 'paragraph', children: [{ type: 'text', text: `S${i}` }] }]).flat()]);
+    const withParts = () => { const ast = ownSections() as any; ast.auxiliary = { headers: Array.from({ length: n(4_000) }, (_, i) => ({ type: 'header', metadata: { type: 'default', section: i + 1 }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'H' }] }] })), footers: Array.from({ length: n(4_000) }, (_, i) => ({ type: 'footer', metadata: { type: 'default', section: i + 1 }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'F' }] }] })) }; return ast; };
+    for (const format of ['pdf', 'docx', 'odt', 'rtf'] as const) await timed(`${format}: 4,000 sections of their own headers and footers are written`, () => OfficeGenerator.generate(withParts(), format as any, { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any));
+    // An RTF of pages and columns no page holds is read held to a page, in time in proportion to it.
+    await timed('rtf: 20,000 column widths of a hundred million twips are read', () => OfficeParser.parseOffice(Buffer.from('{\\rtf1\\ansi\\sectd\\cols16' + '\\colno3\\colw99999999'.repeat(n(20_000)) + ' x\\par}'), { fileType: 'rtf' } as any));
+    const heldRtf = await OfficeParser.parseOffice(Buffer.from('{\\rtf1\\ansi\\paperw12240\\paperh15840\\margl99999999\\sectd\\cols16\\colsx99999999 x\\par}'), { fileType: 'rtf' } as any) as OfficeParserAST;
+    const held = heldRtf.metadata.pageSetup!;
+    check('rtf: margins and a column gap no page holds are held to it', held.margin!.left <= Math.min(held.width, held.height) / 3 && held.columns!.gap <= held.width / 4, JSON.stringify(held));
     // Footnotes are measured once each and given a page as they are cited: many of them, each cited
     // once, cost in proportion; a stylesheet of many rules over many elements too (see the HTML cases).
     const footnoted = () => astWith(Array.from({ length: n(3000) }, (_, i) => ({ type: 'paragraph', children: [{ type: 'text', text: `Cited ${i}`, notes: [{ type: 'note', metadata: { noteType: i % 3 ? 'footnote' : 'endnote' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: `Note ${i} text.` }] }] }] }] })));
@@ -2747,6 +2762,10 @@ async function parserHardeningTests() {
         type: 'row', children: Array.from({ length: 10 }, (_, c) => ({ type: 'cell', text: c % 3 ? `${r * c}.5` : `Row ${r}`, metadata: { row: r, col: c, ...(c === 0 && r % 50 === 0 ? { rowSpan: 2 } : {}) }, children: [{ type: 'text', text: c % 3 ? `${r * c}.5` : `Row ${r}` }] })),
     })) }] }) as any;
     for (const format of ['xlsx', 'ods'] as const) await timed(`${format}: a sheet of 200,000 cells is written`, () => OfficeGenerator.generate(bigSheet(), format, { onWarning: () => {} } as any));
+    // Merges that overlap (a sheet whose cells name their places) are found in time in proportion, and a link a cell.
+    const overlapping = () => ({ type: 'xlsx', metadata: {}, attachments: [], content: [{ type: 'sheet', metadata: { sheetName: 'M' }, children: Array.from({ length: n(20_000) }, (_, r) => ({
+        type: 'row', children: [{ type: 'cell', metadata: { row: r, col: 0, rowSpan: 3, colSpan: 2 }, children: [{ type: 'text', text: `R${r}`, metadata: { link: `https://example.com/${r}` } }] }] })) }] }) as any;
+    for (const format of ['xlsx', 'ods'] as const) await timed(`${format}: 20,000 overlapping merges with links are written`, () => OfficeGenerator.generate(overlapping(), format, { onWarning: () => {} } as any));
     // A deck in time in proportion: a sheet's rows cut into slides, a long document flowed onto slides,
     // a page of many lines (each line found by its place, grouped by its left edge), a placed table.
     const placedPage = () => ({ type: 'pdf', metadata: {}, attachments: [], content: [{ type: 'page', metadata: { pageWidth: 612, pageHeight: 792 }, children: [
@@ -4135,6 +4154,21 @@ async function pdfProcessTests(h: {
     let ruled = { error: '', text: '' } as { error: string; text: string };
     await linear('pdf: a page of 16,000 crossing rules is read', async () => { ruled = await read(ruledPage(n(8000))); });
     check('pdf: a page of crossing rules keeps its text', !ruled.error && ruled.text.includes('Grid page'), ruled.error);
+    // A ruled table each of whose rows is one string across all its rules: each cut at them in time in
+    // proportion to the rows (its word boundaries found once, each rule's by halving).
+    const cutPage = (rows: number) => {
+        let body = '0.5 w\n';
+        for (let r = 0; r <= rows; r++) body += `20 ${800 - r * 10} m 580 ${800 - r * 10} l S\n`;
+        for (let c = 0; c <= 56; c++) body += `${20 + c * 10} 800 m ${20 + c * 10} ${800 - rows * 10} l S\n`;
+        body += 'BT /F1 4 Tf\n';
+        for (let r = 0; r < rows; r++) body += `1 0 0 1 22 ${802 - (r + 1) * 10} Tm (${Array.from({ length: 56 }, (_, c) => `w${c}`).join(' ')}) Tj\n`;
+        body += '1 0 0 1 40 820 Tm (Cut page) Tj ET\n';
+        return pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [5 0 R] /Count 1 >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', flate(Buffer.from(body)),
+            '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 4 0 R >>']);
+    };
+    let cut = { error: '', text: '' } as { error: string; text: string };
+    await linear('pdf: a ruled table of rows drawn as one string across 56 rules is read', async () => { cut = await read(cutPage(n(76))); });
+    check('pdf: a table of rows drawn across its rules keeps its text', !cut.error && cut.text.includes('Cut page') && cut.text.includes('w55'), cut.error || cut.text.slice(0, 80));
     // A page's marked content is read for its ActualText (see actualText): in time in proportion to its
     // operators, and within its bound on what it inflates (a stream of zeros inflating far past it).
     const markedPage = (body: Buffer) => pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [5 0 R] /Count 1 >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', flate(body),

@@ -18,6 +18,8 @@ import type { OfficeParserConfig } from '../../types.js';
 const MAX_ELEMENTS = 50_000;
 /** At most this many path commands in all. */
 const MAX_PATH_COMMANDS = 500_000;
+/** At most this many of a gradient's stops make its colour (their mean). */
+const MAX_GRADIENT_STOPS = 256;
 /** At most this deep groups (and nested `svg`) are followed. */
 const MAX_DEPTH = 64;
 /** At most this deep `use` refers to `use`. */
@@ -447,17 +449,42 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
         return name;
     };
 
+    /**
+     * The stylesheet's rules by what an element must have for them (its id, else one of its classes, else
+     * its type, else none), so an element tries only the rules that may match it; and the declarations each
+     * element takes from them, found once (a `use` drawn ten thousand times matched all rules each time).
+     */
+    const ruleIndex = new Map<string, number[]>();
+    svg.rules.forEach((rule, i) => {
+        const key = rule.id ? `#${rule.id}` : rule.classes.length ? `.${rule.classes[0]}` : rule.tag ? `t:${rule.tag}` : '*';
+        (ruleIndex.get(key) ?? ruleIndex.set(key, []).get(key)!).push(i);
+    });
+    const matched = new Map<Element, [string, string][]>();
+    const matchedRules = (el: Element): [string, string][] => {
+        const known = matched.get(el);
+        if (known) return known;
+        const classes = new Set((el.getAttribute('class') || '').split(/\s+/).filter(Boolean));
+        const id = el.getAttribute('id') || undefined, tag = localName(el);
+        const candidates: number[] = [...(ruleIndex.get('*') ?? []), ...(ruleIndex.get(`t:${tag}`) ?? []), ...(id ? ruleIndex.get(`#${id}`) ?? [] : [])];
+        for (const c of classes) for (const i of ruleIndex.get(`.${c}`) ?? []) candidates.push(i);
+        // (In the stylesheet's order of precedence, as the rules are sorted.)
+        candidates.sort((a, b) => a - b);
+        const out: [string, string][] = [];
+        for (const i of candidates) {
+            const rule = svg.rules[i];
+            if ((rule.tag && rule.tag !== tag) || (rule.id && rule.id !== id) || !rule.classes.every(c => classes.has(c))) continue;
+            for (const entry of rule.declarations) out.push(entry);
+        }
+        matched.set(el, out);
+        return out;
+    };
+
     /** The style an element draws with: its parent's inherited, then rules, attributes, `style`. */
     const styleOf = (el: Element, parent: Style): { style: Style; own: Map<string, string> } => {
         const own = new Map<string, string>();
-        const classes = new Set((el.getAttribute('class') || '').split(/\s+/).filter(Boolean));
-        const id = el.getAttribute('id') || undefined, tag = localName(el);
         // Presentation attributes first, then the stylesheet's rules over them, then `style` over both.
         for (const name of PROPERTIES) { const v = el.getAttribute(name); if (v != null && v.length <= 256) own.set(name, v.trim()); }
-        for (const rule of svg.rules) {
-            if ((rule.tag && rule.tag !== tag) || (rule.id && rule.id !== id) || !rule.classes.every(c => classes.has(c))) continue;
-            for (const [k, v] of rule.declarations) own.set(k, v);
-        }
+        for (const [k, v] of matchedRules(el)) own.set(k, v);
         const inline = el.getAttribute('style');
         if (inline) declarations(inline.slice(0, 4096), own);
         const style: Style = { ...parent, opacity: 1 };
@@ -493,6 +520,28 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
         return { style, own };
     };
 
+    /**
+     * A gradient in the mean of its stops' colours (its own, else those of the one it refers to), at most
+     * MAX_GRADIENT_STOPS of them: a gradient's colour is the same wherever it paints.
+     */
+    const gradientPaints = new Map<Element, { color: any; alpha: number } | undefined>();
+    const gradientPaint = (target: Element): { color: any; alpha: number } | undefined => {
+        let stops: Element[] = [];
+        for (let g: Element | undefined = target, hops = 0; g && !stops.length && hops < 8; hops++) {
+            stops = childElements(g).filter(s => localName(s) === 'stop').slice(0, MAX_GRADIENT_STOPS);
+            const href: string | null = g.getAttribute('href') || g.getAttribute('xlink:href');
+            g = href?.startsWith('#') ? svg.ids.get(href.slice(1)) : undefined;
+        }
+        const colours = stops.map(s => {
+            const own = declarations(s.getAttribute('style') || '');
+            return { c: parseCssColor(own.get('stop-color') ?? s.getAttribute('stop-color') ?? 'black'), a: num(own.get('stop-opacity') ?? s.getAttribute('stop-opacity') ?? '1') };
+        }).filter(s => s.c);
+        if (!colours.length) return undefined;
+        const mean = [0, 2, 4].map(i => colours.reduce((sum, s) => sum + parseInt(s.c!.hex.slice(i, i + 2), 16), 0) / colours.length / 255);
+        const alpha = colours.reduce((sum, s) => sum + (Number.isFinite(s.a) ? s.a : 1) * s.c!.alpha, 0) / colours.length;
+        return { color: lib.rgb(mean[0], mean[1], mean[2]), alpha };
+    };
+
     /** A paint (`fill`, `stroke`) as a colour and its alpha, or undefined for none. */
     const paint = (value: string, style: Style): { color: any; alpha: number } | undefined => {
         const v = value.trim();
@@ -503,22 +552,10 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
             const target = svg.ids.get(ref[1]);
             const kind = target ? localName(target) : '';
             if (kind === 'linearGradient' || kind === 'radialGradient') {
-                // A gradient in the mean of its stops' colours (its own, else those of the one it refers to).
                 left.add('gradients (drawn in one colour)');
-                let stops: Element[] = [];
-                for (let g: Element | undefined = target, hops = 0; g && !stops.length && hops < 8; hops++) {
-                    stops = childElements(g).filter(s => localName(s) === 'stop');
-                    const href = g.getAttribute('href') || g.getAttribute('xlink:href');
-                    g = href?.startsWith('#') ? svg.ids.get(href.slice(1)) : undefined;
-                }
-                const colours = stops.map(s => {
-                    const own = declarations(s.getAttribute('style') || '');
-                    return { c: parseCssColor(own.get('stop-color') ?? s.getAttribute('stop-color') ?? 'black'), a: num(own.get('stop-opacity') ?? s.getAttribute('stop-opacity') ?? '1') };
-                }).filter(s => s.c);
-                if (!colours.length) return undefined;
-                const mean = [0, 2, 4].map(i => colours.reduce((sum, s) => sum + parseInt(s.c!.hex.slice(i, i + 2), 16), 0) / colours.length / 255);
-                const alpha = colours.reduce((sum, s) => sum + (Number.isFinite(s.a) ? s.a : 1) * s.c!.alpha, 0) / colours.length;
-                return { color: lib.rgb(mean[0], mean[1], mean[2]), alpha };
+                // (Resolved once a gradient: every shape painted with it, each use copy too, read all its stops again.)
+                if (!gradientPaints.has(target!)) gradientPaints.set(target!, gradientPaint(target!));
+                return gradientPaints.get(target!);
             }
             if (kind === 'pattern') left.add('patterns');
             return ref[2] ? paint(ref[2], style) : undefined;

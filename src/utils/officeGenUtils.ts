@@ -216,27 +216,34 @@ export function runningFurniture(nodes: OfficeContentNode[] | undefined, kind: '
  * before it, as a word processor's section does. A reader that gives loose blocks, or a page's (a
  * PDF's), gives none.
  */
-export function sectionFurniture(nodes: OfficeContentNode[] | undefined, kind: 'header' | 'footer', section: number): OfficeContentNode[] | undefined {
-    if (!nodes?.length || section < 1) return undefined;
-    const own = sectionFurnitureIndex(nodes, kind).bySection.get(section);
+export function sectionFurniture(nodes: OfficeContentNode[] | undefined, kind: 'header' | 'footer', section: number, type: 'default' | 'first' | 'even' = 'default'): OfficeContentNode[] | undefined {
+    if (!nodes?.length || section < (type === 'default' ? 1 : 0)) return undefined;
+    const own = sectionFurnitureIndex(nodes, kind, type).bySection.get(section);
     return own ? [own] : undefined;
 }
 
-/** Later sections' own parts of a kind, by section, and their sections in order: read once a list (see sectionFurniture). */
+/**
+ * Sections' own parts of a kind and type, by section, and their sections in order: read once a list (see
+ * sectionFurniture). Every-page parts are later sections' (the first section's is runningFurniture's);
+ * a first page's or even pages' are the first section's too, but for the one runningFurniture picked.
+ */
 const furnitureIndexes = new WeakMap<OfficeContentNode[], Map<string, { bySection: Map<number, OfficeContentNode>; sections: number[] }>>();
-export function sectionFurnitureIndex(nodes: OfficeContentNode[], kind: 'header' | 'footer'): { bySection: Map<number, OfficeContentNode>; sections: number[] } {
+export function sectionFurnitureIndex(nodes: OfficeContentNode[], kind: 'header' | 'footer', type: 'default' | 'first' | 'even' = 'default'): { bySection: Map<number, OfficeContentNode>; sections: number[] } {
     let byKind = furnitureIndexes.get(nodes);
     if (!byKind) furnitureIndexes.set(nodes, byKind = new Map());
-    let index = byKind.get(kind);
+    let index = byKind.get(`${kind}|${type}`);
     if (!index) {
         const bySection = new Map<number, OfficeContentNode>();
+        const running = type === 'default' ? undefined : runningFurniture(nodes, kind)[0];
         for (const n of nodes) {
             const m = n.metadata as { type?: string; section?: number; hidden?: boolean; page?: number } | undefined;
-            if (n.type !== kind || typeof m?.section !== 'number' || m.section < 1 || m.page !== undefined || m.hidden || (m.type ?? 'default') !== 'default') continue;
-            if (!bySection.has(m.section)) bySection.set(m.section, n);
+            if (n.type !== kind || n === running || m?.page !== undefined || m?.hidden || (m?.type ?? 'default') !== type) continue;
+            const section = typeof m?.section === 'number' ? m.section : type === 'default' ? -1 : 0;
+            if (section < (type === 'default' ? 1 : 0)) continue;
+            if (!bySection.has(section)) bySection.set(section, n);
         }
         index = { bySection, sections: [...bySection.keys()].sort((a, b) => a - b) };
-        byKind.set(kind, index);
+        byKind.set(`${kind}|${type}`, index);
     }
     return index;
 }
@@ -596,13 +603,19 @@ const propText = (s: string): string => escapeXml(stripInvalidXmlChars(s));
  */
 function customEntries(props: Record<string, unknown> | undefined): { name: string; kind: 'bool' | 'number' | 'date' | 'text'; value: string }[] {
     const out: { name: string; kind: 'bool' | 'number' | 'date' | 'text'; value: string }[] = [];
+    // One property a name as Office compares them (trimmed, case aside): the first.
+    const names = new Set<string>();
     for (const [key, value] of Object.entries(props || {})) {
         const name = key.trim().slice(0, 255);
-        if (!name || value === undefined) continue;
-        const year = value instanceof Date ? value.getUTCFullYear() : NaN;
+        if (!name || value === undefined || names.has(name.toLowerCase())) continue;
+        names.add(name.toLowerCase());
+        const time = value instanceof Date ? value.getTime() : NaN;
+        const year = Number.isFinite(time) ? (value as Date).getUTCFullYear() : NaN;
         if (typeof value === 'boolean') out.push({ name, kind: 'bool', value: value ? 'true' : 'false' });
         else if (typeof value === 'number' && Number.isFinite(value)) out.push({ name, kind: 'number', value: String(value) });
         else if (value instanceof Date && year >= 1601 && year <= 9999) out.push({ name, kind: 'date', value: value.toISOString().replace(/\.\d+Z$/, 'Z') });
+        // A date no file time holds: its ISO text (the same on every machine), or 'Invalid Date'.
+        else if (value instanceof Date) out.push({ name, kind: 'text', value: Number.isFinite(time) ? value.toISOString() : 'Invalid Date' });
         else {
             let text: string;
             if (value !== null && typeof value === 'object' && !(value instanceof Date)) { try { text = JSON.stringify(value) ?? String(value); } catch { text = String(value); } }

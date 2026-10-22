@@ -2870,11 +2870,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             const master = masterPages.get(name);
             const own = [['style:header', 'header', 'default'], ['style:header-left', 'header', 'even'], ['style:header-first', 'header', 'first'],
                 ['style:footer', 'footer', 'default'], ['style:footer-left', 'footer', 'even'], ['style:footer-first', 'footer', 'first']] as const;
-            // A document's first master page that hands over to another after its first page (a word
-            // processor's "First Page" style, `style:next-style-name`) holds the first page's header and
-            // footer, and the one it hands over to the rest's: read as every page's, its letterhead was
-            // repeated on every page.
-            const next = section === 0 ? master?.getAttribute('style:next-style-name') : undefined;
+            // A section's master page that hands over to another after its first page (a word processor's
+            // "First Page" style, `style:next-style-name`) holds the first page's header and footer, and
+            // the one it hands over to the rest's: read as every page's, its letterhead was repeated on
+            // every page (a later section's too, as ODT output writes one).
+            const next = master?.getAttribute('style:next-style-name');
             const rest = next && next !== name ? masterPages.get(next) : undefined;
             const parts: (readonly [Element | undefined, string, 'header' | 'footer', 'default' | 'even' | 'first'])[] = rest
                 ? [...(['header', 'footer'] as const).map(kind => [master, shown(master, `style:${kind}-first`) ? `style:${kind}-first` : `style:${kind}`, kind, 'first'] as const),
