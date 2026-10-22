@@ -40,7 +40,7 @@
  * @see https://latex2rtf.sourceforge.net/RTF-Spec-1.2.pdf RTF 1.2 Specification
  */
 
-import { CellMetadata, FullOfficeParserConfig, ImageMetadata, IndentationMetadata, ListMetadata, ParagraphSpacing, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, TextFormatting } from '../types.js';
+import { CellMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, IndentationMetadata, ListMetadata, ParagraphSpacing, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, TextFormatting } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
@@ -658,8 +658,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     const colorTable = extractColorTable(doc);
 
     const content: OfficeContentNode[] = [];
-    // Headers and footers (`\header`, `\headerl`, `\footerf`, ...), for the AST's auxiliary: skipped,
-    // their text was lost, and the left, right and first-page ones were read into the body.
+    // Headers and footers (`\header`, `\headerl`, `\footerf`, ...), for the AST's auxiliary: one node a
+    // group, of its kind (`f` the first page's, `l` the left, even, pages'), as Word's and ODT's are.
     const headers: OfficeContentNode[] = [];
     const footers: OfficeContentNode[] = [];
     // Who wrote the next annotation (`\annotation`), given in the groups before it.
@@ -1480,6 +1480,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             // Where a header's or footer's paragraphs go, and whether the group is an annotation (a
             // comment), a shape whose text box (`\shptxt`) alone is read, or that text box.
             let redirect: OfficeContentNode[] | undefined;
+            let furniturePart: OfficeContentNode | undefined;
             let isAnnotation = false;
             let isShapeInstance = false;
             let isShapeText = false;
@@ -1540,7 +1541,14 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     }
                 } else if (/^(?:header|footer)[lrf]?$/.test(node.destination)) {
                     if (config.ignoreHeadersAndFooters) isIgnored = true;
-                    else redirect = node.destination.startsWith('header') ? headers : footers;
+                    else {
+                        const kind = node.destination.startsWith('header') ? 'header' : 'footer';
+                        const which = node.destination.slice(kind.length);
+                        const part: OfficeContentNode = { type: kind, text: '', children: [], metadata: { type: which === 'f' ? 'first' : which === 'l' ? 'even' : 'default' } as HeaderFooterMetadata };
+                        (kind === 'header' ? headers : footers).push(part);
+                        furniturePart = part;
+                        redirect = part.children!;
+                    }
                 } else if (node.destination === 'annotation') {
                     if (config.ignoreComments) isIgnored = true;
                     else isAnnotation = true;
@@ -1840,7 +1848,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             if (shapeBlocks) for (const block of shapeBlocks) blocksAfterParagraph.push(block);
             // A note's or comment's text is its paragraphs' (a final pass meant to give notes theirs did not
             // reach them, on the runs' `notes`).
-            for (const holder of [redirectedComment, footnote]) {
+            for (const holder of [redirectedComment, footnote, furniturePart]) {
                 if (holder) holder.text = (holder.children ?? []).map(n => n.text ?? '').join(' ').trim();
             }
 

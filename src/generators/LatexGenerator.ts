@@ -3,7 +3,7 @@ import { UniqueNames } from '../utils/uniqueNames.js';
 import { trimEndChars } from '../utils/textUtils.js';
 import { AdmonitionMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TexDocumentClass, TextFormatting, TextMetadata } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { LatexMathPlan, LatexScripts, LatexUnicodePlan, LISTINGS_LANGUAGES, mathCommandsOf, planLatexMath, planLatexUnicode, withLatexMathMacros } from '../utils/latexUtils.js';
 import { escapeLatex, latexComment, latexSourceComment, sanitizeLatexImagePath, sanitizeLatexMath, sanitizeLatexUrl } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
@@ -2069,6 +2069,12 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         return picked.length > 1 ? { type: kind, children: picked } as OfficeContentNode : picked[0];
     }
 
+    /** A field's text on the pages its part is on: the first page alone, or the even pages alone. */
+    private onItsPages(text: string, nodes: OfficeContentNode[] | undefined, kind: 'header' | 'footer'): string {
+        const on = furnitureKind(runningFurniture(nodes, kind), kind);
+        return on === 'first' ? `\\ifnum\\value{page}=1 {${text}}\\fi` : on === 'even' ? `\\ifodd\\value{page}\\else {${text}}\\fi` : text;
+    }
+
     /** One header/footer's content as the lines of a `fancyhdr` field, plus its horizontal position. */
     private async headerFieldContent(node: OfficeContentNode): Promise<{ text: string; lines: number; position: 'L' | 'C' | 'R' }> {
         const lines: string[] = [];
@@ -2121,10 +2127,10 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             '\\renewcommand{\\headrulewidth}{0pt}',
         ];
         if (head?.text) {
-            lines.push(`\\fancyhead[${head.position}]{${head.text}}`);
+            lines.push(`\\fancyhead[${head.position}]{${this.onItsPages(head.text, this.ast.auxiliary?.headers, 'header')}}`);
             lines.push(`\\setlength{\\headheight}{${fmtPt(head.lines * HEADER_LINE_HEIGHT_PT + (/\\includegraphics/.test(head.text) ? HEADER_IMAGE_HEIGHT_PT : 0))}}`);
         }
-        lines.push(foot?.text ? `\\fancyfoot[${foot.position}]{${foot.text}}` : '\\fancyfoot[C]{\\thepage}');
+        lines.push(foot?.text ? `\\fancyfoot[${foot.position}]{${this.onItsPages(foot.text, this.ast.auxiliary?.footers, 'footer')}}` : '\\fancyfoot[C]{\\thepage}');
         // \maketitle and \chapter switch their page to the `plain` style, which would drop the
         // document's running header there; make `plain` the same as the header/footer set up here.
         lines.push('\\fancypagestyle{plain}[fancy]{}');
@@ -2306,9 +2312,9 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             // The page as a person asks `geometry` for it: the paper by its name, and one `margin` when
             // the four are the same (`a4paper,margin=1in`).
             const cfg = this.config.texConfig;
-            const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup);
+            const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup, cfg.margin);
             const named = paper.name ? GEOMETRY_PAPER[paper.name] : undefined;
-            const margin = { top: marginPt(cfg.margin?.top), bottom: marginPt(cfg.margin?.bottom), left: marginPt(cfg.margin?.left), right: marginPt(cfg.margin?.right) };
+            const margin = paper.margin;
             const sides = (['top', 'bottom', 'left', 'right'] as const).map(side => `${side}=${pageLength(margin[side])}`);
             const geometry = [
                 ...(named ? [named, ...(paper.landscape ? ['landscape'] : [])] : [`paperwidth=${pageLength(paper.w)}`, `paperheight=${pageLength(paper.h)}`]),

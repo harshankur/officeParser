@@ -293,13 +293,15 @@ const DEFAULT_CHUNKING_CONFIG: ChunkingConfig = DEFAULT_DOCUMENT_STRUCTURE_CHUNK
 const DEFAULT_DOCX_GENERATOR_CONFIG: DeepRequired<DocxGeneratorConfig> = {
     format: 'auto',
     landscape: false,
-    margin: { top: 72, right: 72, bottom: 72, left: 72 },
+    // '' is unset: under format 'auto' the document's own margin, else an inch.
+    margin: { top: '', right: '', bottom: '', left: '' },
 };
 
 const DEFAULT_ODT_GENERATOR_CONFIG: DeepRequired<OdtGeneratorConfig> = {
     format: 'auto',
     landscape: false,
-    margin: { top: 72, right: 72, bottom: 72, left: 72 },
+    // '' is unset: under format 'auto' the document's own margin, else an inch.
+    margin: { top: '', right: '', bottom: '', left: '' },
 };
 
 const DEFAULT_TEX_GENERATOR_CONFIG: DeepRequired<TexGeneratorConfig> = {
@@ -310,7 +312,8 @@ const DEFAULT_TEX_GENERATOR_CONFIG: DeepRequired<TexGeneratorConfig> = {
     numberSections: false,
     format: 'auto',
     landscape: false,
-    margin: { top: 72, right: 72, bottom: 72, left: 72 },
+    // '' is unset: under format 'auto' the document's own margin, else an inch.
+    margin: { top: '', right: '', bottom: '', left: '' },
 };
 
 export const DEFAULT_GENERATOR_CONFIG: FullGeneratorConfig = {

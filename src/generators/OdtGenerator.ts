@@ -4,7 +4,7 @@ import { layoutTableRows } from '../utils/tableLayout.js';
 import { ConversionResult, GeneratorConfig, ImageMode, OdtGeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
 import { markerPattern, MarkerPattern, odfNumFormat } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
@@ -175,7 +175,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         for (const def of this.listDefs.values()) def.registry.internListStyle(this.buildListStyleXml(def));
 
         const contentXml = this.buildContentXml(metaBlock + body);
-        const stylesXml = this.buildStylesXml(headerXml, footerXml);
+        const stylesXml = this.buildStylesXml(headerXml, footerXml, hasHeader ? furnitureKind(headers, 'header') : 'default', hasFooter ? furnitureKind(footers, 'footer') : 'default');
         const metaXml = this.buildMetaXml(iso);
 
         const parts: Record<string, Uint8Array> = {};
@@ -827,10 +827,8 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
 
     private contentWidthPt(): number {
         const cfg = this.config.odtConfig;
-        const widthPt = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup).w;
-        const left = marginPt(cfg.margin.left);
-        const right = marginPt(cfg.margin.right);
-        return Math.max(36, widthPt - left - right);
+        const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup, cfg.margin);
+        return Math.max(36, paper.w - paper.margin.left - paper.margin.right);
     }
 
     // ── breaks / code / admonition / chart / embed ────────────────────────────────
@@ -928,23 +926,36 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             + `</office:document-content>`;
     }
 
-    private buildStylesXml(headerXml: string, footerXml: string): string {
+    private buildStylesXml(headerXml: string, footerXml: string, headerKind: 'default' | 'first' | 'even' = 'default', footerKind: 'default' | 'first' | 'even' = 'default'): string {
         // The Preformatted Text named style always references Courier New, so styles.xml must always
         // declare that font-face. Register it in the font set (deduplicated) rather than prepending a
         // literal decl: a header/footer that also used inline code would otherwise declare it twice.
         this.stylesFileStyles.useFont('Courier New');
         const cfg = this.config.odtConfig;
-        const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup);
+        const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup, cfg.margin);
         const pw = paper.w / 72; // inches
         const ph = paper.h / 72;
         const orient = paper.landscape ? 'landscape' : 'portrait';
-        const mar = cfg.margin;
+        const mar = paper.margin;
         const pageLayout = `<style:page-layout style:name="pm1"><style:page-layout-properties`
             + ` fo:page-width="${fmtIn(pw)}" fo:page-height="${fmtIn(ph)}" style:print-orientation="${orient}"`
-            + ` fo:margin-top="${fmtPt(marginPt(mar.top))}" fo:margin-bottom="${fmtPt(marginPt(mar.bottom))}"`
-            + ` fo:margin-left="${fmtPt(marginPt(mar.left))}" fo:margin-right="${fmtPt(marginPt(mar.right))}"/></style:page-layout>`;
-        const hf = (headerXml ? `<style:header>${headerXml}</style:header>` : '') + (footerXml ? `<style:footer>${footerXml}</style:footer>` : '');
-        const masterPage = `<style:master-page style:name="Standard" style:page-layout-name="pm1">${hf}</style:master-page>`;
+            + ` fo:margin-top="${fmtPt(mar.top)}" fo:margin-bottom="${fmtPt(mar.bottom)}"`
+            + ` fo:margin-left="${fmtPt(mar.left)}" fo:margin-right="${fmtPt(mar.right)}"/></style:page-layout>`;
+        // A part on every page, on even pages alone (`style:header-left`, its odd pages' header empty), or
+        // on the first page alone: then the first page's master (the document starts on `Standard`)
+        // hands over to one for the rest (`style:next-style-name`), as a word processor's first-page style.
+        const part = (tag: 'header' | 'footer', xml: string, kind: string, page: 'first' | 'rest') => {
+            if (!xml) return '';
+            if (kind === 'first') return page === 'first' ? `<style:${tag}>${xml}</style:${tag}>` : '';
+            if (kind === 'even') return page === 'first' && headerKind !== 'first' && footerKind !== 'first' || page === 'rest' ? `<style:${tag}/><style:${tag}-left>${xml}</style:${tag}-left>` : '';
+            return `<style:${tag}>${xml}</style:${tag}>`;
+        };
+        const firstOwn = headerKind === 'first' || footerKind === 'first';
+        const masters = (page: 'first' | 'rest') => part('header', headerXml, headerKind, page) + part('footer', footerXml, footerKind, page);
+        const masterPage = firstOwn
+            ? `<style:master-page style:name="Standard" style:page-layout-name="pm1" style:next-style-name="Rest">${masters('first')}</style:master-page>`
+                + `<style:master-page style:name="Rest" style:page-layout-name="pm1">${masters('rest')}</style:master-page>`
+            : `<style:master-page style:name="Standard" style:page-layout-name="pm1">${masters('rest')}</style:master-page>`;
         return `<?xml version="1.0" encoding="UTF-8"?>\n`
             + `<office:document-styles ${ODF_NS} office:version="1.2">`
             + `<office:font-face-decls>${this.stylesFileStyles.fontFaceDeclsXml()}</office:font-face-decls>`

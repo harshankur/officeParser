@@ -209,24 +209,52 @@ export function runningFurniture(nodes: OfficeContentNode[] | undefined, kind: '
 }
 
 /**
+ * Which pages the running header or footer {@link runningFurniture} picked is on: every page
+ * (`default`), the first alone (`first`: a letterhead, where the default one is empty) or the even pages
+ * alone (`even`). A writer writes it as that kind, never as every page's.
+ */
+export function furnitureKind(nodes: OfficeContentNode[], kind: 'header' | 'footer'): 'default' | 'first' | 'even' {
+    const type = nodes[0]?.type === kind ? (nodes[0].metadata as { type?: string } | undefined)?.type : undefined;
+    return type === 'first' || type === 'even' ? type : 'default';
+}
+
+/**
  * The paper a writer lays its pages on, in points: the format's, turned by `landscape`; under 'auto' the
  * document's own first page (OfficeMetadata.pageSetup, turned by `landscape` when it is upright), else
  * A4. `name` is the format whose paper it is, upright, where it is one (for writers that name paper).
+ * `margin` is the configured margins, a side left unset (`''`) being the document's own under 'auto',
+ * else an inch; a page too small for them keeps half an inch of text room each way, its margins made
+ * smaller to fit.
  */
-export function resolvePaper(format: string | undefined, landscape: boolean | undefined, setup: PageSetup | undefined): { w: number; h: number; landscape: boolean; name?: string } {
+export function resolvePaper(format: string | undefined, landscape: boolean | undefined, setup: PageSetup | undefined,
+    margin?: { top?: number | string; right?: number | string; bottom?: number | string; left?: number | string }): { w: number; h: number; landscape: boolean; name?: string; margin: { top: number; right: number; bottom: number; left: number }; headerDistance?: number; footerDistance?: number } {
     const key = String(format ?? 'auto').toLowerCase();
     let w: number, h: number;
-    // (A document's page between three and twenty-two inches each way, which a word processor takes and
-    // a page's default margins leave text room on; another is A4.)
-    if (key === 'auto' && setup && setup.width >= 216 && setup.height >= 216 && setup.width <= 1584 && setup.height <= 1584) {
-        [w, h] = landscape && setup.width < setup.height ? [setup.height, setup.width] : [setup.width, setup.height];
+    // (A document's page between an inch and twenty-two inches each way, which a word processor takes;
+    // another is A4.)
+    const own = key === 'auto' && !!setup && setup.width >= 72 && setup.height >= 72 && setup.width <= 1584 && setup.height <= 1584;
+    if (own) {
+        [w, h] = landscape && setup!.width < setup!.height ? [setup!.height, setup!.width] : [setup!.width, setup!.height];
     } else {
         const paper = PAPER_SIZES_PT[key] ?? PAPER_SIZES_PT.a4;
         [w, h] = landscape ? [paper.h, paper.w] : [paper.w, paper.h];
     }
     const upright = [Math.min(w, h), Math.max(w, h)];
     const name = Object.keys(PAPER_SIZES_PT).find(n => Math.abs(PAPER_SIZES_PT[n].w - upright[0]) < 1.5 && Math.abs(PAPER_SIZES_PT[n].h - upright[1]) < 1.5);
-    return { w, h, landscape: w > h, ...(name ? { name } : {}) };
+    const side = (value: number | string | undefined, document: number | undefined) =>
+        (value === undefined || value === null || value === '') && own && document !== undefined && Number.isFinite(document) ? Math.max(0, document) : Math.max(0, marginPt(value === '' ? undefined : value));
+    const m = { top: side(margin?.top, setup?.margin?.top), right: side(margin?.right, setup?.margin?.right), bottom: side(margin?.bottom, setup?.margin?.bottom), left: side(margin?.left, setup?.margin?.left) };
+    // Half an inch of text room each way at least: margins wider than the page leaves are made smaller.
+    const fit = (a: 'top' | 'left', b: 'bottom' | 'right', room: number) => {
+        const total = m[a] + m[b], most = Math.max(0, room - 36);
+        if (total > most) { const scale = total ? most / total : 0; m[a] = Math.round(m[a] * scale * 100) / 100; m[b] = Math.round(m[b] * scale * 100) / 100; }
+    };
+    fit('left', 'right', w);
+    fit('top', 'bottom', h);
+    // The header's and footer's distances from the edges, the document's under 'auto'.
+    const distance = (value: number | undefined) => own && value !== undefined && Number.isFinite(value) && value > 0 ? value : undefined;
+    const headerDistance = distance(setup?.headerDistance), footerDistance = distance(setup?.footerDistance);
+    return { w, h, landscape: w > h, ...(name ? { name } : {}), margin: m, ...(headerDistance !== undefined ? { headerDistance } : {}), ...(footerDistance !== undefined ? { footerDistance } : {}) };
 }
 
 /** Portrait `{ w, h }` page size in points for a {@link PaperFormat} name (case-insensitive), defaulting to A4. */

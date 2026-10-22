@@ -314,11 +314,13 @@ class NativeLayout {
     private section = 0;
     private startingSection = true;
     /** Every page made: its section, whether it is that section's first, and its size and margins. */
-    private readonly pageRecords: { page: any; section: number; firstOfSection: boolean; w: number; h: number; margin: { top: number; right: number; bottom: number; left: number }; headerDistance?: number; footerDistance?: number; differentFirstPage?: boolean }[] = [];
+    private readonly pageRecords: { page: any; section: number; firstOfSection: boolean; w: number; h: number; margin: { top: number; right: number; bottom: number; left: number }; headerDistance?: number; footerDistance?: number; differentFirstPage?: boolean; sourcePage?: number }[] = [];
+    /** The page of the PDF being drawn whose content is being laid out (a PDF's `page` node's number). */
+    private sourcePage: number | undefined;
 
     /** Notes the page just made, for its header and footer. */
     private recordPage(): void {
-        this.pageRecords.push({ page: this.page, section: this.section, firstOfSection: this.startingSection, w: this.pageW, h: this.pageH, margin: { ...this.margin }, headerDistance: this.headerDistance, footerDistance: this.footerDistance, differentFirstPage: this.differentFirstPage });
+        this.pageRecords.push({ page: this.page, section: this.section, firstOfSection: this.startingSection, w: this.pageW, h: this.pageH, margin: { ...this.margin }, headerDistance: this.headerDistance, footerDistance: this.footerDistance, differentFirstPage: this.differentFirstPage, sourcePage: this.sourcePage });
         this.startingSection = false;
     }
 
@@ -530,7 +532,9 @@ class NativeLayout {
         const kept = shown.filter(n => {
             const page = (n.metadata as HeaderFooterMetadata | undefined)?.page;
             if (page === undefined) return true;
-            byPage.set(page, [...(byPage.get(page) || []), { ...n, type: 'paragraph', metadata: undefined }]);
+            let lines = byPage.get(page);
+            if (!lines) byPage.set(page, lines = []);
+            lines.push({ ...n, type: 'paragraph', metadata: undefined });
             return false;
         });
         for (const [page, lines] of byPage) kept.push({ type: kind, children: lines, metadata: { type: 'default', page } } as OfficeContentNode);
@@ -600,11 +604,25 @@ class NativeLayout {
             const own = (first?.metadata as HeaderFooterMetadata | undefined)?.section;
             return first && (record.differentFirstPage ?? (own === undefined || own === record.section)) ? first : undefined;
         };
-        // A PDF's: the page's own, where the document's pages have theirs.
-        const ofPage = (list: OfficeContentNode[], number: number) => list.find(n => (n.metadata as HeaderFooterMetadata | undefined)?.page === number);
+        // A PDF's: that of the page whose content the page holds, else of the nearest page before it with
+        // one (a PDF's page laid out on several, a page with none of its own).
+        const byPage = new Map<OfficeContentNode[], { page: number; node: OfficeContentNode }[]>();
+        const ofPage = (list: OfficeContentNode[], number: number) => {
+            let sorted = byPage.get(list);
+            if (!sorted) {
+                sorted = list.flatMap(node => { const page = (node.metadata as HeaderFooterMetadata | undefined)?.page; return page === undefined ? [] : [{ page, node }]; }).sort((a, b) => a.page - b.page);
+                byPage.set(list, sorted);
+            }
+            let low = 0, high = sorted.length - 1, best: OfficeContentNode | undefined;
+            while (low <= high) {
+                const mid = (low + high) >> 1;
+                if (sorted[mid].page <= number) { best = sorted[mid].node; low = mid + 1; } else high = mid - 1;
+            }
+            return best;
+        };
         const paged = (list: OfficeContentNode[]) => list.some(n => (n.metadata as HeaderFooterMetadata | undefined)?.page !== undefined);
         const choose = (list: OfficeContentNode[], record: typeof this.pageRecords[number], number: number) =>
-            paged(list) ? ofPage(list, number) : firstOf(list, record)
+            paged(list) ? ofPage(list, record.sourcePage ?? number) : firstOf(list, record)
             ?? (number % 2 === 0 ? pick(list, record.section, 'even') : undefined)
             ?? pick(list, record.section, 'default');
         const saved = { page: this.page, y: this.y, w: this.pageW, h: this.pageH, margin: this.margin };
@@ -1444,7 +1462,16 @@ class NativeLayout {
                 // A slide whose shapes have their places is drawn as it is laid out (see drawSlide).
                 if (node.type === 'slide' && (node.children || []).some(c => c.bounds)) { await this.drawSlide(node); return; }
                 // A PDF's page keeps its own size (pdfConfig.format 'auto'), as each section's does.
-                if (topLevel && node.type === 'page') this.takePageSize(node.metadata as { pageWidth?: number; pageHeight?: number } | undefined);
+                if (topLevel && node.type === 'page') {
+                    this.takePageSize(node.metadata as { pageWidth?: number; pageHeight?: number } | undefined);
+                    // Its headers are drawn on the pages its content is laid out on (see drawRunningContent).
+                    const number = (node.metadata as { pageNumber?: number } | undefined)?.pageNumber;
+                    if (typeof number === 'number') {
+                        this.sourcePage = number;
+                        const record = this.pageRecords[this.pageRecords.length - 1];
+                        if (record && record.page === this.page && this.y <= this.margin.top + 0.5) record.sourcePage = number;
+                    }
+                }
                 for (const c of node.children || []) await this.render(c);
                 // Speaker notes, when the PDF keeps them (pdfConfig.printSpeakerNotes), under their slide.
                 for (const n of node.notes || []) await this.note(n);

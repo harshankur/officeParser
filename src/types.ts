@@ -1757,15 +1757,15 @@ export interface StructuredStyleMapping {
 export interface DocxGeneratorConfig {
     /**
      * Page size for the document section (`w:pgSz`). One of the shared {@link PaperFormat} names,
-     * the same set and spelling {@link PdfGeneratorConfig.format} accepts. Defaults to `'A4'`.
+     * the same set and spelling {@link PdfGeneratorConfig.format} accepts. Defaults to `'auto'`: the document's own page ({@link OfficeMetadata.pageSetup}), else A4.
      */
     format?: PaperFormat;
     /** Landscape orientation (swaps the page dimensions and sets `w:orient`). Defaults to false. */
     landscape?: boolean;
     /**
      * Page margins, converted to twips for `w:pgMar`. Each side is a number of points (1/72 inch) or
-     * a unit-labeled string (`'1in'`, `'2cm'`, `'36pt'`, `'48px'`); a bare number is points. Defaults
-     * to 72 (Word's standard one inch) on every side.
+     * a unit-labeled string (`'1in'`, `'2cm'`, `'36pt'`, `'48px'`); a bare number is points. By default
+     * a side left unset is the document's own margin under `format: 'auto'`, else 72 (one inch).
      */
     margin?: { top?: number | string; right?: number | string; bottom?: number | string; left?: number | string };
 }
@@ -1776,16 +1776,16 @@ export interface DocxGeneratorConfig {
 export interface OdtGeneratorConfig {
     /**
      * Page size for the page layout (`style:page-layout` in styles.xml). One of the shared
-     * {@link PaperFormat} names, the same set {@link PdfGeneratorConfig.format} accepts. Defaults to
-     * `'A4'`.
+     * {@link PaperFormat} names, the same set {@link PdfGeneratorConfig.format} accepts.
+     * Defaults to `'auto'`: the document's own page ({@link OfficeMetadata.pageSetup}), else A4.
      */
     format?: PaperFormat;
     /** Landscape orientation (swaps page dimensions and sets `style:print-orientation`). Defaults to false. */
     landscape?: boolean;
     /**
      * Page margins, written as `fo:margin-*` lengths. Each side is a number of points (1/72 inch) or
-     * a unit-labeled string (`'1in'`, `'2cm'`, `'36pt'`, `'48px'`); a bare number is points. Defaults
-     * to 72 (the standard one inch) on every side.
+     * a unit-labeled string (`'1in'`, `'2cm'`, `'36pt'`, `'48px'`); a bare number is points. By default
+     * a side left unset is the document's own margin under `format: 'auto'`, else 72 (one inch).
      */
     margin?: { top?: number | string; right?: number | string; bottom?: number | string; left?: number | string };
 }
@@ -1844,15 +1844,15 @@ export interface TexGeneratorConfig {
     numberSections?: boolean;
     /**
      * Paper size, written as a `geometry` option. One of the shared {@link PaperFormat} names.
-     * Defaults to `'A4'`. Ignored by `beamer`, whose frame size is fixed.
+     * Defaults to `'auto'`: the document's own page ({@link OfficeMetadata.pageSetup}), else A4. Ignored by `beamer`, whose frame size is fixed.
      */
     format?: PaperFormat;
     /** Landscape orientation. Defaults to false. Ignored by `beamer`. */
     landscape?: boolean;
     /**
      * Page margins, written as `geometry` options. Each side is a number of points (1/72 inch) or a
-     * unit-labeled string (`'1in'`, `'2cm'`, `'36pt'`, `'48px'`); a bare number is points. Defaults to
-     * 72 (one inch) on every side. Ignored by `beamer`.
+     * unit-labeled string (`'1in'`, `'2cm'`, `'36pt'`, `'48px'`); a bare number is points. By default
+     * a side left unset is the document's own margin under `format: 'auto'`, else 72 (one inch). Ignored by `beamer`.
      */
     margin?: { top?: number | string; right?: number | string; bottom?: number | string; left?: number | string };
 }

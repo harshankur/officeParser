@@ -4153,18 +4153,25 @@ class LatexReader {
         // The fields were collected from the preamble; read them even though the body has ended.
         this.finished = false;
         const build = (fields: Map<string, string>, type: 'header' | 'footer'): OfficeContentNode[] => {
-            const paragraphs: OfficeContentNode[] = [];
+            // A field shown on the first page alone (`\\ifnum\\value{page}=1 {...}\\fi`) or on even pages alone
+            // (`\\ifodd\\value{page}\\else {...}\\fi`), as the LaTeX generator writes them, is that kind's part.
+            const parts = new Map<string, OfficeContentNode[]>();
             for (const pos of ['L', 'C', 'R']) {
-                const raw = fields.get(pos);
+                let raw = fields.get(pos);
                 if (!raw || !raw.replace(/\\thepage|\\hfill|\s/g, '')) continue;
+                let kind = 'default';
+                const first = /^\s*\\ifnum\\value\{page\}=1 ?\{([\s\S]*)\}\\fi\s*$/.exec(raw), even = /^\s*\\ifodd\\value\{page\}\\else ?\{([\s\S]*)\}\\fi\s*$/.exec(raw);
+                if (first) { kind = 'first'; raw = first[1]; } else if (even) { kind = 'even'; raw = even[1]; }
                 const align: TextAlignment = pos === 'C' ? 'center' : pos === 'R' ? 'right' : 'left';
                 const blocks = this.parseBlocksOf(raw);
+                let paragraphs = parts.get(kind);
+                if (!paragraphs) parts.set(kind, paragraphs = []);
                 for (const b of blocks) {
                     if (b.type === 'paragraph') (b.metadata ??= {} as any) && ((b.metadata as any).alignment = align);
                     paragraphs.push(b);
                 }
             }
-            return paragraphs.length ? [{ type, metadata: { type: 'default' } as any, children: paragraphs }] : [];
+            return [...parts].filter(([, paragraphs]) => paragraphs.length).map(([kind, paragraphs]) => ({ type, metadata: { type: kind } as any, children: paragraphs }));
         };
         const headers = build(this.headerFields, 'header');
         const footers = build(this.footerFields, 'footer');

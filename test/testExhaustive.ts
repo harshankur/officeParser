@@ -12,7 +12,7 @@ import { excelShownText } from '../src/utils/excelFormat';
 import { OfficeTemplate } from '../src/OfficeTemplate';
 import { OfficeConverter } from '../src/OfficeConverter';
 import { zipSync, strToU8, unzipSync, strFromU8 } from 'fflate';
-import { PDFDocument, StandardFonts, degrees } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFOperator, StandardFonts, degrees } from 'pdf-lib';
 import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -986,11 +986,11 @@ async function testRtfDestinations(): Promise<void> {
     // A table ending a section, before the next section's header.
     const sections = await parse(String.raw`\sectd{\header \pard Head1\par}\pard Intro\par\trowd\cellx3000\cellx6000\pard\intbl A\cell B\cell\row\pard\par\sect\sectd{\header \pard Head2\par}\pard After\par`);
     assert.deepStrictEqual(sections.content.map(shape), [['paragraph', 'Intro'], ['table', [['row', [['cell', [['paragraph', 'A']]], ['cell', [['paragraph', 'B']]]]]]], ['paragraph', 'After']], 'RTF: a table ending a section stays in the body');
-    assert.deepStrictEqual(sections.auxiliary?.headers?.map(shape), [['paragraph', 'Head1'], ['paragraph', 'Head2']], 'RTF: the headers hold their own paragraphs only');
+    assert.deepStrictEqual(sections.auxiliary?.headers?.map(h => [(h.metadata as any)?.type, h.children!.map(shape)]), [['default', [['paragraph', 'Head1']]], ['default', [['paragraph', 'Head2']]]], 'RTF: the headers hold their own paragraphs only, each a part');
     // A header's own table, and a footer written inside a table cell.
     const headerTable = await parse(String.raw`\trowd\cellx3000\pard\intbl A\cell\row{\header \trowd\cellx3000\pard\intbl H\cell\row\pard Hx\par}\pard After\par`);
     assert.deepStrictEqual(headerTable.content.map(shape), [['table', [['row', [['cell', [['paragraph', 'A']]]]]]], ['paragraph', 'After']], 'RTF: a header with a table leaves the body\'s table in the body');
-    assert.deepStrictEqual(headerTable.auxiliary?.headers?.map(shape), [['table', [['row', [['cell', [['paragraph', 'H']]]]]]], ['paragraph', 'Hx']], 'RTF: a header keeps its own table');
+    assert.deepStrictEqual(headerTable.auxiliary?.headers?.flatMap(h => h.children!).map(shape), [['table', [['row', [['cell', [['paragraph', 'H']]]]]]], ['paragraph', 'Hx']], 'RTF: a header keeps its own table');
     const footerInCell = await parse(String.raw`\trowd\cellx3000\cellx6000\pard\intbl A{\footer \pard Foot\par}\cell B\cell\row\pard After\par`);
     assert.deepStrictEqual(footerInCell.content.map(shape), [['table', [['row', [['cell', [['paragraph', 'A']]], ['cell', [['paragraph', 'B']]]]]]], ['paragraph', 'After']], 'RTF: a footer written in a cell leaves the cell as it was');
 
@@ -5157,7 +5157,6 @@ async function testFormatsReadAsTheyShow(): Promise<void> {
     const runs = styled.content.map(n => n.children![0].formatting);
     assert.deepStrictEqual([runs[0]?.color, runs[0]?.backgroundColor, runs[1]?.color, (styled.content[1].metadata as any)?.alignment, runs[2]?.bold], ['red', '#ff0', 'green', 'center', true],
         'an !important rule wins over the element\'s style, and the element\'s own !important over it');
-
     const quoted = await OfficeParser.parseOffice(Buffer.from('<style>.q { background: url("img (1).png") yellow } .s { background: url(\'a).png\'); color: green }</style><p><span class="q" style="color: blue; font-weight: bold">Q</span> <span class="s" style="font-weight: bold">S</span></p>'), { fileType: 'html' } as any) as OfficeParserAST;
     const [q, , sRun] = quoted.content[0].children!.map(c => c.formatting);
     assert.deepStrictEqual([q?.color, q?.bold, q?.backgroundColor, sRun?.color, sRun?.bold], ['blue', true, 'yellow', 'green', true], 'a `)` in a quoted url() address does not swallow the declarations after it');
@@ -5175,7 +5174,30 @@ async function testFormatsReadAsTheyShow(): Promise<void> {
  * A4; a drawing node holding nodes writes them; and a list marker is cut at a whole character.
  */
 async function testWritersHoldUp(): Promise<void> {
+    const furnitureOf = (tag: 'header' | 'footer', text: string, type: string) => ({ type: tag, text, children: text ? [{ type: 'paragraph', text, children: [{ type: 'text', text }] }] : [], metadata: { type, section: 0 } });
     assert.deepStrictEqual([resolvePaper('auto', false, { width: 50, height: 50 }), resolvePaper('auto', false, { width: 612, height: 792 })].map(p => [Math.round(p.w * 100) / 100, Math.round(p.h * 100) / 100]), [[595.28, 841.89], [612, 792]], 'a page too small to write on is A4, a letter page is its own');
+    // A small page keeps its size and its own margins (they were the configured inch, which left no room).
+    const card = { type: 'docx', metadata: { pageSetup: { width: 252, height: 144, margin: { top: 7.2, right: 7.2, bottom: 7.2, left: 7.2 } } }, attachments: [], content: [{ type: 'paragraph', text: 'Card', children: [{ type: 'text', text: 'Card' }] }] } as any;
+    const cardDoc = docxParts((await OfficeGenerator.generate(card, 'docx')).value as Uint8Array)['word/document.xml'];
+    assert.ok(/<w:pgSz w:w="5040" w:h="2880"/.test(cardDoc) && /<w:pgMar w:top="144" w:right="144" w:bottom="144" w:left="144"/.test(cardDoc), `DOCX: a business card keeps its size and margins; got ${cardDoc.match(/<w:pg[^>]*>/g)}`);
+    const cardOdt = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(card, 'odt')).value as Uint8Array))['styles.xml']);
+    assert.ok(/fo:page-width="3\.5in"/.test(cardOdt) && /fo:margin-left="7\.2pt"/.test(cardOdt), 'ODT: so does it in ODT');
+    assert.ok(/<w:pgMar w:top="720"/.test(docxParts((await OfficeGenerator.generate(card, 'docx', { docxConfig: { margin: { top: 36 } } } as any)).value as Uint8Array)['word/document.xml']), 'DOCX: a margin given is used as given');
+    // A first page's own header (a letterhead, the default one empty) is written as the first page's.
+    const letterhead = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', text: 'Body', children: [{ type: 'text', text: 'Body' }] }],
+        auxiliary: { headers: [furnitureOf('header', '', 'default'), furnitureOf('header', 'Letterhead', 'first')], footers: [furnitureOf('footer', 'Foot', 'default')] } } as any;
+    const lhDoc = docxParts((await OfficeGenerator.generate(letterhead, 'docx')).value as Uint8Array)['word/document.xml'];
+    assert.ok(/<w:headerReference w:type="first"/.test(lhDoc) && !/<w:headerReference w:type="default"/.test(lhDoc) && /<w:footerReference w:type="default"[^>]*\/><w:footerReference w:type="first"/.test(lhDoc) && /<w:titlePg\/>/.test(lhDoc), 'DOCX: a letterhead is the title page\'s header, the footer on every page');
+    for (const format of ['docx', 'rtf', 'tex'] as const) {
+        const back = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(letterhead, format)).value as any), { fileType: format } as any) as OfficeParserAST;
+        const heads = runningFurniture(back.auxiliary?.headers, 'header');
+        assert.deepStrictEqual([heads.map(h => collectAllNodes({ content: [h] } as any).filter(n => n.type === 'text').map(n => n.text).join('')), (heads[0]?.metadata as any)?.type], [['Letterhead'], 'first'], `${format}: a letterhead reads back as the first page's header`);
+    }
+    const lhOdt = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(letterhead, 'odt')).value as Uint8Array))['styles.xml']);
+    assert.ok(/<style:master-page style:name="Standard"[^>]*style:next-style-name="Rest"><style:header>.*Letterhead.*<\/style:header>/.test(lhOdt) && /<style:master-page style:name="Rest"[^>]*><style:footer>/.test(lhOdt), 'ODT: a letterhead is on the first page\'s master, which hands over to the rest');
+    const evenOnly = { ...letterhead, auxiliary: { headers: [furnitureOf('header', 'Even pages', 'even')] } };
+    const evenParts = docxParts((await OfficeGenerator.generate(evenOnly, 'docx')).value as Uint8Array);
+    assert.ok(/<w:headerReference w:type="even"/.test(evenParts['word/document.xml']) && /<w:evenAndOddHeaders\/>/.test(evenParts['word/settings.xml'] ?? ''), 'DOCX: even pages\' own header is written for even pages, with the setting that shows it');
     const furniture = (text: string, meta: object) => ({ type: 'header', text, children: text ? [{ type: 'paragraph', text, children: [{ type: 'text', text }] }] : [], metadata: meta }) as any;
     assert.deepStrictEqual(runningFurniture([furniture('', { type: 'default', section: 0 }), furniture('Letterhead', { type: 'first', section: 0 })], 'header').map(n => n.text), ['Letterhead'], 'an empty default header does not stand in for the one with text');
     const drawingAst = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'drawing', children: [{ type: 'paragraph', text: 'Inside a drawing', children: [{ type: 'text', text: 'Inside a drawing' }] }] }] } as any;
@@ -5210,6 +5232,25 @@ async function testWritersHoldUp(): Promise<void> {
     const at = (text: string) => pdfText.indexOf(text);
     assert.ok(pdfText.lastIndexOf('Cover') < at('First body') && at('First body') < at('Chapter head') && at('Chapter head') === pdfText.lastIndexOf('Chapter head') && at('Chapter head') < at('Second body'),
         `a PDF's headers are drawn on their own pages; got ${JSON.stringify(pdfText)}`);
+    // A PDF's page laid out on several pages has its header on each of them.
+    const source = await PDFDocument.create();
+    const helvetica = await source.embedFont(StandardFonts.Helvetica);
+    for (let p = 0; p < 2; p++) {
+        const sheet = source.addPage([612, 792]);
+        // Marked as an artifact, as a running header is.
+        sheet.pushOperators(PDFOperator.of('BMC' as any, [PDFName.of('Artifact')]));
+        sheet.drawText(`Running title ${p + 1}`, { x: 72, y: 750, size: 10, font: helvetica });
+        sheet.pushOperators(PDFOperator.of('EMC' as any));
+        for (let i = 0; i < 30; i++) sheet.drawText(`Body line ${p * 30 + i} of the report, long enough to wrap on a small page.`, { x: 72, y: 680 - i * 18, size: 11, font: helvetica });
+    }
+    const reflowSource = await OfficeParser.parseOffice(Buffer.from(await source.save()), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.ok(reflowSource.auxiliary?.headers?.length, 'the PDF\'s running headers are read');
+    {
+        const small = (await OfficeGenerator.generate(reflowSource, 'pdf', { pdfConfig: { engine: 'native', format: 'a6' } } as any)).value as Uint8Array;
+        const smallPages = (await OfficeParser.parseOffice(Buffer.from(small), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).content.filter(n => n.type === 'page');
+        const titled = smallPages.map(p => /Running title/.test(JSON.stringify(p)) || false);
+        assert.ok(smallPages.length > 4 && titled.every(Boolean), `each page a PDF's page is laid out on has its header; got ${titled}`);
+    }
 }
 
 async function testNativePdfFurnitureLimits(): Promise<void> {
@@ -5499,7 +5540,7 @@ async function testConfigConsistency(): Promise<void> {
     assert.deepStrictEqual(tex.seen.filter(w => w.code === 'INVALID_CONFIG_VALUE').map(w => w.message), [
         'Invalid texConfig.documentClass: "reprot". Expected one of auto, article, report, book, beamer; the default ("auto") is used instead.',
         'Invalid texConfig.format: "A44". Expected one of letter, legal, tabloid, ledger, a0, a1, a2, a3, a4, a5, a6, auto; the default ("auto") is used instead.',
-        'Invalid texConfig.margin.top: "1 inch". Expected a number of points or a length such as \'1in\', \'2cm\', \'36pt\'; the default (72) is used instead.',
+        'Invalid texConfig.margin.top: "1 inch". Expected a number of points or a length such as \'1in\', \'2cm\', \'36pt\'; the default is used instead.',
     ], 'Config: invalid texConfig values are reported with what the option accepts');
     const texOut = String(tex.result.value);
     assert.ok(texOut.includes('\\documentclass[\\officeparserdriver 11pt]{article}') && texOut.includes('[a4paper,top=1in,bottom=1in,left=20mm,right=1in]{geometry}'), 'Config: the defaults replace invalid values; valid ones are kept');

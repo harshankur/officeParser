@@ -4,7 +4,7 @@ import { layoutTableRows } from '../utils/tableLayout.js';
 import { ConversionResult, DocxGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
 import { markerPattern, MarkerPattern } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
@@ -185,9 +185,15 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         const footerXml = hasFooter ? await this.withRelOwner('word/footer1.xml', () => this.renderHdrFtr('ftr', footers)) : '';
         const headerRid = hasHeader ? this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/header', 'header1.xml') : '';
         const footerRid = hasFooter ? this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer', 'footer1.xml') : '';
+        // A first page's own (a letterhead) or even pages' own is written as that kind: on the title
+        // page (`w:titlePg`), or on even pages with the settings' `w:evenAndOddHeaders`.
+        const headerKind = hasHeader ? furnitureKind(headers, 'header') : 'default', footerKind = hasFooter ? furnitureKind(footers, 'footer') : 'default';
+        const furniture = { headerKind, footerKind, titlePage: headerKind === 'first' || footerKind === 'first', evenPages: headerKind === 'even' || footerKind === 'even' };
+        if (furniture.evenPages) this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings', 'settings.xml');
 
-        const documentXml = this.buildDocumentXml(metaBlock + body, headerRid, footerRid);
+        const documentXml = this.buildDocumentXml(metaBlock + body, headerRid, footerRid, furniture);
         const parts = this.assembleParts({ documentXml, iso, hasHeader, hasFooter, headerXml, footerXml });
+        if (furniture.evenPages) parts['word/settings.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:settings ${WML_NS}><w:evenAndOddHeaders/></w:settings>`;
 
         const zipFiles: Zippable = {};
         for (const [path, content] of Object.entries(parts)) zipFiles[path] = new TextEncoder().encode(content);
@@ -830,10 +836,10 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
 
     private contentWidthTwips(): number {
         const cfg = this.config.docxConfig;
-        const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup);
+        const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup, cfg.margin);
         const w = Math.round(paper.w * TWIPS_PER_PT);
-        const left = Math.round(marginPt(cfg.margin.left) * TWIPS_PER_PT);
-        const right = Math.round(marginPt(cfg.margin.right) * TWIPS_PER_PT);
+        const left = Math.round(paper.margin.left * TWIPS_PER_PT);
+        const right = Math.round(paper.margin.right * TWIPS_PER_PT);
         return Math.max(720, w - left - right);
     }
 
@@ -938,19 +944,24 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
 
     // ── part assembly ─────────────────────────────────────────────────────────────
 
-    private buildDocumentXml(body: string, headerRid: string, footerRid: string): string {
+    private buildDocumentXml(body: string, headerRid: string, footerRid: string,
+        furniture: { headerKind: string; footerKind: string; titlePage: boolean; evenPages: boolean } = { headerKind: 'default', footerKind: 'default', titlePage: false, evenPages: false }): string {
         const cfg = this.config.docxConfig;
-        const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup);
+        const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup, cfg.margin);
         const pw = Math.round(paper.w * TWIPS_PER_PT);
         const ph = Math.round(paper.h * TWIPS_PER_PT);
         const orient = paper.landscape ? ' w:orient="landscape"' : '';
-        const mar = cfg.margin;
-        const pgMar = `<w:pgMar w:top="${Math.round(marginPt(mar.top) * TWIPS_PER_PT)}" w:right="${Math.round(marginPt(mar.right) * TWIPS_PER_PT)}" `
-            + `w:bottom="${Math.round(marginPt(mar.bottom) * TWIPS_PER_PT)}" w:left="${Math.round(marginPt(mar.left) * TWIPS_PER_PT)}" w:header="708" w:footer="708" w:gutter="0"/>`;
+        const mar = paper.margin, twips = (pt: number) => Math.round(pt * TWIPS_PER_PT);
+        const pgMar = `<w:pgMar w:top="${twips(mar.top)}" w:right="${twips(mar.right)}" w:bottom="${twips(mar.bottom)}" w:left="${twips(mar.left)}" `
+            + `w:header="${paper.headerDistance !== undefined ? twips(paper.headerDistance) : 708}" w:footer="${paper.footerDistance !== undefined ? twips(paper.footerDistance) : 708}" w:gutter="0"/>`;
+        // The kinds of page a part is on: every page's is also the title page's and even pages', where
+        // the document has those.
+        const kinds = (kind: string) => kind !== 'default' ? [kind] : ['default', ...(furniture.titlePage ? ['first'] : []), ...(furniture.evenPages ? ['even'] : [])];
+        const references = (tag: 'header' | 'footer', rid: string, kind: string) => rid ? kinds(kind).map(type => `<w:${tag}Reference w:type="${type}" r:id="${rid}"/>`).join('') : '';
         const sectPr = `<w:sectPr>`
-            + (headerRid ? `<w:headerReference w:type="default" r:id="${headerRid}"/>` : '')
-            + (footerRid ? `<w:footerReference w:type="default" r:id="${footerRid}"/>` : '')
-            + `<w:pgSz w:w="${pw}" w:h="${ph}"${orient}/>${pgMar}</w:sectPr>`;
+            + references('header', headerRid, furniture.headerKind)
+            + references('footer', footerRid, furniture.footerKind)
+            + `<w:pgSz w:w="${pw}" w:h="${ph}"${orient}/>${pgMar}${furniture.titlePage ? '<w:titlePg/>' : ''}</w:sectPr>`;
         const bodyContent = body.trim() ? body : '<w:p/>';
         return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n`
             + `<w:document ${WML_NS}>`
@@ -1028,6 +1039,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         if (o.hasComments) overrides += `<Override PartName="/word/comments.xml" ContentType="${wml}.comments+xml"/>`;
         if (runningFurniture(this.ast.auxiliary?.headers, 'header').length) overrides += `<Override PartName="/word/header1.xml" ContentType="${wml}.header+xml"/>`;
         if (runningFurniture(this.ast.auxiliary?.footers, 'footer').length) overrides += `<Override PartName="/word/footer1.xml" ContentType="${wml}.footer+xml"/>`;
+        const headers = runningFurniture(this.ast.auxiliary?.headers, 'header'), footers = runningFurniture(this.ast.auxiliary?.footers, 'footer');
+        if ((headers.length && furnitureKind(headers, 'header') === 'even') || (footers.length && furnitureKind(footers, 'footer') === 'even')) overrides += `<Override PartName="/word/settings.xml" ContentType="${wml}.settings+xml"/>`;
         overrides += `<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>`
             + `<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>`;
         if (o.hasCustom) overrides += `<Override PartName="/docProps/custom.xml" ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml"/>`;
