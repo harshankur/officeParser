@@ -4,7 +4,7 @@ import { layoutTableRows } from '../utils/tableLayout.js';
 import { ConversionResult, DocxGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, resolvePaper, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
 import { markerPattern, MarkerPattern } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
@@ -826,8 +826,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
 
     private contentWidthTwips(): number {
         const cfg = this.config.docxConfig;
-        const size = paperSizePt(cfg.format);
-        const w = Math.round((cfg.landscape ? size.h : size.w) * TWIPS_PER_PT);
+        const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup);
+        const w = Math.round(paper.w * TWIPS_PER_PT);
         const left = Math.round(marginPt(cfg.margin.left) * TWIPS_PER_PT);
         const right = Math.round(marginPt(cfg.margin.right) * TWIPS_PER_PT);
         return Math.max(720, w - left - right);
@@ -936,10 +936,10 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
 
     private buildDocumentXml(body: string, headerRid: string, footerRid: string): string {
         const cfg = this.config.docxConfig;
-        const size = paperSizePt(cfg.format);
-        const pw = Math.round((cfg.landscape ? size.h : size.w) * TWIPS_PER_PT);
-        const ph = Math.round((cfg.landscape ? size.w : size.h) * TWIPS_PER_PT);
-        const orient = cfg.landscape ? ' w:orient="landscape"' : '';
+        const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup);
+        const pw = Math.round(paper.w * TWIPS_PER_PT);
+        const ph = Math.round(paper.h * TWIPS_PER_PT);
+        const orient = paper.landscape ? ' w:orient="landscape"' : '';
         const mar = cfg.margin;
         const pgMar = `<w:pgMar w:top="${Math.round(marginPt(mar.top) * TWIPS_PER_PT)}" w:right="${Math.round(marginPt(mar.right) * TWIPS_PER_PT)}" `
             + `w:bottom="${Math.round(marginPt(mar.bottom) * TWIPS_PER_PT)}" w:left="${Math.round(marginPt(mar.left) * TWIPS_PER_PT)}" w:header="708" w:footer="708" w:gutter="0"/>`;

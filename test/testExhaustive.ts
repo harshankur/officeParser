@@ -3038,7 +3038,12 @@ async function testLatexGeneration(): Promise<void> {
     assert.strictEqual(await geometryOf({}), 'a4paper,margin=1in', 'TEX config: the default page is A4 with inch margins');
     assert.strictEqual(await geometryOf({ format: 'Letter', margin: { top: 50, right: 50, bottom: 50, left: 50 } }), 'letterpaper,margin=50bp', 'TEX config: a length that is no round number of inches or millimetres is in big points');
     assert.strictEqual(await geometryOf({ format: 'Tabloid', margin: { top: '25mm', right: '25mm', bottom: '25mm', left: '25mm' } }), 'ansibpaper,margin=25mm', 'TEX config: tabloid is geometry\'s ANSI B');
-    assert.strictEqual(await geometryOf({ format: 'Ledger' }), 'paperwidth=17in,paperheight=11in,margin=1in', 'TEX config: a sheet geometry has no upright name for is given by its size');
+    assert.strictEqual(await geometryOf({ format: 'Ledger' }), 'ansibpaper,landscape,margin=1in', 'TEX config: ledger is ANSI B turned');
+    assert.strictEqual(await geometryOf({ format: 'auto' }), 'a4paper,margin=1in', 'TEX config: a document without a page of its own is on A4');
+    const letterLandscape = { ...synthetic, metadata: { ...synthetic.metadata, pageSetup: { width: 792, height: 612 } } };
+    assert.strictEqual(/\\usepackage\[([^\]]*)\]\{geometry\}/.exec((await OfficeGenerator.generate(letterLandscape, 'tex', {} as any)).value as string)?.[1], 'letterpaper,landscape,margin=1in', 'TEX config: the document\'s own page by default');
+    const oddSize = { ...synthetic, metadata: { ...synthetic.metadata, pageSetup: { width: 500, height: 700 } } };
+    assert.ok(((await OfficeGenerator.generate(oddSize, 'tex', {} as any)).value as string).includes('paperwidth='), 'TEX config: a page no paper is named for is given by its size');
     assert.strictEqual(await geometryOf({ format: 'A5', landscape: true }), 'a5paper,landscape,margin=1in', 'TEX config: landscape turns the named paper');
     // A paragraph's indents and a picture's size are the document's points too.
     const indented = { type: 'docx', content: [{ type: 'paragraph', text: 'Indented.', children: [{ type: 'text', text: 'Indented.' }], metadata: { paragraphIndentation: { left: 720, right: 360, hanging: 240 } } }], metadata: {}, attachments: [] } as any;
@@ -4824,6 +4829,54 @@ async function testNativePdfFootnotes(): Promise<void> {
 }
 
 /**
+ * A Word document's sections keep their pages in PDF output: each its size and orientation (every page
+ * printed A4 portrait), each page its section's header and footer (they printed once, every part's at
+ * once, at the top and the end), a first page's own where the section has one, page fields filled in
+ * for each page ("Page 4 of 5" from the saved file on every page), and parts Word does not show left out.
+ */
+async function testDocxSectionsInPdf(): Promise<void> {
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const part = (tag: 'hdr' | 'ftr', body: string) => strToU8(`<?xml version="1.0"?><w:${tag} ${W}>${body}</w:${tag}>`);
+    const para = (text: string) => `<w:p><w:r><w:t>${text}</w:t></w:r></w:p>`;
+    const pageField = '<w:p><w:r><w:t xml:space="preserve">Page </w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>9</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>'
+        + '<w:r><w:t xml:space="preserve"> of </w:t></w:r><w:fldSimple w:instr=" NUMPAGES "><w:r><w:t>9</w:t></w:r></w:fldSimple></w:p>';
+    const sect = (size: string, refs: string, extra = '') => `<w:sectPr>${refs}<w:pgSz ${size}/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/>${extra}</w:sectPr>`;
+    const body = Array.from({ length: 70 }, (_, i) => para(`Portrait paragraph ${i}.`)).join('')
+        + `<w:p><w:pPr>${sect('w:w="12240" w:h="15840"', '<w:headerReference w:type="default" r:id="h1"/><w:headerReference w:type="first" r:id="h2"/><w:headerReference w:type="even" r:id="h4"/><w:footerReference w:type="default" r:id="f1"/>', '<w:titlePg/>')}</w:pPr><w:r><w:t>End of one.</w:t></w:r></w:p>`
+        + para('Landscape page.') + sect('w:w="15840" w:h="12240" w:orient="landscape"', '<w:headerReference w:type="default" r:id="h3"/>');
+    const docx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/_rels/document.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            + ['h1:header1', 'h2:header2', 'h3:header3', 'h4:header4', 'f1:footer1'].map(x => { const [id, name] = x.split(':'); return `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${name.replace(/\d/, '')}" Target="${name}.xml"/>`; }).join('') + '</Relationships>'),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${W}><w:body>${body}</w:body></w:document>`),
+        'word/header1.xml': part('hdr', para('Running header')),
+        'word/header2.xml': part('hdr', para('Title page header')),
+        'word/header3.xml': part('hdr', para('Landscape header')),
+        'word/header4.xml': part('hdr', para('Even header not shown')),
+        'word/footer1.xml': part('ftr', pageField),
+    }));
+    const ast = await OfficeParser.parseOffice(docx, { fileType: 'docx', includeBreakNodes: true } as any) as OfficeParserAST;
+    assert.deepStrictEqual([ast.metadata.pageSetup?.width, ast.metadata.pageSetup?.height, ast.metadata.pageSetup?.margin?.top], [612, 792, 72], 'the first section\'s page is the document\'s');
+    assert.deepStrictEqual(ast.auxiliary!.headers!.map(h => [h.text, (h.metadata as any).type, (h.metadata as any).section, (h.metadata as any).hidden]),
+        [['Running header', 'default', 0, undefined], ['Title page header', 'first', 0, undefined], ['Even header not shown', 'even', 0, true], ['Landscape header', 'default', 1, undefined]], 'each header part is read once, with its kind and section');
+    const sectionBreak = ast.content.find(n => (n.metadata as any)?.section === 1)!;
+    assert.deepStrictEqual([(sectionBreak.metadata as any).breakType, (sectionBreak.metadata as any).pageSetup.width], ['page', 792], 'a section starts on a page break that carries its page');
+
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const pages = back.content.filter(n => n.type === 'page');
+    const texts = pages.map(p => collectAllNodes({ content: [p] } as any).filter(n => n.type === 'text').map(n => n.text).join(' ') + ' ' + [...(back.auxiliary?.headers ?? []), ...(back.auxiliary?.footers ?? [])].filter(h => (h.metadata as any)?.pageNumber === (p.metadata as any).pageNumber).map(h => h.text).join(' '));
+    const sizes = pages.map(p => [(p.metadata as any).pageWidth, (p.metadata as any).pageHeight]);
+    assert.ok(sizes.length >= 3 && sizes.slice(0, -1).every(([w, h]) => w === 612 && h === 792) && sizes[sizes.length - 1][0] === 792, `Letter pages, then a landscape one; got ${JSON.stringify(sizes)}`);
+    const printed = String((await back.to('text')).value) + ' ' + collectAllNodes({ content: [...(back.auxiliary?.headers ?? []), ...(back.auxiliary?.footers ?? [])] } as any).filter(x => x.type === 'text').map(x => x.text).join(' ');
+    const n = pages.length;
+    assert.ok(printed.includes('Title page header') && printed.includes('Running header') && printed.includes('Landscape header') && !printed.includes('Even header not shown'), 'each page prints its section\'s header, its first page its own, and an unused part none');
+    for (let i = 1; i < n; i++) assert.ok(printed.includes(`Page ${i} of ${n}`), `page ${i}'s footer is numbered for it; got ${JSON.stringify(printed.slice(0, 200))}`);
+    assert.strictEqual((printed.match(/Title page header/g) || []).length, 1, 'the first page\'s header is on the first page alone');
+}
+
+/**
  * The native PDF engine draws GIF (its first frame) and uncompressed BMP pictures, turned into PNG: a PDF
  * holds neither, and both were dropped with IMAGE_PROCESSING_FAILED.
  */
@@ -5067,7 +5120,7 @@ async function testConfigConsistency(): Promise<void> {
     const tex = await run('tex', { texConfig: { documentClass: 'reprot', format: 'A44', margin: { top: '1 inch', left: '2cm' } } });
     assert.deepStrictEqual(tex.seen.filter(w => w.code === 'INVALID_CONFIG_VALUE').map(w => w.message), [
         'Invalid texConfig.documentClass: "reprot". Expected one of auto, article, report, book, beamer; the default ("auto") is used instead.',
-        'Invalid texConfig.format: "A44". Expected one of letter, legal, tabloid, ledger, a0, a1, a2, a3, a4, a5, a6; the default ("A4") is used instead.',
+        'Invalid texConfig.format: "A44". Expected one of letter, legal, tabloid, ledger, a0, a1, a2, a3, a4, a5, a6, auto; the default ("auto") is used instead.',
         'Invalid texConfig.margin.top: "1 inch". Expected a number of points or a length such as \'1in\', \'2cm\', \'36pt\'; the default (72) is used instead.',
     ], 'Config: invalid texConfig values are reported with what the option accepts');
     const texOut = String(tex.result.value);
@@ -6192,7 +6245,7 @@ async function testDocxReadingReview(): Promise<void> {
     assert.deepStrictEqual(texts(footnote.children!), [['paragraph', 'FN link'], ['paragraph', 'CHUNK IN FOOTNOTE']], 'DOCX: a chunk in a footnote is read');
     assert.strictEqual((footnote.children![0].children![1].metadata as any)?.link, 'https://footnote.example/', 'DOCX: a footnote\'s link is its part\'s relationship, not the document\'s');
     assert.deepStrictEqual(texts(comment.children!), [['paragraph', 'CM'], ['paragraph', 'CHUNK IN COMMENT']], 'DOCX: a chunk in a comment is read');
-    const header = parts.ast.auxiliary!.headers!;
+    const header = parts.ast.auxiliary!.headers![0].children!;
     assert.deepStrictEqual([(header[0].children![0].metadata as any)?.attachmentName, header[1].text], ['logo.png', 'CHUNK IN HEADER'], 'DOCX: a header\'s picture and chunk are read through its own relationships');
     assert.deepStrictEqual(parts.issues, [], 'DOCX: chunks in every part read without a warning');
     const embeddedObject = zipSync({ 'word/document.xml': strToU8('<w:document/>'), 'big.bin': new Uint8Array(3_000_000) }, { level: 0 });
@@ -6666,6 +6719,7 @@ async function runTests(): Promise<void> {
         ['List markers', testListMarkers],
         ['HTML stylesheet and shading', testHtmlStylesheetAndShading],
         ['Native PDF footnotes', testNativePdfFootnotes],
+        ['DOCX sections in PDF', testDocxSectionsInPdf],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

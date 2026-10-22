@@ -4,7 +4,7 @@ import { layoutTableRows } from '../utils/tableLayout.js';
 import { ConversionResult, GeneratorConfig, ImageMode, OdtGeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, resolvePaper, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
 import { markerPattern, MarkerPattern, odfNumFormat } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
@@ -822,8 +822,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
 
     private contentWidthPt(): number {
         const cfg = this.config.odtConfig;
-        const size = paperSizePt(cfg.format);
-        const widthPt = cfg.landscape ? size.h : size.w;
+        const widthPt = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup).w;
         const left = marginPt(cfg.margin.left);
         const right = marginPt(cfg.margin.right);
         return Math.max(36, widthPt - left - right);
@@ -930,10 +929,10 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         // literal decl: a header/footer that also used inline code would otherwise declare it twice.
         this.stylesFileStyles.useFont('Courier New');
         const cfg = this.config.odtConfig;
-        const size = paperSizePt(cfg.format);
-        const pw = (cfg.landscape ? size.h : size.w) / 72; // inches
-        const ph = (cfg.landscape ? size.w : size.h) / 72;
-        const orient = cfg.landscape ? 'landscape' : 'portrait';
+        const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup);
+        const pw = paper.w / 72; // inches
+        const ph = paper.h / 72;
+        const orient = paper.landscape ? 'landscape' : 'portrait';
         const mar = cfg.margin;
         const pageLayout = `<style:page-layout style:name="pm1"><style:page-layout-properties`
             + ` fo:page-width="${fmtIn(pw)}" fo:page-height="${fmtIn(ph)}" style:print-orientation="${orient}"`

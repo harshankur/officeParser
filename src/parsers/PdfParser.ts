@@ -1779,6 +1779,8 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             pageNode.metadata.pageWidth = Math.round(extract.width * 100) / 100;
             pageNode.metadata.pageHeight = Math.round(extract.height * 100) / 100;
             if (extract.rotation) pageNode.metadata.rotation = extract.rotation;
+            // The document's page, for the writers that lay out pages (DOCX, ODT and PDF output kept A4).
+            if (!metadata.pageSetup && extract.width > 0 && extract.height > 0) metadata.pageSetup = { width: pageNode.metadata.pageWidth, height: pageNode.metadata.pageHeight };
         }
         if (pageNode.type === 'page' && pageNode.metadata) {
             const label = pageLabels?.[extract.pageNumber - 1];

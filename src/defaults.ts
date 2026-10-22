@@ -174,7 +174,7 @@ const DEFAULT_PDF_GENERATOR_CONFIG: DeepRequired<PdfGeneratorConfig> = {
     printSpeakerNotes: false,
     tagged: true,
     outline: false,
-    format: 'A4',
+    format: 'auto',
     width: '',
     height: '',
     landscape: false,
@@ -291,13 +291,13 @@ const DEFAULT_CHUNKING_CONFIG: ChunkingConfig = DEFAULT_DOCUMENT_STRUCTURE_CHUNK
  * Default configuration for DOCX (Word) generation.
  */
 const DEFAULT_DOCX_GENERATOR_CONFIG: DeepRequired<DocxGeneratorConfig> = {
-    format: 'A4',
+    format: 'auto',
     landscape: false,
     margin: { top: 72, right: 72, bottom: 72, left: 72 },
 };
 
 const DEFAULT_ODT_GENERATOR_CONFIG: DeepRequired<OdtGeneratorConfig> = {
-    format: 'A4',
+    format: 'auto',
     landscape: false,
     margin: { top: 72, right: 72, bottom: 72, left: 72 },
 };
@@ -308,7 +308,7 @@ const DEFAULT_TEX_GENERATOR_CONFIG: DeepRequired<TexGeneratorConfig> = {
     bundle: false,
     embedImages: true,
     numberSections: false,
-    format: 'A4',
+    format: 'auto',
     landscape: false,
     margin: { top: 72, right: 72, bottom: 72, left: 72 },
 };

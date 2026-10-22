@@ -177,11 +177,19 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
             const m = pdfConfig.margin;
             const marginPx = (v: string | number) => (v === '' ? 0 : v);
 
+            // 'auto': the document's own page (its first section's; the browser prints one size), else A4.
+            const setup = this.ast.metadata?.pageSetup;
+            const auto = String(pdfConfig.format ?? 'auto').toLowerCase() === 'auto' && !pdfConfig.width && !pdfConfig.height;
+            let autoSize: { width: string; height: string } | undefined;
+            if (auto && setup) {
+                const [w, h] = pdfConfig.landscape && setup.width < setup.height ? [setup.height, setup.width] : [setup.width, setup.height];
+                autoSize = { width: `${+(w / 72).toFixed(4)}in`, height: `${+(h / 72).toFixed(4)}in` };
+            }
             const pdfBuffer = await page.pdf({
-                format: pdfConfig.format,
-                width: pdfConfig.width,
-                height: pdfConfig.height,
-                landscape: pdfConfig.landscape,
+                format: auto ? (autoSize ? undefined : 'A4') : pdfConfig.format as any,
+                width: autoSize?.width ?? pdfConfig.width,
+                height: autoSize?.height ?? pdfConfig.height,
+                landscape: autoSize ? false : pdfConfig.landscape,
                 printBackground: pdfConfig.printBackground,
                 scale: pdfConfig.scale,
                 margin: { top: marginPx(m.top), right: marginPx(m.right), bottom: marginPx(m.bottom), left: marginPx(m.left) },

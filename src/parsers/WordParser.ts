@@ -61,7 +61,7 @@
  */
 
 import { attachmentLookup } from '../utils/repeatUtils.js';
-import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError, logWarning } from '../utils/errorUtils.js';
 import { createAttachment, renameAttachments } from '../utils/imageUtils.js';
@@ -975,6 +975,13 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         // (the note's number) is read as a reference to its note, not as text.
         const fields: { instruction: string; resolved: boolean; hidesResult: boolean }[] = [];
         let hiddenResults = 0;
+        // The page fields (PAGE, NUMPAGES) whose results are being read, innermost last: their text is
+        // the number when the file was saved, marked so that each page can show its own.
+        const pageFields: ('page' | 'pages' | undefined)[] = [];
+        const pageFieldOf = (instruction: string): 'page' | 'pages' | undefined => {
+            const name = /^\s*([A-Z]+)/i.exec(instruction)?.[1]?.toUpperCase();
+            return name === 'PAGE' ? 'page' : name === 'NUMPAGES' ? 'pages' : undefined;
+        };
         const resolveField = (field: { instruction: string; resolved: boolean; hidesResult: boolean }): void => {
             if (field.resolved) return;
             field.resolved = true;
@@ -1067,17 +1074,23 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         if (nodeStyle) {
                             textNode.metadata = { style: nodeStyle };
                         }
+                        const field = pageFields[pageFields.length - 1];
+                        if (field) textNode.metadata = { ...(textNode.metadata as TextMetadata), field };
                         children.push(textNode);
                     }
                     // Complex fields: where one begins, its instruction, where its result begins, where it ends.
                     else if (child.tagName === "w:fldChar") {
                         const kind = child.getAttribute("w:fldCharType");
-                        if (kind === 'begin') fields.push({ instruction: '', resolved: false, hidesResult: false });
-                        else if (kind === 'separate' && fields.length) resolveField(fields[fields.length - 1]);
+                        if (kind === 'begin') { fields.push({ instruction: '', resolved: false, hidesResult: false }); pageFields.push(undefined); }
+                        else if (kind === 'separate' && fields.length) {
+                            resolveField(fields[fields.length - 1]);
+                            pageFields[pageFields.length - 1] = pageFieldOf(fields[fields.length - 1].instruction);
+                        }
                         else if (kind === 'end' && fields.length) {
                             const field = fields[fields.length - 1];
                             resolveField(field);
                             fields.pop();
+                            pageFields.pop();
                             if (field.hidesResult) hiddenResults--;
                         }
                     } else if (child.tagName === "w:instrText") {
@@ -1314,7 +1327,12 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 const reference = noteRefField(node.getAttribute("w:instr") || '');
                 if (reference?.note) attach(reference.note, 'notes');
                 if (!reference || (!reference.note && !config.ignoreNotes)) {
-                    for (const child of Array.from(node.childNodes)) processChildNode(child, depth + 1);
+                    pageFields.push(pageFieldOf(node.getAttribute("w:instr") || ''));
+                    try {
+                        for (const child of Array.from(node.childNodes)) processChildNode(child, depth + 1);
+                    } finally {
+                        pageFields.pop();
+                    }
                 }
             } else if (isElement(node) && isAlternateContent(node)) {
                 const resolved = resolveAlternateContent(node);
@@ -1453,6 +1471,38 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
      * however deep text boxes nest, where copying each level's content up into the one around it copied
      * it again per level.
      */
+    /**
+     * The body's sections, each its `w:sectPr` (in a paragraph's properties for every section but the
+     * last, whose stands at the body's end), in order; and the paragraph that ends each but the last.
+     */
+    const sections: Element[] = [];
+    const sectionEnds = new Map<Element, number>();
+
+    /** A section's pages (see PageSetup): `w:pgSz` and `w:pgMar` in twips. Undefined without a size. */
+    const pageSetupOf = (sectPr: Element | undefined): PageSetup | undefined => {
+        if (!sectPr) return undefined;
+        const twips = (element: Element | undefined, name: string): number | undefined => {
+            const v = Number(element?.getAttribute(name));
+            return element?.getAttribute(name) && Number.isFinite(v) ? Math.abs(v) / 20 : undefined;
+        };
+        const size = getDirectChildren(sectPr, "w:pgSz")[0];
+        let width = twips(size, "w:w"), height = twips(size, "w:h");
+        if (!width || !height || width > 1584 || height > 1584) return undefined;
+        // A landscape page given in portrait's order is turned, as Word turns it.
+        if (size.getAttribute("w:orient") === 'landscape' && width < height) [width, height] = [height, width];
+        const setup: PageSetup = { width, height };
+        if (isOn(getDirectChildren(sectPr, "w:titlePg")[0])) setup.differentFirstPage = true;
+        const mar = getDirectChildren(sectPr, "w:pgMar")[0];
+        if (mar) {
+            const [top, right, bottom, left] = ["w:top", "w:right", "w:bottom", "w:left"].map(name => Math.min(twips(mar, name) ?? 72, Math.min(width!, height!) / 3));
+            setup.margin = { top, right, bottom, left };
+            const header = twips(mar, "w:header"), footer = twips(mar, "w:footer");
+            if (header !== undefined) setup.headerDistance = Math.min(header, height / 3);
+            if (footer !== undefined) setup.footerDistance = Math.min(footer, height / 3);
+        }
+        return setup;
+    };
+
     const readBlocks = (container: Element, xml: string, out: OfficeContentNode[]): void => {
         let pendingAnchorIds: string[] = [];
         for (const child of layoutChildren(container)) {
@@ -1462,6 +1512,17 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 out.push(undefined as unknown as OfficeContentNode);
                 out[at] = parseParagraph(child, xml, pendingAnchorIds, out);
                 pendingAnchorIds = [];
+                // The paragraph ends a section: the next starts on a new page (unless it runs on, a
+                // continuous section), with pages of its own.
+                const ended = sectionEnds.get(child);
+                if (ended !== undefined && config.includeBreakNodes && ended + 1 < sections.length) {
+                    const next = sections[ended + 1];
+                    const kind = getDirectChildren(next, "w:type")[0]?.getAttribute("w:val");
+                    if (kind !== 'continuous' && kind !== 'nextColumn') {
+                        const pageSetup = config.ignorePageGeometry ? undefined : pageSetupOf(next);
+                        out.push({ type: 'break', text: '', metadata: { breakType: 'page', section: ended + 1, ...(pageSetup ? { pageSetup } : {}) } as BreakMetadata });
+                    }
+                }
             } else if (child.nodeName === 'w:tbl') {
                 out.push(parseTable(child, xml, pendingAnchorIds));
                 pendingAnchorIds = [];
@@ -1682,25 +1743,75 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         }
     }
 
-    // Pre-process headers and footers
     const headers: OfficeContentNode[] = [];
     const footers: OfficeContentNode[] = [];
-    if (!config.ignoreHeadersAndFooters) {
-        for (const [regex, out] of [[headerFileRegex, headers], [footerFileRegex, footers]] as const) {
-            for (const partFile of files.filter(f => f.path.match(regex))) {
-                const partXml = partFile.content.toString();
-                const partDoc = parseXmlString(partXml, { config });
-                if (partDoc.documentElement) await readPart(partFile.path, partDoc.documentElement, () => readBlocks(partDoc.documentElement, partXml, out));
+    /** Whether an on/off property is on: present, and not `false`, `0` or `off`. */
+    const isOn = (element: Element | undefined): boolean => !!element && !['false', '0', 'off'].includes(element.getAttribute("w:val") ?? '');
+
+    /**
+     * The headers and footers: each part a section refers to, as a `header` or `footer` node of its type
+     * (default, first, even) and of the first section that refers to it (a later section without one
+     * of its own takes the one before's, as Word does). A first-page part in a section without a
+     * different first page, an even-page one without different odd and even pages, and a part no
+     * section refers to are kept, hidden: Word shows none of them. They were read as one list of
+     * paragraphs, every part's, which printed three headers at the top of a document of three.
+     */
+    const readHeadersAndFooters = async (documentPath: string): Promise<void> => {
+        if (config.ignoreHeadersAndFooters) return;
+        const settings = files.find(f => f.path === 'word/settings.xml');
+        const settingsDoc = settings ? parseXmlString(settings.content.toString(), { config }) : undefined;
+        const evenAndOdd = isOn(settingsDoc ? getFirstElementByTagName(settingsDoc, "w:evenAndOddHeaders") : undefined);
+        const rels = relsOf(documentPath);
+        const read = new Set<string>();
+        const readInto = async (path: string, kind: 'header' | 'footer', metadata: HeaderFooterMetadata) => {
+            const partFile = files.find(f => f.path === path);
+            if (!partFile || read.has(path)) return;
+            read.add(path);
+            const partXml = partFile.content.toString();
+            const partDoc = parseXmlString(partXml, { config });
+            if (!partDoc.documentElement) return;
+            const children: OfficeContentNode[] = [];
+            await readPart(partFile.path, partDoc.documentElement, () => readBlocks(partDoc.documentElement, partXml, children));
+            (kind === 'header' ? headers : footers).push({ type: kind, text: children.map(c => c.text || '').join('\n'), children, metadata });
+        };
+        for (const [index, sectPr] of sections.entries()) {
+            const titlePage = isOn(getDirectChildren(sectPr, "w:titlePg")[0]);
+            for (const ref of [...getDirectChildren(sectPr, "w:headerReference"), ...getDirectChildren(sectPr, "w:footerReference")]) {
+                const target = rels[ref.getAttribute("r:id") || ''];
+                if (!target) continue;
+                const type = ref.getAttribute("w:type") || 'default';
+                const hidden = (type === 'first' && !titlePage) || (type === 'even' && !evenAndOdd);
+                await readInto(resolvePartPath('word/', target), ref.nodeName === 'w:headerReference' ? 'header' : 'footer',
+                    { type, ...(sections.length > 1 ? { section: index } : {}), ...(hidden ? { hidden: true } : {}) });
             }
         }
-    }
+        for (const [regex, kind] of [[headerFileRegex, 'header'], [footerFileRegex, 'footer']] as const) {
+            for (const partFile of files.filter(f => regex.test(f.path))) {
+                await readInto(partFile.path, kind, sections.length ? { type: 'default', hidden: true } : { type: 'default' });
+            }
+        }
+    };
 
     for (const file of files) {
         if (!file.path.match(documentFileRegex)) continue;
         const documentContent = file.content.toString();
         const doc = parseXmlString(documentContent, { config, locator: config.includeRawContent });
         const body = getFirstElementByTagName(doc, "w:body");
-        if (body) await readPart(file.path, body, () => readBlocks(body, documentContent, content));
+        if (body) {
+            // The sections: a paragraph's `w:sectPr` ends one, the body's own is the last's (one in a
+            // revision's record of the old properties is no section).
+            for (const sectPr of getElementsByTagName(body, "w:sectPr")) {
+                const parent = sectPr.parentNode as Element | null;
+                if (parent?.nodeName === 'w:sectPrChange') continue;
+                if (parent?.nodeName === 'w:pPr' && parent.parentNode) sectionEnds.set(parent.parentNode as Element, sections.length);
+                else if (parent !== body) continue;
+                sections.push(sectPr);
+            }
+            const first = config.ignorePageGeometry ? undefined : pageSetupOf(sections[0]);
+            if (first) metadata.pageSetup = first;
+            await readHeadersAndFooters(file.path);
+            await readPart(file.path, body, () => readBlocks(body, documentContent, content));
+        }
     }
     // A chunk standing where no content is read from would be lost unseen.
     for (const [element, nodes] of chunkNodes) {

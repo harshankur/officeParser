@@ -447,7 +447,7 @@ if (fileArg && !showHelp) {
     console.log('  --pdfConfig.printHidden                     Print a spreadsheet\'s hidden sheets, rows and columns (default: false)');
     console.log('  --pdfConfig.printSpeakerNotes               Print each slide\'s speaker notes under it (default: false)');
     console.log('  --pdfConfig.outline                         Write a bookmark outline from the headings (default: false)');
-    console.log('  --pdfConfig.format=Letter                   PDF paper format (A4 | Letter | Legal | A3 ...), both engines');
+    console.log('  --pdfConfig.format=Letter                   PDF paper format (auto: as the document sets it; A4 | Letter | Legal ...)');
     console.log('  --chunksConfig.strategy=fixed-size          Chunking strategy (fixed-size | document-structure | semantic)');
     console.log('  --mdConfig.dialect=github                   Markdown dialect (extended | github | gitlab | obsidian | pandoc | commonmark)');
     console.log('  --mdConfig.fallbackToHtml=false             Disable HTML fallback for unsupported Markdown features (default: true)');

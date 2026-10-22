@@ -155,6 +155,7 @@ import {
     HeaderFooterMetadata,
     IndentationMetadata,
     ParagraphSpacing,
+    PageSetup,
     ParagraphMetadata,
     DefinitionMetadata,
 } from './types.js';
@@ -270,6 +271,7 @@ export {
     HeaderFooterMetadata,
     IndentationMetadata,
     ParagraphSpacing,
+    PageSetup,
     ParagraphMetadata,
     DefinitionMetadata,
 };

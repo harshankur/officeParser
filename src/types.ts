@@ -1510,7 +1510,32 @@ export interface HtmlGeneratorConfig {
  */
 export type PaperFormat =
     'letter' | 'legal' | 'tabloid' | 'ledger' | 'a0' | 'a1' | 'a2' | 'a3' | 'a4' | 'a5' | 'a6' |
-    'Letter' | 'Legal' | 'Tabloid' | 'Ledger' | 'A0' | 'A1' | 'A2' | 'A3' | 'A4' | 'A5' | 'A6';
+    'Letter' | 'Legal' | 'Tabloid' | 'Ledger' | 'A0' | 'A1' | 'A2' | 'A3' | 'A4' | 'A5' | 'A6' |
+    /** The document's own page ({@link OfficeMetadata.pageSetup}, and each section's own where the output has sections), else A4. */
+    'auto';
+
+/**
+ * A page's size and margins, in points, as a document sets them for a run of its pages: a Word section,
+ * an ODF page style, a presentation's slides, a sheet's print setup.
+ */
+export interface PageSetup {
+    /** Width in points (the page is landscape when it is wider than it is tall). */
+    width: number;
+    /** Height in points. */
+    height: number;
+    /** The margins around the body, in points. */
+    margin?: { top: number; right: number; bottom: number; left: number };
+    /** From the page's top edge to its header, in points. */
+    headerDistance?: number;
+    /** From the page's bottom edge to its footer, in points. */
+    footerDistance?: number;
+    /**
+     * The first of these pages has a header and footer of its own (Word's "different first page"): a
+     * first-page header (HeaderFooterMetadata type `first`) is used on it, here or carried on from an
+     * earlier section; without it, none is.
+     */
+    differentFirstPage?: boolean;
+}
 
 /**
  * Configuration options for PDF generation.
@@ -1602,7 +1627,12 @@ export interface PdfGeneratorConfig {
      * engines write one (it is experimental in the `'html'` engine's browser). Defaults to false.
      */
     outline?: boolean;
-    /** Paper format. Defaults to 'A4'. See {@link PaperFormat}. */
+    /**
+     * Paper format. Defaults to 'auto': the document's own pages ({@link OfficeMetadata.pageSetup}; the
+     * native engine gives each section its own, BreakMetadata.pageSetup, and takes the margins left
+     * unset from it), else A4. `landscape` turns a document's portrait page; a `width` or `height`
+     * given is used instead. See {@link PaperFormat}.
+     */
     format?: PaperFormat;
     /** Paper width, accepts values labeled with units (e.g., '5in', '3cm') or numbers (in pixels). */
     width?: string | number;
@@ -3168,6 +3198,13 @@ export interface TextMetadata {
     wikilink?: boolean;
     /** Advisory link title (Markdown `[text](url "title")`, HTML `<a title>`), if any. */
     title?: string;
+    /**
+     * The run is the result of a field each page fills in: the number of the page it is on (`page`,
+     * Word's PAGE, ODF's `text:page-number`) or of pages in the document (`pages`, NUMPAGES,
+     * `text:page-count`). Its text is the number when the file was saved; PDF output writes each
+     * page's own.
+     */
+    field?: 'page' | 'pages';
 }
 
 /**
@@ -3217,6 +3254,14 @@ export interface BreakMetadata {
      *   `<hr>` in HTML.
      */
     breakType: 'column' | 'page' | 'lastRenderedPage' | 'textWrapping' | 'carriageReturn' | 'thematic';
+
+    /**
+     * On a page break that starts a section of the document (a Word section, an ODF page of another
+     * style): its number (1 for the second section) and its pages' size and margins, where they are set.
+     */
+    section?: number;
+    /** The pages of the section this break starts (see `section`). */
+    pageSetup?: PageSetup;
 
     /**
      * Specifies the location which shall be used as the next available line when breakType
@@ -3279,7 +3324,19 @@ export interface CommentMetadata {
  * Metadata for a header or footer.
  */
 export interface HeaderFooterMetadata {
+    /** Which pages it is on: every page (`default`), a section's first, or its even ones. */
     type: 'default' | 'first' | 'even' | string;
+    /**
+     * The section it belongs to (0 for the first; see BreakMetadata.section), where a document gives
+     * each section headers and footers of its own. Absent: it is on every section's pages.
+     */
+    section?: number;
+    /**
+     * The document keeps it but does not show it: a Word first-page header in a section without a
+     * different first page, an even-page one without different odd and even pages, or a part no
+     * section refers to. PDF output leaves it out.
+     */
+    hidden?: boolean;
 }
 
 /**
@@ -3608,6 +3665,12 @@ export interface OfficeMetadata {
     subject?: string;
     /** Number of pages (if available). */
     pages?: number;
+    /**
+     * The size and margins of the document's pages (its first section's, where sections differ: each
+     * later one's is on the page break that starts it, BreakMetadata.pageSetup): a Word document's
+     * section, an ODF document's page style, a presentation's slide size, a sheet's print setup.
+     */
+    pageSetup?: PageSetup;
     /** Document-wide default formatting settings (font, size, color). */
     formatting?: Partial<TextFormatting>;
     /** Style map for styles in the document. */

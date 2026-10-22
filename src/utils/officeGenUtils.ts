@@ -9,7 +9,7 @@
  * @module officeGenUtils
  */
 
-import { CellMetadata, EmbedMetadata, ImageMode, OfficeContentNode, OfficeParserAST, ParagraphSpacing, RowMetadata, SheetMetadata } from '../types.js';
+import { CellMetadata, EmbedMetadata, ImageMode, OfficeContentNode, OfficeParserAST, PageSetup, ParagraphSpacing, RowMetadata, SheetMetadata } from '../types.js';
 import { cssColorHex } from './colorUtils.js';
 import { lookupTable } from './lookupUtils.js';
 
@@ -184,7 +184,26 @@ export function documentLanguage(metadata: { language?: string; nativeProperties
 }
 
 /** Every {@link PaperFormat} name, lowercased: the page sizes a `format` option accepts. */
-export const PAPER_FORMAT_NAMES: readonly string[] = Object.keys(PAPER_SIZES_PT);
+export const PAPER_FORMAT_NAMES: readonly string[] = [...Object.keys(PAPER_SIZES_PT), 'auto'];
+
+/**
+ * The paper a writer lays its pages on, in points: the format's, turned by `landscape`; under 'auto' the
+ * document's own first page (OfficeMetadata.pageSetup, turned by `landscape` when it is upright), else
+ * A4. `name` is the format whose paper it is, upright, where it is one (for writers that name paper).
+ */
+export function resolvePaper(format: string | undefined, landscape: boolean | undefined, setup: PageSetup | undefined): { w: number; h: number; landscape: boolean; name?: string } {
+    const key = String(format ?? 'auto').toLowerCase();
+    let w: number, h: number;
+    if (key === 'auto' && setup && setup.width > 0 && setup.height > 0) {
+        [w, h] = landscape && setup.width < setup.height ? [setup.height, setup.width] : [setup.width, setup.height];
+    } else {
+        const paper = PAPER_SIZES_PT[key] ?? PAPER_SIZES_PT.a4;
+        [w, h] = landscape ? [paper.h, paper.w] : [paper.w, paper.h];
+    }
+    const upright = [Math.min(w, h), Math.max(w, h)];
+    const name = Object.keys(PAPER_SIZES_PT).find(n => Math.abs(PAPER_SIZES_PT[n].w - upright[0]) < 1.5 && Math.abs(PAPER_SIZES_PT[n].h - upright[1]) < 1.5);
+    return { w, h, landscape: w > h, ...(name ? { name } : {}) };
+}
 
 /** Portrait `{ w, h }` page size in points for a {@link PaperFormat} name (case-insensitive), defaulting to A4. */
 export function paperSizePt(format: string | undefined): { w: number; h: number } {

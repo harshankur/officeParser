@@ -3,7 +3,7 @@ import { UniqueNames } from '../utils/uniqueNames.js';
 import { trimEndChars } from '../utils/textUtils.js';
 import { AdmonitionMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TexDocumentClass, TextFormatting, TextMetadata } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, resolvePaper, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { LatexMathPlan, LatexScripts, LatexUnicodePlan, LISTINGS_LANGUAGES, mathCommandsOf, planLatexMath, planLatexUnicode, withLatexMathMacros } from '../utils/latexUtils.js';
 import { escapeLatex, latexComment, latexSourceComment, sanitizeLatexImagePath, sanitizeLatexMath, sanitizeLatexUrl } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
@@ -2306,14 +2306,12 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             // The page as a person asks `geometry` for it: the paper by its name, and one `margin` when
             // the four are the same (`a4paper,margin=1in`).
             const cfg = this.config.texConfig;
-            const format = (cfg.format || 'a4').toLowerCase();
-            const paper = paperSizePt(format);
-            const named = GEOMETRY_PAPER[format] ?? (paper === paperSizePt(undefined) ? GEOMETRY_PAPER.a4 : undefined);
+            const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup);
+            const named = paper.name ? GEOMETRY_PAPER[paper.name] : undefined;
             const margin = { top: marginPt(cfg.margin?.top), bottom: marginPt(cfg.margin?.bottom), left: marginPt(cfg.margin?.left), right: marginPt(cfg.margin?.right) };
             const sides = (['top', 'bottom', 'left', 'right'] as const).map(side => `${side}=${pageLength(margin[side])}`);
             const geometry = [
-                ...(named ? [named] : [`paperwidth=${pageLength(paper.w)}`, `paperheight=${pageLength(paper.h)}`]),
-                ...(cfg.landscape ? ['landscape'] : []),
+                ...(named ? [named, ...(paper.landscape ? ['landscape'] : [])] : [`paperwidth=${pageLength(paper.w)}`, `paperheight=${pageLength(paper.h)}`]),
                 ...(new Set(sides.map(side => side.split('=')[1])).size === 1 ? [`margin=${pageLength(margin.top)}`] : sides),
             ];
             lines.push(`\\usepackage[${geometry.join(',')}]{geometry}`);

@@ -17,7 +17,7 @@
  * @module generators/pdf/nativePdfEngine
  */
 
-import { EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, ParagraphSpacing, TextAlignment, TextFormatting } from '../../types.js';
+import { EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, TextAlignment, TextFormatting, BreakMetadata, HeaderFooterMetadata } from '../../types.js';
 import { getAbortError, getOfficeError } from '../../utils/errorUtils.js';
 import { documentLanguage, embedUrl, isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize, writableSpacing } from '../../utils/officeGenUtils.js';
 import { decodeBmp, decodeGif, encodePng } from '../../utils/rasterUtils.js';
@@ -274,9 +274,9 @@ class NativeLayout {
         private readonly pdf: any,
         private readonly lib: any,
         private readonly fonts: Fonts,
-        private readonly pageW: number,
-        private readonly pageH: number,
-        private readonly margin: { top: number; right: number; bottom: number; left: number },
+        private pageW: number,
+        private pageH: number,
+        private margin: { top: number; right: number; bottom: number; left: number },
         private readonly config: FullGeneratorConfig,
         private readonly ast: OfficeParserAST,
         // Reports a warning through the generator's own channel, so it lands in `result.messages`
@@ -284,6 +284,15 @@ class NativeLayout {
         private readonly reportWarning: (type: OfficeWarningType, info?: any) => void,
         /** Whether any font was given: the Standard-14 ones are then the last resort, not the only fonts. */
         private readonly customFonts: boolean,
+        /**
+         * Each section's pages from its PageSetup (pdfConfig.format 'auto'), the margins the caller left
+         * unset taken from it; null when the caller's paper is used throughout.
+         */
+        private readonly sectionPage: ((setup: PageSetup | undefined) => { w: number; h: number; margin: { top: number; right: number; bottom: number; left: number } }) | null,
+        /** The first section's distances of its header and footer from the page's edges, and whether its first page has its own. */
+        private headerDistance?: number,
+        private footerDistance?: number,
+        private differentFirstPage?: boolean,
     ) {
         this.imageMode = resolveImageMode(this.config.includeImages);
         for (const a of this.ast.attachments || []) {
@@ -293,8 +302,159 @@ class NativeLayout {
     }
 
     private get contentWidth(): number { return this.pageW - this.margin.left - this.margin.right; }
-    /** The lowest a line of the body goes: above the page's margin, and above its footnotes. */
-    private get bottom(): number { return this.pageH - this.margin.bottom - this.footReserve; }
+    /**
+     * The lowest a line of the body goes: above the page's margin, and above its footnotes. On a page
+     * drawn as it is (a header, a footer, a footnote, or one measured), as low as it needs.
+     */
+    private get bottom(): number { return this.fixedPage ? Number.MAX_SAFE_INTEGER : this.pageH - this.margin.bottom - this.footReserve; }
+
+    // ── sections ─────────────────────────────────────────────────────────────────
+
+    /** The section being laid out (see BreakMetadata.section), and whether the next page starts it. */
+    private section = 0;
+    private startingSection = true;
+    /** Every page made: its section, whether it is that section's first, and its size and margins. */
+    private readonly pageRecords: { page: any; section: number; firstOfSection: boolean; w: number; h: number; margin: { top: number; right: number; bottom: number; left: number }; headerDistance?: number; footerDistance?: number; differentFirstPage?: boolean }[] = [];
+
+    /** Notes the page just made, for its header and footer. */
+    private recordPage(): void {
+        this.pageRecords.push({ page: this.page, section: this.section, firstOfSection: this.startingSection, w: this.pageW, h: this.pageH, margin: { ...this.margin }, headerDistance: this.headerDistance, footerDistance: this.footerDistance, differentFirstPage: this.differentFirstPage });
+        this.startingSection = false;
+    }
+
+    /**
+     * Starts a section of the document: its pages' size and margins (pdfConfig.format 'auto'), on a new
+     * page, or on this one when nothing is drawn on it yet (a page break before the section's own).
+     */
+    private startSection(section: number, setup: PageSetup | undefined): void {
+        this.section = section;
+        this.startingSection = true;
+        this.differentFirstPage = setup?.differentFirstPage;
+        if (this.sectionPage && setup) {
+            const page = this.sectionPage(setup);
+            this.pageW = page.w; this.pageH = page.h; this.margin = page.margin;
+            this.headerDistance = setup.headerDistance;
+            this.footerDistance = setup.footerDistance;
+        }
+        const record = this.pageRecords[this.pageRecords.length - 1];
+        if (record && record.page === this.page && this.y <= this.margin.top + 0.5 && !this.pageFootnotes.length && record.section !== section) {
+            this.page.setSize(this.pageW, this.pageH);
+            Object.assign(record, { section, firstOfSection: true, w: this.pageW, h: this.pageH, margin: { ...this.margin }, headerDistance: this.headerDistance, footerDistance: this.footerDistance, differentFirstPage: this.differentFirstPage });
+            this.startingSection = false;
+            this.y = this.margin.top;
+            return;
+        }
+        this.newPage();
+    }
+
+    /** Gives this page, while nothing is drawn on it, the size a page node of the source has. */
+    private takePageSize(meta: { pageWidth?: number; pageHeight?: number } | undefined): void {
+        const w = meta?.pageWidth, h = meta?.pageHeight;
+        // Room for the margins and an inch of text, and no larger than a PDF page can be.
+        if (!this.sectionPage || !w || !h || !(w > this.margin.left + this.margin.right + 72 && h > this.margin.top + this.margin.bottom + 72 && w <= 14400 && h <= 14400)) return;
+        const record = this.pageRecords[this.pageRecords.length - 1];
+        if (!record || record.page !== this.page || this.y > this.margin.top + 0.5 || (Math.abs(w - this.pageW) < 0.5 && Math.abs(h - this.pageH) < 0.5)) return;
+        this.pageW = w; this.pageH = h;
+        this.page.setSize(w, h);
+        Object.assign(record, { w, h });
+    }
+
+    /** The page fields' numbers while a page's header and footer are drawn (see TextMetadata.field). */
+    private fieldPage?: number;
+    private fieldPages?: number;
+
+    /**
+     * Draws each page's header and footer, once every page is laid out (so a page count can be filled
+     * in): the section's own, or the one before's where it has none, as Word carries them on; its
+     * first page's where it has one, and its even pages' where it has those. They were drawn once,
+     * headers before the body and footers after it, each section's and each kind's all together.
+     */
+    async drawRunningContent(): Promise<void> {
+        const furniture = (nodes: OfficeContentNode[] | undefined, kind: 'header' | 'footer') => {
+            const wrapped = (nodes || []).filter(n => n.type === kind);
+            const loose = (nodes || []).filter(n => n.type !== kind);
+            // Loose blocks (a reader that gives one list) are one header or footer for every page.
+            if (loose.length) wrapped.push({ type: kind, children: loose, metadata: { type: 'default' } } as OfficeContentNode);
+            return wrapped.filter(n => !(n.metadata as HeaderFooterMetadata | undefined)?.hidden);
+        };
+        const headers = furniture(this.ast.auxiliary?.headers, 'header'), footers = furniture(this.ast.auxiliary?.footers, 'footer');
+        if (!headers.length && !footers.length) return;
+        const pick = (list: OfficeContentNode[], section: number, type: string): OfficeContentNode | undefined => {
+            let best: OfficeContentNode | undefined, bestSection = -2;
+            for (const node of list) {
+                const meta = node.metadata as HeaderFooterMetadata | undefined;
+                if ((meta?.type ?? 'default') !== type) continue;
+                const at = meta?.section ?? -1;
+                if (at <= section && at > bestSection) { best = node; bestSection = at; }
+            }
+            return best;
+        };
+        // A first page's own: where its section has a different first page (or, not said, where the
+        // first-page part is the section's own).
+        const firstOf = (list: OfficeContentNode[], record: typeof this.pageRecords[number]) => {
+            const first = record.firstOfSection ? pick(list, record.section, 'first') : undefined;
+            const own = (first?.metadata as HeaderFooterMetadata | undefined)?.section;
+            return first && (record.differentFirstPage ?? (own === undefined || own === record.section)) ? first : undefined;
+        };
+        const choose = (list: OfficeContentNode[], record: typeof this.pageRecords[number], number: number) =>
+            firstOf(list, record)
+            ?? (number % 2 === 0 ? pick(list, record.section, 'even') : undefined)
+            ?? pick(list, record.section, 'default');
+        const saved = { page: this.page, y: this.y, w: this.pageW, h: this.pageH, margin: this.margin };
+        this.fieldPages = this.pageRecords.length;
+        this.fixedPage = true;
+        try {
+            for (const [index, record] of this.pageRecords.entries()) {
+                this.fieldPage = index + 1;
+                this.pageW = record.w; this.pageH = record.h; this.margin = record.margin;
+                const header = choose(headers, record, index + 1), footer = choose(footers, record, index + 1);
+                if (header) {
+                    this.page = record.page;
+                    this.y = record.headerDistance || Math.max(12, record.margin.top / 3);
+                    await this.render(header);
+                }
+                if (footer) {
+                    // Measured first, on a page made for it and taken away: it ends at its distance from the bottom.
+                    const height = await this.measured(async () => { await this.render(footer); });
+                    this.page = record.page;
+                    this.y = Math.max(record.margin.top, record.h - (record.footerDistance || Math.max(12, record.margin.bottom / 3)) - height);
+                    await this.render(footer);
+                }
+            }
+        } finally {
+            this.fixedPage = false;
+            this.fieldPage = this.fieldPages = undefined;
+            Object.assign(this, { page: saved.page, y: saved.y, pageW: saved.w, pageH: saved.h, margin: saved.margin });
+        }
+    }
+
+    /**
+     * How tall something drawn is: drawn on a page made for it and taken away, everything it left
+     * behind (links, anchors, characters counted as lost) taken back.
+     */
+    private async measured(draw: () => Promise<void> | void): Promise<number> {
+        const saved = { page: this.page, y: this.y, fixed: this.fixedPage, links: this.linkBoxes.length, lost: this.lostCharacters, sample: this.lostSample.length, pending: [...this.pendingAnchors], outline: this.outlineEntries.length };
+        const pagesBefore = this.pdf.getPageCount();
+        this.fixedPage = true;
+        try {
+            this.page = this.pdf.addPage([this.pageW, this.pageH]);
+            this.y = 0;
+            await draw();
+            return this.y;
+        } finally {
+            const scratch = new Set(this.pdf.getPages().slice(pagesBefore));
+            while (this.pdf.getPageCount() > pagesBefore) this.pdf.removePage(this.pdf.getPageCount() - 1);
+            for (const [id, at] of [...this.anchors]) if (scratch.has(at.page)) this.anchors.delete(id);
+            this.fixedPage = saved.fixed;
+            this.page = saved.page;
+            this.y = saved.y;
+            this.linkBoxes.length = saved.links;
+            this.lostCharacters = saved.lost;
+            this.lostSample.length = saved.sample;
+            this.pendingAnchors = saved.pending;
+            this.outlineEntries.length = saved.outline;
+        }
+    }
 
     /** Where each anchor id is (its page and the height on it), for the links into the document. */
     private readonly anchors = new Map<string, { page: any; top: number }>();
@@ -362,9 +522,12 @@ class NativeLayout {
 
     /** Starts a fresh page and resets the cursor to the top margin. */
     private newPage(): void {
+        // A page drawn as it is never runs on to another (see bottom).
+        if (this.fixedPage) return;
         this.drawPageFootnotes();
         this.page = this.pdf.addPage([this.pageW, this.pageH]);
         this.y = this.margin.top;
+        this.recordPage();
         // Footnotes whose reference ended the page before, without room left there, go on this one.
         const carried = this.carriedFootnotes;
         this.carriedFootnotes = [];
@@ -387,7 +550,7 @@ class NativeLayout {
     /** The footnotes given a page (the rest are drawn with the endnotes, at the end). */
     private readonly placedNotes = new Set<OfficeContentNode>();
     /** Set while footnotes are measured or drawn: no page is started, and no footnote placed. */
-    private drawingFootnotes = false;
+    private fixedPage = false;
     /** The rule over a page's footnotes and the space around it. */
     private static readonly FOOTNOTE_RULE = 12;
 
@@ -403,30 +566,11 @@ class NativeLayout {
      */
     async measureFootnotes(): Promise<void> {
         const notes = this.collectedNotes.filter(n => (n.metadata as { noteType?: string } | undefined)?.noteType !== 'endnote' && this.noteLabels.has(n));
-        if (!notes.length) return;
-        const saved = { page: this.page, y: this.y, links: this.linkBoxes.length, lost: this.lostCharacters, sample: this.lostSample.length, pending: [...this.pendingAnchors] };
-        const pagesBefore = this.pdf.getPageCount();
-        this.drawingFootnotes = true;
-        try {
-            this.page = this.pdf.addPage([this.pageW, this.pageH]);
-            for (const note of notes) {
-                const runs = [{ text: `${this.noteLabels.get(note)} `, fmt: { size: '9pt', superscript: true } } as Run,
-                    ...(await this.collectRuns(note)).map(r => ({ ...r, fmt: { ...r.fmt, size: '9pt' } }))];
-                this.footnoteRuns.set(note, runs);
-                this.y = 0;
-                this.drawRuns(runs, this.margin.left, this.contentWidth);
-                this.footnoteHeights.set(note, this.y + 2);
-            }
-        } finally {
-            while (this.pdf.getPageCount() > pagesBefore) this.pdf.removePage(this.pdf.getPageCount() - 1);
-            this.drawingFootnotes = false;
-            this.page = saved.page;
-            this.y = saved.y;
-            this.linkBoxes.length = saved.links;
-            this.lostCharacters = saved.lost;
-            this.lostSample.length = saved.sample;
-            this.pendingAnchors = saved.pending;
-            for (const [id, at] of [...this.anchors]) if (at.page !== this.page && !this.pdf.getPages().includes(at.page)) this.anchors.delete(id);
+        for (const note of notes) {
+            const runs = [{ text: `${this.noteLabels.get(note)} `, fmt: { size: '9pt', superscript: true } } as Run,
+                ...(await this.collectRuns(note)).map(r => ({ ...r, fmt: { ...r.fmt, size: '9pt' } }))];
+            this.footnoteRuns.set(note, runs);
+            this.footnoteHeights.set(note, await this.measured(() => this.drawRuns(runs, this.margin.left, this.contentWidth)) + 2);
         }
     }
 
@@ -446,7 +590,7 @@ class NativeLayout {
 
     /** A footnote cited in a line just drawn: given a page, once. */
     private citeFootnote(note: OfficeContentNode): void {
-        if (this.drawingFootnotes || this.placedNotes.has(note) || !this.footnoteRuns.has(note)) return;
+        if (this.fixedPage || this.placedNotes.has(note) || !this.footnoteRuns.has(note)) return;
         this.reserveFootnote(note);
     }
 
@@ -456,7 +600,7 @@ class NativeLayout {
         const notes = this.pageFootnotes, reserve = this.footReserve;
         this.pageFootnotes = [];
         this.footReserve = 0;
-        this.drawingFootnotes = true;
+        this.fixedPage = true;
         try {
             this.y = this.pageH - this.margin.bottom - reserve + NativeLayout.FOOTNOTE_RULE / 2;
             const yy = this.pageH - this.y;
@@ -467,7 +611,7 @@ class NativeLayout {
                 this.y += 2;
             }
         } finally {
-            this.drawingFootnotes = false;
+            this.fixedPage = false;
         }
     }
 
@@ -478,7 +622,7 @@ class NativeLayout {
      * content taller than a page (tables) split it across pages themselves.
      */
     private ensureSpace(h: number): void {
-        if (this.y + h > this.bottom && this.y > this.margin.top && !this.drawingFootnotes) this.newPage();
+        if (this.y + h > this.bottom && this.y > this.margin.top && !this.fixedPage) this.newPage();
         if (this.pendingAnchors.length) this.placeAnchors();
     }
 
@@ -633,6 +777,10 @@ class NativeLayout {
                 if (typeof override === 'string') text = override;
             }
             const fmt = { ...inherited, ...(n.formatting || {}) };
+            // A page field's number for the page being drawn (its header or footer), not the one saved.
+            const field = (n.metadata as { field?: string } | undefined)?.field;
+            if (field === 'page' && this.fieldPage !== undefined && typeof override !== 'string') text = String(this.fieldPage);
+            else if (field === 'pages' && this.fieldPages !== undefined && typeof override !== 'string') text = String(this.fieldPages);
             // A link's target, which the words inside it share: a link around formatted runs linked only
             // the run that carried it.
             const own = (n.metadata as { link?: unknown } | undefined)?.link;
@@ -955,6 +1103,8 @@ class NativeLayout {
         switch (node.type) {
             case 'page':
             case 'slide':
+                // A PDF's page keeps its own size (pdfConfig.format 'auto'), as each section's does.
+                if (topLevel && node.type === 'page') this.takePageSize(node.metadata as { pageWidth?: number; pageHeight?: number } | undefined);
                 for (const c of node.children || []) await this.render(c);
                 // Speaker notes, when the PDF keeps them (pdfConfig.printSpeakerNotes), under their slide.
                 for (const n of node.notes || []) await this.note(n);
@@ -1038,7 +1188,7 @@ class NativeLayout {
         else if (this.y > this.margin.top) this.y += size * 0.6;
         const runs = (await this.collectRuns(node)).map(r => ({ ...r, fmt: { ...r.fmt, bold: true, size: `${size}pt` } }));
         const title = (runs.length ? runs.map(r => r.text).join('') : node.text || '').replace(/\s+/g, ' ').trim();
-        if (title) this.outlineEntries.push({ title, level, page: this.page, top: this.pageH - this.y });
+        if (title && !this.fixedPage) this.outlineEntries.push({ title, level, page: this.page, top: this.pageH - this.y });
         this.drawRuns(runs.length ? runs : [{ text: node.text || '', fmt: { bold: true, size: `${size}pt` } }], left, width, false, layout);
         this.y += this.spaceBelow(spacing?.after, size * 0.35);
     }
@@ -1190,7 +1340,9 @@ class NativeLayout {
     }
 
     private breakNode(node: OfficeContentNode): void {
-        const t = (node.metadata as any)?.breakType;
+        const meta = node.metadata as BreakMetadata | undefined;
+        const t = meta?.breakType;
+        if (t === 'page' && typeof meta?.section === 'number' && meta.section > 0) { this.startSection(meta.section, meta.pageSetup); return; }
         if (t === 'page') { this.newPage(); return; }
         if (t === 'thematic') {
             this.ensureSpace(12);
@@ -1824,7 +1976,10 @@ export async function renderNativePdf(ast: OfficeParserAST, config: FullGenerato
 /** Lays the document out on the pages of `pdf` and returns its bytes. */
 async function drawDocument(pdf: any, lib: any, fonts: Fonts, customFonts: boolean, ast: OfficeParserAST, config: FullGeneratorConfig, reportWarning: (type: OfficeWarningType, info?: any) => void): Promise<Uint8Array> {
     const pc = config.pdfConfig;
-    const paper = paperSizePt(pc.format);
+    // 'auto' (the default): the document's own pages, each section's, where it sets them; else A4. A
+    // width or height given is the caller's paper.
+    const auto = String(pc.format ?? 'auto').toLowerCase() === 'auto' && !pc.width && !pc.height;
+    const paper = paperSizePt(auto ? 'a4' : pc.format);
     // Orient the FORMAT by swapping its dimensions when landscape (the same `landscape ? h : w` the
     // DOCX/ODT generators and Puppeteer use), so a paper that is already landscape - `ledger` (17x11) -
     // rotates to portrait under `landscape: true` instead of the old conditional swap that never
@@ -1839,22 +1994,31 @@ async function drawDocument(pdf: any, lib: any, fonts: Fonts, customFonts: boole
     // mdef so text is not glued to the sheet edge, while an explicit 0 parses to 0 and is honoured for
     // callers who genuinely want an edge-to-edge native PDF.
     const mdef = 48; // ~0.67in
-    const mv = (v: string | number | undefined) => toPoints(v, mdef);
-    const margin = { top: mv(pc.margin?.top), right: mv(pc.margin?.right), bottom: mv(pc.margin?.bottom), left: mv(pc.margin?.left) };
+    // A side the caller left unset is the document's (under 'auto'), else the default.
+    const unset = (v: string | number | undefined) => v === undefined || v === null || v === '';
+    const marginFor = (setup: PageSetup | undefined) => {
+        const side = (v: string | number | undefined, own: number | undefined) => unset(v) && auto && own !== undefined ? own : toPoints(v, mdef);
+        return { top: side(pc.margin?.top, setup?.margin?.top), right: side(pc.margin?.right, setup?.margin?.right), bottom: side(pc.margin?.bottom, setup?.margin?.bottom), left: side(pc.margin?.left, setup?.margin?.left) };
+    };
+    // A section's page: its own size (turned to landscape when the caller asks), its own margins.
+    const sectionPage = (setup: PageSetup | undefined) => {
+        let pw = setup?.width ?? w, ph = setup?.height ?? h;
+        if (setup && pc.landscape && pw < ph) [pw, ph] = [ph, pw];
+        return { w: pw, h: ph, margin: marginFor(setup) };
+    };
+    const first = auto ? ast.metadata?.pageSetup : undefined;
+    const firstPage = first ? sectionPage(first) : { w, h, margin: marginFor(undefined) };
 
-    const layout = new NativeLayout(pdf, lib, fonts, w, h, margin, config, ast, reportWarning, customFonts);
-    // The native engine reflows a single stream and has no running page furniture, so master-page
-    // headers/footers (ast.auxiliary, present only when parsing kept them) are drawn once - headers
-    // before the body, footers after - rather than dropped. Footnote/endnote bodies gathered during the
-    // walk are drawn last.
-    for (const n of ast.auxiliary?.headers || []) await layout.render(n);
+    const layout = new NativeLayout(pdf, lib, fonts, firstPage.w, firstPage.h, firstPage.margin, config, ast, reportWarning, customFonts,
+        auto ? sectionPage : null, first?.headerDistance, first?.footerDistance, ast.metadata?.pageSetup?.differentFirstPage);
     // Gather footnote/endnote bodies from the whole content tree first (they attach to text runs, deep
     // in the tree, so a render()-level sweep would miss them), then render the body, then draw them.
     for (const node of ast.content) layout.collectNotes(node);
     await layout.measureFootnotes();
     for (const node of ast.content) await layout.render(node, true);
-    for (const n of ast.auxiliary?.footers || []) await layout.render(n);
     await layout.flushNotes();
+    // Each page's header and footer, once the pages are known (ast.auxiliary, where parsing kept them).
+    await layout.drawRunningContent();
     layout.reportLostCharacters();
     layout.writeLinks();
     if (pc.outline) writeOutline(pdf, lib, layout.outlineEntries);
