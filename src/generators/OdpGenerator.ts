@@ -222,7 +222,9 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
     private paragraphXml(p: DeckParagraph, defaultSize?: number): string {
         const align = p.align === 'center' ? 'center' : p.align === 'right' ? 'end' : p.align === 'justify' ? 'justify' : undefined;
         const first = !p.bullet && p.firstIndent ? p.firstIndent : 0;
-        const pStyle = align || p.bullet || first ? this.styleNamed(`p|${align}|${p.bullet?.level ?? ''}|${first.toFixed(2)}`, 'P', name => `<style:style style:name="${name}" style:family="paragraph"><style:paragraph-properties${align ? ` fo:text-align="${align}"` : ''}${p.bullet ? ` fo:margin-left="${pt(18 * (p.bullet.level + 1))}" fo:text-indent="${pt(-14)}"` : first ? ` fo:margin-left="${pt(Math.max(0, -first))}" fo:text-indent="${pt(first)}"` : ''}/></style:style>`) : undefined;
+        // Lines as far apart as the source set them.
+        const spacing = p.lineSpacing && p.lineSpacing > 0 ? Math.min(1584, p.lineSpacing) : 0;
+        const pStyle = align || p.bullet || first || spacing ? this.styleNamed(`p|${align}|${p.bullet?.level ?? ''}|${first.toFixed(2)}|${spacing.toFixed(2)}`, 'P', name => `<style:style style:name="${name}" style:family="paragraph"><style:paragraph-properties${align ? ` fo:text-align="${align}"` : ''}${spacing ? ` fo:line-height="${pt(spacing)}"` : ''}${p.bullet ? ` fo:margin-left="${pt(18 * (p.bullet.level + 1))}" fo:text-indent="${pt(-14)}"` : first ? ` fo:margin-left="${pt(Math.max(0, -first))}" fo:text-indent="${pt(first)}"` : ''}/></style:style>`) : undefined;
         const spans = p.runs.map(r => this.spanXml(r, defaultSize, p.mono)).join('');
         const marker = p.bullet ? (p.bullet.numbered ? '' : `${xmlText(p.bullet.char ? [...p.bullet.char][0] : '')}<text:tab/>`) : '';
         return `<text:p${pStyle ? ` text:style-name="${pStyle}"` : ''}>${marker}${spans}</text:p>`;

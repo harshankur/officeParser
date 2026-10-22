@@ -5571,6 +5571,13 @@ async function testPresentationWriters(): Promise<void> {
     assert.ok(/Demonstration of DOCX support in<\/a:t><\/a:r><a:br\b[^]*?<a:t>calibre<\/a:t>/.test(slideXml(1)) && slideXml(1).includes('wrap="none"'), 'a page\'s heading keeps its line break, unwrapped');
     const tables = slideXml(3);
     assert.ok(/<a:t>ITEM<\/a:t>[\s\S]*?<a:srgbClr val="9BBB59"\/>/i.test(tables), 'the shaded header is written with its colour');
+    assert.ok(/<a:lnSpc><a:spcPts val="\d+"\/><\/a:lnSpc>/.test(slideXml(2)), 'a page\'s paragraph keeps its lines as far apart as they were');
+    const cedar = collectAllNodes(pdf).find(n => n.type === 'cell' && n.text === 'Cedar University')!.bounds!, number = collectAllNodes(pdf).find(n => n.type === 'cell' && n.text === '110')!.bounds!;
+    assert.ok(number.x > cedar.x + cedar.width + 10, `a cell's text is where it was drawn, not where the blank before it began; got ${number.x}`);
+    // A page drawn behind its slide: the tables' rules are in the picture, their cells' text over it in place.
+    const drawn = unzipSync(new Uint8Array((await OfficeGenerator.generate(pdf, 'pptx', { pptxConfig: { backgrounds: pdf.content.map(() => new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64'))) } } as any)).value as Uint8Array));
+    const drawnTables = strFromU8(drawn['ppt/slides/slide3.xml']);
+    assert.ok(!drawnTables.includes('<a:tbl>') && /<a:t>Books<\/a:t>/.test(drawnTables) && /<a:t>110<\/a:t>/.test(drawnTables) && /<p:bg><p:bgPr><a:blipFill/.test(drawnTables), 'over a page\'s picture, a table is its cells\' text in place');
     const beside = tables.split('<p:sp>').filter(sp => /Tables in Word|optimum results/.test(sp)).map(sp => Number(/<a:off x="(\d+)"/.exec(sp)![1]));
     assert.ok(beside.length === 2 && beside[0] > beside[1] + 12700 * 100, `the paragraph beside the floating table is set beside it, then under it; got ${beside}`);
 

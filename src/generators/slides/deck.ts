@@ -24,7 +24,7 @@ import { layoutTableRows } from '../../utils/tableLayout.js';
 export interface Box { x: number; y: number; w: number; h: number }
 
 export interface DeckRun { text: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; size?: number; color?: string; font?: string; link?: string; superscript?: boolean; subscript?: boolean; lineBreak?: boolean }
-export interface DeckParagraph { runs: DeckRun[]; align?: 'left' | 'center' | 'right' | 'justify'; bullet?: { level: number; char?: string; numbered?: boolean } ; mono?: boolean; /** The first line's indent past the others, in points (negative: hanging). */ firstIndent?: number }
+export interface DeckParagraph { runs: DeckRun[]; align?: 'left' | 'center' | 'right' | 'justify'; bullet?: { level: number; char?: string; numbered?: boolean } ; mono?: boolean; /** The first line's indent past the others, in points (negative: hanging). */ firstIndent?: number; /** From baseline to baseline, in points, where the source measured it. */ lineSpacing?: number }
 
 export type DeckItem =
     | { kind: 'text'; box: Box; paragraphs: DeckParagraph[]; anchor?: 'top' | 'middle' | 'bottom'; insets?: { top: number; right: number; bottom: number; left: number }; exact?: boolean; shape?: ShapeMetadata; rotation?: number; role?: 'title' | 'body' }
@@ -146,11 +146,19 @@ function placedLines(node: OfficeContentNode, runs: DeckRun[]): { runs: DeckRun[
     return lines;
 }
 
-/** A page paragraph's runs with a break where each of its lines ended on the page. */
-function brokenAsPlaced(node: OfficeContentNode, runs: DeckRun[]): DeckRun[] {
-    const lines = placedLines(node, runs);
-    return lines ? lines.flatMap((line, i) => i ? [{ text: '', lineBreak: true }, ...line.runs] : line.runs) : runs;
+/** A page paragraph's lines joined with a break where each ended on the page. */
+const joinLines = (lines: { runs: DeckRun[] }[]): DeckRun[] => lines.flatMap((line, i) => i ? [{ text: '', lineBreak: true }, ...line.runs] : line.runs);
+
+/** The distance from one line to the next, where lines were measured on the page and are evenly apart enough to say. */
+function pitchOf(lines: { box: NodeBounds }[]): number | undefined {
+    if (lines.length < 2) return undefined;
+    const pitch = (lines[lines.length - 1].box.y - lines[0].box.y) / (lines.length - 1);
+    return pitch > 0 && Number.isFinite(pitch) ? Math.round(pitch * 100) / 100 : undefined;
 }
+
+/** A paragraph's sizes (indent, line spacing) scaled with its page. */
+const scaledParagraph = (p: DeckParagraph, scale: number): DeckParagraph => scale === 1 ? p
+    : { ...p, ...(p.firstIndent ? { firstIndent: p.firstIndent * scale } : {}), ...(p.lineSpacing ? { lineSpacing: p.lineSpacing * scale } : {}) };
 
 /**
  * A page paragraph's lines in groups that share a left edge (the first line's own indent kept as one), each
@@ -161,6 +169,7 @@ function placedGroups(node: OfficeContentNode, p: DeckParagraph): { paragraph: D
     if (p.bullet || (p.align && p.align !== 'left' && p.align !== 'justify')) return undefined;
     const lines = placedLines(node, p.runs);
     if (!lines || lines.length < 2) return undefined;
+    const pitch = pitchOf(lines);
     const groups: { lines: typeof lines; left: number; first: number }[] = [];
     for (const [i, line] of lines.entries()) {
         const g = groups[groups.length - 1];
@@ -174,7 +183,8 @@ function placedGroups(node: OfficeContentNode, p: DeckParagraph): { paragraph: D
         let right = -Infinity, top = Infinity, bottom = -Infinity;
         for (const l of g.lines) { right = Math.max(right, l.box.x + l.box.width); top = Math.min(top, l.box.y); bottom = Math.max(bottom, l.box.y + l.box.height); }
         const indent = g.first - g.left;
-        const paragraph: DeckParagraph = { ...p, runs: g.lines.flatMap((line, i) => i ? [{ text: '', lineBreak: true }, ...line.runs] : line.runs), ...(Math.abs(indent) > 3 ? { firstIndent: indent } : {}) };
+        const own = pitchOf(g.lines) ?? pitch;
+        const paragraph: DeckParagraph = { ...p, runs: joinLines(g.lines), ...(Math.abs(indent) > 3 ? { firstIndent: indent } : {}), ...(own ? { lineSpacing: own } : {}) };
         return { paragraph, box: { x: Math.min(g.left, g.first), y: top, width: right - Math.min(g.left, g.first), height: bottom - top } };
     });
 }
@@ -182,10 +192,12 @@ function placedGroups(node: OfficeContentNode, p: DeckParagraph): { paragraph: D
 /** A block as a paragraph: its runs, its alignment, a list item's bullet and level. */
 async function paragraphOf(node: OfficeContentNode, source: DeckSource, notes: { list: DeckParagraph[]; seen: Map<OfficeContentNode, number> }, kept: true | string = true, asPlaced = false): Promise<DeckParagraph> {
     const read = typeof kept === 'string' ? [{ text: kept }] : await runsOf(node, source, notes);
-    const runs = asPlaced && typeof kept !== 'string' ? brokenAsPlaced(node, read) : read;
+    // A page's paragraph: its lines as the page broke them, as far apart as they were.
+    const lines = asPlaced && typeof kept !== 'string' ? placedLines(node, read) : undefined;
+    const pitch = lines && pitchOf(lines);
     const meta = node.metadata as (ListMetadata & { alignment?: string }) | undefined;
     const align = meta?.alignment === 'center' || meta?.alignment === 'right' || meta?.alignment === 'justify' ? meta.alignment : undefined;
-    const p: DeckParagraph = { runs, ...(align ? { align } : {}) };
+    const p: DeckParagraph = { runs: lines ? joinLines(lines) : read, ...(align ? { align } : {}), ...(pitch ? { lineSpacing: pitch } : {}) };
     if (node.type === 'list') p.bullet = { level: Math.max(0, Math.min(8, meta?.indentation ?? 0)), ...(meta?.listType === 'ordered' ? { numbered: true } : { char: typeof meta?.marker === 'string' && meta.marker ? meta.marker : '•' }) };
     if (node.type === 'code') p.mono = true;
     return p;
@@ -287,6 +299,50 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
             if (background) slide.background = background;
             const picture = options.backgrounds?.[index];
             if (picture) slide.picture = picture;
+            // A page's block in its place: its lines kept as the page broke and spaced them, a paragraph whose
+            // lines start at more than one edge (beside a floating table or picture) a box for each group of them.
+            const placeBlock = async (block: OfficeContentNode, kept: true | string) => {
+                const rotation = (block.metadata as { rotation?: number } | undefined)?.rotation;
+                if (!rotation && kept === true && (block.type === 'paragraph' || block.type === 'heading')) {
+                    const groups = placedGroups(block, await paragraphOf(block, source, notes));
+                    if (groups) {
+                        for (const g of groups) { const at = boxOf(g.box, scale, dx, dy); if (at) slide.items.push({ kind: 'text', box: at, paragraphs: [scaledParagraph(g.paragraph, scale)], exact: true }); }
+                        return;
+                    }
+                }
+                const p = await paragraphOf(block, source, notes, kept, true);
+                if (!p.runs.some(r => r.text.trim())) return;
+                const at = boxOf(block.bounds, scale, dx, dy);
+                if (at) slide.items.push({ kind: 'text', box: at, paragraphs: [scaledParagraph(p, scale)], exact: true, ...(rotation ? { rotation } : {}) });
+                else slide.items.push({ kind: 'text', box: { ...BODY_BOX, x: width * 0.05, w: width * 0.9, y: height * 0.1 + slide.items.length * 24, h: 24 }, paragraphs: [p] });
+            };
+            // A table's cells' text placed block by block, where every block of text in it has its place.
+            const cellsPlaced = async (table: OfficeContentNode): Promise<boolean> => {
+                const blocks: OfficeContentNode[] = [];
+                const walk = (n: OfficeContentNode, d: number): boolean => {
+                    for (const c of n.children ?? []) {
+                        // A cell of runs (no blocks of its own) is its one block.
+                        if (c.type === 'cell' && !(c.children ?? []).some(x => ['paragraph', 'heading', 'list', 'code', 'table'].includes(x.type))) {
+                            if (!(c.text || '').trim()) continue;
+                            // Placed where its text is (a cell's box is wider than a centred or right-aligned number).
+                            const texts = (c.children ?? []).filter(x => (x.text || '').trim());
+                            const placed = texts.length && texts.every(x => x.bounds) ? texts.map(x => x.bounds!) : undefined;
+                            const box = placed ? placed.reduce((u, b) => { const x = Math.min(u.x, b.x), y = Math.min(u.y, b.y); return { x, y, width: Math.max(u.x + u.width, b.x + b.width) - x, height: Math.max(u.y + u.height, b.y + b.height) - y }; }) : c.bounds;
+                            if (!box) return false;
+                            blocks.push({ ...c, bounds: box });
+                            continue;
+                        }
+                        if (c.type === 'row' || c.type === 'cell' || c.type === 'table') { if (d >= 16 || !walk(c, d + 1)) return false; continue; }
+                        if (!['paragraph', 'heading', 'list', 'code'].includes(c.type)) { if ((c.text || '').trim() || c.type === 'image') return false; continue; }
+                        if (!c.bounds) return false;
+                        blocks.push(c);
+                    }
+                    return true;
+                };
+                if (!walk(table, 0)) return false;
+                for (const b of blocks) { const k = await source.keep(b); if (k !== false) await placeBlock(b, k); }
+                return true;
+            };
             const children = node.children ?? [];
             for (let i = 0; i < children.length; i++) {
                 const child = children[i];
@@ -310,19 +366,12 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
                     // A deck's text box holds the paragraphs that share its bounds; a page's paragraph is its own.
                     const group: OfficeContentNode[] = [child];
                     while (isSlides && i + 1 < children.length && ['paragraph', 'heading', 'list'].includes(children[i + 1].type) && sameBox(children[i + 1].bounds, child.bounds)) group.push(children[++i]);
+                    if (!isSlides) { await placeBlock(child, kept); continue; }
                     const rotation = (child.metadata as { rotation?: number } | undefined)?.rotation;
-                    // A page's paragraph whose lines start at more than one edge: a box for each group of its lines.
-                    if (!isSlides && !rotation && kept === true && (child.type === 'paragraph' || child.type === 'heading')) {
-                        const groups = placedGroups(child, await paragraphOf(child, source, notes));
-                        if (groups) {
-                            for (const g of groups) { const at = boxOf(g.box, scale, dx, dy); if (at) slide.items.push({ kind: 'text', box: at, paragraphs: [g.paragraph.firstIndent ? { ...g.paragraph, firstIndent: g.paragraph.firstIndent * scale } : g.paragraph], exact: true }); }
-                            continue;
-                        }
-                    }
                     const paragraphs = [];
-                    for (const g of group) { const k = g === child ? kept : await source.keep(g); if (k !== false) paragraphs.push(await paragraphOf(g, source, notes, k, !isSlides)); }
+                    for (const g of group) { const k = g === child ? kept : await source.keep(g); if (k !== false) paragraphs.push(await paragraphOf(g, source, notes, k)); }
                     if (!paragraphs.some(p => p.runs.some(r => r.text.trim()))) continue;
-                    if (box) slide.items.push({ kind: 'text', box, paragraphs, exact: !isSlides, ...(rotation ? { rotation } : {}) });
+                    if (box) slide.items.push({ kind: 'text', box, paragraphs, ...(rotation ? { rotation } : {}) });
                     else slide.items.push({ kind: 'text', box: { ...BODY_BOX, x: width * 0.05, w: width * 0.9, y: height * 0.1 + slide.items.length * 24, h: 24 }, paragraphs });
                     continue;
                 }
@@ -333,6 +382,9 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
                     continue;
                 }
                 if (child.type === 'table') {
+                    // On a page drawn behind its slide, the table's rules are in the picture: its cells' text in
+                    // their places over it, where every cell's text has a place.
+                    if (slide.picture && !isSlides && await cellsPlaced(child)) continue;
                     const t = await tableOf(child, source, notes);
                     if (box) slide.items.push({ kind: 'table', box, ...t });
                     continue;

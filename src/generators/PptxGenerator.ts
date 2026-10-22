@@ -269,7 +269,9 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
         const bullet = !b ? '<a:buNone/>' : b.numbered ? '<a:buFont typeface="+mj-lt"/><a:buAutoNum type="arabicPeriod"/>' : b.char ? `<a:buFont typeface="Arial"/><a:buChar char="${xmlText([...b.char][0])}"/>` : '<a:buNone/>';
         const runs = p.runs.map(r => this.runXml(r, rel, defaultSize, p.mono)).join('');
         const size = p.runs.find(r => r.size)?.size ?? defaultSize;
-        return `<a:p><a:pPr${algn}${indent}>${bullet}</a:pPr>${runs}<a:endParaRPr lang="en-US"${size ? ` sz="${Math.round(size * 100)}"` : ''} dirty="0"/></a:p>`;
+        // Lines as far apart as the source set them (spcPts holds at most 1,584 points).
+        const spacing = p.lineSpacing && p.lineSpacing > 0 ? `<a:lnSpc><a:spcPts val="${Math.round(Math.min(1584, p.lineSpacing) * 100)}"/></a:lnSpc>` : '';
+        return `<a:p><a:pPr${algn}${indent}>${spacing}${bullet}</a:pPr>${runs}<a:endParaRPr lang="en-US"${size ? ` sz="${Math.round(size * 100)}"` : ''} dirty="0"/></a:p>`;
     }
 
     private runXml(r: DeckRun, rel: (type: string, target: string, external?: boolean) => string, defaultSize?: number, mono?: boolean): string {
