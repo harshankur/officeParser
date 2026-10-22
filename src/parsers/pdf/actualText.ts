@@ -617,12 +617,24 @@ function withoutCoveredSpaces<T extends TextContentItem>(items: T[]): T[] {
     });
 }
 
-/** The user-perceived characters in a text: its grapheme clusters, or its letters where they cannot be told. */
+/**
+ * The user-perceived characters in a text: its grapheme clusters (or its letters where they cannot be
+ * told), a conjunct joined by a virama counting once ("க்ஷ", "ஸ்ரீ", "क्ष"): counted apart, a conjunct's lost
+ * width was taken for twice its own, over the space after it.
+ */
 function clusters(text: string): number {
-    const Segmenter = (Intl as unknown as { Segmenter?: new (locale?: string, options?: object) => { segment(t: string): Iterable<unknown> } }).Segmenter;
-    if (Segmenter) { let n = 0; for (const _ of new Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) { void _; n++; } return Math.max(1, n); }
-    return Math.max(1, (text.match(/\p{L}/gu) ?? []).length);
+    const Segmenter = (Intl as unknown as { Segmenter?: new (locale?: string, options?: object) => { segment(t: string): Iterable<{ segment: string }> } }).Segmenter;
+    if (!Segmenter) return Math.max(1, (text.match(/\p{L}/gu) ?? []).length);
+    let n = 0, joined = false;
+    for (const { segment } of new Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
+        if (!joined) n++;
+        joined = VIRAMA.test(segment[segment.length - 1] ?? '');
+    }
+    return Math.max(1, n);
 }
+
+/** The viramas (halants) of the Indic scripts, which join the consonant after them into one conjunct. */
+const VIRAMA = /[\u094D\u09CD\u0A4D\u0ACD\u0B4D\u0BCD\u0C4D\u0CCD\u0D4D\u0DCA\u1039\u17D2]/;
 
 /**
  * Items pdf.js gave no width (a glyph whose text holds a virama or another mark it takes for a
@@ -702,8 +714,10 @@ function spans<T extends TextContentItem>(items: T[], events: MarkedEvent[] | un
             maxX = Math.max(maxX, t[4] + (item.width || 0));
         }
         if (!target) {
-            // A space pdf.js put before the glyphs (a ligature's own width lost) stays before the text.
-            target = { ...item, str: (/^\s/.test(item.str ?? '') ? ' ' : '') + text.replace(controls, '') };
+            // A space pdf.js put before the glyphs (a ligature's own width lost) stays on that side of the text:
+            // before it, or after it for right-to-left text, which is read from the other side.
+            const space = /^\s/.test(item.str ?? '') ? ' ' : '', said = text.replace(controls, '');
+            target = { ...item, str: /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/.test(said) ? said + space : space + said };
             out.push(target);
         }
     }

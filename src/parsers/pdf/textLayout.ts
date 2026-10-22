@@ -231,43 +231,73 @@ function clusterToLines(clusterRuns: RawRun[], cfg: PdfLayoutConfig): PdfLine[] 
 
 /** Letters of the scripts written right to left (Hebrew, Arabic, Syriac, Thaana, NKo, and their presentation forms). */
 const RTL_LETTER = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
-const LTR_LETTER = /[\p{L}\p{N}]/u;
+/** A list's marker standing alone (a bullet, `1.`, `a)`, `iv.`), which sits at the side a line starts on. */
+const EDGE_MARKER = /^\s*(?:[•◦▪‣·○●■□∙\u2013\u2014*-]|\(?(?:\d{1,3}(?:\.\d{1,3})*|[a-zA-Z]|[ivxlcdmIVXLCDM]{1,7})[.)])\s*$/;
 
 /**
  * A line's runs (left to right on the page) in the order they are read, by the Unicode bidirectional
- * algorithm's last rule (L2): each run right to left, left to right or neither by its letters (a blank,
- * punctuation: as the runs around it, else as the line); right-to-left stretches reversed, and in a line
- * read right to left (most of its letters so) the whole line reversed with its left-to-right stretches
- * kept. A producer setting each word as a run of its own (Chrome) had its Hebrew and Arabic read last
- * word first; a line of one run is as it was.
+ * algorithm's last rule (L2): each run right-to-left (Hebrew, Arabic), left-to-right (other letters), a
+ * number, or neither (blanks, punctuation); its level resolved as the algorithm resolves it (a neutral
+ * as the strong runs on both sides where they agree, else as the line; a number among right-to-left words
+ * with them); stretches reversed from the highest level down. The line reads right to left where both its
+ * outer letters are right-to-left, or a list's marker stands at its right: a count of letters took a
+ * line of English with a Hebrew phrase for Hebrew, and moved its bullet to the end. A producer setting each
+ * word as a run of its own (Chrome) had its Hebrew and Arabic read last word first; a line of one run, or
+ * of no right-to-left letter, is as it was.
  */
-function readingOrder(runs: RawRun[], dir: 'ltr' | 'rtl'): RawRun[] {
+function readingOrder(runs: RawRun[]): RawRun[] {
     if (runs.length < 2 || !runs.some(r => RTL_LETTER.test(r.text))) return runs;
-    const strong = runs.map(r => RTL_LETTER.test(r.text) ? 1 : LTR_LETTER.test(r.text) ? 0 : -1);
-    const base = dir === 'rtl' ? 1 : 0;
-    // A neutral run takes the direction of the strong runs on both sides where they agree, else the line's.
-    const level: number[] = strong.map((t, i) => {
-        if (t >= 0) return t === 1 ? 1 : base === 1 ? 2 : 0;
-        let a = -1, b = -1;
-        for (let k = i - 1; k >= 0; k--) if (strong[k] >= 0) { a = strong[k]; break; }
-        for (let k = i + 1; k < runs.length; k++) if (strong[k] >= 0) { b = strong[k]; break; }
-        const t2 = a >= 0 && a === b ? a : base;
-        return t2 === 1 ? 1 : base === 1 ? 2 : 0;
+    const n = runs.length;
+    const kind = runs.map(r => RTL_LETTER.test(r.text) ? 'R' : /\p{L}/u.test(r.text) ? 'L' : /\p{N}/u.test(r.text) ? 'EN' : 'N');
+    let leftStrong = '', rightStrong = '';
+    for (const k of kind) if (k === 'R' || k === 'L') { leftStrong = k; break; }
+    for (let i = n - 1; i >= 0; i--) if (kind[i] === 'R' || kind[i] === 'L') { rightStrong = kind[i]; break; }
+    const rtl = EDGE_MARKER.test(runs[0].text) ? false : EDGE_MARKER.test(runs[n - 1].text) ? true : leftStrong === 'R' && rightStrong === 'R';
+    // The nearest strong run on each side of every run, a number counting as right-to-left beside it (N1).
+    const before: string[] = new Array(n), after: string[] = new Array(n);
+    for (let i = 0, last = ''; i < n; i++) { before[i] = last; if (kind[i] === 'R' || kind[i] === 'L') last = kind[i]; }
+    for (let i = n - 1, last = ''; i >= 0; i--) { after[i] = last; if (kind[i] === 'R' || kind[i] === 'L') last = kind[i]; }
+    const level = kind.map((k, i) => {
+        if (k === 'R') return 1;
+        if (k === 'L') return rtl ? 2 : 0;
+        if (k === 'EN') return rtl ? 2 : before[i] === 'R' ? 2 : 0;
+        const side = before[i] === after[i] ? before[i] : '';
+        return side === 'R' ? 1 : side === 'L' ? (rtl ? 2 : 0) : rtl ? 1 : 0;
     });
     const order = runs.map((_, i) => i);
-    // From the highest level down to the lowest odd one, each stretch at or above it reversed.
-    let highest = 0;
-    for (const l of level) if (l > highest) highest = l;
-    for (let at = highest; at >= 1; at--) {
-        for (let i = 0; i < order.length;) {
+    for (let at = 2; at >= 1; at--) {
+        for (let i = 0; i < n;) {
             if (level[order[i]] < at) { i++; continue; }
             let j = i;
-            while (j + 1 < order.length && level[order[j + 1]] >= at) j++;
+            while (j + 1 < n && level[order[j + 1]] >= at) j++;
             for (let a = i, b = j; a < b; a++, b--) [order[a], order[b]] = [order[b], order[a]];
             i = j + 1;
         }
     }
-    return order.map(i => runs[i]);
+    // A bracket's run of neither direction read right to left has its characters in that order too (`" )"`
+    // set on the page before a word read after it is ") "); other runs' (a list's "• ", a right-to-left word)
+    // are as pdf.js gave them.
+    return order.map(i => kind[i] === 'N' && level[i] % 2 === 1 && runs[i].text.length > 1 && /[()[\]{}<>«»"'“”‘’]/.test(runs[i].text)
+        ? { ...runs[i], text: [...runs[i].text].reverse().join('') } : runs[i]);
+}
+
+/**
+ * A line's runs with a blank run between two the page sets apart (as the line is read left to right, a gap
+ * of the space threshold, neither side a blank already): when the line is read in another order (see
+ * readingOrder), its spaces are where the page has them, not between runs it reads one after another.
+ */
+function withSpacesOfPage(runs: RawRun[], cfg: PdfLayoutConfig, lineFontSize: number): RawRun[] {
+    const out: RawRun[] = [];
+    for (let i = 0; i < runs.length; i++) {
+        const r = runs[i], prev = runs[i - 1];
+        if (prev) {
+            const gap = r.x - (prev.x + prev.width);
+            const ref = Math.min(prev.fontSize, r.fontSize) || lineFontSize;
+            if (gap >= cfg.spaceToleranceFactor * ref && !/\s$/.test(prev.text) && !/^\s/.test(r.text)) out.push({ ...r, text: ' ', x: prev.x + prev.width, width: gap });
+        }
+        out.push(r);
+    }
+    return out;
 }
 
 function clusterToLine(clusterRuns: RawRun[], cfg: PdfLayoutConfig): PdfLine {
@@ -295,7 +325,10 @@ function clusterToLine(clusterRuns: RawRun[], cfg: PdfLayoutConfig): PdfLine {
     // The last fragment's box before the blanks that end it, while they do.
     let blankFrom: NodeBounds | undefined;
     // In the order the line is read (see readingOrder): a right-to-left line set word by word read last word first.
-    for (const r of readingOrder(runs, dir)) {
+    // (Its spaces from the page's gaps first where it is read in another order, as no gap between runs read
+    // one after another says.)
+    const reordered = runs.length > 1 && runs.some(r => RTL_LETTER.test(r.text));
+    for (const r of reordered ? readingOrder(withSpacesOfPage(runs, cfg, lineFontSize)) : runs) {
         const fmt: TextFormatting = { ...r.formatting };
         const off = baseline - r.yBaseline; // >0 raised, <0 lowered
         const rel = lineFontSize ? Math.abs(off) / lineFontSize : 0;
@@ -308,17 +341,17 @@ function clusterToLine(clusterRuns: RawRun[], cfg: PdfLayoutConfig): PdfLine {
         }
 
         let lead = '';
-        if (prev) {
-            // The space between the two runs' boxes, whichever side each is on (runs read right to left
-            // stand left of the one before them).
-            const gap = Math.max(r.x - (prev.x + prev.width), prev.x - (r.x + r.width));
+        // (A line read in another order has its spaces as blank runs already, see withSpacesOfPage.)
+        if (prev && !reordered) {
+            const gap = r.x - (prev.x + prev.width);
             const ref = Math.min(prev.fontSize, r.fontSize) || lineFontSize;
             // A super/subscript run attaches to the preceding text with no space ("super"+"script" ->
             // "superscript", "H"+"2" -> "H2"); only a genuinely wide gap (a real word boundary) still
             // inserts one. A normal run uses the ordinary small-gap threshold.
             const isSupSub = !!(fmt.superscript || fmt.subscript);
             const threshold = isSupSub ? Math.max(ref, cfg.spaceToleranceFactor * lineFontSize) : cfg.spaceToleranceFactor * ref;
-            if (gap >= threshold) lead = ' ';
+            // (No second space beside one a run already holds.)
+            if (gap >= threshold && !/^\s/.test(r.text) && !/\s$/.test(prev.text)) lead = ' ';
         }
 
         const box: NodeBounds = { x: r.x, y: r.yTop, width: r.width, height: r.height };

@@ -5547,6 +5547,20 @@ async function testPdfRuledTables(): Promise<void> {
     const scripts = String((await (await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'scripts_words_chrome.pdf')), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).to('text')).value);
     for (const line of ['שלום עולם זה טקסט בעברית עם כמה מילים', 'مرحبا بالعالم هذا نص عربي فيه كلمات كثيرة', 'தமிழ் மொழி ஒரு அழகான மொழி', 'বাংলা ভাষা একটি সুন্দর ভাষা']) assert.ok(scripts.includes(line), `a Chrome PDF reads "${line}"; got ${JSON.stringify(scripts.slice(0, 400))}`);
 
+    // Lines are read in their direction: a line of English with a Hebrew phrase keeps its order and its
+    // list items apart; brackets, quotes and numbers sit where they are read; spaces are the page's.
+    // (The blocks' text, as read: text output sets a PDF's lines out by their places.)
+    const readText = async (file: string) => collectAllNodes(await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', file)), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST)
+        .filter(n => ['paragraph', 'heading', 'list', 'cell'].includes(n.type)).map(n => n.text || '').join('\n');
+    const mixed = await readText('bidi_mixed_chrome.pdf');
+    for (const line of ['The word (שלום עולם) means hello world.', 'See "שלום עולם" here.', 'Item שלום, עולם, גדול end.', 'טלפון: 03-1234567']) assert.ok(mixed.includes(line), `a mixed line reads "${line}"; got ${JSON.stringify(mixed.slice(0, 500))}`);
+    const numbers = await readText('bidi_numbers_chrome.pdf');
+    for (const line of ['הספר (מהדורה שנייה) יצא לאור', 'في عام 2026 افتتح المكتب الجديد', 'الكتاب (الطبعة الثانية) صدر']) assert.ok(numbers.includes(line), `a right-to-left line reads "${line}"; got ${JSON.stringify(numbers.slice(0, 500))}`);
+    const listed = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'lists_rtl_items_libreoffice.pdf')), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const items = collectAllNodes(listed).filter(n => n.type === 'list').map(n => (n.text || '').trim());
+    assert.ok(['First English item', 'שלום עולם גדול מאוד', 'مرحبا بالعالم الكبير', 'Fourth English item', 'Alpha step', 'שלב שני בעברית', 'Gamma step'].every(t => items.includes(t)), `an English list's right-to-left items stay items of their own; got ${JSON.stringify(items)}`);
+    assert.ok((await readText('indic_conjunct_spaces_chrome.pdf')).includes('க்ஷ ஸ்ரீ கற்'), 'a conjunct joined by a virama is one cluster: the space after it is kept');
+
 }
 
 /**
