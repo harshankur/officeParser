@@ -5414,6 +5414,54 @@ async function testPdfRuledTables(): Promise<void> {
     assert.ok(!ast.content[0].children!.some(n => n.type === 'paragraph' && /^(Width|Team|Q1)/.test(n.text || '')), 'the tables\' text is in their cells, not the page\'s paragraphs');
 }
 
+/**
+ * A document's columns are read (Word's `w:cols`, a continuous section that runs on on the page, ODF
+ * page layouts' and sections' columns: PageSetup.columns, a 'section' break), laid out by the native PDF
+ * engine (text running from column to column, a section a continuous break ends balanced, a line
+ * between where drawn), and written by DOCX, ODT, RTF and LaTeX. Two-column sections printed as one.
+ */
+async function testColumns(): Promise<void> {
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const lorem = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.';
+    const para = (text: string) => `<w:p><w:r><w:t>${text}</w:t></w:r></w:p>`;
+    const sect = (cols: string, type = '') => `<w:sectPr>${type}<w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/>${cols}</w:sectPr>`;
+    const body = para('Title across the page') + `<w:p><w:pPr>${sect('<w:cols w:space="720"/>')}</w:pPr><w:r><w:t>Intro in one column.</w:t></w:r></w:p>`
+        + Array.from({ length: 6 }, (_, i) => para(`Column paragraph ${i + 1}. ${lorem}`)).join('')
+        + `<w:p><w:pPr>${sect('<w:cols w:num="2" w:space="720" w:sep="1"/>', '<w:type w:val="continuous"/>')}</w:pPr></w:p>`
+        + para('After, in one column again.') + sect('<w:cols w:space="720"/>', '<w:type w:val="continuous"/>');
+    const docx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${W}><w:body>${body}</w:body></w:document>`),
+    }));
+    const ast = await OfficeParser.parseOffice(docx, { fileType: 'docx', includeBreakNodes: true } as any) as OfficeParserAST;
+    const breaks = ast.content.filter(n => n.type === 'break').map(n => { const m = n.metadata as any; return [m.breakType, m.section, m.pageSetup?.columns ?? null]; });
+    assert.deepStrictEqual(breaks, [['section', 1, { count: 2, gap: 36, separator: true }], ['section', 2, null]], 'continuous sections are section breaks carrying their columns');
+
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.strictEqual(back.content.filter(n => n.type === 'page').length, 1, 'a short section in columns stays on its page');
+    // The columns' lines: those between the intro and the paragraph after, left and right of the page's middle.
+    const lines = collectAllNodes(back).filter(n => n.type === 'text' && n.bounds && !/^(Title|Intro|After)/.test(n.text || '')).map(n => n.bounds!);
+    const left = lines.filter(b => b.x < 300), right = lines.filter(b => b.x > 300);
+    const top = (bs: typeof lines) => Math.min(...bs.map(b => b.y)), end = (bs: typeof lines) => Math.max(...bs.map(b => b.y + b.height));
+    assert.ok(left.length && right.length && Math.abs(top(left) - top(right)) < 3, `the text runs from the left column into the right, both starting level; got ${JSON.stringify([top(left), top(right)])}`);
+    assert.ok(Math.abs(end(left) - end(right)) < 30, `balanced columns end within a line or two of each other; got ${JSON.stringify([end(left), end(right)])}`);
+    const after = collectAllNodes(back).find(n => n.type === 'text' && (n.text || '').startsWith('After'))!.bounds!;
+    assert.ok(after.x < 120 && after.y > Math.max(end(left), end(right)) && after.y < 400, `the section after starts under the columns, across the page; got ${JSON.stringify(after)}`);
+
+    const written = docxParts((await OfficeGenerator.generate(ast, 'docx')).value as Uint8Array)['word/document.xml'];
+    assert.ok(/<w:sectPr><w:type w:val="continuous"\/>[^]*?<w:cols w:num="2" w:space="720" w:sep="1"\/>/.test(written), 'DOCX: the section in columns is a continuous section of them');
+    const odtParts = unzipSync(new Uint8Array((await OfficeGenerator.generate(ast, 'odt')).value as Uint8Array));
+    const content = strFromU8(odtParts['content.xml']);
+    assert.ok(/style:family="section"><style:section-properties><style:columns fo:column-count="2" fo:column-gap="36pt"><style:column-sep/.test(content) && /<text:section [^>]*>[^]*Column paragraph 6[^]*<\/text:section>/.test(content), 'ODT: the columns are a section of their own');
+    const odtBack = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(ast, 'odt')).value as Uint8Array), { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+    assert.deepStrictEqual(odtBack.content.filter(n => n.type === 'break').map(n => (n.metadata as any).pageSetup?.columns?.count ?? 1), [2, 1], 'ODT: its column section reads back');
+    assert.ok(/\\sect\\sectd\\sbknone\\cols2\\colsx720\\linebetcol/.test(String((await OfficeGenerator.generate(ast, 'rtf')).value)), 'RTF: a section of two columns');
+    const tex = String((await OfficeGenerator.generate(ast, 'tex')).value);
+    assert.ok(/\\usepackage\{multicol\}/.test(tex) && /\\begin\{multicols\}\{2\}[^]*Column paragraph 6[^]*\\end\{multicols\}/.test(tex), 'LaTeX: the columns are a multicols');
+}
+
 async function testNativePdfFurnitureLimits(): Promise<void> {
     const t = (text: string, more: any = {}) => ({ type: 'text', text, ...more });
     const p = (...children: any[]) => ({ type: 'paragraph', children });
@@ -7312,6 +7360,7 @@ async function runTests(): Promise<void> {
         ['PDF lists read whole', testPdfListsReadWhole],
         ['PDF headings by size and weight', testPdfHeadingsBySizeAndWeight],
         ['PDF ruled tables', testPdfRuledTables],
+        ['Columns', testColumns],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

@@ -1,7 +1,7 @@
 import { zipSync, Zippable } from 'fflate';
 import { UniqueNames } from '../utils/uniqueNames.js';
 import { trimEndChars } from '../utils/textUtils.js';
-import { AdmonitionMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TexDocumentClass, TextFormatting, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, BreakMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, PageSetup, OfficeWarningType, ParagraphMetadata, TexDocumentClass, TextFormatting, TextMetadata } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { LatexMathPlan, LatexScripts, LatexUnicodePlan, LISTINGS_LANGUAGES, mathCommandsOf, planLatexMath, planLatexUnicode, withLatexMathMacros } from '../utils/latexUtils.js';
@@ -167,6 +167,7 @@ type TableSlot =
 interface PackageUse {
     math: boolean; amssymb: boolean; graphics: boolean; tables: boolean; longtable: boolean; multirow: boolean;
     ulem: boolean; xcolor: boolean; colortbl: boolean; listings: boolean; endnotes: boolean; paragraphFix: boolean; captionof: boolean;
+    multicol: boolean;
 }
 
 /**
@@ -284,8 +285,22 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
 
     private readonly uses: PackageUse = {
         math: false, amssymb: false, graphics: false, tables: false, longtable: false, multirow: false,
-        ulem: false, xcolor: false, colortbl: false, listings: false, endnotes: false, paragraphFix: false, captionof: false,
+        ulem: false, xcolor: false, colortbl: false, listings: false, endnotes: false, paragraphFix: false, captionof: false, multicol: false,
     };
+    /** Whether a `multicols` environment (a section's columns) is open in the body. */
+    private openColumns = false;
+
+    /** Opens a section's columns (`multicols`), closing the open one first; none for one column. */
+    private columnsSwitch(columns: PageSetup['columns'] | undefined): string {
+        // (Each in a group of its own, which keeps its column gap and rule to it.)
+        let out = this.openColumns ? '\\end{multicols}}' : '';
+        this.openColumns = !this.beamer && !!columns && columns.count > 1;
+        if (this.openColumns) {
+            this.uses.multicol = true;
+            out += `${out ? '\n' : ''}{\\setlength{\\columnsep}{${fmtPt(columns!.gap)}}${columns!.separator ? '\\setlength{\\columnseprule}{0.4pt}' : ''}\\begin{multicols}{${Math.min(columns!.count, 10)}}`;
+        }
+        return out;
+    }
 
     /** Image files the output refers to by path (written into a bundle); `includable` when `\includegraphics` draws one. */
     private readonly media: { path: string; bytes: Uint8Array; includable: boolean }[] = [];
@@ -364,7 +379,11 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         this.titleNodes = this.findTitleBlock();
         if (this.titleNodes) this.titleFields = await this.renderTitleFields(this.titleNodes);
 
-        const body = this.beamer ? await this.renderBeamerBody(this.ast.content) : await this.renderFlow(this.ast.content);
+        // The document's columns, from its first section's page (multicols), closed at its end.
+        const opening = this.beamer ? '' : this.columnsSwitch(this.ast.metadata?.pageSetup?.columns);
+        let body = this.beamer ? await this.renderBeamerBody(this.ast.content) : await this.renderFlow(this.ast.content);
+        if (opening) body = `${opening}\n${body}`;
+        if (this.openColumns) { body += '\n\\end{multicols}}'; this.openColumns = false; }
         const headerSetup = this.beamer ? this.warnBeamerHeaders() : await this.pageHeaderSetup();
         const endnotes = this.uses.endnotes
             ? (this.beamer ? '\\begin{frame}[allowframebreaks]\n\\theendnotes\n\\end{frame}' : '\\theendnotes')
@@ -925,7 +944,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         const t = (node.metadata as any)?.breakType;
         if (this.ctx.moving) return ' ';
         if (t === 'page') return '\\newpage{}';
-        if (t === 'lastRenderedPage') return '';
+        if (t === 'lastRenderedPage' || t === 'section') return '';
         if (t === 'column' || t === 'thematic') return ' ';
         return LINE_BREAK;
     }
@@ -1897,6 +1916,12 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
 
     private blockBreak(node: OfficeContentNode): string {
         const t = (node.metadata as any)?.breakType;
+        // A section starting on this page, in its own columns.
+        if (t === 'section') return this.columnsSwitch((node.metadata as BreakMetadata | undefined)?.pageSetup?.columns);
+        // A section starting on a new page, in its own columns: the columns before end, the page breaks.
+        if (t === 'page' && !this.beamer && typeof (node.metadata as BreakMetadata | undefined)?.section === 'number') {
+            return [this.columnsSwitch(undefined), '\\clearpage', this.columnsSwitch((node.metadata as BreakMetadata | undefined)?.pageSetup?.columns)].filter(Boolean).join('\n');
+        }
         if (t === 'page') return this.beamer ? '' : '\\clearpage';
         if (t === 'thematic') return '\\begin{center}\\rule{0.5\\linewidth}{0.5pt}\\end{center}';
         return '';
@@ -2285,6 +2310,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         if (u.listings) lines.push('\\usepackage{listings}');
         if (u.endnotes) lines.push('\\usepackage{endnotes}');
         if (u.captionof) lines.push('\\usepackage{capt-of}');
+        if (u.multicol) lines.push('\\usepackage{multicol}');
         return lines;
     }
 

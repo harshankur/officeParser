@@ -1,7 +1,7 @@
 import { zipSync, Zippable } from 'fflate';
 import { UniqueNames } from '../utils/uniqueNames.js';
 import { layoutTableRows } from '../utils/tableLayout.js';
-import { ConversionResult, DocxGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
+import { BreakMetadata, ConversionResult, DocxGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
@@ -836,7 +836,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
 
     private contentWidthTwips(): number {
         const cfg = this.config.docxConfig;
-        const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup, cfg.margin);
+        const paper = resolvePaper(cfg.format, cfg.landscape, this.sectionSetup ?? this.ast.metadata?.pageSetup, cfg.margin);
         const w = Math.round(paper.w * TWIPS_PER_PT);
         const left = Math.round(paper.margin.left * TWIPS_PER_PT);
         const right = Math.round(paper.margin.right * TWIPS_PER_PT);
@@ -845,8 +845,44 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
 
     // ── breaks / code / admonition / chart / embed ────────────────────────────────
 
+    /** The section being written: its pages (BreakMetadata.pageSetup), how it starts, and how many have ended. */
+    private sectionSetup: PageSetup | undefined;
+    private sectionStart: 'nextPage' | 'continuous' = 'nextPage';
+    private sectionsEnded = 0;
+
+    /**
+     * A section's properties (`w:sectPr`): its page's size and margins (under format 'auto' the
+     * section's own, else the format's), its columns, how it starts, and `refs` (its header and footer).
+     */
+    private sectionProperties(setup: PageSetup | undefined, start: 'nextPage' | 'continuous', refs: string, titlePage: boolean | string): string {
+        const cfg = this.config.docxConfig;
+        const paper = resolvePaper(cfg.format, cfg.landscape, setup, cfg.margin);
+        const twips = (pt: number) => Math.round(pt * TWIPS_PER_PT);
+        const orient = paper.landscape ? ' w:orient="landscape"' : '';
+        const mar = paper.margin;
+        const pgMar = `<w:pgMar w:top="${twips(mar.top)}" w:right="${twips(mar.right)}" w:bottom="${twips(mar.bottom)}" w:left="${twips(mar.left)}" `
+            + `w:header="${paper.headerDistance !== undefined ? twips(paper.headerDistance) : 708}" w:footer="${paper.footerDistance !== undefined ? twips(paper.footerDistance) : 708}" w:gutter="0"/>`;
+        const columns = setup?.columns;
+        const cols = columns && columns.count > 1
+            ? `<w:cols w:num="${columns.count}" w:space="${twips(columns.gap)}"${columns.separator ? ' w:sep="1"' : ''}${columns.widths?.length === columns.count
+                ? ` w:equalWidth="0">${columns.widths.map((w, i) => `<w:col w:w="${twips(w)}"${i < columns.count - 1 ? ` w:space="${twips(columns.gap)}"` : ''}/>`).join('')}</w:cols>` : '/>'}`
+            : '';
+        const title = typeof titlePage === 'string' ? titlePage : titlePage ? '<w:titlePg/>' : '';
+        return `<w:sectPr>${refs}${start === 'continuous' ? '<w:type w:val="continuous"/>' : ''}<w:pgSz w:w="${twips(paper.w)}" w:h="${twips(paper.h)}"${orient}/>${pgMar}${cols}${title}</w:sectPr>`;
+    }
+
     private blockBreak(node: OfficeContentNode): string {
-        const t = (node.metadata as any)?.breakType;
+        const meta = node.metadata as BreakMetadata | undefined;
+        const t = meta?.breakType;
+        // A section ends here: a paragraph holding its properties (Word's way), and the next one starts,
+        // on a new page or on this one ('section'). The first section's carry the header and footer.
+        if (t === 'section' || (t === 'page' && typeof meta?.section === 'number')) {
+            const first = this.sectionsEnded++ === 0;
+            const ended = this.sectionProperties(this.sectionSetup ?? this.ast.metadata?.pageSetup, this.sectionStart, first ? FIRST_SECTION : '', first ? FIRST_SECTION_TITLE : false);
+            this.sectionSetup = meta?.pageSetup ?? this.sectionSetup;
+            this.sectionStart = t === 'section' ? 'continuous' : 'nextPage';
+            return `<w:p><w:pPr>${ended}</w:pPr></w:p>`;
+        }
         if (t === 'page') return `<w:p><w:r><w:br w:type="page"/></w:r></w:p>`;
         if (t === 'column') return `<w:p><w:r><w:br w:type="column"/></w:r></w:p>`;
         if (t === 'thematic') return `<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="auto"/></w:pBdr></w:pPr></w:p>`;
@@ -858,6 +894,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         if (t === 'page') return `<w:r><w:br w:type="page"/></w:r>`;
         if (t === 'column') return `<w:r><w:br w:type="column"/></w:r>`;
         if (t === 'carriageReturn') return `<w:r><w:cr/></w:r>`;
+        if (t === 'section') return '';
         return `<w:r><w:br/></w:r>`;
     }
 
@@ -946,22 +983,16 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
 
     private buildDocumentXml(body: string, headerRid: string, footerRid: string,
         furniture: { headerKind: string; footerKind: string; titlePage: boolean; evenPages: boolean } = { headerKind: 'default', footerKind: 'default', titlePage: false, evenPages: false }): string {
-        const cfg = this.config.docxConfig;
-        const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup, cfg.margin);
-        const pw = Math.round(paper.w * TWIPS_PER_PT);
-        const ph = Math.round(paper.h * TWIPS_PER_PT);
-        const orient = paper.landscape ? ' w:orient="landscape"' : '';
-        const mar = paper.margin, twips = (pt: number) => Math.round(pt * TWIPS_PER_PT);
-        const pgMar = `<w:pgMar w:top="${twips(mar.top)}" w:right="${twips(mar.right)}" w:bottom="${twips(mar.bottom)}" w:left="${twips(mar.left)}" `
-            + `w:header="${paper.headerDistance !== undefined ? twips(paper.headerDistance) : 708}" w:footer="${paper.footerDistance !== undefined ? twips(paper.footerDistance) : 708}" w:gutter="0"/>`;
         // The kinds of page a part is on: every page's is also the title page's and even pages', where
         // the document has those.
         const kinds = (kind: string) => kind !== 'default' ? [kind] : ['default', ...(furniture.titlePage ? ['first'] : []), ...(furniture.evenPages ? ['even'] : [])];
         const references = (tag: 'header' | 'footer', rid: string, kind: string) => rid ? kinds(kind).map(type => `<w:${tag}Reference w:type="${type}" r:id="${rid}"/>`).join('') : '';
-        const sectPr = `<w:sectPr>`
-            + references('header', headerRid, furniture.headerKind)
-            + references('footer', footerRid, furniture.footerKind)
-            + `<w:pgSz w:w="${pw}" w:h="${ph}"${orient}/>${pgMar}${furniture.titlePage ? '<w:titlePg/>' : ''}</w:sectPr>`;
+        // The header and footer are the first section's (a later one takes them on), with its title page.
+        const first = references('header', headerRid, furniture.headerKind) + references('footer', footerRid, furniture.footerKind);
+        const sectioned = body.includes(FIRST_SECTION);
+        if (sectioned) body = body.replace(FIRST_SECTION, first).replace(FIRST_SECTION_TITLE, furniture.titlePage ? '<w:titlePg/>' : '');
+        // The last section's properties close the body.
+        const sectPr = this.sectionProperties(this.sectionSetup ?? this.ast.metadata?.pageSetup, this.sectionStart, sectioned ? '' : first, !sectioned && furniture.titlePage);
         const bodyContent = body.trim() ? body : '<w:p/>';
         return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n`
             + `<w:document ${WML_NS}>`
@@ -1139,6 +1170,10 @@ function buildStyles(): string {
         + `<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:left w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:right w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="auto"/></w:tblBorders></w:tblPr></w:style>`
         + `</w:styles>`;
 }
+
+/** Where the first section's header and footer references, and its title page, go once they are known. */
+const FIRST_SECTION = '\u0000first-section-references\u0000';
+const FIRST_SECTION_TITLE = '\u0000first-section-title-page\u0000';
 
 /** A paragraph's properties in the order WordprocessingML lists them, which Word requires. */
 const PPR_ORDER = ['pStyle', 'keepNext', 'keepLines', 'pageBreakBefore', 'framePr', 'widowControl', 'numPr', 'suppressLineNumbers', 'pBdr', 'shd', 'tabs', 'suppressAutoHyphens', 'kinsoku', 'wordWrap', 'overflowPunct', 'topLinePunct', 'autoSpaceDE', 'autoSpaceDN', 'bidi', 'adjustRightInd', 'snapToGrid', 'spacing', 'ind', 'contextualSpacing', 'mirrorIndents', 'suppressOverlap', 'jc', 'textDirection', 'textAlignment', 'textboxTightWrap', 'outlineLvl', 'divId', 'cnfStyle', 'rPr', 'sectPr', 'pPrChange'];

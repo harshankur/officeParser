@@ -314,7 +314,111 @@ class NativeLayout {
      * The lowest a line of the body goes: above the page's margin, and above its footnotes. On a page
      * drawn as it is (a header, a footer, a footnote, or one measured), as low as it needs.
      */
-    private get bottom(): number { return this.fixedPage ? Number.MAX_SAFE_INTEGER : this.pageH - this.margin.bottom - this.footReserve; }
+    private get bottom(): number {
+        if (this.fixedPage) return Number.MAX_SAFE_INTEGER;
+        const page = this.pageH - this.margin.bottom - this.footReserve;
+        // Balanced columns end level; the last takes what is left of the page, should the measure have been short.
+        return this.columnLimit !== null && this.columns && this.columnIndex < this.columns.count - 1 ? Math.min(this.columnLimit, page) : page;
+    }
+
+    // ── columns ──────────────────────────────────────────────────────────────────
+
+    /**
+     * The columns the section is laid out in (PageSetup.columns), which one the text is in, where they
+     * start on this page, the lowest any has reached, the page's own margins (the text's are the
+     * column's), and the bottom of columns balanced to end level (see setColumns).
+     */
+    private columns: NonNullable<PageSetup['columns']> | null = null;
+    private columnIndex = 0;
+    private columnTop = 0;
+    private columnsBottom = 0;
+    private pageMargin: { top: number; right: number; bottom: number; left: number } | null = null;
+    private columnLimit: number | null = null;
+    /** The document's top-level blocks, and which is being drawn: what a balanced section holds. */
+    flow: OfficeContentNode[] = [];
+    flowIndex = -1;
+
+    /** The text's margins for the column it is in: the page's, narrowed to that column. */
+    private applyColumn(): void {
+        const pm = this.pageMargin, cols = this.columns;
+        if (!pm || !cols) return;
+        const room = this.pageW - pm.left - pm.right;
+        const gap = Math.min(cols.gap, room / (2 * cols.count));
+        const given = cols.widths?.length === cols.count && cols.widths.every(w => w > 0) ? cols.widths : undefined;
+        const scale = given ? (room - gap * (cols.count - 1)) / given.reduce((a, b) => a + b, 0) : 1;
+        const widths = given ? given.map(w => w * scale) : new Array<number>(cols.count).fill((room - gap * (cols.count - 1)) / cols.count);
+        let left = pm.left;
+        for (let i = 0; i < this.columnIndex; i++) left += widths[i] + gap;
+        this.margin = { ...pm, left, right: this.pageW - left - widths[this.columnIndex] };
+    }
+
+    /** Ends the columns on this page: the lines between them, where the section draws them, to the lowest one's end. */
+    private closeColumnsOnPage(): void {
+        if (!this.columns || !this.pageMargin) return;
+        this.columnsBottom = Math.max(this.columnsBottom, this.y);
+        if (!this.columns.separator || this.columnIndex === 0) return;
+        const saved = { margin: this.margin, index: this.columnIndex };
+        for (let i = 1; i <= saved.index; i++) {
+            this.columnIndex = i;
+            this.applyColumn();
+            const x = this.margin.left - Math.min(this.columns.gap, (this.pageW - this.pageMargin.left - this.pageMargin.right) / (2 * this.columns.count)) / 2;
+            this.page.drawLine({ start: { x, y: this.pageH - this.columnTop }, end: { x, y: this.pageH - this.columnsBottom }, thickness: 0.5, color: this.lib.rgb(0, 0, 0) });
+        }
+        this.columnIndex = saved.index;
+        this.margin = saved.margin;
+    }
+
+    /** The text runs on into the next column, or, from the last, onto the next page. */
+    private nextColumnOrPage(): void {
+        if (this.columns && !this.fixedPage && this.columnIndex < this.columns.count - 1) {
+            this.columnsBottom = Math.max(this.columnsBottom, this.y);
+            this.columnIndex++;
+            this.applyColumn();
+            this.y = this.columnTop;
+            return;
+        }
+        this.newPage();
+    }
+
+    /**
+     * Lays the text out in `columns` from here on (none, or one, for the page's width), the columns
+     * before ending at the lowest of them. A section that the next ends on the same page (a section
+     * break that runs on) is balanced, as a word processor balances it: measured in a column's width
+     * first, its columns end level, where they fit on this page.
+     */
+    async setColumns(columns: PageSetup['columns'] | undefined, balance: boolean): Promise<void> {
+        if (this.columns) {
+            this.closeColumnsOnPage();
+            this.y = Math.max(this.columnsBottom, this.y);
+            this.margin = this.pageMargin!;
+            this.columns = null;
+            this.pageMargin = null;
+            this.columnLimit = null;
+        }
+        if (!columns || columns.count < 2) return;
+        this.pageMargin = { ...this.margin };
+        this.columns = { ...columns, count: Math.min(columns.count, 16) };
+        this.columnIndex = 0;
+        this.columnTop = this.y;
+        this.columnsBottom = this.y;
+        this.applyColumn();
+        if (!balance) return;
+        // The blocks up to the break that ends the section, measured in the column's width.
+        const region: OfficeContentNode[] = [];
+        for (let i = this.flowIndex + 1; i < this.flow.length; i++) {
+            const meta = this.flow[i].type === 'break' ? this.flow[i].metadata as BreakMetadata | undefined : undefined;
+            if (meta?.breakType === 'section' || (meta?.breakType === 'page' && typeof meta.section === 'number')) {
+                if (meta.breakType !== 'section') return;
+                break;
+            }
+            if (i === this.flow.length - 1) return;
+            region.push(this.flow[i]);
+        }
+        const height = await this.measured(async () => { for (const node of region) await this.render(node); });
+        // (The last column has no limit: what the measure missed, it takes.)
+        const limit = this.columnTop + height / this.columns.count;
+        if (limit < this.pageH - this.margin.bottom - this.footReserve) this.columnLimit = limit;
+    }
 
     // ── sections ─────────────────────────────────────────────────────────────────
 
@@ -328,7 +432,7 @@ class NativeLayout {
 
     /** Notes the page just made, for its header and footer. */
     private recordPage(): void {
-        this.pageRecords.push({ page: this.page, section: this.section, firstOfSection: this.startingSection, w: this.pageW, h: this.pageH, margin: { ...this.margin }, headerDistance: this.headerDistance, footerDistance: this.footerDistance, differentFirstPage: this.differentFirstPage, sourcePage: this.sourcePage });
+        this.pageRecords.push({ page: this.page, section: this.section, firstOfSection: this.startingSection, w: this.pageW, h: this.pageH, margin: { ...(this.pageMargin ?? this.margin) }, headerDistance: this.headerDistance, footerDistance: this.footerDistance, differentFirstPage: this.differentFirstPage, sourcePage: this.sourcePage });
         this.startingSection = false;
     }
 
@@ -784,10 +888,20 @@ class NativeLayout {
     private newPage(): void {
         // A page drawn as it is never runs on to another (see bottom).
         if (this.fixedPage) return;
+        this.closeColumnsOnPage();
+        // The page's own margins again, for its footnotes and the next page (the text's were a column's).
+        if (this.pageMargin) this.margin = this.pageMargin;
         this.drawPageFootnotes();
         this.page = this.pdf.addPage([this.pageW, this.pageH]);
         this.y = this.margin.top;
         this.recordPage();
+        // Columns run on onto the page, from its top, the first again; balanced ones end with the page before.
+        if (this.columns) {
+            this.columnIndex = 0;
+            this.columnTop = this.columnsBottom = this.y;
+            this.columnLimit = null;
+            this.applyColumn();
+        }
         // Footnotes whose reference ended the page before, without room left there, go on this one.
         const carried = this.carriedFootnotes;
         this.carriedFootnotes = [];
@@ -905,7 +1019,7 @@ class NativeLayout {
      * content taller than a page (tables) split it across pages themselves.
      */
     private ensureSpace(h: number): void {
-        if (this.y + h > this.bottom && this.y > this.margin.top && !this.fixedPage) this.newPage();
+        if (this.y + h > this.bottom && this.y > this.margin.top && !this.fixedPage) this.nextColumnOrPage();
         if (this.pendingAnchors.length) this.placeAnchors();
     }
 
@@ -1237,6 +1351,8 @@ class NativeLayout {
      * needed. Returns nothing; advances the cursor to just below the last line.
      */
     private drawRuns(runs: Run[], left: number, width: number, mono = false, layout: LineLayout = {}): void {
+        // The column's left edge the paragraph starts at (see flush).
+        let columnLeft = this.margin.left;
         // Expand runs into per-word pieces (a trailing-space flag lets us re-insert inter-word gaps).
         // A piece is a word, or (`brk`) a forced break: a new line, or a new page.
         const pieces: { p: Piece; space: boolean; brk?: 'line' | 'page' }[] = [];
@@ -1303,6 +1419,8 @@ class NativeLayout {
             const textSize = Math.max(...line.filter(it => !it.p.picture).map(it => it.p.size), tallest ? 0 : 11);
             const lh = Math.max(lineAdvance(textSize || 11), tallest + (textSize || 11) * 0.35);
             this.ensureSpace(lh);
+            // Run on into another column: its lines move with it.
+            if (this.margin.left !== columnLeft) { left += this.margin.left - columnLeft; columnLeft = this.margin.left; }
             const baseline = this.pageH - this.y - Math.max(textSize, tallest);
             // Words and the gaps between them, in reading order, then in the order they are seen.
             const items: { p?: Piece; w: number; dir: 'ltr' | 'rtl' | 'neutral' }[] = [];
@@ -1515,7 +1633,7 @@ class NativeLayout {
             case 'image': return this.image(node);
             case 'code': return this.code(node);
             case 'note': return this.note(node);
-            case 'break': return this.breakNode(node);
+            case 'break': return await this.breakNode(node);
             case 'embed': {
                 // A video or framed page cannot play in a PDF: its URL is written, styled as a link (with
                 // its label), as the DOCX and ODT generators write it. It was dropped.
@@ -1830,11 +1948,24 @@ class NativeLayout {
         this.y += 4;
     }
 
-    private breakNode(node: OfficeContentNode): void {
+    private async breakNode(node: OfficeContentNode): Promise<void> {
         const meta = node.metadata as BreakMetadata | undefined;
         const t = meta?.breakType;
-        if (t === 'page' && typeof meta?.section === 'number' && meta.section > 0) { this.startSection(meta.section, meta.pageSetup); return; }
+        // A section that starts on this page: its columns from here (balanced where the next ends it here).
+        if (t === 'section') {
+            if (typeof meta?.section === 'number') this.section = meta.section;
+            await this.setColumns(meta?.pageSetup?.columns, true);
+            return;
+        }
+        if (t === 'page' && typeof meta?.section === 'number' && meta.section > 0) {
+            await this.setColumns(undefined, false);
+            this.startSection(meta.section, meta.pageSetup);
+            await this.setColumns(meta.pageSetup?.columns, true);
+            return;
+        }
         if (t === 'page') { this.newPage(); return; }
+        // A column break: the next column, where the text is set in columns.
+        if (t === 'column' && this.columns) { if (!this.fixedPage) this.nextColumnOrPage(); return; }
         if (t === 'thematic') {
             this.ensureSpace(12);
             this.y += 6;
@@ -2143,6 +2274,8 @@ class NativeLayout {
         const { widths, size } = this.columnWidths(grid, cols, pad);
         const xs = [this.margin.left];
         for (const w of widths) xs.push(xs[xs.length - 1] + w);
+        // A row run on into another column is drawn in it (its cells' edges move with the column's).
+        const tableLeft = this.margin.left;
         const spanWidth = (col: number, span: number) => xs[Math.min(col + span, cols)] - xs[Math.min(col, cols)];
         /** Wraps a cell's (un-encoded) text to the width of the columns it spans. */
         // A header cell is drawn bold, so it is wrapped at the bold font's widths.
@@ -2176,11 +2309,11 @@ class NativeLayout {
                 const heightOf = (i: number) => placed[i].lines.length * lineH + sized[i].reduce((sum, pic) => sum + pic.h + 4, 0);
                 const rowH = Math.max(size * 1.4, ...placed.map((_, i) => heightOf(i))) + 2 * pad;
                 // (The table's top gap is not something drawn: a row starting there needs no new page.)
-                if (this.y + rowH > this.bottom && this.y > this.margin.top + 3) this.newPage();
+                if (this.y + rowH > this.bottom && this.y > this.margin.top + 3) this.nextColumnOrPage();
                 if (this.pendingAnchors.length) this.placeAnchors();
                 const topY = this.pageH - this.y;
                 placed.forEach((p, i) => {
-                    const x = xs[Math.min(p.col, cols)];
+                    const x = xs[Math.min(p.col, cols)] + this.margin.left - tableLeft;
                     const room = spanWidth(p.col, p.span) - 2 * pad;
                     this.page.drawRectangle({ x, y: topY - rowH, width: spanWidth(p.col, p.span), height: rowH, borderColor: border, borderWidth: 0.5, color: p.fill ? this.color(p.fill) : undefined });
                     const face: FaceKey = p.header ? 'bold' : 'regular';
@@ -2221,14 +2354,14 @@ class NativeLayout {
                 let bandLines: number;
                 if (fitLines >= remaining) bandLines = remaining;               // the rest fits here
                 else if (this.y > this.margin.top && fitLines >= 1) bandLines = fitLines; // fill this page
-                else if (this.y > this.margin.top) { this.newPage(); continue; } // nothing fits: fresh page
+                else if (this.y > this.margin.top) { this.nextColumnOrPage(); continue; } // nothing fits: the next column or page
                 else bandLines = Math.min(remaining, fullBand);                  // at page top: a full band
                 const whole = lineOffset === 0 && bandLines === maxLines;
                 const bandH = whole ? rowH : bandLines * lineH + 2 * pad;
                 if (this.pendingAnchors.length) this.placeAnchors();
                 const topY = this.pageH - this.y;
                 for (const p of placed) {
-                    const x = xs[Math.min(p.col, cols)];
+                    const x = xs[Math.min(p.col, cols)] + this.margin.left - tableLeft;
                     this.page.drawRectangle({ x, y: topY - bandH, width: spanWidth(p.col, p.span), height: bandH, borderColor: border, borderWidth: 0.5, color: p.fill ? this.color(p.fill) : undefined });
                     const face: FaceKey = p.header ? 'bold' : 'regular';
                     const room = spanWidth(p.col, p.span) - 2 * pad;
@@ -2628,7 +2761,11 @@ async function drawDocument(pdf: any, lib: any, fonts: Fonts, customFonts: boole
     await layout.fitRunningContent();
     for (const node of ast.content) layout.collectNotes(node);
     await layout.measureFootnotes();
-    for (const node of ast.content) await layout.render(node, true);
+    // The document's columns, its first section's, then its blocks (each section's own as it starts).
+    layout.flow = ast.content;
+    await layout.setColumns(ast.metadata?.pageSetup?.columns, true);
+    for (const [index, node] of ast.content.entries()) { layout.flowIndex = index; await layout.render(node, true); }
+    await layout.setColumns(undefined, false);
     await layout.flushNotes();
     // The anchors last met take their place on the last page, before the headers are drawn on the pages.
     layout.placeAnchors();

@@ -1310,6 +1310,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 if (breakType === 'page') return `${extraAnchors}<hr class="page-break"${idAttr}>`;
                 // A thematic break is a plain rule; the parser reads a bare <hr> back as one.
                 if (breakType === 'thematic') return `${extraAnchors}<hr${idAttr}>`;
+                // A section starting on the same page (its columns) breaks no text.
+                if (breakType === 'section') return extraAnchors;
                 return '<br>';
             }
 

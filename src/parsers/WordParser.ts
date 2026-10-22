@@ -1501,6 +1501,18 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
             if (header !== undefined) setup.headerDistance = Math.min(header, height / 3);
             if (footer !== undefined) setup.footerDistance = Math.min(footer, height / 3);
         }
+        // Its columns (`w:cols`): their number and gap, each column's width where they differ, a line between.
+        const cols = getDirectChildren(sectPr, "w:cols")[0];
+        const own = cols ? getDirectChildren(cols, "w:col") : [];
+        const count = Math.min(16, Math.max(1, Math.round(Number(cols?.getAttribute("w:num")) || 0) || own.length || 1));
+        if (cols && count > 1) {
+            const columns: NonNullable<PageSetup['columns']> = { count, gap: Math.min(twips(cols, "w:space") ?? 36, width / 4) };
+            const widths = cols.getAttribute("w:equalWidth") === '0' || cols.getAttribute("w:equalWidth") === 'false' ? own.map(c => twips(c, "w:w") ?? 0) : [];
+            if (widths.length === count && widths.every(w => w > 0)) columns.widths = widths;
+            const sep = cols.getAttribute("w:sep");
+            if (sep && !['false', '0', 'off'].includes(sep)) columns.separator = true;
+            setup.columns = columns;
+        }
         return setup;
     };
 
@@ -1519,10 +1531,10 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 if (ended !== undefined && config.includeBreakNodes && ended + 1 < sections.length) {
                     const next = sections[ended + 1];
                     const kind = getDirectChildren(next, "w:type")[0]?.getAttribute("w:val");
-                    if (kind !== 'continuous' && kind !== 'nextColumn') {
-                        const pageSetup = config.ignorePageGeometry ? undefined : pageSetupOf(next);
-                        out.push({ type: 'break', text: '', metadata: { breakType: 'page', section: ended + 1, ...(pageSetup ? { pageSetup } : {}) } as BreakMetadata });
-                    }
+                    const pageSetup = config.ignorePageGeometry ? undefined : pageSetupOf(next);
+                    // A continuous section runs on on the same page (as two columns under a title do).
+                    const breakType = kind === 'continuous' || kind === 'nextColumn' ? 'section' : 'page';
+                    out.push({ type: 'break', text: '', metadata: { breakType, section: ended + 1, ...(pageSetup ? { pageSetup } : {}) } as BreakMetadata });
                 }
             } else if (child.nodeName === 'w:tbl') {
                 out.push(parseTable(child, xml, pendingAnchorIds));

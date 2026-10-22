@@ -96,7 +96,8 @@ export class TextGenerator extends BaseGenerator<'text'> {
 
             // Handle explicit breaks
             if (node.type === 'break') {
-                return newline;
+                // A section starting on the same page (its columns) breaks no text.
+                return (node.metadata as { breakType?: string } | undefined)?.breakType === 'section' ? '' : newline;
             }
 
             if (node.type === 'image') {

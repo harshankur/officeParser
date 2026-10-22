@@ -1,4 +1,4 @@
-import { CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, IndentationMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TextMetadata } from '../types.js';
+import { BreakMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, IndentationMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphMetadata, TextMetadata } from '../types.js';
 import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
@@ -116,7 +116,9 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
             output += '}\n';
         }
 
-        // 4. Header and footer, then the body
+        // 4. The first section's columns, the header and footer, then the body
+        const columns = columnsRtf(this.ast.metadata?.pageSetup?.columns);
+        if (columns) output += `\\sectd${columns}\n`;
         output += running;
         output += '\\f0\\fs24\n';
         output += bodyContent;
@@ -410,7 +412,12 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                 }
 
                 case 'break': {
-                    return (node.metadata as any)?.breakType === 'page' ? '\\page\n' : '\\line\n';
+                    const meta = node.metadata as BreakMetadata | undefined;
+                    // A section starting on this page, in its columns (`\sbknone`: no break in the text).
+                    if (meta?.breakType === 'section') return `\\sect\\sectd\\sbknone${columnsRtf(meta.pageSetup?.columns)}\n`;
+                    // A section starting on a new page, in its columns.
+                    if (meta?.breakType === 'page' && typeof meta.section === 'number') return `\\sect\\sectd\\sbkpage${columnsRtf(meta.pageSetup?.columns)}\n`;
+                    return meta?.breakType === 'page' ? '\\page\n' : '\\line\n';
                 }
 
                 case 'code': {
@@ -614,4 +621,10 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
             .replace(/\f/g, '\\page ')
             .replace(/[\x00-\x08\x0e-\x1f\x7f]/g, '');
     }
+}
+
+/** Columns as RTF's section controls: their number, the gap in twips, a line between. Nothing for one. */
+function columnsRtf(columns: PageSetup['columns'] | undefined): string {
+    if (!columns || columns.count < 2) return '';
+    return `\\cols${Math.min(columns.count, 16)}\\colsx${Math.round(columns.gap * 20)}${columns.separator ? '\\linebetcol' : ''}`;
 }

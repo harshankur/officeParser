@@ -1,7 +1,7 @@
 import { zipSync, Zippable } from 'fflate';
 import { UniqueNames } from '../utils/uniqueNames.js';
 import { layoutTableRows } from '../utils/tableLayout.js';
-import { ConversionResult, GeneratorConfig, ImageMode, OdtGeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
+import { BreakMetadata, ConversionResult, GeneratorConfig, ImageMode, OdtGeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
@@ -80,7 +80,7 @@ function encodeOdfText(s: string | undefined): string {
     return out;
 }
 
-type StyleFamily = 'text' | 'paragraph' | 'table' | 'table-cell';
+type StyleFamily = 'text' | 'paragraph' | 'table' | 'table-cell' | 'section';
 
 /**
  * Interns automatic styles for one output file (content.xml or styles.xml). ODF puts run/paragraph
@@ -161,7 +161,8 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         const { iso, mtime } = resolveZipInstant(this.effectiveMetadata.modified);
 
         const metaBlock = this.config.renderMetadata ? this.renderMetadataBlock() : '';
-        const body = await this.renderBlocks(this.ast.content);
+        let body = await this.renderBlocks(this.ast.content);
+        if (this.openSection) { body += '</text:section>'; this.openSection = false; }
 
         const headers = runningFurniture(this.ast.auxiliary?.headers, 'header'), footers = runningFurniture(this.ast.auxiliary?.footers, 'footer');
         const hasHeader = headers.length > 0;
@@ -515,7 +516,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
 
     private inlineBreak(node: OfficeContentNode): string {
         const t = (node.metadata as any)?.breakType;
-        if (t === 'carriageReturn') return '<text:line-break/>';
+        if (t === 'section') return '';
         return '<text:line-break/>';
     }
 
@@ -835,8 +836,37 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
 
     private pageBreakStyle(): string { return this.internPara(' fo:break-before="page"'); }
 
+    /** Whether a section of columns of its own is open, and how many there have been. */
+    private openSection = false;
+    private sections = 0;
+
+    /** Columns as ODF writes them (`style:columns`): their number, gap, widths where they differ, a line between. */
+    private columnsXml(columns: PageSetup['columns'] | undefined): string {
+        if (!columns || columns.count < 2) return '<style:columns fo:column-count="1" fo:column-gap="0pt"/>';
+        const sep = columns.separator ? '<style:column-sep style:width="0.5pt" style:color="#000000" style:height="100%" style:style="solid"/>' : '';
+        const own = columns.widths?.length === columns.count
+            ? columns.widths.map((w, i) => `<style:column style:rel-width="${Math.max(1, Math.round(w * 20))}*" fo:start-indent="${i ? fmtPt(columns.gap / 2) : '0pt'}" fo:end-indent="${i < columns.count - 1 ? fmtPt(columns.gap / 2) : '0pt'}"/>`).join('')
+            : '';
+        return `<style:columns fo:column-count="${columns.count}" fo:column-gap="${fmtPt(columns.gap)}">${sep}${own}</style:columns>`;
+    }
+
     private blockBreak(node: OfficeContentNode): string {
         const t = (node.metadata as any)?.breakType;
+        const sectionStart = t === 'section' || (t === 'page' && typeof (node.metadata as BreakMetadata | undefined)?.section === 'number');
+        if (sectionStart) {
+            // A section starting on this page (or on the next, after its page break), in its own columns:
+            // a text:section of them, where they are not the page's (which the page layout has).
+            const columns = (node.metadata as BreakMetadata | undefined)?.pageSetup?.columns;
+            const pageColumns = this.ast.metadata?.pageSetup?.columns;
+            let out = this.openSection ? '</text:section>' : '';
+            if (t === 'page') out += `<text:p text:style-name="${this.pageBreakStyle()}"/>`;
+            this.openSection = (columns?.count ?? 1) !== (pageColumns?.count ?? 1) || (columns?.gap ?? 0) !== (pageColumns?.gap ?? 0);
+            if (this.openSection) {
+                const style = this.activeStyles.intern('section', 'Sect', `<style:section-properties>${this.columnsXml(columns)}</style:section-properties>`);
+                out += `<text:section text:style-name="${style}" text:name="Section${++this.sections}">`;
+            }
+            return out;
+        }
         if (t === 'page') return `<text:p text:style-name="${this.pageBreakStyle()}"/>`;
         if (t === 'column') return `<text:p text:style-name="${this.internPara(' fo:break-before="column"')}"/>`;
         if (t === 'thematic') return `<text:p text:style-name="${this.internPara(' fo:border-bottom="0.5pt solid #808080" fo:padding-bottom="1pt"')}"/>`;
@@ -940,7 +970,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         const pageLayout = `<style:page-layout style:name="pm1"><style:page-layout-properties`
             + ` fo:page-width="${fmtIn(pw)}" fo:page-height="${fmtIn(ph)}" style:print-orientation="${orient}"`
             + ` fo:margin-top="${fmtPt(mar.top)}" fo:margin-bottom="${fmtPt(mar.bottom)}"`
-            + ` fo:margin-left="${fmtPt(mar.left)}" fo:margin-right="${fmtPt(mar.right)}"/></style:page-layout>`;
+            + ` fo:margin-left="${fmtPt(mar.left)}" fo:margin-right="${fmtPt(mar.right)}"${(this.ast.metadata?.pageSetup?.columns?.count ?? 1) > 1 ? `>${this.columnsXml(this.ast.metadata!.pageSetup!.columns)}</style:page-layout-properties>` : '/>'}</style:page-layout>`;
         // A part on every page, on even pages alone (`style:header-left`, its odd pages' header an empty
         // paragraph: an empty `style:header` is read as none, and its left pages' with it), or
         // on the first page alone: then the first page's master (the document starts on `Standard`)
@@ -1005,7 +1035,7 @@ const OWN_BOOKMARKS: ReadonlySet<string> = new Set(['paragraph', 'heading', 'def
 /** Whether a node among blocks belongs in a paragraph's line: a run, a picture, a line break, inline math. */
 function isInlineNode(node: OfficeContentNode): boolean {
     if (node.type === 'text' || node.type === 'image') return true;
-    if (node.type === 'break') return !['page', 'column', 'thematic', 'lastRenderedPage'].includes((node.metadata as any)?.breakType);
+    if (node.type === 'break') return !['page', 'column', 'thematic', 'lastRenderedPage', 'section'].includes((node.metadata as any)?.breakType);
     return node.type === 'code' && (node.metadata as any)?.math === 'inline';
 }
 

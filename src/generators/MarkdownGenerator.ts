@@ -1044,6 +1044,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // A rule is a block, blank lines around it: `a---b` in a paragraph was text. In a list
                     // item, cell or definition (one line of Markdown) it cannot be one, and is a line break.
                     if (meta?.breakType === 'thematic') return this.inOneLine ? `${this.deferAnchors(meta)}\n` : `${this.anchorsBefore(meta) || '\n\n'}---\n\n`;
+                    // A section starting on the same page (its columns) breaks no text.
+                    if (meta?.breakType === 'section') return '';
                     return '\n';
                 }
 
@@ -1836,6 +1838,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 return meta?.link ? link(meta.link, meta.linkType, meta.title, text) : text;
             }
             case 'break':
+                if ((n.metadata as BreakMetadata | undefined)?.breakType === 'section') return '';
                 return (n.metadata as BreakMetadata | undefined)?.breakType === 'page' || (n.metadata as BreakMetadata | undefined)?.breakType === 'thematic' ? '<hr>' : '<br>';
             case 'code': {
                 const meta = n.metadata as CodeMetadata | undefined;

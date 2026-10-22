@@ -547,8 +547,20 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         if (shown(master, "style:header")) { setup.headerDistance = margin.top; margin.top += room("style:header-style", "fo:margin-bottom"); }
         if (shown(master, "style:footer")) { setup.footerDistance = margin.bottom; margin.bottom += room("style:footer-style", "fo:margin-top"); }
         if (shown(master, "style:header-first") || shown(master, "style:footer-first")) setup.differentFirstPage = true;
+        const columns = odfColumns(getDirectChildren(props, "style:columns")[0]);
+        if (columns) setup.columns = columns;
         return setup;
     };
+    /** A `style:columns` element's columns (their number, the gap, a line between), where there are two or more. */
+    function odfColumns(columns: Element | undefined): PageSetup['columns'] | undefined {
+        const count = Math.min(16, Math.round(Number(columns?.getAttribute("fo:column-count")) || 0));
+        if (!columns || count < 2) return undefined;
+        const gap = lengthToPt(columns.getAttribute("fo:column-gap") || undefined);
+        const sep = getDirectChildren(columns, "style:column-sep")[0];
+        return { count, gap: gap != null && gap >= 0 && gap < 1584 ? Math.round(gap * 100) / 100 : 0, ...(sep && (sep.getAttribute("style:style") ?? 'solid') !== 'none' ? { separator: true } : {}) };
+    }
+    /** Each section style's columns (`style:section-properties`), by its name. */
+    const sectionColumns = new Map<string, PageSetup['columns'] | undefined>();
     const content: OfficeContentNode[] = [];
     const notes: OfficeContentNode[] = [];
 
@@ -593,6 +605,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             const name = style.getAttribute("style:name");
             if (!name) continue;
 
+            if (style.getAttribute("style:family") === 'section') {
+                const sectionProps = getDirectChildren(style, "style:section-properties")[0];
+                if (!sectionColumns.has(name)) sectionColumns.set(name, odfColumns(sectionProps ? getDirectChildren(sectionProps, "style:columns")[0] : undefined));
+                continue;
+            }
             const styleInfo: ParagraphStyleInfo = {};
             const masterPage = style.getAttribute("style:master-page-name");
             if (masterPage) styleInfo.masterPage = masterPage;
@@ -2041,6 +2058,18 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     }
                 }
                 for (const child of linked) targetArray.push(child);
+            } else if (node.tagName === "text:section" && readingBody && config.includeBreakNodes && !config.ignorePageGeometry
+                && sectionColumns.get(node.getAttribute("text:style-name") || '') && odfPageSetup(sectionMasters[sectionMasters.length - 1] ?? firstMaster)) {
+                // A section set in columns of its own, on the page it is on: a section break before it
+                // with its columns, and one after it with the page's again.
+                const { columns: pageColumns, ...page } = odfPageSetup(sectionMasters[sectionMasters.length - 1] ?? firstMaster)!;
+                const columns = sectionColumns.get(node.getAttribute("text:style-name") || '')!;
+                targetArray.push({ type: 'break', metadata: { breakType: 'section', pageSetup: { ...page, columns } } as BreakMetadata });
+                for (let i = 0; i < node.childNodes.length; i++) {
+                    const child = node.childNodes[i];
+                    if (isElement(child)) traverse(child as Element, targetArray, forceHeading, sourceXml);
+                }
+                targetArray.push({ type: 'break', metadata: { breakType: 'section', pageSetup: { ...page, ...(pageColumns ? { columns: pageColumns } : {}) } } as BreakMetadata });
             } else if (node.tagName !== "text:tracked-changes") {
                 // (Tracked changes hold what a deletion removed, which is not the document's text.)
                 if (node.childNodes) {

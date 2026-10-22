@@ -1535,6 +1535,12 @@ export interface PageSetup {
      * earlier section; without it, none is.
      */
     differentFirstPage?: boolean;
+    /**
+     * The body's columns, where it is set in more than one: their number, the gap between them (in
+     * points), their widths where they differ (in points, left to right), and whether a line is drawn
+     * between them.
+     */
+    columns?: { count: number; gap: number; widths?: number[]; separator?: boolean };
 }
 
 /**
@@ -3287,8 +3293,11 @@ export interface BreakMetadata {
      * - 'thematic': A thematic break (Markdown `---`/`***`/`___`, HTML `<hr>`) - a horizontal
      *   rule separating sections, distinct from a page break. Emitted as `---` in Markdown and
      *   `<hr>` in HTML.
+     * - 'section': A section of the document starts here, on the same page (a Word continuous section,
+     *   an ODF section of its own columns), with `section` and `pageSetup` (its columns): no break in
+     *   the text.
      */
-    breakType: 'column' | 'page' | 'lastRenderedPage' | 'textWrapping' | 'carriageReturn' | 'thematic';
+    breakType: 'column' | 'page' | 'lastRenderedPage' | 'textWrapping' | 'carriageReturn' | 'thematic' | 'section';
 
     /**
      * On a page break that starts a section of the document (a Word section, an ODF page of another
