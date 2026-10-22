@@ -5565,6 +5565,14 @@ async function testPdfRuledTables(): Promise<void> {
     const items = collectAllNodes(listed).filter(n => n.type === 'list').map(n => (n.text || '').trim());
     assert.ok(['First English item', 'שלום עולם גדול מאוד', 'مرحبا بالعالم الكبير', 'Fourth English item', 'Alpha step', 'שלב שני בעברית', 'Gamma step'].every(t => items.includes(t)), `an English list's right-to-left items stay items of their own; got ${JSON.stringify(items)}`);
     assert.ok((await readText('indic_conjunct_spaces_chrome.pdf')).includes('க்ஷ ஸ்ரீ கற்'), 'a conjunct joined by a virama is one cluster: the space after it is kept');
+    // A line reads as its paragraph does: one with a product's name at an edge, an English sentence with a
+    // Hebrew word at an edge or a "(a)" or "1." at its end, a Hebrew list's item mostly in Latin letters.
+    const edges = await readText('bidi_edges_chrome.pdf');
+    for (const line of ['Microsoft Word הוא מעבד התמלילים הנפוץ ביותר של Microsoft', 'שלום means hello and the word for world is עולם', 'The Hebrew word שלום is listed under (a)', 'Option שלום was chosen, see 1.']) assert.ok(edges.includes(line), `a line reads "${line}"; got ${JSON.stringify(edges.slice(0, 600))}`);
+    assert.ok((await readText('hebrew_document_chrome.pdf')).includes('Microsoft Office הוא חבילה'), 'a Hebrew list\'s item in mostly Latin letters reads as its list does');
+    // A superscript a little larger than four fifths of its line (Chrome's) stays in its line.
+    const sup = await readText('superscripts_chrome.pdf');
+    assert.ok(sup.includes('See the note1 on the next page.') && sup.includes('ראו הערה1 בעמוד הבא'), `a superscript stays in its line; got ${JSON.stringify(sup.slice(0, 300))}`);
 
 }
 

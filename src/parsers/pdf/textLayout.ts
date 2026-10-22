@@ -75,7 +75,7 @@ const MAX_CLUSTER_SCAN = 512;
  * super/subscript fragments, splits lines at wide horizontal gaps (so columns and table cells become
  * separate atoms), then builds fragments with gap-derived spacing. Returns lines top-to-bottom.
  */
-export function buildLines(runs: RawRun[], cfg: PdfLayoutConfig): PdfLine[] {
+export function buildLines(runs: RawRun[], cfg: PdfLayoutConfig, page: PageDirection = {}): PdfLine[] {
     const items = runs.filter(r => r.angle === 0 && r.text.length > 0);
     if (!items.length) return [];
     items.sort((a, b) => a.yBaseline - b.yBaseline || a.x - b.x);
@@ -115,7 +115,9 @@ export function buildLines(runs: RawRun[], cfg: PdfLayoutConfig): PdfLine[] {
 
     clusters = mergeSuperSubClusters(clusters, maxFontSize);
 
-    const lines = clusters.flatMap(c => clusterToLines(c.runs, cfg));
+    // Each line's direction from its paragraph's (see directionsOf): one line cannot tell it.
+    const rtl = directionsOf(clusters, page);
+    const lines = clusters.flatMap((c, i) => clusterToLines(c.runs, cfg, rtl[i]));
     // Top to bottom; lines on one baseline (a line cut at a wide gap) left to right.
     return inReadingOrder(lines);
 }
@@ -172,7 +174,8 @@ function mergeSuperSubClusters(clusters: Cluster[], maxFontSize: number): Cluste
         let bestDiff = Infinity;
         const consider = (l: Cluster): void => {
             if (l === s || removed.has(l)) return;
-            if (s.fontSize > 0.8 * l.fontSize) return;
+            // (Chrome sets a superscript at five sixths of its line's size.)
+            if (s.fontSize > 0.85 * l.fontSize) return;
             const diff = Math.abs(s.baseline - l.baseline);
             if (diff > 0.5 * l.fontSize) return;
             // The small cluster must *start* inside the host line's horizontal extent (give or take
@@ -201,7 +204,7 @@ function mergeSuperSubClusters(clusters: Cluster[], maxFontSize: number): Cluste
  * wide gap (much larger than a space) marks a column or table-cell boundary, so the pieces become
  * separate atoms the block segmenter can place independently.
  */
-function clusterToLines(clusterRuns: RawRun[], cfg: PdfLayoutConfig): PdfLine[] {
+function clusterToLines(clusterRuns: RawRun[], cfg: PdfLayoutConfig, rtl = false): PdfLine[] {
     const runs = [...clusterRuns].sort((a, b) => a.x - b.x);
     const fs = dominantFontSize(runs);
     const wideGap = Math.max(18, 4 * cfg.spaceToleranceFactor * fs, 1.5 * fs);
@@ -226,33 +229,26 @@ function clusterToLines(clusterRuns: RawRun[], cfg: PdfLayoutConfig): PdfLine[] 
         last = r;
     }
     if (cur.length) segments.push(cur);
-    return segments.filter(seg => seg.some(r => r.text.trim().length)).map(seg => clusterToLine(seg, cfg));
+    return segments.filter(seg => seg.some(r => r.text.trim().length)).map(seg => clusterToLine(seg, cfg, rtl));
 }
 
 /** Letters of the scripts written right to left (Hebrew, Arabic, Syriac, Thaana, NKo, and their presentation forms). */
 const RTL_LETTER = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
-/** A list's marker standing alone (a bullet, `1.`, `a)`, `iv.`), which sits at the side a line starts on. */
-const EDGE_MARKER = /^\s*(?:[•◦▪‣·○●■□∙\u2013\u2014*-]|\(?(?:\d{1,3}(?:\.\d{1,3})*|[a-zA-Z]|[ivxlcdmIVXLCDM]{1,7})[.)])\s*$/;
 
 /**
  * A line's runs (left to right on the page) in the order they are read, by the Unicode bidirectional
  * algorithm's last rule (L2): each run right-to-left (Hebrew, Arabic), left-to-right (other letters), a
  * number, or neither (blanks, punctuation); its level resolved as the algorithm resolves it (a neutral
  * as the strong runs on both sides where they agree, else as the line; a number among right-to-left words
- * with them); stretches reversed from the highest level down. The line reads right to left where both its
- * outer letters are right-to-left, or a list's marker stands at its right: a count of letters took a
- * line of English with a Hebrew phrase for Hebrew, and moved its bullet to the end. A producer setting each
- * word as a run of its own (Chrome) had its Hebrew and Arabic read last word first; a line of one run, or
- * of no right-to-left letter, is as it was.
+ * with them); stretches reversed from the highest level down. The line reads right to left as its
+ * paragraph does (`rtl`, see directionsOf): a line alone reads the same both ways. A producer setting
+ * each word as a run of its own (Chrome) had its Hebrew and Arabic read last word first; a line of one
+ * run, or of no right-to-left letter, is as it was.
  */
-function readingOrder(runs: RawRun[]): RawRun[] {
+function readingOrder(runs: RawRun[], rtl: boolean): RawRun[] {
     if (runs.length < 2 || !runs.some(r => RTL_LETTER.test(r.text))) return runs;
     const n = runs.length;
     const kind = runs.map(r => RTL_LETTER.test(r.text) ? 'R' : /\p{L}/u.test(r.text) ? 'L' : /\p{N}/u.test(r.text) ? 'EN' : 'N');
-    let leftStrong = '', rightStrong = '';
-    for (const k of kind) if (k === 'R' || k === 'L') { leftStrong = k; break; }
-    for (let i = n - 1; i >= 0; i--) if (kind[i] === 'R' || kind[i] === 'L') { rightStrong = kind[i]; break; }
-    const rtl = EDGE_MARKER.test(runs[0].text) ? false : EDGE_MARKER.test(runs[n - 1].text) ? true : leftStrong === 'R' && rightStrong === 'R';
     // The nearest strong run on each side of every run, a number counting as right-to-left beside it (N1).
     const before: string[] = new Array(n), after: string[] = new Array(n);
     for (let i = 0, last = ''; i < n; i++) { before[i] = last; if (kind[i] === 'R' || kind[i] === 'L') last = kind[i]; }
@@ -281,6 +277,64 @@ function readingOrder(runs: RawRun[]): RawRun[] {
         ? { ...runs[i], text: [...runs[i].text].reverse().join('') } : runs[i]);
 }
 
+/** A list's marker standing alone (a bullet, `1.`, `.1` as a right-to-left list sets it, `a)`, `iv.`). */
+const LIST_MARKER = /^\s*(?:[•◦▪‣·○●■□∙\u2013*-]|\(?(?:\d{1,3}(?:\.\d{1,3})*|[a-zA-Z]|[ivxlcdmIVXLCDM]{1,7})[.)]|[.)(]\d{1,3})\s*$/;
+
+/**
+ * Whether each line (a cluster of runs on one baseline) reads right to left, as its paragraph does:
+ * - a list's markers, where the line's marker stands in a column of them (another line just above or below
+ *   with one at the same place): at the lines' left, left to right; at their right, right to left (a
+ *   sentence ending in "(a)" is no list);
+ * - else a line set short against one edge of the page's text and not the other (left flush, ragged
+ *   right: left to right; right flush, ragged left: right to left), a line nearly as wide as the text
+ *   (an indented first line, a justified one) telling nothing;
+ * - else the letters of the line and the lines just above and below it that share its column (within
+ *   three of its ems, overlapping it across), leaning as the page does (`pageLean`, by the line's own
+ *   letters): a one-line paragraph of Hebrew with a product's name in it is Hebrew where its page is.
+ * One line's own letters, or its outer ones, could not tell: a Hebrew paragraph's line starting with
+ * "Microsoft Word", or an English line with a Hebrew phrase, read the other way.
+ */
+function directionsOf(clusters: Cluster[], page: PageDirection): boolean[] {
+    const pageLean = page.lean ?? 0;
+    const info = clusters.map(c => {
+        let r = 0, l = 0;
+        for (const run of c.runs) for (const ch of run.text) { if (RTL_LETTER.test(ch)) r++; else if (/\p{L}/u.test(ch)) l++; }
+        // Its marker at its left or right: alone in its run, set apart from the text beside it.
+        const runs = c.runs.filter(run => run.text.trim()).sort((a, b) => a.x - b.x);
+        const em = c.fontSize || 12;
+        const first = runs[0], second = runs[1], last = runs[runs.length - 1], before = runs[runs.length - 2];
+        const left = first && second && LIST_MARKER.test(first.text) && second.x - (first.x + first.width) >= 0.2 * em ? first.x : undefined;
+        const right = last && before && LIST_MARKER.test(last.text) && last.x - (before.x + before.width) >= 0.2 * em ? last.x + last.width : undefined;
+        return { r, l, left, right };
+    });
+    if (!info.some(c => c.r)) return clusters.map(() => false);
+    return clusters.map((c, i) => {
+        const own = info[i];
+        let r = own.r, l = own.l, leftColumn = false, rightColumn = false;
+        const reach = 3 * (c.fontSize || 12);
+        // (Clusters are in baseline order: the neighbours on each side, a few at most.)
+        for (const step of [-1, 1]) {
+            for (let j = i + step, seen = 0; j >= 0 && j < clusters.length && seen < 64; j += step, seen++) {
+                const o = clusters[j];
+                if (Math.abs(o.baseline - c.baseline) > reach) break;
+                if (o.maxX < c.minX || o.minX > c.maxX) continue;
+                r += info[j].r; l += info[j].l;
+                if (own.left !== undefined && info[j].left !== undefined && Math.abs(info[j].left! - own.left) <= 2) leftColumn = true;
+                if (own.right !== undefined && info[j].right !== undefined && Math.abs(info[j].right! - own.right) <= 2) rightColumn = true;
+            }
+        }
+        if (leftColumn !== rightColumn) return rightColumn;
+        if (page.left !== undefined && page.right !== undefined) {
+            const width = page.right - page.left, slack = Math.max(4, 0.02 * width);
+            if (c.maxX - c.minX < 0.85 * width) {
+                const atLeft = Math.abs(c.minX - page.left) <= slack, atRight = Math.abs(c.maxX - page.right) <= slack;
+                if (atLeft !== atRight) return atRight;
+            }
+        }
+        return r - l + pageLean * (own.r + own.l) > 0;
+    });
+}
+
 /**
  * A line's runs with a blank run between two the page sets apart (as the line is read left to right, a gap
  * of the space threshold, neither side a blank already): when the line is read in another order (see
@@ -300,7 +354,7 @@ function withSpacesOfPage(runs: RawRun[], cfg: PdfLayoutConfig, lineFontSize: nu
     return out;
 }
 
-function clusterToLine(clusterRuns: RawRun[], cfg: PdfLayoutConfig): PdfLine {
+function clusterToLine(clusterRuns: RawRun[], cfg: PdfLayoutConfig, rtl = false): PdfLine {
     const runs = [...clusterRuns].sort((a, b) => a.x - b.x);
     const lineFontSize = dominantFontSize(runs);
 
@@ -328,7 +382,7 @@ function clusterToLine(clusterRuns: RawRun[], cfg: PdfLayoutConfig): PdfLine {
     // (Its spaces from the page's gaps first where it is read in another order, as no gap between runs read
     // one after another says.)
     const reordered = runs.length > 1 && runs.some(r => RTL_LETTER.test(r.text));
-    for (const r of reordered ? readingOrder(withSpacesOfPage(runs, cfg, lineFontSize)) : runs) {
+    for (const r of reordered ? readingOrder(withSpacesOfPage(runs, cfg, lineFontSize), rtl) : runs) {
         const fmt: TextFormatting = { ...r.formatting };
         const off = baseline - r.yBaseline; // >0 raised, <0 lowered
         const rel = lineFontSize ? Math.abs(off) / lineFontSize : 0;
@@ -492,6 +546,28 @@ export interface PageContext {
     authoredW: number;
     authoredH: number;
     rotation: number;
+    /** How far the page's letters lean right to left, from -1 (none) to 1 (all) (see directionsOf). */
+    rtl?: number;
+    /** The left and right edges of the page's text (see directionsOf). */
+    textLeft?: number;
+    textRight?: number;
+}
+
+/** What a page tells of its lines' direction (see directionsOf): its letters' lean, its text's edges. */
+export interface PageDirection { lean?: number; left?: number; right?: number }
+
+/** The page's direction cues from its runs (level ones with text). */
+export function pageDirection(runs: readonly RawRun[]): PageDirection {
+    let left = Infinity, right = -Infinity;
+    for (const r of runs) if (r.angle === 0 && r.text.trim() && Number.isFinite(r.x) && Number.isFinite(r.width)) { left = Math.min(left, r.x); right = Math.max(right, r.x + r.width); }
+    return { lean: rightToLeftLean(runs), ...(Number.isFinite(left) && right > left ? { left, right } : {}) };
+}
+
+/** How far some runs' letters lean right to left (Hebrew, Arabic), from -1 to 1: a page's direction. */
+export function rightToLeftLean(runs: readonly RawRun[]): number {
+    let r = 0, l = 0;
+    for (const run of runs) for (const ch of run.text) { if (RTL_LETTER.test(ch)) r++; else if (/\p{L}/u.test(ch)) l++; }
+    return r + l ? (r - l) / (r + l) : 0;
 }
 
 export function emitBounds(box: NodeBounds, page: PageContext, cfg: PdfLayoutConfig): NodeBounds | undefined {
@@ -1388,7 +1464,7 @@ export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContex
  * @param forcedLevel - heading level to force (0 = paragraph); omit for auto heading detection.
  */
 export function runsToParagraph(runs: RawRun[], page: PageContext, doc: DocContext, forcedLevel?: number): OfficeContentNode | null {
-    const lines = buildLines(runs, doc.cfg);
+    const lines = buildLines(runs, doc.cfg, { lean: page.rtl, left: page.textLeft, right: page.textRight });
     if (!lines.length) return null;
     return paragraphNode(finishGroup(lines), page, doc, forcedLevel);
 }
