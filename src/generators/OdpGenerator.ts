@@ -83,7 +83,7 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
                 + `<office:body><office:presentation>${pages}</office:presentation></office:body></office:document-content>`),
             'styles.xml': enc(`<?xml version="1.0" encoding="UTF-8"?>\n<office:document-styles ${ODF_NS} office:version="1.2">`
                 // Text in a sans face at 18pt where it says no other (a reader's default is a serif).
-                + `<office:styles><style:default-style style:family="graphic"><style:text-properties fo:font-family="Calibri" style:font-family-generic="swiss" fo:font-size="18pt"/></style:default-style>`
+                + `<office:styles><style:default-style style:family="graphic"><style:text-properties fo:font-family="Calibri" style:font-family-generic="swiss" fo:font-size="18pt" style:font-size-asian="18pt" style:font-size-complex="18pt"/></style:default-style>`
                 + `<style:style style:name="standard" style:family="graphic"><style:graphic-properties draw:stroke="none" draw:fill="none"/></style:style></office:styles>`
                 + `<office:automatic-styles><style:page-layout style:name="PM1"><style:page-layout-properties fo:margin-top="0pt" fo:margin-bottom="0pt" fo:margin-left="0pt" fo:margin-right="0pt" fo:page-width="${pt(deck.width)}" fo:page-height="${pt(deck.height)}" style:print-orientation="${deck.width > deck.height ? 'landscape' : 'portrait'}"/></style:page-layout>`
                 + `<style:style style:name="Mdp1" style:family="drawing-page"><style:drawing-page-properties draw:background-size="border" draw:fill="none"/></style:style></office:automatic-styles>`
@@ -254,10 +254,14 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
         if (r.lineBreak) return '<text:line-break/>';
         if (!r.text) return '';
         const size = r.size ?? defaultSize;
-        const props = (size ? ` fo:font-size="${pt(size)}"` : '') + (r.bold ? ' fo:font-weight="bold"' : '') + (r.italic ? ' fo:font-style="italic"' : '')
+        // Size, weight, slant and font for every script (Latin, Asian, complex): CJK, Arabic and Indic text
+        // took the default's alone, and overflowed its box.
+        const all = (prop: string, value: string) => ` fo:${prop}="${value}" style:${prop}-asian="${value}" style:${prop}-complex="${value}"`;
+        const face = (name: string) => ` style:font-name="${xmlText(name)}" fo:font-family="${xmlText(name)}" style:font-family-asian="${xmlText(name)}" style:font-family-complex="${xmlText(name)}"`;
+        const props = (size ? all('font-size', pt(size)) : '') + (r.bold ? all('font-weight', 'bold') : '') + (r.italic ? all('font-style', 'italic') : '')
             + (r.underline ? ' style:text-underline-style="solid" style:text-underline-width="auto" style:text-underline-color="font-color"' : '')
             + (r.strike ? ' style:text-line-through-style="solid"' : '') + (r.superscript ? ' style:text-position="33% 58%"' : r.subscript ? ' style:text-position="-33% 58%"' : '')
-            + (r.color && hexColor(r.color) ? ` fo:color="#${hexColor(r.color)}"` : '') + (r.font || mono ? ` style:font-name="${xmlText(r.font || 'Courier New')}" fo:font-family="${xmlText(r.font || 'Courier New')}"` : '');
+            + (r.color && hexColor(r.color) ? ` fo:color="#${hexColor(r.color)}"` : '') + (r.font || mono ? face(r.font || 'Courier New') : '');
         const text = xmlText(r.text).replace(/ {2,}/g, m => ` <text:s text:c="${m.length - 1}"/>`).replace(/\t/g, '<text:tab/>');
         const span = props ? `<text:span text:style-name="${this.styleNamed(`t|${props}`, 'T', name => `<style:style style:name="${name}" style:family="text"><style:text-properties${props}/></style:style>`)}">${text}</text:span>` : text;
         return r.link ? `<text:a xlink:type="simple" xlink:href="${xmlText(encUrl(r.link))}">${span}</text:a>` : span;

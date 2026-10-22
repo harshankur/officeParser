@@ -83,15 +83,19 @@ const linkOf = (meta: TextMetadata | undefined): string | undefined => {
  * The notes cited (numbered once each, for the notes slides) and the comments met since the last slide was
  * made, which go into that slide's speaker notes.
  */
-interface NoteState { list: DeckParagraph[]; seen: Map<OfficeContentNode, number>; comments: DeckParagraph[]; seenComments: Set<OfficeContentNode> }
+interface NoteState { list: DeckParagraph[]; seen: Map<OfficeContentNode, number>; comments: DeckParagraph[]; seenComments: Set<OfficeContentNode>; /** Whether a link to a place in the document was met (a slide's text cannot open one). */ placeLinks?: boolean }
 
 /** A comment as a line of a slide's speaker notes: `Comment (author): its text`. */
 async function noteComment(comment: OfficeContentNode, source: DeckSource, notes: NoteState): Promise<void> {
-    if (notes.seenComments.has(comment) || await source.keep(comment) === false) return;
+    if (notes.seenComments.has(comment)) return;
     notes.seenComments.add(comment);
-    const text = (comment.children?.length ? (await runsOf(comment, source, notes, {}, 1)).map(r => r.lineBreak ? '\n' : r.text).join('') : comment.text ?? '').trim();
+    // As onNode has it: left out, or its text replaced.
+    const kept = await source.keep(comment);
+    if (kept === false) return;
+    const text = (typeof kept === 'string' ? kept : comment.children?.length ? (await runsOf(comment, source, notes, {}, 1)).map(r => r.lineBreak ? '\n' : r.text).join('') : comment.text ?? '').trim();
     if (!text) return;
-    const author = (comment.metadata as CommentMetadata | undefined)?.author;
+    // (Its author is the comment's, which a replacement is not.)
+    const author = typeof kept === 'string' ? undefined : (comment.metadata as CommentMetadata | undefined)?.author;
     notes.comments.push({ runs: [{ text: `Comment${typeof author === 'string' && author.trim() ? ` (${author.trim()})` : ''}: ${text}` }] });
 }
 
@@ -101,10 +105,11 @@ async function runsOf(node: OfficeContentNode, source: DeckSource, notes: NoteSt
     for (const child of node.children ?? []) {
         // A comment (one in the text, or one anchored on a run) goes to the slide's speaker notes.
         if (child.type === 'comment') { await noteComment(child, source, notes); continue; }
-        for (const c of child.comments ?? []) await noteComment(c, source, notes);
+        // A run onNode leaves out takes its comments and notes with it; one it replaces is its text alone.
         const kept = await source.keep(child);
         if (kept === false) continue;
         if (typeof kept === 'string') { runs.push({ text: kept }); continue; }
+        for (const c of child.comments ?? []) await noteComment(c, source, notes);
         const fmt: TextFormatting = { ...inherited, ...(child.formatting ?? {}) };
         if (child.type === 'text' || child.type === 'code') {
             if (child.text) runs.push({
@@ -113,6 +118,8 @@ async function runsOf(node: OfficeContentNode, source: DeckSource, notes: NoteSt
                 ...(sizeOf(fmt) ? { size: sizeOf(fmt) } : {}), ...(fmt.color ? { color: fmt.color } : {}), ...(fmt.font ? { font: fontFamily(fmt.font) } : child.type === 'code' ? { font: 'Courier New' } : {}),
                 ...(linkOf(child.metadata as TextMetadata) ? { link: linkOf(child.metadata as TextMetadata) } : {}),
             });
+            const target = (child.metadata as { link?: unknown } | undefined)?.link;
+            if (typeof target === 'string' && target.startsWith('#')) notes.placeLinks = true;
         } else if (child.type === 'break') {
             const kind = (child.metadata as { breakType?: string } | undefined)?.breakType;
             if (kind !== 'section' && kind !== 'page' && kind !== 'lastRenderedPage') runs.push({ text: '', lineBreak: true });
@@ -259,7 +266,8 @@ async function paragraphOf(node: OfficeContentNode, source: DeckSource, notes: N
         : typeof kept !== 'string' && typeof embedUrl === 'string' && embedUrl.trim()
             ? [{ text: embedUrl.trim(), ...(/^https?:/i.test(embedUrl.trim()) ? { link: embedUrl.trim() } : {}) }]
             : undefined;
-    for (const c of node.comments ?? []) await noteComment(c, source, notes);
+    // (A block onNode replaced takes its comments with it.)
+    if (typeof kept !== 'string') for (const c of node.comments ?? []) await noteComment(c, source, notes);
     const read = typeof kept === 'string' ? [{ text: kept }] : own ?? await runsOf(node, source, notes);
     // A page's paragraph: its lines as the page broke them, as far apart as they were.
     const lines = asPlaced && typeof kept !== 'string' ? placedLines(node, read) : undefined;
@@ -323,18 +331,36 @@ async function tableOf(node: OfficeContentNode, source: DeckSource, notes: NoteS
             const cell = slot.cell;
             const meta = cell.metadata as { style?: string; backgroundColor?: string } | undefined;
             const paragraphs: DeckParagraph[] = [];
-            if ((cell.children ?? []).some(c => c.type === 'paragraph' || c.type === 'list' || c.type === 'heading' || c.type === 'table')) {
+            const cellText = keptText.get(cell);
+            // A cell onNode gave text for is that text, whatever it holds.
+            if (typeof cellText === 'string') paragraphs.push({ runs: [{ text: cellText }] });
+            else if ((cell.children ?? []).some(c => c.type === 'paragraph' || c.type === 'list' || c.type === 'heading' || c.type === 'table')) {
                 for (const child of cell.children ?? []) {
                     const childKept = await source.keep(child);
                     if (childKept === false) continue;
                     if (typeof childKept === 'string') { paragraphs.push({ runs: [{ text: childKept }] }); continue; }
                     // A table inside the cell: its rows as lines of the cell, their cells apart by tabs.
-                    if (child.type === 'table') { for (const r of child.children ?? []) if (r.type === 'row') paragraphs.push({ runs: [{ text: (r.children ?? []).map(x => (x.text || '').trim()).join('\t') }] }); continue; }
+                    // (Its rows and cells as onNode has them: left out, or their text replaced.)
+                    if (child.type === 'table') {
+                        for (const r of child.children ?? []) {
+                            if (r.type !== 'row') continue;
+                            const rowKept = await source.keep(r);
+                            if (rowKept === false) continue;
+                            if (typeof rowKept === 'string') { paragraphs.push({ runs: [{ text: rowKept }] }); continue; }
+                            const texts: string[] = [];
+                            for (const x of r.children ?? []) {
+                                const k = await source.keep(x);
+                                if (k !== false) texts.push((typeof k === 'string' ? k : x.text || '').trim());
+                            }
+                            paragraphs.push({ runs: [{ text: texts.join('\t') }] });
+                        }
+                        continue;
+                    }
                     // (Pictures and charts in a cell are written apart from the table, see mediaUnder.)
                     if (child.type === 'image' || child.type === 'chart') continue;
                     paragraphs.push(await paragraphOf(child, source, notes));
                 }
-            } else paragraphs.push(await paragraphOf(cell, source, notes, keptText.get(cell) ?? true));
+            } else paragraphs.push(await paragraphOf(cell, source, notes));
             cells.push({ paragraphs, colSpan: slot.colSpan, rowSpan: slot.rowSpan, bold: source.includeFormatting && meta?.style === 'header', ...(meta?.backgroundColor ? { fill: meta.backgroundColor } : {}), col: slot.col });
             placed.push({ row: ri, col: slot.col, colSpan: slot.colSpan, rowSpan: slot.rowSpan, len: paragraphs.map(p => p.runs.map(x => x.text).join('')).join(' ').length, bounds: cell.bounds });
             cols = Math.max(cols, slot.col + slot.colSpan);
@@ -362,6 +388,7 @@ const boxOf = (b: NodeBounds | undefined, scale = 1, dx = 0, dy = 0): Box | unde
 export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMetadata, source: DeckSource, options: { backgrounds?: (Uint8Array | undefined | null)[] }): Promise<Deck> {
     const unrepresentable = new Set<string>();
     const notes: NoteState = { list: [], seen: new Map(), comments: [], seenComments: new Set() };
+    const reportPlaceLinks = <T>(deck: T) => { if (notes.placeLinks) unrepresentable.add('links to places in the document'); return deck; };
     const wantPicture = source.imageMode === 'image-only' || source.imageMode === 'image+ocr-text';
     const wantOcr = source.imageMode === 'ocr-text-only' || source.imageMode === 'image+ocr-text';
     const slideNodes = content.filter(n => n.type === 'slide');
@@ -453,6 +480,8 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
             for (let i = 0; i < children.length; i++) {
                 const child = children[i];
                 const kept = await source.keep(child);
+                // A shape onNode leaves out or replaces takes the text in its box with it (the nodes after it with its bounds).
+                if (child.type === 'drawing' && kept !== true) while (i + 1 < children.length && ['paragraph', 'heading', 'list'].includes(children[i + 1].type) && sameBox(children[i + 1].bounds, child.bounds)) i++;
                 if (kept === false) continue;
                 const box = boxOf(child.bounds, scale, dx, dy);
                 // A table, picture, chart or shape onNode gives a string for: that text in its place.
@@ -562,14 +591,14 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
             slides.push(slide);
         }
         slides.push(...notesSlides(notes.list.filter((_, i) => !printed.has(i + 1)), width, height));
-        return { width, height, slides, unrepresentable };
+        return reportPlaceLinks({ width, height, slides, unrepresentable });
     }
 
     // A flowing document: slides of its headings.
     const deck = await flowDeck(content, metadata, source, notes, unrepresentable);
     // Pictures behind the slides, one a slide in order.
     deck.slides.forEach((slide, i) => { const picture = options.backgrounds?.[i]; if (picture) slide.picture = picture; });
-    return deck;
+    return reportPlaceLinks(deck);
 }
 
 /** A slide's speaker note as paragraphs, each block asked of onNode (a string its text). */

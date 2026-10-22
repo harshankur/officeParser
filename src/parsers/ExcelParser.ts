@@ -135,6 +135,7 @@ function cellLinks(sheetXml: string, targets: Map<string, string>): Map<string, 
     const block = firstElementContent(sheetXml, 'hyperlinks');
     if (!block) return links;
     const attr = (attrs: string, name: string) => new RegExp(`(?:^|\\s)${name}\\s*=\\s*["']([^"']*)["']`).exec(attrs)?.[1];
+    let visited = 0;
     for (const h of xmlElements(block, 'hyperlink')) {
         const id = attr(h.attrs, 'r:id'), location = attr(h.attrs, 'location');
         const target = id ? targets.get(id) : undefined;
@@ -143,14 +144,17 @@ function cellLinks(sheetXml: string, targets: Map<string, string>): Map<string, 
         const [from, to] = (attr(h.attrs, 'ref') ?? '').split(':').map(cellAt);
         if (!value || !from) continue;
         const last = to ?? from;
-        for (let r = from.row; r <= last.row && links.size < MAX_LINKED_CELLS; r++) {
-            for (let c = from.col; c <= last.col && links.size < MAX_LINKED_CELLS; c++) if (!links.has(`${r}:${c}`)) links.set(`${r}:${c}`, value);
+        // Bounded by the positions visited, not the cells marked: a range repeated a thousand times marks
+        // nothing new and visited its hundred thousand cells each time.
+        for (let r = from.row; r <= last.row && visited < MAX_LINKED_CELLS; r++) {
+            for (let c = from.col; c <= last.col && visited < MAX_LINKED_CELLS; c++, visited++) if (!links.has(`${r}:${c}`)) links.set(`${r}:${c}`, value);
         }
+        if (visited >= MAX_LINKED_CELLS) break;
     }
     return links;
 }
 
-/** The most cells a sheet's hyperlinks mark (a range of a million cells is one link, not a million). */
+/** The most cell positions a sheet's hyperlinks visit (a range of a million cells is one link, not a million). */
 const MAX_LINKED_CELLS = 100_000;
 
 /** Excel's paper sizes (`pageSetup paperSize`) in points, upright: the common ones. */

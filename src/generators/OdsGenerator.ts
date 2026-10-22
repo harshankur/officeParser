@@ -4,7 +4,7 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { encUrl, odfUserDefinedXml, resolveZipInstant, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
-import { buildWorkbook, cellTextProcessor, noteLabels, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
+import { buildWorkbook, cellTextProcessor, noteLabels, placeOf, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
 
 /** Escapes text content for an XML part after stripping XML-illegal characters. */
 function xmlText(s: string | undefined): string {
@@ -74,7 +74,7 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
         if (!data && !bold && !wrap) return undefined;
         return this.styleNamed(`ce|${data}|${bold}|${wrap}`, 'ce', name => `<style:style style:name="${name}" style:family="table-cell" style:parent-style-name="Default"${data ? ` style:data-style-name="${data}"` : ''}>`
             + (wrap ? '<style:table-cell-properties fo:wrap-option="wrap" style:vertical-align="top"/>' : '')
-            + (bold ? '<style:text-properties fo:font-weight="bold"/>' : '') + `</style:style>`);
+            + (bold ? '<style:text-properties fo:font-weight="bold" style:font-weight-asian="bold" style:font-weight-complex="bold"/>' : '') + `</style:style>`);
     }
 
     async generate(): Promise<ConversionResult<'ods'>> {
@@ -109,7 +109,9 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
             sheets.push({ name: 'Sheet1', rows: [], widths: [] });
         }
         if (sheets.every(s => s.hidden)) delete sheets[0].hidden;
-        const tables = sheets.map(sheet => this.tableXml(sheet)).join('');
+        const sheetNames = sheets.map(sh => sh.name);
+        const tables = sheets.map(sheet => this.tableXml(sheet, sheetNames)).join('');
+        if (this.placeLinksLost) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'links to places outside the workbook\'s sheets', format: 'ods' });
         const { iso, mtime } = resolveZipInstant(this.effectiveMetadata.modified);
         const enc = (s: string) => new TextEncoder().encode(s);
         const m = this.effectiveMetadata;
@@ -136,7 +138,10 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
     }
 
     /** A sheet as a table: its columns' widths (hidden ones collapsed), its rows and cells, merges covering cells. */
-    private tableXml(sheet: WorkSheet): string {
+    /** Whether a link to a place no written sheet holds was left out (reported once). */
+    private placeLinksLost = false;
+
+    private tableXml(sheet: WorkSheet, sheetNames: readonly string[]): string {
         const hiddenCols = hiddenColumns(sheet);
         const tableStyle = sheet.hidden ? this.styleNamed('ta|hidden', 'ta', name => `<style:style style:name="${name}" style:family="table"><style:table-properties table:display="false"/></style:style>`) : undefined;
         const columns = sheet.widths.map((w, i) => {
@@ -173,7 +178,12 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
                     + valueAttrs(cell.value);
                 // (What the cell shows: a spreadsheet's number in its format, as ODF holds it beside the value.)
                 // Its link on its text, line by line.
-                const linked = (line: string) => cell.link ? `<text:a xlink:type="simple" xlink:href="${xmlText(encUrl(cell.link))}">${xmlText(line)}</text:a>` : xmlText(line);
+                // (A place in the workbook as ODF names a cell, `#Sheet.A1`, where the sheet is written; else reported.)
+                const place = cell.link?.startsWith('#') ? placeOf(cell.link, sheetNames) : undefined;
+                if (cell.link?.startsWith('#') && !place) this.placeLinksLost = true;
+                const href = place ? `#${/^[A-Za-z_][A-Za-z0-9_]*$/.test(place.sheet) ? place.sheet : `'${place.sheet.replace(/'/g, "''")}'`}.${place.cell}`
+                    : cell.link && !cell.link.startsWith('#') ? encUrl(cell.link) : undefined;
+                const linked = (line: string) => href ? `<text:a xlink:type="simple" xlink:href="${xmlText(href)}">${xmlText(line)}</text:a>` : xmlText(line);
                 const paragraphs = cell.shown ? cell.shown.split('\n').map(line => `<text:p>${linked(line)}</text:p>`).join('') : '';
                 out.push(`<table:table-cell${attrs}>${paragraphs}</table:table-cell>`);
             }

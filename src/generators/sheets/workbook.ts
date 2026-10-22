@@ -10,7 +10,7 @@
  * @module generators/sheets/workbook
  */
 
-import { CellMetadata, CommentMetadata, ImageMode, ListMetadata, OfficeContentNode, RowMetadata, SheetMetadata, SlideMetadata } from '../../types.js';
+import { CellMetadata, CommentMetadata, ImageMode, ListMetadata, NodeBounds, OfficeContentNode, RowMetadata, SheetMetadata, SlideMetadata } from '../../types.js';
 import { stripInvalidXmlChars } from '../../utils/sanitize.js';
 import { layoutTableRows } from '../../utils/tableLayout.js';
 
@@ -164,7 +164,9 @@ function cutTo(text: string, max: number): string {
 const nextSuffix = new WeakMap<Set<string>, Map<string, number>>();
 
 export function sheetName(wanted: string, taken: Set<string>, fallback: string): string {
-    const clean = (name: string) => cutTo(stripInvalidXmlChars(name).replace(/[[\]:*?/\\\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().replace(/^'+|'+$/g, '').trim(), 31).trim();
+    // (Neither end an apostrophe nor a blank, after every cut too: a name cut to 31 could end in one.)
+    const ends = (text: string) => text.replace(/^[\s']+|[\s']+$/g, '');
+    const clean = (name: string) => ends(cutTo(ends(stripInvalidXmlChars(name).replace(/[[\]:*?/\\\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ')), 31));
     let base = clean(wanted) || clean(fallback) || 'Sheet';
     if (base.toLowerCase() === 'history') base = `${cutTo(base, 29)} 1`;
     let name = base;
@@ -172,7 +174,7 @@ export function sheetName(wanted: string, taken: Set<string>, fallback: string):
     let next = nextSuffix.get(taken);
     if (!next) nextSuffix.set(taken, next = new Map());
     let n = next.get(base.toLowerCase()) ?? 2;
-    while (taken.has(name.toLowerCase())) { name = `${cutTo(base, 31 - String(n).length - 1).trim()} ${n}`; n++; }
+    while (taken.has(name.toLowerCase())) { name = `${ends(cutTo(base, 31 - String(n).length - 1)) || 'Sheet'} ${n}`; n++; }
     next.set(base.toLowerCase(), n);
     taken.add(name.toLowerCase());
     return name;
@@ -263,7 +265,7 @@ async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadshe
         const shown = spreadsheet && typeof cm?.shownText === 'string' ? cm.shownText : undefined;
         // Its pictures and charts, which a cell cannot hold (see CellMedia), and its first link.
         if (own === undefined && media) await mediaIn(cell, source, media);
-        const links = own === undefined ? linksIn(cell) : [];
+        const links = own === undefined ? await linksIn(cell, source.keep) : [];
         if (links.length > 1 && media) media.extraLinks = true;
         return {
             col, text, shown: shown ?? text, value: cellValue(text, shown, spreadsheet), bold: cm?.style === 'header' || allBold(cell),
@@ -363,16 +365,42 @@ async function mediaIn(node: OfficeContentNode, source: WorkbookSource, media: C
     }
 }
 
-/** A node's distinct web, mail and phone links, in order (two at most: whether there is more than one is all that is asked). */
-function linksIn(node: OfficeContentNode): string[] {
+/** The links a cell takes: a web, mail or phone address, or a place in the document (`#Sheet!A1`, `#bookmark`). */
+const LINK_KINDS = /^(https?:|mailto:|tel:|#.)/i;
+
+/**
+ * A place in the workbook a link names (`#Sheet2!B4`, `#'Q1 sales'!A1`, `#Sheet2`) on a sheet written, as
+ * that sheet's name and the cell (A1 where it names none); undefined for a link elsewhere, or to a sheet
+ * no longer there (a document's bookmark).
+ */
+export function placeOf(link: string, sheetNames: readonly string[]): { sheet: string; cell: string } | undefined {
+    if (!link.startsWith('#')) return undefined;
+    const m = /^#(?:'((?:[^']|'')+)'|([^!]+))(?:!\$?([A-Za-z]{1,3})\$?(\d{1,7}))?$/.exec(link);
+    if (!m) return undefined;
+    const wanted = (m[1] !== undefined ? m[1].replace(/''/g, "'") : m[2]).toLowerCase();
+    const sheet = sheetNames.find(n => n.toLowerCase() === wanted);
+    return sheet ? { sheet, cell: m[3] ? `${m[3].toUpperCase()}${m[4]}` : 'A1' } : undefined;
+}
+
+/**
+ * A node's distinct web, mail and phone links, in order (two at most: whether there is more than one is
+ * all that is asked); a part onNode leaves out or replaces has none (its link went with it).
+ */
+async function linksIn(node: OfficeContentNode, keep: (node: OfficeContentNode) => Promise<boolean | string>): Promise<string[]> {
     const out: string[] = [];
-    const walk = (n: OfficeContentNode, depth: number) => {
-        if (out.length > 1) return;
-        const url = (n.metadata as { link?: unknown } | undefined)?.link;
-        if (typeof url === 'string' && /^(https?:|mailto:|tel:)/i.test(url.trim()) && !out.includes(url.trim())) out.push(url.trim());
-        if (depth < 32) for (const c of n.children || []) walk(c, depth + 1);
+    const walk = async (n: OfficeContentNode, depth: number) => {
+        for (const c of n.children || []) {
+            if (out.length > 1) return;
+            const k = await keep(c);
+            if (k === false || typeof k === 'string') continue;
+            const url = (c.metadata as { link?: unknown } | undefined)?.link;
+            if (typeof url === 'string' && LINK_KINDS.test(url.trim()) && !out.includes(url.trim())) out.push(url.trim());
+            if (depth < 32) await walk(c, depth + 1);
+        }
     };
-    walk(node, 0);
+    const own = (node.metadata as { link?: unknown } | undefined)?.link;
+    if (typeof own === 'string' && LINK_KINDS.test(own.trim())) out.push(own.trim());
+    await walk(node, 0);
     return out;
 }
 
@@ -391,6 +419,8 @@ export async function noteLabels(content: OfficeContentNode[], keep: (node: Offi
         const top = stack[stack.length - 1];
         if (top.at >= top.nodes.length) { stack.pop(); continue; }
         const node = top.nodes[top.at++];
+        // (The notes of a part onNode leaves out or replaces went with it.)
+        if (node.type !== 'note') { const k = await keep(node); if (k === false || typeof k === 'string') continue; }
         if (node.type === 'note') label(node);
         if (node.type !== 'slide') for (const note of node.notes || []) {
             label(note);
@@ -425,15 +455,19 @@ async function notesOf(content: OfficeContentNode[], source: WorkbookSource, lab
             : note.text ?? '').trim();
         if (text) rows.push({ cells: [textCell(0, label), { ...textCell(1, text), value: { kind: 'text' } }] });
     };
-    const commentLabel = (comment: OfficeContentNode) => {
+    // (A comment onNode replaced is its text alone, no author.)
+    const commentLabel = async (comment: OfficeContentNode) => {
+        if (typeof await source.keep(comment) === 'string') return 'Comment';
         const author = (comment.metadata as CommentMetadata | undefined)?.author;
         return typeof author === 'string' && author.trim() ? `Comment (${author.trim()})` : 'Comment';
     };
     const visit = async (nodes: OfficeContentNode[], depth: number) => {
         for (const node of nodes) {
             if (seen.has(node)) continue;
+            // A part onNode leaves out or replaces takes its notes and comments with it.
+            if (node.type !== 'note' && node.type !== 'comment') { const k = await source.keep(node); if (k === false || typeof k === 'string') continue; }
             if (node.type === 'note') await add(node, labels.get(node) ?? 'Footnote');
-            else if (node.type === 'comment') { await add(node, commentLabel(node)); continue; }
+            else if (node.type === 'comment') { await add(node, await commentLabel(node)); continue; }
             else if (node.type === 'slide') {
                 const slideNumber = (node.metadata as SlideMetadata | undefined)?.slideNumber;
                 for (const note of node.notes || []) await add(note, `Slide ${slideNumber ?? ''}`.trim());
@@ -442,7 +476,7 @@ async function notesOf(content: OfficeContentNode[], source: WorkbookSource, lab
                 // A note cited inside a note.
                 if (depth < 32 && note.children?.length) await visit(note.children, depth + 1);
             }
-            for (const comment of node.comments || []) await add(comment, commentLabel(comment));
+            for (const comment of node.comments || []) await add(comment, await commentLabel(comment));
             if (depth < 32 && node.children?.length) await visit(node.children, depth + 1);
         }
     };
@@ -516,20 +550,28 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
             for (const c of node.children || []) {
                 if (c.type !== 'chart' && c.type !== 'image') continue;
                 const k = await source.keep(c);
-                if (k === false || typeof k === 'string') continue;
+                if (k === false) continue;
+                // (One onNode gives a string for: a row of that text on the sheet, after its own.)
+                if (typeof k === 'string') { if (k.trim() && rows.length < MAX_ROWS) rows.push({ cells: [{ ...textCell(0, k), value: { kind: 'text' } }] }); continue; }
                 if (c.type === 'image') media.pictures++; else media.charts.push(c);
             }
             await settle(name);
         }
-        return withNotes();
+        // Blocks beside the sheets (a heading, a paragraph): read as a document's are, below.
+        if (!content.some(n => n.type !== 'sheet')) return withNotes();
     }
     // A document: its tables, and its text between them.
     const text: WorkRow[] = [];
     const together: WorkRow[] = [];
     let heading = '', tables = 0;
     const visit = async (nodes: OfficeContentNode[], depth: number) => {
+        // The box of a shape onNode left out or replaced, whose text (the blocks after it with its bounds) went with it.
+        let goneShape: NodeBounds | undefined;
         for (const node of nodes) {
+            if (goneShape && node.bounds && ['paragraph', 'heading', 'list'].includes(node.type) && sameBounds(node.bounds, goneShape)) continue;
+            goneShape = undefined;
             const kept = await source.keep(node);
+            if (node.type === 'drawing' && kept !== true && node.bounds) goneShape = node.bounds;
             if (kept === false) continue;
             // A table or chart onNode gives a string for: a table of that one cell; a picture, an embed or any
             // other block: a row of the text.
@@ -581,7 +623,7 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
                 // A list item with its marker as the document shows it.
                 if (node.type === 'list' && t && blockText === null) { const marker = listMarker(node.metadata as ListMetadata | undefined); if (marker) t = `${marker} ${t}`; }
                 // Its first link the row's; a picture or chart in the text, which a cell cannot hold, reported or a sheet of its data.
-                const links = blockText === null ? linksIn(node) : [];
+                const links = blockText === null ? await linksIn(node, source.keep) : [];
                 if (links.length > 1) media.extraLinks = true;
                 if (t && options.includeText && text.length < MAX_ROWS) text.push({ cells: [{ ...textCell(0, t, node.type === 'heading'), value: { kind: 'text' }, ...(links[0] ? { link: links[0] } : {}) }] });
                 if (blockText === null) await mediaIn(node, source, media);
@@ -591,7 +633,7 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
             if (depth < 32 && node.children?.length) await visit(node.children, depth + 1);
         }
     };
-    await visit(content, 0);
+    await visit(sheetNodes.length ? content.filter(n => n.type !== 'sheet') : content, 0);
     if (!options.sheetPerTable && together.length) sheets.push({ name: sheetName('Tables', taken, 'Tables'), rows: together, widths: widthsOf(together) });
     if (text.length) sheets.push({ name: sheetName('Text', taken, 'Text'), rows: text, widths: [Math.min(120, Math.max(8, longestOf(text, 0)))] });
     return withNotes();
@@ -643,3 +685,6 @@ function pictureWords(node: OfficeContentNode, imageMode: ImageMode): string {
     if (imageMode === 'image+ocr-text') return [alt, ocr].filter(Boolean).join(' ');
     return alt;
 }
+
+/** Whether two boxes are one (a shape's and the text in it). */
+const sameBounds = (a: NodeBounds, b: NodeBounds) => Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5 && Math.abs(a.width - b.width) < 0.5 && Math.abs(a.height - b.height) < 0.5;

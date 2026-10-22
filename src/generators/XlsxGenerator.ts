@@ -4,7 +4,7 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { encUrl, ooxmlCustomPropertiesXml, resolveZipInstant, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
-import { buildWorkbook, cellTextProcessor, noteLabels, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
+import { buildWorkbook, cellTextProcessor, noteLabels, placeOf, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
 
 /** Escapes text content for an XML part after stripping XML-illegal characters. */
 function xmlText(s: string | undefined): string {
@@ -97,7 +97,9 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
         if (sheets.every(s => s.hidden)) delete sheets[0].hidden;
 
         const styles = new StyleTable();
-        const sheetParts = sheets.map(sheet => this.sheetXml(sheet, styles));
+        const sheetNames = sheets.map(sh => sh.name);
+        const sheetParts = sheets.map(sheet => this.sheetXml(sheet, styles, sheetNames));
+        if (this.placeLinksLost) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'links to places outside the workbook\'s sheets', format: 'xlsx' });
         const { iso, mtime } = resolveZipInstant(this.effectiveMetadata.modified);
         const enc = (s: string) => new TextEncoder().encode(s);
         const custom = ooxmlCustomPropertiesXml(this.effectiveMetadata.customProperties);
@@ -138,7 +140,10 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
     private cutCellReported = false;
 
     /** A sheet's part: its columns' widths (hidden ones hidden), its rows and cells, its merged ranges, its cells' links (and their relationships). */
-    private sheetXml(sheet: WorkSheet, styles: StyleTable): { xml: string; rels?: string } {
+    /** Whether a link to a place no written sheet holds was left out (reported once). */
+    private placeLinksLost = false;
+
+    private sheetXml(sheet: WorkSheet, styles: StyleTable, sheetNames: readonly string[]): { xml: string; rels?: string } {
         const hiddenCols = hiddenColumns(sheet);
         const cols = sheet.widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"${hiddenCols.has(i) ? ' hidden="1"' : ''}/>`).join('');
         const merges: string[] = [], links: string[] = [], rels: string[] = [];
@@ -146,7 +151,14 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
             if (!row.cells.length && !row.hidden) return '';
             const cells = row.cells.map(cell => {
                 const ref = `${columnName(cell.col)}${r + 1}`;
-                if (cell.link) {
+                if (cell.link?.startsWith('#')) {
+                    // A place in the workbook: its sheet and cell, where the sheet is written; else reported.
+                    const place = placeOf(cell.link, sheetNames);
+                    // (Its sheet's name quoted where it is more than letters, digits and underscores, as Excel writes it.)
+                    const sheetRef = /^[A-Za-z_][A-Za-z0-9_]*$/.test(place?.sheet ?? '') ? place!.sheet : `'${(place?.sheet ?? '').replace(/'/g, "''")}'`;
+                    if (place) links.push(`<hyperlink ref="${ref}" location="${xmlText(`${sheetRef}!${place.cell}`)}"/>`);
+                    else this.placeLinksLost = true;
+                } else if (cell.link) {
                     const id = `rId${rels.length + 1}`;
                     rels.push(`<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${xmlText(encUrl(cell.link))}" TargetMode="External"/>`);
                     links.push(`<hyperlink ref="${ref}" r:id="${id}"/>`);
