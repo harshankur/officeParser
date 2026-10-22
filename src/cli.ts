@@ -8,7 +8,7 @@
  *   officeparser file.docx --ocr --extractAttachments
  *
  * Options (--key=value, --key value, or bare flags):
- *   --to=json|text|md|html|csv|rtf|pdf|docx|odt|xlsx|ods|tex|epub|chunks  Convert AST to specified format (default: json)
+ *   --to=json|text|md|html|csv|rtf|pdf|docx|odt|xlsx|ods|pptx|odp|tex|epub|chunks  Convert AST to specified format (default: json)
  *   --output=path             Save result to a file
  *   --fileType=docx|xlsx|...  Override file type detection
  *   --ocr                     Enable OCR for images (default: false); also requires --extractAttachments
@@ -109,7 +109,7 @@ const REMOVED_CLI_FLAGS: Record<string, string> = lookupTable({
 
 // Prefixes used to identify configurations targeted for the generator instead of the parser.
 const generatorPrefixes = [
-    'generatorConfig.', 'htmlConfig.', 'csvConfig.', 'textConfig.', 'mdConfig.', 'pdfConfig.', 'rtfConfig.', 'docxConfig.', 'odtConfig.', 'xlsxConfig.', 'odsConfig.', 'texConfig.', 'chunksConfig.'
+    'generatorConfig.', 'htmlConfig.', 'csvConfig.', 'textConfig.', 'mdConfig.', 'pdfConfig.', 'rtfConfig.', 'docxConfig.', 'odtConfig.', 'xlsxConfig.', 'odsConfig.', 'pptxConfig.', 'odpConfig.', 'texConfig.', 'chunksConfig.'
 ];
 
 // Options only a generator has (`--maxInlineImageBytes`, `--metadataOverrides.title`), read from the
@@ -272,10 +272,30 @@ function fontPathsAsBytes(pdfConfig: Record<string, any> | undefined): void {
     }
 }
 
+/**
+ * A presentation's background pictures are given as paths to picture files, a page each, in order
+ * (`--pptxConfig.backgrounds=page1.png,page2.png`; an empty entry for a page without one); the generator
+ * takes their bytes. A path that cannot be read ends the run, naming the option.
+ */
+function backgroundPathsAsBytes(container: Record<string, any> | undefined, name: string): void {
+    if (!container || typeof container.backgrounds !== 'string') return;
+    container.backgrounds = container.backgrounds.split(',').map((file: string) => file.trim()).map((file: string) => {
+        if (!file) return null;
+        try {
+            return new Uint8Array(fs.readFileSync(file));
+        } catch (e: any) {
+            console.error(`Could not read the picture given in --${name}.backgrounds: ${file} (${e?.code || e?.message})`);
+            process.exit(1);
+        }
+    });
+}
+
 if (fileArg && !showHelp) {
     numbersAsNumbers(config, DEFAULT_OFFICE_PARSER_CONFIG);
     numbersAsNumbers(generatorConfig, DEFAULT_GENERATOR_CONFIG);
     fontPathsAsBytes(generatorConfig.pdfConfig);
+    backgroundPathsAsBytes(generatorConfig.pptxConfig, 'pptxConfig');
+    backgroundPathsAsBytes(generatorConfig.odpConfig, 'odpConfig');
     // Resolve output format prioritizing: --to > --format
     let outputFormat: string | undefined;
     if (toFlagOption) {
@@ -389,7 +409,7 @@ if (fileArg && !showHelp) {
     console.log('Usage: officeparser <file> [options]');
     console.log('');
     console.log('Options:');
-    console.log('  --to=json|text|md|html|pdf|csv|rtf|docx|odt|xlsx|ods|tex|epub|chunks  Target conversion format (default: json)');
+    console.log('  --to=json|text|md|html|pdf|csv|rtf|docx|odt|xlsx|ods|pptx|odp|tex|epub|chunks  Target conversion format (default: json)');
     console.log('  --output=file.ext                           Save output to file instead of stdout');
     console.log('  --fileType=docx|xlsx|pptx|odt|...           Explicitly override input file type detection');
     console.log('  --ocr                                       Enable OCR for images (default: false; also requires --extractAttachments)');

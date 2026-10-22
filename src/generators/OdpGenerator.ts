@@ -1,0 +1,241 @@
+import { zipSync, Zippable } from 'fflate';
+import { ConversionResult, GeneratorConfig, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType } from '../types.js';
+import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
+import { decodeBase64, hexColor, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
+import { BaseGenerator } from './BaseGenerator.js';
+import { buildDeck, Box, DeckItem, DeckParagraph, DeckRun, DeckSlide } from './slides/deck.js';
+
+/** Escapes text content for an XML part after stripping XML-illegal characters. */
+function xmlText(s: string | undefined): string {
+    return escapeXml(stripInvalidXmlChars(s ?? ''));
+}
+
+/** A length in points, as ODF writes one. */
+const pt = (n: number) => `${Math.round(n * 100) / 100}pt`;
+
+const ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
+    + 'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" '
+    + 'xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" '
+    + 'xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" '
+    + 'xmlns:presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0" xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" '
+    + 'xmlns:dc="http://purl.org/dc/elements/1.1/"';
+
+/** DrawingML's preset outlines ODF draws as its own shapes. */
+const ODF_SHAPES: Record<string, string> = { rect: 'rectangle', roundRect: 'round-rectangle', ellipse: 'ellipse', triangle: 'isosceles-triangle', rtTriangle: 'right-triangle', diamond: 'diamond', hexagon: 'hexagon', octagon: 'octagon', pentagon: 'pentagon', star5: 'star5', rightArrow: 'right-arrow', leftArrow: 'left-arrow', upArrow: 'up-arrow', downArrow: 'down-arrow', parallelogram: 'parallelogram', trapezoid: 'trapezoid' };
+
+/**
+ * Generates ODP presentations from an AST, as PptxGenerator does PPTX (see buildDeck): a deck's slides
+ * as they are, a PDF's pages a slide each with each paragraph a text frame in its place (and a
+ * background picture a page where `odpConfig.backgrounds` gives one), a flowing document's headings a
+ * slide each.
+ */
+export class OdpGenerator extends BaseGenerator<'odp'> {
+    constructor(ast: OfficeParserAST, config?: GeneratorConfig<'odp'>) {
+        super('odp', ast, config);
+    }
+
+    private readonly styles = new Map<string, { name: string; xml: string }>();
+    private readonly media: { path: string; bytes: Uint8Array; mime: string }[] = [];
+    private readonly mediaByKey = new Map<string, number>();
+    private readonly attachmentsByName = new Map<string, OfficeAttachment>();
+
+    private styleNamed(key: string, prefix: string, xml: (name: string) => string): string {
+        let style = this.styles.get(key);
+        if (!style) {
+            const name = `${prefix}${this.styles.size + 1}`;
+            style = { name, xml: xml(name) };
+            this.styles.set(key, style);
+        }
+        return style.name;
+    }
+
+    async generate(): Promise<ConversionResult<'odp'>> {
+        for (const a of this.ast.attachments ?? []) if (a?.name) this.attachmentsByName.set(a.name, a);
+        const deck = await buildDeck(this.ast.content, this.ast.metadata ?? {}, {
+            keep: async node => { const v = await this.handleOnNode(node); return v === false ? false : typeof v === 'string' ? v : true; },
+            chartTable: node => {
+                if (this.config.includeCharts === false) return undefined;
+                const data = this.attachmentsByName.get((node.metadata as { attachmentName?: string } | undefined)?.attachmentName ?? '')?.chartData;
+                return data ? this.chartTable(data, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode)) : undefined;
+            },
+        }, { backgrounds: this.config.odpConfig.backgrounds ?? undefined });
+        for (const feature of deck.unrepresentable) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'odp' });
+        const pages = deck.slides.map((slide, i) => this.pageXml(slide, i, deck.width, deck.height)).join('');
+        const enc = (s: string) => new TextEncoder().encode(s);
+        const m = this.effectiveMetadata;
+        const el = (tag: string, val: string | undefined) => val ? `<${tag}>${xmlText(val)}</${tag}>` : '';
+        const { iso, mtime } = resolveZipInstant(m.modified);
+        const files: Zippable = {
+            mimetype: [enc('application/vnd.oasis.opendocument.presentation'), { level: 0 }],
+            'content.xml': enc(`<?xml version="1.0" encoding="UTF-8"?>\n<office:document-content ${ODF_NS} office:version="1.2">`
+                + `<office:automatic-styles>${[...this.styles.values()].map(s => s.xml).join('')}</office:automatic-styles>`
+                + `<office:body><office:presentation>${pages}</office:presentation></office:body></office:document-content>`),
+            'styles.xml': enc(`<?xml version="1.0" encoding="UTF-8"?>\n<office:document-styles ${ODF_NS} office:version="1.2">`
+                // Text in a sans face at 18pt where it says no other (a reader's default is a serif).
+                + `<office:styles><style:default-style style:family="graphic"><style:text-properties fo:font-family="Calibri" style:font-family-generic="swiss" fo:font-size="18pt"/></style:default-style>`
+                + `<style:style style:name="standard" style:family="graphic"><style:graphic-properties draw:stroke="none" draw:fill="none"/></style:style></office:styles>`
+                + `<office:automatic-styles><style:page-layout style:name="PM1"><style:page-layout-properties fo:margin-top="0pt" fo:margin-bottom="0pt" fo:margin-left="0pt" fo:margin-right="0pt" fo:page-width="${pt(deck.width)}" fo:page-height="${pt(deck.height)}" style:print-orientation="${deck.width > deck.height ? 'landscape' : 'portrait'}"/></style:page-layout>`
+                + `<style:style style:name="Mdp1" style:family="drawing-page"><style:drawing-page-properties draw:background-size="border" draw:fill="none"/></style:style></office:automatic-styles>`
+                + `<office:master-styles><style:master-page style:name="Default" style:page-layout-name="PM1" draw:style-name="Mdp1"/></office:master-styles></office:document-styles>`),
+            'meta.xml': enc(`<?xml version="1.0" encoding="UTF-8"?>\n<office:document-meta ${ODF_NS} office:version="1.2"><office:meta>`
+                + el('dc:title', m.title) + el('meta:initial-creator', m.author) + el('dc:creator', m.author) + el('dc:subject', m.subject) + el('dc:description', m.description)
+                + `<meta:creation-date>${toW3CDTF(m.created) ?? iso}</meta:creation-date><dc:date>${iso}</dc:date><meta:generator>officeParser</meta:generator></office:meta></office:document-meta>`),
+        };
+        for (const pic of this.media) files[pic.path] = pic.bytes;
+        files['META-INF/manifest.xml'] = enc(`<?xml version="1.0" encoding="UTF-8"?>\n<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2">`
+            + `<manifest:file-entry manifest:full-path="/" manifest:version="1.2" manifest:media-type="application/vnd.oasis.opendocument.presentation"/>`
+            + ['content.xml', 'styles.xml', 'meta.xml'].map(p => `<manifest:file-entry manifest:full-path="${p}" manifest:media-type="text/xml"/>`).join('')
+            + this.media.map(pic => `<manifest:file-entry manifest:full-path="${pic.path}" manifest:media-type="${pic.mime}"/>`).join('')
+            + `</manifest:manifest>`);
+        return { value: zipSync(files, { mtime }), messages: this.messages };
+    }
+
+    /** A picture's place in the package, added once, or undefined where it is none a slide shows. */
+    private mediaFor(key: string, bytes: Uint8Array | undefined, mime: string | undefined): string | undefined {
+        let at = this.mediaByKey.get(key);
+        if (at === undefined) {
+            if (!bytes || !bytes.length) return undefined;
+            const sniffed = bytes[0] === 0x89 && bytes[1] === 0x50 ? 'image/png' : bytes[0] === 0xff && bytes[1] === 0xd8 ? 'image/jpeg' : bytes[0] === 0x47 && bytes[1] === 0x49 ? 'image/gif' : bytes[0] === 0x42 && bytes[1] === 0x4d ? 'image/bmp' : undefined;
+            const type = sniffed ?? (mime && /^image\/(png|jpe?g|gif|bmp)$/i.test(mime) ? mime.toLowerCase() : undefined);
+            if (!type) return undefined;
+            at = this.media.length;
+            this.media.push({ path: `Pictures/image${at + 1}.${type.split('/')[1].replace('jpeg', 'jpg')}`, bytes, mime: type });
+            this.mediaByKey.set(key, at);
+        }
+        return this.media[at].path;
+    }
+
+    /** A slide: its page (background colour or picture), its frames, its notes. */
+    private pageXml(slide: DeckSlide, index: number, width: number, height: number): string {
+        let pageStyle = '', under = '';
+        if (slide.picture) {
+            // A background picture: a frame the page's size, under the rest.
+            const href = this.mediaFor(`background:${index}`, slide.picture, undefined);
+            if (href) under = `<draw:frame svg:x="0pt" svg:y="0pt" svg:width="${pt(width)}" svg:height="${pt(height)}"><draw:image xlink:href="${xmlText(href)}" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/></draw:frame>`;
+            else this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { reason: 'a background picture that is not PNG, JPEG, GIF or BMP' });
+        } else if (slide.background && hexColor(slide.background)) {
+            pageStyle = this.styleNamed(`dp|${hexColor(slide.background)}`, 'dp', name => `<style:style style:name="${name}" style:family="drawing-page"><style:drawing-page-properties draw:fill="solid" draw:fill-color="#${hexColor(slide.background)}" draw:background-size="border"/></style:style>`);
+        }
+        const items = slide.items.map(item => this.itemXml(item)).join('');
+        const notes = slide.notes?.length ? `<presentation:notes><draw:frame svg:x="2cm" svg:y="14cm" svg:width="17cm" svg:height="10cm" presentation:class="notes"><draw:text-box>${slide.notes.map(p => this.paragraphXml(p)).join('')}</draw:text-box></draw:frame></presentation:notes>` : '';
+        return `<draw:page draw:name="page${index + 1}" draw:master-page-name="Default"${pageStyle ? ` draw:style-name="${pageStyle}"` : ''}>${under}${items}${notes}</draw:page>`;
+    }
+
+    private frameAttrs(box: Box, rotation?: number): string {
+        if (!rotation) return ` svg:x="${pt(box.x)}" svg:y="${pt(box.y)}" svg:width="${pt(Math.max(1, box.w))}" svg:height="${pt(Math.max(1, box.h))}"`;
+        // Turned about its middle: ODF's transform turns about the frame's corner, then moves it.
+        const r = -rotation * Math.PI / 180, cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+        const ox = cx - (box.w / 2) * Math.cos(r) - (box.h / 2) * Math.sin(r), oy = cy + (box.w / 2) * Math.sin(r) - (box.h / 2) * Math.cos(r);
+        return ` svg:width="${pt(Math.max(1, box.w))}" svg:height="${pt(Math.max(1, box.h))}" draw:transform="rotate (${Math.round(r * 1e6) / 1e6}) translate (${pt(ox)} ${pt(oy)})"`;
+    }
+
+    /** A shape's or frame's graphic style: its fill, outline, text anchor and insets. */
+    private graphicStyle(fill?: string, line?: { color?: string; width?: number }, anchor?: string, insets?: { top: number; right: number; bottom: number; left: number }, autoGrow = false, unwrapped = false): string {
+        const f = fill && hexColor(fill) ? ` draw:fill="solid" draw:fill-color="#${hexColor(fill)}"` : ' draw:fill="none"';
+        const l = line && (line.color || line.width) ? ` draw:stroke="solid" svg:stroke-color="#${hexColor(line.color ?? '#000000') ?? '000000'}" svg:stroke-width="${pt(line.width ?? 0.75)}"` : ' draw:stroke="none"';
+        const a = ` draw:textarea-vertical-align="${anchor === 'middle' ? 'middle' : anchor === 'bottom' ? 'bottom' : 'top'}"`;
+        const i = insets ? ` fo:padding-top="${pt(insets.top)}" fo:padding-right="${pt(insets.right)}" fo:padding-bottom="${pt(insets.bottom)}" fo:padding-left="${pt(insets.left)}"` : '';
+        const key = `gr|${f}|${l}|${a}|${i}|${autoGrow}|${unwrapped}`;
+        return this.styleNamed(key, 'gr', name => `<style:style style:name="${name}" style:family="graphic" style:parent-style-name="standard"><style:graphic-properties${f}${l}${a}${i} draw:auto-grow-height="${autoGrow}" draw:auto-grow-width="${unwrapped}"${unwrapped ? ' fo:wrap-option="no-wrap" draw:textarea-horizontal-align="left"' : ''}/></style:style>`);
+    }
+
+    private itemXml(item: DeckItem): string {
+        if (item.kind === 'shape') {
+            const s = item.shape;
+            const kind = s.geometry ? ODF_SHAPES[s.geometry] : 'rectangle';
+            const style = this.graphicStyle(s.fill, s.line);
+            if (s.geometry === 'line') return `<draw:line draw:style-name="${style}" svg:x1="${pt(item.box.x)}" svg:y1="${pt(item.box.y)}" svg:x2="${pt(item.box.x + item.box.w)}" svg:y2="${pt(item.box.y + item.box.h)}"/>`;
+            if (!kind) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: `a ${s.geometry} shape (drawn as a rectangle)`, format: 'odp' });
+            return `<draw:custom-shape draw:style-name="${style}"${this.frameAttrs(item.box, s.rotation)}><draw:enhanced-geometry svg:viewBox="0 0 21600 21600" draw:type="${kind ?? 'rectangle'}"/></draw:custom-shape>`;
+        }
+        if (item.kind === 'picture') {
+            const a = this.attachmentsByName.get(item.attachment);
+            const bytes = a?.data ? decodeBase64(a.data) : undefined;
+            const href = this.mediaFor(item.attachment, bytes ?? undefined, a?.mimeType);
+            if (!href) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: item.attachment, reason: a ? 'a picture a slide cannot hold (PNG, JPEG, GIF and BMP it can)' : 'missing attachment' }); return ''; }
+            const size = bytes ? sniffImageSize(bytes) : null;
+            let box = item.box;
+            if (size && size.w > 0 && size.h > 0) {
+                const scale = Math.min(box.w / size.w, box.h / size.h);
+                box = { x: box.x + (box.w - size.w * scale) / 2, y: box.y + (box.h - size.h * scale) / 2, w: size.w * scale, h: size.h * scale };
+            }
+            return `<draw:frame${this.frameAttrs(box, item.rotation)}><draw:image xlink:href="${xmlText(href)}" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/></draw:frame>`;
+        }
+        if (item.kind === 'table') return this.tableXml(item);
+        const s = item.shape;
+        const insets = item.insets ?? (item.exact ? { top: 0, right: 0, bottom: 0, left: 0 } : undefined);
+        const size = item.role === 'body' ? 18 : undefined;
+        const paragraphs = item.paragraphs.map(p => this.paragraphXml(p, size)).join('') || '<text:p/>';
+        if (s && (s.geometry && s.geometry !== 'rect' || s.fill || s.line)) {
+            // A shape with its text.
+            const kind = s.geometry ? ODF_SHAPES[s.geometry] ?? 'rectangle' : 'rectangle';
+            return `<draw:custom-shape draw:style-name="${this.graphicStyle(s.fill, s.line, item.anchor, insets)}"${this.frameAttrs(item.box, item.rotation ?? s.rotation)}>${paragraphs}<draw:enhanced-geometry svg:viewBox="0 0 21600 21600" draw:type="${kind}"/></draw:custom-shape>`;
+        }
+        return `<draw:frame draw:style-name="${this.graphicStyle(undefined, undefined, item.anchor, insets, !item.exact, item.exact)}"${this.frameAttrs(item.box, item.rotation)}><draw:text-box>${paragraphs}</draw:text-box></draw:frame>`;
+    }
+
+    /** A table in a frame: its columns' widths, its cells (merges covering others), thin rules. */
+    private tableXml(item: Extract<DeckItem, { kind: 'table' }>): string {
+        const cols = Math.max(1, item.widths.length);
+        const total = item.widths.reduce((a, b) => a + b, 0) || cols;
+        // A measured table's cells keep its text close to their rules, as its source set them; a shaded cell its colour.
+        const pad = item.heights ? ` fo:padding-top="0pt" fo:padding-bottom="0pt" fo:padding-left="${pt(3)}" fo:padding-right="${pt(3)}"` : '';
+        const cellStyleOf = (fill?: string) => {
+            const hex = fill && hexColor(fill);
+            return this.styleNamed(`cell|rule|${hex ?? ''}|${pad}`, 'ce', name => `<style:style style:name="${name}" style:family="table-cell"><style:graphic-properties ${hex ? `draw:fill="solid" draw:fill-color="#${hex}"` : 'draw:fill="none"'}${pad}/><style:paragraph-properties fo:border="0.5pt solid #BFBFBF"/></style:style>`);
+        };
+        const cellStyle = cellStyleOf();
+        const hTotal = item.heights?.reduce((a, b) => a + b, 0);
+        const rowStyle = (r: number) => {
+            if (!item.heights || !hTotal) return '';
+            const h = item.box.h * item.heights[r] / hTotal;
+            return ` table:style-name="${this.styleNamed(`row|${h.toFixed(2)}`, 'ro', name => `<style:style style:name="${name}" style:family="table-row"><style:table-row-properties style:row-height="${pt(h)}"/></style:style>`)}"`;
+        };
+        const columns = item.widths.map(w => {
+            const style = this.styleNamed(`col|${Math.round(item.box.w * w / total)}`, 'co', name => `<style:style style:name="${name}" style:family="table-column"><style:table-column-properties style:column-width="${pt(item.box.w * w / total)}"/></style:style>`);
+            return `<table:table-column table:style-name="${style}"/>`;
+        }).join('');
+        const rows = item.rows.length;
+        const covered = new Set<string>();
+        const rowsXml = item.rows.map((row, r) => {
+            let col = 0;
+            const out: string[] = [];
+            for (const cell of row.cells) {
+                while (col < cols && covered.has(`${r},${col}`)) { out.push('<table:covered-table-cell/>'); col++; }
+                if (col >= cols) break;
+                const span = Math.min(cell.colSpan, cols - col), down = Math.min(cell.rowSpan, rows - r);
+                for (let dr = 0; dr < down; dr++) for (let dc = 0; dc < span; dc++) if (dr || dc) covered.add(`${r + dr},${col + dc}`);
+                const paragraphs = cell.paragraphs.map(p => this.paragraphXml(cell.bold ? { ...p, runs: p.runs.map(x => ({ ...x, bold: true })) } : p, 12)).join('') || '<text:p/>';
+                out.push(`<table:table-cell table:style-name="${cellStyleOf(cell.fill)}"${span > 1 ? ` table:number-columns-spanned="${span}"` : ''}${down > 1 ? ` table:number-rows-spanned="${down}"` : ''}>${paragraphs}</table:table-cell>`);
+                col++;
+                for (let dc = 1; dc < span; dc++) { out.push('<table:covered-table-cell/>'); col++; }
+            }
+            while (col < cols) { out.push(covered.has(`${r},${col}`) ? '<table:covered-table-cell/>' : `<table:table-cell table:style-name="${cellStyle}"/>`); col++; }
+            return `<table:table-row${rowStyle(r)}>${out.join('')}</table:table-row>`;
+        }).join('');
+        return `<draw:frame${this.frameAttrs(item.box)}><table:table>${columns}${rowsXml}</table:table></draw:frame>`;
+    }
+
+    /** A paragraph: its alignment and bullet (a list of one level, as ODF writes a bullet), its spans. */
+    private paragraphXml(p: DeckParagraph, defaultSize?: number): string {
+        const align = p.align === 'center' ? 'center' : p.align === 'right' ? 'end' : p.align === 'justify' ? 'justify' : undefined;
+        const first = !p.bullet && p.firstIndent ? p.firstIndent : 0;
+        const pStyle = align || p.bullet || first ? this.styleNamed(`p|${align}|${p.bullet?.level ?? ''}|${first.toFixed(2)}`, 'P', name => `<style:style style:name="${name}" style:family="paragraph"><style:paragraph-properties${align ? ` fo:text-align="${align}"` : ''}${p.bullet ? ` fo:margin-left="${pt(18 * (p.bullet.level + 1))}" fo:text-indent="${pt(-14)}"` : first ? ` fo:margin-left="${pt(Math.max(0, -first))}" fo:text-indent="${pt(first)}"` : ''}/></style:style>`) : undefined;
+        const spans = p.runs.map(r => this.spanXml(r, defaultSize, p.mono)).join('');
+        const marker = p.bullet ? (p.bullet.numbered ? '' : `${xmlText(p.bullet.char ? [...p.bullet.char][0] : '')}<text:tab/>`) : '';
+        return `<text:p${pStyle ? ` text:style-name="${pStyle}"` : ''}>${marker}${spans}</text:p>`;
+    }
+
+    private spanXml(r: DeckRun, defaultSize?: number, mono?: boolean): string {
+        if (r.lineBreak) return '<text:line-break/>';
+        if (!r.text) return '';
+        const size = r.size ?? defaultSize;
+        const props = (size ? ` fo:font-size="${pt(size)}"` : '') + (r.bold ? ' fo:font-weight="bold"' : '') + (r.italic ? ' fo:font-style="italic"' : '')
+            + (r.underline ? ' style:text-underline-style="solid" style:text-underline-width="auto" style:text-underline-color="font-color"' : '')
+            + (r.strike ? ' style:text-line-through-style="solid"' : '') + (r.superscript ? ' style:text-position="33% 58%"' : r.subscript ? ' style:text-position="-33% 58%"' : '')
+            + (r.color && hexColor(r.color) ? ` fo:color="#${hexColor(r.color)}"` : '') + (r.font || mono ? ` style:font-name="${xmlText(r.font || 'Courier New')}" fo:font-family="${xmlText(r.font || 'Courier New')}"` : '');
+        const text = xmlText(r.text).replace(/ {2,}/g, m => ` <text:s text:c="${m.length - 1}"/>`).replace(/\t/g, '<text:tab/>');
+        const span = props ? `<text:span text:style-name="${this.styleNamed(`t|${props}`, 'T', name => `<style:style style:name="${name}" style:family="text"><style:text-properties${props}/></style:style>`)}">${text}</text:span>` : text;
+        return r.link ? `<text:a xlink:type="simple" xlink:href="${xmlText(r.link)}">${span}</text:a>` : span;
+    }
+}

@@ -9,6 +9,8 @@ import { MarkdownGenerator } from './generators/MarkdownGenerator.js';
 import { OdtGenerator } from './generators/OdtGenerator.js';
 import { OdsGenerator } from './generators/OdsGenerator.js';
 import { XlsxGenerator } from './generators/XlsxGenerator.js';
+import { PptxGenerator } from './generators/PptxGenerator.js';
+import { OdpGenerator } from './generators/OdpGenerator.js';
 import { LatexGenerator } from './generators/LatexGenerator.js';
 import { PdfGenerator } from './generators/PdfGenerator.js';
 import { RtfGenerator } from './generators/RtfGenerator.js';
@@ -160,6 +162,12 @@ export class OfficeGenerator {
                 break;
             case 'ods':
                 generator = new OdsGenerator(input, config as GeneratorConfig<'ods'>);
+                break;
+            case 'pptx':
+                generator = new PptxGenerator(input, config as GeneratorConfig<'pptx'>);
+                break;
+            case 'odp':
+                generator = new OdpGenerator(input, config as GeneratorConfig<'odp'>);
                 break;
             default:
                 // Reported where a generator would report it: the caller's handler, else the AST's.

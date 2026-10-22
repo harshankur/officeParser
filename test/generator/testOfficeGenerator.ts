@@ -39,7 +39,7 @@ import { isHeaderRow } from '../../src/utils/officeGenUtils.js';
 // ============================================================================
 
 /** Output formats tested (PDF excluded — slow/brittle in CI) */
-const GENERATOR_FORMATS = ['html', 'md', 'text', 'rtf', 'csv', 'chunks', 'epub', 'docx', 'odt', 'tex', 'xlsx', 'ods'] as const;
+const GENERATOR_FORMATS = ['html', 'md', 'text', 'rtf', 'csv', 'chunks', 'epub', 'docx', 'odt', 'tex', 'xlsx', 'ods', 'pptx', 'odp'] as const;
 type GeneratorFormat = typeof GENERATOR_FORMATS[number];
 
 /** Formats that support roundtrip testing (parse → generate → re-parse) */
@@ -141,7 +141,7 @@ const BASELINE_MODIFIED = new Date('2024-01-01T00:00:00Z');
  * entry mtimes follow the same instant.
  */
 const deterministicConfigFor = (destFmt: string): GeneratorConfig =>
-    (destFmt === 'epub' || destFmt === 'docx' || destFmt === 'odt' || destFmt === 'xlsx' || destFmt === 'ods' ? { metadataOverrides: { modified: BASELINE_MODIFIED } } : {}) as GeneratorConfig;
+    (destFmt === 'epub' || destFmt === 'docx' || destFmt === 'odt' || isPackage(destFmt) ? { metadataOverrides: { modified: BASELINE_MODIFIED } } : {}) as GeneratorConfig;
 
 /** Generator config permutations */
 const GENERATOR_CONFIG_TESTS = [
@@ -450,6 +450,31 @@ function extractOdtMetrics(bytes: Uint8Array): GeneratedMetrics {
     };
 }
 
+/** The workbook and deck formats, written as packages and measured by {@link extractPackageMetrics}. */
+type PackageFormat = 'xlsx' | 'ods' | 'pptx' | 'odp';
+const isPackage = (fmt: string): fmt is PackageFormat => fmt === 'xlsx' || fmt === 'ods' || fmt === 'pptx' || fmt === 'odp';
+
+/** A workbook's or deck's metrics. */
+function extractPackageMetrics(bytes: Uint8Array, fmt: PackageFormat): GeneratedMetrics {
+    return fmt === 'pptx' || fmt === 'odp' ? extractDeckMetrics(bytes, fmt) : extractSheetMetrics(bytes, fmt);
+}
+
+/** A deck's metrics (PPTX, ODP): its slides as lines, its tables, its text's words. */
+function extractDeckMetrics(bytes: Uint8Array, fmt: 'pptx' | 'odp'): GeneratedMetrics {
+    const files = unzipSync(bytes);
+    const slides = fmt === 'pptx' ? Object.keys(files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n)).map(n => strFromU8(files[n])) : [];
+    const xml = fmt === 'pptx' ? slides.join('') : (files['content.xml'] ? strFromU8(files['content.xml']) : '');
+    const texts = fmt === 'pptx' ? (xml.match(/<a:t>[^<]*<\/a:t>/g) || []) : (xml.match(/<text:(?:p|span)[^>]*>[^<]*(?=<)/g) || []);
+    const words = texts.join(' ').replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean);
+    return {
+        outputLength: bytes.length,
+        hasContent: bytes.length > 0 && words.length > 0,
+        lineCount: fmt === 'pptx' ? slides.length : (xml.match(/<draw:page[ >]/g) || []).length,
+        wordCount: words.length,
+        tableCount: (xml.match(fmt === 'pptx' ? /<a:tbl>/g : /<table:table[ >]/g) || []).length,
+    };
+}
+
 /** A workbook's metrics (XLSX, ODS): its sheets as tables, its rows as lines, its cells' words. */
 function extractSheetMetrics(bytes: Uint8Array, fmt: 'xlsx' | 'ods'): GeneratedMetrics {
     const files = unzipSync(bytes);
@@ -725,8 +750,8 @@ async function testGeneration(
             // ODT is always a binary ZIP (ODF) archive.
             isOdtOutput = true;
             rawOutput = '[ODT archive]';
-        } else if (destFmt === 'xlsx' || destFmt === 'ods') {
-            // A workbook is always a binary ZIP archive.
+        } else if (isPackage(destFmt)) {
+            // A workbook or deck is always a binary ZIP archive.
             rawOutput = `[${destFmt.toUpperCase()} archive]`;
         } else if (destFmt === 'csv') {
             if (result.value instanceof Uint8Array) {
@@ -750,8 +775,8 @@ async function testGeneration(
             actualMetrics = extractDocxMetrics(result.value as Uint8Array);
         } else if (isOdtOutput) {
             actualMetrics = extractOdtMetrics(result.value as Uint8Array);
-        } else if (destFmt === 'xlsx' || destFmt === 'ods') {
-            actualMetrics = extractSheetMetrics(result.value as Uint8Array, destFmt);
+        } else if (isPackage(destFmt)) {
+            actualMetrics = extractPackageMetrics(result.value as Uint8Array, destFmt);
         } else if (isZipOutput) {
             // ZIP: treat as valid multi-sheet output, just validate non-empty archive
             actualMetrics = {
@@ -775,7 +800,7 @@ async function testGeneration(
             fs.writeFileSync(`${outPath}.docx`, result.value as Uint8Array);
         } else if (isOdtOutput) {
             fs.writeFileSync(`${outPath}.odt`, result.value as Uint8Array);
-        } else if (destFmt === 'xlsx' || destFmt === 'ods') {
+        } else if (isPackage(destFmt)) {
             fs.writeFileSync(`${outPath}.${destFmt}`, result.value as Uint8Array);
         } else if (isZipOutput) {
             fs.writeFileSync(`${outPath}.zip`, result.value as Uint8Array);
@@ -2680,8 +2705,8 @@ async function generateBaselines(): Promise<void> {
                     metrics = extractDocxMetrics(result.value as Uint8Array);
                 } else if (destFmt === 'odt') {
                     metrics = extractOdtMetrics(result.value as Uint8Array);
-                } else if (destFmt === 'xlsx' || destFmt === 'ods') {
-                    metrics = extractSheetMetrics(result.value as Uint8Array, destFmt);
+                } else if (isPackage(destFmt)) {
+                    metrics = extractPackageMetrics(result.value as Uint8Array, destFmt);
                 } else if (result.value instanceof Uint8Array) {
                     // ZIP archive (multi-sheet CSV)
                     metrics = { outputLength: result.value.length, hasContent: result.value.length > 0, lineCount: 0, wordCount: 0 };
@@ -2703,7 +2728,7 @@ async function generateBaselines(): Promise<void> {
                     fs.writeFileSync(`${fileBaselinePath}.docx`, result.value as Uint8Array);
                 } else if (destFmt === 'odt') {
                     fs.writeFileSync(`${fileBaselinePath}.odt`, result.value as Uint8Array);
-                } else if (destFmt === 'xlsx' || destFmt === 'ods') {
+                } else if (isPackage(destFmt)) {
                     fs.writeFileSync(`${fileBaselinePath}.${destFmt}`, result.value as Uint8Array);
                 } else if (result.value instanceof Uint8Array) {
                     fs.writeFileSync(`${fileBaselinePath}.zip`, result.value);

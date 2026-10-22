@@ -1002,6 +1002,8 @@ type ConversionValue<D extends string> =
     CanonicalFormat<D> extends 'odt' ? Uint8Array :
     CanonicalFormat<D> extends 'xlsx' ? Uint8Array :
     CanonicalFormat<D> extends 'ods' ? Uint8Array :
+    CanonicalFormat<D> extends 'pptx' ? Uint8Array :
+    CanonicalFormat<D> extends 'odp' ? Uint8Array :
     CanonicalFormat<D> extends 'tex' ? string | Uint8Array :
     string;
 
@@ -1015,7 +1017,7 @@ export interface ConversionResult<D extends string> {
 /**
  * Universal formats supported by all source types for generation.
  */
-export type UniversalGeneratorFormat = 'text' | 'md' | 'html' | 'pdf' | 'csv' | 'rtf' | 'chunks' | 'epub' | 'docx' | 'odt' | 'tex' | 'xlsx' | 'ods';
+export type UniversalGeneratorFormat = 'text' | 'md' | 'html' | 'pdf' | 'csv' | 'rtf' | 'chunks' | 'epub' | 'docx' | 'odt' | 'tex' | 'xlsx' | 'ods' | 'pptx' | 'odp';
 
 /**
  * Other names the generators accept for a format: `'txt'` for `'text'`, `'markdown'` for `'md'` and
@@ -1281,6 +1283,8 @@ type GeneratorSpecificConfigOf<D extends string> =
     D extends 'odt' ? { odtConfig?: OdtGeneratorConfig } :
     D extends 'xlsx' ? { xlsxConfig?: XlsxGeneratorConfig } :
     D extends 'ods' ? { odsConfig?: OdsGeneratorConfig } :
+    D extends 'pptx' ? { pptxConfig?: PptxGeneratorConfig } :
+    D extends 'odp' ? { odpConfig?: OdpGeneratorConfig } :
     D extends 'tex' ? { texConfig?: TexGeneratorConfig } :
     D extends 'chunks' ? { chunksConfig?: ChunkingConfig } :
     Partial<{
@@ -1294,6 +1298,8 @@ type GeneratorSpecificConfigOf<D extends string> =
         odtConfig: OdtGeneratorConfig;
         xlsxConfig: XlsxGeneratorConfig;
         odsConfig: OdsGeneratorConfig;
+        pptxConfig: PptxGeneratorConfig;
+        odpConfig: OdpGeneratorConfig;
         texConfig: TexGeneratorConfig;
         chunksConfig: ChunkingConfig;
     }>;
@@ -1370,6 +1376,8 @@ export type FullGeneratorConfig = DeepRequired<Omit<CommonGeneratorConfig, 'meta
     odtConfig: OdtGeneratorConfig;
     xlsxConfig: XlsxGeneratorConfig;
     odsConfig: OdsGeneratorConfig;
+    pptxConfig: PptxGeneratorConfig;
+    odpConfig: OdpGeneratorConfig;
     texConfig: TexGeneratorConfig;
 }> & {
     chunksConfig: ChunkingConfig;
@@ -1802,6 +1810,26 @@ export interface OdsGeneratorConfig {
     sheetPerTable?: boolean;
     /** A document's text outside its tables on a sheet named Text. Defaults to true. */
     includeText?: boolean;
+}
+
+/**
+ * Configuration options for PPTX (PowerPoint) generation. A deck is written slide for slide; a PDF's
+ * pages a slide each, each paragraph a text box where it stood; a flowing document's headings a slide
+ * each, its text as bullets.
+ */
+export interface PptxGeneratorConfig {
+    /**
+     * A picture for each page (PNG or JPEG bytes, in page order; null or undefined for a page without
+     * one), drawn as its slide's background under its text: a PDF's page drawn without its text, so its
+     * shapes, backgrounds, charts and gradients look as they did, with its text over it to edit.
+     */
+    backgrounds?: (Uint8Array | null | undefined)[];
+}
+
+/** Configuration options for ODP (OpenDocument presentation) generation, as {@link PptxGeneratorConfig}'s. */
+export interface OdpGeneratorConfig {
+    /** A picture for each page (PNG or JPEG bytes, in page order), under its slide's text. */
+    backgrounds?: (Uint8Array | null | undefined)[];
 }
 
 /**

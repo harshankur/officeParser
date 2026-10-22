@@ -5537,6 +5537,88 @@ async function testSpreadsheetWriters(): Promise<void> {
     assert.deepStrictEqual(strFromU8(together['xl/workbook.xml']).match(/<sheet name="[^"]+"/g), ['<sheet name="Tables"'], 'sheetPerTable false and includeText false: the tables on one sheet, no text sheet');
 }
 
+/**
+ * PPTX and ODP output: a deck written as a deck (its slides, notes and charts, as tables of their data),
+ * a PDF's pages as slides with their text where the page set it (lines kept, a paragraph beside a floating
+ * table in two boxes, a shaded header cell's colour), a document flowed onto slides (a slide a section,
+ * long tables cut with their header repeated, merged cells kept), and pictures behind slides.
+ */
+async function testPresentationWriters(): Promise<void> {
+    const textOf = (n: OfficeContentNode): string => n.type === 'text' ? n.text || '' : (n.children ?? []).map(textOf).join(' ');
+    const slideTexts = (ast: OfficeParserAST) => ast.content.filter(n => n.type === 'slide').map(s => textOf(s).replace(/\s+/g, ' ').trim());
+    const deck = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.pptx')), { fileType: 'pptx', extractAttachments: true } as any) as OfficeParserAST;
+    const notesOf = (ast: OfficeParserAST) => JSON.stringify(ast.content.map(s => s.notes ?? []));
+    for (const format of ['pptx', 'odp'] as const) {
+        const out = await OfficeGenerator.generate(deck, format);
+        const back = await OfficeParser.parseOffice(Buffer.from(out.value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+        const before = slideTexts(deck), after = slideTexts(back);
+        assert.strictEqual(after.length, before.length, `${format}: a deck keeps its slides`);
+        const words = (t: string) => t.split(' ').filter(w => /^[A-Za-z]{4,}$/.test(w));
+        before.forEach((text, i) => { const missing = words(text).filter(w => !after[i].includes(w)); assert.ok(missing.length <= words(text).length * 0.1, `${format}: slide ${i + 1} keeps its text; missing ${missing.join(' ')}`); });
+        assert.ok(notesOf(back).includes('Slide Note 1'), `${format}: speaker notes are kept`);
+        assert.ok(!(out.messages || []).some((m: any) => m.code === 'CONTENT_NOT_REPRESENTABLE'), `${format}: nothing in the sample deck is reported lost`);
+    }
+
+    // A PDF's pages: the text in its lines, the floating table's neighbour in two boxes, the green header.
+    const pdf = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.pdf')), { fileType: 'pdf', extractAttachments: true, ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const item = collectAllNodes(pdf).find(n => n.type === 'cell' && n.text === 'ITEM');
+    assert.strictEqual((item?.metadata as any)?.backgroundColor, '#9bbb59', 'a PDF table\'s shaded header cell is read with its colour');
+    const unplaced = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.pdf')), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false, includeBounds: false } } as any) as OfficeParserAST;
+    assert.strictEqual((collectAllNodes(unplaced).find(n => n.type === 'cell' && n.text === 'ITEM')?.metadata as any)?.backgroundColor, '#9bbb59', 'the shading is read without bounds too');
+    const pptx = unzipSync(new Uint8Array((await OfficeGenerator.generate(pdf, 'pptx')).value as Uint8Array));
+    const slideXml = (n: number) => strFromU8(pptx[`ppt/slides/slide${n}.xml`]);
+    assert.strictEqual(Object.keys(pptx).filter(k => /^ppt\/slides\/slide\d+\.xml$/.test(k)).length, pdf.content.length, 'a PDF\'s pages are its slides');
+    assert.ok(/Demonstration of DOCX support in<\/a:t><\/a:r><a:br\b[^]*?<a:t>calibre<\/a:t>/.test(slideXml(1)) && slideXml(1).includes('wrap="none"'), 'a page\'s heading keeps its line break, unwrapped');
+    const tables = slideXml(3);
+    assert.ok(/<a:t>ITEM<\/a:t>[\s\S]*?<a:srgbClr val="9BBB59"\/>/i.test(tables), 'the shaded header is written with its colour');
+    const beside = tables.split('<p:sp>').filter(sp => /Tables in Word|optimum results/.test(sp)).map(sp => Number(/<a:off x="(\d+)"/.exec(sp)![1]));
+    assert.ok(beside.length === 2 && beside[0] > beside[1] + 12700 * 100, `the paragraph beside the floating table is set beside it, then under it; got ${beside}`);
+
+    // A document on slides: a slide a section, a table of 25 rows on three (its header on each), merges kept.
+    const rows = Array.from({ length: 25 }, (_, i) => `<tr><td>Row ${i + 1}</td><td>${i}</td></tr>`).join('');
+    const html = '<h1>Deck title</h1><p>Opening words.</p><h2>First section</h2>' + Array.from({ length: 30 }, (_, i) => `<p>Point ${i + 1} of a long section.</p>`).join('')
+        + `<h2>Data</h2><table><tr><th>Name</th><th>Value</th></tr>${rows}</table>`
+        + '<h2>Merged</h2><table><tr><td colspan="2">Across</td><td rowspan="2">Down</td></tr><tr><td>a</td><td>b</td></tr></table>';
+    const doc = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' } as any) as OfficeParserAST;
+    for (const format of ['pptx', 'odp'] as const) {
+        const out = await OfficeGenerator.generate(doc, format);
+        const back = await OfficeParser.parseOffice(Buffer.from(out.value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+        const texts = slideTexts(back);
+        assert.ok(texts[0].startsWith('Deck title') && texts[0].includes('Opening words'), `${format}: the title slide; got ${texts[0]}`);
+        const section = texts.filter(t => t.startsWith('First section'));
+        assert.ok(section.length >= 2 && section.join(' ').includes('Point 1 ') && section.join(' ').includes('Point 30 '), `${format}: a long section runs on to more slides, all of it kept`);
+        const data = texts.filter(t => t.startsWith('Data'));
+        assert.ok(data.length === 3 && data.every(t => t.includes('Name') && t.includes('Value')) && data[2].includes('Row 25'), `${format}: a long table is cut, its header on each slide`);
+        const merged = collectAllNodes(back).filter(n => n.type === 'cell' && (n.text === 'Across' || n.text === 'Down'));
+        assert.deepStrictEqual(merged.map(c => [c.text, (c.metadata as any)?.colSpan ?? 1, (c.metadata as any)?.rowSpan ?? 1]), [['Across', 2, 1], ['Down', 1, 2]], `${format}: merged cells keep their spans`);
+    }
+
+    // A workbook: each sheet's rows a table under the sheet's name.
+    const book = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.xlsx')), { fileType: 'xlsx' } as any) as OfficeParserAST;
+    const values = collectAllNodes(book).filter(n => n.type === 'cell' && /^[A-Za-z]{4,}$/.test((n.text || '').trim())).map(n => n.text!.trim());
+    for (const format of ['pptx', 'odp'] as const) {
+        const back = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(book, format)).value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+        const all = slideTexts(back).join(' ');
+        assert.ok(values.length > 0 && values.every(v => all.includes(v)) && all.startsWith('Sheet1'), `${format}: a workbook's sheets are tables under their names, every cell kept`);
+    }
+
+    // A chart is a table of its data; a picture is put behind a slide (backgrounds).
+    const chart = { type: 'pptx', metadata: { pageSetup: { width: 720, height: 405 } }, content: [{ type: 'slide', metadata: { slideNumber: 1 }, children: [{ type: 'chart', text: 'Sales', bounds: { x: 40, y: 40, width: 400, height: 200 }, metadata: { attachmentName: 'c' } }] }],
+        attachments: [{ type: 'chart', name: 'c', mimeType: 'application/xml', extension: 'xml', data: '', chartData: { labels: ['North', 'South'], dataSets: [{ name: 'Units', values: ['12', '30'], pointLabels: [] }], rawTexts: [] } }] } as any;
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+    for (const format of ['pptx', 'odp'] as const) {
+        const out = await OfficeGenerator.generate(chart, format, { [`${format}Config`]: { backgrounds: [new Uint8Array(png)] } } as any);
+        const back = await OfficeParser.parseOffice(Buffer.from(out.value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+        const cells = collectAllNodes(back).filter(n => n.type === 'cell').map(n => n.text);
+        assert.ok(['North', 'South', '12', '30'].every(v => cells.includes(v)), `${format}: a chart is a table of its data; got ${cells}`);
+        const parts = unzipSync(new Uint8Array(out.value as unknown as Uint8Array));
+        const media = Object.keys(parts).filter(k => /media\/|Pictures\//.test(k));
+        assert.ok(media.length === 1 && Buffer.from(parts[media[0]]).equals(png), `${format}: the background picture is in the package`);
+        const slide = format === 'pptx' ? strFromU8(parts['ppt/slides/slide1.xml']) : strFromU8(parts['content.xml']);
+        assert.ok(format === 'pptx' ? /<p:bg><p:bgPr><a:blipFill/.test(slide) : slide.includes(media[0]), `${format}: the slide is drawn on the picture`);
+    }
+}
+
 async function testNativePdfFurnitureLimits(): Promise<void> {
     const t = (text: string, more: any = {}) => ({ type: 'text', text, ...more });
     const p = (...children: any[]) => ({ type: 'paragraph', children });
@@ -7438,6 +7520,7 @@ async function runTests(): Promise<void> {
         ['Columns', testColumns],
         ['PDF ActualText', testPdfActualText],
         ['Spreadsheet writers', testSpreadsheetWriters],
+        ['Presentation writers', testPresentationWriters],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

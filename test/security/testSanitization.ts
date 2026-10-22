@@ -692,7 +692,7 @@ async function markdownTests() {
         ['5,000 cells along a diagonal', sheetOf(Array.from({ length: 5_000 }, (_, i) => ({ type: 'row', children: [{ type: 'cell', metadata: { row: i, col: i }, children: [T0('d' + i)] }] })))],
         ['a span of a billion columns', sheetOf([{ type: 'row', children: [{ type: 'cell', metadata: { row: 0, col: 0, colSpan: 1e9, rowSpan: 1e9 }, children: [T0('wide')] }] }])],
     ] as const) {
-        for (const format of ['html', 'csv', 'md', 'tex', 'docx', 'odt', 'rtf', 'text', 'epub'] as const) {
+        for (const format of ['html', 'csv', 'md', 'tex', 'docx', 'odt', 'rtf', 'text', 'epub', 'xlsx', 'ods', 'pptx', 'odp'] as const) {
             // Bounded by the grid budget: the size is the check (a budget not kept would not finish).
             const out: any = (await OfficeGenerator.generate(ast, format, { onWarning: () => {} } as any)).value;
             const size = typeof out === 'string' ? out.length : out.length ?? out.byteLength;
@@ -708,7 +708,7 @@ async function markdownTests() {
     const handSpan = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [{ type: 'row', children: [{ type: 'cell', metadata: { colSpan: 1e8, rowSpan: 1e8 }, children: [T0('x')] }] }, { type: 'row', children: [{ type: 'cell', children: [T0('y')] }] }] }] } as any;
     const manySheets = { type: 'xlsx', metadata: {}, attachments: [], content: Array.from({ length: 20 }, () => sheetOf([{ type: 'row', children: [{ type: 'cell', metadata: { row: 0, col: 0 }, children: [T0('a')] }] }, { type: 'row', children: [{ type: 'cell', metadata: { row: 1999, col: 999 }, children: [T0('b')] }] }]).content[0]) } as any;
     for (const [label, ast] of [['a span of 100 million on a cell without coordinates', handSpan], ['20 sheets each holding 2 million positions', manySheets]] as const) {
-        for (const format of ['html', 'md', 'csv', 'tex', 'docx', 'odt', 'epub', 'pdf'] as const) {
+        for (const format of ['html', 'md', 'csv', 'tex', 'docx', 'odt', 'epub', 'pdf', 'xlsx', 'ods', 'pptx', 'odp'] as const) {
             const out: any = (await OfficeGenerator.generate(ast, format, { onWarning: () => {}, pdfConfig: { engine: 'native' } } as any)).value;
             const size = typeof out === 'string' ? out.length : out.length ?? out.byteLength;
             check(`${format}: ${label} is written bounded`, size < 20_000_000, `${size} bytes`);
@@ -2706,6 +2706,18 @@ async function parserHardeningTests() {
         type: 'row', children: Array.from({ length: 10 }, (_, c) => ({ type: 'cell', text: c % 3 ? `${r * c}.5` : `Row ${r}`, metadata: { row: r, col: c, ...(c === 0 && r % 50 === 0 ? { rowSpan: 2 } : {}) }, children: [{ type: 'text', text: c % 3 ? `${r * c}.5` : `Row ${r}` }] })),
     })) }] }) as any;
     for (const format of ['xlsx', 'ods'] as const) await timed(`${format}: a sheet of 200,000 cells is written`, () => OfficeGenerator.generate(bigSheet(), format, { onWarning: () => {} } as any));
+    // A deck in time in proportion: a sheet's rows cut into slides, a long document flowed onto slides,
+    // a page of many lines (each line found by its place, grouped by its left edge), a placed table.
+    const placedPage = () => ({ type: 'pdf', metadata: {}, attachments: [], content: [{ type: 'page', metadata: { pageWidth: 612, pageHeight: 792 }, children: [
+        { type: 'paragraph', bounds: { x: 72, y: 72, width: 400, height: 600 }, children: Array.from({ length: n(40_000) }, (_, i) => ({ type: 'text', text: `line ${i} `, bounds: { x: i % 7 ? 72 : 200, y: 72 + i * 0.01, width: 300, height: 0.005 } })) },
+        { type: 'table', bounds: { x: 72, y: 700, width: 400, height: 60 }, children: Array.from({ length: n(5_000) }, (_, r) => ({ type: 'row', children: [0, 1, 2].map(c => ({ type: 'cell', metadata: { row: r, col: c }, bounds: { x: 72 + c * 100, y: 700 + r * 0.01, width: 100, height: 0.01 }, children: [{ type: 'text', text: `${r}.${c}` }] })) })) },
+    ] }] }) as any;
+    const longDoc = () => astWith([...Array.from({ length: n(20_000) }, (_, i) => i % 50 ? { type: 'paragraph', children: [{ type: 'text', text: `Point ${i} of a long section, with words enough to wrap a line or two.` }] } : { type: 'heading', metadata: { level: 2 }, children: [{ type: 'text', text: `Section ${i}` }] })]);
+    for (const format of ['pptx', 'odp'] as const) {
+        await timed(`${format}: a sheet of 200,000 cells is written`, () => OfficeGenerator.generate(bigSheet(), format, { onWarning: () => {} } as any));
+        await timed(`${format}: a document of 20,000 paragraphs is written`, () => OfficeGenerator.generate(longDoc(), format, { onWarning: () => {} } as any));
+        await timed(`${format}: a page of 40,000 placed runs and a placed table of 5,000 rows is written`, () => OfficeGenerator.generate(placedPage(), format, { onWarning: () => {} } as any));
+    }
     await timed('md: block math of 200 KB of spaces is written inline', () => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'a' }, { type: 'code', text: 'x' + ' '.repeat(n(200000)) + 'y', metadata: { math: 'block' } }] }]), 'md' as any, { onWarning: () => {} } as any));
 
     // Raw HTML in Markdown, read as links and pictures, passes the writers' URL checks like any other.
