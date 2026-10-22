@@ -1239,7 +1239,8 @@
                   "metadata": {
                     "row": 0,
                     "col": 0,
-                    "style": "header"
+                    "style": "header",
+                    "backgroundColor": "#9bbb59"
                   },
                   "bounds": {
                     "x": 93.55,
@@ -1284,7 +1285,8 @@
                   "metadata": {
                     "row": 0,
                     "col": 1,
-                    "style": "header"
+                    "style": "header",
+                    "backgroundColor": "#9bbb59"
                   },
                   "bounds": {
                     "x": 184.58,
@@ -2335,7 +2337,8 @@
                   ],
                   "metadata": {
                     "row": 1,
-                    "col": 1
+                    "col": 1,
+                    "backgroundColor": "#d3dfee"
                   },
                   "bounds": {
                     "x": 190.83,
@@ -2634,7 +2637,8 @@
                   ],
                   "metadata": {
                     "row": 3,
-                    "col": 1
+                    "col": 1,
+                    "backgroundColor": "#d3dfee"
                   },
                   "bounds": {
                     "x": 190.08,
@@ -2676,7 +2680,8 @@
                   ],
                   "metadata": {
                     "row": 3,
-                    "col": 2
+                    "col": 2,
+                    "backgroundColor": "#d3dfee"
                   },
                   "bounds": {
                     "x": 271.38,
@@ -2718,7 +2723,8 @@
                   ],
                   "metadata": {
                     "row": 3,
-                    "col": 3
+                    "col": 3,
+                    "backgroundColor": "#d3dfee"
                   },
                   "bounds": {
                     "x": 353.65,
@@ -3065,7 +3071,8 @@
                   ],
                   "metadata": {
                     "row": 5,
-                    "col": 1
+                    "col": 1,
+                    "backgroundColor": "#d3dfee"
                   },
                   "bounds": {
                     "x": 190.08,
@@ -3107,7 +3114,8 @@
                   ],
                   "metadata": {
                     "row": 5,
-                    "col": 2
+                    "col": 2,
+                    "backgroundColor": "#d3dfee"
                   },
                   "bounds": {
                     "x": 271.38,
@@ -3149,7 +3157,8 @@
                   ],
                   "metadata": {
                     "row": 5,
-                    "col": 3
+                    "col": 3,
+                    "backgroundColor": "#d3dfee"
                   },
                   "bounds": {
                     "x": 352.9,
@@ -3191,7 +3200,8 @@
                   ],
                   "metadata": {
                     "row": 5,
-                    "col": 4
+                    "col": 4,
+                    "backgroundColor": "#d3dfee"
                   },
                   "bounds": {
                     "x": 434.17,
@@ -3233,7 +3243,8 @@
                   ],
                   "metadata": {
                     "row": 5,
-                    "col": 5
+                    "col": 5,
+                    "backgroundColor": "#d3dfee"
                   },
                   "bounds": {
                     "x": 513.23,
@@ -3342,7 +3353,8 @@
                   "metadata": {
                     "row": 0,
                     "col": 0,
-                    "style": "header"
+                    "style": "header",
+                    "backgroundColor": "#4bacc6"
                   },
                   "bounds": {
                     "x": 93.55,
@@ -3387,7 +3399,8 @@
                   "metadata": {
                     "row": 0,
                     "col": 1,
-                    "style": "header"
+                    "style": "header",
+                    "backgroundColor": "#4bacc6"
                   },
                   "bounds": {
                     "x": 213.35,
@@ -3448,7 +3461,8 @@
                   "metadata": {
                     "row": 0,
                     "col": 2,
-                    "style": "header"
+                    "style": "header",
+                    "backgroundColor": "#4bacc6"
                   },
                   "bounds": {
                     "x": 311.63,
@@ -3493,7 +3507,8 @@
                   "metadata": {
                     "row": 0,
                     "col": 3,
-                    "style": "header"
+                    "style": "header",
+                    "backgroundColor": "#4bacc6"
                   },
                   "bounds": {
                     "x": 452.7,

@@ -14,7 +14,7 @@ import { CellMetadata, ListMetadata, NoteMetadata, OfficeContentNode } from '../
 import { unionAll } from './geometry.js';
 import { RawRun } from './pdfTypes.js';
 import { median } from '../../utils/numberUtils.js';
-import { DocContext, PageContext, runsToParagraph } from './textLayout.js';
+import { CELL_PAGE_BOX, DocContext, PageContext, runsToParagraph } from './textLayout.js';
 import { appendAll } from '../../utils/nodeListUtils.js';
 
 interface StructNode {
@@ -419,6 +419,8 @@ function buildTable(node: StructNode, ctx: WalkCtx): OfficeContentNode | null {
             };
             const cb = unionAll(cellChildren.map(c => c.bounds));
             if (cb) cell.bounds = cb;
+            const pageBox = unionAll(collectRuns(cellNode, ctx).map(r => ({ x: r.x, y: r.yTop, width: r.width, height: r.height })));
+            if (pageBox) CELL_PAGE_BOX.set(cell, pageBox);
             cells.push(cell);
             colIdx++;
         }

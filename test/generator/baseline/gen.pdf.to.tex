@@ -15,7 +15,7 @@
 \usepackage{newunicodechar}
 \usepackage{graphicx}
 \usepackage{array,longtable,multirow}
-\usepackage{xcolor}
+\usepackage[table]{xcolor}
 \usepackage[hyperfootnotes=false]{hyperref}
 \hypersetup{colorlinks=true,
   linkcolor=blue,
@@ -32,9 +32,12 @@
 \setcounter{secnumdepth}{-\maxdimen}
 \definecolor{hex17365D}{HTML}{17365D}
 \definecolor{hex365F91}{HTML}{365F91}
+\definecolor{hex4BACC6}{HTML}{4BACC6}
 \definecolor{hex4F81BD}{HTML}{4F81BD}
 \definecolor{hex7F7F7F}{HTML}{7F7F7F}
 \definecolor{hex808080}{HTML}{808080}
+\definecolor{hex9BBB59}{HTML}{9BBB59}
+\definecolor{hexD3DFEE}{HTML}{D3DFEE}
 \definecolor{hexFFFFFF}{HTML}{FFFFFF}
 \iftutex
   \newunicodechar{▪}{\ensuremath{\blacksquare}}
@@ -5730,7 +5733,7 @@ For the lovers of poetry amongst you, paragraphs with hanging indents, like this
 
 \begin{longtable}{|*{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-4\tabcolsep-3\arrayrulewidth)/2\relax}|}}
 \hline
-\textcolor{hexFFFFFF}{\textbf{{\fontsize{11pt}{13.2pt}\selectfont ITEM}}} & \textcolor{hexFFFFFF}{\textbf{{\fontsize{11pt}{13.2pt}\selectfont NEEDED}}} \\
+\cellcolor{hex9BBB59}\textcolor{hexFFFFFF}{\textbf{{\fontsize{11pt}{13.2pt}\selectfont ITEM}}} & \cellcolor{hex9BBB59}\textcolor{hexFFFFFF}{\textbf{{\fontsize{11pt}{13.2pt}\selectfont NEEDED}}} \\
 \hline
 \endhead
 {\fontsize{11pt}{13.2pt}\selectfont Books} & {\fontsize{11pt}{13.2pt}\selectfont 1} \\
@@ -5755,15 +5758,15 @@ Now let’s look at a fancier table—one with alternating row colors and partia
 {\fontsize{11pt}{13.2pt}\selectfont City or Town} & {\fontsize{11pt}{13.2pt}\selectfont Point A} & {\fontsize{11pt}{13.2pt}\selectfont Point B} & {\fontsize{11pt}{13.2pt}\selectfont Point C} & {\fontsize{11pt}{13.2pt}\selectfont Point D} & {\fontsize{11pt}{13.2pt}\selectfont Point E} \\
 \hline
 \endhead
-{\fontsize{11pt}{13.2pt}\selectfont Point A} & {\fontsize{11pt}{13.2pt}\selectfont —} &  &  &  &  \\
+{\fontsize{11pt}{13.2pt}\selectfont Point A} & \cellcolor{hexD3DFEE}{\fontsize{11pt}{13.2pt}\selectfont —} &  &  &  &  \\
 \hline
 {\fontsize{11pt}{13.2pt}\selectfont Point B} & {\fontsize{11pt}{13.2pt}\selectfont 87} & {\fontsize{11pt}{13.2pt}\selectfont —} &  &  &  \\
 \hline
-{\fontsize{11pt}{13.2pt}\selectfont Point C} & {\fontsize{11pt}{13.2pt}\selectfont 64} & {\fontsize{11pt}{13.2pt}\selectfont 56} & {\fontsize{11pt}{13.2pt}\selectfont —} &  &  \\
+{\fontsize{11pt}{13.2pt}\selectfont Point C} & \cellcolor{hexD3DFEE}{\fontsize{11pt}{13.2pt}\selectfont 64} & \cellcolor{hexD3DFEE}{\fontsize{11pt}{13.2pt}\selectfont 56} & \cellcolor{hexD3DFEE}{\fontsize{11pt}{13.2pt}\selectfont —} &  &  \\
 \hline
 {\fontsize{11pt}{13.2pt}\selectfont Point D} & {\fontsize{11pt}{13.2pt}\selectfont 37} & {\fontsize{11pt}{13.2pt}\selectfont 32} & {\fontsize{11pt}{13.2pt}\selectfont 91} & {\fontsize{11pt}{13.2pt}\selectfont —} &  \\
 \hline
-{\fontsize{11pt}{13.2pt}\selectfont Point E} & {\fontsize{11pt}{13.2pt}\selectfont 93} & {\fontsize{11pt}{13.2pt}\selectfont 35} & {\fontsize{11pt}{13.2pt}\selectfont 54} & {\fontsize{11pt}{13.2pt}\selectfont 43} & {\fontsize{11pt}{13.2pt}\selectfont —} \\
+{\fontsize{11pt}{13.2pt}\selectfont Point E} & \cellcolor{hexD3DFEE}{\fontsize{11pt}{13.2pt}\selectfont 93} & \cellcolor{hexD3DFEE}{\fontsize{11pt}{13.2pt}\selectfont 35} & \cellcolor{hexD3DFEE}{\fontsize{11pt}{13.2pt}\selectfont 54} & \cellcolor{hexD3DFEE}{\fontsize{11pt}{13.2pt}\selectfont 43} & \cellcolor{hexD3DFEE}{\fontsize{11pt}{13.2pt}\selectfont —} \\
 \hline
 \end{longtable}
 }
@@ -5772,7 +5775,7 @@ Next, we see a table with special formatting in various locations. Notice how th
 
 \begin{longtable}{|*{4}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-8\tabcolsep-5\arrayrulewidth)/4\relax}|}}
 \hline
-\textcolor{hexFFFFFF}{\textbf{{\fontsize{11pt}{13.2pt}\selectfont College}}} & \textcolor{hexFFFFFF}{\textbf{{\fontsize{11pt}{13.2pt}\selectfont New students}}} & \textcolor{hexFFFFFF}{\textbf{{\fontsize{11pt}{13.2pt}\selectfont Graduating students}}} & \textcolor{hexFFFFFF}{\textbf{{\fontsize{11pt}{13.2pt}\selectfont Change}}} \\
+\cellcolor{hex4BACC6}\textcolor{hexFFFFFF}{\textbf{{\fontsize{11pt}{13.2pt}\selectfont College}}} & \cellcolor{hex4BACC6}\textcolor{hexFFFFFF}{\textbf{{\fontsize{11pt}{13.2pt}\selectfont New students}}} & \cellcolor{hex4BACC6}\textcolor{hexFFFFFF}{\textbf{{\fontsize{11pt}{13.2pt}\selectfont Graduating students}}} & \cellcolor{hex4BACC6}\textcolor{hexFFFFFF}{\textbf{{\fontsize{11pt}{13.2pt}\selectfont Change}}} \\
 \hline
 \endhead
  & \textcolor{hex808080}{\textit{{\fontsize{11pt}{13.2pt}\selectfont Undergraduate}}} &  &  \\

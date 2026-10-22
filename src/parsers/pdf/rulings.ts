@@ -16,6 +16,7 @@
 import { CellMetadata, NodeBounds, OfficeContentNode } from '../../types.js';
 import type { PdfShape } from './pdfShapes.js';
 import type { PdfLayoutConfig, RawRun } from './pdfTypes.js';
+import { CELL_PAGE_BOX } from './textLayout.js';
 
 /** At most this many rules a page, this many crossing tests, and this many grid cells a frame. */
 const MAX_RULINGS = 4_000;
@@ -266,7 +267,9 @@ export function ruledTables(frames: RuledFrame[], runs: readonly RawRun[], layou
             if (c.colSpan > 1) meta.colSpan = c.colSpan;
             if (c.rowSpan > 1) meta.rowSpan = c.rowSpan;
             const cell: OfficeContentNode = { type: 'cell', text: children.map(n => n.text || '').join('\n').trim(), children, metadata: meta };
-            const box = layout.bounds({ x: f.xs[c.col], y: f.ys[c.row], width: f.xs[c.col + c.colSpan] - f.xs[c.col], height: f.ys[c.row + c.rowSpan] - f.ys[c.row] });
+            const pageBox = { x: f.xs[c.col], y: f.ys[c.row], width: f.xs[c.col + c.colSpan] - f.xs[c.col], height: f.ys[c.row + c.rowSpan] - f.ys[c.row] };
+            CELL_PAGE_BOX.set(cell, pageBox);
+            const box = layout.bounds(pageBox);
             if (box) cell.bounds = box;
             while (rows.length <= c.row) rows.push({ type: 'row', children: [] });
             rows[c.row].children!.push(cell);
@@ -279,4 +282,31 @@ export function ruledTables(frames: RuledFrame[], runs: readonly RawRun[], layou
     }
     for (const [fi, node] of built) if (!nestedIn.has(fi)) tables.push(node);
     return { tables, consumed };
+}
+
+/**
+ * Tables' cells shaded as their page shades them: each cell (read from the page, with no colour yet)
+ * takes the colour of the smallest coloured rectangle under its middle, so a header row's white text is
+ * read on the colour it was set on, not on none.
+ */
+export function shadeCells(tables: readonly OfficeContentNode[], shapes: readonly PdfShape[] | undefined, pageW: number, pageH: number): void {
+    if (!shapes?.length || !tables.length) return;
+    const fills = shapes.filter(s => s.filled && s.fill && s.fill.toLowerCase() !== '#ffffff' && !s.curved && s.segments.length <= 5
+        && s.width > MAX_THICKNESS && s.height > MAX_THICKNESS && !(s.width >= 0.9 * pageW && s.height >= 0.9 * pageH))
+        .sort((a, b) => a.width * a.height - b.width * b.height);
+    if (!fills.length) return;
+    let tests = 0;
+    const visit = (node: OfficeContentNode) => {
+        for (const child of node.children ?? []) {
+            const box = child.type === 'cell' ? CELL_PAGE_BOX.get(child) : undefined;
+            if (box && !(child.metadata as CellMetadata | undefined)?.backgroundColor && tests < MAX_CROSSINGS) {
+                const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+                tests += fills.length;
+                const under = fills.find(f => cx >= f.x && cx <= f.x + f.width && cy >= f.y && cy <= f.y + f.height);
+                if (under) child.metadata = { ...(child.metadata as CellMetadata), backgroundColor: under.fill };
+            }
+            visit(child);
+        }
+    };
+    for (const t of tables) visit(t);
 }

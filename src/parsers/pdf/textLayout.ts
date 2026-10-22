@@ -689,6 +689,9 @@ function stripMarkerFrom(node: OfficeContentNode, raw: string): void {
 
 // ── geometric table detection ─────────────────────────────────────────────────
 
+/** Each table cell's box on the page, as read (before any rotation into the AST's bounds), for shading it. */
+export const CELL_PAGE_BOX = new WeakMap<OfficeContentNode, NodeBounds>();
+
 /** Builds a table cell node from a single visual line (one row's cell). */
 function cellFromLine(line: PdfLine, row: number, col: number, page: PageContext, cfg: PdfLayoutConfig): OfficeContentNode {
     const children: OfficeContentNode[] = [];
@@ -699,7 +702,9 @@ function cellFromLine(line: PdfLine, row: number, col: number, page: PageContext
         children.push(child);
     }
     const cell: OfficeContentNode = { type: 'cell', text: line.fragments.map(f => f.text).join('').trim(), children, metadata: { row, col } };
-    const cb = emitBounds({ x: line.x, y: line.yTop, width: line.width, height: line.height }, page, cfg);
+    const box = { x: line.x, y: line.yTop, width: line.width, height: line.height };
+    CELL_PAGE_BOX.set(cell, box);
+    const cb = emitBounds(box, page, cfg);
     if (cb) cell.bounds = cb;
     return cell;
 }

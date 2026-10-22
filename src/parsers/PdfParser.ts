@@ -43,7 +43,7 @@ import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { collectColorMarks, ColorLookup, makeColorLookup } from './pdf/pdfColor.js';
 import { collectShapes, PdfShape, shapeBullets } from './pdf/pdfShapes.js';
 import { MarkedEvent, readableItems, readMarkedContent } from './pdf/actualText.js';
-import { ruledFrames, ruledTables } from './pdf/rulings.js';
+import { ruledFrames, ruledTables, shadeCells } from './pdf/rulings.js';
 import { computeRunBox, identityMatrix, mulMatrix, roundBounds, rotateBoundsToRendered, toMatrix6, unionAll } from './pdf/geometry.js';
 import { PageExtract, PdfImage, PdfLayoutConfig, RawRun, ResolvedFont } from './pdf/pdfTypes.js';
 import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, emitBounds, indentLevels as indentLevelsOf, joinMarkerLines, leadingMarker, ListCarry, markerLefts, PageContext, recoverTaggedGrids, relevelHeadings, runsToParagraph, segmentIntoBlocks } from './pdf/textLayout.js';
@@ -1788,6 +1788,8 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         // parity. Runs on authored boxes here, before finalizeBounds, so it works under
         // ignorePageGeometry too.
         if (fromTags) pageContent = recoverTaggedGrids(pageContent);
+        // Tables' cells shaded as the page shades them (a header row's white text on its colour).
+        shadeCells(pageContent, extract.shapes, pageCtx.authoredW, pageCtx.authoredH);
 
         // Images: emit as attachments/OCR, then splice each into the flow before the first text node
         // that sits lower on the page, so reading order is preserved without reordering text.
