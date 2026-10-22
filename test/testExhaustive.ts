@@ -5257,6 +5257,35 @@ async function testWritersHoldUp(): Promise<void> {
     }
 }
 
+/**
+ * The native PDF engine draws an SVG picture as vector graphics (it was dropped with
+ * IMAGE_PROCESSING_FAILED): its shapes, paths, text, symbols and styles, in its place among the text,
+ * at its size; what it cannot draw (a gradient in one colour) is reported, and an SVG that cannot be
+ * read is reported as it was.
+ */
+async function testNativePdfSvgPictures(): Promise<void> {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="300" height="150" viewBox="0 0 200 100">
+        <style>.blue { fill: #2255cc }</style>
+        <defs><linearGradient id="g"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="yellow"/></linearGradient><symbol id="dot" viewBox="0 0 10 10"><circle cx="5" cy="5" r="5" fill="green"/></symbol></defs>
+        <rect class="blue" x="10" y="10" width="40" height="30"/><circle cx="80" cy="25" r="15" fill="url(#g)"/>
+        <path d="M150 40 A 20 20 0 0 1 190 40 Q 170 60 150 40 z" fill="none" stroke="purple" stroke-width="3"/>
+        <g transform="translate(10 60) rotate(-5)"><text x="0" y="10" font-size="12">Drawn label</text></g>
+        <use xlink:href="#dot" x="150" y="70" width="20" height="20"/></svg>`;
+    const ast = (data: string, name = 'a.svg') => ({ type: 'docx', metadata: {}, attachments: [{ type: 'image', name, mimeType: 'image/svg+xml', extension: 'svg', data: Buffer.from(data).toString('base64') }],
+        content: [{ type: 'paragraph', text: 'Before', children: [{ type: 'text', text: 'Before' }] }, { type: 'image', metadata: { attachmentName: name } }, { type: 'paragraph', text: 'After', children: [{ type: 'text', text: 'After' }] }] }) as any;
+    const result = await OfficeGenerator.generate(ast(svg), 'pdf', { pdfConfig: { engine: 'native' } } as any);
+    const reasons = (result.messages || []).map((m: any) => [m.code, m.details?.reason]);
+    assert.deepStrictEqual(reasons, [['CONTENT_NOT_REPRESENTABLE', 'svg']], `the SVG is drawn, its gradient reported as drawn in one colour; got ${JSON.stringify(result.messages)}`);
+    const back = await OfficeParser.parseOffice(Buffer.from(result.value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.strictEqual(back.content.filter(n => n.type === 'page').length, 1, 'the page the SVG is drawn on is no page of the document');
+    const nodes = collectAllNodes(back);
+    const at = (text: string) => nodes.find(n => n.type === 'text' && (n.text || '').includes(text))?.bounds;
+    const before = at('Before')!, after = at('After')!, label = at('Drawn');
+    assert.ok(label && label.y > before.y && label.y < after.y && after.y - before.y > 100, `the SVG stands between the paragraphs at its size, its text drawn; got ${JSON.stringify([before, label, after])}`);
+    const unreadable = await OfficeGenerator.generate(ast('<svg><g>', 'b.svg'), 'pdf', { pdfConfig: { engine: 'native' } } as any);
+    assert.ok((unreadable.messages || []).some((m: any) => m.code === 'IMAGE_PROCESSING_FAILED'), 'an SVG that cannot be read is reported');
+}
+
 async function testNativePdfFurnitureLimits(): Promise<void> {
     const t = (text: string, more: any = {}) => ({ type: 'text', text, ...more });
     const p = (...children: any[]) => ({ type: 'paragraph', children });
@@ -7151,6 +7180,7 @@ async function runTests(): Promise<void> {
         ['Native PDF furniture limits', testNativePdfFurnitureLimits],
         ['Formats read as they show', testFormatsReadAsTheyShow],
         ['Writers hold up', testWritersHoldUp],
+        ['Native PDF SVG pictures', testNativePdfSvgPictures],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

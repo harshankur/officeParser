@@ -24,6 +24,7 @@ import { decodeBmp, decodeGif, encodePng } from '../../utils/rasterUtils.js';
 import { sanitizeOfficePackageUrl } from '../../utils/sanitize.js';
 import { cssColorHex } from '../../utils/colorUtils.js';
 import { formatListNumber } from '../../utils/listMarkers.js';
+import { drawSvg, readSvg } from './svgDrawing.js';
 
 /**
  * Megapixel ceiling for an embedded image. `embedPng`/`embedJpg` decode the full bitmap, so a
@@ -202,6 +203,13 @@ function toPoints(v: string | number | undefined, fallback: number): number {
         }
     }
     return fallback;
+}
+
+/** Whether a picture's bytes are an SVG: by its type or name, or by its text starting `<svg` or `<?xml`. */
+function isSvg(bytes: Uint8Array, attachment: { extension?: string; mimeType?: string }): boolean {
+    if (/svg/i.test(attachment.mimeType || '') || /^svg$/i.test(attachment.extension || '')) return true;
+    const head = new TextDecoder().decode(bytes.subarray(0, 512)).replace(/^\uFEFF/, '').trimStart();
+    return /^<(?:\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!DOCTYPE[^>]*>\s*)?<svg[\s>]/i.test(head);
 }
 
 /** The styles text is drawn in. */
@@ -418,7 +426,7 @@ class NativeLayout {
                     if (text.length) await this.drawTextBox(text, box, shape);
                 } else if (child.type === 'image') {
                     const picture = this.imageMode === 'image-only' || this.imageMode === 'image+ocr-text' ? await this.embedPicture(child) : null;
-                    if (picture) this.page.drawImage(picture.img, { x: box.x, y: this.pageH - box.y - box.height, width: box.width, height: box.height });
+                    if (picture) this.drawPicture(picture.img, { x: box.x, y: this.pageH - box.y - box.height, width: box.width, height: box.height });
                     else await this.drawTextBox([child], box, undefined);
                 } else if (child.type === 'table' || child.type === 'chart') {
                     this.margin = { top: box.y, left: box.x, right: this.pageW - box.x - box.width, bottom: 0 };
@@ -1324,7 +1332,7 @@ class NativeLayout {
             });
             for (const it of ordered) {
                 if (it.p?.picture) {
-                    this.page.drawImage(it.p.picture.img, { x, y: baseline, width: it.p.picture.w, height: it.p.picture.h });
+                    this.drawPicture(it.p.picture.img, { x, y: baseline, width: it.p.picture.w, height: it.p.picture.h });
                     if (it.p.link) this.addLinkBox(it.p.link, x, baseline, it.p.picture.w, it.p.picture.h);
                 } else if (it.p) {
                     this.drawText(it.p.text, it.p.face, x, baseline + (it.p.rise || 0), it.p.size, it.p.color);
@@ -1857,7 +1865,7 @@ class NativeLayout {
         w *= scale; h *= scale;
         if (h > this.bottom - this.margin.top) { const s = (this.bottom - this.margin.top) / h; w *= s; h *= s; }
         this.ensureSpace(h + 6);
-        this.page.drawImage(picture.img, { x: this.margin.left, y: this.pageH - this.y - h, width: w, height: h });
+        this.drawPicture(picture.img, { x: this.margin.left, y: this.pageH - this.y - h, width: w, height: h });
         const target = (node.metadata as { link?: unknown } | undefined)?.link;
         if (typeof target === 'string' && target) this.addLinkBox(target, this.margin.left, this.pageH - this.y - h, w, h);
         this.y += h + 6;
@@ -1871,6 +1879,39 @@ class NativeLayout {
      * else its bounds on a PDF page, else its pixels at 96 per inch. Null, the failure reported, when it
      * cannot be: no data, too large, or a format a PDF holds none of.
      */
+    /** Draws an embedded picture: a raster image, or an SVG's page (a form). */
+    private drawPicture(img: any, box: { x: number; y: number; width: number; height: number }): void {
+        if (img instanceof this.lib.PDFEmbeddedPage) this.page.drawPage(img, box);
+        else this.page.drawImage(img, box);
+    }
+
+    /**
+     * An SVG picture drawn on a page of its own, in this document (so its text is in the document's
+     * fonts), embedded as a form and the page taken away; what it could not draw is reported. Its
+     * `width` and `height` are its size in CSS pixels, as a raster picture's are.
+     */
+    private async svgPicture(bytes: Uint8Array): Promise<any> {
+        const svg = readSvg(new TextDecoder().decode(bytes), this.ast.config);
+        if (!svg) return 'unreadable SVG picture';
+        const savedPage = this.page;
+        const scratch = this.pdf.addPage([svg.width * 0.75, svg.height * 0.75]);
+        this.page = scratch;
+        let left: string[];
+        try {
+            left = await drawSvg(svg, {
+                lib: this.lib, page: scratch,
+                text: (text, face, x, y, size, color) => this.drawText(this.enc(text, face as FaceKey), face as FaceKey, x, y, size, color),
+                width: (text, face, size) => this.widthOf(this.enc(text, face as FaceKey, false), face as FaceKey, size),
+                image: async (data, kind) => { try { return kind === 'png' ? await this.pdf.embedPng(data) : await this.pdf.embedJpg(data); } catch { return undefined; } },
+            });
+        } finally {
+            this.page = savedPage;
+            this.pdf.removePage(this.pdf.getPages().indexOf(scratch));
+        }
+        if (left.length) this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { reason: 'svg', feature: `SVG ${left.join(', ')}`, format: 'pdf' });
+        return await this.pdf.embedPage(scratch);
+    }
+
     private async embedPicture(node: OfficeContentNode): Promise<{ img: any; w: number; h: number } | null> {
         const meta = node.metadata as any;
         const name = meta?.attachmentName;
@@ -1890,6 +1931,8 @@ class NativeLayout {
                     // allocate the full bitmap, so a decompression bomb would OOM the process uncatchably.
                     const dim = sniffImageSize(bytes);
                     if (dim && dim.w * dim.h > MAX_IMAGE_PIXELS) return `image is too large to embed (${dim.w}x${dim.h} pixels)`;
+                    // An SVG drawn as vector graphics, on a page embedded as a form (see svgDrawing).
+                    if (isSvg(bytes, attachment)) return await this.svgPicture(bytes);
                     const isJpg = /jpe?g/i.test(attachment.extension || '') || attachment.mimeType === 'image/jpeg';
                     if (isJpg) return await this.pdf.embedJpg(bytes);
                     // A GIF (its first frame) or an uncompressed BMP, which a PDF cannot hold, as a PNG: both
@@ -1911,25 +1954,28 @@ class NativeLayout {
                 this.reportWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name, reason: img });
                 return null;
             }
-            const ratio = img.width ? img.height / img.width : 1;
+            // Its size in CSS pixels: a raster picture's pixels, an SVG's page (in points) as pixels.
+            const svgPage = img instanceof this.lib.PDFEmbeddedPage;
+            const pxW = svgPage ? img.width / 0.75 : img.width, pxH = svgPage ? img.height / 0.75 : img.height;
+            const ratio = pxW ? pxH / pxW : 1;
             const pctOf = (v: any): number | null => (typeof v === 'string' && /^\s*[\d.]+\s*%\s*$/.test(v)) ? parseFloat(v) / 100 : null;
             let w: number, h: number;
             if (meta?.width != null) {
                 const p = pctOf(meta.width);
-                w = p != null ? this.contentWidth * p : toPoints(meta.width, img.width * 0.75);
+                w = p != null ? this.contentWidth * p : toPoints(meta.width, pxW * 0.75);
                 h = (meta.height != null && pctOf(meta.height) == null) ? toPoints(meta.height, w * ratio) : w * ratio;
             } else if (node.bounds?.width) {
                 w = node.bounds.width;
                 h = node.bounds.height || w * ratio;
             } else {
-                w = img.width * 0.75; // intrinsic pixels -> points (96dpi), not points 1:1
-                h = img.height * 0.75;
+                w = pxW * 0.75; // intrinsic pixels -> points (96dpi), not points 1:1
+                h = pxH * 0.75;
             }
             return { img, w: Math.max(1, w), h: Math.max(1, h) };
         } catch {
             // pdf-lib embeds PNG and JPEG (and a GIF or BMP is turned into PNG), so a WebP, TIFF or SVG
             // attachment lands here.
-            this.reportWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name, reason: 'unsupported image format (the native PDF engine embeds PNG, JPEG, GIF and BMP)' });
+            this.reportWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name, reason: 'unsupported image format (the native PDF engine embeds PNG, JPEG, GIF, BMP and SVG)' });
             return null;
         }
     }
@@ -2149,7 +2195,7 @@ class NativeLayout {
                     let py = topY - pad - p.lines.length * lineH;
                     for (const pic of sized[i]) {
                         const free = Math.max(0, room - pic.w);
-                        this.page.drawImage(pic.img, { x: x + pad + (p.align === 'center' ? free / 2 : p.align === 'right' ? free : 0), y: py - pic.h, width: pic.w, height: pic.h });
+                        this.drawPicture(pic.img, { x: x + pad + (p.align === 'center' ? free / 2 : p.align === 'right' ? free : 0), y: py - pic.h, width: pic.w, height: pic.h });
                         py -= pic.h + 4;
                     }
                 });
@@ -2205,7 +2251,7 @@ class NativeLayout {
             const scale = Math.min(1, this.contentWidth / picture.w, (this.pageH - this.margin.top - this.margin.bottom) * 0.9 / picture.h);
             const w = picture.w * scale, h = picture.h * scale;
             this.ensureSpace(h + 6);
-            this.page.drawImage(picture.img, { x: this.margin.left, y: this.pageH - this.y - h, width: w, height: h });
+            this.drawPicture(picture.img, { x: this.margin.left, y: this.pageH - this.y - h, width: w, height: h });
             this.y += h + 6;
         }
         for (const chart of chartsAfter) await this.render(chart);
