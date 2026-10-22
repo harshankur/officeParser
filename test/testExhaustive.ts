@@ -4934,6 +4934,26 @@ async function testSheetAndSlidePages(): Promise<void> {
 }
 
 /**
+ * The native PDF engine draws a chart from its data, as HTML output does (bars, axis, labels, legend),
+ * where it printed the data as text; a chart in a sheet's cell after its table, not as the cell's text;
+ * and a picture in a table cell in the cell, where it printed its alt text.
+ */
+async function testNativePdfChartsAndCellPictures(): Promise<void> {
+    const ods = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.ods')), { fileType: 'ods', extractAttachments: true } as any) as OfficeParserAST;
+    const result = await ods.to('pdf', { pdfConfig: { engine: 'native' } } as any);
+    const reasons = (result.messages || []).map((m: any) => m.details?.reason);
+    assert.ok(!reasons.includes('chart') && !reasons.includes('image-in-table-cell'), `the chart and the cell's picture are drawn; got ${JSON.stringify(reasons)}`);
+    const back = await OfficeParser.parseOffice(Buffer.from(result.value as Uint8Array), { fileType: 'pdf', ocr: false, extractAttachments: true, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const printed = String((await back.to('text')).value);
+    assert.ok(['Chart Title', 'Category 1', 'Series D2'].every(t => printed.includes(t)), 'the chart\'s title, labels and legend are drawn');
+    assert.ok(!/Series D2\s+4\.3\s+2\.5/.test(printed), 'the chart\'s data is not printed as text in its cell');
+    assert.ok(back.attachments.some(a => a.type === 'image'), 'the cell\'s picture is in the PDF');
+    const noData = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'chart', text: 'Revenue 10 20', metadata: { attachmentName: 'missing' } }] } as any;
+    const textOnly = await OfficeGenerator.generate(noData, 'pdf', { pdfConfig: { engine: 'native' } } as any);
+    assert.ok((textOnly.messages || []).some((m: any) => m.details?.reason === 'chart'), 'a chart without data is its text, reported');
+}
+
+/**
  * The native PDF engine draws GIF (its first frame) and uncompressed BMP pictures, turned into PNG: a PDF
  * holds neither, and both were dropped with IMAGE_PROCESSING_FAILED.
  */
@@ -6779,6 +6799,7 @@ async function runTests(): Promise<void> {
         ['DOCX sections in PDF', testDocxSectionsInPdf],
         ['ODT master pages in PDF', testOdtMasterPagesInPdf],
         ['Sheet and slide pages', testSheetAndSlidePages],
+        ['Native PDF charts and cell pictures', testNativePdfChartsAndCellPictures],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

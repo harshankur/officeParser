@@ -17,7 +17,7 @@
  * @module generators/pdf/nativePdfEngine
  */
 
-import { EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, SheetMetadata, TextAlignment, TextFormatting, BreakMetadata, HeaderFooterMetadata } from '../../types.js';
+import { EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, SheetMetadata, TextAlignment, TextFormatting, BreakMetadata, ChartData, HeaderFooterMetadata } from '../../types.js';
 import { getAbortError, getOfficeError } from '../../utils/errorUtils.js';
 import { documentLanguage, embedUrl, isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize, writableSpacing } from '../../utils/officeGenUtils.js';
 import { decodeBmp, decodeGif, encodePng } from '../../utils/rasterUtils.js';
@@ -784,6 +784,8 @@ class NativeLayout {
         const walk = async (n: OfficeContentNode, inherited: TextFormatting, inheritedLink: string | undefined, isRoot: boolean): Promise<void> => {
             let text = n.text;
             let override: string | false | void = undefined;
+            // A picture drawn in its cell, or a chart after its table, is no text of the cell's (see table).
+            if (!isRoot && this.drawnApart.has(n)) return;
             if (!isRoot) {
                 override = await this.onNodeValue(n);
                 if (override === false) return;
@@ -855,6 +857,7 @@ class NativeLayout {
                 if (override === false) continue;
                 let t: string;
                 if (typeof override === 'string') t = override;
+                else if (this.drawnApart.has(c)) t = '';
                 else if (c.type === 'image') t = this.cellImageText(c);
                 else t = (await this.collectRuns(c)).map(r => r.text).join('').replace(/\f/g, '\n');
                 if (t !== '') lines.push(t);
@@ -882,6 +885,40 @@ class NativeLayout {
             this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature: 'image inside a list item, heading or note (native engine renders its alt/OCR text)', reason: 'image-in-text-line' });
         }
         return text;
+    }
+
+    /**
+     * What in a table's cells is drawn apart from their text: pictures, in their cells; charts, after
+     * the table (a chart in a sheet's cell printed as its data's text, in the cell).
+     */
+    private drawnApart = new Set<OfficeContentNode>();
+
+    /** A cell's charts (its own and its blocks'), drawn after its table. */
+    private chartsIn(cell: OfficeContentNode): OfficeContentNode[] {
+        if (this.config.includeCharts === false) return [];
+        const found: OfficeContentNode[] = [];
+        const walk = (n: OfficeContentNode, depth: number) => {
+            if (found.length >= 16 || depth > 6 || n.type === 'table') return;
+            if (n.type === 'chart') { found.push(n); return; }
+            for (const c of n.children || []) walk(c, depth + 1);
+        };
+        for (const c of cell.children || []) walk(c, 0);
+        return found;
+    }
+
+    /** A cell's pictures, where pictures are drawn (the image mode embeds them): its own and its blocks'. */
+    private picturesIn(cell: OfficeContentNode): OfficeContentNode[] {
+        if (this.imageMode !== 'image-only' && this.imageMode !== 'image+ocr-text') return [];
+        const found: OfficeContentNode[] = [];
+        const walk = (n: OfficeContentNode, depth: number) => {
+            if (found.length >= 16 || depth > 6) return;
+            if (n.type === 'image') { found.push(n); return; }
+            // A nested table's pictures are its own cells'.
+            if (n.type === 'table') return;
+            for (const c of n.children || []) walk(c, depth + 1);
+        };
+        for (const c of cell.children || []) walk(c, 0);
+        return found;
     }
 
     private cellImageWarned = false;
@@ -1173,6 +1210,8 @@ class NativeLayout {
                 // includeCharts: false omits charts in every generator. The native engine cannot draw a
                 // chart, so it otherwise renders the chart's data text (in node.text); skip it when off.
                 if (this.config.includeCharts === false) return;
+                // Drawn from its data, as HTML output draws it (bars for each label, one colour a series).
+                if (this.drawChart(node)) return;
                 if (node.text) {
                     if (!this.chartWarned) {
                         this.chartWarned = true;
@@ -1186,6 +1225,86 @@ class NativeLayout {
                 else if (node.text) await this.paragraph(node);
                 return;
         }
+    }
+
+    /**
+     * Draws a chart from its data (ChartData on its attachment) as a bar chart, as the HTML engine draws
+     * one: a bar for each series at each label, a value axis with its ticks, the title, the labels and a
+     * legend. False, nothing drawn, for a chart without numbers to draw or with more than can be read on
+     * a page; it is then written as its data's text. Charts printed as text only.
+     */
+    private drawChart(node: OfficeContentNode): boolean {
+        const name = (node.metadata as { attachmentName?: string } | undefined)?.attachmentName;
+        const data = (name ? this.attachmentsByName.get(name) as { chartData?: ChartData } | undefined : undefined)?.chartData;
+        if (!data || !Array.isArray(data.dataSets) || !Array.isArray(data.labels)) return false;
+        const series = data.dataSets.slice(0, 12).map(set => (Array.isArray(set.values) ? set.values : []).map(v => { const n = Number(String(v).replace(/,/g, '')); return Number.isFinite(n) ? n : NaN; }));
+        const groups = Math.max(data.labels.length, ...series.map(v => v.length));
+        if (!groups || groups > 120 || data.dataSets.length > 12 || !series.some(v => v.some(n => !Number.isNaN(n)))) return false;
+        const ink = this.lib.rgb(0.12, 0.12, 0.12), grid = this.lib.rgb(0.85, 0.85, 0.85);
+        const palette = [[255, 99, 132], [54, 162, 235], [255, 206, 86], [75, 192, 192], [153, 102, 255], [255, 159, 64]].map(([r, g, b]) => this.lib.rgb(r / 255, g / 255, b / 255));
+        const values = series.flat().filter(n => !Number.isNaN(n));
+        let low = Math.min(0, ...values), high = Math.max(0, ...values);
+        if (low === high) high = low + 1;
+        // Ticks at a round step: 1, 2 or 5 times a power of ten, about five of them.
+        const rough = (high - low) / 5, power = 10 ** Math.floor(Math.log10(rough));
+        const step = [1, 2, 5, 10].map(m => m * power).find(t => t >= rough) ?? rough;
+        low = Math.floor(low / step) * step; high = Math.ceil(high / step) * step;
+        const tickText = (v: number) => this.enc(String(+v.toFixed(6)), 'regular', false);
+        const ticks: number[] = [];
+        for (let v = low; v <= high + step / 2 && ticks.length < 50; v += step) ticks.push(v);
+        const legendRows = data.dataSets.length > 1 ? Math.ceil(data.dataSets.length / 4) : 0;
+        const titleH = data.title ? 20 : 0, labelH = 24, legendH = legendRows * 14, plotH = 180;
+        const height = titleH + plotH + labelH + legendH + (data.xAxisTitle ? 14 : 0) + 10;
+        this.ensureSpace(height);
+        if (this.pendingAnchors.length) this.placeAnchors();
+        const top = this.pageH - this.y;
+        if (data.title) {
+            const title = this.enc(String(data.title), 'bold');
+            const w = this.widthOf(title, 'bold', 12);
+            this.drawText(title, 'bold', this.margin.left + Math.max(0, (this.contentWidth - w) / 2), top - 14, 12, ink);
+        }
+        const axisW = Math.max(...ticks.map(t => this.widthOf(tickText(t), 'regular', 8))) + 6 + (data.yAxisTitle ? 14 : 0);
+        const left = this.margin.left + axisW, width = this.contentWidth - axisW;
+        const plotTop = top - titleH, plotBottom = plotTop - plotH;
+        const yOf = (v: number) => plotBottom + (v - low) / (high - low) * plotH;
+        for (const t of ticks) {
+            const y = yOf(t);
+            this.page.drawLine({ start: { x: left, y }, end: { x: left + width, y }, thickness: 0.4, color: grid });
+            const text = tickText(t);
+            this.drawText(text, 'regular', left - 4 - this.widthOf(text, 'regular', 8), y - 3, 8, ink);
+        }
+        this.page.drawLine({ start: { x: left, y: plotBottom }, end: { x: left, y: plotTop }, thickness: 0.6, color: ink });
+        this.page.drawLine({ start: { x: left, y: yOf(0) }, end: { x: left + width, y: yOf(0) }, thickness: 0.6, color: ink });
+        if (data.yAxisTitle) this.page.drawText(this.enc(String(data.yAxisTitle), 'regular').slice(0, 60), { x: this.margin.left + 8, y: plotBottom + plotH / 2 - this.widthOf(this.enc(String(data.yAxisTitle), 'regular').slice(0, 60), 'regular', 8) / 2, size: 8, font: this.fonts.regular[0].font, color: ink, rotate: this.lib.degrees(90) });
+        const groupW = width / groups, barW = groupW * 0.8 / series.length;
+        series.forEach((values, s) => values.forEach((v, g) => {
+            if (Number.isNaN(v)) return;
+            const x = left + g * groupW + groupW * 0.1 + s * barW;
+            const y0 = yOf(0), y1 = yOf(v);
+            this.page.drawRectangle({ x, y: Math.min(y0, y1), width: Math.max(0.5, barW - 1), height: Math.max(0.5, Math.abs(y1 - y0)), color: palette[s % palette.length], opacity: 0.75, borderColor: palette[s % palette.length], borderWidth: 0.5 });
+        }));
+        // Each label under its bars, cut to their width; every few, where they are too many to be read.
+        const every = Math.max(1, Math.ceil(groups * 18 / width));
+        data.labels.slice(0, groups).forEach((label, g) => {
+            if (g % every) return;
+            const text = splitToWidth(this.enc(String(label ?? ''), 'regular'), t => this.widthOf(t, 'regular', 7), groupW * every - 2)[0] ?? '';
+            this.drawText(text, 'regular', left + g * groupW + Math.max(0, (groupW - this.widthOf(text, 'regular', 7)) / 2), plotBottom - 10, 7, ink);
+        });
+        let below = plotBottom - labelH;
+        if (data.xAxisTitle) {
+            const text = this.enc(String(data.xAxisTitle), 'regular');
+            this.drawText(text, 'regular', left + Math.max(0, (width - this.widthOf(text, 'regular', 8)) / 2), below + 6, 8, ink);
+            below -= 14;
+        }
+        data.dataSets.forEach((set, s) => {
+            if (!legendRows) return;
+            const x = this.margin.left + (s % 4) * (this.contentWidth / 4), y = below - Math.floor(s / 4) * 14;
+            this.page.drawRectangle({ x, y, width: 8, height: 8, color: palette[s % palette.length], opacity: 0.75 });
+            const text = splitToWidth(this.enc(set.name || `Series ${s + 1}`, 'regular'), t => this.widthOf(t, 'regular', 8), this.contentWidth / 4 - 14)[0] ?? '';
+            this.drawText(text, 'regular', x + 11, y + 1, 8, ink);
+        });
+        this.y += height;
+        return true;
     }
 
     private async heading(node: OfficeContentNode): Promise<void> {
@@ -1380,16 +1499,36 @@ class NativeLayout {
         if (mode === 'ocr-text-only') { if (ocr) await this.drawOcrText(ocr); return; }
 
         const meta = node.metadata as any;
+        // Nothing renderable: keep the alt text (or the OCR text) rather than drawing nothing (the
+        // failure is reported): the DOCX and ODT generators degrade and warn for the same input.
+        const picture = await this.embedPicture(node);
+        if (!picture) { this.plainParagraph(meta?.altText || ocr); return; }
+        let { w, h } = picture;
+        const scale = Math.min(1, this.contentWidth / w);
+        w *= scale; h *= scale;
+        if (h > this.bottom - this.margin.top) { const s = (this.bottom - this.margin.top) / h; w *= s; h *= s; }
+        this.ensureSpace(h + 6);
+        this.page.drawImage(picture.img, { x: this.margin.left, y: this.pageH - this.y - h, width: w, height: h });
+        const target = (node.metadata as { link?: unknown } | undefined)?.link;
+        if (typeof target === 'string' && target) this.addLinkBox(target, this.margin.left, this.pageH - this.y - h, w, h);
+        this.y += h + 6;
+        // 'image+ocr-text': draw the recognized text just below the successfully embedded image.
+        if (mode === 'image+ocr-text' && ocr) await this.drawOcrText(ocr);
+    }
+
+    /**
+     * A picture embedded in the PDF (each attachment once, wherever it shows) and the size it is drawn at
+     * in points: its ImageMetadata width and height (a length, pixels, or a '%' of the text's width),
+     * else its bounds on a PDF page, else its pixels at 96 per inch. Null, the failure reported, when it
+     * cannot be: no data, too large, or a format a PDF holds none of.
+     */
+    private async embedPicture(node: OfficeContentNode): Promise<{ img: any; w: number; h: number } | null> {
+        const meta = node.metadata as any;
         const name = meta?.attachmentName;
-        // Nothing renderable: keep the alt text (or the OCR text) rather than drawing nothing, and
-        // report the failure - the DOCX and ODT generators degrade and warn for the same input, and a
-        // picture that silently vanishes gives the caller no way to find out.
-        const fallback = () => this.plainParagraph(meta?.altText || ocr);
         const attachment = name ? this.attachmentsByName.get(name) : undefined;
         if (!attachment?.data) {
             if (name) this.reportWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name, reason: attachment ? 'attachment has no data' : 'missing attachment' });
-            fallback();
-            return;
+            return null;
         }
         try {
             // Each attachment decoded and embedded once, and drawn wherever a picture shows it: embedded
@@ -1421,21 +1560,15 @@ class NativeLayout {
             const img = await embedded;
             if (typeof img === 'string') {
                 this.reportWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name, reason: img });
-                fallback();
-                return;
+                return null;
             }
-            // Resolve the draw size in points, by priority: an explicit ImageMetadata.width/height
-            // (a length like '200px'/'3cm', a number in px, or a '%' of the content width), then PDF
-            // page bounds (already points), then the intrinsic pixel size converted px->pt. Aspect ratio
-            // is preserved from the intrinsic image when only a width is given.
             const ratio = img.width ? img.height / img.width : 1;
-            const meta2 = node.metadata as any;
             const pctOf = (v: any): number | null => (typeof v === 'string' && /^\s*[\d.]+\s*%\s*$/.test(v)) ? parseFloat(v) / 100 : null;
             let w: number, h: number;
-            if (meta2?.width != null) {
-                const p = pctOf(meta2.width);
-                w = p != null ? this.contentWidth * p : toPoints(meta2.width, img.width * 0.75);
-                h = (meta2.height != null && pctOf(meta2.height) == null) ? toPoints(meta2.height, w * ratio) : w * ratio;
+            if (meta?.width != null) {
+                const p = pctOf(meta.width);
+                w = p != null ? this.contentWidth * p : toPoints(meta.width, img.width * 0.75);
+                h = (meta.height != null && pctOf(meta.height) == null) ? toPoints(meta.height, w * ratio) : w * ratio;
             } else if (node.bounds?.width) {
                 w = node.bounds.width;
                 h = node.bounds.height || w * ratio;
@@ -1443,23 +1576,13 @@ class NativeLayout {
                 w = img.width * 0.75; // intrinsic pixels -> points (96dpi), not points 1:1
                 h = img.height * 0.75;
             }
-            const scale = Math.min(1, this.contentWidth / w);
-            w *= scale; h *= scale;
-            if (h > this.bottom - this.margin.top) { const s = (this.bottom - this.margin.top) / h; w *= s; h *= s; }
-            this.ensureSpace(h + 6);
-            this.page.drawImage(img, { x: this.margin.left, y: this.pageH - this.y - h, width: w, height: h });
-            const target = (node.metadata as { link?: unknown } | undefined)?.link;
-            if (typeof target === 'string' && target) this.addLinkBox(target, this.margin.left, this.pageH - this.y - h, w, h);
-            this.y += h + 6;
+            return { img, w: Math.max(1, w), h: Math.max(1, h) };
         } catch {
             // pdf-lib embeds PNG and JPEG (and a GIF or BMP is turned into PNG), so a WebP, TIFF or SVG
             // attachment lands here.
             this.reportWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name, reason: 'unsupported image format (the native PDF engine embeds PNG, JPEG, GIF and BMP)' });
-            fallback();
-            return;
+            return null;
         }
-        // 'image+ocr-text': draw the recognized text just below the successfully embedded image.
-        if (mode === 'image+ocr-text' && ocr) await this.drawOcrText(ocr);
     }
 
     /**
@@ -1523,8 +1646,9 @@ class NativeLayout {
         const border = this.lib.rgb(0.6, 0.6, 0.6);
 
         // First the cells' texts and places, then the columns' widths from them, then the rows drawn.
-        type Placed = { col: number; span: number; rowSpan: number; text: string; header: boolean; lines: string[]; fill?: string; align?: TextAlignment; ink?: string };
+        type Placed = { col: number; span: number; rowSpan: number; text: string; header: boolean; lines: string[]; fill?: string; align?: TextAlignment; ink?: string; pictures?: { img: any; w: number; h: number }[] };
         const grid: Placed[][] = [];
+        const chartsAfter: OfficeContentNode[] = [];
         // Grid occupancy: column -> rows still covered by a rowspan from above, so a spanning cell
         // reserves its column(s) below instead of letting later rows slide left under it.
         const carry = new Map<number, number>();
@@ -1578,6 +1702,16 @@ class NativeLayout {
                 const span = meta?.colSpan && meta.colSpan > 1 ? meta.colSpan : 1;
                 let col = typeof meta?.col === 'number' ? meta.col : -1;
                 if (col < 0) { while ((carry.get(cursor) || 0) > 0) cursor++; col = cursor; }
+                // A cell's pictures are drawn in it, under its text (each one that can be embedded; another
+                // is its alt text): only their alt text was.
+                const pictures: { img: any; w: number; h: number }[] = [];
+                if (typeof override !== 'string') {
+                    for (const picture of this.picturesIn(cell)) {
+                        const embedded = await this.embedPicture(picture);
+                        if (embedded) { pictures.push(embedded); this.drawnApart.add(picture); }
+                    }
+                    for (const chart of this.chartsIn(cell)) { chartsAfter.push(chart); this.drawnApart.add(chart); }
+                }
                 // Cells built by the markup parsers carry their text only in `children`; reading
                 // `cell.text` alone rendered every Markdown/HTML table as an empty grid.
                 const text = typeof override === 'string' ? override : await this.flatText(cell);
@@ -1585,7 +1719,7 @@ class NativeLayout {
                 // is not drawn: its box would cut through the merged one.
                 if (!text.trim() && (spanned.has(col) || (carry.get(col) || 0) > 0)) continue;
                 const header = rowIsHeader || meta?.style === 'header';
-                placed.push({ col, span, rowSpan: Math.max(1, meta?.rowSpan || 1), text, header, lines: [], ...cellLook(cell) });
+                placed.push({ col, span, rowSpan: Math.max(1, meta?.rowSpan || 1), text, header, lines: [], ...cellLook(cell), ...(pictures.length ? { pictures } : {}) });
                 for (let c = col + 1; c < col + span && c < cols; c++) spanned.add(c);
                 cursor = col + span;
             }
@@ -1624,6 +1758,40 @@ class NativeLayout {
         for (const placed of grid) {
             for (const p of placed) p.lines = wrap(p.text, p.col, p.span, p.header);
             const lineH = size * 1.35;
+            // A row with pictures is drawn whole, on a page of its own when it does not fit this one: each
+            // cell's text, then its pictures, scaled to its width (and to half a page at most).
+            if (placed.some(p => p.pictures?.length)) {
+                const most = (this.bottom - this.margin.top) / 2;
+                const sized = placed.map(p => (p.pictures || []).map(pic => {
+                    const scale = Math.min(1, Math.max(1, spanWidth(p.col, p.span) - 2 * pad) / pic.w, most / pic.h);
+                    return { img: pic.img, w: pic.w * scale, h: pic.h * scale };
+                }));
+                const heightOf = (i: number) => placed[i].lines.length * lineH + sized[i].reduce((sum, pic) => sum + pic.h + 4, 0);
+                const rowH = Math.max(size * 1.4, ...placed.map((_, i) => heightOf(i))) + 2 * pad;
+                if (this.y + rowH > this.bottom && this.y > this.margin.top) this.newPage();
+                if (this.pendingAnchors.length) this.placeAnchors();
+                const topY = this.pageH - this.y;
+                placed.forEach((p, i) => {
+                    const x = xs[Math.min(p.col, cols)];
+                    const room = spanWidth(p.col, p.span) - 2 * pad;
+                    this.page.drawRectangle({ x, y: topY - rowH, width: spanWidth(p.col, p.span), height: rowH, borderColor: border, borderWidth: 0.5, color: p.fill ? this.color(p.fill) : undefined });
+                    const face: FaceKey = p.header ? 'bold' : 'regular';
+                    let ty = topY - pad - size;
+                    for (const line of p.lines) {
+                        const free = p.align ? Math.max(0, room - this.widthOf(line, face, size)) : 0;
+                        this.drawLine(line, face, x + pad + (p.align === 'center' ? free / 2 : p.align === 'right' ? free : 0), ty, size, (p.ink && this.color(p.ink)) || this.lib.rgb(0.12, 0.12, 0.12), room);
+                        ty -= lineH;
+                    }
+                    let py = topY - pad - p.lines.length * lineH;
+                    for (const pic of sized[i]) {
+                        const free = Math.max(0, room - pic.w);
+                        this.page.drawImage(pic.img, { x: x + pad + (p.align === 'center' ? free / 2 : p.align === 'right' ? free : 0), y: py - pic.h, width: pic.w, height: pic.h });
+                        py -= pic.h + 4;
+                    }
+                });
+                this.y += rowH;
+                continue;
+            }
             const rowH = Math.max(size * 1.4, ...placed.map(p => p.lines.length * lineH)) + 2 * pad;
             // Draw the row in vertical bands so a row taller than a whole page is split across pages
             // rather than drawn off the bottom (which silently lost the overflowing text). A normal row
@@ -1665,6 +1833,7 @@ class NativeLayout {
             }
         }
         this.y += 6;
+        for (const chart of chartsAfter) await this.render(chart);
     }
 
     /**
@@ -1672,7 +1841,7 @@ class NativeLayout {
      * as wide as its longest word, at most as wide as its longest line, at 10pt; set smaller, down to 6pt,
      * when its words alone are wider than the page. Measured from the cells that span one column.
      */
-    private columnWidths(grid: { col: number; span: number; text: string; header: boolean }[][], cols: number, pad: number): { widths: number[]; size: number } {
+    private columnWidths(grid: { col: number; span: number; text: string; header: boolean; pictures?: { w: number }[] }[][], cols: number, pad: number): { widths: number[]; size: number } {
         const base = 10, smallest = 6, room = this.contentWidth;
         const least = new Array<number>(cols).fill(2 * pad + 6), most = new Array<number>(cols).fill(2 * pad + 6);
         for (const placed of grid) {
@@ -1688,6 +1857,8 @@ class NativeLayout {
                 // A point to spare, so a word as wide as its column is not broken by rounding.
                 least[p.col] = Math.max(least[p.col], word + 1 + 2 * pad);
                 most[p.col] = Math.max(most[p.col], line + 1 + 2 * pad);
+                // A picture asks for its width (to most of the page's), and is scaled to what it gets.
+                for (const picture of p.pictures || []) most[p.col] = Math.max(most[p.col], Math.min(picture.w, room * 0.6) + 2 * pad);
             }
         }
         const sum = (a: number[]) => a.reduce((n, w) => n + w, 0);
