@@ -233,6 +233,8 @@ function clusterToLine(clusterRuns: RawRun[], cfg: PdfLayoutConfig): PdfLine {
 
     const fragments: TextFragment[] = [];
     let prev: RawRun | undefined;
+    // The last fragment's box before the blanks that end it, while they do.
+    let blankFrom: NodeBounds | undefined;
     for (const r of runs) {
         const fmt: TextFormatting = { ...r.formatting };
         const off = baseline - r.yBaseline; // >0 raised, <0 lowered
@@ -259,6 +261,15 @@ function clusterToLine(clusterRuns: RawRun[], cfg: PdfLayoutConfig): PdfLine {
 
         const box: NodeBounds = { x: r.x, y: r.yTop, width: r.width, height: r.height };
         const last = fragments[fragments.length - 1];
+        // A blank item that leads or ends the line (the space a producer draws before a cell's text or after
+        // a line's last word) is text, not a place: its box put a cell's number where the cell before it
+        // ended. Between words it is the line's, as the words around it are.
+        if (!r.text.trim()) {
+            if (last) { blankFrom ??= last.bounds; last.text += lead + r.text; last.bounds = unionBounds(last.bounds, box); }
+            prev = r;
+            continue;
+        }
+        blankFrom = undefined;
         if (last && sameFormatting(last.formatting, fmt) && sameLink(last.link, r.link)) {
             last.text += lead + r.text;
             last.bounds = unionBounds(last.bounds, box);
@@ -267,6 +278,7 @@ function clusterToLine(clusterRuns: RawRun[], cfg: PdfLayoutConfig): PdfLine {
         }
         prev = r;
     }
+    if (blankFrom && fragments.length) fragments[fragments.length - 1].bounds = blankFrom;
     if (fragments.length) fragments[0].text = fragments[0].text.replace(/^\s+/, '');
     // Drop fragments left empty after trimming (e.g. a bullet-glyph run), so generators do not emit
     // stray formatting markers such as an empty `` ` `` for a zero-length monospace run.

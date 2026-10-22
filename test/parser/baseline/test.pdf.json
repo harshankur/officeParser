@@ -698,7 +698,7 @@
           "children": [
             {
               "type": "text",
-              "text": "A paragraph with styled text:",
+              "text": "A paragraph with styled text: ",
               "formatting": {
                 "font": "Ubuntu-Regular",
                 "size": "12pt"
@@ -706,22 +706,7 @@
               "bounds": {
                 "x": 93.55,
                 "y": 222.4,
-                "width": 157.37,
-                "height": 13.45
-              }
-            },
-            {
-              "type": "text",
-              "text": " ",
-              "formatting": {
-                "font": "Ubuntu-Regular",
-                "size": "12pt",
-                "color": "#808080"
-              },
-              "bounds": {
-                "x": 250.92,
-                "y": 222.4,
-                "width": 2.93,
+                "width": 160.3,
                 "height": 13.45
               }
             },
@@ -3670,18 +3655,18 @@
                             "size": "11pt"
                           },
                           "bounds": {
-                            "x": 175.72,
-                            "y": 494.9,
-                            "width": 34.81,
-                            "height": 12.58
+                            "x": 191.83,
+                            "y": 495.15,
+                            "width": 18.7,
+                            "height": 12.33
                           }
                         }
                       ],
                       "bounds": {
-                        "x": 175.72,
-                        "y": 494.9,
-                        "width": 34.81,
-                        "height": 12.58
+                        "x": 191.83,
+                        "y": 495.15,
+                        "width": 18.7,
+                        "height": 12.33
                       }
                     }
                   ],
@@ -3690,10 +3675,10 @@
                     "col": 1
                   },
                   "bounds": {
-                    "x": 175.72,
-                    "y": 494.9,
-                    "width": 34.81,
-                    "height": 12.58
+                    "x": 191.83,
+                    "y": 495.15,
+                    "width": 18.7,
+                    "height": 12.33
                   }
                 },
                 {
@@ -6946,7 +6931,7 @@
                           "bounds": {
                             "x": 72.03,
                             "y": 685.66,
-                            "width": 6,
+                            "width": 3.67,
                             "height": 7.29
                           }
                         },
@@ -7206,7 +7191,7 @@
             },
             {
               "type": "text",
-              "text": "example, here is a link pointing to the",
+              "text": "example, here is a link pointing to the ",
               "formatting": {
                 "font": "Ubuntu-Regular",
                 "size": "12pt"
@@ -7214,27 +7199,8 @@
               "bounds": {
                 "x": 72.03,
                 "y": 339.17,
-                "width": 203.53,
+                "width": 206.61,
                 "height": 13.45
-              }
-            },
-            {
-              "type": "text",
-              "text": " ",
-              "formatting": {
-                "font": "Ubuntu-Regular",
-                "size": "12pt",
-                "color": "#0000ff"
-              },
-              "bounds": {
-                "x": 275.56,
-                "y": 339.17,
-                "width": 3.07,
-                "height": 13.45
-              },
-              "metadata": {
-                "link": "http://calibre-ebook.com/download",
-                "linkType": "external"
               }
             },
             {
@@ -7271,7 +7237,7 @@
             },
             {
               "type": "text",
-              "text": "points back to the section on",
+              "text": "points back to the section on ",
               "formatting": {
                 "font": "Ubuntu-Regular",
                 "size": "12pt"
@@ -7279,27 +7245,8 @@
               "bounds": {
                 "x": 72.03,
                 "y": 354.94,
-                "width": 156.77,
+                "width": 159.82,
                 "height": 13.45
-              }
-            },
-            {
-              "type": "text",
-              "text": " ",
-              "formatting": {
-                "font": "Ubuntu-Regular",
-                "size": "12pt",
-                "color": "#0000ff"
-              },
-              "bounds": {
-                "x": 228.79,
-                "y": 354.94,
-                "width": 3.06,
-                "height": 13.45
-              },
-              "metadata": {
-                "link": "#paragraph-level-formatting",
-                "linkType": "internal"
               }
             },
             {
@@ -8088,7 +8035,7 @@
             },
             {
               "type": "text",
-              "text": "was",
+              "text": "was ",
               "formatting": {
                 "font": "Ubuntu-Regular",
                 "size": "12pt"
@@ -8096,22 +8043,7 @@
               "bounds": {
                 "x": 72.03,
                 "y": 511.99,
-                "width": 20.87,
-                "height": 13.45
-              }
-            },
-            {
-              "type": "text",
-              "text": " ",
-              "formatting": {
-                "font": "Ubuntu-Regular",
-                "size": "12pt",
-                "color": "#808080"
-              },
-              "bounds": {
-                "x": 92.89,
-                "y": 511.99,
-                "width": 2.66,
+                "width": 23.52,
                 "height": 13.45
               }
             },
@@ -8194,7 +8126,7 @@
                   "bounds": {
                     "x": 93.55,
                     "y": 651.14,
-                    "width": 4,
+                    "width": 1.64,
                     "height": 7.29
                   }
                 },
@@ -8510,9 +8442,9 @@
                     "size": "12pt"
                   },
                   "bounds": {
-                    "x": 121.25,
+                    "x": 129.55,
                     "y": 233.65,
-                    "width": 405.38,
+                    "width": 397.08,
                     "height": 13.45
                   }
                 },
@@ -8532,9 +8464,9 @@
                 }
               ],
               "bounds": {
-                "x": 121.25,
+                "x": 129.55,
                 "y": 233.65,
-                "width": 405.38,
+                "width": 397.08,
                 "height": 29.45
               }
             }
@@ -8547,9 +8479,9 @@
             "itemIndex": 0
           },
           "bounds": {
-            "x": 121.25,
+            "x": 129.55,
             "y": 233.65,
-            "width": 405.38,
+            "width": 397.08,
             "height": 29.45
           }
         },
@@ -8569,17 +8501,17 @@
                     "size": "12pt"
                   },
                   "bounds": {
-                    "x": 121.25,
+                    "x": 129.55,
                     "y": 265.42,
-                    "width": 31.37,
+                    "width": 23.08,
                     "height": 13.45
                   }
                 }
               ],
               "bounds": {
-                "x": 121.25,
+                "x": 129.55,
                 "y": 265.42,
-                "width": 31.37,
+                "width": 23.08,
                 "height": 13.45
               }
             }
@@ -8592,9 +8524,9 @@
             "itemIndex": 1
           },
           "bounds": {
-            "x": 121.25,
+            "x": 129.55,
             "y": 265.42,
-            "width": 31.37,
+            "width": 23.08,
             "height": 13.45
           }
         },
@@ -8649,17 +8581,17 @@
                     "size": "12pt"
                   },
                   "bounds": {
-                    "x": 99.75,
+                    "x": 108.05,
                     "y": 308.42,
-                    "width": 31.24,
+                    "width": 22.94,
                     "height": 13.45
                   }
                 }
               ],
               "bounds": {
-                "x": 99.75,
+                "x": 108.05,
                 "y": 308.42,
-                "width": 31.24,
+                "width": 22.94,
                 "height": 13.45
               }
             }
@@ -8672,9 +8604,9 @@
             "itemIndex": 0
           },
           "bounds": {
-            "x": 99.75,
+            "x": 108.05,
             "y": 308.42,
-            "width": 31.24,
+            "width": 22.94,
             "height": 13.45
           }
         },
@@ -8694,17 +8626,17 @@
                     "size": "12pt"
                   },
                   "bounds": {
-                    "x": 127.49,
+                    "x": 129.55,
                     "y": 324.42,
-                    "width": 25.14,
+                    "width": 23.08,
                     "height": 13.45
                   }
                 }
               ],
               "bounds": {
-                "x": 127.49,
+                "x": 129.55,
                 "y": 324.42,
-                "width": 25.14,
+                "width": 23.08,
                 "height": 13.45
               }
             }
@@ -8718,9 +8650,9 @@
             "marker": "1.1."
           },
           "bounds": {
-            "x": 127.49,
+            "x": 129.55,
             "y": 324.42,
-            "width": 25.14,
+            "width": 23.08,
             "height": 13.45
           }
         },
@@ -8892,17 +8824,17 @@
                     "size": "12pt"
                   },
                   "bounds": {
-                    "x": 99.75,
+                    "x": 108.05,
                     "y": 403.69,
-                    "width": 23.96,
+                    "width": 15.66,
                     "height": 13.45
                   }
                 }
               ],
               "bounds": {
-                "x": 99.75,
+                "x": 108.05,
                 "y": 403.69,
-                "width": 23.96,
+                "width": 15.66,
                 "height": 13.45
               }
             }
@@ -8915,9 +8847,9 @@
             "itemIndex": 1
           },
           "bounds": {
-            "x": 99.75,
+            "x": 108.05,
             "y": 403.69,
-            "width": 23.96,
+            "width": 15.66,
             "height": 13.45
           }
         },

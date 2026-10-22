@@ -129,7 +129,7 @@ rop caps are used to emphasize the leading paragraph at the start of a section. 
 
 ## Links {#links}
 
-Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the[ calibre download page](http://calibre-ebook.com/download). Then we have a link that points back to the section on[ paragraph level formatting ](#paragraph-level-formatting)in this document.
+Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the [calibre download page](http://calibre-ebook.com/download). Then we have a link that points back to the section on [paragraph level formatting ](#paragraph-level-formatting)in this document.
 
 ## Table of Contents {#table-of-contents}
 
