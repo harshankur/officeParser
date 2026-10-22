@@ -4985,6 +4985,68 @@ async function testNativePdfInlinePictures(): Promise<void> {
 }
 
 /**
+ * A slide's shapes have their places (bounds, through groups and from their layout's placeholders), a
+ * shape its look (a drawing node: outline, fill, line, turn, text anchor), the slide its background and
+ * its text the sizes and colours its master gives; the native PDF engine draws the slide as laid out.
+ * A deck was laid out as flowing text on pages of the slide's size.
+ */
+async function testSlidesDrawnAsLaidOut(): Promise<void> {
+    const P = 'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const emu = (pt: number) => Math.round(pt * 12700);
+    const xfrm = (x: number, y: number, w: number, h: number, rot = 0) => `<a:xfrm${rot ? ` rot="${rot * 60000}"` : ''}><a:off x="${emu(x)}" y="${emu(y)}"/><a:ext cx="${emu(w)}" cy="${emu(h)}"/></a:xfrm>`;
+    const rel = (id: string, type: string, target: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${target}"/>`;
+    const rels = (...items: string[]) => strToU8(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${items.join('')}</Relationships>`);
+    const master = `<?xml version="1.0"?><p:sldMaster ${P}><p:cSld><p:bg><p:bgPr><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></p:bgPr></p:bg><p:spTree>`
+        + `<p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:spPr>${xfrm(40, 30, 640, 60)}</p:spPr></p:sp></p:spTree></p:cSld>`
+        + '<p:txStyles><p:titleStyle><a:lvl1pPr><a:defRPr sz="4000"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:defRPr></a:lvl1pPr></p:titleStyle><p:bodyStyle/><p:otherStyle/></p:txStyles></p:sldMaster>';
+    const theme = `<?xml version="1.0"?><a:theme ${P}><a:themeElements><a:clrScheme name="t"><a:dk1><a:srgbClr val="000000"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:accent1><a:srgbClr val="0B3D91"/></a:accent1></a:clrScheme></a:themeElements></a:theme>`;
+    const slide = `<?xml version="1.0"?><p:sld ${P}><p:cSld><p:spTree>`
+        + '<p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:t>Slide title</a:t></a:r></a:p></p:txBody></p:sp>'
+        + `<p:grpSp><p:grpSpPr><a:xfrm><a:off x="${emu(400)}" y="${emu(200)}"/><a:ext cx="${emu(200)}" cy="${emu(100)}"/><a:chOff x="0" y="0"/><a:chExt cx="${emu(400)}" cy="${emu(200)}"/></a:xfrm></p:grpSpPr>`
+        + `<p:sp><p:nvSpPr><p:cNvPr id="3" name="Box"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(0, 0, 400, 200)}<a:prstGeom prst="ellipse"/><a:solidFill><a:srgbClr val="FFCC00"/></a:solidFill></p:spPr><p:txBody><a:bodyPr anchor="ctr"/><a:p><a:r><a:rPr sz="1800"/><a:t>In a circle</a:t></a:r></a:p></p:txBody></p:sp></p:grpSp>`
+        + `<p:sp><p:nvSpPr><p:cNvPr id="4" name="Turned"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(40, 150, 200, 40, 270)}</p:spPr><p:txBody><a:bodyPr/><a:p><a:r><a:rPr sz="1800"/><a:t>Turned label</a:t></a:r></a:p></p:txBody></p:sp>`
+        + `<p:sp><p:nvSpPr><p:cNvPr id="5" name="Slanted"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(300, 330, 200, 40, 30)}</p:spPr><p:txBody><a:bodyPr/><a:p><a:r><a:rPr sz="1800"/><a:t>Slanted words</a:t></a:r></a:p></p:txBody></p:sp>`
+        + '</p:spTree></p:cSld></p:sld>';
+    const pptx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>'),
+        'ppt/presentation.xml': strToU8(`<?xml version="1.0"?><p:presentation ${P}><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:sldSz cx="${emu(720)}" cy="${emu(405)}"/></p:presentation>`),
+        'ppt/_rels/presentation.xml.rels': rels(rel('rId1', 'slide', 'slides/slide1.xml')),
+        'ppt/slides/slide1.xml': strToU8(slide),
+        'ppt/slides/_rels/slide1.xml.rels': rels(rel('rId1', 'slideLayout', '../slideLayouts/slideLayout1.xml')),
+        'ppt/slideLayouts/slideLayout1.xml': strToU8(`<?xml version="1.0"?><p:sldLayout ${P}><p:cSld><p:spTree/></p:cSld></p:sldLayout>`),
+        'ppt/slideLayouts/_rels/slideLayout1.xml.rels': rels(rel('rId1', 'slideMaster', '../slideMasters/slideMaster1.xml')),
+        'ppt/slideMasters/slideMaster1.xml': strToU8(master),
+        'ppt/slideMasters/_rels/slideMaster1.xml.rels': rels(rel('rId1', 'theme', '../theme/theme1.xml')),
+        'ppt/theme/theme1.xml': strToU8(theme),
+    }));
+    const ast = await OfficeParser.parseOffice(pptx, { fileType: 'pptx' } as any) as OfficeParserAST;
+    const deck = ast.content[0];
+    assert.deepStrictEqual([(deck.metadata as any).background, ast.metadata.pageSetup], ['#0B3D91', { width: 720, height: 405 }], 'the slide\'s background is its master\'s, in the theme\'s colour, and its page the slide size');
+    const title = deck.children!.find(n => n.text === 'Slide title')!;
+    assert.deepStrictEqual([title.bounds, title.children![0].formatting?.size, title.children![0].formatting?.color], [{ x: 40, y: 30, width: 640, height: 60 }, '40pt', '#FFFFFF'], 'a placeholder takes its master\'s place, size and colour');
+    const drawings = deck.children!.filter(n => n.type === 'drawing');
+    assert.deepStrictEqual(drawings.map(n => [n.bounds, (n.metadata as any).geometry, (n.metadata as any).fill, (n.metadata as any).rotation, (n.metadata as any).textAnchor]),
+        [[{ x: 400, y: 200, width: 200, height: 100 }, 'ellipse', '#FFCC00', undefined, 'middle'], [{ x: 40, y: 150, width: 200, height: 40 }, undefined, undefined, 270, undefined], [{ x: 300, y: 330, width: 200, height: 40 }, undefined, undefined, 30, undefined]], 'a shape in a group is placed by the group, and a turned one carries its turn');
+    const flat = await OfficeParser.parseOffice(pptx, { fileType: 'pptx', ignorePageGeometry: true } as any) as OfficeParserAST;
+    assert.ok(collectAllNodes(flat).every(n => !n.bounds && n.type !== 'drawing'), 'ignorePageGeometry leaves the places and shapes out');
+
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const page = back.content[0];
+    assert.deepStrictEqual([(page.metadata as any).pageWidth, (page.metadata as any).pageHeight, back.content.length], [720, 405, 1], 'the slide is one page of its size');
+    const at = (text: string) => collectAllNodes(back).find(n => n.type === 'text' && (n.text || '').includes(text))?.bounds;
+    const titleBox = at('Slide title')!, circle = at('In a circle')!, turned = at('Turned label')!;
+    assert.ok(Math.abs(titleBox.x - 47.2) < 3 && titleBox.y > 30 && titleBox.y < 60, `the title is in its box; got ${JSON.stringify(titleBox)}`);
+    assert.ok(circle.x > 400 && circle.x + circle.width < 600 && circle.y > 225 && circle.y < 260, `the circle's text is in its middle; got ${JSON.stringify(circle)}`);
+    assert.ok(turned.height > turned.width, `the turned label runs up the page; got ${JSON.stringify(turned)}`);
+    // Read back, the turned text is kept whole, with its angle (export: it was lost from a tagged PDF and kept level from others).
+    const turnedParagraph = collectAllNodes(back).find(n => n.type === 'paragraph' && (n.text || '').includes('Turned label'));
+    assert.deepStrictEqual([turnedParagraph?.text, (turnedParagraph?.metadata as any)?.rotation], ['Turned label', 270], 'a PDF\'s turned text is read with its angle');
+    const slanted = collectAllNodes(back).find(n => n.type === 'paragraph' && (n.text || '').includes('Slanted'));
+    assert.deepStrictEqual([slanted?.text, (slanted?.metadata as any)?.rotation], ['Slanted words', 30], 'text at an angle no quarter turn is is read whole, with its angle');
+}
+
+/**
  * The native PDF engine draws GIF (its first frame) and uncompressed BMP pictures, turned into PNG: a PDF
  * holds neither, and both were dropped with IMAGE_PROCESSING_FAILED.
  */
@@ -6832,6 +6894,7 @@ async function runTests(): Promise<void> {
         ['Sheet and slide pages', testSheetAndSlidePages],
         ['Native PDF charts and cell pictures', testNativePdfChartsAndCellPictures],
         ['Native PDF inline pictures', testNativePdfInlinePictures],
+        ['Slides drawn as laid out', testSlidesDrawnAsLaidOut],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

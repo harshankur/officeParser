@@ -156,6 +156,7 @@ import {
     IndentationMetadata,
     ParagraphSpacing,
     PageSetup,
+    ShapeMetadata,
     ParagraphMetadata,
     DefinitionMetadata,
 } from './types.js';
@@ -272,6 +273,7 @@ export {
     IndentationMetadata,
     ParagraphSpacing,
     PageSetup,
+    ShapeMetadata,
     ParagraphMetadata,
     DefinitionMetadata,
 };

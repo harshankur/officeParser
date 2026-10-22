@@ -3156,7 +3156,7 @@ async function parserHardeningTests() {
     // A table of contents' dot leaders (tagged TOCI) collapse in time linear in the entry, however its
     // dots and spaces run: an entry four times as long takes about four times as long.
     const tocMs = (text: string) => {
-        const run: any = { text, x: 72, yTop: 90, yBaseline: 100, width: 300, height: 12, fontSize: 10, dir: 'ltr', angle: 0, mcid: 'm0', inArtifact: false, formatting: {} };
+        const run: any = { text, x: 72, yTop: 90, yBaseline: 100, width: 300, height: 12, fontSize: 10, dir: 'ltr', angle: 0, turn: 0, mcid: 'm0', inArtifact: false, formatting: {} };
         const layout: any = { useTags: true, detectColumns: true, mergeHyphenatedWords: true, lineToleranceFactor: 0.35, spaceToleranceFactor: 0.25, headingDetection: 'auto', normalizeText: true, extractTextColor: false, includeBounds: true };
         const begun = performance.now();
         buildTaggedNodes({ role: 'Root', children: [{ role: 'TOCI', children: [{ type: 'content', id: 'm0' }] }] }, new Map([['m0', [run]]]), { pageNumber: 1, authoredW: 612, authoredH: 792, rotation: 0 }, computeDocContext([run], layout, '\n'), { ignoreNotes: false, listCounter: { n: 0 } });

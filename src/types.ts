@@ -2751,6 +2751,31 @@ export interface SlideMetadata {
     style?: string;
     /** Unique anchor IDs for internal linking. */
     anchorIds?: string[];
+    /** The colour the slide is filled with (its own background, else its layout's or master's), `#RRGGBB`. */
+    background?: string;
+}
+
+/**
+ * Metadata for a `drawing` node: a shape drawn on a slide (a filled box, a circle, a line), or the frame
+ * a shape's text sits in where that is turned or set within it. Its place is the node's `bounds`; the
+ * text in the shape is in the paragraphs after it that have the same bounds. Read from PPTX.
+ */
+export interface ShapeMetadata {
+    /** The shape's outline: DrawingML's preset name (`rect`, `roundRect`, `ellipse`, `triangle`, `line`, ...). */
+    geometry?: string;
+    /** The colour it is filled with, `#RRGGBB`. */
+    fill?: string;
+    /** The colour and width (points) of its outline. */
+    line?: { color?: string; width?: number };
+    /** How far it is turned, in degrees clockwise. */
+    rotation?: number;
+    /** It is mirrored left to right, or top to bottom. */
+    flipH?: boolean;
+    flipV?: boolean;
+    /** Where its text sits from top to bottom of it. */
+    textAnchor?: 'top' | 'middle' | 'bottom';
+    /** The space between its edges and its text, in points. */
+    textInsets?: { top: number; right: number; bottom: number; left: number };
 }
 
 /**
@@ -2854,6 +2879,11 @@ export interface HeadingMetadata {
 export interface ParagraphMetadata {
     /** The alignment of the paragraph. */
     alignment?: TextAlignment;
+    /**
+     * The paragraph's text is turned on its page, in degrees clockwise (a PDF's label running up the
+     * page is 270, one running down 90): text read at an angle, gathered after its page's level text.
+     */
+    rotation?: number;
     /** The style of the paragraph. */
     style?: string;
     /** Detailed indentation information. */
@@ -3347,7 +3377,7 @@ export interface HeaderFooterMetadata {
 /**
  * Union type for content metadata.
  */
-export type ContentMetadata = SlideMetadata | SheetMetadata | RowMetadata | HeadingMetadata | ListMetadata | CellMetadata | ImageMetadata | ChartMetadata | PageMetadata | ParagraphMetadata | TextMetadata | NoteMetadata | BreakMetadata | CodeMetadata | CommentMetadata | HeaderFooterMetadata | TableMetadata | EmbedMetadata | AdmonitionMetadata | DefinitionMetadata | undefined;
+export type ContentMetadata = SlideMetadata | SheetMetadata | RowMetadata | HeadingMetadata | ListMetadata | CellMetadata | ImageMetadata | ChartMetadata | PageMetadata | ParagraphMetadata | TextMetadata | NoteMetadata | BreakMetadata | CodeMetadata | CommentMetadata | HeaderFooterMetadata | TableMetadata | EmbedMetadata | AdmonitionMetadata | DefinitionMetadata | ShapeMetadata | undefined;
 
 
 /**
@@ -3404,7 +3434,7 @@ export interface BaseContentNode {
     /**
      * Where this node sits on its page, as an axis-aligned box in page coordinates.
      * See {@link NodeBounds} for the coordinate convention. Present only when the parser knows
-     * the geometry (currently PDF) and `ignorePageGeometry` is not set.
+     * the geometry (PDF; PPTX, a shape's box on its slide) and `ignorePageGeometry` is not set.
      */
     bounds?: NodeBounds;
 
@@ -3522,7 +3552,7 @@ export type OfficeContentNode = BaseContentNode & (
     | { type: 'footer'; metadata?: HeaderFooterMetadata }
     | { type: 'table'; metadata?: TableMetadata }
     | { type: 'row'; metadata?: RowMetadata }
-    | { type: 'drawing'; metadata?: undefined }
+    | { type: 'drawing'; metadata?: ShapeMetadata }
     | { type: 'slideMaster'; metadata?: SlideMetadata }
     | { type: 'embed'; metadata?: EmbedMetadata }
     | { type: 'admonition'; metadata?: AdmonitionMetadata }

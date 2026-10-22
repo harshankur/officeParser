@@ -32,7 +32,7 @@
 import { zlibSync } from 'fflate';
 import { passwordAttemptLimit } from '../crypto/decryptContainer.js';
 import { DEFAULT_OFFICE_PARSER_CONFIG, DEFAULT_PDF_WORKER_SRC } from '../defaults.js';
-import { FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextFormatting, TextMetadata } from '../types.js';
+import { FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { parseOfficeDate } from '../utils/dateUtils.js';
 import { assertNode, isBrowser } from '../utils/envUtils.js';
@@ -1126,7 +1126,10 @@ async function collectPage(
         const mcid = top?.mcid ?? null, inArtifact = !!top?.artifact;
 
         const dir = (item.dir === 'rtl' || item.dir === 'ttb') ? item.dir : 'ltr';
-        const angle = box.angle === -1 ? 0 : box.angle;
+        // A run at an angle no quarter turn is keeps it: read as level text at its origin, it was
+        // scrambled into the lines around it, or lost.
+        const angle = box.angle;
+        const turn = (Math.round(Math.atan2(m[1], m[0]) * 180 / Math.PI) % 360 + 360) % 360;
 
         // Split the item at annotation x-boundaries so a link only covers the characters it actually
         // spans, instead of the whole phrase run it merely grazes. Adjacent unlinked segments re-merge
@@ -1146,6 +1149,7 @@ async function collectPage(
                 fontSize: box.fontSize,
                 dir,
                 angle,
+                turn,
                 mcid, inArtifact,
                 formatting,
                 link: seg.link,
@@ -1729,6 +1733,10 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
                     // evidence of a broken one: only untagged *body* text warrants the warning.
                     if (leftover.some(r => !r.inArtifact)) warnStruct('some text on a page was outside the tag tree');
                 }
+                // Turned text the tags cover, which their lines (level text alone) leave out: after the
+                // page's text, with its angle, as the geometric path keeps it. A turned label on a slide,
+                // a chart's axis title, was lost from a tagged PDF (as a browser prints one).
+                appendAll(pageContent, rotatedTextNodes(bodyRuns.filter(r => r.angle !== 0 && r.mcid && coveredMcids.has(r.mcid)), pageCtx, pdfCfg));
             } else {
                 warnStruct('the tag tree covered too little of the page text');
             }
@@ -1837,12 +1845,19 @@ function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext
     return out;
 }
 
-/** Recovers rotated (90/180/270) runs as trailing paragraphs, one per angle, in content order. */
+/**
+ * Recovers turned runs (a quarter turn, or any other angle) as trailing paragraphs, one per angle, in
+ * content order, each with its angle (ParagraphMetadata.rotation).
+ */
 function rotatedTextNodes(runs: RawRun[], pageCtx: PageContext, pdfCfg: PdfLayoutConfig): OfficeContentNode[] {
     const out: OfficeContentNode[] = [];
-    for (const angle of [90, 270, 180] as const) {
-        const group = runs.filter(r => r.angle === angle && r.text.trim().length > 0);
-        if (!group.length) continue;
+    const byTurn = new Map<number, RawRun[]>();
+    for (const r of runs) {
+        if (r.angle === 0 || !r.text.trim().length) continue;
+        const group = byTurn.get(r.turn);
+        if (group) group.push(r); else byTurn.set(r.turn, [r]);
+    }
+    for (const [turn, group] of byTurn) {
         // Joined once, a space between runs that do not already meet at one; testing the end of the
         // growing text for each run instead copied all of it every time.
         const parts: string[] = [];
@@ -1854,7 +1869,7 @@ function rotatedTextNodes(runs: RawRun[], pageCtx: PageContext, pdfCfg: PdfLayou
         }
         const text = parts.join('').replace(/\s+/g, ' ').trim();
         if (!text) continue;
-        const node: OfficeContentNode = { type: 'paragraph', text, children: [{ type: 'text', text }] };
+        const node: OfficeContentNode = { type: 'paragraph', text, children: [{ type: 'text', text }], metadata: { rotation: turn } as ParagraphMetadata };
         const box = unionAll(group.map(r => ({ x: r.x, y: r.yTop, width: r.width, height: r.height })));
         if (pdfCfg.includeBounds && box) {
             const rendered = roundBounds(rotateBoundsToRendered(box, pageCtx.rotation, pageCtx.authoredW, pageCtx.authoredH));

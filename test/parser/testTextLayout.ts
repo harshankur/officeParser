@@ -70,6 +70,7 @@ function run(text: string, x: number, yBaseline: number, fontSize = 12, opts: Ru
         fontSize,
         dir: 'ltr',
         angle: 0,
+        turn: 0,
         mcid: null,
         inArtifact: false,
         formatting: opts.bold ? { bold: true } : {},

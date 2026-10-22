@@ -17,7 +17,7 @@
  * @module generators/pdf/nativePdfEngine
  */
 
-import { EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, SheetMetadata, TextAlignment, TextFormatting, BreakMetadata, ChartData, HeaderFooterMetadata } from '../../types.js';
+import { EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, SheetMetadata, TextAlignment, TextFormatting, BreakMetadata, ChartData, HeaderFooterMetadata, NodeBounds, ShapeMetadata, SlideMetadata } from '../../types.js';
 import { getAbortError, getOfficeError } from '../../utils/errorUtils.js';
 import { documentLanguage, embedUrl, isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize, writableSpacing } from '../../utils/officeGenUtils.js';
 import { decodeBmp, decodeGif, encodePng } from '../../utils/rasterUtils.js';
@@ -370,6 +370,133 @@ class NativeLayout {
         this.pageW = w; this.pageH = h;
         this.page.setSize(w, h);
         Object.assign(record, { w, h });
+    }
+
+    // ── slides ───────────────────────────────────────────────────────────────────
+
+    /**
+     * Draws a slide as it is laid out: its background over the page, each shape (ShapeMetadata) where
+     * it is, each shape's text in its box (set from its top, middle or bottom, turned with it), each
+     * picture over its frame, each table and chart in its box; the slide scaled to the page where the
+     * page is another size. A deck was laid out as flowing text, its shapes, fills and places lost.
+     */
+    private async drawSlide(node: OfficeContentNode): Promise<void> {
+        const meta = node.metadata as SlideMetadata | undefined;
+        const children = node.children || [];
+        // The slide's size (the presentation's page), and its place on this page.
+        const slideW = this.ast.metadata?.pageSetup?.width || this.pageW, slideH = this.ast.metadata?.pageSetup?.height || this.pageH;
+        const scale = Math.min(this.pageW / slideW, this.pageH / slideH);
+        const offsetX = (this.pageW - slideW * scale) / 2, offsetY = (this.pageH - slideH * scale) / 2;
+        const place = (b: NodeBounds) => ({ x: offsetX + b.x * scale, y: offsetY + b.y * scale, width: b.width * scale, height: b.height * scale });
+        const saved = { margin: this.margin, fixed: this.fixedPage, y: this.y };
+        const pageNumber = this.pageRecords.length;
+        if (meta?.background) this.page.drawRectangle({ x: offsetX, y: this.pageH - offsetY - slideH * scale, width: slideW * scale, height: slideH * scale, color: this.color(meta.background) });
+        this.fixedPage = true;
+        this.fieldPage = pageNumber;
+        const flowing: OfficeContentNode[] = [];
+        try {
+            for (let i = 0; i < children.length; i++) {
+                const child = children[i];
+                if (!child.bounds) { flowing.push(child); continue; }
+                const box = place(child.bounds);
+                if (child.type === 'drawing') {
+                    const shape = child.metadata as ShapeMetadata | undefined;
+                    this.turned(box, shape, () => this.drawShape(box, shape));
+                    // The shape's text: the nodes after it in its box.
+                    const text: OfficeContentNode[] = [];
+                    while (i + 1 < children.length && children[i + 1].type !== 'drawing' && sameBox(children[i + 1].bounds, child.bounds)) text.push(children[++i]);
+                    if (text.length) await this.drawTextBox(text, box, shape);
+                } else if (child.type === 'image') {
+                    const picture = this.imageMode === 'image-only' || this.imageMode === 'image+ocr-text' ? await this.embedPicture(child) : null;
+                    if (picture) this.page.drawImage(picture.img, { x: box.x, y: this.pageH - box.y - box.height, width: box.width, height: box.height });
+                    else await this.drawTextBox([child], box, undefined);
+                } else if (child.type === 'table' || child.type === 'chart') {
+                    this.margin = { top: box.y, left: box.x, right: this.pageW - box.x - box.width, bottom: 0 };
+                    this.y = box.y;
+                    await this.render(child);
+                } else {
+                    const text: OfficeContentNode[] = [child];
+                    while (i + 1 < children.length && children[i + 1].type !== 'drawing' && sameBox(children[i + 1].bounds, child.bounds)) text.push(children[++i]);
+                    await this.drawTextBox(text, box, undefined);
+                }
+            }
+        } finally {
+            this.margin = saved.margin;
+            this.fixedPage = saved.fixed;
+            this.fieldPage = undefined;
+            this.y = saved.y;
+        }
+        // What has no place on the slide, and its speaker notes (pdfConfig.printSpeakerNotes), follow it.
+        if (flowing.length || node.notes?.length) {
+            this.newPage();
+            for (const c of flowing) await this.render(c);
+            for (const n of node.notes || []) await this.note(n);
+        } else {
+            // The next slide starts a page of its own (see render's pagination): this one is full.
+            this.y = this.bottom;
+        }
+    }
+
+    /** Draws `draw` turned (and mirrored) about the box's centre, as the shape is. */
+    private turned(box: { x: number; y: number; width: number; height: number }, shape: ShapeMetadata | undefined, draw: () => void): void {
+        const rotation = shape?.rotation || 0;
+        if (!rotation && !shape?.flipH && !shape?.flipV) { draw(); return; }
+        const cx = box.x + box.width / 2, cy = this.pageH - box.y - box.height / 2;
+        const angle = -rotation * Math.PI / 180, cos = Math.cos(angle), sin = Math.sin(angle);
+        const sx = shape?.flipH ? -1 : 1, sy = shape?.flipV ? -1 : 1;
+        // Translate to the centre, turn (clockwise on the page), mirror, and translate back.
+        const a = cos * sx, b = sin * sx, c = -sin * sy, d = cos * sy;
+        this.page.pushOperators(this.lib.pushGraphicsState(), this.lib.concatTransformationMatrix(a, b, c, d, cx - a * cx - c * cy, cy - b * cx - d * cy));
+        try { draw(); } finally { this.page.pushOperators(this.lib.popGraphicsState()); }
+    }
+
+    /** Draws a shape's outline in its fill and line: a box, a rounded box, an ellipse, a line, a triangle or a diamond. */
+    private drawShape(box: { x: number; y: number; width: number; height: number }, shape: ShapeMetadata | undefined): void {
+        if (!shape?.fill && !shape?.line) return;
+        const fill = shape.fill ? this.color(shape.fill) : undefined;
+        const line = shape.line?.color ? { borderColor: this.color(shape.line.color), borderWidth: shape.line.width ?? 0.75 } : {};
+        const bottom = this.pageH - box.y - box.height;
+        switch (shape.geometry) {
+            case 'ellipse':
+            case 'circle':
+                this.page.drawEllipse({ x: box.x + box.width / 2, y: bottom + box.height / 2, xScale: box.width / 2, yScale: box.height / 2, ...(fill ? { color: fill } : {}), ...line });
+                return;
+            case 'line':
+            case 'straightConnector1':
+                this.page.drawLine({ start: { x: box.x, y: bottom + box.height }, end: { x: box.x + box.width, y: bottom }, thickness: shape.line?.width ?? 0.75, color: (shape.line?.color && this.color(shape.line.color)) || fill || this.lib.rgb(0, 0, 0) });
+                return;
+            case 'triangle':
+            case 'diamond': {
+                const w = box.width, h = box.height;
+                const path = shape.geometry === 'triangle' ? `M ${w / 2} 0 L ${w} ${h} L 0 ${h} Z` : `M ${w / 2} 0 L ${w} ${h / 2} L ${w / 2} ${h} L 0 ${h / 2} Z`;
+                this.page.drawSvgPath(path, { x: box.x, y: this.pageH - box.y, ...(fill ? { color: fill } : {}), ...line });
+                return;
+            }
+            default:
+                // A box, a rounded box, and the outlines not drawn as themselves: their box, in their colours.
+                this.page.drawRectangle({ x: box.x, y: bottom, width: box.width, height: box.height, ...(fill ? { color: fill } : {}), ...line });
+        }
+    }
+
+    /** Draws a shape's text in its box: within its insets, set from its top, middle or bottom, turned with it. */
+    private async drawTextBox(nodes: OfficeContentNode[], box: { x: number; y: number; width: number; height: number }, shape: ShapeMetadata | undefined): Promise<void> {
+        const insets = shape?.textInsets ?? { top: 3.6, right: 7.2, bottom: 3.6, left: 7.2 };
+        const inner = { left: box.x + insets.left, right: this.pageW - (box.x + box.width - insets.right), top: box.y + insets.top, bottom: 0 };
+        if (this.pageW - inner.left - inner.right < 4) { inner.left = box.x; inner.right = this.pageW - box.x - Math.max(4, box.width); }
+        const drawAll = async () => { for (const n of nodes) await this.render(n); };
+        // Measured from the top of a box of its width, then drawn from where its anchor sets it: its
+        // first line at the top of the box it is given (a heading adds no space above it there).
+        const height = await this.measured(async () => { this.margin = { ...inner, top: 0 }; this.y = 0; await drawAll(); });
+        const room = box.height - insets.top - insets.bottom;
+        const offset = shape?.textAnchor === 'middle' ? (room - height) / 2 : shape?.textAnchor === 'bottom' ? room - height : 0;
+        this.margin = { ...inner, top: inner.top + offset };
+        this.y = inner.top + offset;
+        const rotation = shape?.rotation || 0;
+        if (!rotation && !shape?.flipH && !shape?.flipV) { await drawAll(); return; }
+        const cx = box.x + box.width / 2, cy = this.pageH - box.y - box.height / 2;
+        const angle = -rotation * Math.PI / 180, cos = Math.cos(angle), sin = Math.sin(angle);
+        this.page.pushOperators(this.lib.pushGraphicsState(), this.lib.concatTransformationMatrix(cos, sin, -sin, cos, cx - cos * cx + sin * cy, cy - sin * cx - cos * cy));
+        try { await drawAll(); } finally { this.page.pushOperators(this.lib.popGraphicsState()); }
     }
 
     /** The page fields' numbers while a page's header and footer are drawn (see TextMetadata.field). */
@@ -1171,6 +1298,8 @@ class NativeLayout {
         switch (node.type) {
             case 'page':
             case 'slide':
+                // A slide whose shapes have their places is drawn as it is laid out (see drawSlide).
+                if (node.type === 'slide' && (node.children || []).some(c => c.bounds)) { await this.drawSlide(node); return; }
                 // A PDF's page keeps its own size (pdfConfig.format 'auto'), as each section's does.
                 if (topLevel && node.type === 'page') this.takePageSize(node.metadata as { pageWidth?: number; pageHeight?: number } | undefined);
                 for (const c of node.children || []) await this.render(c);
@@ -1338,7 +1467,8 @@ class NativeLayout {
         const { left, width, layout, spacing } = this.placement(node);
         if (spacing?.before !== undefined) this.spaceAbove(spacing.before);
         else if (this.y > this.margin.top) this.y += size * 0.6;
-        const runs = (await this.collectRuns(node)).map(r => ({ ...r, fmt: { ...r.fmt, bold: true, size: `${size}pt` } }));
+        // Bold, at the level's size unless its runs have their own (a slide's title, a style's size).
+        const runs = (await this.collectRuns(node)).map(r => ({ ...r, fmt: { ...r.fmt, bold: true, size: r.fmt.size ?? `${size}pt` } }));
         const title = (runs.length ? runs.map(r => r.text).join('') : node.text || '').replace(/\s+/g, ' ').trim();
         if (title && !this.fixedPage) this.outlineEntries.push({ title, level, page: this.page, top: this.pageH - this.y });
         this.drawRuns(runs.length ? runs : [{ text: node.text || '', fmt: { bold: true, size: `${size}pt` } }], left, width, false, layout);
@@ -1424,7 +1554,9 @@ class NativeLayout {
         // drawRuns' first line stays on this page and draws at the same baseline as the marker.
         const markerX = this.margin.left + indent - 14;
         const baseline = this.pageH - this.y - size;
-        if (marker && !this.drawBulletShape(marker, markerX, baseline, size)) this.drawText(this.enc(marker), 'regular', markerX, baseline, size, this.lib.rgb(0.12, 0.12, 0.12));
+        // In its text's colour (white bullets on a dark slide were drawn dark).
+        const ink = this.color(bodyRuns.find(r => r.text.trim())?.fmt.color) ?? this.lib.rgb(0.12, 0.12, 0.12);
+        if (marker && !this.drawBulletShape(marker, markerX, baseline, size, ink)) this.drawText(this.enc(marker), 'regular', markerX, baseline, size, ink);
         // The body starts past a marker wider than the usual gap (`1.1.1.`, `(iii)`), as a tab stop
         // past it would set it.
         const markerWidth = marker ? this.widthOf(this.enc(marker, 'regular', false), 'regular', size) : 0;
@@ -1443,10 +1575,9 @@ class NativeLayout {
      * Standard-14 fonts having none but the round bullet. False when the marker is not such a bullet,
      * or a font draws it.
      */
-    private drawBulletShape(marker: string, x: number, baseline: number, size: number): boolean {
+    private drawBulletShape(marker: string, x: number, baseline: number, size: number, color: any): boolean {
         const cp = marker.codePointAt(0)!;
         if ([...marker].length !== 1 || this.fonts.regular.some(face => face.covers(cp))) return false;
-        const color = this.lib.rgb(0.12, 0.12, 0.12);
         const r = size * 0.18, cx = x + r + 1, cy = baseline + size * 0.3;
         switch (marker) {
             case '◦': case '○': case '❍':
@@ -1913,6 +2044,11 @@ class NativeLayout {
         const total = sum(scaled);
         return { widths: scaled.map(w => w * room / total), size: base * scale };
     }
+}
+
+/** Whether two boxes are the same (a shape's, which its text nodes share). */
+function sameBox(a: NodeBounds | undefined, b: NodeBounds | undefined): boolean {
+    return !!a && !!b && (a === b || (a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height));
 }
 
 /** Minimal shape of `CellMetadata` the native engine reads. */

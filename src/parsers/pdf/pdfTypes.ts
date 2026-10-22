@@ -10,8 +10,8 @@
 
 import { NodeBounds, TextFormatting, TextMetadata } from '../../types.js';
 
-/** A run's writing angle after snapping to the nearest quarter turn. */
-export type RunAngle = 0 | 90 | 180 | 270;
+/** A run's writing angle after snapping to the nearest quarter turn, or -1 for one between them. */
+export type RunAngle = 0 | 90 | 180 | 270 | -1;
 
 /** Resolved font attributes for one pdf.js font id, looked up once per document. */
 export interface ResolvedFont {
@@ -43,6 +43,8 @@ export interface RawRun {
     dir: 'ltr' | 'rtl' | 'ttb';
     /** Snapped writing angle. Only 0 goes through the normal flow; others are appended after. */
     angle: RunAngle;
+    /** The angle the run is turned at on the page, in whole degrees clockwise (0 for level text). */
+    turn: number;
     /** Marked-content id for the tagged path, or null. */
     mcid: string | null;
     /** True when the run sits inside an Artifact scope (running header/footer, decoration). */
