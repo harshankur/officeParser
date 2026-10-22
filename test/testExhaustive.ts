@@ -5188,7 +5188,7 @@ async function testWritersHoldUp(): Promise<void> {
         auxiliary: { headers: [furnitureOf('header', '', 'default'), furnitureOf('header', 'Letterhead', 'first')], footers: [furnitureOf('footer', 'Foot', 'default')] } } as any;
     const lhDoc = docxParts((await OfficeGenerator.generate(letterhead, 'docx')).value as Uint8Array)['word/document.xml'];
     assert.ok(/<w:headerReference w:type="first"/.test(lhDoc) && !/<w:headerReference w:type="default"/.test(lhDoc) && /<w:footerReference w:type="default"[^>]*\/><w:footerReference w:type="first"/.test(lhDoc) && /<w:titlePg\/>/.test(lhDoc), 'DOCX: a letterhead is the title page\'s header, the footer on every page');
-    for (const format of ['docx', 'rtf', 'tex'] as const) {
+    for (const format of ['docx', 'odt', 'rtf', 'tex'] as const) {
         const back = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(letterhead, format)).value as any), { fileType: format } as any) as OfficeParserAST;
         const heads = runningFurniture(back.auxiliary?.headers, 'header');
         assert.deepStrictEqual([heads.map(h => collectAllNodes({ content: [h] } as any).filter(n => n.type === 'text').map(n => n.text).join('')), (heads[0]?.metadata as any)?.type], [['Letterhead'], 'first'], `${format}: a letterhead reads back as the first page's header`);
@@ -5196,6 +5196,10 @@ async function testWritersHoldUp(): Promise<void> {
     const lhOdt = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(letterhead, 'odt')).value as Uint8Array))['styles.xml']);
     assert.ok(/<style:master-page style:name="Standard"[^>]*style:next-style-name="Rest"><style:header>.*Letterhead.*<\/style:header>/.test(lhOdt) && /<style:master-page style:name="Rest"[^>]*><style:footer>/.test(lhOdt), 'ODT: a letterhead is on the first page\'s master, which hands over to the rest');
     const evenOnly = { ...letterhead, auxiliary: { headers: [furnitureOf('header', 'Even pages', 'even')] } };
+    const evenOdt = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(evenOnly, 'odt')).value as Uint8Array))['styles.xml']);
+    assert.ok(/<style:header><text:p\/><\/style:header><style:header-left>.*Even pages/.test(evenOdt), 'ODT: even pages\' own header follows an odd pages\' header of an empty paragraph (an empty one is read as none, its left pages\' with it)');
+    const unshown = await OfficeParser.parseOffice(Buffer.from(String.raw`{\rtf1\ansi{\fonttbl{\f0 Arial;}}{\headerf {\pard Letterhead\par}}{\headerl {\pard Left\par}}{\pard Body\par}}`), { fileType: 'rtf' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(unshown.auxiliary?.headers?.map(h => [(h.metadata as any).type, (h.metadata as any).hidden]), [['first', true], ['even', true]], 'RTF: a first page\'s part without \\titlepg, and a left page\'s without \\facingp, are kept hidden');
     const evenParts = docxParts((await OfficeGenerator.generate(evenOnly, 'docx')).value as Uint8Array);
     assert.ok(/<w:headerReference w:type="even"/.test(evenParts['word/document.xml']) && /<w:evenAndOddHeaders\/>/.test(evenParts['word/settings.xml'] ?? ''), 'DOCX: even pages\' own header is written for even pages, with the setting that shows it');
     const furniture = (text: string, meta: object) => ({ type: 'header', text, children: text ? [{ type: 'paragraph', text, children: [{ type: 'text', text }] }] : [], metadata: meta }) as any;

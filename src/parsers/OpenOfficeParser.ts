@@ -2770,9 +2770,20 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         masters.forEach((name, section) => {
             if (section > 0 && name === masters[section - 1]) return;
             const master = masterPages.get(name);
-            for (const [tag, kind, type] of [['style:header', 'header', 'default'], ['style:header-left', 'header', 'even'], ['style:header-first', 'header', 'first'],
-                ['style:footer', 'footer', 'default'], ['style:footer-left', 'footer', 'even'], ['style:footer-first', 'footer', 'first']] as const) {
-                const el = shown(master, tag);
+            const own = [['style:header', 'header', 'default'], ['style:header-left', 'header', 'even'], ['style:header-first', 'header', 'first'],
+                ['style:footer', 'footer', 'default'], ['style:footer-left', 'footer', 'even'], ['style:footer-first', 'footer', 'first']] as const;
+            // A document's first master page that hands over to another after its first page (a word
+            // processor's "First Page" style, `style:next-style-name`) holds the first page's header and
+            // footer, and the one it hands over to the rest's: read as every page's, its letterhead was
+            // repeated on every page.
+            const next = section === 0 ? master?.getAttribute('style:next-style-name') : undefined;
+            const rest = next && next !== name ? masterPages.get(next) : undefined;
+            const parts: (readonly [Element | undefined, string, 'header' | 'footer', 'default' | 'even' | 'first'])[] = rest
+                ? [...(['header', 'footer'] as const).map(kind => [master, shown(master, `style:${kind}-first`) ? `style:${kind}-first` : `style:${kind}`, kind, 'first'] as const),
+                    ...own.filter(([, , type]) => type !== 'first').map(([tag, kind, type]) => [rest, tag, kind, type] as const)]
+                : own.map(([tag, kind, type]) => [master, tag, kind, type] as const);
+            for (const [from, tag, kind, type] of parts) {
+                const el = shown(from, tag);
                 if (!el && !(sectioned && section > 0 && type === 'default')) continue;
                 const children: OfficeContentNode[] = [];
                 if (el) traverse(el, children, false, stylesXmlStr);

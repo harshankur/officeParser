@@ -662,6 +662,9 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // group, of its kind (`f` the first page's, `l` the left, even, pages'), as Word's and ODT's are.
     const headers: OfficeContentNode[] = [];
     const footers: OfficeContentNode[] = [];
+    // A first page's own part is shown under `\titlepg`, a left page's under `\facingp`; without them,
+    // kept and hidden, as Word's are.
+    let titlePage = false, facingPages = false;
     // Who wrote the next annotation (`\annotation`), given in the groups before it.
     let annotationAuthor: string | undefined;
     let annotationInitials: string | undefined;
@@ -1906,6 +1909,9 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 }
                 return;
             }
+            // Whether the first page's own header and footer (`\headerf`) and the left pages' (`\headerl`) are shown.
+            if (node.value === 'titlepg') titlePage = true;
+            else if (node.value === 'facingp') facingPages = true;
             // Paragraph control words
             if (node.value === 'par') {
                 flushParagraph();
@@ -2243,6 +2249,10 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         assignOcr(content);
     }
 
+    for (const part of [...headers, ...footers]) {
+        const meta = part.metadata as HeaderFooterMetadata;
+        if ((meta.type === 'first' && !titlePage) || (meta.type === 'even' && !facingPages)) meta.hidden = true;
+    }
     const result = createAST(
         'rtf',
         {

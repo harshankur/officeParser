@@ -941,13 +941,14 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             + ` fo:page-width="${fmtIn(pw)}" fo:page-height="${fmtIn(ph)}" style:print-orientation="${orient}"`
             + ` fo:margin-top="${fmtPt(mar.top)}" fo:margin-bottom="${fmtPt(mar.bottom)}"`
             + ` fo:margin-left="${fmtPt(mar.left)}" fo:margin-right="${fmtPt(mar.right)}"/></style:page-layout>`;
-        // A part on every page, on even pages alone (`style:header-left`, its odd pages' header empty), or
+        // A part on every page, on even pages alone (`style:header-left`, its odd pages' header an empty
+        // paragraph: an empty `style:header` is read as none, and its left pages' with it), or
         // on the first page alone: then the first page's master (the document starts on `Standard`)
         // hands over to one for the rest (`style:next-style-name`), as a word processor's first-page style.
         const part = (tag: 'header' | 'footer', xml: string, kind: string, page: 'first' | 'rest') => {
             if (!xml) return '';
             if (kind === 'first') return page === 'first' ? `<style:${tag}>${xml}</style:${tag}>` : '';
-            if (kind === 'even') return page === 'first' && headerKind !== 'first' && footerKind !== 'first' || page === 'rest' ? `<style:${tag}/><style:${tag}-left>${xml}</style:${tag}-left>` : '';
+            if (kind === 'even') return page === 'first' && headerKind !== 'first' && footerKind !== 'first' || page === 'rest' ? `<style:${tag}><text:p/></style:${tag}><style:${tag}-left>${xml}</style:${tag}-left>` : '';
             return `<style:${tag}>${xml}</style:${tag}>`;
         };
         const firstOwn = headerKind === 'first' || footerKind === 'first';
