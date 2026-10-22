@@ -4885,7 +4885,9 @@ async function testDocxSectionsInPdf(): Promise<void> {
     assert.strictEqual(strFromU8(docxOut['word/header1.xml']).replace(/<[^>]+>/g, '').trim(), 'Running header', 'DOCX output writes the document\'s running header alone');
     const perPage = { ...ast, auxiliary: { headers: [1, 2, 3].map(() => ({ type: 'header', text: 'Same on every page', metadata: { type: 'default' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'Same on every page' }] }] })) } } as any;
     const odtOut = unzipSync(new Uint8Array((await OfficeGenerator.generate(perPage, 'odt', {} as any)).value as any));
-    assert.strictEqual((strFromU8(odtOut['styles.xml']).match(/Same on every page/g) || []).length, 1, 'a header given for each page (as a PDF gives it) is written once');
+    // (Once on each master page: a section on a page of its own has a master of its own, with the body's header.)
+    const odtStyles = strFromU8(odtOut['styles.xml']);
+    assert.strictEqual((odtStyles.match(/Same on every page/g) || []).length, (odtStyles.match(/<style:master-page /g) || []).length, 'a header given for each page (as a PDF gives it) is written once a master page');
 }
 
 /**

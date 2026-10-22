@@ -38,6 +38,20 @@ class PdfString { constructor(readonly bytes: Uint8Array) {} }
 type PdfDict = Map<string, PdfValue>;
 interface PdfStream { dict: PdfDict; start: number; length: number; src: Uint8Array }
 
+/** The longest word (an operator, a number, a keyword) a content stream holds: longer is none. */
+const MAX_WORD = 64;
+
+/** Whether a word is a PDF number: a sign, then digits with at most one point among or before them. */
+function isNumberWord(word: string): boolean {
+    let i = word[0] === '+' || word[0] === '-' ? 1 : 0, digits = 0, points = 0;
+    for (; i < word.length; i++) {
+        const c = word.charCodeAt(i);
+        if (c >= 0x30 && c <= 0x39) digits++;
+        else if (c === 0x2e && points === 0) points++;
+        else return false;
+    }
+    return digits > 0;
+}
 const isWhite = (c: number) => c === 0x20 || c === 0x0a || c === 0x0d || c === 0x09 || c === 0x0c || c === 0x00;
 const isDelim = (c: number) => c === 0x28 || c === 0x29 || c === 0x3c || c === 0x3e || c === 0x5b || c === 0x5d || c === 0x7b || c === 0x7d || c === 0x2f || c === 0x25;
 
@@ -90,13 +104,16 @@ class Lexer {
             return out;
         }
         if (c === 0x5d || c === 0x3e || c === 0x29 || c === 0x7b || c === 0x7d) { this.pos++; return { op: String.fromCharCode(c) }; }
-        // A number, or a word (an operator, true, false, null).
+        // A number, or a word (an operator, true, false, null). A word longer than any a content stream
+        // names is none of them (a run of digits a hundred thousand long cost time in its square to test).
         let i = this.pos;
         while (i < this.end && !isWhite(s[i]) && !isDelim(s[i])) i++;
-        let word = '';
-        for (let k = this.pos; k < i; k++) word += String.fromCharCode(s[k]);
+        const start = this.pos;
         this.pos = i;
-        if (/^[+-]?(\d+\.?\d*|\.\d+)$/.test(word)) return Number(word);
+        if (i - start > MAX_WORD) return { op: '' };
+        let word = '';
+        for (let k = start; k < i; k++) word += String.fromCharCode(s[k]);
+        if (isNumberWord(word)) return Number(word);
         if (word === 'true') return true;
         if (word === 'false') return false;
         if (word === 'null') return null;

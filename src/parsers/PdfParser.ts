@@ -32,7 +32,7 @@
 import { zlibSync } from 'fflate';
 import { passwordAttemptLimit } from '../crypto/decryptContainer.js';
 import { DEFAULT_OFFICE_PARSER_CONFIG, DEFAULT_PDF_WORKER_SRC } from '../defaults.js';
-import { FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { FullOfficeParserConfig, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { parseOfficeDate } from '../utils/dateUtils.js';
 import { assertNode, isBrowser } from '../utils/envUtils.js';
@@ -1853,6 +1853,8 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     resolveSectionLinks(content, extracts, sectionLinks, [content, auxHeaders, auxFooters, outline ?? []]);
     // The headings read by size and weight, levelled by the sizes of those headings (see relevelHeadings).
     relevelHeadings(content);
+    // A list read from its geometry is levelled from its own outermost items (see levelListsFromOwnItems).
+    levelListsFromOwnItems(content);
 
     const auxiliary = (auxHeaders.length || auxFooters.length || outline)
         ? { ...(auxHeaders.length ? { headers: auxHeaders } : {}), ...(auxFooters.length ? { footers: auxFooters } : {}), ...(outline ? { outline } : {}) }
@@ -1904,6 +1906,31 @@ function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext
     // usually the correct reading order); precise visual ordering of rotated text is a limitation.
     appendAll(out, rotatedTextNodes(runs, pageCtx, pdfCfg));
     return out;
+}
+
+/**
+ * Each list read from the page's geometry levelled from its own outermost items: levels are found from
+ * the markers' left edges across a page, so a list whose items all sat right of another marker (a
+ * numbered table's first column, a list further left) started at level one.
+ */
+function levelListsFromOwnItems(content: OfficeContentNode[]): void {
+    const lists = new Map<string, ListMetadata[]>();
+    const stack = [...content];
+    let visited = 0;
+    while (stack.length && visited++ < 5_000_000) {
+        const n = stack.pop()!;
+        const meta = n.type === 'list' ? n.metadata as ListMetadata | undefined : undefined;
+        if (meta && typeof meta.listId === 'string' && meta.listId.startsWith('pdf-geo-list') && typeof meta.indentation === 'number') {
+            const group = lists.get(meta.listId);
+            if (group) group.push(meta); else lists.set(meta.listId, [meta]);
+        }
+        if (n.children) for (const c of n.children) stack.push(c);
+    }
+    for (const group of lists.values()) {
+        let least = Infinity;
+        for (const m of group) least = Math.min(least, m.indentation);
+        if (least > 0 && Number.isFinite(least)) for (const m of group) m.indentation -= least;
+    }
 }
 
 /**

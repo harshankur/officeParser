@@ -136,18 +136,22 @@ export function shapeBullets(shapes: readonly PdfShape[] | undefined, runs: read
         if (list) list.push(r); else buckets.set(key, [r]);
     }
     const out: RawRun[] = [];
+    // Every marker-sized shape on a line of text, by the line (see the end).
+    const perLine = new Map<number, number>();
     for (const s of shapes) {
         if (s.width <= 0 || s.height <= 0 || s.width > 24 || s.height > 24) continue;
         if (Math.abs(s.width - s.height) > 0.25 * Math.max(s.width, s.height)) continue;
         const cx = s.x + s.width / 2, cy = s.y + s.height / 2, right = s.x + s.width;
-        let next: RawRun | undefined;
+        let next: RawRun | undefined, counted = false;
         for (let key = Math.floor(cy / 4) - 1; key <= Math.floor((cy + 24) / 4) + 1; key++) {
             for (const r of buckets.get(key) ?? []) {
                 const fs = r.fontSize || 12;
                 if (s.width < 0.15 * fs || s.width > 0.6 * fs) continue;
                 if (cy < r.yBaseline - 0.8 * fs || cy > r.yBaseline - 0.05 * fs) continue;
-                // On the shape's line, a run reaching over it means the shape is in the text, not before it.
-                if (r.x < cx && r.x + r.width > cx) { next = undefined; key = Infinity; break; }
+                if (!counted) { counted = true; const k = Math.round(r.yBaseline); perLine.set(k, (perLine.get(k) ?? 0) + 1); }
+                // On the shape's line, a run reaching over it means the shape is in the text, not before it; and
+                // text just before it, a key between a chart legend's labels ("Series 1 ▪ Series 2").
+                if ((r.x < cx && r.x + r.width > cx) || (r.x + r.width <= s.x + 0.5 && s.x - (r.x + r.width) < 4 * fs)) { next = undefined; key = Infinity; break; }
                 if (r.x < right - 0.5 || r.x - right > 3 * fs) continue;
                 if (!next || r.x < next.x) next = r;
             }
@@ -159,5 +163,6 @@ export function shapeBullets(shapes: readonly PdfShape[] | undefined, runs: read
             dir: 'ltr', angle: 0, turn: 0, mcid: next.mcid, inArtifact: next.inArtifact, formatting: {},
         });
     }
-    return out;
+    // A list has one marker a line: shapes on one line with another (a chart legend's keys in a row) are none.
+    return out.filter(b => { const k = Math.round(b.yBaseline); return (perLine.get(k - 1) ?? 0) + (perLine.get(k) ?? 0) + (perLine.get(k + 1) ?? 0) === 1; });
 }

@@ -117,8 +117,26 @@ export function buildLines(runs: RawRun[], cfg: PdfLayoutConfig): PdfLine[] {
 
     const lines = clusters.flatMap(c => clusterToLines(c.runs, cfg));
     // Top to bottom; lines on one baseline (a line cut at a wide gap) left to right.
-    lines.sort((a, b) => Math.abs(a.baseline - b.baseline) < 0.5 ? a.x - b.x : a.baseline - b.baseline);
-    return lines;
+    return inReadingOrder(lines);
+}
+
+/**
+ * Lines top to bottom, those on one baseline (within half a unit of the first of them: a line cut at a
+ * wide gap) left to right. In bands, as a comparator of "close baselines by x, else by baseline" is no
+ * order: lines a few tenths apart came out in an order of the sort's own.
+ */
+function inReadingOrder<T extends { baseline: number; x: number }>(lines: T[]): T[] {
+    lines.sort((a, b) => a.baseline - b.baseline);
+    const out: T[] = [];
+    for (let i = 0; i < lines.length;) {
+        let j = i + 1;
+        while (j < lines.length && lines[j].baseline - lines[i].baseline < 0.5) j++;
+        const band = lines.slice(i, j);
+        if (band.length > 1) band.sort((a, b) => a.x - b.x);
+        for (const l of band) out.push(l);
+        i = j;
+    }
+    return out;
 }
 
 function addToCluster(c: Cluster, r: RawRun): void {
@@ -520,7 +538,7 @@ function startsNewParagraph(l: PdfLine, prev: PdfLine, firstIsItem: boolean, han
 
 function groupParagraphs(block: PdfLine[]): ParaGroup[] {
     // Top to bottom; lines on one baseline (a line cut at a wide gap) left to right.
-    const lines = [...block].sort((a, b) => Math.abs(a.baseline - b.baseline) < 0.5 ? a.x - b.x : a.baseline - b.baseline);
+    const lines = inReadingOrder([...block]);
     const deltas: number[] = [];
     for (let i = 1; i < lines.length; i++) deltas.push(lines[i].baseline - lines[i - 1].baseline);
     const leading = median(deltas) || (lines[0]?.height ?? 12) * 1.2;
@@ -1424,5 +1442,8 @@ function headingLevel(group: ParaGroup, doc: DocContext, bodyFollows = false): n
     if (!allBold || chars > 150 || /[.,;]$/.test(text)) return 0;
     if (size >= body + 0.75) return doc.headingLevelForSize(size) || doc.bodyHeadingLevel;
     if (Math.abs(size - body) >= 0.75 || group.lines.length > 2 || chars > 120 || /[:!]$/.test(text) || !bodyFollows) return 0;
+    // A line spread wide for its letters (more than an em and a half a letter) is a row of columns (a table's
+    // header the table reader did not take), not a heading.
+    if (group.lines.some(l => l.width > 1.5 * (l.fontSize || size) * Math.max(1, lineTextOf(l).replace(/\s+/g, ' ').trim().length))) return 0;
     return doc.bodyHeadingLevel;
 }

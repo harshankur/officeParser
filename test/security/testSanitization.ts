@@ -4123,6 +4123,12 @@ async function pdfProcessTests(h: {
         marked = await read(markedPage(Buffer.from(body + 'ET\n')));
     });
     check('pdf: marked-content spans read as their ActualText', !marked.error && marked.text.includes('a1') && !marked.text.includes('x'), marked.error || marked.text.slice(0, 80));
+    // A word of a hundred thousand digits ending in a letter is no number: telling took time in its square.
+    let longWord = { error: '', text: '' } as { error: string; text: string };
+    await linear('pdf: marked content holding a word of 160,000 digits is read', async () => {
+        longWord = await read(markedPage(Buffer.from(`BT /F1 12 Tf 72 700 Td /P BMC (Long word page) Tj EMC ET\n${'7'.repeat(n(160_000))}x\n`)));
+    });
+    check('pdf: a page with a long digit word keeps its text', !longWord.error && longWord.text.includes('Long word page'), longWord.error || longWord.text.slice(0, 80));
     const zeros = Buffer.alloc(96 * 1024 * 1024, 0x20);
     zeros.write('BT /F1 10 Tf 40 800 Td (Past the zeros) Tj ET', zeros.length - 64);
     const bombRun = await withinTime(20_000, () => read(markedPage(zeros)));
