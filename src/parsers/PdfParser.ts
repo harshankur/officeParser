@@ -32,7 +32,7 @@
 import { zlibSync } from 'fflate';
 import { passwordAttemptLimit } from '../crypto/decryptContainer.js';
 import { DEFAULT_OFFICE_PARSER_CONFIG, DEFAULT_PDF_WORKER_SRC } from '../defaults.js';
-import { FullOfficeParserConfig, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { parseOfficeDate } from '../utils/dateUtils.js';
 import { assertNode, isBrowser } from '../utils/envUtils.js';
@@ -1864,8 +1864,6 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     resolveSectionLinks(content, extracts, sectionLinks, [content, auxHeaders, auxFooters, outline ?? []]);
     // The headings read by size and weight, levelled by the sizes of those headings (see relevelHeadings).
     relevelHeadings(content);
-    // A list read from its geometry is levelled from its own outermost items (see levelListsFromOwnItems).
-    levelListsFromOwnItems(content);
 
     const auxiliary = (auxHeaders.length || auxFooters.length || outline)
         ? { ...(auxHeaders.length ? { headers: auxHeaders } : {}), ...(auxFooters.length ? { footers: auxFooters } : {}), ...(outline ? { outline } : {}) }
@@ -1917,43 +1915,6 @@ function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext
     // usually the correct reading order); precise visual ordering of rotated text is a limitation.
     appendAll(out, rotatedTextNodes(runs, pageCtx, pdfCfg));
     return out;
-}
-
-/**
- * Each list read from the page's geometry levelled from its own outermost items, unless it is a part of
- * the list before it: levels are found from the markers' left edges across a page, so a list whose items
- * all sat right of another marker (a numbered table's first column, a list further left) started at level
- * one. A list is a part of the one before it (its nested items after a paragraph of that one's, or on the
- * next page) where the list item read just before its first, with no heading between, is at its level
- * or a lower one: it keeps its levels.
- */
-function levelListsFromOwnItems(content: OfficeContentNode[]): void {
-    const lists = new Map<string, { items: ListMetadata[]; before: number | undefined }>();
-    // In reading order: the level of the last list item read, until a heading.
-    let lastLevel: number | undefined, lastId: string | undefined;
-    const stack: { nodes: OfficeContentNode[]; at: number }[] = [{ nodes: content, at: 0 }];
-    let visited = 0;
-    while (stack.length && visited++ < 5_000_000) {
-        const top = stack[stack.length - 1];
-        if (top.at >= top.nodes.length) { stack.pop(); continue; }
-        const n = top.nodes[top.at++];
-        if (n.type === 'heading') { lastLevel = undefined; lastId = undefined; }
-        const meta = n.type === 'list' ? n.metadata as ListMetadata | undefined : undefined;
-        if (meta && typeof meta.listId === 'string' && meta.listId.startsWith('pdf-geo-list') && typeof meta.indentation === 'number') {
-            let group = lists.get(meta.listId);
-            if (!group) lists.set(meta.listId, group = { items: [], before: lastId !== meta.listId ? lastLevel : undefined });
-            group.items.push(meta);
-            lastLevel = meta.indentation; lastId = meta.listId;
-        }
-        if (n.children?.length) stack.push({ nodes: n.children, at: 0 });
-    }
-    for (const group of lists.values()) {
-        let least = Infinity;
-        for (const m of group.items) least = Math.min(least, m.indentation);
-        if (!(least > 0) || !Number.isFinite(least)) continue;
-        if (group.before !== undefined && group.before <= least) continue;
-        for (const m of group.items) m.indentation -= least;
-    }
 }
 
 /**

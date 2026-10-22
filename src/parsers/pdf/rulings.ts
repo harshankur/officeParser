@@ -223,9 +223,26 @@ export function ruledTables(frames: RuledFrame[], runs: readonly RawRun[], layou
             const at = cellIndex.get(`${row},${col}`);
             if (at !== undefined) contents[at].push(run);
         };
+        // The rules between distinct cells of each row (a merged cell's own grid lines are none), by row.
+        const bordersOf = new Map<number, number[]>();
+        const rowBorders = (row: number) => {
+            let out = bordersOf.get(row);
+            if (!out) {
+                out = [f.xs[0]];
+                for (let k = 1; k < f.xs.length - 1; k++) if (cellIndex.get(`${row},${k}`) !== cellIndex.get(`${row},${k - 1}`)) out.push(f.xs[k]);
+                out.push(f.xs[f.xs.length - 1]);
+                bordersOf.set(row, out);
+            }
+            return out;
+        };
         for (const run of runs) {
             if (consumed.has(run) || run.angle !== 0) continue;
-            const pieces = cutAtRules(run, f.xs);
+            // Only a run within the frame's rows is cut, and only at the borders of its own row's cells.
+            const cy = run.yTop + run.height / 2;
+            if (!(cy >= f.ys[0] && cy <= f.ys[f.ys.length - 1]) || run.x + run.width < f.xs[0] || run.x > f.xs[f.xs.length - 1]) continue;
+            let row = 0;
+            while (row < f.ys.length - 2 && cy > f.ys[row + 1]) row++;
+            const pieces = cutAtRules(run, rowBorders(row));
             if (pieces.length > 1) for (const p of pieces) { pieceOf.set(p, run); place(p); }
             else place(run);
         }

@@ -229,6 +229,47 @@ function clusterToLines(clusterRuns: RawRun[], cfg: PdfLayoutConfig): PdfLine[] 
     return segments.filter(seg => seg.some(r => r.text.trim().length)).map(seg => clusterToLine(seg, cfg));
 }
 
+/** Letters of the scripts written right to left (Hebrew, Arabic, Syriac, Thaana, NKo, and their presentation forms). */
+const RTL_LETTER = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
+const LTR_LETTER = /[\p{L}\p{N}]/u;
+
+/**
+ * A line's runs (left to right on the page) in the order they are read, by the Unicode bidirectional
+ * algorithm's last rule (L2): each run right to left, left to right or neither by its letters (a blank,
+ * punctuation: as the runs around it, else as the line); right-to-left stretches reversed, and in a line
+ * read right to left (most of its letters so) the whole line reversed with its left-to-right stretches
+ * kept. A producer setting each word as a run of its own (Chrome) had its Hebrew and Arabic read last
+ * word first; a line of one run is as it was.
+ */
+function readingOrder(runs: RawRun[], dir: 'ltr' | 'rtl'): RawRun[] {
+    if (runs.length < 2 || !runs.some(r => RTL_LETTER.test(r.text))) return runs;
+    const strong = runs.map(r => RTL_LETTER.test(r.text) ? 1 : LTR_LETTER.test(r.text) ? 0 : -1);
+    const base = dir === 'rtl' ? 1 : 0;
+    // A neutral run takes the direction of the strong runs on both sides where they agree, else the line's.
+    const level: number[] = strong.map((t, i) => {
+        if (t >= 0) return t === 1 ? 1 : base === 1 ? 2 : 0;
+        let a = -1, b = -1;
+        for (let k = i - 1; k >= 0; k--) if (strong[k] >= 0) { a = strong[k]; break; }
+        for (let k = i + 1; k < runs.length; k++) if (strong[k] >= 0) { b = strong[k]; break; }
+        const t2 = a >= 0 && a === b ? a : base;
+        return t2 === 1 ? 1 : base === 1 ? 2 : 0;
+    });
+    const order = runs.map((_, i) => i);
+    // From the highest level down to the lowest odd one, each stretch at or above it reversed.
+    let highest = 0;
+    for (const l of level) if (l > highest) highest = l;
+    for (let at = highest; at >= 1; at--) {
+        for (let i = 0; i < order.length;) {
+            if (level[order[i]] < at) { i++; continue; }
+            let j = i;
+            while (j + 1 < order.length && level[order[j + 1]] >= at) j++;
+            for (let a = i, b = j; a < b; a++, b--) [order[a], order[b]] = [order[b], order[a]];
+            i = j + 1;
+        }
+    }
+    return order.map(i => runs[i]);
+}
+
 function clusterToLine(clusterRuns: RawRun[], cfg: PdfLayoutConfig): PdfLine {
     const runs = [...clusterRuns].sort((a, b) => a.x - b.x);
     const lineFontSize = dominantFontSize(runs);
@@ -253,7 +294,8 @@ function clusterToLine(clusterRuns: RawRun[], cfg: PdfLayoutConfig): PdfLine {
     let prev: RawRun | undefined;
     // The last fragment's box before the blanks that end it, while they do.
     let blankFrom: NodeBounds | undefined;
-    for (const r of runs) {
+    // In the order the line is read (see readingOrder): a right-to-left line set word by word read last word first.
+    for (const r of readingOrder(runs, dir)) {
         const fmt: TextFormatting = { ...r.formatting };
         const off = baseline - r.yBaseline; // >0 raised, <0 lowered
         const rel = lineFontSize ? Math.abs(off) / lineFontSize : 0;
@@ -267,7 +309,9 @@ function clusterToLine(clusterRuns: RawRun[], cfg: PdfLayoutConfig): PdfLine {
 
         let lead = '';
         if (prev) {
-            const gap = r.x - (prev.x + prev.width);
+            // The space between the two runs' boxes, whichever side each is on (runs read right to left
+            // stand left of the one before them).
+            const gap = Math.max(r.x - (prev.x + prev.width), prev.x - (r.x + r.width));
             const ref = Math.min(prev.fontSize, r.fontSize) || lineFontSize;
             // A super/subscript run attaches to the preceding text with no space ("super"+"script" ->
             // "superscript", "H"+"2" -> "H2"); only a genuinely wide gap (a real word boundary) still

@@ -609,13 +609,14 @@ function withoutCoveredSpaces<T extends TextContentItem>(items: T[]): T[] {
             if (k === i || typeof o.str !== 'string' || !o.str.trim() || !level(o) || !(Math.abs(o.transform![5] - y) <= 0.5)) continue;
             const ox0 = o.transform![4], ox1 = ox0 + (o.width || 0);
             const overlap = Math.min(x1, ox1) - Math.max(x0, ox0);
-            if (overlap > 0.5 * (x1 - x0) || (ox0 < x0 - 0.5 && ox1 > x0 + 0.5)) return false;
+            // (One reaching a fifth of an em past the glyph is that glyph's lost width and a word space after it.)
+            const em = Math.abs(item.transform![0]) || Math.abs(o.transform![0]) || 1;
+            if ((overlap > 0.5 * (x1 - x0) || (ox0 < x0 - 0.5 && ox1 > x0 + 0.5)) && !(x1 - ox1 >= 0.2 * em)) return false;
         }
         return true;
     });
 }
 
-/**
 /** The user-perceived characters in a text: its grapheme clusters, or its letters where they cannot be told. */
 function clusters(text: string): number {
     const Segmenter = (Intl as unknown as { Segmenter?: new (locale?: string, options?: object) => { segment(t: string): Iterable<unknown> } }).Segmenter;
@@ -640,7 +641,8 @@ function advanced<T extends TextContentItem>(items: T[]): T[] {
         const t = item.transform;
         if (typeof item.str !== 'string' || !t || t.length < 6 || !t.every(Number.isFinite) || Math.abs(t[1]) > 1e-6 || Math.abs(t[2]) > 1e-6) return item;
         if (lineY === undefined || !(Math.abs(t[5] - lineY) <= 0.5)) { shift = 0; lineY = t[5]; afterLost = false; lost = undefined; }
-        else if (lost && item.str) {
+        else if (lost && item.str.trim()) {
+            // (A blank decides nothing: pdf.js puts one over the lost glyph, as wide as it and the word space after it.)
             // (Room left: the space before this item, if any, is the word's, not the lost width's gap.)
             if (t[4] >= lost.x + lost.em / 3) { shift -= lost.width; afterLost = false; }
             lost = undefined;
