@@ -558,7 +558,7 @@ function finishGroup(lines: PdfLine[]): ParaGroup {
 // ── geometric list detection ─────────────────────────────────────────────────
 
 /** A recognized list marker at the start of a paragraph group. */
-interface ListMarker {
+export interface ListMarker {
     type: 'ordered' | 'unordered';
     /** The exact leading token (incl. trailing whitespace) to strip from the item text. */
     raw: string;
@@ -570,9 +570,15 @@ interface ListMarker {
     text: string;
 }
 
-const BULLET_GLYPHS = '•◦▪‣·○●■□∙-';
+// (U+F0B7, U+F0A7, U+F06C and the others are Symbol's and Wingdings' bullets, as a PDF of a Word or
+// LibreOffice document gives them where its font has no Unicode mapping: they read as prose.)
+const BULLET_GLYPHS = '•◦▪‣·○●■□∙\uF0B7\uF0A7\uF06C\uF076\uF0D8\uF0FC\uF0A8\uF0AE-';
+/** A private-use bullet as the character it shows. */
+const PRIVATE_BULLETS: Record<string, string> = { '\uF0B7': '•', '\uF06C': '●', '\uF0A7': '▪', '\uF076': '❖', '\uF0D8': '➢', '\uF0FC': '✓', '\uF0A8': '□', '\uF0AE': '➔' };
+const shownBullet = (glyph: string): string => PRIVATE_BULLETS[glyph] ?? glyph;
 const UNORDERED_RE = new RegExp(`^([${BULLET_GLYPHS}]|\\*)[ \\t\\u00a0]+`);
-const ORDERED_RE = /^\(?([0-9]{1,3}|[a-zA-Z]|[ivxlcdmIVXLCDM]{1,7})[.)][ \t ]+/;
+// (A multi-level number, `1.2.3.`, as a multi-level list prints its items.)
+const ORDERED_RE = /^\(?([0-9]{1,3}(?:\.[0-9]{1,3}){0,8}|[a-zA-Z]|[ivxlcdmIVXLCDM]{1,7})[.)][ \t\u00a0]+/;
 
 /** Escapes a literal string for safe insertion into a RegExp. */
 function escapeRe(s: string): string { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
@@ -600,10 +606,11 @@ function detectLineMarker(text: string): ListMarker | null {
     const first = text.replace(/^\s+/, '');
     if (!first) return null;
     const u = UNORDERED_RE.exec(first);
-    if (u) return { type: 'unordered', raw: u[0], number: null, strongBullet: u[1] !== '-' && u[1] !== '*', text: u[1] };
+    if (u) return { type: 'unordered', raw: u[0], number: null, strongBullet: u[1] !== '-' && u[1] !== '*', text: shownBullet(u[1]) };
     const o = ORDERED_RE.exec(first);
     if (o) {
-        const core = o[1];
+        // A multi-level number's own is its last.
+        const core = o[1].includes('.') ? o[1].slice(o[1].lastIndexOf('.') + 1) : o[1];
         let n: number | null = null;
         if (/^[0-9]+$/.test(core)) n = parseInt(core, 10);
         else if (/^[ivxlcdm]+$/i.test(core)) { const r = romanValue(core); n = r > 0 ? r : null; }
@@ -620,7 +627,7 @@ function detectListMarker(group: ParaGroup): ListMarker | null {
 }
 
 /** Buckets marker left-edges into 0-based indent levels (each distinct column ~a nesting level). */
-function indentLevels(lefts: number[]): (x: number) => number {
+export function indentLevels(lefts: number[]): (x: number) => number {
     const sorted = [...new Set(lefts.map(x => Math.round(x)))].sort((a, b) => a - b);
     const levels: number[] = [];
     for (const x of sorted) {
@@ -995,11 +1002,11 @@ export function recoverTaggedGrids(nodes: OfficeContentNode[]): OfficeContentNod
 // ── geometric list detection ─────────────────────────────────────────────────
 
 /** A marker that stands alone as its own atom (e.g. "1.1.1.", "i.", "•"), split from its item text. */
-const STANDALONE_MARKER_RE = /^(?:[•◦▪‣·○●■□∙]|\(?(?:\d+(?:\.\d+)*|[a-zA-Z]|[ivxlcdmIVXLCDM]{1,7})[.)])$/;
+const STANDALONE_MARKER_RE = /^(?:[•◦▪‣·○●■□∙\uF0B7\uF0A7\uF06C\uF076\uF0D8\uF0FC\uF0A8\uF0AE]|\(?(?:\d+(?:\.\d+)*|[a-zA-Z]|[ivxlcdmIVXLCDM]{1,7})[.)])$/;
 
 /** Parses a standalone marker token into a {@link ListMarker} (raw empty - nothing to strip). */
 function parseStandaloneMarker(t: string): ListMarker | null {
-    if (/^[•◦▪‣·○●■□∙]$/.test(t)) return { type: 'unordered', raw: '', number: null, strongBullet: true, text: t };
+    if (/^[•◦▪‣·○●■□∙\uF0B7\uF0A7\uF06C\uF076\uF0D8\uF0FC\uF0A8\uF0AE]$/.test(t)) return { type: 'unordered', raw: '', number: null, strongBullet: true, text: shownBullet(t) };
     const m = /^\(?(\d+(?:\.\d+)*|[a-zA-Z]|[ivxlcdmIVXLCDM]{1,7})[.)]$/.exec(t);
     if (!m) return null;
     const core = m[1];
@@ -1029,7 +1036,84 @@ function groupText(g: ParaGroup): string {
  * when a neighbour carries a compatible marker; an unambiguous bullet glyph, or a separate marker
  * atom sitting beside its text, counts on its own. Nesting level comes from the marker's indent.
  */
-export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContext): OfficeContentNode[] {
+/**
+ * A list as it stands at the end of one block, for the next block of the page: a page is cut into
+ * blocks at its wider gaps, and a list whose items are spaced apart (as a browser prints one) was cut
+ * into one list an item. `next` is the marker the next block starts with, for the rule that a lone
+ * numbered item needs a neighbour.
+ */
+export interface ListCarry {
+    listId: string | null;
+    type: 'ordered' | 'unordered' | null;
+    /** The list's outermost marker left edge, and its last item's bottom. */
+    left: number;
+    bottom: number;
+    lineHeight: number;
+    itemInList: number;
+    /** The marker the block before ended with, and the one the next block starts with. */
+    prev: ListMarker | null;
+    next: ListMarker | null;
+    /** The page's indent levels, from every item's marker on it. */
+    levelFor?: (x: number) => number;
+}
+
+/** The list marker a block's first line starts with: a prefixed one, or a marker atom of its own. */
+export function leadingMarker(block: PdfLine[]): ListMarker | null {
+    const first = block[0];
+    if (!first) return null;
+    const atom = first.fragments[0]?.text.trim() ?? '';
+    return detectLineMarker(lineTextOf(first)) ?? (STANDALONE_MARKER_RE.test(atom) ? parseStandaloneMarker(atom) : null);
+}
+
+/**
+ * Joins a list marker set apart from its text (`1.1.2.` in a hanging indent, a gap wide enough for the
+ * line builder to make two lines of it) to the text on its baseline, so the item reads `1.1.2. Four`,
+ * and its wrapped lines follow it as a prefixed item's do: apart, the marker column was cut from its
+ * text into a block of its own, or its text grouped with the item above.
+ */
+export function joinMarkerLines(lines: PdfLine[]): PdfLine[] {
+    const byBaseline = new Map<number, number[]>();
+    lines.forEach((l, i) => { const k = Math.round(l.baseline); const b = byBaseline.get(k); if (b) b.push(i); else byBaseline.set(k, [i]); });
+    const partner = new Map<number, number>(), taken = new Set<number>();
+    lines.forEach((l, i) => {
+        const atom = lineTextOf(l).trim();
+        if (!STANDALONE_MARKER_RE.test(atom) || taken.has(i)) return;
+        const fs = l.fontSize || 12, right = l.x + l.width;
+        let best = -1;
+        for (let k = Math.round(l.baseline - 0.3 * fs) - 1; k <= Math.round(l.baseline + 0.3 * fs) + 1; k++) {
+            for (const j of byBaseline.get(k) ?? []) {
+                const t = lines[j];
+                if (j === i || taken.has(j) || Math.abs(t.baseline - l.baseline) > 0.3 * fs) continue;
+                if (t.x < right - 0.5 || t.x - right > 6 * fs || STANDALONE_MARKER_RE.test(lineTextOf(t).trim())) continue;
+                if (best < 0 || t.x < lines[best].x) best = j;
+            }
+        }
+        if (best >= 0) { partner.set(i, best); taken.add(best); taken.add(i); }
+    });
+    if (!partner.size) return lines;
+    const joined = new Map<number, PdfLine>();
+    for (const [i, j] of partner) {
+        const m = lines[i], t = lines[j];
+        const markerFragments = m.fragments.map((f, k) => k === m.fragments.length - 1 && !/\s$/.test(f.text) ? { ...f, text: f.text + ' ' } : f);
+        const top = Math.min(m.yTop, t.yTop), bottom = Math.max(m.yTop + m.height, t.yTop + t.height);
+        joined.set(Math.min(i, j), { ...t, fragments: [...markerFragments, ...t.fragments], x: m.x, width: t.x + t.width - m.x, yTop: top, height: bottom - top });
+    }
+    const out: PdfLine[] = [];
+    lines.forEach((l, i) => {
+        if (joined.has(i)) out.push(joined.get(i)!);
+        else if (!taken.has(i)) out.push(l);
+    });
+    return out;
+}
+
+/** The marker left edges of a page's lines that start with a list marker, for its indent levels. */
+export function markerLefts(lines: PdfLine[]): number[] {
+    const out: number[] = [];
+    for (const l of lines) if (leadingMarker([l])) out.push(l.x);
+    return out;
+}
+
+export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContext, carry?: ListCarry): OfficeContentNode[] {
     const groups = groupParagraphs(block);
     const N = groups.length;
     const baseOf = (g: ParaGroup) => g.lines[0]?.baseline ?? 0;
@@ -1086,17 +1170,20 @@ export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContex
         if (dropped[i] || !m) return false;
         if (m.type === 'ordered' && (headingSized(groups[i]) || /\.{4,}/.test(groupText(groups[i])))) return false;
         if (attached[i] || m.strongBullet) return true;         // separate atom or real bullet: strong
-        const prev = effective[i - 1], next = effective[i + 1]; // else require a run of compatible markers
+        // Else require a run of compatible markers (the blocks before and after count at the edges).
+        const prev = i === 0 ? carry?.prev ?? null : effective[i - 1], next = i === N - 1 ? carry?.next ?? null : effective[i + 1];
         return (!!prev && prev.type === m.type) || (!!next && next.type === m.type);
     });
 
     const itemLefts = groups.map((g, i) => isItem[i] ? (markerLeft[i] ?? leftOf(g)) : null).filter((x): x is number => x != null);
-    const levelFor = indentLevels(itemLefts);
+    const levelFor = carry?.levelFor ?? indentLevels(itemLefts);
 
     const nodes: OfficeContentNode[] = [];
     let listId: string | null = null;
     let itemInList = 0;
     let prevWasItem = false;
+    // The open list's outermost marker edge: an item further left is in another list.
+    let listLeft = Infinity;
     for (let i = 0; i < N; i++) {
         if (dropped[i]) continue;
         if (!isItem[i]) {
@@ -1105,8 +1192,15 @@ export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContex
             if (node && (node.text || '').trim().length) nodes.push(node);
             continue;
         }
-        if (!prevWasItem) { listId = `pdf-geo-list-${++doc.listCounter.n}`; itemInList = 0; }
         const marker = effective[i]!;
+        if (!prevWasItem) {
+            // An item right after the last block's last item, of its kind, is in its list.
+            const top = groups[i].lines[0]?.yTop ?? 0, left = markerLeft[i] ?? leftOf(groups[i]);
+            const continues = !nodes.length && carry?.listId && carry.type === marker.type
+                && top >= carry.bottom - 2 && top - carry.bottom < 2.5 * carry.lineHeight && left >= carry.left - 6;
+            if (continues) { listId = carry!.listId; itemInList = carry!.itemInList; listLeft = Math.min(carry!.left, left); }
+            else { listId = `pdf-geo-list-${++doc.listCounter.n}`; itemInList = 0; listLeft = left; }
+        }
         const p = paragraphNode(groups[i], page, doc, 0);
         if (!p) { prevWasItem = false; continue; }
         if (marker.raw) stripMarkerFrom(p, marker.raw);
@@ -1124,9 +1218,23 @@ export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContex
         if (marker.text && marker.text !== (marker.type === 'ordered' ? `${meta.itemIndex + 1}.` : '•')) meta.marker = marker.text;
         itemInList++;
         prevWasItem = true;
+        listLeft = Math.min(listLeft, markerLeft[i] ?? leftOf(groups[i]));
         const item: OfficeContentNode = { type: 'list', text: p.text, children: p.children, metadata: meta };
         if (p.bounds) item.bounds = p.bounds;
         nodes.push(item);
+    }
+    if (carry) {
+        // What the next block takes on: the list open at this block's end, or none.
+        const last = N - 1 - [...dropped].reverse().findIndex(d => !d);
+        const open = prevWasItem && last >= 0 && last < N && isItem[last];
+        carry.prev = last >= 0 && last < N ? effective[last] : null;
+        if (open) {
+            const g = groups[last];
+            Object.assign(carry, {
+                listId, type: effective[last]!.type, left: Math.min(listLeft, markerLeft[last] ?? leftOf(g)), itemInList,
+                bottom: Math.max(...g.lines.map(l => l.yTop + l.height)), lineHeight: Math.max(...g.lines.map(l => l.height)) || 12,
+            });
+        } else carry.listId = null;
     }
     return nodes;
 }

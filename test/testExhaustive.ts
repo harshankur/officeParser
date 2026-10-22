@@ -12,7 +12,7 @@ import { excelShownText } from '../src/utils/excelFormat';
 import { OfficeTemplate } from '../src/OfficeTemplate';
 import { OfficeConverter } from '../src/OfficeConverter';
 import { zipSync, strToU8, unzipSync, strFromU8 } from 'fflate';
-import { PDFDocument, PDFName, PDFOperator, StandardFonts, degrees } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFOperator, StandardFonts, degrees, rgb } from 'pdf-lib';
 import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -5286,6 +5286,44 @@ async function testNativePdfSvgPictures(): Promise<void> {
     assert.ok((unreadable.messages || []).some((m: any) => m.code === 'IMAGE_PROCESSING_FAILED'), 'an SVG that cannot be read is reported');
 }
 
+/**
+ * A PDF's lists are read whole: a bullet drawn as a shape (a disc, a ring, a square, as a browser
+ * draws `<ul>` markers) is a bullet, items spaced apart are one list, a multi-level list whose markers
+ * are set apart from their text (`1.1.2.` in a hanging indent) keeps its levels and wrapped lines, and
+ * a symbol font's private-use bullet is a bullet. They read as one list an item, or as paragraphs.
+ */
+async function testPdfListsReadWhole(): Promise<void> {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    const page = pdf.addPage([400, 600]);
+    let y = 560;
+    const line = (text: string, x = 60, size = 11) => { page.drawText(text, { x, y, size, font }); y -= size * 1.6 + 6; };
+    line('Shopping:', 40);
+    for (const item of ['Apples', 'Bread', 'Cheese']) { page.drawCircle({ x: 50, y: y + 4, size: 1.6, color: rgb(0, 0, 0) }); line(item); }
+    page.drawEllipse({ x: 70, y: y + 4, xScale: 1.6, yScale: 1.6, borderColor: rgb(0, 0, 0), borderWidth: 0.6 }); line('Green apples', 80);
+    page.drawRectangle({ x: 48.4, y: y + 2.4, width: 3.2, height: 3.2, color: rgb(0, 0, 0) }); line('Dairy');
+    line('Steps:', 40);
+    for (const [n, step] of [['1.', 'Wash'], ['2.', 'Slice'], ['3.', 'Serve']]) { page.drawText(n, { x: 45, y, size: 11, font }); line(step); }
+    line('Outline:', 40);
+    for (const [n, text, x] of [['1.', 'One', 45], ['1.1.', 'Two', 60], ['1.1.1.', 'Three', 75], ['1.1.2.', 'Four, a long item that wraps onto', 75]] as const) {
+        page.drawText(n, { x, y, size: 11, font });
+        page.drawText(text, { x: x + 60, y, size: 11, font });
+        y -= 14;
+    }
+    page.drawText('the line below it.', { x: 135, y, size: 11, font }); y -= 20;
+    line('Done.', 40);
+    const ast = await OfficeParser.parseOffice(Buffer.from(await pdf.save()), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const items = collectAllNodes(ast).filter(n => n.type === 'list').map(n => { const m = n.metadata as any; return [n.text, m.listType, m.indentation, m.marker ?? null, m.listId]; });
+    const ids = [...new Set(items.map(i => i[4]))];
+    assert.deepStrictEqual(items.map(i => i.slice(0, 4)), [
+        ['Apples', 'unordered', 0, null], ['Bread', 'unordered', 0, null], ['Cheese', 'unordered', 0, null], ['Green apples', 'unordered', 1, '◦'], ['Dairy', 'unordered', 0, '▪'],
+        ['Wash', 'ordered', 0, null], ['Slice', 'ordered', 0, null], ['Serve', 'ordered', 0, null],
+        ['One', 'ordered', 0, null], ['Two', 'ordered', 1, '1.1.'], ['Three', 'ordered', 2, '1.1.1.'], ['Four, a long item that wraps onto the line below it.', 'ordered', 2, '1.1.2.'],
+    ], `the lists are read whole; got ${JSON.stringify(items)}`);
+    assert.strictEqual(ids.length, 3, `each list is one list, its items spaced apart; got ${JSON.stringify(items.map(i => i[4]))}`);
+    assert.ok(!collectAllNodes(ast).some(n => n.type === 'paragraph' && /^(Apples|Wash|1\.1)/.test(n.text || '')), 'no item is left a paragraph');
+}
+
 async function testNativePdfFurnitureLimits(): Promise<void> {
     const t = (text: string, more: any = {}) => ({ type: 'text', text, ...more });
     const p = (...children: any[]) => ({ type: 'paragraph', children });
@@ -7181,6 +7219,7 @@ async function runTests(): Promise<void> {
         ['Formats read as they show', testFormatsReadAsTheyShow],
         ['Writers hold up', testWritersHoldUp],
         ['Native PDF SVG pictures', testNativePdfSvgPictures],
+        ['PDF lists read whole', testPdfListsReadWhole],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

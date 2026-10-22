@@ -7,8 +7,8 @@
  *
  * @module parsers/pdf/pdfTypes
  */
-
 import { NodeBounds, TextFormatting, TextMetadata } from '../../types.js';
+import type { PdfShape } from './pdfShapes.js';
 
 /** A run's writing angle after snapping to the nearest quarter turn, or -1 for one between them. */
 export type RunAngle = 0 | 90 | 180 | 270 | -1;
@@ -113,6 +113,8 @@ export interface PageExtract {
     images: PdfImage[];
     /** Raw pdf.js struct tree for the tagged path; null when untagged/unavailable. */
     structTree: unknown | null;
+    /** The shapes the page draws (see pdfShapes): bullets drawn as shapes, tables' ruling lines. */
+    shapes?: PdfShape[];
 }
 
 /** Resolved PDF-specific knobs, read from `config.pdfParserConfig` with numeric coercion done. */

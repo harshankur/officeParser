@@ -41,9 +41,10 @@ import { crc32, createAttachment } from '../utils/imageUtils.js';
 import { loadPdfJs } from '../utils/moduleLoader.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { collectColorMarks, ColorLookup, makeColorLookup } from './pdf/pdfColor.js';
+import { collectShapes, shapeBullets } from './pdf/pdfShapes.js';
 import { computeRunBox, identityMatrix, mulMatrix, roundBounds, rotateBoundsToRendered, toMatrix6, unionAll } from './pdf/geometry.js';
 import { PageExtract, PdfImage, PdfLayoutConfig, RawRun, ResolvedFont } from './pdf/pdfTypes.js';
-import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, PageContext, recoverTaggedGrids, runsToParagraph, segmentIntoBlocks } from './pdf/textLayout.js';
+import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, indentLevels as indentLevelsOf, joinMarkerLines, leadingMarker, ListCarry, markerLefts, PageContext, recoverTaggedGrids, runsToParagraph, segmentIntoBlocks } from './pdf/textLayout.js';
 import { buildTaggedNodes } from './pdf/structTree.js';
 import { setOwn } from '../utils/lookupUtils.js';
 import { acquirePdfProcess, PdfProcess } from './pdf/pdfProcess.js';
@@ -958,7 +959,10 @@ async function readTextContent(page: any, params: object, work: PdfWorkBudget): 
     return { items, styles };
 }
 
-/** The operators the image and color readers use; the rest (paths, above all) are not kept. */
+/** At most this many path operators are kept on a page, for its shapes (see readOperatorList). */
+const MAX_PATHS_KEPT = 40_000;
+
+/** The operators the image, color and shape readers use (paths with their paint and width); the rest are not kept. */
 const keptOperatorsCache = new WeakMap<object, Set<number>>();
 const keptOperators = (OPS: any): Set<number> => {
     let kept = keptOperatorsCache.get(OPS);
@@ -967,7 +971,7 @@ const keptOperators = (OPS: any): Set<number> => {
             'paintImageXObject', 'paintImageXObjectRepeat', 'paintInlineImageXObject',
             'setFillRGBColor', 'setFillColorN', 'setFillTransparent', 'setStrokeRGBColor', 'setStrokeColorN', 'setStrokeTransparent',
             'beginText', 'setTextMatrix', 'moveText', 'setLeadingMoveText', 'setLeading', 'nextLine', 'setTextRise',
-            'setTextRenderingMode', 'showText'].map(name => OPS[name]).filter((op): op is number => typeof op === 'number'));
+            'setTextRenderingMode', 'showText', 'constructPath', 'setLineWidth'].map(name => OPS[name]).filter((op): op is number => typeof op === 'number'));
         keptOperatorsCache.set(OPS, kept);
     }
     return kept;
@@ -986,6 +990,10 @@ async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep
     if (work.spent || work.operatorsSpent) return null;
     const kept = keep === 'drawing' ? keptOperators(pdfjs.OPS) : null;
     const showText = pdfjs.OPS.showText;
+    // Paths (and their widths) are kept for the page's shapes, a bounded number of them, costing none of
+    // the budget, as when they were not kept: a plan stamping one symbol thousands of times stays whole.
+    const pathOps = new Set([pdfjs.OPS.constructPath, pdfjs.OPS.setLineWidth]);
+    let pathsKept = 0;
     let stopped!: (partial: any) => void;
     const stop = new Promise<any>(resolve => { stopped = resolve; });
     let done = false;
@@ -1005,18 +1013,19 @@ async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep
             if (done) return;
             const fnArray: number[] = [];
             const argsArray: unknown[] = [];
-            let weight = 0;
+            let weight = 0, free = 0;
             if (kept) {
                 for (let i = 0; i < chunk.length; i++) {
                     const fn = chunk.fnArray[i];
                     if (!kept.has(fn)) continue;
+                    if (pathOps.has(fn)) { if (pathsKept >= MAX_PATHS_KEPT) continue; pathsKept++; free++; }
                     const args = chunk.argsArray[i];
                     fnArray.push(fn);
                     argsArray.push(args);
                     if (fn === showText && Array.isArray(args?.[0])) weight += Math.floor(args[0].length / 64);
                 }
             }
-            if (!work.takeOperators(fnArray.length + weight, page.pageNumber)) { leave(intentState); return; }
+            if (!work.takeOperators(fnArray.length - free + weight, page.pageNumber)) { leave(intentState); return; }
             const result = original.call(this, { ...chunk, fnArray, argsArray, length: fnArray.length }, intentState);
             // Read only for the page's fonts: once pdf.js has sent them (it sends a font before the
             // operators using it), the rest of the list is not needed, and is left unread.
@@ -1065,9 +1074,9 @@ async function collectPage(
     let ops: any = null;
     // Not `config.ocr`: page-image OCR runs over collected images, which require extractAttachments, so
     // ocr alone needs no operator list (and must not fetch one just to discard it).
-    if (newFonts.length || config.extractAttachments || pdfCfg.extractTextColor) {
-        ops = await readOperatorList(pdfjs, page, work, config.extractAttachments || pdfCfg.extractTextColor ? 'drawing' : 'none', newFonts);
-    }
+    // The page's drawing is read too: its shapes (a bullet drawn as a disc, a table's ruling lines) tell
+    // what its text alone does not.
+    ops = await readOperatorList(pdfjs, page, work, 'drawing', newFonts);
     for (const key of seen) if (!fontCache.has(key)) fontCache.set(key, await resolveFont(key, page.commonObjs, styles));
 
     // Per-run fill color (opt-in): recovered from the operator list, which is now fetched above.
@@ -1171,7 +1180,9 @@ async function collectPage(
 
     if (typeof page.cleanup === 'function' && !work.spent) { try { page.cleanup(); } catch { /* best effort */ } }
 
-    return { pageNumber, width, height, authoredW, authoredH, authoredY1, rotation, runs, images, structTree };
+    const shapes = ops ? collectShapes(ops, layoutViewport.transform, pdfjs.OPS) : [];
+
+    return { pageNumber, width, height, authoredW, authoredH, authoredY1, rotation, runs, images, structTree, shapes };
 }
 
 /** Extracts images from a page's operator list, positioned in layout-viewport space. */
@@ -1743,7 +1754,8 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         }
 
         // Geometric fallback (untagged, distrusted, or low coverage).
-        if (!pageContent) pageContent = geometricNodes(bodyRuns, layoutCtx, docCtx, layoutCfg);
+        // A bullet drawn as a shape reads as its glyph (see shapeBullets).
+        if (!pageContent) pageContent = geometricNodes([...bodyRuns, ...shapeBullets(extract.shapes, bodyRuns)], layoutCtx, docCtx, layoutCfg);
 
         // Hybrid recovery: on the tagged path, additionally fold a contiguous run of loose sibling
         // paragraphs whose geometry forms a clean grid (a calendar tagged as one paragraph per day,
@@ -1824,14 +1836,21 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
  * tables).
  */
 function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext, pdfCfg: PdfLayoutConfig, detectGridTables = true): OfficeContentNode[] {
-    const lines = buildLines(runs, pdfCfg);
+    const lines = joinMarkerLines(buildLines(runs, pdfCfg));
     const { tables, consumed } = detectGridTables
         ? detectTables(lines, pageCtx, docCtx)
         : { tables: [] as { node: OfficeContentNode; y: number }[], consumed: new Set<typeof lines[number]>() };
     const remaining = consumed.size ? lines.filter(l => !consumed.has(l)) : lines;
 
     const out: OfficeContentNode[] = [];
-    for (const block of segmentIntoBlocks(remaining, pdfCfg)) appendAll(out, blockToNodes(block, pageCtx, docCtx));
+    // A list runs on from block to block, and its levels are the page's (see ListCarry).
+    const blocks = segmentIntoBlocks(remaining, pdfCfg);
+    const lefts = markerLefts(remaining);
+    const carry: ListCarry = { listId: null, type: null, left: 0, bottom: 0, lineHeight: 12, itemInList: 0, prev: null, next: null, ...(lefts.length ? { levelFor: indentLevelsOf(lefts) } : {}) };
+    blocks.forEach((block, k) => {
+        carry.next = k + 1 < blocks.length ? leadingMarker(blocks[k + 1]) : null;
+        appendAll(out, blockToNodes(block, pageCtx, docCtx, carry));
+    });
     // Splice each detected table into the flow at its vertical position.
     for (const t of tables) {
         const ty = t.node.bounds?.y ?? Infinity;
