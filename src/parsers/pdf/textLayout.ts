@@ -794,6 +794,8 @@ export function detectTables(lines: PdfLine[], page: PageContext, doc: DocContex
 
     for (const run of candidates) {
         if (run.length < 3) continue;
+        // Rows each of a list marker and its text are a list set apart from its markers, not a table.
+        if (run.every(r => r.length === 2 && STANDALONE_MARKER_RE.test(lineTextOf(r[0]).trim()))) continue;
 
         const cells = run.flat();
         // Cluster cell left-edges into columns.

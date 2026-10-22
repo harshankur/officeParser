@@ -42,7 +42,7 @@ import { loadPdfJs } from '../utils/moduleLoader.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { collectColorMarks, ColorLookup, makeColorLookup } from './pdf/pdfColor.js';
 import { collectShapes, PdfShape, shapeBullets } from './pdf/pdfShapes.js';
-import { MarkedEvent, readableItems, readMarkedContent } from './pdf/actualText.js';
+import { MarkedContent, readableItems } from './pdf/actualText.js';
 import { ruledFrames, ruledTables, shadeCells } from './pdf/rulings.js';
 import { computeRunBox, identityMatrix, mulMatrix, roundBounds, rotateBoundsToRendered, toMatrix6, unionAll } from './pdf/geometry.js';
 import { PageExtract, PdfImage, PdfLayoutConfig, RawRun, ResolvedFont } from './pdf/pdfTypes.js';
@@ -1067,7 +1067,7 @@ async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep
 async function collectPage(
     pdfjs: any, pdfDocument: any, pageNumber: number, config: FullOfficeParserConfig,
     pdfCfg: PdfLayoutConfig, fontCache: Map<string, ResolvedFont>, destCache: Map<string, SectionTarget | null>,
-    sectionLinks: SectionLinks, work: PdfWorkBudget, markedContent?: MarkedEvent[][],
+    sectionLinks: SectionLinks, work: PdfWorkBudget, markedContent?: MarkedContent,
 ): Promise<PageExtract | undefined> {
     const page = await work.within(pdfDocument.getPage(pageNumber) as Promise<any>);
     if (!page) return undefined;
@@ -1117,7 +1117,9 @@ async function collectPage(
     const stack: { mcid: string | null; artifact: boolean }[] = [];
     const runs: RawRun[] = [];
     // The text a producer gave its glyph clusters (ActualText), where the glyphs map to none of it.
-    for (const item of readableItems(textContent.items, markedContent?.[pageNumber - 1])) {
+    // Read from the file only for a page whose text has marked content, and once its budget allows.
+    const hasMarked = !work.spent && textContent.items.some((it: any) => it.type === 'beginMarkedContentProps' || it.type === 'beginMarkedContent');
+    for (const item of readableItems(textContent.items, hasMarked ? markedContent?.eventsOf(pageNumber - 1) : undefined)) {
         if (!isTextItem(item)) {
             const type = (item as any).type as string | undefined;
             if (type === 'beginMarkedContent' || type === 'beginMarkedContentProps') {
@@ -1653,8 +1655,9 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     const destCache = new Map<string, SectionTarget | null>();
     const sectionLinks = new SectionLinks();
     const extracts: PageExtract[] = [];
-    // Each page's marked content, read from the file for the ActualText pdf.js leaves out (see actualText).
-    const markedContent = readMarkedContent(new Uint8Array(buffer), numPages);
+    // Each page's marked content, read from the file for the ActualText pdf.js leaves out (see actualText),
+    // as each page read asks for it.
+    const markedContent = new MarkedContent(buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer), numPages);
     for (const pageNum of pageNumbers) {
         checkAbortSignal(config.abortSignal);
         if (work.spent) break;
@@ -1871,12 +1874,14 @@ function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext
         bounds: box => emitBounds(box, pageCtx, pdfCfg),
     }) : { tables: [], consumed: new Set<RawRun>() };
     if (ruled.consumed.size) runs = runs.filter(r => !ruled.consumed.has(r));
-    const lines = joinMarkerLines(buildLines(runs, pdfCfg));
+    // Tables are found before a list's markers are joined to their text: a table's first column of numbers
+    // (`1.`, `2.`) joined to the cell beside it gave each row a cell fewer than its header.
+    const built = buildLines(runs, pdfCfg);
     const { tables, consumed } = detectGridTables
-        ? detectTables(lines, pageCtx, docCtx)
-        : { tables: [] as { node: OfficeContentNode; y: number }[], consumed: new Set<typeof lines[number]>() };
+        ? detectTables(built, pageCtx, docCtx)
+        : { tables: [] as { node: OfficeContentNode; y: number }[], consumed: new Set<typeof built[number]>() };
     for (const node of ruled.tables) tables.push({ node, y: node.bounds?.y ?? Infinity });
-    const remaining = consumed.size ? lines.filter(l => !consumed.has(l)) : lines;
+    const remaining = joinMarkerLines(consumed.size ? built.filter(l => !consumed.has(l)) : built);
 
     const out: OfficeContentNode[] = [];
     // A list runs on from block to block, and its levels are the page's (see ListCarry).

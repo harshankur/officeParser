@@ -25,8 +25,11 @@ export type MarkedEvent = { begin: true; actualText?: string } | { begin: false 
 const MAX_INFLATED = 64 * 1024 * 1024;
 const MAX_OBJECTS = 200_000;
 const MAX_FORM_DEPTH = 8;
-/** At most this many events a page. */
+/** At most this many events a page, and for the whole document. */
 const MAX_EVENTS = 500_000;
+const MAX_DOCUMENT_EVENTS = 10_000_000;
+/** Compressed data is inflated this much at a time. */
+const INFLATE_SLICE = 64 * 1024;
 
 type PdfValue = number | string | boolean | null | PdfName | PdfRef | PdfValue[] | PdfDict | PdfStream | PdfString;
 class PdfName { constructor(readonly name: string) {} }
@@ -343,8 +346,12 @@ class PdfReader {
             if (size > left) { over = true; return; }
             chunks.push(chunk);
         });
+        // Fed a slice at a time, and no more once past the bound: pushed whole, a megabyte that inflates
+        // to a gigabyte was inflated (a gigabyte held, seconds spent) before its size was looked at.
         // A stream cut short, or with a bad check, gives what it inflated.
-        try { inflater.push(raw, true); } catch { /* what was inflated stands */ }
+        try {
+            for (let at = 0; at < raw.length && !over; at += INFLATE_SLICE) inflater.push(raw.subarray(at, at + INFLATE_SLICE), at + INFLATE_SLICE >= raw.length);
+        } catch { /* what was inflated stands */ }
         this.inflated += Math.min(size, left);
         if (over) { this.inflated = MAX_INFLATED; return undefined; }
         const data = new Uint8Array(size);
@@ -409,22 +416,72 @@ function indexOf(src: Uint8Array, word: string, from: number): number {
     return -1;
 }
 
-/** At most this many tokens are read on a page, forms included (each form read once). */
+/** At most this many tokens are read in one stream, and in the whole document (each stream read once). */
 const MAX_TOKENS = 5_000_000;
+const MAX_DOCUMENT_TOKENS = 50_000_000;
 
 /**
- * A page's marked-content events, in the order pdf.js meets them (forms drawn with `Do` in place). Each
- * form is read once, its events repeated where it is drawn again: a form drawn ten times in each of
- * eight forms nested would be read a hundred million times.
+ * A content stream's marked-content operators, in order, as written: what a page's events are made of
+ * with the resources it is drawn with (a named property list, a form drawn with `Do`). Read once for each
+ * stream, whatever draws it: a stream shared by a thousand pages was read a thousand times.
  */
-function pageEvents(reader: PdfReader, page: { dict: PdfDict; resources: PdfDict | undefined }, forms: Map<PdfValue, MarkedEvent[]>): MarkedEvent[] {
-    const budget = { tokens: MAX_TOKENS };
-    /** A stream's events as written, a form's drawn in place (EMC included even at no depth, see below). */
-    const scan = (data: Uint8Array, resources: PdfDict | undefined, depth: number, active: Set<PdfValue>): MarkedEvent[] => {
-        const events: MarkedEvent[] = [];
+type MarkedOp = { op: 'BMC' } | { op: 'BDC'; props: PdfValue | undefined } | { op: 'EMC' } | { op: 'Do'; name: string };
+
+/**
+ * The marked-content events of a document's pages, read from the file when a page asks for them (see
+ * eventsOf): the structure, each stream's operators and each form's events read once, every read within
+ * the document's bounds (bytes inflated, tokens, events), past which a page has none and its glyphs'
+ * text stands.
+ */
+export class MarkedContent {
+    private reader: PdfReader | undefined;
+    private pages: { dict: PdfDict; resources: PdfDict | undefined }[] | undefined;
+    private opened = false;
+    private readonly programs = new Map<PdfValue, MarkedOp[]>();
+    /** A form's events, with the resources it was last drawn with (pages of resources of their own each keep none). */
+    private readonly forms = new Map<PdfValue, { resources: PdfDict | undefined; events: MarkedEvent[] }>();
+    private tokensLeft = MAX_DOCUMENT_TOKENS;
+    private eventsLeft = MAX_DOCUMENT_EVENTS;
+
+    constructor(private readonly bytes: Uint8Array, private readonly pageCount: number) {}
+
+    /**
+     * A page's events (index 0 the first page's), in the order pdf.js meets them; undefined for a file
+     * whose structure cannot be read here (encrypted, damaged, in a filter not read), or once the
+     * document's bounds are spent. A page whose content cannot be read has none.
+     */
+    eventsOf(index: number): MarkedEvent[] | undefined {
+        try {
+            if (!this.opened) {
+                this.opened = true;
+                const reader = new PdfReader(this.bytes);
+                if (reader.open()) {
+                    const pages = reader.pages(this.pageCount);
+                    if (pages.length === this.pageCount) { this.reader = reader; this.pages = pages; }
+                }
+            }
+            const page = this.pages?.[index];
+            if (!this.reader || !page || this.eventsLeft <= 0 || this.tokensLeft <= 0) return undefined;
+            const events = this.pageEvents(this.reader, page);
+            this.eventsLeft -= events.length;
+            return events;
+        } catch {
+            return [];
+        }
+    }
+
+    /** A stream's operators (see MarkedOp), read once. */
+    private program(reader: PdfReader, stream: PdfStream & PdfValue): MarkedOp[] | undefined {
+        const known = this.programs.get(stream);
+        if (known) return known;
+        const data = reader.decode(stream);
+        if (!data) return undefined;
+        const ops: MarkedOp[] = [];
         const lx = new Lexer(data);
         const operands: (PdfValue | { op: string })[] = [];
-        while (events.length < MAX_EVENTS && budget.tokens-- > 0) {
+        let tokens = Math.min(MAX_TOKENS, this.tokensLeft);
+        const budget = tokens;
+        while (ops.length < MAX_EVENTS && tokens-- > 0) {
             const t = lx.next();
             if (t === undefined) break;
             if (!(t && typeof t === 'object' && 'op' in t)) { if (operands.length < 64) operands.push(t); continue; }
@@ -435,72 +492,72 @@ function pageEvents(reader: PdfReader, page: { dict: PdfDict; resources: PdfDict
                 let end = id < 0 ? -1 : indexOf(data, 'EI', id + 3);
                 while (end > 0 && !(isWhite(data[end - 1]) && (end + 2 >= data.length || isWhite(data[end + 2]) || isDelim(data[end + 2])))) end = indexOf(data, 'EI', end + 2);
                 lx.pos = end < 0 ? data.length : end + 2;
-            } else if (op === 'BMC') events.push({ begin: true });
-            else if (op === 'BDC') {
-                let props: PdfValue | { op: string } | undefined = operands[operands.length - 1];
-                if (props instanceof PdfName) {
-                    const named = resources ? reader.resolve(resources.get('Properties')) : undefined;
-                    props = named instanceof Map ? reader.resolve(named.get(props.name)) : undefined;
-                }
-                const actual = props instanceof Map ? reader.resolve(props.get('ActualText')) : undefined;
-                events.push(actual instanceof PdfString ? { begin: true, actualText: textOf(actual) } : { begin: true });
-            } else if (op === 'EMC') events.push({ begin: false });
-            else if (op === 'Do' && depth < MAX_FORM_DEPTH) {
-                const name = operands[operands.length - 1];
-                const xobjects = resources ? reader.resolve(resources.get('XObject')) : undefined;
-                const form = name instanceof PdfName && xobjects instanceof Map ? reader.resolve(xobjects.get(name.name)) : undefined;
-                if (form && isStream(form) && (reader.resolve(form.dict.get('Subtype')) as PdfName | undefined)?.name === 'Form' && !active.has(form)) {
-                    let own = forms.get(form);
-                    if (!own) {
-                        const res = reader.resolve(form.dict.get('Resources'));
-                        const body = reader.decode(form);
-                        active.add(form);
-                        own = body ? scan(body, res instanceof Map ? res : resources, depth + 1, active) : [];
-                        active.delete(form);
-                        forms.set(form, own);
-                    }
-                    for (let k = 0; k < own.length && events.length < MAX_EVENTS; k++) events.push(own[k]);
-                }
-            }
+            } else if (op === 'BMC' || op === 'EMC') ops.push({ op });
+            else if (op === 'BDC') { const props = operands[operands.length - 1]; ops.push({ op, props: props && typeof props === 'object' && 'op' in props ? undefined : props as PdfValue }); }
+            else if (op === 'Do') { const name = operands[operands.length - 1]; if (name instanceof PdfName) ops.push({ op, name: name.name }); }
             operands.length = 0;
         }
-        return events;
-    };
-    const contents = reader.resolve(page.dict.get('Contents'));
-    const streams = (Array.isArray(contents) ? contents.map(c => reader.resolve(c)) : [contents]).filter((s): s is PdfStream & PdfValue => !!s && isStream(s));
-    const parts = streams.map(s => reader.decode(s)).filter((d): d is Uint8Array => !!d);
-    if (parts.length !== streams.length) return [];
-    // The streams are one content stream, as a page's are.
-    const total = parts.reduce((n, p) => n + p.length + 1, 0);
-    const joined = new Uint8Array(total);
-    let at = 0;
-    for (const p of parts) { joined.set(p, at); at += p.length; joined[at++] = 0x0a; }
-    const raw = scan(joined, page.resources, 0, new Set());
-    // An end with nothing open is dropped, as pdf.js drops it.
-    const events: MarkedEvent[] = [];
-    let level = 0;
-    for (const e of raw) {
-        if (e.begin) { level++; events.push(e); }
-        else if (level > 0) { level--; events.push(e); }
+        this.tokensLeft -= budget - Math.max(0, tokens);
+        this.programs.set(stream, ops);
+        return ops;
     }
-    return events;
-}
 
-/**
- * Each page's marked-content events (index 0 the first page's), or undefined for a file whose structure
- * cannot be read here (encrypted, damaged, or written in a filter not read). A page whose content
- * cannot be read has none.
- */
-export function readMarkedContent(bytes: Uint8Array, pageCount: number): MarkedEvent[][] | undefined {
-    try {
-        const reader = new PdfReader(bytes);
-        if (!reader.open()) return undefined;
-        const pages = reader.pages(pageCount);
-        if (pages.length !== pageCount) return undefined;
-        const forms = new Map<PdfValue, MarkedEvent[]>();
-        return pages.map(page => { try { return pageEvents(reader, page, forms); } catch { return []; } });
-    } catch {
-        return undefined;
+    /** A page's events: its content streams' operators with its resources, forms drawn in place. */
+    private pageEvents(reader: PdfReader, page: { dict: PdfDict; resources: PdfDict | undefined }): MarkedEvent[] {
+        /** The events of operators drawn with `resources` (EMC included even at no depth, see below). */
+        const play = (ops: MarkedOp[], resources: PdfDict | undefined, depth: number, active: Set<PdfValue>, events: MarkedEvent[]) => {
+            for (const o of ops) {
+                if (events.length >= MAX_EVENTS) return;
+                if (o.op === 'BMC') events.push({ begin: true });
+                else if (o.op === 'EMC') events.push({ begin: false });
+                else if (o.op === 'BDC') {
+                    let props = o.props;
+                    if (props instanceof PdfName) {
+                        const named = resources ? reader.resolve(resources.get('Properties')) : undefined;
+                        props = named instanceof Map ? reader.resolve(named.get(props.name)) : undefined;
+                    }
+                    const actual = props instanceof Map ? reader.resolve(props.get('ActualText')) : undefined;
+                    events.push(actual instanceof PdfString ? { begin: true, actualText: textOf(actual) } : { begin: true });
+                } else if (depth < MAX_FORM_DEPTH) {
+                    const xobjects = resources ? reader.resolve(resources.get('XObject')) : undefined;
+                    const form = xobjects instanceof Map ? reader.resolve(xobjects.get(o.name)) : undefined;
+                    if (!form || !isStream(form) || (reader.resolve(form.dict.get('Subtype')) as PdfName | undefined)?.name !== 'Form' || active.has(form)) continue;
+                    const own = reader.resolve(form.dict.get('Resources'));
+                    const res = own instanceof Map ? own : resources;
+                    // A form's events are read once for the resources it is drawn with, and repeated where it is
+                    // drawn again: a form drawn ten times in each of eight forms nested would be read a hundred
+                    // million times.
+                    const cached = this.forms.get(form);
+                    let drawn = cached && cached.resources === res ? cached.events : undefined;
+                    if (!drawn) {
+                        drawn = [];
+                        const body = this.program(reader, form);
+                        active.add(form);
+                        if (body) play(body, res, depth + 1, active, drawn);
+                        active.delete(form);
+                        this.forms.set(form, { resources: res, events: drawn });
+                    }
+                    for (let k = 0; k < drawn.length && events.length < MAX_EVENTS; k++) events.push(drawn[k]);
+                }
+            }
+        };
+        const contents = reader.resolve(page.dict.get('Contents'));
+        const streams = (Array.isArray(contents) ? contents.map(c => reader.resolve(c)) : [contents]).filter((st): st is PdfStream & PdfValue => !!st && isStream(st));
+        const raw: MarkedEvent[] = [];
+        // The streams are one content stream, as a page's are.
+        for (const st of streams) {
+            const ops = this.program(reader, st);
+            if (!ops) return [];
+            play(ops, page.resources, 0, new Set(), raw);
+        }
+        // An end with nothing open is dropped, as pdf.js drops it.
+        const events: MarkedEvent[] = [];
+        let level = 0;
+        for (const e of raw) {
+            if (e.begin) { level++; events.push(e); }
+            else if (level > 0) { level--; events.push(e); }
+        }
+        return events;
     }
 }
 

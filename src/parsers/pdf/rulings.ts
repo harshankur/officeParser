@@ -252,7 +252,19 @@ export function ruledTables(frames: RuledFrame[], runs: readonly RawRun[], layou
             };
             return spans('x', f.xs, c.col, c.colSpan) || spans('y', f.ys, c.row, c.rowSpan);
         });
-        if (falseMerge) continue;
+        // A cell whose own lines hold text set apart in columns (a gap of two ems and more between runs on one
+        // baseline) is several cells a producer drew no rule between: a box with lines between its rows alone
+        // read each row as one cell. So is a frame of one column (row lines in a box, of a list or a table).
+        const columned = f.xs.length - 1 < 2 || contents.some(runs => {
+            const lines = new Map<number, RawRun[]>();
+            for (const run of runs) if (run.text.trim()) { const key = Math.round(run.yBaseline); (lines.get(key) ?? lines.set(key, []).get(key)!).push(run); }
+            for (const line of lines.values()) {
+                line.sort((a, b) => a.x - b.x);
+                for (let k = 1; k < line.length; k++) if (line[k].x - (line[k - 1].x + line[k - 1].width) >= 2 * Math.max(line[k].fontSize, line[k - 1].fontSize, 4)) return true;
+            }
+            return false;
+        });
+        if (falseMerge || columned) continue;
         const rows: OfficeContentNode[] = [];
         f.cells.forEach((c, i) => {
             for (const r of contents[i]) consumed.add(r);
