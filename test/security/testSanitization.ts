@@ -4076,6 +4076,21 @@ async function pdfProcessTests(h: {
     let ruled = { error: '', text: '' } as { error: string; text: string };
     await linear('pdf: a page of 16,000 crossing rules is read', async () => { ruled = await read(ruledPage(n(8000))); });
     check('pdf: a page of crossing rules keeps its text', !ruled.error && ruled.text.includes('Grid page'), ruled.error);
+    // A page's marked content is read for its ActualText (see actualText): in time in proportion to its
+    // operators, and within its bound on what it inflates (a stream of zeros inflating far past it).
+    const markedPage = (body: Buffer) => pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [5 0 R] /Count 1 >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', flate(body),
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 4 0 R >>']);
+    let marked = { error: '', text: '' } as { error: string; text: string };
+    await linear('pdf: a page of 2,000 marked-content spans with ActualText is read', async () => {
+        let body = 'BT /F1 10 Tf 40 800 Td\n';
+        for (let i = 0; i < n(2_000); i++) body += `/Span << /ActualText (a${i % 10}) >> BDC (x) Tj EMC\n`;
+        marked = await read(markedPage(Buffer.from(body + 'ET\n')));
+    });
+    check('pdf: marked-content spans read as their ActualText', !marked.error && marked.text.includes('a1') && !marked.text.includes('x'), marked.error || marked.text.slice(0, 80));
+    const zeros = Buffer.alloc(96 * 1024 * 1024, 0x20);
+    zeros.write('BT /F1 10 Tf 40 800 Td (Past the zeros) Tj ET', zeros.length - 64);
+    const bombRun = await withinTime(20_000, () => read(markedPage(zeros)));
+    check('pdf: a content stream inflating past the marked-content bound is read in time', !bombRun.result.error && bombRun.within && bombRun.result.text.includes('Past the zeros'), `${bombRun.ms}ms ${bombRun.result.error}`);
     check('pdf: a plan of 3,000 symbols is read whole, its paths costing none of the operator budget', !planned.error && planned.pages === 21 && planned.text.includes('Note 20.50') && !planned.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED') && !planned.codes.includes('PDF_NO_TEXT_EXTRACTED'), `${planned.pages} pages ${planned.codes} ${planned.error}`);
     const operatorChecks = async (separateProcess: boolean) => {
         const where = separateProcess ? 'separate process' : 'in process';

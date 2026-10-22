@@ -12,7 +12,7 @@ import { excelShownText } from '../src/utils/excelFormat';
 import { OfficeTemplate } from '../src/OfficeTemplate';
 import { OfficeConverter } from '../src/OfficeConverter';
 import { zipSync, strToU8, unzipSync, strFromU8 } from 'fflate';
-import { PDFDocument, PDFName, PDFOperator, StandardFonts, degrees, rgb } from 'pdf-lib';
+import { PDFDocument, PDFHexString, PDFName, PDFOperator, StandardFonts, degrees, rgb } from 'pdf-lib';
 import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -5462,6 +5462,32 @@ async function testColumns(): Promise<void> {
     assert.ok(/\\usepackage\{multicol\}/.test(tex) && /\\begin\{multicols\}\{2\}[^]*Column paragraph 6[^]*\\end\{multicols\}/.test(tex), 'LaTeX: the columns are a multicols');
 }
 
+/**
+ * A PDF's text is read from the ActualText a producer gives its glyph clusters (a conjunct of an Indic
+ * script, a ligature), where its glyphs map to none of it or to the wrong letters: Chromium's PDF of
+ * Hindi, Bengali and Tamil read as "ह ी" and the like. A conjunct pdf.js gives no width keeps its place
+ * in its word.
+ */
+async function testPdfActualText(): Promise<void> {
+    const read = async (bytes: Uint8Array) => (await OfficeParser.parseOffice(Buffer.from(bytes), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).content[0].children!.map(n => n.text);
+    assert.deepStrictEqual(await read(fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'indic_chromium.pdf'))),
+        ['हिन्दी', 'हिन्दी भाषा क्षत्रिय श्री कृष्ण', 'বাংলা ভাষা ক্ষত্রিয়', 'தமிழ் மொழி க்ஷ ஸ்ரீ'], 'Chromium\'s PDF of four Indic lines reads as written');
+    // Glyphs whose text is wrong ("xy", "zz"), each cluster with its ActualText, as producers write it.
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    const page = pdf.addPage([300, 200]);
+    const span = (actual: string, glyphs: string, x: number) => {
+        const hex = 'FEFF' + [...actual].map(c => c.codePointAt(0)!.toString(16).padStart(4, '0')).join('').toUpperCase();
+        page.pushOperators(PDFOperator.of('BDC' as any, [PDFName.of('Span'), pdf.context.obj({ ActualText: PDFHexString.of(hex) }) as any]));
+        page.drawText(glyphs, { x, y: 150, size: 14, font });
+        page.pushOperators(PDFOperator.of('EMC' as any));
+    };
+    const xy = font.widthOfTextAtSize('xy', 14), zz = font.widthOfTextAtSize('zz', 14), space = font.widthOfTextAtSize(' ', 14);
+    span('हि', 'xy', 40); span('न्दी', 'zz', 40 + xy);
+    page.drawText('plain', { x: 40 + xy + zz + space, y: 150, size: 14, font });
+    assert.deepStrictEqual(await read(await pdf.save()), ['हिन्दी plain'], 'each span reads as its ActualText, in its place, and the text around it as drawn');
+}
+
 async function testNativePdfFurnitureLimits(): Promise<void> {
     const t = (text: string, more: any = {}) => ({ type: 'text', text, ...more });
     const p = (...children: any[]) => ({ type: 'paragraph', children });
@@ -7361,6 +7387,7 @@ async function runTests(): Promise<void> {
         ['PDF headings by size and weight', testPdfHeadingsBySizeAndWeight],
         ['PDF ruled tables', testPdfRuledTables],
         ['Columns', testColumns],
+        ['PDF ActualText', testPdfActualText],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],

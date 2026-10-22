@@ -42,6 +42,7 @@ import { loadPdfJs } from '../utils/moduleLoader.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { collectColorMarks, ColorLookup, makeColorLookup } from './pdf/pdfColor.js';
 import { collectShapes, PdfShape, shapeBullets } from './pdf/pdfShapes.js';
+import { MarkedEvent, readableItems, readMarkedContent } from './pdf/actualText.js';
 import { ruledFrames, ruledTables } from './pdf/rulings.js';
 import { computeRunBox, identityMatrix, mulMatrix, roundBounds, rotateBoundsToRendered, toMatrix6, unionAll } from './pdf/geometry.js';
 import { PageExtract, PdfImage, PdfLayoutConfig, RawRun, ResolvedFont } from './pdf/pdfTypes.js';
@@ -962,6 +963,20 @@ async function readTextContent(page: any, params: object, work: PdfWorkBudget): 
 
 /** At most this many path operators are kept on a page, for its shapes (see readOperatorList). */
 const MAX_PATHS_KEPT = 40_000;
+/** At most this many operators are kept on a page read for its shapes alone, past which it is left unread. */
+const MAX_SHAPE_OPERATORS = 200_000;
+
+/** The operators the shape reader uses: paths, their widths and colours, and the state that places them. */
+const shapeOperatorsCache = new WeakMap<object, Set<number>>();
+const shapeOperators = (OPS: any): Set<number> => {
+    let kept = shapeOperatorsCache.get(OPS);
+    if (!kept) {
+        kept = new Set(['save', 'restore', 'transform', 'paintFormXObjectBegin', 'paintFormXObjectEnd', 'constructPath', 'setLineWidth',
+            'setFillRGBColor', 'setFillColorN', 'setFillTransparent', 'setStrokeRGBColor', 'setStrokeColorN', 'setStrokeTransparent'].map(name => OPS[name]).filter((op): op is number => typeof op === 'number'));
+        shapeOperatorsCache.set(OPS, kept);
+    }
+    return kept;
+};
 
 /** The operators the image, color and shape readers use (paths with their paint and width); the rest are not kept. */
 const keptOperatorsCache = new WeakMap<object, Set<number>>();
@@ -987,9 +1002,12 @@ const keptOperators = (OPS: any): Set<number> => {
  * of the list is left unread (see PdfWorkBudget.leaveUnread) and the page keeps what was read of it;
  * later pages read none.
  */
-async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep: 'none' | 'drawing', fonts: readonly string[] = []): Promise<any | null> {
+async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep: 'none' | 'drawing' | 'shapes', fonts: readonly string[] = []): Promise<any | null> {
     if (work.spent || work.operatorsSpent) return null;
-    const kept = keep === 'drawing' ? keptOperators(pdfjs.OPS) : null;
+    // ('shapes': the page's paths alone, for its bullets and tables: kept outside the budget, up to
+    // MAX_SHAPE_OPERATORS, and the rest left unread once the fonts are known.)
+    const kept = keep === 'drawing' ? keptOperators(pdfjs.OPS) : keep === 'shapes' ? shapeOperators(pdfjs.OPS) : null;
+    let shapeOps = 0;
     const showText = pdfjs.OPS.showText;
     // Paths (and their widths) are kept for the page's shapes, a bounded number of them, costing none of
     // the budget, as when they were not kept: a plan stamping one symbol thousands of times stays whole.
@@ -1026,11 +1044,13 @@ async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep
                     if (fn === showText && Array.isArray(args?.[0])) weight += Math.floor(args[0].length / 64);
                 }
             }
-            if (!work.takeOperators(fnArray.length - free + weight, page.pageNumber)) { leave(intentState); return; }
+            if (keep === 'shapes') shapeOps += fnArray.length;
+            else if (!work.takeOperators(fnArray.length - free + weight, page.pageNumber)) { leave(intentState); return; }
             const result = original.call(this, { ...chunk, fnArray, argsArray, length: fnArray.length }, intentState);
-            // Read only for the page's fonts: once pdf.js has sent them (it sends a font before the
-            // operators using it), the rest of the list is not needed, and is left unread.
-            if (!kept && !chunk.lastChunk) {
+            // Read only for the page's fonts (or for its shapes, past as many as are kept): once pdf.js has
+            // sent them (it sends a font before the operators using it), the rest of the list is not needed,
+            // and is left unread.
+            if ((!kept || (keep === 'shapes' && shapeOps >= MAX_SHAPE_OPERATORS)) && !chunk.lastChunk) {
                 while (fontsSent < fonts.length && page.commonObjs?.has?.(fonts[fontsSent])) fontsSent++;
                 if (fontsSent === fonts.length) leave(intentState);
             }
@@ -1047,7 +1067,7 @@ async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep
 async function collectPage(
     pdfjs: any, pdfDocument: any, pageNumber: number, config: FullOfficeParserConfig,
     pdfCfg: PdfLayoutConfig, fontCache: Map<string, ResolvedFont>, destCache: Map<string, SectionTarget | null>,
-    sectionLinks: SectionLinks, work: PdfWorkBudget,
+    sectionLinks: SectionLinks, work: PdfWorkBudget, markedContent?: MarkedEvent[][],
 ): Promise<PageExtract | undefined> {
     const page = await work.within(pdfDocument.getPage(pageNumber) as Promise<any>);
     if (!page) return undefined;
@@ -1077,7 +1097,7 @@ async function collectPage(
     // ocr alone needs no operator list (and must not fetch one just to discard it).
     // The page's drawing is read too: its shapes (a bullet drawn as a disc, a table's ruling lines) tell
     // what its text alone does not.
-    ops = await readOperatorList(pdfjs, page, work, 'drawing', newFonts);
+    ops = await readOperatorList(pdfjs, page, work, config.extractAttachments || pdfCfg.extractTextColor ? 'drawing' : 'shapes', newFonts);
     for (const key of seen) if (!fontCache.has(key)) fontCache.set(key, await resolveFont(key, page.commonObjs, styles));
 
     // Per-run fill color (opt-in): recovered from the operator list, which is now fetched above.
@@ -1096,7 +1116,8 @@ async function collectPage(
     // thousands deep took time in the square of the page.
     const stack: { mcid: string | null; artifact: boolean }[] = [];
     const runs: RawRun[] = [];
-    for (const item of textContent.items) {
+    // The text a producer gave its glyph clusters (ActualText), where the glyphs map to none of it.
+    for (const item of readableItems(textContent.items, markedContent?.[pageNumber - 1])) {
         if (!isTextItem(item)) {
             const type = (item as any).type as string | undefined;
             if (type === 'beginMarkedContent' || type === 'beginMarkedContentProps') {
@@ -1487,7 +1508,7 @@ async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfi
             // Every request to pdf.js goes through the document's budget, from the first (see PdfWorkBudget).
             const budget = work = new PdfWorkBudget(pdfDocument, config, pdfCfg, buffer.length, pdfProcess);
             try {
-                return await whileAlive(buildAst(pdfjs, pdfDocument, config, pdfCfg, budget));
+                return await whileAlive(buildAst(pdfjs, pdfDocument, config, pdfCfg, budget, buffer));
             } finally {
                 // Whatever ended the parse, the read ends with it (see PdfWorkBudget.cancel).
                 budget.cancel();
@@ -1511,7 +1532,7 @@ async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfi
 }
 
 /** Assembles the AST from an opened document. Separated so the caller can guarantee task cleanup. */
-async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, work: PdfWorkBudget): Promise<OfficeParserAST> {
+async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, work: PdfWorkBudget, buffer: Buffer): Promise<OfficeParserAST> {
     const content: OfficeContentNode[] = [];
     const attachments: OfficeAttachment[] = [];
     const numPages = pdfDocument.numPages;
@@ -1632,11 +1653,13 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     const destCache = new Map<string, SectionTarget | null>();
     const sectionLinks = new SectionLinks();
     const extracts: PageExtract[] = [];
+    // Each page's marked content, read from the file for the ActualText pdf.js leaves out (see actualText).
+    const markedContent = readMarkedContent(new Uint8Array(buffer), numPages);
     for (const pageNum of pageNumbers) {
         checkAbortSignal(config.abortSignal);
         if (work.spent) break;
         try {
-            const extract = await collectPage(pdfjs, pdfDocument, pageNum, config, pdfCfg, fontCache, destCache, sectionLinks, work);
+            const extract = await collectPage(pdfjs, pdfDocument, pageNum, config, pdfCfg, fontCache, destCache, sectionLinks, work, markedContent);
             if (extract) extracts.push(extract);
         } catch (e: any) {
             // A page failing because its parse has ended (its process ended with it) is not reported.

@@ -116,7 +116,8 @@ export function buildLines(runs: RawRun[], cfg: PdfLayoutConfig): PdfLine[] {
     clusters = mergeSuperSubClusters(clusters, maxFontSize);
 
     const lines = clusters.flatMap(c => clusterToLines(c.runs, cfg));
-    lines.sort((a, b) => a.baseline - b.baseline);
+    // Top to bottom; lines on one baseline (a line cut at a wide gap) left to right.
+    lines.sort((a, b) => Math.abs(a.baseline - b.baseline) < 0.5 ? a.x - b.x : a.baseline - b.baseline);
     return lines;
 }
 
@@ -189,16 +190,20 @@ function clusterToLines(clusterRuns: RawRun[], cfg: PdfLayoutConfig): PdfLine[] 
     const segments: RawRun[][] = [];
     let cur: RawRun[] = [];
     let last: RawRun | undefined;
-    for (const r of runs) {
+    for (let i = 0; i < runs.length; i++) {
+        const r = runs[i];
         const isBlank = r.text.trim().length === 0;
         // pdf.js synthesizes a wide whitespace run to bridge a gutter; treat that (or a plain
-        // coordinate gap) as a column/cell boundary.
+        // coordinate gap) as a column/cell boundary. A wide blank with text inside it is no gutter: one
+        // pdf.js put after glyphs whose width it lost (an Indic conjunct's) lies over the text after them.
+        const wideBlank = isBlank && r.width >= wideGap && !(runs[i + 1] && runs[i + 1].x < r.x + r.width - 1);
         const coordGap = last ? r.x - (last.x + last.width) : 0;
-        if (cur.length && ((isBlank && r.width >= wideGap) || coordGap >= wideGap)) {
+        if (cur.length && (wideBlank || coordGap >= wideGap)) {
             segments.push(cur);
             cur = [];
         }
-        if (isBlank && r.width >= wideGap) { last = r; continue; } // drop the separating whitespace
+        if (wideBlank) { last = r; continue; } // drop the separating whitespace
+        if (isBlank && r.width >= wideGap) continue; // nor keep one over text
         cur.push(r);
         last = r;
     }
@@ -502,7 +507,8 @@ function startsNewParagraph(l: PdfLine, prev: PdfLine, firstIsItem: boolean, han
 }
 
 function groupParagraphs(block: PdfLine[]): ParaGroup[] {
-    const lines = [...block].sort((a, b) => a.baseline - b.baseline);
+    // Top to bottom; lines on one baseline (a line cut at a wide gap) left to right.
+    const lines = [...block].sort((a, b) => Math.abs(a.baseline - b.baseline) < 0.5 ? a.x - b.x : a.baseline - b.baseline);
     const deltas: number[] = [];
     for (let i = 1; i < lines.length; i++) deltas.push(lines[i].baseline - lines[i - 1].baseline);
     const leading = median(deltas) || (lines[0]?.height ?? 12) * 1.2;
