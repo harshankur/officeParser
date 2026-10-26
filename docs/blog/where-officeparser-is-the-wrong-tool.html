@@ -10,7 +10,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Where officeParser is the Wrong Tool: An Honest Engineering Guide | officeParser Blog</title>
-    <meta name="description" content="The jobs officeParser does not do: PDFs that match Word exactly, formula recalculation, legacy .doc files, writing spreadsheets and slides, macros, and TeX typesetting, and what to use instead.">
+    <meta name="description" content="The jobs officeParser does not do: PDFs that match Word exactly, formula recalculation, legacy .doc files, formulas and native charts in what it writes, macros, and TeX typesetting, and what to use instead.">
     <meta name="author" content="Harsh Ankur">
     <link rel="canonical" href="https://officeparser.harshankur.com/blog/where-officeparser-is-the-wrong-tool.html">
     <link rel="alternate" type="application/rss+xml" title="officeParser Blog" href="./feed.xml">
@@ -18,11 +18,12 @@
 
     <!-- Open Graph -->
     <meta property="og:title" content="Where officeParser is the Wrong Tool: An Honest Engineering Guide">
-    <meta property="og:description" content="The jobs officeParser does not do: PDFs that match Word exactly, formula recalculation, legacy .doc files, writing spreadsheets and slides, macros, and TeX typesetting, and what to use instead.">
+    <meta property="og:description" content="The jobs officeParser does not do: PDFs that match Word exactly, formula recalculation, legacy .doc files, formulas and native charts in what it writes, macros, and TeX typesetting, and what to use instead.">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://officeparser.harshankur.com/blog/where-officeparser-is-the-wrong-tool.html">
     <meta property="og:site_name" content="officeParser">
     <meta property="article:published_time" content="2026-10-04">
+    <meta property="article:modified_time" content="2026-10-26">
 
     <!-- Fonts: the site's own copies (docs/fonts), shared with the home page. -->
     <link rel="stylesheet" href="../fonts/fonts.css">
@@ -78,7 +79,7 @@
                     <div>
                         <a href="https://harshankur.com" target="_blank" rel="noopener" class="author-name">Harsh
                             Ankur</a>
-                        <div>Published <time datetime="2026-10-04">4 October 2026</time> · 5 min read</div>
+                        <div>Published <time datetime="2026-10-04">4 October 2026</time>, updated <time datetime="2026-10-26">26 October 2026</time> · 5 min read</div>
                     </div>
                 </div>
             </div>
@@ -172,16 +173,19 @@
     <code>soffice --headless --convert-to docx old-file.doc</code>. Then parse the result.
 </p>
 
-<h2>4. You Need to Write Spreadsheets or Slides</h2>
+<h2>4. You Need Formulas or Native Charts in the Files You Write</h2>
 <p>
-    officeParser reads fourteen formats but writes fewer. It generates DOCX, ODT, PDF, HTML, Markdown,
-    LaTeX, RTF, EPUB, CSV, plain text, and chunks for retrieval. It does <strong>not</strong> generate
-    <code>.xlsx</code>, <code>.pptx</code>, <code>.ods</code>, or <code>.odp</code>.
+    Since 8.3.0, officeParser writes spreadsheets and slides as well as documents: <code>.xlsx</code>,
+    <code>.ods</code>, <code>.pptx</code> and <code>.odp</code>, next to DOCX, ODT, PDF, HTML, Markdown,
+    LaTeX, RTF, EPUB, CSV, plain text and chunks for retrieval. What it writes is what it read: a
+    workbook's <strong>values</strong>, shown in their number formats, and a deck's text boxes, pictures,
+    shapes, tables and speaker notes.
 </p>
 <p>
-    A spreadsheet can go out as CSV, and a deck can go out as a document, but if the deliverable has to
-    open in Excel or PowerPoint as a native file, use a library built for writing them, such as ExcelJS
-    or PptxGenJS.
+    It does <strong>not</strong> write formulas, since it never reads them (see section 2), and it writes
+    a chart as a table of its data, on a sheet or a slide, not as a chart Excel or PowerPoint can edit. If
+    the deliverable needs live formulas or editable charts, use a library built for authoring them, such
+    as ExcelJS or PptxGenJS.
 </p>
 
 <h2>5. You Need to Run Macros</h2>

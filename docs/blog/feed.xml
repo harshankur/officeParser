@@ -1768,7 +1768,7 @@ DOCX   HTML   PDF   Markdown   chunks</code></pre>
       <pubDate>Sun, 04 Oct 2026 00:00:00 GMT</pubDate>
       <dc:creator>Harsh Ankur</dc:creator>
       <category>Honest Comparisons</category>
-      <description>The jobs officeParser does not do: PDFs that match Word exactly, formula recalculation, legacy .doc files, writing spreadsheets and slides, macros, and TeX typesetting, and what to use instead.</description>
+      <description>The jobs officeParser does not do: PDFs that match Word exactly, formula recalculation, legacy .doc files, formulas and native charts in what it writes, macros, and TeX typesetting, and what to use instead.</description>
       <content:encoded><![CDATA[<p>
     Every architecture is a set of trade-offs. When I designed <code>officeParser</code>, I made three
     on purpose:
@@ -1857,16 +1857,19 @@ DOCX   HTML   PDF   Markdown   chunks</code></pre>
     <code>soffice --headless --convert-to docx old-file.doc</code>. Then parse the result.
 </p>
 
-<h2>4. You Need to Write Spreadsheets or Slides</h2>
+<h2>4. You Need Formulas or Native Charts in the Files You Write</h2>
 <p>
-    officeParser reads fourteen formats but writes fewer. It generates DOCX, ODT, PDF, HTML, Markdown,
-    LaTeX, RTF, EPUB, CSV, plain text, and chunks for retrieval. It does <strong>not</strong> generate
-    <code>.xlsx</code>, <code>.pptx</code>, <code>.ods</code>, or <code>.odp</code>.
+    Since 8.3.0, officeParser writes spreadsheets and slides as well as documents: <code>.xlsx</code>,
+    <code>.ods</code>, <code>.pptx</code> and <code>.odp</code>, next to DOCX, ODT, PDF, HTML, Markdown,
+    LaTeX, RTF, EPUB, CSV, plain text and chunks for retrieval. What it writes is what it read: a
+    workbook's <strong>values</strong>, shown in their number formats, and a deck's text boxes, pictures,
+    shapes, tables and speaker notes.
 </p>
 <p>
-    A spreadsheet can go out as CSV, and a deck can go out as a document, but if the deliverable has to
-    open in Excel or PowerPoint as a native file, use a library built for writing them, such as ExcelJS
-    or PptxGenJS.
+    It does <strong>not</strong> write formulas, since it never reads them (see section 2), and it writes
+    a chart as a table of its data, on a sheet or a slide, not as a chart Excel or PowerPoint can edit. If
+    the deliverable needs live formulas or editable charts, use a library built for authoring them, such
+    as ExcelJS or PptxGenJS.
 </p>
 
 <h2>5. You Need to Run Macros</h2>

@@ -92,7 +92,8 @@
             "shortTitle": "Where officeParser is the Wrong Tool",
             "category": "comparisons",
             "published": "2026-10-04",
-            "description": "The jobs officeParser does not do: PDFs that match Word exactly, formula recalculation, legacy .doc files, writing spreadsheets and slides, macros, and TeX typesetting, and what to use instead.",
+            "updated": "2026-10-26",
+            "description": "The jobs officeParser does not do: PDFs that match Word exactly, formula recalculation, legacy .doc files, formulas and native charts in what it writes, macros, and TeX typesetting, and what to use instead.",
             "deck": "Most documentation reads like a sales pitch, with the drawbacks in the fine print. I would rather be plain: here are the problems officeParser does not solve, and the tools to use instead."
         },
         {
