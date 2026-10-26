@@ -6,9 +6,10 @@
  * Excel's codes hold is turned into those: the section for the value's sign, a currency's `[$€-407]` as
  * its symbol, colours and locales dropped, `_x` padding and `*x` fill as a space, an empty section as
  * nothing shown, thousands scaling (`0,`), and a date's `m` read as a month or, next to an hour or a
- * second, a minute (`mmmmm` the month's first letter). A code it
- * cannot write the way Excel does (General, scientific notation, fractions, conditions, elapsed time,
- * text sections) shows nothing of its own: the value is shown as read.
+ * second, a minute (`mmmmm` the month's first letter), and elapsed time (`[h]:mm`, `[mm]:ss`: the hours,
+ * minutes or seconds in all, past a day). A code it cannot write the way Excel does (General, scientific
+ * notation, fractions, conditions, elapsed time in fractions of a second, text sections) shows nothing of
+ * its own: the value is shown as read.
  */
 import { DEFAULT_TEMPLATE_CONFIG } from '../defaults.js';
 import { formatDate, formatNumber, Picture, PictureSettings, readPicture } from '../template/templateFormat.js';
@@ -203,6 +204,25 @@ function readCode(code: string): SectionReading[] {
 
 const MONTH_LETTERS = 'JFMAMJJASOND';
 
+/**
+ * A day count through an elapsed-time format (`[h]:mm`, `[h]:mm:ss`, `[mm]:ss`, `[ss]`): its first unit
+ * in all (30 hours is `30:00`, not 6:00 on the next day), at least as many digits as the code's letters,
+ * then the units after it in two digits each. Null for any other code.
+ */
+function elapsedTime(days: number, code: string): string | null {
+    const match = /^\[(h+|m+|s+)\]((?::mm)?(?::ss)?)$/i.exec(code);
+    if (!match) return null;
+    const unit = match[1][0].toLowerCase(), rest = match[2].toLowerCase();
+    if (!(unit === 'h' ? ['', ':mm', ':mm:ss'] : unit === 'm' ? ['', ':ss'] : ['']).includes(rest)) return null;
+    const seconds = Math.round(Math.abs(days) * 86400);
+    const two = (n: number) => String(n).padStart(2, '0');
+    const first = unit === 'h' ? Math.floor(seconds / 3600) : unit === 'm' ? Math.floor(seconds / 60) : seconds;
+    let shown = String(first).padStart(match[1].length, '0');
+    if (rest.startsWith(':mm')) shown += ':' + two(Math.floor(seconds % 3600 / 60));
+    if (rest.endsWith(':ss')) shown += ':' + two(seconds % 60);
+    return (days < 0 && seconds ? '-' : '') + shown;
+}
+
 /** A picture's literal text, its quotes and escapes taken away. */
 function literalText(picture: string): string {
     return picture.replace(/"([^"]*)"|\\(.)/g, (_, quoted: string | undefined, escaped: string | undefined) => quoted ?? escaped ?? '').trim();
@@ -216,6 +236,8 @@ export function excelShownText(value: string, code: string, date1904: boolean): 
     if (!code || code.length > MAX_CODE_LENGTH || /^general$/i.test(code.trim())) return undefined;
     let number = Number(value);
     if (value.trim() === '' || !Number.isFinite(number)) return undefined;
+    const elapsed = elapsedTime(number, code.trim());
+    if (elapsed !== null) return elapsed;
     const parts = readCode(code);
     let section = parts[0];
     if (number < 0 && parts.length >= 2) { section = parts[1]; number = -number; }
