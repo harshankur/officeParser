@@ -110,6 +110,8 @@ const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
         pageRange: '',
         normalizeText: true,
         extractTextColor: true,
+        // In auxiliary, as headers and footers: the most the AST says of them.
+        keepHeadersAndFootersInPages: false,
         maxTextItems: 20_000,
         maxOperators: 250_000,
         maxAnnotations: 10_000,

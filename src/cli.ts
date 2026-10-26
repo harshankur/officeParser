@@ -69,6 +69,7 @@ const knownParserBooleans = new Set([
     'htmlParserConfig.preserveComments',
     'pdfParserConfig.useTags', 'pdfParserConfig.detectColumns',
     'pdfParserConfig.mergeHyphenatedWords', 'pdfParserConfig.normalizeText', 'pdfParserConfig.extractTextColor', 'pdfParserConfig.separateProcess',
+    'pdfParserConfig.keepHeadersAndFootersInPages',
     'ocrConfig.preserveLayout',
 ]);
 
@@ -445,6 +446,7 @@ if (fileArg && !showHelp) {
     console.log('  --pdfParserConfig.mergeHyphenatedWords=false Keep words hyphenated across line breaks (default: true)');
     console.log('  --pdfParserConfig.normalizeText=false       Skip Unicode/ligature normalization of PDF text (default: true)');
     console.log('  --pdfParserConfig.extractTextColor          Record each PDF run\'s fill colour in formatting.color (default: true; set false to skip)');
+    console.log('  --pdfParserConfig.keepHeadersAndFootersInPages Keep a tagged PDF\'s running headers and footers in each page\'s content (default: false)');
     console.log('  --pdfParserConfig.maxTextItems=20000        Base of the text items a PDF may yield, plus one per byte (default: 20000)');
     console.log('  --pdfParserConfig.maxOperators=250000       Base of the drawing operators kept, plus four per byte (default: 250000)');
     console.log('  --pdfParserConfig.maxAnnotations=10000      Base of the annotations read, plus one per 32 bytes (default: 10000)');

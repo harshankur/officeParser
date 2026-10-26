@@ -153,6 +153,8 @@ const FULL_CONFIG: DeepRequired<OfficeParserConfig> = {
         pageRange: '',
         normalizeText: true,
         extractTextColor: true,
+        // In auxiliary, as headers and footers: the most the AST says of them.
+        keepHeadersAndFootersInPages: false,
         maxTextItems: 20_000,
         maxOperators: 250_000,
         maxAnnotations: 10_000,
@@ -3592,6 +3594,18 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
                 !(dropped.auxiliary as any)?.headers && !(dropped.auxiliary as any)?.footers && droppedText.includes('WATERMARK DRAFT'),
                 'no headers/footers, watermark kept',
                 `headers=${((dropped.auxiliary as any)?.headers || []).length} watermark=${droppedText.includes('WATERMARK DRAFT')}`);
+            // Kept in the page on request: the header before the page's text, the footer after it, and in
+            // a writer that writes no running headers (a slide per page) too.
+            const kept = await OfficeParser.parseOffice(path.join(pdfDir, `${name}.pdf`), { ocr: false, pdfParserConfig: { keepHeadersAndFootersInPages: true } });
+            const keptText = textOf(kept).replace(/\s+/g, ' ');
+            const order = ['RUNNING HEADER', 'FIRST BODY PARAGRAPH', 'WATERMARK DRAFT', 'SECOND BODY PARAGRAPH', 'RUNNING FOOTER'].map(t => keptText.indexOf(t));
+            add(`${name}: keepHeadersAndFootersInPages keeps them in the page, in place`,
+                !(kept.auxiliary as any)?.headers && !(kept.auxiliary as any)?.footers && order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1])),
+                'header, body, footer in page order', `${JSON.stringify(order)} ${keptText.slice(0, 120)}`);
+            const slide = String((await kept.to('text')).value);
+            add(`${name}: a kept header reaches a writer of no running headers`, slide.includes('RUNNING HEADER') && slide.includes('RUNNING FOOTER'), 'both in the text output', slide.replace(/\s+/g, ' ').slice(0, 120));
+            const keptDropped = await OfficeParser.parseOffice(path.join(pdfDir, `${name}.pdf`), { ocr: false, ignoreHeadersAndFooters: true, pdfParserConfig: { keepHeadersAndFootersInPages: true } });
+            add(`${name}: ignoreHeadersAndFooters still drops kept headers`, !textOf(keptDropped).includes('RUNNING HEADER') && textOf(keptDropped).includes('WATERMARK DRAFT'), 'no header text', textOf(keptDropped).replace(/\s+/g, ' ').slice(0, 120));
         } catch (e: any) {
             add(`${name} parse`, false, 'parsed', e?.message || String(e));
         }

@@ -675,6 +675,20 @@ export interface PdfParserConfig {
      */
     extractTextColor?: boolean;
     /**
+     * Keep each page's running header and footer in that page's content, where they stand on the
+     * page (the header first, the footer last), instead of in `auxiliary.headers` and
+     * `auxiliary.footers`. A tagged PDF marks its running headers and footers as artifacts, outside its
+     * structure: they are read into `auxiliary`, as a word processor's header is, so a writer that lays
+     * out pages (Word, ODT, RTF, LaTeX, PDF) repeats the first page's on every page and one that does
+     * not (text, Markdown, HTML, EPUB, PowerPoint) leaves them out. Turn this on for a writer that
+     * shows each page as it was, a slide per page, so a page keeps its own header and footer text (a
+     * page number, a chapter title) in its place. An untagged PDF's headers and footers are page text
+     * already. `ignoreHeadersAndFooters` still drops them.
+     *
+     * Default is false.
+     */
+    keepHeadersAndFootersInPages?: boolean;
+    /**
      * Base of the text items one PDF may yield; the limit is this plus one per byte of the file, and an
      * item counts once more for each 64 characters it holds (a form drawing one 1 MB string a hundred
      * times took 13 seconds as a hundred items). A form

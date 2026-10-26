@@ -58,6 +58,7 @@
       "pageRange": "",
       "normalizeText": true,
       "extractTextColor": true,
+      "keepHeadersAndFootersInPages": false,
       "maxTextItems": 20000,
       "maxOperators": 250000,
       "maxAnnotations": 10000,
@@ -8741,6 +8742,7 @@
       "name": "chart1.xml",
       "extension": "xml",
       "chartData": {
+        "title": "Chart Title",
         "dataSets": [
           {
             "name": "Series 1",

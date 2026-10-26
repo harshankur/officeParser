@@ -63,6 +63,7 @@ const DEFAULT_PDF_PARSER_CONFIG: DeepRequired<PdfParserConfig> = {
     pageRange: '',
     normalizeText: true,
     extractTextColor: true,
+    keepHeadersAndFootersInPages: false,
     maxTextItems: 20_000,
     maxOperators: 250_000,
     maxAnnotations: 10_000,

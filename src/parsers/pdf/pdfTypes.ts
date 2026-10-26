@@ -132,6 +132,8 @@ export interface PdfLayoutConfig {
     normalizeText: boolean;
     /** Extract per-run fill color from the operator list into `formatting.color` (costs an op-list fetch per page). */
     extractTextColor: boolean;
+    /** Running headers and footers stay in their page's content instead of `auxiliary`. */
+    keepHeadersAndFootersInPages: boolean;
     /** When false, geometry is not written onto emitted nodes. */
     includeBounds: boolean;
     /** Run pdf.js's worker in a separate process (Node), under `processMemoryMb` of heap. */

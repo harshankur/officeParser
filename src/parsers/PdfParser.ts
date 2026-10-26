@@ -242,6 +242,7 @@ function resolvePdfLayoutConfig(config: FullOfficeParserConfig): PdfLayoutConfig
         headingDetection: p.headingDetection ?? 'auto',
         normalizeText: p.normalizeText !== false,
         extractTextColor: p.extractTextColor !== false, // default true, matching defaults.ts and its siblings
+        keepHeadersAndFootersInPages: p.keepHeadersAndFootersInPages === true,
         includeBounds: !config.ignorePageGeometry,
         separateProcess: p.separateProcess !== false,
         processMemoryMb: memory(),
@@ -1807,6 +1808,12 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         // Tables' cells shaded as the page shades them (a header row's white text on its colour).
         shadeCells(pageContent, extract.shapes, pageCtx.authoredW, pageCtx.authoredH);
 
+        // A running header and footer kept in the page: before its content and after it, as an untagged
+        // PDF's read, and before its images are placed (a logo beside the header stays with it).
+        if (!config.ignoreHeadersAndFooters && pdfCfg.keepHeadersAndFootersInPages) {
+            pageContent = [...geometricNodes(headerRuns, layoutCtx, docCtx, layoutCfg, false), ...pageContent, ...geometricNodes(footerRuns, layoutCtx, docCtx, layoutCfg, false)];
+        }
+
         // Images: emit as attachments/OCR, then splice each into the flow before the first text node
         // that sits lower on the page, so reading order is preserved without reordering text.
         for (const img of extract.images) {
@@ -1817,8 +1824,9 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             if (at < 0) pageContent.push(node); else pageContent.splice(at, 0, node);
         }
 
-        // Running headers/footers route to auxiliary unless the caller asked for them to be dropped.
-        if (!config.ignoreHeadersAndFooters) {
+        // Running headers/footers route to auxiliary unless the caller asked for them to be dropped,
+        // or kept in the page (see above).
+        if (!config.ignoreHeadersAndFooters && !pdfCfg.keepHeadersAndFootersInPages) {
             const pageHeaders: OfficeContentNode[] = [];
             const pageFooters: OfficeContentNode[] = [];
             for (const node of geometricNodes(headerRuns, layoutCtx, docCtx, layoutCfg, false)) pageHeaders.push(retypeAsHeaderFooter(node, 'header', extract.pageNumber));
