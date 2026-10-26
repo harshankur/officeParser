@@ -24,13 +24,13 @@
         data-operator="Harsh Ankur"></script>
 
     <meta name="description"
-        content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 14 formats (including EPUB and LaTeX) and generate DOCX, ODT, LaTeX, RAG-ready Markdown, HTML, EPUB, and high-fidelity PDF with native document awareness.">
+        content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 14 formats (including EPUB and LaTeX) and generate DOCX, ODT, XLSX, ODS, PPTX, ODP, LaTeX, RAG-ready Markdown, HTML, EPUB, and high-fidelity PDF with native document awareness.">
 
     <!-- OpenGraph Metadata -->
     <meta property="og:title"
         content="officeParser | The Most Versatile Office Parser & Generator for Node.js & Browser">
     <meta property="og:description"
-        content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 14 formats (including EPUB and LaTeX) and generate DOCX, ODT, LaTeX, RAG-ready Markdown, HTML, EPUB, and high-fidelity PDF with native document awareness.">
+        content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 14 formats (including EPUB and LaTeX) and generate DOCX, ODT, XLSX, ODS, PPTX, ODP, LaTeX, RAG-ready Markdown, HTML, EPUB, and high-fidelity PDF with native document awareness.">
     <meta property="og:image"
         content="https://raw.githubusercontent.com/harshankur/officeParser/master/docs/favicon.png">
     <meta property="og:url" content="https://officeparser.harshankur.com">
@@ -3470,6 +3470,7 @@
                 { id: 'cfg_pdfMergeHyphenatedWords', label: 'PDF Merge Hyphens', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfNormalizeText', label: 'PDF Normalize Text', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfExtractTextColor', label: 'PDF Extract Text Color', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfKeepHeadersAndFootersInPages', label: 'PDF Headers and Footers in Pages', type: 'switch', default: false, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_ignorePageGeometry', label: 'Ignore Page Geometry', type: 'switch', default: false, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfWorkerSrc', label: 'PDF Worker URL', type: 'text', default: window.SITE_PDF_WORKER_SRC, replaces: /^https:\/\/cdn\.jsdelivr\.net\/npm\/pdfjs-dist@[^/]+\/build\/pdf\.worker\.min\.mjs$/, fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
 
@@ -3774,7 +3775,7 @@
             <div class="hero-container">
                 <div class="hero-badges">
                     <!-- package-version:start (written from package.json by scripts/sync-site-version.js: do not edit) -->
-                    <a class="badge-link" href="https://github.com/harshankur/officeParser/blob/master/CHANGELOG.md#830---2026-10-22" target="_blank"
+                    <a class="badge-link" href="https://github.com/harshankur/officeParser/blob/master/CHANGELOG.md#830---2026-10-26" target="_blank"
                         rel="noopener" aria-label="officeParser version 8.3.0: see what changed">
                         <div class="badge badge-version" id="version-badge">v8.3.0</div>
                     </a>
@@ -4025,7 +4026,7 @@
                 <div class="feature-card">
                     <span class="feature-icon">🏗️</span>
                     <h3>Native Generation</h3>
-                    <p>Write real <strong>DOCX and ODT</strong> packages, <strong>LaTeX</strong> that compiles with
+                    <p>Write real <strong>DOCX, ODT, XLSX, ODS, PPTX and ODP</strong> packages, <strong>LaTeX</strong> that compiles with
                         pdfLaTeX, XeLaTeX, LuaLaTeX and upLaTeX (CJK included), and PDFs via a native <code>pdf-lib</code> engine that needs
                         <em>no headless browser</em>, running identically in Node and the browser.</p>
                 </div>
@@ -4131,7 +4132,7 @@
                 </div>
                 <div class="spec-card" id="card-generator_config" onclick="location.hash='#spec/generator_config'">
                     <h3>Generator Config</h3>
-                    <p>Complete guide to common and format-specific settings for HTML, Markdown, PDF, DOCX, ODT, LaTeX and more.</p>
+                    <p>Complete guide to common and format-specific settings for HTML, Markdown, PDF, DOCX, ODT, XLSX, PPTX, LaTeX and more.</p>
                     <div class="spec-link-hint">Read Config Spec →</div>
                 </div>
                 <div class="spec-card" id="card-generator" onclick="location.hash='#spec/generator'">
@@ -4491,6 +4492,10 @@
                                 <button class="dropdown-menu-item" role="menuitem" data-export-fmt="pdf">PDF (print)</button>
                                 <button class="dropdown-menu-item" role="menuitem" data-export-fmt="docx">DOCX (.docx)</button>
                                 <button class="dropdown-menu-item" role="menuitem" data-export-fmt="odt">ODT (.odt)</button>
+                                <button class="dropdown-menu-item" role="menuitem" data-export-fmt="xlsx">XLSX (.xlsx)</button>
+                                <button class="dropdown-menu-item" role="menuitem" data-export-fmt="ods">ODS (.ods)</button>
+                                <button class="dropdown-menu-item" role="menuitem" data-export-fmt="pptx">PPTX (.pptx)</button>
+                                <button class="dropdown-menu-item" role="menuitem" data-export-fmt="odp">ODP (.odp)</button>
                                 <button class="dropdown-menu-item" role="menuitem" data-export-fmt="epub">EPUB (.epub)</button>
                             </div>
                         </div>
@@ -4817,7 +4822,7 @@
                 <div class="panel-body" id="visual-export">
                     <p class="export-intro">Convert the loaded document to any format officeParser generates. Each
                         download uses the options set in the matching window above (the HTML window's for PDF, EPUB,
-                        DOCX and ODT).</p>
+                        DOCX, ODT, XLSX, ODS, PPTX and ODP).</p>
                     <div class="export-grid" id="export-grid"></div>
                 </div>
             </div>
@@ -5966,7 +5971,8 @@
                         mergeHyphenatedWords: document.getElementById('cfg_pdfMergeHyphenatedWords').checked,
                         pageRange: document.getElementById('cfg_pdfPageRange').value,
                         normalizeText: document.getElementById('cfg_pdfNormalizeText').checked,
-                        extractTextColor: document.getElementById('cfg_pdfExtractTextColor').checked
+                        extractTextColor: document.getElementById('cfg_pdfExtractTextColor').checked,
+                        keepHeadersAndFootersInPages: document.getElementById('cfg_pdfKeepHeadersAndFootersInPages').checked
                     },
                     htmlParserConfig: {
                         preserveAttributes: document.getElementById('cfg_preserveAttributes').checked,
@@ -6356,7 +6362,8 @@
             const WARNING_GROUP_LABELS = {
                 parse: 'Parsing', html: 'HTML output', md: 'Markdown output', chunks: 'RAG chunks output',
                 csv: 'CSV output', rtf: 'RTF output', tex: 'LaTeX output', text: 'Plain text output', ast: 'AST download',
-                docx: 'DOCX download', odt: 'ODT download', epub: 'EPUB download', pdf: 'PDF export', texbundle: 'LaTeX + images download'
+                docx: 'DOCX download', odt: 'ODT download', xlsx: 'XLSX download', ods: 'ODS download',
+                pptx: 'PPTX download', odp: 'ODP download', epub: 'EPUB download', pdf: 'PDF export', texbundle: 'LaTeX + images download'
             };
             const warningGroups = new Map();
             /** Messages on screen when the banner was dismissed; the banner returns only for a new one. */
@@ -7969,7 +7976,7 @@ ${sectioning.filter(Boolean).join('\n')}
             };
 
             // Exports with no preview window of their own, keyed by the panel whose options they use and
-            // whose "Download ▾" dropdown lists them (PDF, EPUB, DOCX and ODT take the HTML panel's
+            // whose "Download ▾" dropdown lists them (PDF, EPUB, DOCX, ODT, XLSX, ODS, PPTX and ODP take the HTML panel's
             // options; the LaTeX + images zip takes the LaTeX panel's). The Export panel lists them too.
             const DERIVED_EXPORTS = {
                 html: {
@@ -8021,6 +8028,46 @@ ${sectioning.filter(Boolean).join('\n')}
                             const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.odt';
                             downloadFile(result.value, name, 'application/vnd.oasis.opendocument.text');
                         }
+                    },
+                    xlsx: {
+                        kind: 'binary',
+                        run: async () => {
+                            // XlsxGenerator writes a workbook straight from the AST; it ignores the html-specific keys in the derived config.
+                            const genConfig = htmlDerivedConfig(false);
+                            const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'xlsx', genConfig);
+                            const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.xlsx';
+                            downloadFile(result.value, name, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+                        }
+                    },
+                    ods: {
+                        kind: 'binary',
+                        run: async () => {
+                            // OdsGenerator writes an OpenDocument spreadsheet straight from the AST; it ignores the html-specific keys in the derived config.
+                            const genConfig = htmlDerivedConfig(false);
+                            const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'ods', genConfig);
+                            const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.ods';
+                            downloadFile(result.value, name, 'application/vnd.oasis.opendocument.spreadsheet');
+                        }
+                    },
+                    pptx: {
+                        kind: 'binary',
+                        run: async () => {
+                            // PptxGenerator writes a presentation straight from the AST; it ignores the html-specific keys in the derived config.
+                            const genConfig = htmlDerivedConfig(false);
+                            const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'pptx', genConfig);
+                            const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.pptx';
+                            downloadFile(result.value, name, 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+                        }
+                    },
+                    odp: {
+                        kind: 'binary',
+                        run: async () => {
+                            // OdpGenerator writes an OpenDocument presentation straight from the AST; it ignores the html-specific keys in the derived config.
+                            const genConfig = htmlDerivedConfig(false);
+                            const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'odp', genConfig);
+                            const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.odp';
+                            downloadFile(result.value, name, 'application/vnd.oasis.opendocument.presentation');
+                        }
                     }
                 },
                 tex: {
@@ -8070,6 +8117,10 @@ ${sectioning.filter(Boolean).join('\n')}
             const EXPORT_TARGETS = [
                 { name: 'Word', group: 'docx', ext: '.docx', run: () => DERIVED_EXPORTS.html.docx.run() },
                 { name: 'OpenDocument Text', group: 'odt', ext: '.odt', run: () => DERIVED_EXPORTS.html.odt.run() },
+                { name: 'Excel', group: 'xlsx', ext: '.xlsx', run: () => DERIVED_EXPORTS.html.xlsx.run() },
+                { name: 'OpenDocument Spreadsheet', group: 'ods', ext: '.ods', run: () => DERIVED_EXPORTS.html.ods.run() },
+                { name: 'PowerPoint', group: 'pptx', ext: '.pptx', run: () => DERIVED_EXPORTS.html.pptx.run() },
+                { name: 'OpenDocument Presentation', group: 'odp', ext: '.odp', run: () => DERIVED_EXPORTS.html.odp.run() },
                 { name: 'LaTeX', group: 'tex', ext: '.tex', run: () => downloadHandlers.tex() },
                 { name: 'LaTeX + images', group: 'texbundle', ext: '.zip', run: () => DERIVED_EXPORTS.tex.texbundle.run() },
                 { name: 'EPUB', group: 'epub', ext: '.epub', run: () => DERIVED_EXPORTS.html.epub.run() },

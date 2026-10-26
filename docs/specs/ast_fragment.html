@@ -57,7 +57,7 @@
             <tr>
                 <td><code>to(destination, config?)</code></td>
                 <td><code>Promise&lt;ConversionResult&gt;</code></td>
-                <td><strong>Recommended</strong>: Universal entry point for generation. Converts the AST to <code>text</code>, <code>md</code>, <code>html</code>, <code>csv</code>, <code>rtf</code>, <code>pdf</code>, <code>docx</code>, <code>odt</code>, <code>tex</code>, <code>epub</code>, or <code>chunks</code>. Returns a <code>ConversionResult</code> with <code>{ value, messages }</code>.</td>
+                <td><strong>Recommended</strong>: Universal entry point for generation. Converts the AST to <code>text</code>, <code>md</code>, <code>html</code>, <code>csv</code>, <code>rtf</code>, <code>pdf</code>, <code>docx</code>, <code>odt</code>, <code>xlsx</code>, <code>ods</code>, <code>pptx</code>, <code>odp</code>, <code>tex</code>, <code>epub</code>, or <code>chunks</code>. Returns a <code>ConversionResult</code> with <code>{ value, messages }</code>.</td>
             </tr>
         </tbody>
     </table>
@@ -172,9 +172,11 @@
         <li><strong><code>row</code></strong>: A horizontal group of cells.</li>
         <li><strong><code>cell</code></strong>: A container for other content (paragraphs, images, or even nested
             tables). Use <code>metadata</code> for <code>rowSpan</code>, <code>colSpan</code>, and
-            <code>backgroundColor</code> (populated from DOCX <code>w:shd</code> fills; also read from HTML
-            <code>colspan</code>/<code>rowspan</code> attributes so merged cells survive an HTML round-trip, and from
-            XLSX merged ranges). A spreadsheet cell can also carry <code>shownText</code> (what its number format
+            <code>backgroundColor</code> (populated from DOCX <code>w:shd</code> fills, and for a PDF table's cell
+            from the smallest filled rectangle under its middle, tagged or not). Spans are also read from HTML
+            <code>colspan</code>/<code>rowspan</code> attributes so merged cells survive an HTML round-trip, from
+            XLSX merged ranges, from PPTX <code>gridSpan</code>/<code>rowSpan</code> (the positions a merged cell
+            covers are no cells of their own), and from PDF tables that are tagged or drawn with ruling lines. A spreadsheet cell can also carry <code>shownText</code> (what its number format
             shows: <code>'19%'</code>, <code>'€120.00'</code>) and <code>hidden</code> (in a hidden row or column).</li>
     </ul>
 
@@ -188,13 +190,32 @@
 
     <h3>2b. Pages and Sections</h3>
     <p><code>ast.metadata.pageSetup</code> (a <code>PageSetup</code>: <code>width</code>, <code>height</code>,
-        <code>margin</code>, <code>headerDistance</code>, <code>footerDistance</code> in points, and
-        <code>differentFirstPage</code>) is the document's page: a Word document's first section, an ODT document's
-        first master page, a presentation's slide size, a PDF's first page. With <code>includeBreakNodes</code>, the
-        <code>break</code> that starts each later section carries <code>metadata.section</code> (1 for the second) and
-        its <code>pageSetup</code>. A sheet's print setup is <code>SheetMetadata.pageSetup</code>. A page field's text
+        <code>margin</code>, <code>headerDistance</code>, <code>footerDistance</code> in points,
+        <code>differentFirstPage</code>, <code>columns</code>, and <code>pageNumberFormat</code>) is the document's page: a Word document's first section, an ODT document's
+        first master page, an RTF document's page, a presentation's slide size, a PDF's first page. <code>width</code> and
+        <code>height</code> are absent where the document sets no page (an RTF section that only numbers its pages in
+        roman): the section's other properties still apply, on the document's page. In a Word, ODT or RTF
+        document the <code>break</code> that starts each later section is always a node, whatever
+        <code>includeBreakNodes</code> says (a section's start is the document's structure), and carries
+        <code>metadata.section</code> (1 for the second) and its <code>pageSetup</code> (a section with nothing after the
+        last text is none; text and Markdown output show a section's start as nothing, HTML as a new page in print); a section that starts on the same page (a Word
+        continuous section, an ODF section set in columns of its own, an RTF section of <code>\sbknone</code>) is a <code>break</code> of type <code>'section'</code> with its
+        <code>pageSetup</code>. A section's columns are <code>PageSetup.columns</code>:
+        <code>{ count, gap, widths?, separator? }</code>, the number of columns, the gap between them in points,
+        their widths in points where they differ (left to right), and whether a line is drawn between them, read
+        from Word's <code>w:cols</code>, ODF's <code>style:columns</code> (a column's <code>rel-width</code> its share of
+        the text width) and RTF's <code>\cols</code> and <code>\colw</code>. The native PDF engine lays text out in
+        them, balancing a section that ends on its page; DOCX output writes each section with its page, columns,
+        header and footer, ODT a master page for a section on a page of its own (with its header and footer) and a
+        section of the columns, RTF each section's page words, columns, header and footer, and LaTeX
+        <code>multicols</code> (a long table between the columns, across the page). A sheet's print setup is <code>SheetMetadata.pageSetup</code>. A page field's text
         (a page number, the page count, a slide number) is marked <code>TextMetadata.field</code>
-        (<code>'page'</code> or <code>'pages'</code>): it is the number when the file was saved.</p>
+        (<code>'page'</code> or <code>'pages'</code>): it is the number when the file was saved. The format it writes its
+        number in, where it sets one, is <code>TextMetadata.fieldFormat</code> (a <code>PageNumberFormat</code>:
+        <code>lowerRoman</code>, <code>upperLetter</code>, <code>cardinalText</code>, ...), and a section's own page numbering
+        is <code>PageSetup.pageNumberFormat</code> (<code>decimal</code> unless the section says otherwise); the native PDF
+        engine prints each page's number in them. Under <code>ignorePageGeometry</code> a text document's
+        <code>pageSetup</code> keeps its <code>pageNumberFormat</code> and <code>differentFirstPage</code>, which are no geometry.</p>
 
     <h3>3. Structural Containers</h3>
     <p>These nodes represent large-scale document sections:</p>
@@ -213,7 +234,15 @@
             preset name), <code>fill</code>, <code>line</code>, <code>rotation</code> (degrees clockwise),
             <code>flipH</code>, <code>flipV</code>, <code>textAnchor</code> and <code>textInsets</code>. A slide's
             <code>metadata.background</code> is its fill colour. Writers write nothing for a <code>drawing</code>
-            without children (its text is in the nodes after it); one given children writes them.</li>
+            without children (its text is in the nodes after it); one given children writes them. In a document, a
+            text frame or text box floating beside the text (ODT <code>draw:frame</code>, Word <code>wp:anchor</code>
+            and VML, RTF <code>\shp</code>) is a <code>drawing</code> holding its blocks, before the paragraph it is
+            anchored to, with <code>float</code> (a <code>ShapeFloat</code>): what it is measured from
+            (<code>horizontalFrom</code>: column, margin or page; <code>verticalFrom</code>: paragraph, margin or page),
+            <code>x</code> or <code>align</code>, <code>y</code>, <code>width</code>, <code>height</code>, <code>wrap</code>
+            (<code>beside</code>, <code>aboveBelow</code>, <code>none</code>) and <code>gap</code>. The native PDF engine
+            draws it in its place, the text after it going round it; other writers write its blocks where it
+            stands. <code>ignorePageGeometry</code> reads its text where it stands, with no <code>float</code>.</li>
     </ul>
 
     <p><strong>Title blocks.</strong> A document's typeset title is content, not only metadata: a Word paragraph
@@ -310,7 +339,8 @@
     </ul>
 
     <h3>5. Breaks (The <code>break</code> Node)</h3>
-    <p>Breaks are added as <code>break</code> nodes when <code>includeBreakNodes</code> is enabled in the configuration. They represent physical layout changes within the document flow. DOCX writes them inline (<code>w:br</code>/<code>w:cr</code>), so they appear as children of the paragraph; ODF carries page and column breaks on the paragraph style (<code>fo:break-before</code>/<code>fo:break-after</code>), so those are emitted as siblings around the paragraph. LaTeX <code>\newpage</code>/<code>\clearpage</code> become <code>page</code> breaks between blocks, and <code>\\</code>/<code>\newline</code> stay inside the paragraph as line breaks.</p>
+    <p>Breaks are added as <code>break</code> nodes when <code>includeBreakNodes</code> is enabled in the configuration (a
+        section's start, with <code>metadata.section</code>, always is one). They represent physical layout changes within the document flow. DOCX writes them inline (<code>w:br</code>/<code>w:cr</code>), so they appear as children of the paragraph; ODF carries page and column breaks on the paragraph style (<code>fo:break-before</code>/<code>fo:break-after</code>), so those are emitted as siblings around the paragraph. LaTeX <code>\newpage</code>/<code>\clearpage</code> become <code>page</code> breaks between blocks, and <code>\\</code>/<code>\newline</code> stay inside the paragraph as line breaks.</p>
     <ul>
         <li><strong><code>breakType</code></strong>: 
             <ul>
@@ -320,7 +350,10 @@
                 <li><code>'column'</code>: Column break, moving text to the top of the next column in multi-column layouts.</li>
                 <li><code>'lastRenderedPage'</code>: A "soft" page break marker indicating where a page naturally ended during the last render.</li>
                 <li><code>'thematic'</code>: A thematic break / horizontal rule (Markdown <code>---</code>/<code>***</code>/<code>___</code>, HTML <code>&lt;hr&gt;</code>).</li>
+                <li><code>'section'</code>: A section of the document starts here, on the same page (a Word continuous section, an ODF section set in columns of its own), with its <code>pageSetup</code> and its columns: no break in the text. An ODF section in columns has one before it and one after it, which returns to the page's own columns. Outputs other than PDF, DOCX, ODT, RTF and LaTeX write nothing for it.</li>
             </ul>
+        </li>
+        <li><strong><code>section</code></strong> and <strong><code>pageSetup</code></strong>: On a break that starts a section of the document (a <code>'page'</code> break that starts a Word section or an ODT page of another style, or a <code>'section'</code> break): its number (1 for the second, where the document numbers it) and the section's pages (see Pages and Sections).
         </li>
         <li><strong><code>clear</code></strong>: (Only for <code>textWrapping</code>) Specifies where the next available line should start when wrapping around floating objects (<code>all</code>, <code>left</code>, <code>right</code>, <code>none</code>).</li>
         <li><strong><code>anchorIds</code></strong>: Bookmark ids on a rule or page break (HTML <code>&lt;hr id&gt;</code>, a Markdown <code>&lt;a id&gt;</code> line before <code>---</code>), so a link can target it.</li>

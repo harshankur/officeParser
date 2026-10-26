@@ -212,7 +212,10 @@
                 <td><code>includeBreakNodes</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Layout Break Parsing</strong>: Page, column and last-rendered-page breaks. A line break the author
+                <td><strong>Layout Break Parsing</strong>: Page, column and last-rendered-page breaks, and the breaks of an
+                    ODF section set in columns of its own (a <code>'section'</code> break with its <code>pageSetup</code>).
+                    The break that starts a Word, RTF or ODT section (with <code>metadata.section</code> and the section's
+                    <code>pageSetup</code>) is the document's structure and always a node. A line break the author
                     typed (DOCX <code>w:br</code>/<code>w:cr</code>, LaTeX <code>\\</code>, HTML <code>&lt;br&gt;</code>) is
                     always a <code>break</code> node, and a DOCX tab a <code>\t</code> in the text, whatever this says.
                     Supported for Word (DOCX), OpenDocument (ODT/ODP/ODS)
@@ -239,8 +242,9 @@
                 <td><code>false</code></td>
                 <td><strong>Page Geometry</strong>: When true, the geometric layout data (each node's <code>bounds</code> box,
                     its <code>{ x, y, width, height }</code> on the page or slide, plus page dimensions, page setups
-                    and slides' <code>drawing</code> nodes and backgrounds) is omitted. Produced by the PDF, PPTX, ODP,
-                    DOCX, ODT and XLSX parsers; page geometry is emitted by default
+                    and slides' <code>drawing</code> nodes and backgrounds) is omitted. A text document's page setup keeps
+                    what is no geometry: how each section numbers its pages and whether its first page has a header of
+                    its own. Produced by the PDF, PPTX, ODP, DOCX, ODT, RTF and XLSX parsers; page geometry is emitted by default
                     (<code>ignorePageGeometry</code> defaults to false).</td>
             </tr>
             <tr>
@@ -284,6 +288,9 @@
                     <code>pageRange</code> (e.g. <code>1-3,7</code>), <code>normalizeText</code>, and
                     <code>extractTextColor</code> (per-run fill color into <code>formatting.color</code>; on by default,
                     set <code>false</code> to skip the per-page operator-list fetch on a throughput-focused text path),
+                    <code>keepHeadersAndFootersInPages</code> (default <code>false</code>: a tagged PDF's running headers and footers,
+                    marked as artifacts, are read into <code>auxiliary</code>; on, each page keeps its own in its content, the header first and the
+                    footer last, for a page-faithful result such as a slide per page; <code>ignoreHeadersAndFooters</code> still drops them),
                     <code>maxTextItems</code> (default <code>20000</code>; an item counts once more per 64 characters), <code>maxOperators</code>
                     (default <code>250000</code>; only the operators kept count, not paths) and <code>maxTimeMs</code> (default <code>5000</code>): the bases of
                     the text items, drawing operators and CPU time of the separate pdf.js process one PDF may take, each plus an allowance for the file's

@@ -4,7 +4,7 @@ A robust, strictly-typed **Node.js and Browser** library for parsing office file
 
 **Parses:** [`docx`](https://en.wikipedia.org/wiki/Office_Open_XML) · [`pptx`](https://en.wikipedia.org/wiki/Office_Open_XML) · [`xlsx`](https://en.wikipedia.org/wiki/Office_Open_XML) · [`odt`](https://en.wikipedia.org/wiki/OpenDocument) · [`odp`](https://en.wikipedia.org/wiki/OpenDocument) · [`ods`](https://en.wikipedia.org/wiki/OpenDocument) · [`odg`](https://en.wikipedia.org/wiki/OpenDocument) · [`pdf`](https://en.wikipedia.org/wiki/PDF) · [`rtf`](https://en.wikipedia.org/wiki/Rich_Text_Format) · [`csv`](https://en.wikipedia.org/wiki/Comma-separated_values) · [`md`](https://en.wikipedia.org/wiki/Markdown) · [`html`](https://en.wikipedia.org/wiki/HTML) · [`epub`](https://en.wikipedia.org/wiki/EPUB) · [`tex`](https://en.wikipedia.org/wiki/LaTeX) (LaTeX, including Overleaf project zips)
 
-**Generates:** `DOCX` · `ODT` · `LaTeX` · `Markdown` · `HTML` · `CSV` · `RTF` · `PDF` · `EPUB` · `Plain Text` · `RAG Chunks`
+**Generates:** `DOCX` · `ODT` · `XLSX` · `ODS` · `PPTX` · `ODP` · `LaTeX` · `Markdown` · `HTML` · `CSV` · `RTF` · `PDF` · `EPUB` · `Plain Text` · `RAG Chunks`
 
 [![npm version](https://badge.fury.io/js/officeparser.svg)](https://badge.fury.io/js/officeparser)
 [![Total Downloads](https://img.shields.io/npm/dt/officeparser.svg)](https://www.npmjs.com/package/officeparser)
@@ -34,6 +34,7 @@ A robust, strictly-typed **Node.js and Browser** library for parsing office file
 - **Native DOCX & ODT generation**, plus a **native PDF engine** (`pdfConfig.engine: 'native'`, built on `pdf-lib`) that produces real PDF bytes with no headless browser, in Node and the browser alike.
 - **Templates / mail-merge** via `OfficeTemplate.render` (fill a DOCX template's `{{placeholders}}`, `{{ if }}` conditions and `{{ for }}` loops, down to one table row per item, values formatted with Word-style pictures, single or batch), and **ODG parsing** (LibreOffice Draw).
 - **LaTeX in both directions** (8.1): `.tex` files and Overleaf project zips parse into the same AST as every other format (sections, lists, tables with merged cells, figures, math, footnotes, citations, cross-references, user macros, `beamer` slides), so LaTeX converts to DOCX, ODT, HTML, Markdown and the rest. And `to('tex')` turns any parsed document into LaTeX source that compiles unmodified with pdfLaTeX, XeLaTeX, LuaLaTeX, upLaTeX, pLaTeX and `latex` (the last three through dvipdfmx), presentations included (as `beamer` frames), carrying its images inside the one `.tex` file (or, in bundle mode, as files in a zip). See [LaTeX Support](#latex-support).
+- **XLSX, ODS, PPTX and ODP output** (8.3): `to('xlsx')` and `to('ods')` write a workbook (a spreadsheet sheet for sheet, its values typed and shown in their number formats; any other document as its tables, each a sheet, and its text on a sheet of its own), and `to('pptx')` and `to('odp')` write a deck (a presentation slide for slide; a PDF's pages as slides with each paragraph where the page set it; any other document flowed onto slides, a slide for each heading). See [XlsxGeneratorConfig](#xlsxgeneratorconfig) and [PptxGeneratorConfig](#pptxgeneratorconfig).
 
 See the [full changelog](CHANGELOG.md) for the complete list, including breaking changes.
 
@@ -71,6 +72,10 @@ See the [full changelog](CHANGELOG.md) for the complete list, including breaking
   - [PdfGeneratorConfig](#pdfgeneratorconfig)
   - [DocxGeneratorConfig](#docxgeneratorconfig)
   - [OdtGeneratorConfig](#odtgeneratorconfig)
+  - [XlsxGeneratorConfig](#xlsxgeneratorconfig)
+  - [OdsGeneratorConfig](#odsgeneratorconfig)
+  - [PptxGeneratorConfig](#pptxgeneratorconfig)
+  - [OdpGeneratorConfig](#odpgeneratorconfig)
   - [TexGeneratorConfig](#texgeneratorconfig)
   - [CsvGeneratorConfig](#csvgeneratorconfig)
   - [TextGeneratorConfig](#textgeneratorconfig)
@@ -127,6 +132,14 @@ npx officeparser notes.md --extractAttachments --to=docx --output=notes.docx
 # Convert a Word document (or any source) to OpenDocument Text
 npx officeparser report.docx --extractAttachments --to=odt --output=report.odt
 
+# Convert a document's tables to a workbook (each table a sheet, its text on a sheet named Text)
+npx officeparser report.docx --to=xlsx --output=report.xlsx
+npx officeparser report.pdf --to=ods --odsConfig.sheetPerTable=false --output=report.ods
+
+# Convert a PDF or any other source to a presentation (--extractAttachments is required for pictures and charts)
+npx officeparser slides.pdf --extractAttachments --to=pptx --output=slides.pptx
+npx officeparser slides.pdf --extractAttachments --to=pptx --pptxConfig.backgrounds=page1.png,page2.png --output=slides.pptx
+
 # Convert any source to LaTeX: a .tex file, or a zip of main.tex plus its images
 npx officeparser paper.docx --extractAttachments --to=tex --output=paper.tex
 npx officeparser paper.docx --extractAttachments --to=tex --texConfig.bundle --output=paper.zip
@@ -143,13 +156,13 @@ npx officeparser my_document --fileType=docx --to=json
 - **Values:** Flags can be passed as `--flag=value` or `--flag value`.
 - **Booleans:** Bare flags imply `true` (e.g. `--ocr` is equivalent to `--ocr=true`). Negation flags start with `no-` (e.g. `--no-ocr` is equivalent to `--ocr=false`).
 - **Nested Objects:** You can pass nested properties directly using JSON dot-notation (e.g. `--ocrConfig.language=fra` or `--htmlConfig.containerWidth=900px`).
-- **Images:** the CLI parses directly, so add `--extractAttachments` for images to reach *any* output (HTML/EPUB embed them, DOCX/ODT/Markdown/native-PDF include them, and LaTeX carries PNG and JPEG images inside the `.tex`, or with `--texConfig.bundle` packages them beside it). Without it, an image node has no bytes and HTML/Markdown emit a name-only `<img src="image1.png">` reference. (The `OfficeConverter`/`convert()` API auto-enables this; the CLI does not.)
+- **Images:** the CLI parses directly, so add `--extractAttachments` for images to reach *any* output (HTML/EPUB embed them, DOCX/ODT/PPTX/ODP/Markdown/native-PDF include them, and LaTeX carries PNG and JPEG images inside the `.tex`, or with `--texConfig.bundle` packages them beside it). Without it, an image node has no bytes and HTML/Markdown emit a name-only `<img src="image1.png">` reference. (The `OfficeConverter`/`convert()` API auto-enables this; the CLI does not.)
 
 ### CLI Options
 
 | Flag | Values | Default | Description |
 |------|--------|---------|-------------|
-| `--to` | `json\|text\|md\|html\|csv\|rtf\|pdf\|docx\|odt\|tex\|epub\|chunks` | `json` | Output format (`latex` is accepted as an alias of `tex`) |
+| `--to` | `json\|text\|md\|html\|csv\|rtf\|pdf\|docx\|odt\|xlsx\|ods\|pptx\|odp\|tex\|epub\|chunks` | `json` | Output format (`latex` is accepted as an alias of `tex`) |
 | `--output` | path | (none) | Write output to a file |
 | `--fileType` | `docx\|xlsx\|pptx\|odt\|odp\|ods\|odg\|pdf\|rtf\|csv\|md\|html\|epub\|tex` | (none) | Explicitly override input file type detection. Also accepts `latex`/`ltx`, the ODF template names `ott`/`ots`/`otp`/`otg`, and `zip` (parsed as whatever the archive holds) |
 | `--ocr` | boolean | `false` | Enable OCR for images (also requires `--extractAttachments`; OCR runs over extracted images) |
@@ -180,6 +193,7 @@ npx officeparser my_document --fileType=docx --to=json
 | `--pdfParserConfig.mergeHyphenatedWords` | boolean | `true` | Rejoin words hyphenated across line breaks |
 | `--pdfParserConfig.normalizeText` | boolean | `true` | Unicode/ligature normalization of extracted text |
 | `--pdfParserConfig.extractTextColor` | boolean | `true` | Record each run's fill colour in `formatting.color` (set `false` to skip for speed) |
+| `--pdfParserConfig.keepHeadersAndFootersInPages` | boolean | `false` | Keep a tagged PDF's running headers and footers in each page's content, in place, instead of `auxiliary` |
 | `--pdfParserConfig.maxTextItems` | number | `20000` | Base of the text items a PDF may yield (plus one per byte of the file) |
 | `--pdfParserConfig.maxOperators` | number | `250000` | Base of the drawing operators kept from a PDF (plus four per byte of the file) |
 | `--pdfParserConfig.maxAnnotations` | number | `10000` | Base of the annotations read from a PDF (plus one per 32 bytes of the file) |
@@ -201,11 +215,14 @@ npx officeparser my_document --fileType=docx --to=json
 | `--pdfConfig.format` | `auto\|A4\|Letter\|...` | `auto` | Paper format; `auto` is the document's own pages (each section's, each sheet's, a slide's size), else A4 |
 | `--pdfConfig.printHidden` | boolean | `false` | Print hidden sheets, rows and columns |
 | `--pdfConfig.printSpeakerNotes` | boolean | `false` | Print each slide's speaker notes after it |
+| `--xlsxConfig.sheetPerTable` | boolean | `true` | XLSX: each of a document's tables on a sheet of its own; `false` puts them all on one sheet. `--odsConfig.sheetPerTable` for ODS |
+| `--xlsxConfig.includeText` | boolean | `true` | XLSX: a document's text outside its tables on a sheet named `Text`; `false` leaves it out. `--odsConfig.includeText` for ODS |
+| `--pptxConfig.backgrounds` | picture file paths, comma-separated | (none) | PPTX: a PNG or JPEG file for each page of a PDF (or slide of a presentation), in order, drawn as its slide's background under its text; an empty entry for a page without one (`a.png,,c.png`). A file that cannot be read ends the run. `--odpConfig.backgrounds` for ODP |
 | `--texConfig.bundle` | boolean | `false` | LaTeX: write a zip of `main.tex` plus its `images/` instead of the `.tex` alone |
 | `--texConfig.embedImages` | boolean | `true` | LaTeX: `false` refers to `images/` files instead of carrying PNG and JPEG images inside the `.tex` |
 | `--texConfig.documentClass` | `auto\|article\|report\|book\|beamer` | `auto` | LaTeX document class (`auto` = `beamer` for presentations, `article` otherwise) |
 | `--texConfig.standalone` | boolean | `true` | LaTeX: `false` writes the body only, for pasting into an existing document |
-| ~~`--format`~~ | `json\|text\|md\|html\|csv\|rtf\|pdf\|docx\|odt\|tex\|epub\|chunks` | `json` | **Deprecated.** Use `--to` |
+| ~~`--format`~~ | `json\|text\|md\|html\|csv\|rtf\|pdf\|docx\|odt\|xlsx\|ods\|pptx\|odp\|tex\|epub\|chunks` | `json` | **Deprecated.** Use `--to` |
 | ~~`--toText`~~ | | | **Removed in v8.** Use `--to=text`. |
 | ~~`--ocrLanguage`~~ | | | **Removed in v8.** Use `--ocrConfig.language`. |
 | ~~`--putNotesAtLast`~~ | | | **Removed in v8.** Notes are attached structurally via `node.notes`. |
@@ -398,6 +415,7 @@ const { value: markdown, messages } = await ast.to('md');
 const { value: html }               = await ast.to('html', { includeFormatting: false });
 const { value: chunks }             = await ast.to('chunks', { chunksConfig: { strategy: 'fixed-size', chunkSize: 800 } });
 const { value: pdfBytes }           = await ast.to('pdf'); // Uint8Array
+const { value: deck }               = await ast.to('pptx'); // Uint8Array (also docx, odt, xlsx, ods, odp, epub)
 ```
 
 ### `.to('text')`: Plain Text Extraction
@@ -467,7 +485,7 @@ const { value: html } = await OfficeGenerator.generate(ast, 'html', {
 const { value: csv } = await OfficeGenerator.generate(ast, 'csv');
 ```
 
-**Supported destinations:** `'text'` · `'md'` · `'html'` · `'csv'` · `'rtf'` · `'pdf'` · `'docx'` · `'odt'` · `'tex'` (alias `'latex'`) · `'epub'` · `'chunks'`
+**Supported destinations:** `'text'` · `'md'` · `'html'` · `'csv'` · `'rtf'` · `'pdf'` · `'docx'` · `'odt'` · `'xlsx'` · `'ods'` · `'pptx'` · `'odp'` · `'tex'` (alias `'latex'`) · `'epub'` · `'chunks'`
 
 > [!NOTE]
 > **PDF generation** uses a headless browser by default (`pdfConfig.engine: 'html'`), which needs the
@@ -483,7 +501,8 @@ const { value: csv } = await OfficeGenerator.generate(ast, 'csv');
 > See [PdfGeneratorConfig](#pdfgeneratorconfig).
 >
 > **EPUB generation with images** requires `extractAttachments: true` on the parse step that
-> produced the AST. See [EPUB Support](#epub-support).
+> produced the AST. See [EPUB Support](#epub-support). So do pictures and charts in **PPTX and ODP**
+> output: a chart is written as a table of its data, which is in its attachment.
 
 ---
 
@@ -741,7 +760,7 @@ OfficeParserAST
 │   └── chartData?: { title, dataSets, labels }
 ├── warnings: OfficeIssue[]  (non-fatal issues from the parsing phase)
 ├── config: OfficeParserConfig  (the resolved parse config; `.to()` inherits newlineDelimiter/onWarning from it)
-└── to(format, config?)  (format: 'html'|'md'|'text'|'csv'|'rtf'|'pdf'|'docx'|'odt'|'tex'|'epub'|'chunks', returns { value, messages })
+└── to(format, config?)  (format: 'html'|'md'|'text'|'csv'|'rtf'|'pdf'|'docx'|'odt'|'xlsx'|'ods'|'pptx'|'odp'|'tex'|'epub'|'chunks', returns { value, messages })
 ```
 
 A note or comment referred to from several places is one node that each reference's `notes` (or `comments`) array holds. Test for a note you have already seen by identity before handling it again, and do not mutate it expecting only one reference to change. (`JSON.stringify` writes it at every reference.)
@@ -819,7 +838,7 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `PASSWORD_REQUIRED` / `PASSWORD_INCORRECT` | parse | Encrypted input; supply `password`/`onPassword` (these also throw when parsing cannot continue). |
 | `UNRECOGNIZED_CONFIG_OPTION` | config | A config key this version does not know (often a typo or a removed/renamed option); it had no effect. Raised for parser and generator configs, and for a `convert()` option placed at the top level instead of under `parseConfig`/`generatorConfig` (the message says where it belongs). |
 | `INVALID_CONFIG_VALUE` | config | A generator option got a value it does not accept (a `documentClass`, paper `format` or margin, `pdfConfig.engine`, `htmlConfig.standalone.styles`, a Markdown dialect preset, a chunking strategy/`splitBy`/`tableSplitStrategy`) or `texParserConfig.today` is not a string; the option's default was used, and the message names the option, the value and what it accepts. |
-| `CONTENT_NOT_REPRESENTABLE` | generate | A node type has no faithful form in the target format and was downgraded or omitted (e.g. math/embeds in DOCX/ODT, a table-less document to CSV). From the native PDF engine, `details.reason` says which, as a value to branch on: `'unencodable-text'` (characters no font given could draw, with `details.count` and a `details.sample` of the first few), `'image-in-table-cell'`, `'image-in-text-line'`, `'chart'`, `'embed'`, `'onnode-string-override'`. Each is raised once per conversion. HTML raises it with `details.reason: 'chart'` for a chart written as its data table because there is no chart script to draw it with (`htmlConfig.chartJsSrc: ''`). |
+| `CONTENT_NOT_REPRESENTABLE` | generate | A node type has no faithful form in the target format and was downgraded or omitted (e.g. math/embeds in DOCX/ODT, a table-less document to CSV, pictures and charts in XLSX/ODS, which a cell cannot hold, or a chart without its data in PPTX/ODP). From the native PDF engine, `details.reason` says which, as a value to branch on: `'unencodable-text'` (characters no font given could draw, with `details.count` and a `details.sample` of the first few), `'image-in-table-cell'`, `'image-in-text-line'`, `'chart'`, `'embed'`, `'onnode-string-override'`, each raised once per conversion, and `'svg'`, raised for each SVG picture with parts the engine does not draw (named in `details.feature`). HTML raises it with `details.reason: 'chart'` for a chart written as its data table because there is no chart script to draw it with (`htmlConfig.chartJsSrc: ''`). |
 | `METADATA_NOT_REPRESENTABLE` | generate | A metadata field could not be represented in the target format. |
 | `TABLE_GRID_LIMIT_EXCEEDED` | generate | The document's tables needed more empty grid positions than one output fills (a million, plus 16 per byte of the document): a table's cells were laid out closer, short rows were not padded to the table's width, or a sparse sheet's empty rows were not written; or plain text stopped lining columns up (16 million spaces, plus 16 per byte). |
 | `IMAGE_NOT_INLINED` | generate | An image was referenced by name instead of inlined: it is over `maxInlineImageBytes` (Markdown / fragment HTML), or the pictures inlined in the document reached 128 MB in all (Markdown, HTML of either kind, RTF; a picture is inlined at every place that shows it). |
@@ -857,7 +876,7 @@ extracted (the matching `ignore*` flag is then a no-op).
 | ODS  | Y (cell notes) | – | – | – | Y | Y | grid |
 | ODP  | Y (page) | speaker notes | – | – (ODP masters not extracted) | Y | Y | Y |
 | ODG  | Y (page) | – | – | – | Y | – | Y |
-| PDF  | – | footnotes/endnotes (tagged) | Y (top/bottom bands) | – | Y | – | Y (spans: tagged only) |
+| PDF  | – | footnotes/endnotes (tagged) | Y (top/bottom bands) | – | Y | – | Y (spans: tagged, or drawn with ruling lines) |
 | RTF  | Y (annotations) | footnotes/endnotes | Y | – | Y | – | Y |
 | HTML | `<!-- -->` become `comment` nodes* (opt-in: `preserveComments`) | footnotes/endnotes | – | – | Y (`data:` only) | – | Y |
 | MD   | `<!-- -->` become `comment` nodes* | footnotes/endnotes | – | – | Y (`data:` only) | – | Y (HTML-table fallback) |
@@ -919,7 +938,7 @@ Tables follow a strict `table → row → cell` hierarchy:
 Table Node (type: 'table')
 └── children: Row Nodes (type: 'row')
     └── children: Cell Nodes (type: 'cell')
-        ├── metadata: { row, col, rowSpan?, colSpan? }
+        ├── metadata: { row, col, rowSpan?, colSpan?, backgroundColor? }
         └── children: [ Paragraph | List | Table | ... ]
 ```
 
@@ -928,7 +947,8 @@ Table Node (type: 'table')
   16 per byte of the document parsed (spans count); one holding more than remain (a cell far from the rest) is laid out
   closer when written, with a `TABLE_GRID_LIMIT_EXCEEDED` warning: the rows and columns no cell starts or ends in are left
   out, and if that is not enough, each row's cells follow one another
-- `rowSpan` / `colSpan`: merged cells (DOCX, ODF, HTML, Markdown HTML-tables, and tagged PDF)
+- `rowSpan` / `colSpan`: merged cells (DOCX, PPTX, XLSX merged ranges, ODF, HTML, Markdown HTML-tables, and PDF tables that are tagged or drawn with ruling lines)
+- `backgroundColor`: the cell's shading, where the source sets one (a PDF table's cell takes the colour of the smallest filled rectangle under its middle, tagged or not)
 - Cells can contain nested tables
 
 > [!NOTE]
@@ -990,16 +1010,36 @@ When `includeBreakNodes: true`, break elements appear as nodes:
 ```text
 Break Node (type: 'break')
 └── metadata: {
-        breakType: 'textWrapping' | 'page' | 'column' | 'lastRenderedPage' | 'carriageReturn' | 'thematic',
-        clear?: 'all' | 'left' | 'none' | 'right'
+        breakType: 'textWrapping' | 'page' | 'column' | 'lastRenderedPage' | 'carriageReturn' | 'thematic' | 'section',
+        clear?: 'all' | 'left' | 'none' | 'right',
+        section?: number,       // on a break that starts a section of the document: its number (1 for the second)
+        pageSetup?: PageSetup   // the pages of the section the break starts, with their columns
     }
 ```
+
+> [!NOTE]
+> **Sections and columns.** A `'page'` break that starts a section (a Word section, a paragraph of an
+> ODT style naming another master page, an RTF `\sect`), and a `'section'` break, which starts a section
+> on the same page (a Word continuous section, an ODF section set in columns of its own, an RTF section
+> of `\sbknone`), carry the new section's
+> `pageSetup` (under `ignorePageGeometry`, only its page numbering and first-page headers). Its `columns` are
+> `{ count, gap, widths?, separator? }`: the number of columns, the gap between them in points, their
+> widths in points where they differ (left to right), and whether a line is drawn between them, read
+> from Word's `w:cols`, ODF's `style:columns` (a column's `rel-width` its share of the text width) and
+> RTF's `\cols` and `\colw`. `ast.metadata.pageSetup.columns` is the first section's. An ODF section
+> in columns has a `'section'` break before it and one after it, which returns to the page's own
+> columns. The native PDF engine lays text out in the columns, balancing a section that ends on its
+> page; DOCX output writes each section with its page, columns, header and footer, ODT a master page
+> for a section on a page of its own (with its header and footer) and a section of the columns, RTF
+> each section's page words, columns, header and footer, and LaTeX `multicols` (a long table between
+> the columns, across the page); other outputs write nothing for a `'section'` break.
 
 > [!NOTE]
 > Break nodes have no `text` property, but `ast.to('text')` automatically converts them to the configured newline delimiter.
 
 > [!NOTE]
-> `includeBreakNodes` gates layout breaks in DOCX, ODF and LaTeX only (page and column breaks, otherwise invisible). A
+> `includeBreakNodes` gates layout breaks in DOCX, ODF and LaTeX only (page and column breaks, otherwise invisible); a
+> section's start in a Word, RTF or ODT document is always a `break` node with `metadata.section`. A
 > line break the author typed (DOCX `w:br`/`w:cr`, ODF `text:line-break`, LaTeX `\\`) is content, and is a `break` node whatever the flag says. **HTML and
 > Markdown always emit break nodes regardless of the flag**, because a break is explicit content there:
 > a `<br>`/hard line break becomes a `carriageReturn` break, and `<hr>`/`---` a `thematic` break (a
@@ -1062,6 +1102,7 @@ ast.metadata = {
     keywords?: string                            // NEW: Keywords from document properties
     customProperties?: Record<string, any>       // User-defined metadata from the document
     nativeProperties?: Record<string, any>       // NEW: All format-specific raw metadata
+    pageSetup?: PageSetup                        // The document's page: width, height, margin, headerDistance, footerDistance (points), differentFirstPage, columns, pageNumberFormat
     styleMap?: Record<string, TextFormatting>    // Named styles → formatting definitions
     formatting?: TextFormatting                  // Document-wide defaults
 }
@@ -1434,9 +1475,9 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `includeRawContent` | `boolean` | `false` | Attach raw XML/RTF source to each node |
 | `serializeRawContent` | `boolean` | `true` | Re-serialize XML to clean strings (only if `includeRawContent: true`) |
 | `preserveXmlWhitespace` | `boolean` | `false` | Preserve original XML whitespace during serialization |
-| `includeBreakNodes` | `boolean` | `false` | Include layout break nodes: DOCX page, column and last-rendered-page breaks, ODF `fo:break-before`/`fo:break-after` and `text:soft-page-break`, LaTeX `\newpage`/`\clearpage`. A line break the author typed (DOCX `w:br`/`w:cr`, ODF `text:line-break`, a LaTeX `\\` or `\newline`, HTML `<br>`) is always a `break` node inside its paragraph, and a DOCX tab is always a `\t` in the text |
+| `includeBreakNodes` | `boolean` | `false` | Include layout break nodes: DOCX page, column and last-rendered-page breaks, ODF `fo:break-before`/`fo:break-after` and `text:soft-page-break`, LaTeX `\newpage`/`\clearpage`, and the breaks of an ODF section in columns of its own. The break that starts a Word, RTF or ODT section (with `metadata.section` and its `pageSetup`) is the document's structure and always a node. A line break the author typed (DOCX `w:br`/`w:cr`, ODF `text:line-break`, a LaTeX `\\` or `\newline`, HTML `<br>`) is always a `break` node inside its paragraph, and a DOCX tab is always a `\t` in the text |
 | `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal cross-references from AST (now honored for PDF too) |
-| `ignorePageGeometry` | `boolean` | `false` | Omit the geometric layout data: per-node bounding boxes (`node.bounds`: PDF pages, PPTX and ODP slides), page dimensions and page setups (`metadata.pageSetup`, a section's or sheet's `pageSetup`), and slides' `drawing` nodes and backgrounds |
+| `ignorePageGeometry` | `boolean` | `false` | Omit the geometric layout data: per-node bounding boxes (`node.bounds`: PDF pages, PPTX and ODP slides), page dimensions and page setups (`metadata.pageSetup`, a section's or sheet's `pageSetup`; a text document's keeps how each section numbers its pages and whether its first page has a header of its own), slides' `drawing` nodes and backgrounds, and a floating frame's place (`ShapeMetadata.float`: its text is read where it stands) |
 | `fileType` | `SupportedFileType \| FileTypeAlias \| null` | `null` | **Required for text-based binary data** (`'md'`, `'html'`, `'csv'`, `'tex'`) as these lack magic bytes. Also accepts the names the matching extensions route by (`FileTypeAlias`): `'latex'`/`'ltx'` for `tex`, the ODF template names `'ott'`/`'ots'`/`'otp'`/`'otg'`, and `'zip'` (parsed as whatever the archive holds). |
 | `csvDelimiter` | `string` | `'auto'` | Delimiter of CSV input: `'auto'` reads it from the file (comma, semicolon, tab or bar, counted outside quotes); any other value is used as given. CSV output writes the delimiter read |
 | `decompressionLimits` | `DecompressionLimits` | `{ maxUncompressedBytes: 512MB, maxZipEntries: 10000, maxTableCells: 1000000, maxXmlElements: 2000000, maxRepeatedContent: 16777216, maxRawContentLength: 67108864 }` | Limits applied during ZIP extraction (and to the cells an ODF or XLSX document yields, the content a document repeats by reference, the `rawContent` nodes carry, and the XML elements a document's parts may hold; past `maxXmlElements` the parse rejects with `XML_ELEMENT_LIMIT_EXCEEDED`) to protect against excessive memory and resource usage. `maxTableCells` and `maxRepeatedContent` grow by one cell and 16 characters per byte of the document, so a large document is not cut short for its size while a small crafted one stays bounded |
@@ -1464,8 +1505,9 @@ PDF-specific options, passed as `pdfParserConfig` on the parser config.
 | `pageRange` | `string` | `''` (all) | Restrict to given pages, e.g. `'1-3,7'`. Output keeps original page numbers |
 | `normalizeText` | `boolean` | `true` | Unicode-normalize extracted text (expand ligatures, compose combining marks, regularize whitespace). Set `false` to preserve the raw source glyphs verbatim |
 | `extractTextColor` | `boolean` | `true` | Extract each run's fill color into `formatting.color`. Recovered from the operator list; on by default (color is content like bold/font). Costs about 1.6x parse time on a text-heavy PDF, near-free when `extractAttachments`/`ocr` already fetch the operator list; set `false` to skip it. Pure black is left unset. Highlight annotations set `formatting.backgroundColor` regardless of this flag |
+| `keepHeadersAndFootersInPages` | `boolean` | `false` | Keep each page's running header and footer in that page's content, where they stand (the header first, the footer last), instead of `auxiliary.headers`/`footers`. A tagged PDF marks them as artifacts, so they are read as a word processor's are: writers that lay out pages repeat the first page's, and text, Markdown, HTML, EPUB and slides leave them out. Turn it on for a page-faithful result (a slide per page), so each page keeps its own (a page number, a chapter title). An untagged PDF's are page text already; `ignoreHeadersAndFooters` still drops them |
 | `maxTextItems` | `number` | `20000` | Base of the text items one PDF may yield; the limit is this plus one per byte of the file, an item counting once more per 64 characters. Nested form XObjects can multiply a few KB into millions of items; past the limit the rest of the document is not read (`PDF_CONTENT_LIMIT_EXCEEDED`). |
-| `maxOperators` | `number` | `250000` | Base of the drawing operators kept from one PDF (for images, text color and font styles); the limit is this plus four per byte of the file. Paths, which are not kept, do not count; a shown string counts once more per 64 glyphs. Past it no more operators are read: from that page on, images, text colors and font styles are missing, and the text is still read (`PDF_CONTENT_LIMIT_EXCEEDED`). |
+| `maxOperators` | `number` | `250000` | Base of the drawing operators kept from one PDF (for images, text color and font styles); the limit is this plus four per byte of the file. Paths do not count (a page keeps up to 40,000 of them apart, for bullets drawn as shapes and tables drawn with ruling lines); a shown string counts once more per 64 glyphs. Past it no more operators are read: from that page on, images, text colors and font styles are missing, and the text is still read (`PDF_CONTENT_LIMIT_EXCEEDED`). |
 | `maxAnnotations` | `number` | `10000` | Base of the annotations (links, highlights) one PDF may have read; the limit is this plus one per 32 bytes of the file. Past it the rest of the document's links and highlights are not read (`ANNOTATION_EXTRACTION_FAILED`). |
 | `maxTimeMs` | `number` | `5000` | Base of the CPU time the separate pdf.js process may spend reading one PDF; the limit is this plus 20 ms per KB of the file. CPU time, not time passed, so a busy host, many parses at once or a loaded machine never cut a document short. Past it the process is ended and the rest of the document is not read (`PDF_CONTENT_LIMIT_EXCEEDED`). pdf.js in the host (`separateProcess: false`, or the fallback) has no time limit, since no measure of time there is the document's own; bound it with `abortSignal`. |
 | `separateProcess` | `boolean` | `true` | Run pdf.js in a separate process (Node) under `processMemoryMb`, so a PDF that inflates into gigabytes inside pdf.js fails with `PDF_PROCESS_FAILED` instead of ending the host; `abortSignal` and `maxTimeMs` stop it mid-request. Processes are pooled, at most one per CPU, each reading one document at a time (further parses wait), and end with the host. Falls back to the host with `PDF_SEPARATE_PROCESS_UNAVAILABLE`. |
@@ -1479,19 +1521,19 @@ Options shared by all generator formats. Pass to `OfficeGenerator.generate(ast, 
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `includeFormatting` | `boolean` | `true` | Include bold/italic/colors/sizes in output (HTML, Markdown, DOCX, ODT, LaTeX, RTF; a no-op for text/CSV/chunks, which carry no run formatting) |
+| `includeFormatting` | `boolean` | `true` | Include bold/italic/colors/sizes in output (HTML, Markdown, DOCX, ODT, LaTeX, RTF, PPTX, ODP, and XLSX and ODS cells' bold; a no-op for text/CSV/chunks, which carry no run formatting) |
 | `generateIds` | `boolean` | `true` | Slug-based heading anchors: `id` attributes on HTML headings, and a `{#slug}` suffix on Markdown headings (`# Title {#title}`, kramdown/Pandoc). Set `false` to omit both, useful when the Markdown is rendered by GFM/CommonMark, which show `{#slug}` as literal text. A top-level option (not under `mdConfig`/`htmlConfig`); it affects HTML, Markdown, DOCX, ODT and LaTeX (the formats that carry a heading anchor/bookmark id; in LaTeX a `\label`). |
-| `renderMetadata` | `boolean` | `false` | Render title/author as a visible header block. Rendered by CSV, DOCX, HTML (and the Puppeteer PDF engine), EPUB, text, ODT, LaTeX (`\maketitle`, or a beamer title frame, unless the content has its own title block) and RTF; the native PDF engine and Markdown do not |
+| `renderMetadata` | `boolean` | `false` | Render title/author as a visible header block. Rendered by CSV, DOCX, HTML (and the Puppeteer PDF engine), EPUB, text, ODT, LaTeX (`\maketitle`, or a beamer title frame, unless the content has its own title block) and RTF; the native PDF engine, Markdown, XLSX, ODS, PPTX and ODP do not |
 | `metadataOverrides` | `MetadataOverrides` | `{}` | Override the metadata embedded in the output, merged per field over `ast.metadata` |
-| `includeImages` | `boolean \| 'image-only' \| 'image+ocr-text' \| 'ocr-text-only' \| 'none'` | `true` | How to render an image node. `true`=`'image-only'` (embed the image, no OCR text); `'image+ocr-text'` (image then its recognized/OCR text); `'ocr-text-only'` (OCR text, no image); `false`=`'none'` (omit). In plain-text output an image becomes an `[Image: name]` placeholder (plus OCR text for `'image+ocr-text'`), or just the OCR text for `'ocr-text-only'`. In chunks a picture is `[Image: alt]` for its alt text, with its OCR text, except under `'none'` and `'ocr-text-only'` (OCR text only) |
+| `includeImages` | `boolean \| 'image-only' \| 'image+ocr-text' \| 'ocr-text-only' \| 'none'` | `true` | How to render an image node. `true`=`'image-only'` (embed the image, no OCR text); `'image+ocr-text'` (image then its recognized/OCR text); `'ocr-text-only'` (OCR text, no image); `false`=`'none'` (omit). In plain-text output an image becomes an `[Image: name]` placeholder (plus OCR text for `'image+ocr-text'`), or just the OCR text for `'ocr-text-only'`. In chunks a picture is `[Image: alt]` for its alt text, with its OCR text, except under `'none'` and `'ocr-text-only'` (OCR text only). XLSX and ODS, whose cells hold no pictures, write a picture's OCR text in its place under `'ocr-text-only'` and `'image+ocr-text'`; PPTX and ODP write it in the picture's place under `'ocr-text-only'`, and under `'image+ocr-text'` after a flowing document's picture slide or in a placed slide's notes |
 | `maxInlineImageBytes` | `number` | `1500000` | Max decoded image size, in bytes, that is inlined as a `data:` URI (HTML/Markdown); the base64 URI itself is ~1/3 larger, so a scanned page cannot emit a multi-megabyte line that breaks downstream parsers. Under the default `image-only` mode an image over the cap renders its recognized/OCR text when it has any (multi-line OCR as a fenced block in Markdown), otherwise a compact name reference; Markdown still emits the `IMAGE_NOT_INLINED` warning. Plain text follows the same rule. **Standalone HTML inlines whatever the cap**: a self-contained document has nowhere else to resolve the image from. In every mode (standalone HTML and `Infinity` included), the pictures one document writes inline stop at 128 MB in all (a picture is inlined at every place showing it); the rest are name references, with `IMAGE_NOT_INLINED`. `0` never inlines, `Infinity` inlines every picture within those 128 MB |
-| `includeCharts` | `boolean` | `true` | Include charts: HTML renders an interactive Chart.js canvas (or, with no `chartJsSrc`, the chart's data as a table), DOCX/ODT/LaTeX render the chart's data as a table, plain text and the native PDF engine render the chart's data text; Markdown and RTF render nothing for a chart. `false` omits charts in every generator |
+| `includeCharts` | `boolean` | `true` | Include charts: HTML renders an interactive Chart.js canvas (or, with no `chartJsSrc`, the chart's data as a table), DOCX/ODT/LaTeX render the chart's data as a table, PPTX/ODP a table of its data in the chart's place, plain text and the native PDF engine render the chart's data text; Markdown and RTF render nothing for a chart, and XLSX/ODS, whose cells cannot hold one, report it (`CONTENT_NOT_REPRESENTABLE`). `false` omits charts in every generator |
 | `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal anchors from output (HTML, Markdown, DOCX, ODT, LaTeX, RTF, and the native PDF engine's links into the document) |
 | `ignoreDefaultStyleMap` | `boolean` | `false` | Disable built-in style mappings (e.g., "Heading 1" → h1) |
 | `styleMap` | `string[] \| StructuredStyleMapping[]` | `[]` | Custom semantic style mappings |
 | `onNode` | `(node) => string \| false \| void` | (none) | Per-node callback for filtering, overriding, or mutating |
 | `onWarning` | `(issue: OfficeIssue) => void` | (none) | Callback for non-fatal generation issues |
-| `abortSignal` | `AbortSignal \| null` | `null` | Optional signal to cancel the generation operation (rejects with AbortError). Checked between steps by the HTML, Markdown, RTF, DOCX, ODT, EPUB, LaTeX, PDF and chunking generators (both PDF engines: the native one checks before each node it draws); text and CSV generation run to completion |
+| `abortSignal` | `AbortSignal \| null` | `null` | Optional signal to cancel the generation operation (rejects with AbortError). Checked between steps by every generator (both PDF engines: the native one checks before each node it draws; XLSX and ODS before each cell and block of text; PPTX and ODP before each node a slide takes) |
 
 ---
 
@@ -1651,7 +1693,7 @@ const { value: pdf } = await ast.to('pdf', {
 });
 ```
 
-Each character is drawn in the first font that has it, so one document can mix scripts. Words are shaped by the font (ligatures, Arabic joining, Indic conjuncts), and a right-to-left line starts at the right edge with its words in visual order; marks a font places through its positioning table (`GPOS`) are drawn at their default offsets. Fonts are subset to the glyphs used.
+Each character is drawn in the first font that has it, so one document can mix scripts. Words are shaped by the font (ligatures, Arabic joining, Indic conjuncts), and a right-to-left line starts at the right edge with its words in visual order; text of the Indic and Southeast Asian scripts, and letters with combining marks, is drawn with each glyph where the font places it (through its positioning table, `GPOS`) and marked with what it says (`/ActualText`), so it copies in the order it is written. Fonts are subset to the glyphs used, but for OpenType fonts of CFF outlines, which are embedded whole.
 
 **The maintained pdf-lib fork.** `@cantoo/pdf-lib` 2.x (the same API, with encryption) is supported in place of `pdf-lib`, installed under its name, with the fork's own fontkit under `@pdf-lib/fontkit` when fonts are used (each pdf-lib subsets fonts only with its own fontkit):
 
@@ -1667,7 +1709,7 @@ Each character is drawn in the first font that has it, so one document can mix s
 | `engine` | `'html' \| 'native'` | `'html'` | `'html'`: render through a headless browser (Puppeteer in Node; native print in the browser) for maximum fidelity. `'native'`: lay the AST out directly with `pdf-lib` - no browser, runs in Node and the browser (real PDF bytes client-side), much lighter, but draws in the fonts it is given (the Standard-14 fonts when given none) and reflows rather than pixel-matching |
 | `fonts` | `{ regular?, bold?, italic?, boldItalic?, mono? }` of `Uint8Array \| ArrayBuffer` | none | Native engine: the font file (`.ttf`/`.otf` bytes) each style is drawn in. A style given none is drawn in `regular`; code stays in Courier unless `mono` is given. Needs `@pdf-lib/fontkit`. Bytes that are not a font fail the conversion (`PDF_GENERATION_FAILED`) |
 | `fallbackFonts` | `(Uint8Array \| ArrayBuffer)[]` | `[]` | Native engine: more font files, tried in order for each character the fonts before them lack. Given without `fonts`, text stays in the Standard-14 fonts and these draw only what those lack |
-| `subsetFonts` | `boolean` | `true` | Native engine: embed only the glyphs used of each font given. `false` embeds the whole files |
+| `subsetFonts` | `boolean` | `true` | Native engine: embed only the glyphs used of each font given. `false` embeds the whole files. An OpenType font of CFF outlines is embedded whole either way |
 | `tagged` | `boolean` | `true` | Emit a tagged, PDF/UA-accessible PDF (structure tree). HTML engine only; the native engine ignores it |
 | `outline` | `boolean` | `false` | Emit a bookmark outline from the document's headings, nested by heading level. Both engines |
 | `format` | `string` | `'auto'` | Paper format (`'A4'`, `'Letter'`, `'Legal'`, etc.). `'auto'`: the document's own pages (`metadata.pageSetup`; the native engine gives each section and sheet its own and takes unset margins from the document), else A4 |
@@ -1689,8 +1731,12 @@ Each character is drawn in the first font that has it, so one document can mix s
 > options above (and `tagged`), uses a non-zero default `margin` (the document's own, where it sets
 > one), draws a chart as a bar chart of its data, and does not apply `renderMetadata`. It draws the
 > document's own headers and footers on every page, footnotes at the foot of their page, clickable
-> links, and slides as they are laid out. Choose it to avoid the headless browser; choose `'html'` for
-> pixel-matching fidelity, other chart kinds and PDF/UA tags.
+> links, slides as they are laid out, and text in a section's columns. It draws an SVG picture as vector
+> graphics in its place (paths, shapes, text, embedded PNG and JPEG pictures, fills, strokes, dashes
+> and opacity, styled by attributes, `style` and the picture's own stylesheet); a gradient is drawn in
+> one colour, and filters, masks, clip paths and patterns are left out, both reported. Choose it to
+> avoid the headless browser; choose `'html'` for pixel-matching fidelity, other chart kinds and PDF/UA
+> tags.
 
 ### DocxGeneratorConfig
 
@@ -1730,6 +1776,85 @@ import { writeFileSync } from 'fs';
 // Any supported source → OpenDocument Text. convert() extracts the images itself; the CLI needs --extractAttachments.
 const { value } = await OfficeConverter.convert('report.docx', 'odt');
 writeFileSync('report.odt', value); // value is a Uint8Array
+```
+
+### XlsxGeneratorConfig
+
+Pass as `xlsxConfig` inside `GeneratorConfig`. The XLSX generator writes an Excel workbook (`.xlsx`) with zero extra dependencies, so it runs identically in Node and the browser and returns a `Uint8Array`. A spreadsheet (XLSX, ODS, CSV) is written sheet for sheet: each cell's value typed (numbers, percentages, currency amounts, dates and times) and shown in its number format (read from `CellMetadata.shownText`), header cells bold, merged cells merged, and hidden sheets, rows and columns hidden. A sheet's stored numbers stay numbers, exponents and all (`1E-10`, `0.30000000000000004`). Any other document is written as its tables, each on a sheet named after the heading before it (else `Table 1`, `Table 2`, ...), with its cells typed from their text: `1,250.5` is a number, `19%` a percentage, `€1,250.00` a currency amount (`($80.00)` a negative one), `2026-10-01` a date, `14:05` a time. A code with leading zeros (`007`), a number with a leading plus (`+4915112345678`) or a number of more than fifteen digits (a card number, which a spreadsheet would round) stays text, and a whole number of twelve or more digits is shown in full. The document's paragraphs, headings and list items outside its tables go on a sheet named `Text`, one a row, headings bold. Footnotes, endnotes, comments and speaker notes go on a sheet named `Notes` after the others (`Footnote 1`, `Endnote 1`, `Comment (author)`, `Slide 2`, each beside its text), and the text cites each note by its label there (`[Footnote 1]`). A chart is a sheet of its data (its labels down, its series across), a list item keeps its marker, and an embedded video or page is its address. XLSX holds at most 32,767 characters in a cell: a longer one is cut there and reported. Pictures, which a cell cannot hold, are reported with `CONTENT_NOT_REPRESENTABLE`, their alternative text written in their place (their recognized text under `includeImages: 'ocr-text-only'`, both under `'image+ocr-text'`); a chart without its data is reported too (not where `includeCharts` is `false`); a document with neither a table nor text is written as one empty sheet, and reported.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `sheetPerTable` | `boolean` | `true` | Each of a document's tables on a sheet of its own. `false` puts them all on one sheet named `Tables`, an empty row between them. No effect on a spreadsheet, whose sheets are written as they are |
+| `includeText` | `boolean` | `true` | A document's text outside its tables on a sheet named `Text`. `false` leaves it out. No effect on a spreadsheet |
+
+```typescript
+import { OfficeConverter } from 'officeparser';
+import { writeFileSync } from 'fs';
+
+// A report's tables on one sheet, without its text
+const { value } = await OfficeConverter.convert('report.docx', 'xlsx', {
+    generatorConfig: { xlsxConfig: { sheetPerTable: false, includeText: false } }
+});
+writeFileSync('report-tables.xlsx', value); // value is a Uint8Array
+```
+
+### OdsGeneratorConfig
+
+Pass as `odsConfig` inside `GeneratorConfig`. The ODS generator writes an OpenDocument spreadsheet (`.ods`) from the same workbook as XLSX output, with the same options: a spreadsheet sheet for sheet, any other document as its tables and its text, each cell typed (`office:value-type` `float`, `percentage`, `currency`, `date` or `time`, with the text the cell shows beside its value). It returns a `Uint8Array` and needs no extra dependencies.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `sheetPerTable` | `boolean` | `true` | Each of a document's tables on a sheet of its own; `false` puts them all on one sheet named `Tables` |
+| `includeText` | `boolean` | `true` | A document's text outside its tables on a sheet named `Text`; `false` leaves it out |
+
+```typescript
+import { OfficeConverter } from 'officeparser';
+import { writeFileSync } from 'fs';
+
+const { value } = await OfficeConverter.convert('data.xlsx', 'ods');
+writeFileSync('data.ods', value); // value is a Uint8Array
+```
+
+### PptxGeneratorConfig
+
+Pass as `pptxConfig` inside `GeneratorConfig`. The PPTX generator writes a PowerPoint presentation (`.pptx`) with zero extra dependencies, so it runs identically in Node and the browser and returns a `Uint8Array`. What the slides hold depends on the source:
+
+- **A presentation** (PPTX, ODP) is written slide for slide at its slide size: each text box, shape (its outline, fill, line, turn and mirroring, with the text in it), picture and table in its place (`bounds`), the slide's background colour, and its speaker notes on the slide's notes page. A chart is a table of its data in the chart's place.
+- **A PDF** becomes a slide for each page, at the pages' most common size (a page of another size is scaled into it, centred). Each paragraph is a text box where the page set it, its lines broken and spaced as on the page, in its runs' fonts, sizes and colours; a paragraph set beside a floating table or picture is a box for each group of its lines. Tables keep their measured row heights and their cells' shading, pictures their places, and footnotes and a page's notes are at the foot of their page.
+- **Any other document** flows onto 16:9 slides: a slide for each heading of the first two levels, titled by it, with the text under it as bullets (lower headings bold), carried on to more slides of the same title where it does not fit. Text before the first heading is under the document's title, from its metadata. Each table is on slides of its own, ten rows a slide with its header rows repeated, and each sheet of a workbook is a table under the sheet's name. Pictures (those in a table's cells too) are on slides of their own, charts are tables of their data, a presentation's speaker notes go with the slides its content made, and footnotes and endnotes, numbered where they are cited, are listed on slides at the end.
+
+A numbered list item carries its own number as the document shows it (`2.`, `1.1.`, `iv.`), and a picture its alternative text. A code block is set in a monospaced font, line for line; an embedded video or page is its link; a picture known only by its address is its alternative text, and reported; comments go into the speaker notes of the slide they are on. A PDF page shown turned (`/Rotate`) has its text and pictures turned with it. A presentation or PDF parsed with `ignorePageGeometry` has no places on its pages, so it flows as any other document. Pictures and charts need `extractAttachments: true` on the parse (`OfficeConverter.convert` sets it); PNG, JPEG, GIF and BMP pictures are written, and others are reported with `IMAGE_PROCESSING_FAILED`. Links to web, mail and phone addresses stay clickable. What a slide cannot hold (a chart without its data, a picture without a place on a page) is reported with `CONTENT_NOT_REPRESENTABLE`.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `backgrounds` | `(Uint8Array \| null \| undefined)[]` | `[]` | A picture (PNG or JPEG bytes) for each page of a PDF or slide of a presentation, in order, drawn as its slide's background under its text; `null` or `undefined` for one without. Give a PDF's pages drawn without their text, and the slides look as the pages did (shapes, gradients and charts included) with the text over them to edit; a page's tables are then their cells' text in place over the picture, which holds their rules. A flowing document's slides take them in order |
+
+```typescript
+import { OfficeConverter } from 'officeparser';
+import { readFileSync, writeFileSync } from 'fs';
+
+// A PDF as slides, each over a picture of its page drawn without its text (rendered beforehand)
+const backgrounds = ['page1.png', 'page2.png'].map(file => new Uint8Array(readFileSync(file)));
+const { value } = await OfficeConverter.convert('slides.pdf', 'pptx', {
+    generatorConfig: { pptxConfig: { backgrounds } }
+});
+writeFileSync('slides.pptx', value); // value is a Uint8Array
+```
+
+### OdpGeneratorConfig
+
+Pass as `odpConfig` inside `GeneratorConfig`. The ODP generator writes an OpenDocument presentation (`.odp`) from the same deck as PPTX output, with the same option: a presentation slide for slide, a PDF's pages as slides with their text in place, any other document flowed onto slides. A shape is drawn in ODF's own outline of its kind where it has one (rectangles, rounded rectangles, ellipses, triangles, diamonds, polygons, stars, arrows, lines), else as a rectangle, which is reported. It returns a `Uint8Array` and needs no extra dependencies.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `backgrounds` | `(Uint8Array \| null \| undefined)[]` | `[]` | A picture (PNG or JPEG bytes) for each page of a PDF or slide of a presentation (a flowing document's slides, in order), under its slide's text; `null` or `undefined` for one without |
+
+```typescript
+import { OfficeConverter } from 'officeparser';
+import { writeFileSync } from 'fs';
+
+const { value } = await OfficeConverter.convert('deck.pptx', 'odp');
+writeFileSync('deck.odp', value); // value is a Uint8Array
 ```
 
 ### TexGeneratorConfig

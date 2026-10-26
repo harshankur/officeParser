@@ -46,7 +46,7 @@
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
                 <td><strong>Branding</strong>: If true, renders the document metadata (Title, Author, Creation Date) as
-                    a visible header block.</td>
+                    a visible header block. The native PDF engine, Markdown, XLSX, ODS, PPTX and ODP do not render it.</td>
             </tr>
             <tr>
                 <td><code>metadataOverrides</code></td>
@@ -66,7 +66,11 @@
                     plain-text output an image becomes an <code>[Image: name]</code> placeholder (plus OCR text for
                     <code>'image+ocr-text'</code>), or just the OCR text for <code>'ocr-text-only'</code>. In chunks a
                     picture is <code>[Image: alt]</code> for its alt text, with its OCR text, except under
-                    <code>'none'</code> and <code>'ocr-text-only'</code> (OCR text only).</td>
+                    <code>'none'</code> and <code>'ocr-text-only'</code> (OCR text only). XLSX and ODS, whose cells hold no
+                    pictures, write a picture's OCR text in its place under <code>'ocr-text-only'</code> and
+                    <code>'image+ocr-text'</code>; PPTX and ODP write it in the picture's place under
+                    <code>'ocr-text-only'</code>, and under <code>'image+ocr-text'</code> after a flowing document's
+                    picture slide or in a placed slide's notes.</td>
             </tr>
             <tr>
                 <td><code>maxInlineImageBytes</code></td>
@@ -90,8 +94,9 @@
                 <td><code>true</code></td>
                 <td><strong>Visuals</strong>: Whether to include charts. HTML draws an interactive Chart.js canvas (or, with no
                     <code>chartJsSrc</code>, the chart's data as a table); DOCX, ODT and LaTeX write the chart's data as a
-                    table; plain text and the native PDF engine write its data as text; Markdown and RTF write nothing for a
-                    chart. <code>false</code> omits charts in every generator.</td>
+                    table, PPTX and ODP a table of its data in the chart's place; plain text and the native PDF engine write
+                    its data as text; Markdown and RTF write nothing for a chart, and XLSX and ODS, whose cells cannot hold
+                    one, report it (<code>CONTENT_NOT_REPRESENTABLE</code>). <code>false</code> omits charts in every generator.</td>
             </tr>
             <tr>
                 <td><code>ignoreInternalLinks</code></td>
@@ -134,8 +139,10 @@
                 <td><code>abortSignal</code></td>
                 <td><code>AbortSignal | null</code></td>
                 <td><code>null</code></td>
-                <td><strong>Cancellation</strong>: An optional signal to abort the generation operation.
-                    Supported by <code>PdfGenerator</code> and <code>ChunkingGenerator</code>. Rejects with an <code>AbortError</code>.</td>
+                <td><strong>Cancellation</strong>: An optional signal to abort the generation operation, checked
+                    between steps by every generator (the native PDF engine before each node it draws; XLSX and ODS before
+                    each cell and block of text; PPTX and ODP before each node a slide takes). Rejects with an
+                    <code>AbortError</code>.</td>
             </tr>
         </tbody>
     </table>
@@ -446,7 +453,11 @@ await ast.to('md', {
         with <code>pdf-lib</code> (an optional peer dependency), no browser required, so it runs unchanged in Node and the
         browser and is the only way to produce a real PDF client-side. It honors the shared <code>includeImages</code>/​<code>onNode</code>
         options and the page options below, and draws a clean reflow rather than a pixel match: in the Standard-14 fonts, or in
-        font files you give it (<code>fonts</code>, <code>fallbackFonts</code>), which any script needs past Latin.
+        font files you give it (<code>fonts</code>, <code>fallbackFonts</code>), which any script needs past Latin. It lays
+        text out in a section's columns, and draws an SVG picture as vector graphics in its place (paths, shapes, text,
+        embedded PNG and JPEG pictures, fills, strokes, dashes and opacity, styled by attributes, <code>style</code> and the
+        picture's own stylesheet); a gradient is drawn in one colour, and filters, masks, clip paths and patterns are left
+        out, both reported (<code>CONTENT_NOT_REPRESENTABLE</code>, <code>details.reason: 'svg'</code>).
         In the prebuilt browser bundle <code>pdf-lib</code> is stubbed so the bundle stays self-contained; for client-side native
         PDF, import from the dedicated entry <code>officeparser/browser-native-pdf</code> and install <code>pdf-lib</code>.
     </blockquote>
@@ -489,7 +500,8 @@ await ast.to('md', {
                 <td><code>subsetFonts</code></td>
                 <td><code>boolean</code></td>
                 <td><code>true</code></td>
-                <td>Native engine: embed only the glyphs used of each font given; <code>false</code> embeds the whole files.</td>
+                <td>Native engine: embed only the glyphs used of each font given; <code>false</code> embeds the whole files. An
+                    OpenType font of CFF outlines is embedded whole either way.</td>
             </tr>
             <tr>
                 <td><code>tagged</code></td>
@@ -668,6 +680,174 @@ await ast.to('md', {
                 <td>Page margins (<code>top</code>, <code>right</code>, <code>bottom</code>, <code>left</code>). Each is a
                     number of points (1/72 inch) or a unit string (<code>'1in'</code>, <code>'2cm'</code>,
                     <code>'36pt'</code>). A side left unset is the document's own margin under <code>format: 'auto'</code>, else 72 (one inch).</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3 id="xlsxgeneratorconfig">XlsxGeneratorConfig (<code>xlsxConfig</code>)</h3>
+    <p>Writes an Excel workbook (a <code>.xlsx</code> zip) and returns a <code>Uint8Array</code>. Adds no dependencies and
+        runs identically in Node and the browser. A spreadsheet (XLSX, ODS, CSV) is written sheet for sheet: each cell's
+        value typed (numbers, percentages, currency amounts, dates and times) and shown in its number format (read from
+        <code>CellMetadata.shownText</code>), header cells bold, merged cells merged, and hidden sheets, rows and columns
+        hidden. A sheet's stored numbers stay numbers, exponents and all (<code>1E-10</code>). Any other document is written as its tables, each on a sheet named after the heading before it (else
+        <code>Table 1</code>, <code>Table 2</code>, ...), with its cells typed from their text: <code>1,250.5</code> is a
+        number, <code>19%</code> a percentage, <code>€1,250.00</code> a currency amount (<code>($80.00)</code> a negative
+        one), <code>2026-10-01</code> a date, <code>14:05</code> a time. A code with leading zeros (<code>007</code>), a
+        number with a leading plus (<code>+4915112345678</code>) or a number of more than fifteen digits (a card number,
+        which a spreadsheet would round) stays text, and a whole number of twelve or more digits is shown in full. The
+        document's paragraphs, headings and list items outside its tables go on a sheet named <code>Text</code>, one a
+        row, headings bold. Footnotes, endnotes, comments and speaker notes go on a sheet named <code>Notes</code> after the
+        others (<code>Footnote 1</code>, <code>Endnote 1</code>, <code>Comment (author)</code>, <code>Slide 2</code>, each
+        beside its text), and the text cites each note by its label there (<code>[Footnote 1]</code>). A chart is a sheet
+        of its data (its labels down, its series across), a list item keeps its marker, and an embedded video or page is
+        its address. XLSX holds at most
+        32,767 characters in a cell: a longer one is cut there and reported. Pictures, which a cell cannot hold, are
+        reported with <code>CONTENT_NOT_REPRESENTABLE</code>, their alternative text written in their place (their
+        recognized text under <code>includeImages: 'ocr-text-only'</code>, both under <code>'image+ocr-text'</code>); a
+        chart without its data is reported too (not where <code>includeCharts</code> is <code>false</code>); a
+        document with neither a table nor text is written as one empty sheet, and reported.</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>sheetPerTable</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>Each of a document's tables on a sheet of its own. <code>false</code> puts them all on one sheet named
+                    <code>Tables</code>, an empty row between them. No effect on a spreadsheet, whose sheets are written as
+                    they are.</td>
+            </tr>
+            <tr>
+                <td><code>includeText</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>A document's text outside its tables on a sheet named <code>Text</code>. <code>false</code> leaves it
+                    out. No effect on a spreadsheet.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3 id="odsgeneratorconfig">OdsGeneratorConfig (<code>odsConfig</code>)</h3>
+    <p>Writes an OpenDocument spreadsheet (a <code>.ods</code> zip) from the same workbook as XLSX output, with the same
+        options, and returns a <code>Uint8Array</code>: a spreadsheet sheet for sheet, any other document as its tables and
+        its text, each cell typed (<code>office:value-type</code> <code>float</code>, <code>percentage</code>,
+        <code>currency</code>, <code>date</code> or <code>time</code>, with the text the cell shows beside its value).</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>sheetPerTable</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>Each of a document's tables on a sheet of its own. <code>false</code> puts them all on one sheet named
+                    <code>Tables</code>, an empty row between them. No effect on a spreadsheet, whose sheets are written as
+                    they are.</td>
+            </tr>
+            <tr>
+                <td><code>includeText</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>A document's text outside its tables on a sheet named <code>Text</code>. <code>false</code> leaves it
+                    out. No effect on a spreadsheet.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3 id="pptxgeneratorconfig">PptxGeneratorConfig (<code>pptxConfig</code>)</h3>
+    <p>Writes a PowerPoint presentation (a <code>.pptx</code> zip) and returns a <code>Uint8Array</code>. Adds no
+        dependencies and runs identically in Node and the browser. What the slides hold depends on the source:</p>
+    <ul>
+        <li><strong>A presentation</strong> (PPTX, ODP) is written slide for slide at its slide size: each text box, shape
+            (its outline, fill, line, turn and mirroring, with the text in it), picture and table in its place
+            (<code>bounds</code>), the slide's background colour, and its speaker notes on the slide's notes page. A chart
+            is a table of its data in the chart's place.</li>
+        <li><strong>A PDF</strong> becomes a slide for each page, at the pages' most common size (a page of another size is
+            scaled into it, centred). Each paragraph is a text box where the page set it, its lines broken and spaced as on the page,
+            in its runs' fonts, sizes and colours; a paragraph set beside a floating table or picture is a box for each
+            group of its lines. Tables keep their measured row heights and their cells' shading, pictures their places,
+            and footnotes and a page's notes are at the foot of their page.</li>
+        <li><strong>Any other document</strong> flows onto 16:9 slides: a slide for each heading of the first two levels,
+            titled by it, with the text under it as bullets (lower headings bold), carried on to more slides of the same
+            title where it does not fit. Text before the first heading is under the document's title, from its metadata.
+            Each table is on slides of its own, ten rows a slide with its header rows repeated, and each sheet of a workbook
+            is a table under the sheet's name. Pictures (those in a table's cells too) are on slides of their own, charts
+            are tables of their data, a presentation's speaker notes go with the slides its content made, and footnotes
+            and endnotes, numbered where they are cited, are listed on slides at the end.</li>
+    </ul>
+    <p>A numbered list item carries its own number as the document shows it (<code>2.</code>, <code>1.1.</code>,
+        <code>iv.</code>), and a picture its alternative text. A code block is set in a monospaced font, line for line; an
+        embedded video or page is its link; a picture known only by its address is its alternative text, and reported;
+        comments go into the speaker notes of the slide they are on. A PDF page shown turned (<code>/Rotate</code>) has
+        its text and pictures turned with it. A presentation or PDF parsed with <code>ignorePageGeometry</code> has no places on its pages, so it flows as any
+        other document. Pictures and charts need <code>extractAttachments: true</code> on the parse
+        (<code>OfficeConverter.convert()</code> sets it); PNG, JPEG, GIF and BMP pictures are written, and others are
+        reported with <code>IMAGE_PROCESSING_FAILED</code>. Links to web, mail and phone addresses stay clickable. What a
+        slide cannot hold (a chart without its data, a picture without a place on a page) is reported with
+        <code>CONTENT_NOT_REPRESENTABLE</code>.</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>backgrounds</code></td>
+                <td><code>(Uint8Array | null | undefined)[]</code></td>
+                <td><code>[]</code></td>
+                <td>A picture (PNG or JPEG bytes) for each page of a PDF or slide of a presentation, in order, drawn as its
+                    slide's background under its text; <code>null</code> or <code>undefined</code> for one without. Give a
+                    PDF's pages drawn without their text, and the slides look as the pages did (shapes, gradients and
+                    charts included) with the text over them to edit; a page's tables are then their cells' text in place over
+                    the picture, which holds their rules. A flowing document's slides take them in order. The CLI takes
+                    picture files: <code>--pptxConfig.backgrounds=a.png,b.png</code>.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3 id="odpgeneratorconfig">OdpGeneratorConfig (<code>odpConfig</code>)</h3>
+    <p>Writes an OpenDocument presentation (a <code>.odp</code> zip) from the same deck as PPTX output, with the same
+        option, and returns a <code>Uint8Array</code>: a presentation slide for slide, a PDF's pages as slides with their
+        text in place, any other document flowed onto slides. A shape is drawn in ODF's own outline of its kind where it
+        has one (rectangles, rounded rectangles, ellipses, triangles, diamonds, polygons, stars, arrows, lines), else as a
+        rectangle, which is reported.</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>backgrounds</code></td>
+                <td><code>(Uint8Array | null | undefined)[]</code></td>
+                <td><code>[]</code></td>
+                <td>A picture (PNG or JPEG bytes) for each page of a PDF or slide of a presentation, in order, drawn as its
+                    slide's background under its text; <code>null</code> or <code>undefined</code> for one without. Give a
+                    PDF's pages drawn without their text, and the slides look as the pages did (shapes, gradients and
+                    charts included) with the text over them to edit; a page's tables are then their cells' text in place over
+                    the picture, which holds their rules. A flowing document's slides take them in order. The CLI takes
+                    picture files: <code>--odpConfig.backgrounds=a.png,b.png</code>.</td>
             </tr>
         </tbody>
     </table>
