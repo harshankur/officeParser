@@ -5,8 +5,496 @@
     <link>https://officeparser.harshankur.com/blog/</link>
     <description>How document formats work inside, how officeParser reads and writes them, where it falls short, and how to chunk documents for retrieval. Written by Harsh Ankur, author of officeParser.</description>
     <language>en</language>
-    <lastBuildDate>Sun, 04 Oct 2026 00:00:00 GMT</lastBuildDate>
+    <lastBuildDate>Mon, 26 Oct 2026 00:00:00 GMT</lastBuildDate>
     <atom:link href="https://officeparser.harshankur.com/blog/feed.xml" rel="self" type="application/rss+xml"/>
+    <item>
+      <title>Laying Out a Page From Scratch: Text Around a Floating Frame</title>
+      <link>https://officeparser.harshankur.com/blog/laying-out-a-page-around-a-floating-frame.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/laying-out-a-page-around-a-floating-frame.html</guid>
+      <pubDate>Mon, 26 Oct 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Build Notes</category>
+      <description>How ODT, Word and RTF each say where a text box stands, how officeParser reads them into one shape, and how its PDF engine sets lines round the box, with an interactive column to try it.</description>
+      <content:encoded><![CDATA[<p>
+    Reports and newsletters put boxes beside their text: a sidebar, a pull quote, a note in a shaded
+    frame on the right while the paragraph runs down its left. Word calls it a text box, LibreOffice a
+    frame. Until 8.3.0, officeParser read the box's text and put it in the flow, where it was drawn as
+    one more paragraph. ODT's was worse: its text was glued to the paragraph it stood in, so the paragraph
+    read <code>Text in a floating frame on the right.A paragraph beside a floating text frame</code>.
+</p>
+<p>
+    Putting the box back where it stands took two halves: reading where each format says the box is, and
+    teaching the native PDF engine to set lines of text round it. This post is about both.
+</p>
+
+<h2>Three Formats, One Box</h2>
+<p>
+    I made one document with one frame (2.2 inches wide, 1 inch tall, 4.2 inches from the left of the
+    text column, at the top of its paragraph, with text running beside it) and saved it from LibreOffice
+    as ODT, DOCX and RTF. Each says the same thing in its own units and its own words.
+</p>
+<p>
+    <strong>ODT</strong> writes the frame inside the paragraph it is anchored to, in inches, with how
+    text goes round it in a graphic style:
+</p>
+<pre><code>&lt;text:p&gt;&lt;draw:frame text:anchor-type="paragraph" svg:x="4.2in" svg:y="0in"
+        svg:width="2.2004in" svg:height="1.0004in" draw:style-name="gr1"&gt;
+    &lt;draw:text-box&gt;&lt;text:p&gt;Text in a floating frame on the right.&lt;/text:p&gt;&lt;/draw:text-box&gt;
+&lt;/draw:frame&gt;A paragraph beside a floating text frame. ...&lt;/text:p&gt;
+
+&lt;style:graphic-properties style:wrap="parallel" style:horizontal-pos="from-left"
+        style:horizontal-rel="paragraph" style:vertical-rel="paragraph" .../&gt;</code></pre>
+<p>
+    <strong>Word</strong> puts a drawing in a run of the paragraph, measured in EMUs (914,400 to the inch,
+    12,700 to the point), with what each offset is measured from:
+</p>
+<pre><code>&lt;wp:anchor distT="0" distB="0" distL="0" distR="0" ...&gt;
+  &lt;wp:positionH relativeFrom="column"&gt;&lt;wp:posOffset&gt;3840480&lt;/wp:posOffset&gt;&lt;/wp:positionH&gt;
+  &lt;wp:positionV relativeFrom="paragraph"&gt;&lt;wp:posOffset&gt;635&lt;/wp:posOffset&gt;&lt;/wp:positionV&gt;
+  &lt;wp:extent cx="2011680" cy="914400"/&gt;
+  &lt;wp:wrapSquare wrapText="bothSides"/&gt;
+  ... &lt;wps:txbx&gt;&lt;w:txbxContent&gt; the box's paragraphs &lt;/w:txbxContent&gt;&lt;/wps:txbx&gt;</code></pre>
+<p>
+    <strong>RTF</strong> writes a shape in twips (twenty to the point), with its wrapping as a number and
+    its colours as integers in blue, green, red order:
+</p>
+<pre><code>{\shp{\*\shpinst\shpleft6048\shptop0\shpright9215\shpbottom1439\shpwr2
+  {\sp{\sn fillColor}{\sv 13606770}}{\sp{\sn lineColor}{\sv 10773812}} ...
+  {\shptxt Text in a floating frame on the right.\par}}}</code></pre>
+<p>
+    3,840,480 EMUs, 6,048 twips and 4.2 inches are all 302.4 points. That agreement is the whole job of
+    the readers: each turns its format's words into one shape, a <code>drawing</code> node holding the
+    box's paragraphs, with <code>ShapeMetadata.float</code> saying where it stands. Here is what each of
+    the three files reads as:
+</p>
+<pre><code>import { parseOffice } from 'officeparser';
+
+const ast = await parseOffice('layout.docx');
+const frame = ast.content.find(node =&gt; node.type === 'drawing' &amp;&amp; node.metadata?.float);
+console.log(frame.metadata.float);
+// {
+//   horizontalFrom: 'column', verticalFrom: 'paragraph',
+//   x: 302.4, y: 0.05, width: 158.4, height: 72, wrap: 'beside'
+// }</code></pre>
+<p>
+    The ODT gives <code>x: 302.4</code> too (its sizes a fraction larger, as LibreOffice wrote them), and
+    the RTF the same again, with the 9-point gap its shapes keep from text by default. The
+    <code>drawing</code> node comes just <em>before</em> the paragraph it is anchored to, whichever format
+    it came from. That order is what lets a writer place the box before it lays out the lines that go
+    round it. Writers that have no place to put a box (Markdown, plain text, a spreadsheet) write its
+    paragraphs where it stands, so no text is lost; with <code>ignorePageGeometry</code>, the box is read
+    as it was before.
+</p>
+
+<h2>Setting Lines Round a Box</h2>
+<p>
+    The native engine lays text out one line at a time, from the top of the page down. A box changes that
+    in one place: before a line's first word is placed, the engine looks for boxes on the page that
+    overlap the band the line will take, and works out how much room is left beside each.
+</p>
+<ul>
+    <li>Text takes the side with more room. A box near the right edge leaves the left for the text.</li>
+    <li>If that room is less than 36 points, or a third of the line, the line moves down below the box
+        instead of squeezing a word or two into a sliver.</li>
+    <li>A box set to keep text above and below it (Word's <code>wrapTopAndBottom</code>, ODT's
+        <code>style:wrap="none"</code>) sends the line below it whatever the room.</li>
+    <li>A box set in front of or behind the text (Word's <code>wrapNone</code>) is drawn and the lines
+        ignore it, as Word draws them.</li>
+</ul>
+<p>
+    Try it. Drag the box, or move it with the arrow keys, and change how text goes round it. This uses the
+    same rules as the engine, and shows the <code>float</code> a reader would give for the box where you
+    leave it:
+</p>
+<figure class="demo demo-wrap" data-demo="wrap">
+    <p class="demo-fallback">An interactive column of text with a frame you can drag. It needs JavaScript.</p>
+    <figcaption>A column of text 468 points wide (a Letter page's column; 300 on a phone), and a box you
+        can move.</figcaption>
+</figure>
+
+<h2>What a Box Cannot Do</h2>
+<p>
+    Text that is already on the page cannot go round anything. Most boxes are measured from their own
+    paragraph, so the engine meets the box just before the lines that go round it. But a box can be
+    measured from the page or the margin, or placed above its paragraph with a negative offset, and then
+    it stands over lines the engine has already set. My first version simply drew it there, over them.
+</p>
+<p>
+    A review round I run before every release found that, and two more of the same family. A box whose
+    text needed more than a page lost what did not fit, because a box belongs to one page. And a table
+    starting just above a box grew down through it, because blocks other than text only checked for a
+    box where they <em>start</em>. Now:
+</p>
+<ul>
+    <li>A box that would stand over text already laid out stands at its paragraph instead, so the text
+        after it goes round it and nothing is hidden.</li>
+    <li>A box whose text is more than a page holds is set in the flow, all of it.</li>
+    <li>A table, a picture, code or a chart that would reach a box below it is measured first and starts
+        below the box.</li>
+    <li>Footnotes at the foot of the page are not set round boxes.</li>
+</ul>
+<p>
+    Each of these trades a little fidelity for never losing text. A word processor would reflow the
+    page so the earlier lines go round the box as well. A layout engine that sets lines once, top to
+    bottom, cannot, and the honest answer is to move the box rather than cover what is there.
+</p>
+
+<h2>Where It Falls Short</h2>
+<ul>
+    <li>Text goes down one side of a box. Word's <code>wrapText="bothSides"</code> can run text down both
+        sides of a box in the middle of a column; officeParser uses the wider side.</li>
+    <li>A box aligned to the middle or bottom of its page or paragraph is placed at the top.</li>
+    <li>Pictures floating beside text (as opposed to text boxes) are still drawn in the flow.</li>
+</ul>
+<p>
+    The box above is the same document all the way through: read from ODT, Word or RTF, it comes out of
+    the native engine with its paragraph running down its left, and as a paragraph of its own in formats
+    that have no page to stand it on.
+</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>Reading the Spreadsheet You See, Not the One Stored</title>
+      <link>https://officeparser.harshankur.com/blog/reading-the-spreadsheet-you-see.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/reading-the-spreadsheet-you-see.html</guid>
+      <pubDate>Mon, 26 Oct 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Format Deep Dives</category>
+      <description>A cell stores 0.19 and shows 19%. What XLSX keeps, how Excel&#39;s number formats work, and how officeParser reads both halves of a cell so a CSV keeps the numbers and a PDF prints what the sheet shows.</description>
+      <content:encoded><![CDATA[<p>
+    Type 19% into a spreadsheet cell and save the file. What is in the file is not "19%". It is
+    <code>0.19</code>, and a note elsewhere that says to show it as a percentage. A date is a count of
+    days. Thirty hours is the number 1.25. A row you hid is still there, with a flag on it.
+</p>
+<p>
+    So which is the cell's content: what the file stores, or what the sheet shows? For years officeParser
+    gave the stored value and nothing else, which is right for a CSV and wrong for a printout: a PDF of a
+    budget that says <code>0.19</code> where everyone saw 19% is not the budget. In 8.3.0 a cell carries
+    both, and every writer takes the one its format needs.
+</p>
+
+<h2>What an XLSX Cell Holds</h2>
+<p>
+    I built a small workbook by hand, writing the XML myself so I knew exactly what was in it. One sheet,
+    a label in column A and a value in column B. Here is the percentage, as the sheet stores it:
+</p>
+<pre><code>&lt;c r="B1" s="1"&gt;&lt;v&gt;0.19&lt;/v&gt;&lt;/c&gt;</code></pre>
+<p>
+    The <code>s="1"</code> is the only clue. It points into the workbook's list of cell styles, whose
+    second entry says <code>numFmtId="9"</code>, one of Excel's built-in formats: <code>0%</code>.
+    Formats of your own get numbers from 164 up and their code written out in the styles part:
+</p>
+<pre><code>&lt;numFmt numFmtId="164" formatCode="#,##0.00 [$€-407]"/&gt;
+&lt;numFmt numFmtId="165" formatCode="dd.mm.yyyy"/&gt;
+&lt;numFmt numFmtId="166" formatCode="#,##0.00;(#,##0.00)"/&gt;
+&lt;numFmt numFmtId="169" formatCode="[h]:mm"/&gt;</code></pre>
+<p>
+    A format code is a small language. Sections split by semicolons are for positive numbers, negative
+    numbers and zero, so <code>#,##0.00;(#,##0.00)</code> shows a debt in brackets without its minus
+    sign. <code>[$€-407]</code> is a currency symbol with a locale tag. <code>m</code> is a month, unless
+    it stands next to an hour or a second, when it is a minute. <code>[h]</code> counts hours past a day.
+</p>
+
+<h2>Both Halves of a Cell</h2>
+<p>
+    officeParser reads each cell's stored value into its <code>text</code>, as before, and puts beside it
+    what the sheet shows (<code>shownText</code>), what kind of value it is (<code>valueType</code>), the
+    value in full where the text is something else (<code>value</code>), and the format code
+    (<code>numberFormat</code>). A hidden row's cells are marked <code>hidden</code>.
+</p>
+<pre><code>import { parseOffice } from 'officeparser';
+
+const ast = await parseOffice('report.xlsx');
+const sheet = ast.content.find(node =&gt; node.type === 'sheet');
+for (const row of sheet.children) {
+    for (const cell of row.children) console.log(cell.text, cell.metadata);
+}</code></pre>
+<p>
+    For the value column, that prints (the labels left out):
+</p>
+<pre><code>0.19        { shownText: '19%', valueType: 'number', numberFormat: '0%' }
+120         { shownText: '120.00 €', valueType: 'number', numberFormat: '#,##0.00 [$€-407]' }
+2023-03-15  { shownText: '15.03.2023', valueType: 'date', value: '45000', numberFormat: 'dd.mm.yyyy' }
+-1234.5     { shownText: '(1,234.50)', valueType: 'number', numberFormat: '#,##0.00;(#,##0.00)' }
+06:00:00    { shownText: '6:00', valueType: 'time', value: '0.25', numberFormat: 'h:mm' }
+10.456      { shownText: '10.5 kg', valueType: 'number', numberFormat: '0.0 "kg"', hidden: true }
+30:00:00    { shownText: '30:00', valueType: 'time', value: '1.25', numberFormat: '[h]:mm' }
+1E5         { valueType: 'text' }</code></pre>
+<p>
+    A date's <code>text</code> is the ISO date, which every program reads the same way, and its
+    <code>value</code> keeps the day count (45000 is 15 March 2023 in Excel's 1900 date system). The last
+    cell is the reason <code>valueType</code> exists: <code>1E5</code> was typed as text, a part number
+    perhaps, and a writer that guessed from the text alone would turn it into 100000.
+</p>
+<p>
+    Switch between the two halves of the same sheet, and show the hidden row:
+</p>
+<figure class="demo demo-cells" data-demo="cells">
+    <table role="table">
+        <thead role="rowgroup">
+            <tr role="row"><th role="columnheader">Cell</th><th role="columnheader">Stored</th><th role="columnheader">Number format</th><th role="columnheader">Shown</th></tr>
+        </thead>
+        <tbody role="rowgroup">
+            <tr role="row"><td role="cell">Growth</td><td role="cell" data-label="Stored">0.19</td><td role="cell" data-label="Number format">0%</td><td role="cell" data-label="Shown">19%</td></tr>
+            <tr role="row"><td role="cell">Price</td><td role="cell" data-label="Stored">120</td><td role="cell" data-label="Number format">#,##0.00 [$€-407]</td><td role="cell" data-label="Shown">120.00 €</td></tr>
+            <tr role="row"><td role="cell">Invoice date</td><td role="cell" data-label="Stored">45000</td><td role="cell" data-label="Number format">dd.mm.yyyy</td><td role="cell" data-label="Shown">15.03.2023</td></tr>
+            <tr role="row"><td role="cell">Balance</td><td role="cell" data-label="Stored">-1234.5</td><td role="cell" data-label="Number format">#,##0.00;(#,##0.00)</td><td role="cell" data-label="Shown">(1,234.50)</td></tr>
+            <tr role="row"><td role="cell">Start</td><td role="cell" data-label="Stored">0.25</td><td role="cell" data-label="Number format">h:mm</td><td role="cell" data-label="Shown">6:00</td></tr>
+            <tr role="row" data-hidden=""><td role="cell">Weight (hidden row)</td><td role="cell" data-label="Stored">10.456</td><td role="cell" data-label="Number format">0.0 "kg"</td><td role="cell" data-label="Shown">10.5 kg</td></tr>
+            <tr role="row"><td role="cell">Shift</td><td role="cell" data-label="Stored">1.25</td><td role="cell" data-label="Number format">[h]:mm</td><td role="cell" data-label="Shown">30:00</td></tr>
+            <tr role="row"><td role="cell">Code</td><td role="cell" data-label="Stored">1E5</td><td role="cell" data-label="Number format">(text)</td><td role="cell" data-label="Shown">1E5</td></tr>
+        </tbody>
+    </table>
+    <figcaption>The workbook's value column: what the file stores, its number format, and what a
+        spreadsheet shows.</figcaption>
+</figure>
+
+<h2>Each Writer Takes Its Half</h2>
+<p>
+    Having both lets every output take the half its format is for:
+</p>
+<ul>
+    <li><strong>CSV, text and chunks</strong> keep the stored values. A CSV of the sheet starts
+        <code>Growth,0.19</code>: a number another program can add up, not a string with a percent sign.</li>
+    <li><strong>PDF</strong> prints what the sheet shows (<code>19%</code>, <code>(1,234.50)</code>,
+        <code>30:00</code>) and leaves the hidden row out, as a printout does.
+        <code>pdfConfig.printHidden</code> prints it.</li>
+    <li><strong>XLSX</strong> output writes each format code as it was, so the value and its look survive
+        a round trip.</li>
+    <li><strong>ODS</strong> output writes the value as ODS holds one (a percentage, a currency amount, a
+        date, a time of <code>PT30H0M0S</code>) with a number style built from the format code, and the
+        shown text inside the cell, as ODS keeps it.</li>
+</ul>
+<pre><code>const pdf = await ast.to('pdf', { pdfConfig: { engine: 'native' } });                    // as seen
+const all = await ast.to('pdf', { pdfConfig: { engine: 'native', printHidden: true } }); // hidden rows too</code></pre>
+
+<h2>Writing the Shown Text</h2>
+<p>
+    Excel's format codes are not a standard any library speaks, but officeParser already had an engine
+    for something close: the template engine formats numbers and dates with Word's pictures
+    (<code>#,##0.00</code>, <code>dd.MM.yyyy</code>). The spreadsheet reader turns what only Excel's codes
+    hold into that language first: it picks the section for the value's sign, turns
+    <code>[$€-407]</code> into its symbol, drops colours (<code>[Red]</code>) and locale tags, reads
+    <code>_)</code> padding and <code>*</code> fill as a space, divides by a thousand for each trailing
+    comma (<code>#,##0,"K"</code>), and decides whether each <code>m</code> is a month or a minute. Elapsed
+    time (<code>[h]:mm</code>, <code>[mm]:ss</code>) it writes itself, which is how 1.25 days becomes
+    <code>30:00</code> and not 6:00 on the next day.
+</p>
+
+<h2>What It Will Not Guess</h2>
+<p>
+    Where a code says something officeParser cannot write the way Excel would, the cell gets no shown
+    text and every output uses the stored value. That covers General, scientific notation
+    (<code>0.00E+00</code>), fractions (<code># ?/?</code>), conditions (<code>[&gt;=100]</code>) and text
+    sections. Excel's built-in date formats are left alone too, because they follow the date order of the
+    machine that opens the file: what one reader sees as 3/15/2023 another sees as 15.03.2023, so the
+    unambiguous ISO date is the better guess.
+</p>
+<p>
+    One more limit is easy to miss: the shown text uses a full stop for decimals and a comma for
+    thousands. A format code says where the separators go, not which characters they are. Excel takes
+    those from the machine's language, so a German Excel shows the price above as <code>120,00 €</code>.
+</p>
+<p>
+    A spreadsheet is a table of numbers and a set of instructions for showing them. Read as one or the
+    other, it is half a document. Read as both, a CSV can add it up and a PDF can print it as it was.
+</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>Drawing Hindi in a PDF: Glyph Positions, Conjuncts and /ActualText</title>
+      <link>https://officeparser.harshankur.com/blog/drawing-hindi-in-a-pdf.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/drawing-hindi-in-a-pdf.html</guid>
+      <pubDate>Mon, 26 Oct 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Build Notes</category>
+      <description>Why a Hindi word came apart in officeParser&#39;s PDF writer, copied with its letters out of order, or drew the wrong glyphs, and the font and PDF details behind each failure.</description>
+      <content:encoded><![CDATA[<p>
+    officeParser has a PDF writer of its own, the native engine, which draws a document with
+    <a href="https://pdf-lib.js.org/" rel="noopener">pdf-lib</a> instead of a headless browser. Give it
+    a font with <code>pdfConfig.fallbackFonts</code> and it will draw Greek, Arabic, Chinese or Hindi.
+</p>
+<p>
+    Hindi is where it went wrong, in three different ways at once. A word could come apart on the page.
+    Copied out of the PDF, a word read with its letters out of order. And with some fonts every glyph
+    was the wrong one. Each failure has its own cause, and none of them is in the code that lays out
+    lines. This post is about those causes and what I changed for 8.3.0.
+</p>
+
+<h2>A Word is Not Written in the Order It is Drawn</h2>
+<p>
+    Take the word <strong>हिंदी</strong> ("Hindi"). In Unicode it is five code points, in the order
+    you type and say them:
+</p>
+<pre><code>ह  U+0939  HA
+ि  U+093F  VOWEL SIGN I
+ं  U+0902  ANUSVARA
+द  U+0926  DA
+ी  U+0940  VOWEL SIGN II</code></pre>
+<p>
+    The vowel sign ि comes after ह in the text but is drawn <em>before</em> it, to its left. The
+    anusvara ं is a dot that sits above the letter before it and takes no room of its own. Other words
+    go further: in <strong>क्ष</strong>, a letter, a virama and another letter become one glyph, a
+    conjunct the font draws as a single shape.
+</p>
+<p>
+    Turning code points into glyphs and their places is <em>shaping</em>. A shaper reads the font's
+    own tables (OpenType's <code>GSUB</code> and <code>GPOS</code>, or Apple's <code>morx</code>) and
+    returns the glyphs in the order they are drawn, each with an advance and an offset. pdf-lib uses
+    fontkit for this. For the word above, with Devanagari Sangam MN, fontkit returns the glyph for ि
+    first, then ह, then the anusvara with no advance, then द and ी.
+</p>
+
+<figure class="demo demo-shaping" data-demo="shaping">
+    <ol>
+        <li data-drawn="1"><span class="demo-glyph" lang="hi">ह</span><span class="demo-code">U+0939</span></li>
+        <li data-drawn="0"><span class="demo-glyph" lang="hi">ि</span><span class="demo-code">U+093F</span></li>
+        <li data-drawn="2" data-mark=""><span class="demo-glyph" lang="hi">ं</span><span class="demo-code">U+0902</span></li>
+        <li data-drawn="3"><span class="demo-glyph" lang="hi">द</span><span class="demo-code">U+0926</span></li>
+        <li data-drawn="4"><span class="demo-glyph" lang="hi">ी</span><span class="demo-code">U+0940</span></li>
+    </ol>
+    <figcaption>The code points of हिंदी, in the order typed. Switch to the order the glyphs are drawn, and to
+        what copying gives with and without <code>/ActualText</code>.</figcaption>
+</figure>
+
+<h2>Failure One: the Positions Were Thrown Away</h2>
+<p>
+    pdf-lib asks fontkit for that layout, but keeps only the glyph ids. The string it writes into the
+    page is the glyphs one after another, and a PDF viewer moves each glyph along by the width the font
+    file gives it, not by the advance the shaper worked out. Where the two agree, nothing shows. Where
+    they do not (a mark the shaper sets at no advance, or a mark it moves sideways onto its letter), the
+    marks stand in the wrong place and the word drifts apart.
+</p>
+<p>
+    The native engine now asks fontkit for the layout itself and writes it out whole: one string of
+    glyphs (<code>TJ</code>), each moved from where the last one's width leaves off to where the shaper
+    put it, with a rise (<code>Ts</code>) for a mark set above or below the line. Here is the word as
+    it is written into the page now:
+</p>
+<pre><code>/Span &lt;&lt; /ActualText &lt;FEFF0939093F090209260940&gt; &gt;&gt; BDC
+1 0 0 1 48 765.89 Tm
+[ &lt;0001&gt; &lt;0002&gt; &lt;0003&gt; &lt;0004&gt; &lt;0005&gt; ] TJ
+EMC</code></pre>
+<p>
+    One string has another advantage over placing each glyph on its own: a program reading the PDF back
+    measures the word as it is drawn. Placed glyph by glyph, a mark that the font gives a width but the
+    shaper gives none made the word look as long as that, and the space after it disappeared when the
+    text was read back.
+</p>
+
+<h2>Failure Two: Copying Gave the Glyphs, Not the Word</h2>
+<p>
+    When you copy text from a PDF, the viewer does not have the text you typed. It has glyphs, and a
+    table (<code>ToUnicode</code>) mapping each glyph back to characters. Map the glyphs of हिंदी in the
+    order they are drawn and you get <code>िहंदी</code>: the vowel sign before its letter. That is what
+    copying from the native engine's PDFs gave, and what any search over them found.
+</p>
+<p>
+    PDF has an answer for this, the same one browsers and LibreOffice use: wrap the glyphs in a
+    marked-content span that carries the text they stand for, <code>/ActualText</code>. That is the
+    <code>BDC</code> and <code>EMC</code> around the string above. The hex string is the word in UTF-16,
+    in the order it is written. Poppler's <code>pdftotext</code> now reads the line as
+    <code>हिंदी हिन्दी नमस्ते क्षत्रिय श्री कृष्ण</code>, exactly as typed.
+</p>
+
+<div class="callout">
+    <div class="callout-title">Where the span goes matters</div>
+    <p>
+        My first version closed the span after the text object (<code>ET</code>), and Poppler then
+        read every word as standing at the origin of nothing: the words came out bottom-up, one a line.
+        The span now opens and closes inside the text object, where a text position is current.
+    </p>
+</div>
+
+<p>
+    I did not mark right-to-left text the same way. Hebrew and Arabic glyphs are drawn in the order they
+    are seen, each already mapped to its letter, and readers put them back in reading order themselves.
+    Given an <code>/ActualText</code> for a Hebrew word, Poppler reversed it a second time. So Hebrew and
+    Arabic are still drawn as pdf-lib draws them, and the shaped path is for the scripts of South and
+    Southeast Asia and for letters with combining marks.
+</p>
+
+<h2>Failure Three: Some Fonts Drew the Wrong Glyphs</h2>
+<p>
+    Fonts come with two kinds of outlines: TrueType (<code>glyf</code>) and CFF, the PostScript kind,
+    in files that start with <code>OTTO</code>. The native engine subsets a font by default
+    (<code>pdfConfig.subsetFonts</code>), embedding only the glyphs a document uses. For a TrueType font
+    that works. For a CFF font, the subset fontkit writes is not one viewers can read: macOS Preview
+    drew every glyph as another one, and Poppler reported the embedded font as invalid. This was not
+    about Hindi at all. A Latin <code>.otf</code> came out as punctuation.
+</p>
+<p>
+    A CFF font is now embedded whole, labelled as the OpenType file it is. That uncovered a second bug:
+    pdf-lib decides whether a font is CFF by asking fontkit for a <code>cff</code> property that the
+    version it uses does not have, so a whole CFF font was declared as TrueType. And a font embedded
+    whole had widths written only for the glyphs a character maps to directly. A conjunct, a ligature or
+    the left-hand form of ि maps to no single character, so each of those took the PDF's default width
+    of 1000 units. The engine now writes the widths, and the text mapping, for the glyphs it actually
+    draws.
+</p>
+<p>
+    The cost is size. A whole font is the whole file, and a CFF font for Chinese or Japanese is large.
+    If size matters, a TrueType font of the same family keeps the subsetting.
+</p>
+
+<h2>The Bug Found Along the Way: a Shaper That Never Returned</h2>
+<p>
+    Reviewing the change, I tried a Devanagari word longer than a line. The engine breaks such a word
+    between characters, and the process ran out of memory. The cause was not my code: given a vowel sign
+    with no letter of its script before it, fontkit's shaper for Apple's <code>morx</code> tables never
+    finishes. fontkit prefers <code>morx</code> to OpenType when a font has both, as some of the fonts that
+    come with macOS do. A stray vowel sign is not exotic either: it is what you get when a word changes from bold to
+    plain halfway through and each part is shaped on its own.
+</p>
+<p>
+    For such fonts the engine now lays out a vowel sign or virama with no letter of its script before it
+    unshaped, as the glyph the font gives it, and shapes the text around it as usual. A word too long for
+    a line is now cut between the characters a reader sees (grapheme clusters), never inside a syllable.
+</p>
+
+<h2>Reading It Back</h2>
+<p>
+    officeParser reads PDFs too, with pdf.js, and the new PDFs found a gap there. pdf.js treats a glyph
+    whose text holds a combining mark as a diacritic of no width. A conjunct's text holds a virama, so
+    pdf.js measures <code>क्ष</code> as zero wide and puts the space before the word after the conjunct,
+    inside the word's <code>/ActualText</code> span, where officeParser's reader dropped it along with
+    the span's own text. A blank inside a span that lies before the span's glyphs is now read as the
+    space before the word. The reader also composes an ActualText's marks with their letters when
+    <code>pdfParserConfig.normalizeText</code> is on, as pdf.js does for the glyphs' text.
+</p>
+
+<h2>Using It</h2>
+<pre><code>import { readFileSync, writeFileSync } from 'node:fs';
+import { parseOffice } from 'officeparser';
+
+const ast = await parseOffice('report.docx');
+const pdf = await ast.to('pdf', {
+    pdfConfig: {
+        engine: 'native',
+        fallbackFonts: [readFileSync('NotoSansDevanagari-Regular.ttf')],
+    },
+});
+writeFileSync('report.pdf', pdf.value);</code></pre>
+<p>
+    Each character is drawn in the first font that has it, so one Latin font in
+    <code>pdfConfig.fonts</code> and a font for each other script in <code>fallbackFonts</code> covers a document
+    that mixes them. The fonts need the optional peer dependency <code>@pdf-lib/fontkit</code>.
+</p>
+
+<h2>What is Still Not Right</h2>
+<ul>
+    <li>Viewers built on pdf.js build their text from the glyphs, not from <code>/ActualText</code>, so
+        copying there can still put ि before its letter.</li>
+    <li>officeParser's own reader can still lose the space <em>after</em> a conjunct when a Latin word
+        follows it: <code>क्ष end</code> reads back as <code>क्षend</code>. pdf.js gives the conjunct no
+        width, so there is no gap left to find.</li>
+    <li>Arabic and Hebrew marks are drawn where pdf-lib draws them: right for the fonts I tested, but not
+        placed by the font's positioning table.</li>
+</ul>
+<p>
+    None of this was in the line breaking, the justification or the page layout. It was in the three
+    places where text stops being text: when it becomes glyphs, when a viewer turns glyphs back into
+    text, and when a font file is cut down to fit.
+</p>]]></content:encoded>
+    </item>
     <item>
       <title>What is Actually Inside a .docx File? An Architectural Deep Dive</title>
       <link>https://officeparser.harshankur.com/blog/what-is-actually-inside-a-docx.html</link>
@@ -657,6 +1145,15 @@ ET                  % End the text object</code></pre>
         to <code>0.25</code>.
     </p>
 </div>
+
+<figure class="demo demo-spaces" data-demo="spaces" data-runs='[["T",0],["h",-1.2],["i",0.5],["s",-0.2],["i",25],["s",-0.4],["P",25],["D",-1],["F",0.3]]'>
+    <p class="demo-fallback">An interactive version of the line above: move the threshold and see where spaces go in.
+        It needs JavaScript.</p>
+    <figcaption>The glyphs of the <code>TJ</code> line above, each with the gap before it in hundredths of the font
+        size (a dotted gap is kerning that pulls letters together). A space goes in where the gap is at least the
+        threshold times the font size. Raise it past 0.25 and the words run together; lower it near zero and
+        kerning starts splitting them.</figcaption>
+</figure>
 
 <h2>3. Font Encodings: Why Copied Text Comes Out as Gibberish</h2>
 <p>
@@ -1684,6 +2181,13 @@ const { value: chunks } = await ast.to('chunks', {
     familiar recursive splitter with overlap. <code>semantic</code> cuts where the topic shifts, using
     an embedding function that you supply.
 </p>
+
+<figure class="demo demo-chunks-figure" data-demo="chunks" data-text='"3.2 Uptime Credits\nIf monthly uptime falls below 99.9%, the customer is entitled to a 10% credit. Below 99.0%, a 25% credit applies.\n\n| Quarter | Revenue | Operating margin |\n| Q1      | 41,900  | 16.2%            |\n| Q2      | 43,750  | 17.1%            |\n| Q3      | 45,200  | 18.4%            |\n| Q4      | 47,310  | 19.0%            |"' data-chunks='{"90":[["3.2 Uptime Credits","3.2 Uptime Credits",false],["If monthly uptime falls below 99.9%, the customer is entitled to a 10% credit.","3.2 Uptime Credits",false],["Below 99.0%, a 25% credit applies.","3.2 Uptime Credits",false],["| Quarter | Revenue | Operating margin |\n| Q1 | 41,900 | 16.2% |\n| Q2 | 43,750 | 17.1% |","3.2 Uptime Credits",true],["| Quarter | Revenue | Operating margin |\n| Q3 | 45,200 | 18.4% |\n| Q4 | 47,310 | 19.0% |","3.2 Uptime Credits",true]],"120":[["3.2 Uptime Credits","3.2 Uptime Credits",false],["If monthly uptime falls below 99.9%, the customer is entitled to a 10% credit. Below 99.0%, a 25% credit applies.","3.2 Uptime Credits",false],["| Quarter | Revenue | Operating margin |\n| Q1 | 41,900 | 16.2% |\n| Q2 | 43,750 | 17.1% |\n| Q3 | 45,200 | 18.4% |","3.2 Uptime Credits",true],["| Quarter | Revenue | Operating margin |\n| Q4 | 47,310 | 19.0% |","3.2 Uptime Credits",true]],"160":[["3.2 Uptime Credits","3.2 Uptime Credits",false],["If monthly uptime falls below 99.9%, the customer is entitled to a 10% credit. Below 99.0%, a 25% credit applies.","3.2 Uptime Credits",false],["| Quarter | Revenue | Operating margin |\n| Q1 | 41,900 | 16.2% |\n| Q2 | 43,750 | 17.1% |\n| Q3 | 45,200 | 18.4% |\n| Q4 | 47,310 | 19.0% |","3.2 Uptime Credits",true]],"400":[["3.2 Uptime Credits","3.2 Uptime Credits",false],["If monthly uptime falls below 99.9%, the customer is entitled to a 10% credit. Below 99.0%, a 25% credit applies.","3.2 Uptime Credits",false],["| Quarter | Revenue | Operating margin |\n| Q1 | 41,900 | 16.2% |\n| Q2 | 43,750 | 17.1% |\n| Q3 | 45,200 | 18.4% |\n| Q4 | 47,310 | 19.0% |","3.2 Uptime Credits",true]]}'>
+    <p class="demo-fallback">An interactive comparison of the two ways of cutting the document above. It needs JavaScript.</p>
+    <figcaption>The Markdown document above, cut by a window of so many characters over its text, and by
+        officeParser's chunker (its real output for each size, with <code>splitBy: 'heading'</code> and
+        <code>tableSplitStrategy: 'row'</code>). Green chunks are a table's.</figcaption>
+</figure>
 
 <h2>Measure It on Your Own Documents</h2>
 <p>

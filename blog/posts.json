@@ -14,6 +14,33 @@
     ],
     "posts": [
         {
+            "slug": "laying-out-a-page-around-a-floating-frame",
+            "title": "Laying Out a Page From Scratch: Text Around a Floating Frame",
+            "shortTitle": "Text Around a Floating Frame",
+            "category": "architecture",
+            "published": "2026-10-26",
+            "description": "How ODT, Word and RTF each say where a text box stands, how officeParser reads them into one shape, and how its PDF engine sets lines round the box, with an interactive column to try it.",
+            "deck": "A sidebar in a shaded box, text running down its left: three formats store it three ways, and a layout engine that sets lines once from the top of the page has to decide what to do when a box stands over text it has already set."
+        },
+        {
+            "slug": "reading-the-spreadsheet-you-see",
+            "title": "Reading the Spreadsheet You See, Not the One Stored",
+            "shortTitle": "The Spreadsheet You See",
+            "category": "deep-dive",
+            "published": "2026-10-26",
+            "description": "A cell stores 0.19 and shows 19%. What XLSX keeps, how Excel's number formats work, and how officeParser reads both halves of a cell so a CSV keeps the numbers and a PDF prints what the sheet shows.",
+            "deck": "Type 19% into a cell and the file stores 0.19 and a note on how to show it. Which one is the content? Both, and every writer needs a different half."
+        },
+        {
+            "slug": "drawing-hindi-in-a-pdf",
+            "title": "Drawing Hindi in a PDF: Glyph Positions, Conjuncts and /ActualText",
+            "shortTitle": "Drawing Hindi in a PDF",
+            "category": "architecture",
+            "published": "2026-10-26",
+            "description": "Why a Hindi word came apart in officeParser's PDF writer, copied with its letters out of order, or drew the wrong glyphs, and the font and PDF details behind each failure.",
+            "deck": "Hindi broke the native PDF engine in three ways at once. None of them was in the layout code: they were where text becomes glyphs, where glyphs become text again, and where a font is cut down to fit."
+        },
+        {
             "slug": "what-is-actually-inside-a-docx",
             "title": "What is Actually Inside a .docx File? An Architectural Deep Dive",
             "shortTitle": "What is Inside a .docx",
@@ -37,6 +64,7 @@
             "shortTitle": "Why PDF Extraction is Hard",
             "category": "deep-dive",
             "published": "2026-10-04",
+            "updated": "2026-10-26",
             "description": "A PDF has no words, paragraphs, or reading order. Positioned glyphs, missing spaces, font encodings, ligatures, multi-column pages, and the XY-cut that rebuilds reading order.",
             "deck": "PDF describes how a page looks, not what it says. It knows how to paint glyphs at coordinates. Getting text back out means reconstructing what a reader's eye does without being told."
         },
@@ -73,6 +101,7 @@
             "shortTitle": "Chunking for Retrieval",
             "category": "rag",
             "published": "2026-10-04",
+            "updated": "2026-10-26",
             "description": "Why a sliding token window shreds tables and orphans headings, what chunking on document structure fixes, and what officeParser's chunker does and does not do.",
             "deck": "Teams tune embedding models and re-rankers while feeding them chunks that were cut in the wrong places. Here is what a fixed-size splitter does to a real document, and what chunking on the document's structure fixes."
         }

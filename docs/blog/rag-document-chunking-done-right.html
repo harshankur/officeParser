@@ -23,6 +23,7 @@
     <meta property="og:url" content="https://officeparser.harshankur.com/blog/rag-document-chunking-done-right.html">
     <meta property="og:site_name" content="officeParser">
     <meta property="article:published_time" content="2026-10-04">
+    <meta property="article:modified_time" content="2026-10-26">
 
     <!-- Fonts: the site's own copies (docs/fonts), shared with the home page. -->
     <link rel="stylesheet" href="../fonts/fonts.css">
@@ -78,7 +79,7 @@
                     <div>
                         <a href="https://harshankur.com" target="_blank" rel="noopener" class="author-name">Harsh
                             Ankur</a>
-                        <div>Published <time datetime="2026-10-04">4 October 2026</time> · 5 min read</div>
+                        <div>Published <time datetime="2026-10-04">4 October 2026</time>, updated <time datetime="2026-10-26">26 October 2026</time> · 6 min read</div>
                     </div>
                 </div>
             </div>
@@ -264,6 +265,13 @@ const { value: chunks } = await ast.to('chunks', {
     familiar recursive splitter with overlap. <code>semantic</code> cuts where the topic shifts, using
     an embedding function that you supply.
 </p>
+
+<figure class="demo demo-chunks-figure" data-demo="chunks" data-text='"3.2 Uptime Credits\nIf monthly uptime falls below 99.9%, the customer is entitled to a 10% credit. Below 99.0%, a 25% credit applies.\n\n| Quarter | Revenue | Operating margin |\n| Q1      | 41,900  | 16.2%            |\n| Q2      | 43,750  | 17.1%            |\n| Q3      | 45,200  | 18.4%            |\n| Q4      | 47,310  | 19.0%            |"' data-chunks='{"90":[["3.2 Uptime Credits","3.2 Uptime Credits",false],["If monthly uptime falls below 99.9%, the customer is entitled to a 10% credit.","3.2 Uptime Credits",false],["Below 99.0%, a 25% credit applies.","3.2 Uptime Credits",false],["| Quarter | Revenue | Operating margin |\n| Q1 | 41,900 | 16.2% |\n| Q2 | 43,750 | 17.1% |","3.2 Uptime Credits",true],["| Quarter | Revenue | Operating margin |\n| Q3 | 45,200 | 18.4% |\n| Q4 | 47,310 | 19.0% |","3.2 Uptime Credits",true]],"120":[["3.2 Uptime Credits","3.2 Uptime Credits",false],["If monthly uptime falls below 99.9%, the customer is entitled to a 10% credit. Below 99.0%, a 25% credit applies.","3.2 Uptime Credits",false],["| Quarter | Revenue | Operating margin |\n| Q1 | 41,900 | 16.2% |\n| Q2 | 43,750 | 17.1% |\n| Q3 | 45,200 | 18.4% |","3.2 Uptime Credits",true],["| Quarter | Revenue | Operating margin |\n| Q4 | 47,310 | 19.0% |","3.2 Uptime Credits",true]],"160":[["3.2 Uptime Credits","3.2 Uptime Credits",false],["If monthly uptime falls below 99.9%, the customer is entitled to a 10% credit. Below 99.0%, a 25% credit applies.","3.2 Uptime Credits",false],["| Quarter | Revenue | Operating margin |\n| Q1 | 41,900 | 16.2% |\n| Q2 | 43,750 | 17.1% |\n| Q3 | 45,200 | 18.4% |\n| Q4 | 47,310 | 19.0% |","3.2 Uptime Credits",true]],"400":[["3.2 Uptime Credits","3.2 Uptime Credits",false],["If monthly uptime falls below 99.9%, the customer is entitled to a 10% credit. Below 99.0%, a 25% credit applies.","3.2 Uptime Credits",false],["| Quarter | Revenue | Operating margin |\n| Q1 | 41,900 | 16.2% |\n| Q2 | 43,750 | 17.1% |\n| Q3 | 45,200 | 18.4% |\n| Q4 | 47,310 | 19.0% |","3.2 Uptime Credits",true]]}'>
+    <p class="demo-fallback">An interactive comparison of the two ways of cutting the document above. It needs JavaScript.</p>
+    <figcaption>The Markdown document above, cut by a window of so many characters over its text, and by
+        officeParser's chunker (its real output for each size, with <code>splitBy: 'heading'</code> and
+        <code>tableSplitStrategy: 'row'</code>). Green chunks are a table's.</figcaption>
+</figure>
 
 <h2>Measure It on Your Own Documents</h2>
 <p>

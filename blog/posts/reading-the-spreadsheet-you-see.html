@@ -1,0 +1,138 @@
+<p>
+    Type 19% into a spreadsheet cell and save the file. What is in the file is not "19%". It is
+    <code>0.19</code>, and a note elsewhere that says to show it as a percentage. A date is a count of
+    days. Thirty hours is the number 1.25. A row you hid is still there, with a flag on it.
+</p>
+<p>
+    So which is the cell's content: what the file stores, or what the sheet shows? For years officeParser
+    gave the stored value and nothing else, which is right for a CSV and wrong for a printout: a PDF of a
+    budget that says <code>0.19</code> where everyone saw 19% is not the budget. In 8.3.0 a cell carries
+    both, and every writer takes the one its format needs.
+</p>
+
+<h2>What an XLSX Cell Holds</h2>
+<p>
+    I built a small workbook by hand, writing the XML myself so I knew exactly what was in it. One sheet,
+    a label in column A and a value in column B. Here is the percentage, as the sheet stores it:
+</p>
+<pre><code>&lt;c r="B1" s="1"&gt;&lt;v&gt;0.19&lt;/v&gt;&lt;/c&gt;</code></pre>
+<p>
+    The <code>s="1"</code> is the only clue. It points into the workbook's list of cell styles, whose
+    second entry says <code>numFmtId="9"</code>, one of Excel's built-in formats: <code>0%</code>.
+    Formats of your own get numbers from 164 up and their code written out in the styles part:
+</p>
+<pre><code>&lt;numFmt numFmtId="164" formatCode="#,##0.00 [$€-407]"/&gt;
+&lt;numFmt numFmtId="165" formatCode="dd.mm.yyyy"/&gt;
+&lt;numFmt numFmtId="166" formatCode="#,##0.00;(#,##0.00)"/&gt;
+&lt;numFmt numFmtId="169" formatCode="[h]:mm"/&gt;</code></pre>
+<p>
+    A format code is a small language. Sections split by semicolons are for positive numbers, negative
+    numbers and zero, so <code>#,##0.00;(#,##0.00)</code> shows a debt in brackets without its minus
+    sign. <code>[$€-407]</code> is a currency symbol with a locale tag. <code>m</code> is a month, unless
+    it stands next to an hour or a second, when it is a minute. <code>[h]</code> counts hours past a day.
+</p>
+
+<h2>Both Halves of a Cell</h2>
+<p>
+    officeParser reads each cell's stored value into its <code>text</code>, as before, and puts beside it
+    what the sheet shows (<code>shownText</code>), what kind of value it is (<code>valueType</code>), the
+    value in full where the text is something else (<code>value</code>), and the format code
+    (<code>numberFormat</code>). A hidden row's cells are marked <code>hidden</code>.
+</p>
+<pre><code>import { parseOffice } from 'officeparser';
+
+const ast = await parseOffice('report.xlsx');
+const sheet = ast.content.find(node =&gt; node.type === 'sheet');
+for (const row of sheet.children) {
+    for (const cell of row.children) console.log(cell.text, cell.metadata);
+}</code></pre>
+<p>
+    For the value column, that prints (the labels left out):
+</p>
+<pre><code>0.19        { shownText: '19%', valueType: 'number', numberFormat: '0%' }
+120         { shownText: '120.00 €', valueType: 'number', numberFormat: '#,##0.00 [$€-407]' }
+2023-03-15  { shownText: '15.03.2023', valueType: 'date', value: '45000', numberFormat: 'dd.mm.yyyy' }
+-1234.5     { shownText: '(1,234.50)', valueType: 'number', numberFormat: '#,##0.00;(#,##0.00)' }
+06:00:00    { shownText: '6:00', valueType: 'time', value: '0.25', numberFormat: 'h:mm' }
+10.456      { shownText: '10.5 kg', valueType: 'number', numberFormat: '0.0 "kg"', hidden: true }
+30:00:00    { shownText: '30:00', valueType: 'time', value: '1.25', numberFormat: '[h]:mm' }
+1E5         { valueType: 'text' }</code></pre>
+<p>
+    A date's <code>text</code> is the ISO date, which every program reads the same way, and its
+    <code>value</code> keeps the day count (45000 is 15 March 2023 in Excel's 1900 date system). The last
+    cell is the reason <code>valueType</code> exists: <code>1E5</code> was typed as text, a part number
+    perhaps, and a writer that guessed from the text alone would turn it into 100000.
+</p>
+<p>
+    Switch between the two halves of the same sheet, and show the hidden row:
+</p>
+<figure class="demo demo-cells" data-demo="cells">
+    <table>
+        <thead>
+            <tr><th>Cell</th><th>Stored</th><th>Number format</th><th>Shown</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>Growth</td><td>0.19</td><td>0%</td><td>19%</td></tr>
+            <tr><td>Price</td><td>120</td><td>#,##0.00 [$€-407]</td><td>120.00 €</td></tr>
+            <tr><td>Invoice date</td><td>45000</td><td>dd.mm.yyyy</td><td>15.03.2023</td></tr>
+            <tr><td>Balance</td><td>-1234.5</td><td>#,##0.00;(#,##0.00)</td><td>(1,234.50)</td></tr>
+            <tr><td>Start</td><td>0.25</td><td>h:mm</td><td>6:00</td></tr>
+            <tr data-hidden=""><td>Weight (hidden row)</td><td>10.456</td><td>0.0 "kg"</td><td>10.5 kg</td></tr>
+            <tr><td>Shift</td><td>1.25</td><td>[h]:mm</td><td>30:00</td></tr>
+            <tr><td>Code</td><td>1E5</td><td>(text)</td><td>1E5</td></tr>
+        </tbody>
+    </table>
+    <figcaption>The workbook's value column: what the file stores, its number format, and what a
+        spreadsheet shows.</figcaption>
+</figure>
+
+<h2>Each Writer Takes Its Half</h2>
+<p>
+    Having both lets every output take the half its format is for:
+</p>
+<ul>
+    <li><strong>CSV, text and chunks</strong> keep the stored values. A CSV of the sheet starts
+        <code>Growth,0.19</code>: a number another program can add up, not a string with a percent sign.</li>
+    <li><strong>PDF</strong> prints what the sheet shows (<code>19%</code>, <code>(1,234.50)</code>,
+        <code>30:00</code>) and leaves the hidden row out, as a printout does.
+        <code>pdfConfig.printHidden</code> prints it.</li>
+    <li><strong>XLSX</strong> output writes each format code as it was, so the value and its look survive
+        a round trip.</li>
+    <li><strong>ODS</strong> output writes the value as ODS holds one (a percentage, a currency amount, a
+        date, a time of <code>PT30H0M0S</code>) with a number style built from the format code, and the
+        shown text inside the cell, as ODS keeps it.</li>
+</ul>
+<pre><code>const pdf = await ast.to('pdf', { pdfConfig: { engine: 'native' } });                    // as seen
+const all = await ast.to('pdf', { pdfConfig: { engine: 'native', printHidden: true } }); // hidden rows too</code></pre>
+
+<h2>Writing the Shown Text</h2>
+<p>
+    Excel's format codes are not a standard any library speaks, but officeParser already had an engine
+    for something close: the template engine formats numbers and dates with Word's pictures
+    (<code>#,##0.00</code>, <code>dd.MM.yyyy</code>). The spreadsheet reader turns what only Excel's codes
+    hold into that language first: it picks the section for the value's sign, turns
+    <code>[$€-407]</code> into its symbol, drops colours (<code>[Red]</code>) and locale tags, reads
+    <code>_)</code> padding and <code>*</code> fill as a space, divides by a thousand for each trailing
+    comma (<code>#,##0,"K"</code>), and decides whether each <code>m</code> is a month or a minute. Elapsed
+    time (<code>[h]:mm</code>, <code>[mm]:ss</code>) it writes itself, which is how 1.25 days becomes
+    <code>30:00</code> and not 6:00 on the next day.
+</p>
+
+<h2>What It Will Not Guess</h2>
+<p>
+    Where a code says something officeParser cannot write the way Excel would, the cell gets no shown
+    text and every output uses the stored value. That covers General, scientific notation
+    (<code>0.00E+00</code>), fractions (<code># ?/?</code>), conditions (<code>[&gt;=100]</code>) and text
+    sections. Excel's built-in date formats are left alone too, because they follow the date order of the
+    machine that opens the file: what one reader sees as 3/15/2023 another sees as 15.03.2023, so the
+    unambiguous ISO date is the better guess.
+</p>
+<p>
+    One more limit is easy to miss: the shown text uses a full stop for decimals and a comma for
+    thousands. A format code says where the separators go, not which characters they are. Excel takes
+    those from the machine's language, so a German Excel shows the price above as <code>120,00 €</code>.
+</p>
+<p>
+    A spreadsheet is a table of numbers and a set of instructions for showing them. Read as one or the
+    other, it is half a document. Read as both, a CSV can add it up and a PDF can print it as it was.
+</p>

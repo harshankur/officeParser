@@ -1,0 +1,136 @@
+<p>
+    Reports and newsletters put boxes beside their text: a sidebar, a pull quote, a note in a shaded
+    frame on the right while the paragraph runs down its left. Word calls it a text box, LibreOffice a
+    frame. Until 8.3.0, officeParser read the box's text and put it in the flow, where it was drawn as
+    one more paragraph. ODT's was worse: its text was glued to the paragraph it stood in, so the paragraph
+    read <code>Text in a floating frame on the right.A paragraph beside a floating text frame</code>.
+</p>
+<p>
+    Putting the box back where it stands took two halves: reading where each format says the box is, and
+    teaching the native PDF engine to set lines of text round it. This post is about both.
+</p>
+
+<h2>Three Formats, One Box</h2>
+<p>
+    I made one document with one frame (2.2 inches wide, 1 inch tall, 4.2 inches from the left of the
+    text column, at the top of its paragraph, with text running beside it) and saved it from LibreOffice
+    as ODT, DOCX and RTF. Each says the same thing in its own units and its own words.
+</p>
+<p>
+    <strong>ODT</strong> writes the frame inside the paragraph it is anchored to, in inches, with how
+    text goes round it in a graphic style:
+</p>
+<pre><code>&lt;text:p&gt;&lt;draw:frame text:anchor-type="paragraph" svg:x="4.2in" svg:y="0in"
+        svg:width="2.2004in" svg:height="1.0004in" draw:style-name="gr1"&gt;
+    &lt;draw:text-box&gt;&lt;text:p&gt;Text in a floating frame on the right.&lt;/text:p&gt;&lt;/draw:text-box&gt;
+&lt;/draw:frame&gt;A paragraph beside a floating text frame. ...&lt;/text:p&gt;
+
+&lt;style:graphic-properties style:wrap="parallel" style:horizontal-pos="from-left"
+        style:horizontal-rel="paragraph" style:vertical-rel="paragraph" .../&gt;</code></pre>
+<p>
+    <strong>Word</strong> puts a drawing in a run of the paragraph, measured in EMUs (914,400 to the inch,
+    12,700 to the point), with what each offset is measured from:
+</p>
+<pre><code>&lt;wp:anchor distT="0" distB="0" distL="0" distR="0" ...&gt;
+  &lt;wp:positionH relativeFrom="column"&gt;&lt;wp:posOffset&gt;3840480&lt;/wp:posOffset&gt;&lt;/wp:positionH&gt;
+  &lt;wp:positionV relativeFrom="paragraph"&gt;&lt;wp:posOffset&gt;635&lt;/wp:posOffset&gt;&lt;/wp:positionV&gt;
+  &lt;wp:extent cx="2011680" cy="914400"/&gt;
+  &lt;wp:wrapSquare wrapText="bothSides"/&gt;
+  ... &lt;wps:txbx&gt;&lt;w:txbxContent&gt; the box's paragraphs &lt;/w:txbxContent&gt;&lt;/wps:txbx&gt;</code></pre>
+<p>
+    <strong>RTF</strong> writes a shape in twips (twenty to the point), with its wrapping as a number and
+    its colours as integers in blue, green, red order:
+</p>
+<pre><code>{\shp{\*\shpinst\shpleft6048\shptop0\shpright9215\shpbottom1439\shpwr2
+  {\sp{\sn fillColor}{\sv 13606770}}{\sp{\sn lineColor}{\sv 10773812}} ...
+  {\shptxt Text in a floating frame on the right.\par}}}</code></pre>
+<p>
+    3,840,480 EMUs, 6,048 twips and 4.2 inches are all 302.4 points. That agreement is the whole job of
+    the readers: each turns its format's words into one shape, a <code>drawing</code> node holding the
+    box's paragraphs, with <code>ShapeMetadata.float</code> saying where it stands. Here is what each of
+    the three files reads as:
+</p>
+<pre><code>import { parseOffice } from 'officeparser';
+
+const ast = await parseOffice('layout.docx');
+const frame = ast.content.find(node =&gt; node.type === 'drawing' &amp;&amp; node.metadata?.float);
+console.log(frame.metadata.float);
+// {
+//   horizontalFrom: 'column', verticalFrom: 'paragraph',
+//   x: 302.4, y: 0.05, width: 158.4, height: 72, wrap: 'beside'
+// }</code></pre>
+<p>
+    The ODT gives <code>x: 302.4</code> too (its sizes a fraction larger, as LibreOffice wrote them), and
+    the RTF the same again, with the 9-point gap its shapes keep from text by default. The
+    <code>drawing</code> node comes just <em>before</em> the paragraph it is anchored to, whichever format
+    it came from. That order is what lets a writer place the box before it lays out the lines that go
+    round it. Writers that have no place to put a box (Markdown, plain text, a spreadsheet) write its
+    paragraphs where it stands, so no text is lost; with <code>ignorePageGeometry</code>, the box is read
+    as it was before.
+</p>
+
+<h2>Setting Lines Round a Box</h2>
+<p>
+    The native engine lays text out one line at a time, from the top of the page down. A box changes that
+    in one place: before a line's first word is placed, the engine looks for boxes on the page that
+    overlap the band the line will take, and works out how much room is left beside each.
+</p>
+<ul>
+    <li>Text takes the side with more room. A box near the right edge leaves the left for the text.</li>
+    <li>If that room is less than 36 points, or a third of the line, the line moves down below the box
+        instead of squeezing a word or two into a sliver.</li>
+    <li>A box set to keep text above and below it (Word's <code>wrapTopAndBottom</code>, ODT's
+        <code>style:wrap="none"</code>) sends the line below it whatever the room.</li>
+    <li>A box set in front of or behind the text (Word's <code>wrapNone</code>) is drawn and the lines
+        ignore it, as Word draws them.</li>
+</ul>
+<p>
+    Try it. Drag the box, or move it with the arrow keys, and change how text goes round it. This uses the
+    same rules as the engine, and shows the <code>float</code> a reader would give for the box where you
+    leave it:
+</p>
+<figure class="demo demo-wrap" data-demo="wrap">
+    <p class="demo-fallback">An interactive column of text with a frame you can drag. It needs JavaScript.</p>
+    <figcaption>A column of text 468 points wide (a Letter page's column; 300 on a phone), and a box you
+        can move.</figcaption>
+</figure>
+
+<h2>What a Box Cannot Do</h2>
+<p>
+    Text that is already on the page cannot go round anything. Most boxes are measured from their own
+    paragraph, so the engine meets the box just before the lines that go round it. But a box can be
+    measured from the page or the margin, or placed above its paragraph with a negative offset, and then
+    it stands over lines the engine has already set. My first version simply drew it there, over them.
+</p>
+<p>
+    A review round I run before every release found that, and two more of the same family. A box whose
+    text needed more than a page lost what did not fit, because a box belongs to one page. And a table
+    starting just above a box grew down through it, because blocks other than text only checked for a
+    box where they <em>start</em>. Now:
+</p>
+<ul>
+    <li>A box that would stand over text already laid out stands at its paragraph instead, so the text
+        after it goes round it and nothing is hidden.</li>
+    <li>A box whose text is more than a page holds is set in the flow, all of it.</li>
+    <li>A table, a picture, code or a chart that would reach a box below it is measured first and starts
+        below the box.</li>
+    <li>Footnotes at the foot of the page are not set round boxes.</li>
+</ul>
+<p>
+    Each of these trades a little fidelity for never losing text. A word processor would reflow the
+    page so the earlier lines go round the box as well. A layout engine that sets lines once, top to
+    bottom, cannot, and the honest answer is to move the box rather than cover what is there.
+</p>
+
+<h2>Where It Falls Short</h2>
+<ul>
+    <li>Text goes down one side of a box. Word's <code>wrapText="bothSides"</code> can run text down both
+        sides of a box in the middle of a column; officeParser uses the wider side.</li>
+    <li>A box aligned to the middle or bottom of its page or paragraph is placed at the top.</li>
+    <li>Pictures floating beside text (as opposed to text boxes) are still drawn in the flow.</li>
+</ul>
+<p>
+    The box above is the same document all the way through: read from ODT, Word or RTF, it comes out of
+    the native engine with its paragraph running down its left, and as a paragraph of its own in formats
+    that have no page to stand it on.
+</p>
