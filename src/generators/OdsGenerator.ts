@@ -283,8 +283,8 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
 /**
  * An Excel number format code as an ODF number style's parts, where it is one ODF can say: one section (no
  * colour, condition, percent or text placeholder), words before and after (quoted, escaped, or plain
- * spaces and signs), and a number (`#,##0.00`), a number in scientific notation (`0.00E+00`) or a
- * fraction (`# ?/?`) between them. Undefined for any other code.
+ * spaces and signs), and a number (`#,##0.00`, scaled by a thousand for each comma ending its integer part),
+ * a number in scientific notation (`0.00E+00`) or a fraction (`# ?/?`) between them. Undefined for any other code.
  */
 export function odfNumberParts(code: string): string | undefined {
     if (code.length > 255 || /[;[%@*_]/.test(code.replace(/"[^"]*"|\\./g, ''))) return undefined;
@@ -300,13 +300,18 @@ export function odfNumberParts(code: string): string | undefined {
     let after = '';
     for (let m: RegExpExecArray | null; (m = /^(?:"([^"]*)"|\\(.)|([ \-+$€£¥():/]))/.exec(rest));) { after += m[1] ?? m[2] ?? m[3]; rest = rest.slice(m[0].length); }
     if (rest) return undefined;
-    const [whole, fraction = ''] = body[1].split('.');
+    const [written, fraction = ''] = body[1].split('.');
+    // (Commas ending the integer part scale the number by a thousand each, `#,##0,,"M"` showing 1234567 as 1M:
+    // they were read as grouping, and it showed 1,234,567M.)
+    const scaling = /,+$/.exec(written)?.[0].length ?? 0, whole = written.slice(0, written.length - scaling);
+    if (scaling && (body[2] || body[3])) return undefined;
     const decimals = fraction.length, minDecimals = (fraction.match(/0/g) || []).length;
     const minInteger = (whole.match(/0/g) || []).length;
     const grouping = whole.includes(',') ? ' number:grouping="true"' : '';
+    const factor = scaling ? ` number:display-factor="${1000 ** Math.min(scaling, 5)}"` : '';
     if (body[2]) number = `<number:scientific-number number:decimal-places="${decimals}" number:min-decimal-places="${minDecimals}" number:min-integer-digits="${Math.max(1, minInteger)}" number:min-exponent-digits="${body[2].length - 2}"${grouping}/>`;
     else if (body[3]) number = `<number:fraction number:min-integer-digits="${minInteger}" number:min-numerator-digits="${body[3].length}" ${/^\d+$/.test(body[4]) ? `number:denominator-value="${body[4]}"` : `number:min-denominator-digits="${body[4].length}"`}${grouping}/>`;
-    else number = `<number:number number:decimal-places="${decimals}" number:min-decimal-places="${minDecimals}" number:min-integer-digits="${minInteger}"${grouping}/>`;
+    else number = `<number:number number:decimal-places="${decimals}" number:min-decimal-places="${minDecimals}" number:min-integer-digits="${minInteger}"${grouping}${factor}/>`;
     words.push(literal(before), number, literal(after));
     return words.join('');
 }

@@ -590,13 +590,29 @@ function xyCut(lines: PdfLine[], medianH: number, gutterUnit: number, out: PdfLi
     if (lines.length <= 1 || depth > 40) { if (lines.length) out.push(lines); return; }
 
     const h = bestHorizontalGap(lines);
-    const v = bestVerticalGutter(lines);
+    let v = bestVerticalGutter(lines);
     const H_MIN = 0.6 * medianH;
     const V_MIN = Math.max(12, 1.5 * gutterUnit);
 
     const hOk = h && h.gap >= H_MIN;
     // (Or narrower where it is a column gutter the lines were cut at: see columnGutters.)
-    const vOk = v && (v.gap >= V_MIN || (v.gap >= 4 && lines.some(l => l.gutter !== undefined && Math.abs(l.gutter - v.at) <= v.gap / 2 + 0.5)));
+    let vOk = v && (v.gap >= V_MIN || (v.gap >= 4 && lines.some(l => l.gutter !== undefined && Math.abs(l.gutter - v!.at) <= v!.gap / 2 + 0.5)));
+    // A column gutter the lines were cut at that a line or two run into (one set past its column's margin, an
+    // overfull URL), with no empty strip down the block: the cut still, each line on the side holding most of
+    // it. The page was read across its columns, line by line.
+    let byMiddle = false;
+    if (!vOk) {
+        const cutAt = new Map<number, number>();
+        for (const l of lines) if (l.gutter !== undefined) cutAt.set(l.gutter, (cutAt.get(l.gutter) ?? 0) + 1);
+        let best: number | undefined, count = 0;
+        for (const [g, n] of cutAt) if (n > count) { best = g; count = n; }
+        if (best !== undefined && count >= 4) {
+            const g = best;
+            const across = lines.filter(l => l.x < g - 0.5 && l.x + l.width > g + 0.5).length;
+            const left = lines.filter(l => l.x + l.width / 2 < g).length;
+            if (across <= Math.max(1, 0.1 * lines.length) && left >= 2 && lines.length - left >= 2) { v = { gap: V_MIN, at: g }; vOk = true; byMiddle = true; }
+        }
+    }
 
     // Prefer a horizontal band split; only take a vertical gutter when it is clearly the stronger cut
     // and no adequate horizontal split exists, so single-column text is never carved into columns.
@@ -606,8 +622,12 @@ function xyCut(lines: PdfLine[], medianH: number, gutterUnit: number, out: PdfLi
         if (top.length && bottom.length) { xyCut(top, medianH, gutterUnit, out, depth + 1); xyCut(bottom, medianH, gutterUnit, out, depth + 1); return; }
     }
     if (vOk) {
-        const left = lines.filter(l => l.x + l.width <= v!.at + 0.1);
-        const right = lines.filter(l => l.x + l.width > v!.at + 0.1);
+        const onLeft = (l: PdfLine) => byMiddle ? l.x + l.width / 2 < v!.at : l.x + l.width <= v!.at + 0.1;
+        // (A line across the gutter is its two columns' text where they share a baseline, one overprinting the
+        // other: each of its fragments goes to the side holding most of it.)
+        const sides = byMiddle ? lines.flatMap(l => l.x < v!.at - 0.5 && l.x + l.width > v!.at + 0.5 ? splitLineAt(l, v!.at) : [l]) : lines;
+        const left = sides.filter(onLeft);
+        const right = sides.filter(l => !onLeft(l));
         if (left.length && right.length) {
             const rtl = lines.filter(l => l.dir === 'rtl').length * 2 > lines.length;
             const first = rtl ? right : left;
@@ -618,6 +638,24 @@ function xyCut(lines: PdfLine[], medianH: number, gutterUnit: number, out: PdfLi
         }
     }
     out.push(lines);
+}
+
+/**
+ * A line's fragments either side of `x` (each by its middle), as a line each, each ending at `x` where it runs
+ * past it (a line set past its column's margin reached it: its overflow widened its column, and every other
+ * line of it read as short, a paragraph's end); the line itself where all are on one side.
+ */
+function splitLineAt(line: PdfLine, x: number): PdfLine[] {
+    const left = line.fragments.filter(f => f.bounds.x + f.bounds.width / 2 < x), right = line.fragments.filter(f => f.bounds.x + f.bounds.width / 2 >= x);
+    if (!left.length || !right.length) return [line];
+    return [left, right].map((fragments, side) => {
+        let from = Infinity, to = -Infinity;
+        for (const f of fragments) { from = Math.min(from, f.bounds.x); to = Math.max(to, f.bounds.x + f.bounds.width); }
+        if (side === 0) to = Math.min(to, x); else from = Math.max(from, x);
+        const visible = fragments.map(f => f.text).join('').trimEnd();
+        const { gutter: _gutter, ...rest } = line;
+        return { ...rest, fragments, x: from, width: to - from, endsWithHyphen: /[-­]$/.test(visible) };
+    });
 }
 
 /** Largest empty horizontal band; `at` is the y at which to split (bottom edge of the upper part). */

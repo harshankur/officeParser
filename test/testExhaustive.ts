@@ -5038,6 +5038,11 @@ async function testTitleAndEvenPagesAsWordShows(): Promise<void> {
     assert.deepStrictEqual(await texFurniture('\\documentclass{article}\\usepackage{fancyhdr}\\fancypagestyle{main}{\\fancyhf{}\\fancyhead[L]{MAIN}}\\pagestyle{main}\\begin{document}Body.\\end{document}'), ['undefineddefault:MAIN'], 'a LaTeX page style set is read');
     assert.deepStrictEqual(await texFurniture('\\documentclass{article}\\usepackage{fancyhdr}\\pagestyle{fancy}\\fancyhead[L]{FANCY}\\fancypagestyle{plain}{\\fancyhf{}\\fancyhead[L]{PLAIN}}\\begin{document}Body.\\end{document}'), ['undefineddefault:FANCY'], 'a LaTeX page style only defined is not the pages\'');
     assert.deepStrictEqual(await texFurniture('\\documentclass{article}\\usepackage{fancyhdr}\\pagestyle{fancy}\\fancyhead[L]{\\ifodd\\value{page} {ODD}\\else {EVEN}\\fi}\\begin{document}Body.\\end{document}'), ['undefineddefault:ODD', 'undefinedeven:EVEN'], 'a LaTeX field of odd and even pages is read as their parts');
+    assert.deepStrictEqual(await texFurniture('\\documentclass{article}\\usepackage{fancyhdr}\\pagestyle{fancy}\\fancyhead[L]{\\ifodd\\value{page}\\else {E{V}EN}\\fi}\\fancyhead[R]{\\ifnum\\value{page}=1 {FIRST}\\fi}\\begin{document}Body.\\end{document}'), ['undefinedeven:EVEN', 'undefinedfirst:FIRST'], 'LaTeX fields of even pages and of the first page, braces inside, are read as theirs');
+    // (A field of a long run of branches with no end is read in linear time: two open-ended branches took its square.)
+    const branchStarted = Date.now();
+    await texFurniture(`\\documentclass{article}\\usepackage{fancyhdr}\\pagestyle{fancy}\\fancyhead[L]{\\ifodd\\value{page}{a}${'\\else{a}'.repeat(40_000)}}\\begin{document}Body.\\end{document}`);
+    assert.ok(Date.now() - branchStarted < 5_000, `a long field of page branches is read quickly; took ${Date.now() - branchStarted}ms`);
 
     // A part a thousand sections refer to is read once, a node where a section's part changes; sections alternating
     // two master pages share their parts' blocks (each read again for each section took gigabytes).
@@ -5518,6 +5523,15 @@ async function testNativePdfSvgPictures(): Promise<void> {
     assert.ok(/50 0 0 50 0 25 cm/.test(fitted.streams), 'a picture is fitted to its box keeping its aspect');
     const marked = await drawn('<line x1="0" y1="10" x2="100" y2="10" stroke="black" marker-end="url(#m)"/>');
     assert.ok(marked.messages.some(m => /markers/.test(m)), `markers are named; got ${JSON.stringify(marked.messages)}`);
+    // A label's halo (`paint-order: stroke`) is painted under its letters, its fill after it; a fill and stroke in
+    // their own order is one pass, the fill under. (The halo covered the letters.)
+    const halo = (await drawn('<text x="5" y="50" fill="black" stroke="white" stroke-width="4" paint-order="stroke">Halo</text>')).streams;
+    assert.ok(/1 Tr[\s\S]*0 Tr/.test(halo) && !/2 Tr/.test(halo), 'a halo is stroked first, then filled');
+    assert.ok(/2 Tr/.test((await drawn('<text x="5" y="50" fill="black" stroke="white" stroke-width="4">Plain</text>')).streams), 'text filled and stroked is one pass, the fill under');
+    // A selector of a long run of blanks is read in linear time (a pattern around `>` took the square of the run).
+    const blankStarted = Date.now();
+    await drawn(`<style>a${' '.repeat(100_000)}b{fill:red}</style><rect width="10" height="10"/>`);
+    assert.ok(Date.now() - blankStarted < 5_000, `a selector of a long run of blanks is read quickly; took ${Date.now() - blankStarted}ms`);
 }
 
 /**
@@ -5769,7 +5783,9 @@ async function testPdfRuledTables(): Promise<void> {
         const blocks = (await readText(file)).split('\n').filter(t => t.trim());
         return { blocks, apart: blocks.filter(t => !/^P\d+\./.test(t)), joined: blocks.filter(t => (t.match(/\bP\d+\./g) || []).length > 1) };
     };
-    for (const [file, pageBreaks] of [['indented_quote_libreoffice.pdf', 0], ['text_beside_picture_libreoffice.pdf', 0], ['ragged_prose_libreoffice.pdf', 3], ['two_columns_narrow_latex.pdf', 5]] as const) {
+    // (One line of a two-column page set past its column's margin into the gutter, an overfull URL, keeps it read
+    // column by column.)
+    for (const [file, pageBreaks] of [['indented_quote_libreoffice.pdf', 0], ['text_beside_picture_libreoffice.pdf', 0], ['ragged_prose_libreoffice.pdf', 3], ['two_columns_narrow_latex.pdf', 5], ['two_columns_overfull_latex.pdf', 5]] as const) {
         const read = await authored(file);
         // (A paragraph a page break cuts reads as two.)
         assert.ok(read.apart.length <= pageBreaks && !read.joined.length, `${file}: each paragraph is read whole; got ${read.apart.length} pieces and ${read.joined.length} joined: ${JSON.stringify([...read.apart, ...read.joined].slice(0, 4))}`);
@@ -6403,6 +6419,10 @@ async function testSpreadsheetWriters(): Promise<void> {
     const odsHeldXlsx = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(odsHeldAst, 'xlsx')).value as Uint8Array))['xl/worksheets/sheet1.xml']);
     for (const held of ['<v>10.456</v>', '<v>123456</v>', '<v>45000.5</v>', '<v>1.25</v>']) assert.ok(odsHeldXlsx.includes(held), `XLSX output of an ODS writes the value it holds (${held}); got ${odsHeldXlsx.slice(0, 1500)}`);
     assert.ok(/t="b"[^>]*><v>1<\/v>/.test(odsHeldXlsx) && /t="e"/.test(odsHeldXlsx), 'XLSX output of an ODS writes a truth value and an error as such');
+    // A format whose integer part ends in commas shows the number scaled by a thousand for each (`#,##0,,"M"`: 1M).
+    const scaled = { type: 'xlsx', metadata: {}, attachments: [], content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [{ type: 'row', children: [{ type: 'cell', text: '1234567', children: [{ type: 'text', text: '1234567' }], metadata: { row: 0, col: 0, valueType: 'number', numberFormat: '#,##0,,"M"', shownText: '1M' } }] }] }] } as any;
+    const scaledOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(scaled, 'ods')).value as Uint8Array))['content.xml']);
+    assert.ok(/number:display-factor="1000000"/.test(scaledOds), `ODS: a format's scaling commas are a display factor; got ${scaledOds.match(/<number:number-style[\s\S]*?<\/number:number-style>/)?.[0]}`);
 
     // A cell onNode gives text for is that text alone: the value it replaced is not written.
     const redacted = await OfficeGenerator.generate(odsHeldAst, 'xlsx', { onNode: (n: OfficeContentNode) => n.type === 'cell' ? 'REDACTED' : undefined } as any);

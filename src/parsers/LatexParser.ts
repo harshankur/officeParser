@@ -4189,10 +4189,7 @@ class LatexReader {
                 if (!raw || !raw.replace(/\\thepage|\\hfill|\s/g, '')) continue;
                 // (On odd pages alone, `\\ifodd\\value{page} {...}\\fi`, the pages' own where even pages have theirs;
                 // and both, `\\ifodd\\value{page} {...}\\else {...}\\fi`: they were read as text, "page" and all.)
-                const both = /^\s*\\ifodd\\value\{page\} ?\{([\s\S]*)\}\\else ?\{([\s\S]*)\}\\fi\s*$/.exec(raw);
-                const first = /^\s*\\ifnum\\value\{page\}=1 ?\{([\s\S]*)\}\\fi\s*$/.exec(raw), even = /^\s*\\ifodd\\value\{page\}\\else ?\{([\s\S]*)\}\\fi\s*$/.exec(raw);
-                const odd = /^\s*\\ifodd\\value\{page\} ?\{([\s\S]*)\}\\fi\s*$/.exec(raw);
-                const kinds: [string, string][] = both ? [['default', both[1]], ['even', both[2]]] : first ? [['first', first[1]]] : even ? [['even', even[1]]] : odd ? [['default', odd[1]]] : [['default', raw]];
+                const kinds: [string, string][] = pageCondition(raw) ?? [['default', raw]];
                 const align: TextAlignment = pos === 'C' ? 'center' : pos === 'R' ? 'right' : 'left';
                 for (const [kind, text] of kinds) {
                     const blocks = this.parseBlocksOf(text);
@@ -4214,6 +4211,48 @@ class LatexReader {
 }
 
 // ── project loading ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A header field shown on some pages, as the LaTeX generator writes one, as the parts it is: the first page's
+ * (`\\ifnum\\value{page}=1 {X}\\fi`), the odd pages' (`\\ifodd\\value{page} {X}\\fi`, the pages' own where even
+ * pages have theirs), the even pages' (`\\ifodd\\value{page}\\else {Y}\\fi`) or both (`... {X}\\else {Y}\\fi`);
+ * undefined for any other field. Read in one pass, each branch a group of balanced braces: patterns of two
+ * open-ended branches were tried at each `}\\else{` of a long field, in time of its square.
+ */
+function pageCondition(raw: string): [string, string][] | undefined {
+    let at = 0;
+    const blanks = () => { while (at < raw.length && /\s/.test(raw[at])) at++; };
+    const word = (w: string) => { if (raw.startsWith(w, at)) { at += w.length; return true; } return false; };
+    // A group of balanced braces at `at` (a brace a backslash escapes is no brace), its inside; undefined where there is none.
+    const group = (): string | undefined => {
+        if (raw[at] !== '{') return undefined;
+        let depth = 0;
+        for (let i = at; i < raw.length; i++) {
+            const c = raw[i];
+            if (c === '\\') { i++; continue; }
+            if (c === '{') depth++;
+            else if (c === '}' && --depth === 0) { const inside = raw.slice(at + 1, i); at = i + 1; return inside; }
+        }
+        return undefined;
+    };
+    blanks();
+    const first = word('\\ifnum\\value{page}=1');
+    if (!first && !word('\\ifodd\\value{page}')) return undefined;
+    if (raw[at] === ' ') at++;
+    const shown = raw[at] === '{' ? group() : undefined;
+    if (raw[at] === '{' || (shown === undefined && raw[at] !== '\\')) return undefined;
+    let other: string | undefined;
+    if (!first && word('\\else')) {
+        if (raw[at] === ' ') at++;
+        other = group();
+        if (other === undefined) return undefined;
+    }
+    if (!word('\\fi')) return undefined;
+    blanks();
+    if (at < raw.length || (shown === undefined && other === undefined)) return undefined;
+    if (first) return shown === undefined ? undefined : [['first', shown]];
+    return [...(shown !== undefined ? [['default', shown] as [string, string]] : []), ...(other !== undefined ? [['even', other] as [string, string]] : [])];
+}
 
 /**
  * The legacy encoding a `.tex` file declares, as a WHATWG encoding label: `inputenc`'s option (the

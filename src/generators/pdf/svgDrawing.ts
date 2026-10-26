@@ -85,12 +85,14 @@ interface Style {
     fillRule: string; lineCap: string; lineJoin: string; dash: string; fontSize: number; fontFamily: string;
     fontWeight: string; fontStyle: string; textAnchor: string; color: string; visibility: string;
     miterLimit: number; dominantBaseline: string;
+    /** Whether the stroke is painted before the fill (`paint-order: stroke`: a label's halo under its letters). */
+    strokeFirst: boolean;
 }
 
 const INITIAL_STYLE: Style = {
     fill: 'black', stroke: 'none', strokeWidth: 1, fillOpacity: 1, strokeOpacity: 1, opacity: 1, fillRule: 'nonzero',
     lineCap: 'butt', lineJoin: 'miter', dash: 'none', fontSize: 16, fontFamily: 'sans-serif', fontWeight: 'normal',
-    fontStyle: 'normal', textAnchor: 'start', color: 'black', visibility: 'visible', miterLimit: 4, dominantBaseline: 'auto',
+    fontStyle: 'normal', textAnchor: 'start', color: 'black', visibility: 'visible', miterLimit: 4, dominantBaseline: 'auto', strokeFirst: false,
 };
 
 /** How far below the text's y its baseline is, in ems, for each `dominant-baseline` (the y is the text's middle, its top, ...). */
@@ -103,7 +105,7 @@ const BASELINE_SHIFT: Record<string, number> = Object.assign(Object.create(null)
 const PROPERTIES = new Set(['fill', 'stroke', 'stroke-width', 'fill-opacity', 'stroke-opacity', 'opacity', 'fill-rule',
     'stroke-linecap', 'stroke-linejoin', 'stroke-dasharray', 'font-size', 'font-family', 'font-weight', 'font-style',
     'text-anchor', 'color', 'visibility', 'display', 'stop-color', 'stop-opacity', 'font', 'filter', 'mask', 'clip-path',
-    'stroke-miterlimit', 'dominant-baseline', 'alignment-baseline', 'marker', 'marker-start', 'marker-mid', 'marker-end']);
+    'stroke-miterlimit', 'dominant-baseline', 'alignment-baseline', 'marker', 'marker-start', 'marker-mid', 'marker-end', 'paint-order']);
 
 const localName = (el: Element): string => (el.localName || el.tagName || '').replace(/^.*:/, '');
 const childElements = (el: Element): Element[] => {
@@ -271,7 +273,10 @@ function readRules(css: string): { rules: Rule[]; unread: number } {
         if (!decls.size && !important.size) continue;
         for (const selector of prelude.split(',')) {
             if (/:(?:hover|active|focus|focus-within|focus-visible|visited|target)\b/.test(selector)) continue;
-            const tokens = selector.trim().replace(/\s*>\s*/g, ' > ').split(/\s+/).filter(Boolean);
+            // (Split once on blanks, then at each `>`: a pattern of blanks around `>` was tried at each blank of a
+            // long run, in time of its square.)
+            const tokens: string[] = [];
+            for (const word of selector.split(/\s+/)) word.split('>').forEach((part, k) => { if (k) tokens.push('>'); if (part) tokens.push(part); });
             const compounds: Compound[] = [], links: boolean[] = [];
             let ok = tokens.length > 0 && tokens[0] !== '>' && tokens[tokens.length - 1] !== '>';
             for (let k = 0; ok && k < tokens.length; k++) {
@@ -682,6 +687,9 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
         const miter = num(v('stroke-miterlimit'));
         if (miter >= 1) style.miterLimit = miter;
         if (v('dominant-baseline')) style.dominantBaseline = v('dominant-baseline')!;
+        // (The first of fill and stroke it names, the one it leaves out after it: `normal` is fill first.)
+        const order = v('paint-order')?.trim().toLowerCase().split(/\s+/).filter(t => t === 'fill' || t === 'stroke');
+        if (order) style.strokeFirst = order[0] === 'stroke';
         return { style, own };
     };
 
@@ -850,12 +858,17 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
                 const w = canvas.width(run.text, face, run.style.fontSize);
                 if ((fill || outline) && run.text.trim()) {
                     const alpha = (fill ? fill.alpha * run.style.fillOpacity : 1) * opacity, strokeAlpha = (outline ? outline.alpha * run.style.strokeOpacity : 1) * opacity;
-                    const stroked = outline ? [lib.setStrokingRgbColor(outline.color.red, outline.color.green, outline.color.blue), lib.setLineWidth(coord(run.style.strokeWidth)), op('Tr', lib.asPDFNumber(fill ? 2 : 1))] : [];
                     // (Its baseline where `dominant-baseline` sets the text: a label centred on its y sat a third of an em high.)
                     const shift = BASELINE_SHIFT[run.style.dominantBaseline] ?? 0;
-                    page.pushOperators(lib.pushGraphicsState(), ...(alpha < 1 || strokeAlpha < 1 ? [op('gs', opacityState(alpha, strokeAlpha))] : []),
-                        ...stroked, cm([1, 0, 0, -1, cx, chunk.y + shift * run.style.fontSize]));
-                    try { canvas.text(run.text, face, 0, 0, run.style.fontSize, (fill ?? outline)!.color); } finally { page.pushOperators(lib.popGraphicsState()); }
+                    // Filled, stroked, or both: the fill under the stroke (PDF's fill-and-stroke mode), or the stroke under
+                    // it where `paint-order` puts it first, in two passes (a label's white halo covered its letters).
+                    const passes: number[] = fill && outline ? (run.style.strokeFirst ? [1, 0] : [2]) : outline ? [1] : [0];
+                    for (const mode of passes) {
+                        const strokes = mode !== 0 && outline ? [lib.setStrokingRgbColor(outline.color.red, outline.color.green, outline.color.blue), lib.setLineWidth(coord(run.style.strokeWidth))] : [];
+                        page.pushOperators(lib.pushGraphicsState(), ...(alpha < 1 || strokeAlpha < 1 ? [op('gs', opacityState(alpha, strokeAlpha))] : []),
+                            ...strokes, op('Tr', lib.asPDFNumber(mode)), cm([1, 0, 0, -1, cx, chunk.y + shift * run.style.fontSize]));
+                        try { canvas.text(run.text, face, 0, 0, run.style.fontSize, (mode === 1 ? outline : fill ?? outline)!.color); } finally { page.pushOperators(lib.popGraphicsState()); }
+                    }
                 }
                 cx += w;
             }
