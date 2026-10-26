@@ -585,10 +585,12 @@ interface TextContentItem { type?: string; str?: string; transform?: number[]; w
  * A page's text items as they read: each span with an ActualText (see readMarkedContent) as one item of
  * that text over the span's width (its glyphs' own text, in it, left out), and the control characters a
  * font's lost mapping gives (U+0002, U+0005) taken out of every item. The events are used only where
- * they are as many as pdf.js's marked-content begins (else the page is as pdf.js reads it).
+ * they are as many as pdf.js's marked-content begins (else the page is as pdf.js reads it). With
+ * `normalize` (pdfParserConfig.normalizeText), an ActualText's marks are composed with their letters, as
+ * pdf.js composes the glyphs' text: "e" and a combining acute is "é".
  */
-export function readableItems<T extends TextContentItem>(items: T[], events: MarkedEvent[] | undefined): T[] {
-    return withoutCoveredSpaces(advanced(spans(items, events)));
+export function readableItems<T extends TextContentItem>(items: T[], events: MarkedEvent[] | undefined, normalize = false): T[] {
+    return withoutCoveredSpaces(advanced(spans(items, events, normalize)));
 }
 
 /**
@@ -675,7 +677,7 @@ function advanced<T extends TextContentItem>(items: T[]): T[] {
     });
 }
 
-function spans<T extends TextContentItem>(items: T[], events: MarkedEvent[] | undefined): T[] {
+function spans<T extends TextContentItem>(items: T[], events: MarkedEvent[] | undefined, normalize: boolean): T[] {
     const controls = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g;
     const clean = (item: T): T => typeof item.str === 'string' && controls.test(item.str) ? { ...item, str: item.str.replace(controls, '') } : item;
     const isBegin = (item: T) => item.type === 'beginMarkedContent' || item.type === 'beginMarkedContentProps';
@@ -684,6 +686,9 @@ function spans<T extends TextContentItem>(items: T[], events: MarkedEvent[] | un
     const out: T[] = [];
     let at = 0, depth = 0, text = '';
     let target: T | undefined, minX = Infinity, maxX = -Infinity, level = true;
+    // The span's text with the space before it (where pdf.js put one among its items, before its glyphs):
+    // its text, which way it reads, the first glyph's place, and whether it has that space yet.
+    let said = '', rtl = false, glyphX: number | undefined, spaced = false;
     const finish = () => {
         if (target && level && Number.isFinite(minX)) {
             target.transform = [...target.transform!];
@@ -717,13 +722,23 @@ function spans<T extends TextContentItem>(items: T[], events: MarkedEvent[] | un
             minX = Math.min(minX, t[4]);
             maxX = Math.max(maxX, t[4] + (item.width || 0));
         }
+        const blank = !(item.str ?? '').trim();
         if (!target) {
             // A space pdf.js put before the glyphs (a ligature's own width lost) stays on that side of the text:
             // before it, or after it for right-to-left text, which is read from the other side.
-            const space = /^\s/.test(item.str ?? '') ? ' ' : '', said = text.replace(controls, '');
-            target = { ...item, str: /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/.test(said) ? said + space : space + said };
+            spaced = /^\s/.test(item.str ?? '');
+            said = text.replace(controls, '');
+            if (normalize) said = said.normalize('NFC');
+            rtl = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/.test(said);
+            glyphX = blank || !t ? undefined : t[4];
+            target = { ...item, str: spaced ? (rtl ? said + ' ' : ' ' + said) : said };
             out.push(target);
-        }
+        } else if (!spaced && blank && /\s/.test(item.str ?? '') && t && t.length >= 6 && glyphX !== undefined && t[4] + (item.width || 0) <= glyphX + 0.5) {
+            // One pdf.js put after a glyph whose width it lost (a conjunct: its text holds a virama), but drawn
+            // before the span's glyphs: the space before the word, which was lost with the span's own blanks.
+            spaced = true;
+            target.str = rtl ? said + ' ' : ' ' + said;
+        } else if (!blank && glyphX === undefined && t && t.length >= 6) glyphX = t[4];
     }
     finish();
     return out;

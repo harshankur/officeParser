@@ -186,6 +186,47 @@ function borrowGeneratorRuntime(): () => void {
     };
 }
 
+/**
+ * Readies a font given to the engine (embedded by pdf-lib) for the glyphs shaping gives, and returns the
+ * number each glyph is shown by: kept in the font's subset, or, for a font embedded whole, written into
+ * its widths and its text mapping. pdf-lib writes those for a whole font from the characters the font
+ * maps alone, so a ligature, a conjunct, a joined or reordered form took a width of 1000 units and no
+ * text; they are written for the glyphs drawn instead (and only those: a font of 60,000 glyphs wrote all).
+ * An OpenType font of CFF outlines embedded whole is marked as one (`/Subtype /OpenType`), not as the bare
+ * CFF it is not.
+ */
+function glyphCoder(font: any, lib: any): (glyph: any) => number {
+    const embedder = font.embedder;
+    if (embedder.subset) {
+        return glyph => {
+            const id = embedder.subset.includeGlyph(glyph);
+            embedder.glyphs[id - 1] = glyph;
+            embedder.glyphIdMap.set(glyph.id, id);
+            embedder.glyphCache.invalidate();
+            return id;
+        };
+    }
+    const used = new Map<number, any>();
+    // (A font no text was drawn in still writes a width: its first glyph's.)
+    embedder.glyphCache.populate = () => used.size ? [...used.values()].sort((a, b) => a.id - b.id) : [embedder.font.getGlyph(0)];
+    embedder.glyphCache.invalidate();
+    const note = (glyph: any): number => {
+        if (!used.has(glyph.id)) { used.set(glyph.id, glyph); embedder.glyphCache.invalidate(); }
+        return glyph.id;
+    };
+    embedder.encodeText = (text: string) => {
+        let hex = '';
+        for (const glyph of embedder.font.layout(text, embedder.fontFeatures).glyphs) hex += note(glyph).toString(16).padStart(4, '0');
+        return lib.PDFHexString.of(hex);
+    };
+    // (pdf-lib asks fontkit's `cff`, which it does not have: a CFF font was written as a TrueType one.)
+    if (embedder.font['CFF '] || embedder.font['CFF2']) {
+        embedder.isCFF = () => true;
+        embedder.embedFontStream = async (context: any) => context.register(context.flateStream(await embedder.serializeFont(), { Subtype: 'OpenType' }));
+    }
+    return note;
+}
+
 /** Lazily loads `pdf-lib`, throwing a typed, actionable error when it is not installed. */
 async function loadPdfLib(config: OfficeParserAST['config']): Promise<any> {
     try {
@@ -257,7 +298,25 @@ type Run = { text: string; fmt: TextFormatting; link?: string; note?: OfficeCont
 interface LineLayout { align?: TextAlignment; firstLine?: number; lineMultiple?: number; lineHeight?: number; lineAtLeast?: boolean }
 
 /** One embedded font and the code points it has a glyph for. */
-interface Face { font: any; covers: (cp: number) => boolean; }
+interface Face {
+    font: any;
+    covers: (cp: number) => boolean;
+    /** For a font given (not a Standard-14 one): the number a glyph is shown by, the glyph kept in the font (see glyphCoder). */
+    code?: (glyph: any) => number;
+}
+
+/** A run of text as its font shapes it (fontkit): its glyphs, in the order drawn, and where each goes. */
+interface ShapedRun { glyphs: any[]; positions: { xAdvance: number; xOffset: number; yOffset: number }[]; unitsPerEm: number }
+
+/**
+ * Text a font shapes beyond one glyph a character at its advance: marks (placed over or under their
+ * letter), and the scripts of South and Southeast Asia, whose letters form conjuncts or reorder. Drawn
+ * as shaped (see NativeLayout.drawShaped); other text, right-to-left text among it, as pdf-lib draws it
+ * (its glyphs in the order they are seen, each mapped to its letters: readers put those back in the order
+ * they are read, and read an `/ActualText` of right-to-left text, or glyphs moved by their offsets, apart
+ * or backwards).
+ */
+const SHAPED_TEXT = /[\p{M}\u0900-\u0DFF\u0E00-\u0FFF\u1000-\u109F\u1780-\u17FF\u1A00-\u1BFF\uA800-\uABFF]/u;
 
 /**
  * The fonts each style is drawn in, in the order they are tried for a character: the style's own font,
@@ -1316,8 +1375,78 @@ class NativeLayout {
     /** The width of drawable text in a style, each stretch measured in the font it is drawn in. */
     private widthOf(text: string, key: FaceKey, size: number): number {
         let w = 0;
-        for (const seg of this.segments(text, key)) w += seg.face.font.widthOfTextAtSize(seg.text, size);
+        for (const seg of this.segments(text, key)) w += this.segmentWidth(seg, size);
         return w;
+    }
+    /** A stretch of one font's width: as shaped, where its font shapes it (see shapedRun). */
+    private segmentWidth(seg: { text: string; face: Face }, size: number): number {
+        const run = this.shapedRun(seg.face, seg.text);
+        if (!run) return seg.face.font.widthOfTextAtSize(seg.text, size);
+        let units = 0;
+        for (const p of run.positions) units += p.xAdvance;
+        return units * size / run.unitsPerEm;
+    }
+
+    /** Shaped runs by font and text (see shapedRun): a word is measured several times as lines are broken. */
+    private shapedRuns = new Map<unknown, Map<string, ShapedRun | null>>();
+    /**
+     * `text` as a given font shapes it, where it is left-to-right text such a font shapes (SHAPED_TEXT): its
+     * glyphs and their positions, the marks' offsets and advances among them, which pdf-lib leaves out (it
+     * draws each glyph at its own advance). Null for other text, and for the Standard-14 fonts.
+     */
+    private shapedRun(face: Face, text: string): ShapedRun | null {
+        const shaper = face.code ? face.font.embedder?.font : undefined;
+        if (!shaper?.layout || !SHAPED_TEXT.test(text) || directionOf(text) === 'rtl') return null;
+        let runs = this.shapedRuns.get(face.font);
+        if (!runs) this.shapedRuns.set(face.font, runs = new Map());
+        let run = runs.get(text);
+        if (run === undefined) {
+            const laid = shaper.layout(text, face.font.embedder.fontFeatures);
+            run = { glyphs: laid.glyphs, positions: laid.positions, unitsPerEm: shaper.unitsPerEm || 1000 };
+            if (runs.size >= 4096) runs.clear();
+            runs.set(text, run);
+        }
+        return run;
+    }
+
+    /**
+     * Draws a shaped run (see shapedRun) with each glyph where its font places it, and marks it as the text
+     * it stands for (`/ActualText`): copied, a word reads in the order it is written, where the glyphs are
+     * drawn in another (Hindi's ि before the letter it follows) or one glyph stands for several letters.
+     * One string of glyphs, each moved from where the last one's width leaves off (`TJ`), so a reader
+     * measures the word as drawn: drawn one by one, a mark of no advance that the font gives a width made
+     * the word as long as that, and the space after it was lost.
+     */
+    private drawShaped(face: Face, run: ShapedRun, text: string, x: number, y: number, size: number, color: any): void {
+        const lib = this.lib;
+        const context = this.page.doc.context;
+        this.useFont(face.font);
+        const fontKey = (this.page as { fontKey?: unknown }).fontKey;
+        face.font.modified = true;
+        const thousandths = 1000 / run.unitsPerEm;
+        const op = (name: string, ...args: any[]) => lib.PDFOperator.of(name, args);
+        // (The span within the text object: closed after it, a reader took its text to stand where none does.)
+        const ops = [
+            lib.pushGraphicsState(), lib.setFillingColor(color), lib.beginText(), lib.setFontAndSize(fontKey, size),
+            op('BDC', lib.PDFName.of('Span'), context.obj({ ActualText: lib.PDFHexString.fromText(text) })),
+            lib.setTextMatrix(1, 0, 0, 1, x, y),
+        ];
+        let shown: any[] = [], pen = 0, cursor = 0, rise = 0;
+        const flush = () => { if (shown.length) ops.push(op('TJ', context.obj(shown))); shown = []; };
+        run.glyphs.forEach((glyph, i) => {
+            const p = run.positions[i];
+            // A mark raised or lowered: its rise, in a string of its own.
+            if (p.yOffset !== rise) { flush(); rise = p.yOffset; ops.push(op('Ts', lib.PDFNumber.of(rise * size / run.unitsPerEm))); }
+            const to = pen + p.xOffset;
+            if (Math.abs(to - cursor) > 0.01) shown.push(-(to - cursor) * thousandths);
+            shown.push(lib.PDFHexString.of(face.code!(glyph).toString(16).padStart(4, '0')));
+            cursor = to + glyph.advanceWidth;
+            pen += p.xAdvance;
+        });
+        flush();
+        if (rise) ops.push(op('Ts', lib.PDFNumber.of(0)));
+        ops.push(op('EMC'), lib.endText(), lib.popGraphicsState());
+        this.page.pushOperators(...ops);
     }
 
     /** Draws drawable text with its left edge at `x`, each stretch in its font. A right-to-left word's stretches are drawn last first. */
@@ -1325,9 +1454,13 @@ class NativeLayout {
         const segs = this.segments(text, key);
         if (segs.length > 1 && directionOf(text) === 'rtl') segs.reverse();
         for (const seg of segs) {
-            this.useFont(seg.face.font);
-            this.page.drawText(seg.text, { x, y, size, color });
-            x += seg.face.font.widthOfTextAtSize(seg.text, size);
+            const run = this.shapedRun(seg.face, seg.text);
+            if (run) this.drawShaped(seg.face, run, seg.text, x, y, size, color);
+            else {
+                this.useFont(seg.face.font);
+                this.page.drawText(seg.text, { x, y, size, color });
+            }
+            x += this.segmentWidth(seg, size);
         }
     }
 
@@ -2970,9 +3103,12 @@ async function embedFonts(pdf: any, lib: any, pc: FullGeneratorConfig['pdfConfig
         let face = inBuffer.get(span);
         if (face) return face;
         try {
-            const font = await pdf.embedFont(bytes, { subset: pc.subsetFonts !== false });
+            // An OpenType font of CFF outlines (`OTTO`) is embedded whole: its subset (fontkit's) is not one
+            // viewers draw (each glyph another's, or none).
+            const cff = bytes.length >= 4 && bytes[0] === 0x4F && bytes[1] === 0x54 && bytes[2] === 0x54 && bytes[3] === 0x4F;
+            const font = await pdf.embedFont(bytes, { subset: pc.subsetFonts !== false && !cff });
             const set = new Set<number>(font.getCharacterSet());
-            face = { font, covers: cp => set.has(cp) };
+            face = { font, covers: cp => set.has(cp), code: glyphCoder(font, lib) };
         } catch (e: any) {
             throw getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, config, `pdfConfig.${name} could not be read as a TrueType or OpenType font (${e?.message || String(e)})`);
         }

@@ -1122,7 +1122,7 @@ async function collectPage(
     // The text a producer gave its glyph clusters (ActualText), where the glyphs map to none of it.
     // Read from the file only for a page whose text has marked content, and once its budget allows.
     const hasMarked = !work.spent && textContent.items.some((it: any) => it.type === 'beginMarkedContentProps' || it.type === 'beginMarkedContent');
-    for (const item of readableItems(textContent.items, hasMarked ? markedContent?.eventsOf(pageNumber - 1) : undefined)) {
+    for (const item of readableItems(textContent.items, hasMarked ? markedContent?.eventsOf(pageNumber - 1) : undefined, pdfCfg.normalizeText)) {
         if (!isTextItem(item)) {
             const type = (item as any).type as string | undefined;
             if (type === 'beginMarkedContent' || type === 'beginMarkedContentProps') {

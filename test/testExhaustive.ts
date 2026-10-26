@@ -5550,6 +5550,94 @@ async function testFloatingFrames(): Promise<void> {
 }
 
 /**
+ * A font of the system's (a collection's first font where the system keeps it in one, `.ttc`), or null
+ * where none of the paths is there: the tests of shaped text need a font of the script, which the
+ * repository does not ship.
+ */
+function systemFont(...paths: string[]): Uint8Array | null {
+    for (const at of paths) {
+        if (!fs.existsSync(at)) continue;
+        const b = fs.readFileSync(at);
+        if (b.toString('latin1', 0, 4) !== 'ttcf') return new Uint8Array(b);
+        // The collection's first font, its tables copied after a table directory of its own.
+        const start = b.readUInt32BE(12), count = b.readUInt16BE(start + 4);
+        const tables = Array.from({ length: count }, (_, i) => { const r = start + 12 + 16 * i; return { tag: b.subarray(r, r + 4), sum: b.readUInt32BE(r + 4), offset: b.readUInt32BE(r + 8), length: b.readUInt32BE(r + 12) }; });
+        const header = Buffer.alloc(12 + 16 * count);
+        b.copy(header, 0, start, start + 12);
+        const parts: Buffer[] = [header];
+        let offset = header.length;
+        tables.forEach((t, i) => {
+            const r = 12 + 16 * i;
+            t.tag.copy(header, r); header.writeUInt32BE(t.sum, r + 4); header.writeUInt32BE(offset, r + 8); header.writeUInt32BE(t.length, r + 12);
+            const pad = (4 - (t.length % 4)) % 4;
+            parts.push(b.subarray(t.offset, t.offset + t.length), Buffer.alloc(pad));
+            offset += t.length + pad;
+        });
+        return new Uint8Array(Buffer.concat(parts));
+    }
+    return null;
+}
+
+/**
+ * The native PDF engine draws text a font shapes where the font places each glyph (a mark over its
+ * letter at its offset, of no advance: "हिंदी" was drawn as "हिं" and "दी" apart), and marks each run as
+ * the text it stands for, so a word copies in the order it is written (Hindi's ि was copied before its
+ * letter). A font embedded whole writes the widths of the glyphs shaping gives (a conjunct took 1000
+ * units); an OpenType font of CFF outlines is embedded whole (its subset drew other glyphs, or none),
+ * marked as OpenType. Uses the system's Devanagari fonts, where it has them.
+ */
+async function testNativePdfShapedText(): Promise<void> {
+    const devanagari = systemFont('/System/Library/Fonts/Supplemental/Devanagari Sangam MN.ttc', '/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf',
+        '/usr/share/fonts/opentype/noto/NotoSansDevanagari-Regular.ttf', '/usr/share/fonts/truetype/lohit-devanagari/Lohit-Devanagari.ttf', '/usr/share/fonts/truetype/fonts-deva-extra/kalimati.ttf');
+    const cff = systemFont('/System/Library/Fonts/Kohinoor.ttc', '/usr/share/fonts/opentype/noto/NotoSansDevanagari-Regular.otf');
+    if (!devanagari && !cff) { console.log('  (no Devanagari font on this system: shaped text not tested)'); return; }
+    const hindi = 'हिंदी हिन्दी नमस्ते क्षत्रिय श्री कृष्ण';
+    const doc = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', text: hindi, children: [{ type: 'text', text: hindi, formatting: { size: '20pt' } }] }] } as any;
+    const read = async (pdf: Uint8Array) => (await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).content.map(n => n.text).join('\n');
+    // Each glyph's string, as drawn: a run is one string of glyphs (TJ), marked with its text.
+    const contents = async (pdf: Uint8Array) => {
+        const loaded = await PDFDocument.load(pdf);
+        let out = '';
+        for (const [, obj] of loaded.context.enumerateIndirectObjects()) if (obj instanceof PDFRawStream) { try { out += strFromU8(unzlibSync(obj.contents)); } catch { /* not Flate */ } }
+        return { loaded, out };
+    };
+    for (const [name, font] of [['TrueType', devanagari], ['CFF', cff]] as const) {
+        if (!font) continue;
+        for (const subsetFonts of [true, false]) {
+            const result: any = await OfficeGenerator.generate(doc, 'pdf', { pdfConfig: { engine: 'native', fallbackFonts: [font], subsetFonts } } as any);
+            assert.deepStrictEqual((result.messages || []).map((m: any) => m.code), [], `${name} (subset ${subsetFonts}): nothing lost`);
+            const pdf = result.value as Uint8Array;
+            assert.strictEqual(await read(pdf), hindi, `${name} (subset ${subsetFonts}): the words read as written, whole and in order`);
+            const { loaded, out } = await contents(pdf);
+            assert.ok(/\/ActualText <FEFF0939093F0902092609400?>/.test(out) || out.includes('/ActualText'), `${name} (subset ${subsetFonts}): each run is marked with its text`);
+            assert.ok(/\] TJ/.test(out), `${name} (subset ${subsetFonts}): a run is drawn as one string of glyphs`);
+            // Widths for the glyphs drawn, none of the default 1000 a conjunct took; a CFF font whole, as OpenType.
+            let widths: number[] = [], fontFile: string | undefined, openType = false;
+            for (const [, obj] of loaded.context.enumerateIndirectObjects()) {
+                const dict = obj instanceof PDFRawStream ? obj.dict : (obj as any);
+                if (typeof dict?.get !== 'function') continue;
+                const w = dict.get(PDFName.of('W'));
+                if (w) widths = JSON.parse(String(w).replace(/\s+/g, ',').replace(/\[,/g, '[').replace(/,\]/g, ']')).flat(2);
+                if (dict.get(PDFName.of('FontFile3')) || dict.get(PDFName.of('FontFile2'))) fontFile = dict.get(PDFName.of('FontFile3')) ? 'FontFile3' : 'FontFile2';
+                const subtype = dict.get(PDFName.of('Subtype'));
+                if (obj instanceof PDFRawStream && subtype && String(subtype) === '/OpenType') openType = true;
+            }
+            assert.ok(widths.length > 1 && widths.length < 200, `${name} (subset ${subsetFonts}): widths for the glyphs drawn alone; got ${widths.length}`);
+            if (name === 'CFF') assert.ok(fontFile === 'FontFile3' && openType, `a CFF font is embedded whole, as OpenType; got ${fontFile} ${openType}`);
+            else assert.ok(fontFile === 'FontFile2' && !openType, `a TrueType font is embedded as TrueType; got ${fontFile} ${openType}`);
+        }
+    }
+    // A mark over a Latin letter, and Latin text in a font of no shaping: as before.
+    const latinFont = systemFont('/System/Library/Fonts/Supplemental/Arial.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf');
+    if (latinFont) {
+        const latin = 'Cafe\u0301 plain';
+        const result = await OfficeGenerator.generate({ ...doc, content: [{ type: 'paragraph', text: latin, children: [{ type: 'text', text: latin }] }] }, 'pdf', { pdfConfig: { engine: 'native', fonts: { regular: latinFont } } } as any);
+        assert.deepStrictEqual((result.messages || []).map((m: any) => m.code), [], 'the Latin font draws the mark');
+        assert.strictEqual(await read(result.value as Uint8Array), 'Caf\u00E9 plain', 'a Latin letter and its mark read as written');
+    }
+}
+
+/**
  * The native PDF engine draws an SVG picture as vector graphics (it was dropped with
  * IMAGE_PROCESSING_FAILED): its shapes, paths, text, symbols and styles, in its place among the text,
  * at its size; what it cannot draw (a gradient in one colour) is reported, and an SVG that cannot be
@@ -8886,6 +8974,7 @@ async function runTests(): Promise<void> {
         ['Writers hold up', testWritersHoldUp],
         ['Native PDF SVG pictures', testNativePdfSvgPictures],
         ['Floating frames', testFloatingFrames],
+        ['Native PDF shaped text', testNativePdfShapedText],
         ['PDF lists read whole', testPdfListsReadWhole],
         ['PDF headings by size and weight', testPdfHeadingsBySizeAndWeight],
         ['PDF ruled tables', testPdfRuledTables],

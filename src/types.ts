@@ -1628,8 +1628,10 @@ export interface PdfGeneratorConfig {
      * those lack.
      *
      * Words are shaped by the font (ligatures, Arabic joining, Indic conjuncts) and a right-to-left
-     * line is laid out from the right edge, its words in visual order. Marks a font places with its
-     * positioning table (`GPOS`) are drawn at their default offsets.
+     * line is laid out from the right edge, its words in visual order. Text of the Indic and Southeast
+     * Asian scripts, and letters with combining marks, is drawn with each glyph where the font places
+     * it (through its positioning table, `GPOS`) and marked with what it says (`/ActualText`), so it
+     * copies in the order it is written.
      *
      * A value that is not a list, or an entry that is not a file's bytes, is reported
      * (`INVALID_CONFIG_VALUE`) and left out. Defaults to none.
@@ -1638,7 +1640,8 @@ export interface PdfGeneratorConfig {
     /**
      * Embed only the glyphs the document uses of each font given in `fonts` and `fallbackFonts`
      * (`'native'` engine). Set false to embed whole font files, for a font whose subset a viewer does
-     * not draw. Defaults to true.
+     * not draw. An OpenType font of CFF outlines (`.otf` starting `OTTO`) is embedded whole either way:
+     * its subset is not one viewers draw. Defaults to true.
      */
     subsetFonts?: boolean;
     /**
