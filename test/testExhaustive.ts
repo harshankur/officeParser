@@ -6003,7 +6003,7 @@ async function testSectionRoundTrips(): Promise<void> {
     const flowing = { type: 'docx', metadata: {}, attachments: [], content: [para('Front.'), { type: 'break', metadata: { breakType: 'page', section: 1 } }, para('Body.')] } as any;
     assert.strictEqual(String((await OfficeGenerator.generate(flowing, 'text')).value).trim(), 'Front.\nBody.', 'text: a section\'s start is no blank line');
     const html = String((await OfficeGenerator.generate(flowing, 'html')).value).split('<body')[1];
-    assert.ok(!html.includes('<hr class="page-break">') && html.includes('<hr class="page-break section-start">'), 'HTML: a section\'s start is a page break, shown as no rule on screen');
+    assert.ok(!html.includes('<hr class="page-break">') && html.includes('<hr class="page-break section-start" style="border:none;height:0;margin:0;break-after:page">'), 'HTML: a section\'s start is a page break, shown as no rule on screen with any stylesheet or none');
     const fullHtml = String((await OfficeGenerator.generate(flowing, 'html')).value);
     assert.ok(fullHtml.includes('.page-break.section-start::after { content: none; }'), 'HTML: a section\'s start has no rule on screen');
     const htmlBack = await OfficeParser.parseOffice(Buffer.from(fullHtml), { fileType: 'html' } as any) as OfficeParserAST;

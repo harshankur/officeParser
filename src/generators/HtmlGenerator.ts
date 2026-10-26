@@ -1309,7 +1309,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 const breakType = (node.metadata as any)?.breakType;
                 // A section starting on a new page: a page break, as the HTML reader reads it and print breaks
                 // the page, but no rule on screen (it is the document's structure, not a break the author typed).
-                if (breakType === 'page' && typeof (node.metadata as any)?.section === 'number') return `${extraAnchors}<hr class="page-break section-start"${idAttr}>`;
+                // (Styled in place too: without this writer's stylesheet, in EPUB or a fragment, it was a rule.)
+                if (breakType === 'page' && typeof (node.metadata as any)?.section === 'number') return `${extraAnchors}<hr class="page-break section-start"${idAttr} style="border:none;height:0;margin:0;break-after:page">`;
                 if (breakType === 'page') return `${extraAnchors}<hr class="page-break"${idAttr}>`;
                 // A thematic break is a plain rule; the parser reads a bare <hr> back as one.
                 if (breakType === 'thematic') return `${extraAnchors}<hr${idAttr}>`;

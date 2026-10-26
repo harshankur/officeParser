@@ -788,6 +788,10 @@ async function markdownTests() {
     await linear('docx: 20,000 sections are written', () => OfficeGenerator.generate(astWith(Array.from({ length: n(20_000) }, (_, i) => [
         { type: 'paragraph', children: [{ type: 'text', text: `s${i}` }] },
         { type: 'break', metadata: { breakType: i % 2 ? 'section' : 'page', section: i + 1 } }]).flat() as any), 'docx', { onWarning: () => { } } as any));
+    // (Blocks an onNode string gives too: each section's end looked back past all of them.)
+    await linear('docx: 20,000 sections after onNode blocks are written', () => OfficeGenerator.generate(astWith(Array.from({ length: n(20_000) }, (_, i) => [
+        { type: 'paragraph', children: [{ type: 'text', text: `o${i}` }] },
+        { type: 'break', metadata: { breakType: 'page', section: i + 1 } }]).flat() as any), 'docx', { onWarning: () => { }, onNode: (node: any) => node.type === 'paragraph' ? '<w:p><w:r><w:t>given</w:t></w:r></w:p>' : undefined } as any));
     // A colour table found each run's colour by scanning it.
     const colours = () => astWith([{ type: 'paragraph', children: Array.from({ length: n(many) }, (_, i) => ({ type: 'text', text: `r${i} `, formatting: { color: `#${i.toString(16).padStart(6, '0')}` } })) }] as any);
     await linear('rtf: 100,000 runs of distinct colours are written', () => OfficeGenerator.generate(colours(), 'rtf', { onWarning: () => { } } as any));

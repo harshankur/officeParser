@@ -227,7 +227,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
             checkAbortSignal(this.config.abortSignal);
             const override = await this.handleOnNode(node);
             if (override === false) { prevBareList = false; continue; }
-            if (typeof override === 'string') { out.push(override); prevPaginated = null; prevBareList = false; continue; }
+            // (A block an onNode string gives is the last block too: a section's end may go in its paragraph.)
+            if (typeof override === 'string') { if (override) lastBlockAt = out.length; out.push(override); prevPaginated = null; prevBareList = false; continue; }
             // Preserve source pagination: a page break between consecutive page (or slide) nodes.
             if ((node.type === 'page' || node.type === 'slide') && prevPaginated === node.type) {
                 out.push('<w:p><w:r><w:br w:type="page"/></w:r></w:p>');
