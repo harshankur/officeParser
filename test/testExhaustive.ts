@@ -5963,6 +5963,13 @@ async function testSectionRoundTrips(): Promise<void> {
     const docxXml = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(sectioned(para('Front two.')), 'docx')).value as any))['word/document.xml']);
     assert.ok(/<w:p><w:pPr><w:sectPr>[^]*?<\/w:sectPr><\/w:pPr><w:r>[^]*?Front two\./.test(docxXml) && !/<w:p><w:pPr><w:sectPr>(?:(?!<\/w:p>)[^])*<\/w:pPr><\/w:p>/.test(docxXml) && docxXml.includes('<w:pgNumType w:fmt="upperLetter"/>'),
         `DOCX: the section ends in its last paragraph, numbered as it is; got ${docxXml.slice(0, 600)}`);
+    // A section's end in an onNode paragraph whose properties are spaced or empty: one pPr, its own kept.
+    for (const given of ['<w:p>\n  <w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>OV</w:t></w:r></w:p>', '<w:p><w:pPr/><w:r><w:t>OV</w:t></w:r></w:p>']) {
+        const xml = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [para('OV'), { type: 'break', metadata: { breakType: 'page', section: 1 } }, para('Next.')] } as any, 'docx',
+            { onNode: (n: any) => n.text === 'OV' ? given : undefined } as any)).value as any))['word/document.xml']);
+        const ov = xml.slice(xml.indexOf('<w:p>'), xml.indexOf('OV'));
+        assert.ok((ov.match(/<w:pPr[\s>/]/g) ?? []).length === 1 && ov.includes('<w:sectPr>') && (!given.includes('center') || ov.includes('<w:jc w:val="center"/>')), `DOCX: one pPr holds the section's end; got ${ov}`);
+    }
     // ODT: author page breaks saved again stay as they were.
     let breaks: OfficeParserAST = { type: 'docx', metadata: {}, attachments: [], content: [para('One.'), { type: 'break', metadata: { breakType: 'page' } }, para('Two.')] } as any;
     const breakShapes: string[] = [];

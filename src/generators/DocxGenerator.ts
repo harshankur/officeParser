@@ -1285,20 +1285,26 @@ function withSectionEnd(out: string, from: number, sectPr: string): string | und
     }
     if (start < 0 || depth !== 0) return undefined;
     const open = out.indexOf('>', start) + 1;
-    if (!out.startsWith('<w:pPr>', open)) return `${out.slice(0, open)}<w:pPr>${sectPr}</w:pPr>${out.slice(open)}`;
-    // Its own properties end at their matching close (a revision's record of the old ones holds a pPr too).
-    let level = 0, close = -1;
-    const props = /<(\/?)w:pPr>/g;
-    props.lastIndex = open;
+    // Its own properties, the paragraph's first child (after any space between, as XML written by hand has it).
+    const first = /^\s*<w:pPr(\s*\/>|\s*>)?/.exec(out.slice(open, open + 256));
+    if (!first?.[1]) return `${out.slice(0, open)}<w:pPr>${sectPr}</w:pPr>${out.slice(open)}`;
+    const propsAt = open + first[0].length;
+    // (Empty: `<w:pPr/>`, the section's properties its one child.)
+    if (first[1].includes('/')) return `${out.slice(0, open + first[0].length - first[1].length)}>${sectPr}</w:pPr>${out.slice(propsAt)}`;
+    // They end at their matching close (a revision's record of the old ones holds a pPr too).
+    let level = 1, close = -1;
+    const props = /<(\/?)w:pPr(\s*\/)?\s*>/g;
+    props.lastIndex = propsAt;
     for (let m = props.exec(out); m; m = props.exec(out)) {
+        if (m[2]) continue;
         level += m[1] ? -1 : 1;
         if (level === 0) { close = m.index; break; }
     }
     if (close < 0) return undefined;
-    const inner = out.slice(open + '<w:pPr>'.length, close);
-    if (/<w:sectPr[\s>]/.test(inner.replace(/<w:pPrChange[\s\S]*<\/w:pPrChange>/, ''))) return undefined;
+    const inner = out.slice(propsAt, close);
+    if (/<w:sectPr[\s>/]/.test(inner.replace(/<w:pPrChange[\s\S]*<\/w:pPrChange>/, ''))) return undefined;
     const change = inner.indexOf('<w:pPrChange');
-    const at = change >= 0 ? open + '<w:pPr>'.length + change : close;
+    const at = change >= 0 ? propsAt + change : close;
     return `${out.slice(0, at)}${sectPr}${out.slice(at)}`;
 }
 
