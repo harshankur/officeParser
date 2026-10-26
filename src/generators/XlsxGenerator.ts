@@ -3,8 +3,9 @@ import { ConversionResult, GeneratorConfig, OfficeContentNode, OfficeParserAST, 
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { encUrl, ooxmlCustomPropertiesXml, resolveZipInstant, toW3CDTF } from '../utils/officeGenUtils.js';
+import { BUILTIN_NUMBER_FORMATS, BUILTIN_OTHER_FORMATS } from '../utils/excelFormat.js';
 import { BaseGenerator } from './BaseGenerator.js';
-import { buildWorkbook, cellTextProcessor, noteLabels, sheetIndex, sheetRef, writableLink, MAX_LINK_LENGTH, MAX_SHEET_LINKS, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
+import { buildWorkbook, CellComment, cellTextProcessor, noteLabels, rowAt, sheetIndex, sheetRef, writableLink, MAX_LINK_LENGTH, MAX_SHEET_LINKS, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
 
 /** Escapes text content for an XML part after stripping XML-illegal characters. */
 function xmlText(s: string | undefined): string {
@@ -18,8 +19,14 @@ function columnName(index: number): string {
     return name;
 }
 
-/** Excel's built-in number formats a cell is shown in, by their codes. */
-const BUILTIN_FORMATS = new Map<string, number>([['General', 0], ['0', 1], ['0.00', 2], ['#,##0', 3], ['#,##0.00', 4], ['0%', 9], ['0.00%', 10]]);
+/**
+ * Excel's built-in number formats a cell is shown in, by their codes, written by their ids: a built-in date
+ * or time format is shown in the machine's own way, as the workbook it came from showed it.
+ */
+const BUILTIN_FORMATS = new Map<string, number>([
+    ['General', 0], ['0', 1], ['0.00', 2], ['#,##0', 3], ['#,##0.00', 4], ['0%', 9], ['0.00%', 10],
+    ...[...BUILTIN_NUMBER_FORMATS, ...BUILTIN_OTHER_FORMATS].map(([id, code]) => [code, Number(id)] as [string, number]),
+]);
 
 /** The most characters a cell holds in Excel. */
 const MAX_CELL_TEXT = 32_767;
@@ -46,7 +53,7 @@ function formatCode(v: CellValue): string {
             return v.symbolAfter ? `${digits}\\ ${symbol}` : `${symbol}${digits}`;
         }
         case 'date': return 'yyyy\\-mm\\-dd';
-        case 'datetime': return 'yyyy\\-mm\\-dd\\ hh:mm:ss';
+        case 'datetime': return v.clock ? 'hh:mm:ss' : 'yyyy\\-mm\\-dd\\ hh:mm:ss';
         // (A duration of a day or more in its hours, as a clock would turn over.)
         case 'time': return (v.number ?? 0) >= 1 ? '[h]:mm:ss' : 'hh:mm:ss';
         // (Excel shows a truth value as one whatever its format; a reader that shows the 1 it holds is told to.)
@@ -104,6 +111,8 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
         const styles = new StyleTable();
         const sheetNames = sheetIndex(sheets);
         const sheetParts = sheets.map(sheet => this.sheetXml(sheet, styles, sheetNames));
+        // Each sheet's comments, a part of their own and the drawing that shows them (Excel's legacy notes).
+        const commented = sheetParts.map((part, i) => part.comments ? i : -1).filter(i => i >= 0);
         for (const feature of this.linkLosses) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'xlsx' });
         const { iso, mtime } = resolveZipInstant(this.effectiveMetadata.modified);
         const enc = (s: string) => new TextEncoder().encode(s);
@@ -114,6 +123,8 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
                 + `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>`
                 + `<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>`
                 + sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')
+                + (commented.length ? `<Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>` : '')
+                + commented.map(i => `<Override PartName="/xl/comments${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>`).join('')
                 + `<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>`
                 + `<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>`
                 + (custom ? `<Override PartName="/docProps/custom.xml" ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml"/>` : '') + `</Types>`),
@@ -137,6 +148,10 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
         sheetParts.forEach((part, i) => {
             files[`xl/worksheets/sheet${i + 1}.xml`] = enc(part.xml);
             if (part.rels) files[`xl/worksheets/_rels/sheet${i + 1}.xml.rels`] = enc(part.rels);
+            if (part.comments) {
+                files[`xl/comments${i + 1}.xml`] = enc(part.comments.xml);
+                files[`xl/drawings/vmlDrawing${i + 1}.vml`] = enc(part.comments.vml);
+            }
         });
         return { value: zipSync(files, { mtime }), messages: this.messages };
     }
@@ -148,11 +163,21 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
     /** The links left out (each kind reported once). */
     private readonly linkLosses = new Set<string>();
 
-    private sheetXml(sheet: WorkSheet, styles: StyleTable, sheetNames: ReadonlyMap<string, string>): { xml: string; rels?: string } {
+    /** The next block of a thousand and twenty-four note shapes a sheet's drawing takes (`o:idmap`), the workbook's blocks one each. */
+    private nextShapeBlock = 1;
+
+    private sheetXml(sheet: WorkSheet, styles: StyleTable, sheetNames: ReadonlyMap<string, string>): { xml: string; rels?: string; comments?: { xml: string; vml: string } } {
         const hiddenCols = hiddenColumns(sheet);
-        const cols = sheet.widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"${hiddenCols.has(i) ? ' hidden="1"' : ''}/>`).join('');
+        // (The columns with widths of their own: one no cell sets is Excel's default.)
+        const colXml: string[] = [];
+        sheet.widths.forEach((w, i) => colXml.push(`<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"${hiddenCols.has(i) ? ' hidden="1"' : ''}/>`));
+        const cols = colXml.join('');
         const merges: string[] = [], links: string[] = [], rels: string[] = [];
-        const rows = sheet.rows.map((row, r) => {
+        // Its cells' comments, a note each: its row and column, its authors and text.
+        const notes: { ref: string; r: number; c: number; comments: CellComment[] }[] = [];
+        const rows = sheet.rows.map((row, index) => {
+            // (At its own row: a sheet of cells far apart skips the rows between them.)
+            const r = rowAt(row, index);
             if (!row.cells.length && !row.hidden) return '';
             const cells = row.cells.map(cell => {
                 const ref = `${columnName(cell.col)}${r + 1}`;
@@ -168,6 +193,7 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
                     links.push(`<hyperlink ref="${ref}" r:id="${id}"/>`);
                 }
                 if (cell.colSpan > 1 || cell.rowSpan > 1) merges.push(`${ref}:${columnName(cell.col + cell.colSpan - 1)}${r + cell.rowSpan}`);
+                if (cell.comments?.length) notes.push({ ref, r, c: cell.col, comments: cell.comments });
                 const wrap = cell.text.includes('\n');
                 const style = styles.index(formatCode(cell.value), cell.bold, wrap);
                 const s = style ? ` s="${style}"` : '';
@@ -182,13 +208,27 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
             }).join('');
             return `<row r="${r + 1}"${row.hidden ? ' hidden="1"' : ''}>${cells}</row>`;
         }).join('');
+        // Its comments: a comments part, and the drawing of its notes (the relationships after its links').
+        let comments: { xml: string; vml: string } | undefined, legacy = '';
+        if (notes.length) {
+            const sheetNumber = this.sheetNumber;
+            rels.push(`<Relationship Id="rId${rels.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments${sheetNumber}.xml"/>`);
+            rels.push(`<Relationship Id="rId${rels.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing${sheetNumber}.vml"/>`);
+            legacy = `<legacyDrawing r:id="rId${rels.length}"/>`;
+            comments = commentParts(notes, this.nextShapeBlock);
+            this.nextShapeBlock += Math.ceil(notes.length / 1024);
+        }
+        this.sheetNumber++;
         const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`
             + (cols ? `<cols>${cols}</cols>` : '') + `<sheetData>${rows}</sheetData>`
             + (merges.length ? `<mergeCells count="${merges.length}">${merges.map(ref => `<mergeCell ref="${ref}"/>`).join('')}</mergeCells>` : '')
             + (links.length ? `<hyperlinks>${links.join('')}</hyperlinks>` : '')
-            + `</worksheet>`;
-        return { xml, ...(rels.length ? { rels: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join('')}</Relationships>` } : {}) };
+            + legacy + `</worksheet>`;
+        return { xml, ...(rels.length ? { rels: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join('')}</Relationships>` } : {}), ...(comments ? { comments } : {}) };
     }
+
+    /** The number of the sheet sheetXml writes next (1 the first). */
+    private sheetNumber = 1;
 
     private coreProps(iso: string): string {
         const m = this.effectiveMetadata;
@@ -202,6 +242,32 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
             + `<dcterms:created xsi:type="dcterms:W3CDTF">${created}</dcterms:created>`
             + `<dcterms:modified xsi:type="dcterms:W3CDTF">${iso}</dcterms:modified></cp:coreProperties>`;
     }
+}
+
+/**
+ * A sheet's comments part (each cell's comments one note, each by its author, as Excel holds one a cell)
+ * and the drawing that shows them (a hidden note shape a cell, beside it), its shapes numbered from the
+ * block `block` (a thousand and twenty-four shapes a block, `o:idmap`).
+ */
+function commentParts(notes: { ref: string; r: number; c: number; comments: CellComment[] }[], block: number): { xml: string; vml: string } {
+    const authors = new Map<string, number>();
+    const authorOf = (name: string) => { let id = authors.get(name); if (id === undefined) authors.set(name, id = authors.size); return id; };
+    const list = notes.map(n => {
+        // (One author a note: the first comment's; the others' named in their text.)
+        const author = authorOf(n.comments[0].author ?? '');
+        const text = n.comments.map((c, i) => (i && c.author ? `${c.author}: ` : '') + c.text).join('\n');
+        return `<comment ref="${n.ref}" authorId="${author}"><text><r><t xml:space="preserve">${xmlText(cutTo(text, MAX_CELL_TEXT))}</t></r></text></comment>`;
+    }).join('');
+    const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><authors>${[...authors.keys()].map(a => `<author>${xmlText(a)}</author>`).join('')}</authors><commentList>${list}</commentList></comments>`;
+    const blocks = Array.from({ length: Math.ceil(notes.length / 1024) }, (_, i) => block + i).join(',');
+    const shapes = notes.map((n, i) => `<v:shape id="_x0000_s${block * 1024 + i + 1}" type="#_x0000_t202" style="position:absolute;margin-left:59.25pt;margin-top:1.5pt;width:108pt;height:59.25pt;z-index:${i + 1};visibility:hidden" fillcolor="#ffffe1" o:insetmode="auto">`
+        + `<v:fill color2="#ffffe1"/><v:shadow on="t" color="black" obscured="t"/><v:path o:connecttype="none"/><v:textbox style="mso-direction-alt:auto"><div style="text-align:left"></div></v:textbox>`
+        + `<x:ClientData ObjectType="Note"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>${n.c + 1}, 15, ${n.r}, 2, ${n.c + 3}, 15, ${n.r + 4}, 16</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>${n.r}</x:Row><x:Column>${n.c}</x:Column></x:ClientData></v:shape>`).join('');
+    const vml = `<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">`
+        + `<o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="${blocks}"/></o:shapelayout>`
+        + `<v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" path="m,l,21600r21600,l21600,xe"><v:stroke joinstyle="miter"/><v:path gradientshapeok="t" o:connecttype="rect"/></v:shapetype>`
+        + shapes + `</xml>`;
+    return { xml, vml };
 }
 
 /** The cell formats a workbook uses (`cellXfs`): a number format, bold or not, wrapped or not. */

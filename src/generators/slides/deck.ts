@@ -777,8 +777,10 @@ async function flowDeck(content: OfficeContentNode[], metadata: OfficeMetadata, 
             open = open.filter(o => o.row + o.cell.rowSpan > end);
             rest.slice(at, end).forEach((row, i) => { for (const cell of row.cells) if (at + i + cell.rowSpan > end) open.push({ row: at + i, cell }); });
         }
-        // The pictures and charts in its cells, which a slide's table cannot hold, on slides of their own after it.
-        await pictureSlides(node);
+        // The pictures and charts in its cells, which a slide's table cannot hold, on slides of their own after
+        // it (its rows' alone: a sheet's own pictures and charts, beside its rows, follow it as blocks of their own,
+        // and were on two slides each).
+        await pictureSlides({ type: node.type, children: (node.children ?? []).filter(c => c.type === 'row') });
     };
     const add = (p: DeckParagraph) => {
         const size = BODY_SIZE;

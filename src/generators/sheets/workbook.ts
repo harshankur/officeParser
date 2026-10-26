@@ -30,11 +30,26 @@ export interface CellValue {
     symbolAfter?: boolean;
     /** The spreadsheet's own number format code (CellMetadata.numberFormat), which XLSX output writes as it is. */
     code?: string;
+    /** A date and time shown as its time of day alone (=NOW() shown as a time): no duration of all its days. */
+    clock?: boolean;
 }
 
 /** A cell: its text (a spreadsheet's stored value), what it shows (its value in its format), its value typed. */
-export interface WorkCell { col: number; text: string; shown: string; value: CellValue; bold: boolean; colSpan: number; rowSpan: number; hidden?: boolean; /** Its links in order (a few at most): a writer writes the first it can (see writableLink). */ links?: string[] }
-export interface WorkRow { cells: WorkCell[]; hidden?: boolean }
+export interface WorkCell {
+    col: number; text: string; shown: string; value: CellValue; bold: boolean; colSpan: number; rowSpan: number; hidden?: boolean;
+    /** Its links in order (a few at most): a writer writes the first it can (see writableLink). */ links?: string[];
+    /** The comments on it (its own, and its text's), as a spreadsheet holds a cell's: written on it, not on the Notes sheet. */ comments?: CellComment[];
+}
+
+/** A comment on a cell: its author, where it has one, and its text. */
+export interface CellComment { author?: string; text: string }
+export interface WorkRow { cells: WorkCell[]; hidden?: boolean; /** Its row on the sheet (0 the first) where the rows before it skip some (a sheet of cells far apart), else its place among them. */ at?: number }
+
+/** A row's place on its sheet: its own (WorkRow.at), else its index among the sheet's rows. */
+export const rowAt = (row: WorkRow, index: number): number => row.at ?? index;
+
+/** The rows a sheet's rows reach to: past its last row's place. */
+export const rowsEnd = (rows: readonly WorkRow[]): number => rows.length ? rowAt(rows[rows.length - 1], rows.length - 1) + 1 : 0;
 export interface WorkSheet { name: string; rows: WorkRow[]; hidden?: boolean; widths: number[]; /** A spreadsheet's sheet's own name, where the name written is another (cut, made unique): links name it. */ source?: string }
 
 /** Spreadsheets' limits: rows, columns, a sheet name's length. */
@@ -94,6 +109,9 @@ function isoValue(text: string): CellValue | undefined {
     return undefined;
 }
 
+/** A time of day as a sheet shows one (`06:00`, `6:00:00 PM`). */
+const CLOCK = /^\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s?[AaPp]\.?[Mm]\.?)?$/;
+
 /** The errors a spreadsheet cell holds, as Excel writes them. */
 const ERRORS = new Set(['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A', '#GETTING_DATA']);
 
@@ -127,7 +145,9 @@ function typedKind(valueType: NonNullable<CellMetadata['valueType']>, held: stri
             // (Before 1900-03-01 the 1900 system counts a day that never was: such a date stays its text.)
             if (!held.trim() || !Number.isFinite(n) || n < 61 || n >= 2_958_466) return { kind: 'text' };
             const whole = Math.abs(n - Math.round(n)) < 1e-9;
-            return whole ? { kind: 'date', number: Math.round(n), iso: isoOfDays(n, false) } : { kind: 'datetime', number: n, iso: isoOfDays(n, true) };
+            if (whole) return { kind: 'date', number: Math.round(n), iso: isoOfDays(n, false) };
+            // (One the sheet showed as its time of day alone is shown so: written as a time, it was all its days in hours.)
+            return { kind: 'datetime', number: n, iso: isoOfDays(n, true), ...(CLOCK.test(shown.trim()) ? { clock: true } : {}) };
         }
         case 'time': {
             if (!held.trim() || !Number.isFinite(n) || n < 0) return { kind: 'text' };
@@ -230,7 +250,11 @@ export function hiddenColumns(sheet: WorkSheet): Set<number> {
     return hidden;
 }
 
-/** Each column's width in characters, from its longest line of text (at least 8, at most 80). */
+/**
+ * Each column's width in characters, from its longest line of text (at least 8, at most 80): a column no
+ * cell sets one for is left out (a hole), a writer giving it its own default. A sheet of cells in its
+ * first and its last columns wrote sixteen thousand columns' widths.
+ */
 function widthsOf(rows: WorkRow[]): number[] {
     const widths: number[] = [];
     for (const row of rows) for (const cell of row.cells) {
@@ -239,7 +263,7 @@ function widthsOf(rows: WorkRow[]): number[] {
         for (const line of cell.shown.split('\n')) if (line.length > longest) longest = line.length;
         widths[cell.col] = Math.max(widths[cell.col] ?? 8, Math.min(80, longest + 2));
     }
-    return Array.from({ length: widths.length }, (_, i) => widths[i] ?? 8);
+    return widths;
 }
 
 /** What the model needs of a writer: a node's text, and whether a node is written at all (onNode). */
@@ -273,11 +297,21 @@ function allBold(node: OfficeContentNode): boolean {
  * merged down holds its columns in the rows below and no two merges overlap. A row onNode gives text
  * for is one cell holding it; a cell onNode gives text for holds that text.
  */
-async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadsheet: boolean, lost: Set<string>, media?: CellMedia): Promise<WorkRow[]> {
+async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadsheet: boolean, lost: Set<string>, merges: MergeBudget, media?: CellMedia, inGrid?: Set<OfficeContentNode>): Promise<WorkRow[]> {
     // The rows and cells kept, and the text onNode gave for any.
     const rows: { row: OfficeContentNode; cells: OfficeContentNode[]; text?: string }[] = [];
     const given = new Map<OfficeContentNode, string>();
     for (const row of node.children || []) {
+        // A comment standing among the rows (a CSV's `#` line) is a row of its text where it stands, as CSV
+        // output writes it, not a note: a column of colour codes was moved to the Notes sheet.
+        if (row.type === 'comment') {
+            const kept = await source.keep(row);
+            if (kept === false) continue;
+            const text = typeof kept === 'string' ? kept : (row.text ?? (await Promise.all((row.children || []).map(c => source.textOf(c)))).join('\n'));
+            inGrid?.add(row);
+            rows.push({ row, cells: [], text });
+            continue;
+        }
         if (row.type !== 'row') continue;
         const kept = await source.keep(row);
         if (kept === false) continue;
@@ -298,17 +332,22 @@ async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadshe
         const cm = cell.metadata as CellMetadata | undefined;
         const own = given.get(cell);
         const text = own ?? await source.textOf(cell);
-        const shown = spreadsheet && typeof cm?.shownText === 'string' ? cm.shownText : undefined;
+        // What its file says it holds and shows, where its text is its own: one onNode gave (for it, or for
+        // a run in it, or left a run out) is typed from that text alone, and the value it replaced not written.
+        const untouched = own === undefined && spreadsheet && await keptWhole(cell, source.keep);
+        const shown = untouched && typeof cm?.shownText === 'string' ? cm.shownText : undefined;
         // The kind of value its file says it holds, and the value (its text, else what it shows; see CellMetadata.value).
-        const type = spreadsheet && typeof cm?.valueType === 'string' ? cm.valueType : undefined;
+        const type = untouched && typeof cm?.valueType === 'string' ? cm.valueType : undefined;
         const held = typeof cm?.value === 'string' ? cm.value : text;
         // Its pictures and charts, which a cell cannot hold (see CellMedia), and its first link.
         if (own === undefined && media) await mediaIn(cell, source, media);
         const links = own === undefined ? await linksIn(cell, source.keep) : [];
+        // Its comments, on it (a cell onNode gave text for took its own with it).
+        const comments = own === undefined ? await commentsOn(cell, source, inGrid) : [];
         return {
             col, text, shown: shown ?? text, value: type ? typedValue(type, held, shown ?? text, typeof cm?.numberFormat === 'string' ? cm.numberFormat : undefined) : cellValue(text, shown), bold: cm?.style === 'header' || allBold(cell),
             colSpan: Math.max(1, Math.min(MAX_COLS - col, colSpan)), rowSpan: Math.max(1, Math.min(MAX_ROWS - rowIndex, rowSpan)),
-            ...(cm?.hidden ? { hidden: true } : {}), ...(links.length ? { links } : {}),
+            ...(cm?.hidden ? { hidden: true } : {}), ...(links.length ? { links } : {}), ...(comments.length ? { comments } : {}),
         };
     };
     const out: WorkRow[] = [];
@@ -321,12 +360,15 @@ async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadshe
             rowIndex = typeof own === 'number' && own > rowIndex ? own : rowIndex + 1;
             // (Rows and columns past a spreadsheet's are reported, not written.)
             if (rowIndex >= MAX_ROWS) { lost.add(PAST_ROWS); break; }
-            while (out.length < rowIndex) out.push({ cells: [] });
             const cells: WorkCell[] = [];
             if (text !== undefined) {
                 const first = (row.children || []).map(c => (c.metadata as CellMetadata | undefined)?.col).find((c): c is number => typeof c === 'number');
                 cells.push(textCell(Math.min(MAX_COLS - 1, Math.max(0, first ?? 0)), text));
             }
+            // Each cell at its own column, one under an earlier cell's merge too (a value a spreadsheet keeps
+            // there, hidden: withinRows keeps the merge, a writer writes it under it); one naming a column
+            // at or before the last one placed comes after it. Placed after the merge, it moved every
+            // later cell of its row a column right.
             let col = -1;
             for (const cell of kept) {
                 const cm = cell.metadata as CellMetadata;
@@ -334,11 +376,11 @@ async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadshe
                 if (col >= MAX_COLS) { lost.add(PAST_COLS); break; }
                 const colSpan = Math.max(1, Math.floor(cm.colSpan ?? 1));
                 cells.push(await workCell(cell, col, rowIndex, colSpan, Math.max(1, Math.floor(cm.rowSpan ?? 1))));
-                col += colSpan - 1;
             }
-            out.push({ cells, ...hiddenRow(row) });
+            // (At its own row: the rows a sheet skips are not written one by one.)
+            out.push({ cells, ...hiddenRow(row), at: rowIndex });
         }
-        return withinRows(out);
+        return withinRows(out, merges, lost);
     }
     // Laid out as a table is: a row onNode gave text for is one cell, in the row's first column.
     const stand = new Map<OfficeContentNode, string>();
@@ -360,35 +402,82 @@ async function gridOf(node: OfficeContentNode, source: WorkbookSource, spreadshe
         }
         out.push({ cells, ...hiddenRow(rows[ri].row) });
     }
-    return withinRows(out);
+    return withinRows(out, merges, lost);
 }
 
 /**
  * A table's rows with each merge held to them (one reaching past its last row overlapped what came next on
  * the sheet) and to the area no earlier merge covers: a sheet whose cells name their places can give two
- * merges that overlap, which a spreadsheet repairs by dropping them. A merge that would overlap is none.
- * Bounded: past MAX_MERGE_POSITIONS positions marked, later merges are none.
+ * merges that overlap, which a spreadsheet repairs by dropping them. A merge that would overlap is none,
+ * and so is one past the workbook's MAX_MERGE_POSITIONS positions merged (their cells are written, each
+ * on its own), each kind reported.
  */
-function withinRows(rows: WorkRow[]): WorkRow[] {
+function withinRows(rows: WorkRow[], budget: MergeBudget, lost: Set<string>): WorkRow[] {
     const taken = new Set<string>();
-    let marked = 0;
-    rows.forEach((row, ri) => {
+    const end = rowsEnd(rows);
+    rows.forEach((row, i) => {
+        const ri = rowAt(row, i);
         for (const cell of row.cells) {
-            if (cell.rowSpan > rows.length - ri) cell.rowSpan = Math.max(1, rows.length - ri);
+            if (cell.rowSpan > end - ri) cell.rowSpan = Math.max(1, end - ri);
             if (cell.rowSpan === 1 && cell.colSpan === 1) continue;
             const area = cell.rowSpan * cell.colSpan;
-            let free = marked + area <= MAX_MERGE_POSITIONS;
+            if (area > budget.left) { cell.rowSpan = 1; cell.colSpan = 1; lost.add(MERGES_PAST); continue; }
+            let free = true;
             for (let r = ri; free && r < ri + cell.rowSpan; r++) for (let c = cell.col; free && c < cell.col + cell.colSpan; c++) if (taken.has(`${r},${c}`)) free = false;
-            if (!free) { cell.rowSpan = 1; cell.colSpan = 1; continue; }
+            if (!free) { cell.rowSpan = 1; cell.colSpan = 1; lost.add(MERGES_OVERLAPPING); continue; }
             for (let r = ri; r < ri + cell.rowSpan; r++) for (let c = cell.col; c < cell.col + cell.colSpan; c++) taken.add(`${r},${c}`);
-            marked += area;
+            budget.left -= area;
         }
     });
     return rows;
 }
 
-/** The most positions merges may cover on one sheet's check for overlaps. */
+/** The positions a workbook's merges may still cover (each checked for overlaps, and an ODS writer's covered cells). */
+export interface MergeBudget { left: number }
+
+/** The most positions a workbook's merges may cover. */
 const MAX_MERGE_POSITIONS = 2_000_000;
+/** What is reported of merges not written. */
+const MERGES_PAST = 'merged cells past 2,000,000 positions merged', MERGES_OVERLAPPING = 'merged cells overlapping others';
+
+/**
+ * The comments on a cell and on its text (each a few levels down at most), each asked of onNode: one left
+ * out is none, one given text for is that text with no author. Each one taken is added to `taken`, so the
+ * Notes sheet leaves it to its cell. Their cell was lost on the Notes sheet: two comments alike on two
+ * cells could not be told apart.
+ */
+async function commentsOn(cell: OfficeContentNode, source: WorkbookSource, taken?: Set<OfficeContentNode>): Promise<CellComment[]> {
+    const out: CellComment[] = [];
+    const walk = async (node: OfficeContentNode, depth: number) => {
+        for (const comment of node.comments || []) {
+            if (taken?.has(comment)) continue;
+            const kept = await source.keep(comment);
+            if (kept === false) continue;
+            const text = (typeof kept === 'string' ? kept : comment.children?.length ? (await Promise.all(comment.children.map(c => source.textOf(c)))).join('\n') : comment.text ?? '').trim();
+            taken?.add(comment);
+            if (!text) continue;
+            const author = typeof kept === 'string' ? undefined : (comment.metadata as CommentMetadata | undefined)?.author;
+            out.push({ text, ...(typeof author === 'string' && author.trim() ? { author: author.trim() } : {}) });
+        }
+        if (depth >= 32) return;
+        for (const c of node.children || []) {
+            if (c.type === 'comment' || c.type === 'note') continue;
+            if (await source.keep(c) !== true) continue;
+            await walk(c, depth + 1);
+        }
+    };
+    await walk(cell, 0);
+    return out;
+}
+
+/** Whether onNode keeps every node under `node` as it is (none left out, none given text for). */
+async function keptWhole(node: OfficeContentNode, keep: (node: OfficeContentNode) => Promise<boolean | string>, depth = 0): Promise<boolean> {
+    for (const c of node.children || []) {
+        if (await keep(c) !== true) return false;
+        if (depth < 32 && c.children?.length && !await keptWhole(c, keep, depth + 1)) return false;
+    }
+    return true;
+}
 
 /** The pictures and charts met in cells (a cell holds neither), and whether a cell held more than one link. */
 export interface CellMedia { pictures: number; charts: OfficeContentNode[] }
@@ -532,9 +621,10 @@ export async function noteLabels(content: OfficeContentNode[], keep: (node: Offi
  * block of the page) by its number, each slide's speaker notes by the slide, and each comment by its
  * author, with their text.
  */
-async function notesOf(content: OfficeContentNode[], source: WorkbookSource, labels: Map<OfficeContentNode, string>, lost: Set<string>): Promise<WorkRow[]> {
+async function notesOf(content: OfficeContentNode[], source: WorkbookSource, labels: Map<OfficeContentNode, string>, lost: Set<string>, inGrid: ReadonlySet<OfficeContentNode>): Promise<WorkRow[]> {
     const rows: WorkRow[] = [];
-    const seen = new Set<OfficeContentNode>();
+    // (A comment written as a row of its grid is there already.)
+    const seen = new Set<OfficeContentNode>(inGrid);
     const add = async (note: OfficeContentNode, label: string) => {
         if (seen.has(note)) return;
         if (rows.length >= MAX_ROWS) { lost.add(PAST_ROWS); return; }
@@ -589,6 +679,10 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
     const taken = new Set<string>();
     const nameOf = (wanted: string, fallback: string) => sheetName(wanted, taken, fallback, options.sheetNameLength);
     const unrepresentable = new Set<string>();
+    // Comments written as rows of their grids (see gridOf), which the Notes sheet leaves to them.
+    const inGrid = new Set<OfficeContentNode>();
+    // The positions the workbook's merges may cover, all its sheets' (see withinRows).
+    const merges: MergeBudget = { left: MAX_MERGE_POSITIONS };
     // A chart or picture left out by the caller (includeCharts: false, includeImages 'none' or 'ocr-text-only')
     // is not one lost.
     const picturesWanted = options.imageMode === 'image-only' || options.imageMode === 'image+ocr-text';
@@ -611,7 +705,7 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
     };
     // The notes, on a sheet of their own after the others.
     const withNotes = async () => {
-        const notes = await notesOf(content, source, options.noteLabels, unrepresentable);
+        const notes = await notesOf(content, source, options.noteLabels, unrepresentable, inGrid);
         if (notes.length) sheets.push({ name: nameOf('Notes', 'Notes'), rows: notes, widths: [12, Math.min(120, Math.max(8, longestOf(notes, 1)))] });
         // No bold where the caller asked for no formatting (includeFormatting: false).
         if (!options.includeFormatting) for (const sheet of sheets) for (const row of sheet.rows) for (const cell of row.cells) cell.bold = false;
@@ -624,19 +718,19 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
         const table = source.chartTable?.(node);
         if (!table) { lost(node); return undefined; }
         chartCount++;
-        return gridOf(table, source, false, unrepresentable);
+        return gridOf(table, source, false, unrepresentable, merges);
     };
     // A node onNode gives a string for, where a table or sheet stood: one cell of it.
     const oneCell = (text: string): WorkRow[] => [{ cells: [{ ...textCell(0, text), value: { kind: 'text' } }] }];
     // Whether a sheet has a row left (one past its last is reported, not written).
-    const room = (rows: WorkRow[]) => rows.length < MAX_ROWS || (unrepresentable.add(PAST_ROWS), false);
+    const room = (rows: WorkRow[]) => rowsEnd(rows) < MAX_ROWS || (unrepresentable.add(PAST_ROWS), false);
     const sheetNodes = content.filter(n => n.type === 'sheet');
     if (sheetNodes.length) {
         for (const [i, node] of sheetNodes.entries()) {
             const kept = await source.keep(node);
             if (kept === false) continue;
             const meta = node.metadata as SheetMetadata | undefined;
-            const rows = typeof kept === 'string' ? oneCell(kept) : await gridOf(node, source, true, unrepresentable, media);
+            const rows = typeof kept === 'string' ? oneCell(kept) : await gridOf(node, source, true, unrepresentable, merges, media, inGrid);
             // (A sheet onNode gives a string for is that string alone, under no name of its own.)
             const name = nameOf(typeof kept === 'string' ? '' : meta?.sheetName ?? '', `Sheet${i + 1}`);
             const own = typeof kept === 'string' ? undefined : meta?.sheetName;
@@ -649,7 +743,7 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
                 const k = await source.keep(c);
                 if (k === false) continue;
                 // (One onNode gives a string for: a row of that text on the sheet, after its own.)
-                if (typeof k === 'string') { if (k.trim() && room(rows)) rows.push({ cells: [{ ...textCell(0, k), value: { kind: 'text' } }] }); continue; }
+                if (typeof k === 'string') { if (k.trim() && room(rows)) rows.push({ cells: [{ ...textCell(0, k), value: { kind: 'text' } }], at: rowsEnd(rows) }); continue; }
                 if (c.type === 'image') media.pictures++; else media.charts.push(c);
             }
             await settle(name);
@@ -681,7 +775,7 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
                 continue;
             }
             if (node.type === 'table') {
-                const rows = await gridOf(node, source, false, unrepresentable, media);
+                const rows = await gridOf(node, source, false, unrepresentable, merges, media, inGrid);
                 tables++;
                 if (options.sheetPerTable) sheets.push({ name: nameOf(heading, `Table ${tables}`), rows, widths: widthsOf(rows) });
                 else { if (together.length) together.push({ cells: [] }); for (const r of rows) together.push(r); }

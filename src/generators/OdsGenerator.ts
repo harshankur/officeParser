@@ -4,7 +4,7 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { encUrl, odfUserDefinedXml, resolveZipInstant, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
-import { buildWorkbook, cellTextProcessor, noteLabels, sheetIndex, sheetRef, writableLink, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
+import { buildWorkbook, cellTextProcessor, noteLabels, rowAt, sheetIndex, sheetRef, writableLink, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
 
 /** Escapes text content for an XML part after stripping XML-illegal characters. */
 function xmlText(s: string | undefined): string {
@@ -50,10 +50,15 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
     /** The data style a value is shown in, or none (a plain number or text). */
     private dataStyle(v: CellValue): string | undefined {
         switch (v.kind) {
-            case 'number':
+            case 'number': {
+                // (A spreadsheet's own format where ODF can say it: its scientific notation, its fraction, its words
+                // around the number, `0.0 "kg"`. Else the format read from what it showed.)
+                const own = v.code ? odfNumberParts(v.code) : undefined;
+                if (own) return this.styleNamed(`nc|${own}`, 'N', name => `<number:number-style style:name="${name}">${own}</number:number-style>`);
                 // (A whole number of twelve to fifteen digits, an id, is shown in full, not in scientific notation.)
                 if (!v.grouping && !v.decimals && !wholeInFull(v)) return undefined;
                 return this.styleNamed(`n|${v.decimals}|${v.grouping}`, 'N', name => `<number:number-style style:name="${name}">${OdsGenerator.numberXml(v)}</number:number-style>`);
+            }
             case 'percent':
                 return this.styleNamed(`p|${v.decimals}|${v.grouping}`, 'N', name => `<number:percentage-style style:name="${name}">${OdsGenerator.numberXml(v)}<number:text>%</number:text></number:percentage-style>`);
             case 'currency': {
@@ -64,15 +69,22 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
             case 'date':
                 return this.styleNamed('d', 'N', name => `<number:date-style style:name="${name}"><number:year number:style="long"/><number:text>-</number:text><number:month number:style="long"/><number:text>-</number:text><number:day number:style="long"/></number:date-style>`);
             case 'datetime':
+                // (One shown as its time of day: a time style on the date it holds.)
+                if (v.clock) return this.timeOfDayStyle();
                 return this.styleNamed('dt', 'N', name => `<number:date-style style:name="${name}"><number:year number:style="long"/><number:text>-</number:text><number:month number:style="long"/><number:text>-</number:text><number:day number:style="long"/><number:text> </number:text><number:hours number:style="long"/><number:text>:</number:text><number:minutes number:style="long"/><number:text>:</number:text><number:seconds number:style="long"/></number:date-style>`);
             case 'time':
                 // (A duration of a day or more in its hours: `number:truncate-on-overflow` off.)
                 if ((v.number ?? 0) >= 1) return this.styleNamed('th', 'N', name => `<number:time-style style:name="${name}" number:truncate-on-overflow="false"><number:hours/><number:text>:</number:text><number:minutes number:style="long"/><number:text>:</number:text><number:seconds number:style="long"/></number:time-style>`);
-                return this.styleNamed('t', 'N', name => `<number:time-style style:name="${name}"><number:hours number:style="long"/><number:text>:</number:text><number:minutes number:style="long"/><number:text>:</number:text><number:seconds number:style="long"/></number:time-style>`);
+                return this.timeOfDayStyle();
             case 'boolean':
                 return this.styleNamed('b', 'N', name => `<number:boolean-style style:name="${name}"><number:boolean/></number:boolean-style>`);
             default: return undefined;
         }
+    }
+
+    /** A time of day's data style (`14:05:00`). */
+    private timeOfDayStyle(): string {
+        return this.styleNamed('t', 'N', name => `<number:time-style style:name="${name}"><number:hours number:style="long"/><number:text>:</number:text><number:minutes number:style="long"/><number:text>:</number:text><number:seconds number:style="long"/></number:time-style>`);
     }
 
     /** A cell's style: its data style, bold or not, wrapped or not; none for a plain cell. */
@@ -144,70 +156,105 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
         return { value: zipSync(files, { mtime }), messages: this.messages };
     }
 
-    /** A sheet as a table: its columns' widths (hidden ones collapsed), its rows and cells, merges covering cells. */
     /** Whether a link to a place no written sheet holds was left out (reported once). */
     private readonly linkLosses = new Set<string>();
 
+    /**
+     * A sheet as a table: its columns' widths (hidden ones collapsed), its rows and cells, merges covering
+     * cells. Written where its cells stand, empty rows and columns between them repeated, not one by one:
+     * a sheet of two cells a million rows (or sixteen thousand columns) apart wrote every position.
+     */
     private tableXml(sheet: WorkSheet, sheetNames: ReadonlyMap<string, string>): string {
         const hiddenCols = hiddenColumns(sheet);
         const tableStyle = sheet.hidden ? this.styleNamed('ta|hidden', 'ta', name => `<style:style style:name="${name}" style:family="table"><style:table-properties table:display="false"/></style:style>`) : undefined;
-        const columns = sheet.widths.map((w, i) => {
+        // The columns with widths of their own; those between them, one default column repeated.
+        const columnXml: string[] = [];
+        let nextColumn = 0;
+        sheet.widths.forEach((w, i) => {
+            if (i > nextColumn) columnXml.push(`<table:table-column${i - nextColumn > 1 ? ` table:number-columns-repeated="${i - nextColumn}"` : ''}/>`);
             const style = this.styleNamed(`co|${w}`, 'co', name => `<style:style style:name="${name}" style:family="table-column"><style:table-column-properties style:column-width="${(w * 0.19).toFixed(3)}cm"/></style:style>`);
-            return `<table:table-column table:style-name="${style}"${hiddenCols.has(i) ? ' table:visibility="collapse"' : ''}/>`;
-        }).join('');
-        // Positions a merged cell covers: (row, col), and each row's last covered column.
+            columnXml.push(`<table:table-column table:style-name="${style}"${hiddenCols.has(i) ? ' table:visibility="collapse"' : ''}/>`);
+            nextColumn = i + 1;
+        });
+        const columns = columnXml.join('');
+        // Positions a merged cell covers, (row, col), and each row's covered columns (as many as the
+        // workbook's merges cover, see withinRows).
         const covered = new Set<string>();
-        const lastCovered = new Map<number, number>();
-        for (const [r, row] of sheet.rows.entries()) for (const c of row.cells) {
-            for (let dr = 0; dr < c.rowSpan; dr++) for (let dc = 0; dc < c.colSpan; dc++) {
-                if (!dr && !dc) continue;
-                covered.add(`${r + dr},${c.col + dc}`);
-                lastCovered.set(r + dr, Math.max(lastCovered.get(r + dr) ?? -1, c.col + dc));
+        const coveredCols = new Map<number, number[]>();
+        for (const [i, row] of sheet.rows.entries()) {
+            const r = rowAt(row, i);
+            for (const c of row.cells) {
+                for (let dr = 0; dr < c.rowSpan; dr++) for (let dc = 0; dc < c.colSpan; dc++) {
+                    if (!dr && !dc) continue;
+                    covered.add(`${r + dr},${c.col + dc}`);
+                    let list = coveredCols.get(r + dr);
+                    if (!list) coveredCols.set(r + dr, list = []);
+                    list.push(c.col + dc);
+                }
             }
         }
-        // Rows in order, a run of empty ones (nothing in them, none covered) one row repeated: a sheet of two
-        // cells a million rows apart wrote a million rows.
-        const rowOf = (row: WorkSheet['rows'][number], r: number) => this.rowXml(row, r, covered, lastCovered, sheetNames);
+        for (const list of coveredCols.values()) list.sort((a, b) => a - b);
+        // The rows to write, in order: the sheet's, and those only a merge reaches.
+        const listed = sheet.rows.map((row, i) => ({ r: rowAt(row, i), row }));
+        const listedRows = new Set(listed.map(l => l.r));
+        const onlyCovered = [...coveredCols.keys()].filter(r => !listedRows.has(r)).sort((a, b) => a - b);
+        const order: { r: number; row: WorkSheet['rows'][number] }[] = [];
+        for (let a = 0, b = 0; a < listed.length || b < onlyCovered.length;) {
+            if (b >= onlyCovered.length || (a < listed.length && listed[a].r <= onlyCovered[b])) order.push(listed[a++]);
+            else order.push({ r: onlyCovered[b++], row: { cells: [] } });
+        }
+        // Rows in order, a run of empty ones (nothing in them, none covered) one row repeated.
         const rowXml: string[] = [];
-        let emptyRows = 0, emptyHidden = false;
+        let emptyRows = 0, emptyHidden = false, next = 0;
         const flushRows = () => {
             if (!emptyRows) return;
             rowXml.push(`<table:table-row${emptyRows > 1 ? ` table:number-rows-repeated="${emptyRows}"` : ''}${emptyHidden ? ' table:visibility="collapse"' : ''}><table:table-cell/></table:table-row>`);
             emptyRows = 0;
         };
-        for (const [r, row] of sheet.rows.entries()) {
-            if (!row.cells.length && !lastCovered.has(r)) {
-                if (emptyRows && emptyHidden !== !!row.hidden) flushRows();
-                emptyHidden = !!row.hidden;
-                emptyRows++;
-                continue;
-            }
+        const empty = (count: number, hidden: boolean) => {
+            if (emptyRows && emptyHidden !== hidden) flushRows();
+            emptyHidden = hidden;
+            emptyRows += count;
+        };
+        for (const { r, row } of order) {
+            if (r < next) continue;
+            if (r > next) empty(r - next, false);
+            next = r + 1;
+            const cols = coveredCols.get(r) ?? [];
+            if (!row.cells.length && !cols.length) { empty(1, !!row.hidden); continue; }
             flushRows();
-            rowXml.push(rowOf(row, r));
+            rowXml.push(this.rowXml(row, r, cols, covered, sheetNames));
         }
         flushRows();
         const rows = rowXml.join('');
         return `<table:table table:name="${xmlText(sheet.name)}"${tableStyle ? ` table:style-name="${tableStyle}"` : ''}>${columns || '<table:table-column/>'}${rows || '<table:table-row><table:table-cell/></table:table-row>'}</table:table>`;
     }
 
-    /** A row of a sheet's table: its cells, empty positions and those merges cover. */
-    private rowXml(row: WorkSheet['rows'][number], r: number, covered: Set<string>, lastCovered: Map<number, number>, sheetNames: ReadonlyMap<string, string>): string {
+    /** A row of a sheet's table: its cells, the empty positions between them repeated, and those merges cover. */
+    private rowXml(row: WorkSheet['rows'][number], r: number, coveredCols: readonly number[], covered: Set<string>, sheetNames: ReadonlyMap<string, string>): string {
         const out: string[] = [];
-        let col = 0;
-        const byCol = new Map(row.cells.map(c => [c.col, c]));
-        // Empty positions as one repeated cell; covered ones as covered cells.
-        let empty = 0;
-        const flush = () => { if (empty) { out.push(`<table:table-cell${empty > 1 ? ` table:number-columns-repeated="${empty}"` : ''}/>`); empty = 0; } };
-        let last = lastCovered.get(r) ?? -1;
-        for (const c of row.cells) last = Math.max(last, c.col + c.colSpan - 1);
-        for (; col <= last; col++) {
-            const cell = byCol.get(col);
-            if (covered.has(`${r},${col}`) && !cell) { flush(); out.push('<table:covered-table-cell/>'); continue; }
-            if (!cell) { empty++; continue; }
-            flush();
+        const cells = row.cells;
+        let next = 0, ci = 0, ki = 0;
+        while (ci < cells.length || ki < coveredCols.length) {
+            const cellCol = ci < cells.length ? cells[ci].col : Infinity, coveredCol = ki < coveredCols.length ? coveredCols[ki] : Infinity;
+            const at = Math.min(cellCol, coveredCol);
+            if (at < next) { if (cellCol === at) ci++; else ki++; continue; }
+            if (at > next) out.push(`<table:table-cell${at - next > 1 ? ` table:number-columns-repeated="${at - next}"` : ''}/>`);
+            if (cellCol !== at) {
+                // A run of covered positions, one covered cell repeated.
+                let run = 1;
+                ki++;
+                while (ki < coveredCols.length && coveredCols[ki] === at + run && (ci >= cells.length || cells[ci].col !== at + run)) { run++; ki++; }
+                out.push(`<table:covered-table-cell${run > 1 ? ` table:number-columns-repeated="${run}"` : ''}/>`);
+                next = at + run;
+                continue;
+            }
+            const cell = cells[ci++];
+            if (coveredCol === at) ki++;
+            next = at + 1;
             // A value under another cell's merge (a spreadsheet keeps one there, hidden) is a covered cell
             // holding it, as ODF has it: a cell of its own there overlapped the merge.
-            const tag = covered.has(`${r},${col}`) ? 'table:covered-table-cell' : 'table:table-cell';
+            const tag = covered.has(`${r},${at}`) ? 'table:covered-table-cell' : 'table:table-cell';
             const style = this.cellStyle(cell.value, cell.bold, cell.text.includes('\n'));
             const attrs = (style ? ` table:style-name="${style}"` : '')
                 + (tag === 'table:table-cell' && cell.colSpan > 1 ? ` table:number-columns-spanned="${cell.colSpan}"` : '') + (tag === 'table:table-cell' && cell.rowSpan > 1 ? ` table:number-rows-spanned="${cell.rowSpan}"` : '')
@@ -222,12 +269,46 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
             const href = chosen.place ? `#${sheetRef(chosen.place.sheet)}.${chosen.place.cell}${chosen.place.to ? `:${sheetRef(chosen.place.sheet)}.${chosen.place.to}` : ''}` : chosen.link ? encUrl(chosen.link) : undefined;
             const linked = (line: string) => href ? `<text:a xlink:type="simple" xlink:href="${xmlText(href)}">${xmlText(line)}</text:a>` : xmlText(line);
             const paragraphs = cell.shown ? cell.shown.split('\n').map(line => `<text:p>${linked(line)}</text:p>`).join('') : '';
-            out.push(`<${tag}${attrs}>${paragraphs}</${tag}>`);
+            // Its comments as the cell's annotation (ODF holds one a cell: the first comment's author its own,
+            // the others' named in their text).
+            const note = cell.comments?.length ? `<office:annotation>${cell.comments[0].author ? `<dc:creator>${xmlText(cell.comments[0].author)}</dc:creator>` : ''}`
+                + cell.comments.map((c, i) => ((i && c.author ? `${c.author}: ` : '') + c.text).split('\n').map(line => `<text:p>${xmlText(line)}</text:p>`).join('')).join('') + `</office:annotation>` : '';
+            out.push(`<${tag}${attrs}>${note}${paragraphs}</${tag}>`);
         }
-        if (!out.length && !empty) out.push('<table:table-cell/>');
-        flush();
+        if (!out.length) out.push('<table:table-cell/>');
         return `<table:table-row${row.hidden ? ' table:visibility="collapse"' : ''}>${out.join('')}</table:table-row>`;
     }
+}
+
+/**
+ * An Excel number format code as an ODF number style's parts, where it is one ODF can say: one section (no
+ * colour, condition, percent or text placeholder), words before and after (quoted, escaped, or plain
+ * spaces and signs), and a number (`#,##0.00`), a number in scientific notation (`0.00E+00`) or a
+ * fraction (`# ?/?`) between them. Undefined for any other code.
+ */
+export function odfNumberParts(code: string): string | undefined {
+    if (code.length > 255 || /[;[%@*_]/.test(code.replace(/"[^"]*"|\\./g, ''))) return undefined;
+    const words: string[] = [];
+    let rest = code, number = '';
+    const literal = (text: string) => text ? `<number:text>${xmlText(text)}</number:text>` : '';
+    // The words before the number.
+    let before = '';
+    for (let m: RegExpExecArray | null; (m = /^(?:"([^"]*)"|\\(.)|([ \-+$€£¥():/]))/.exec(rest));) { before += m[1] ?? m[2] ?? m[3]; rest = rest.slice(m[0].length); }
+    const body = /^([#0?,]*(?:\.[#0?]+)?)(?:([Ee][+-]0+)|\s+([#0?]+)\/([#0?]+|\d+))?/.exec(rest);
+    if (!body || !/[#0?]/.test(body[1] + (body[3] ?? ''))) return undefined;
+    rest = rest.slice(body[0].length);
+    let after = '';
+    for (let m: RegExpExecArray | null; (m = /^(?:"([^"]*)"|\\(.)|([ \-+$€£¥():/]))/.exec(rest));) { after += m[1] ?? m[2] ?? m[3]; rest = rest.slice(m[0].length); }
+    if (rest) return undefined;
+    const [whole, fraction = ''] = body[1].split('.');
+    const decimals = fraction.length, minDecimals = (fraction.match(/0/g) || []).length;
+    const minInteger = (whole.match(/0/g) || []).length;
+    const grouping = whole.includes(',') ? ' number:grouping="true"' : '';
+    if (body[2]) number = `<number:scientific-number number:decimal-places="${decimals}" number:min-decimal-places="${minDecimals}" number:min-integer-digits="${Math.max(1, minInteger)}" number:min-exponent-digits="${body[2].length - 2}"${grouping}/>`;
+    else if (body[3]) number = `<number:fraction number:min-integer-digits="${minInteger}" number:min-numerator-digits="${body[3].length}" ${/^\d+$/.test(body[4]) ? `number:denominator-value="${body[4]}"` : `number:min-denominator-digits="${body[4].length}"`}${grouping}/>`;
+    else number = `<number:number number:decimal-places="${decimals}" number:min-decimal-places="${minDecimals}" number:min-integer-digits="${minInteger}"${grouping}/>`;
+    words.push(literal(before), number, literal(after));
+    return words.join('');
 }
 
 /** A value's ODF attributes: its type and the value held (text cells hold theirs in their paragraphs). */

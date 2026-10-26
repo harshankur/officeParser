@@ -7,6 +7,11 @@ import { decodeBase64, encUrl, hexColor, odfUserDefinedXml, resolveZipInstant, s
 import { BaseGenerator } from './BaseGenerator.js';
 import { buildDeck, bulletMargin, Box, DeckItem, DeckParagraph, DeckRun, DeckSlide } from './slides/deck.js';
 
+
+/** The pictures ODP output holds, by their types' names (EMF, WMF, TIFF and SVG too, as LibreOffice shows them), and each kind's type. */
+const PICTURE_TYPES = new Map<string, string>([['image/png', 'png'], ['image/jpeg', 'jpg'], ['image/jpg', 'jpg'], ['image/gif', 'gif'], ['image/bmp', 'bmp'], ['image/tiff', 'tiff'],
+    ['image/x-emf', 'emf'], ['image/emf', 'emf'], ['image/x-wmf', 'wmf'], ['image/wmf', 'wmf'], ['image/svg+xml', 'svg']]);
+const PICTURE_MIME = new Map<string, string>([['png', 'image/png'], ['jpg', 'image/jpeg'], ['gif', 'image/gif'], ['bmp', 'image/bmp'], ['tiff', 'image/tiff'], ['emf', 'image/x-emf'], ['wmf', 'image/x-wmf'], ['svg', 'image/svg+xml']]);
 /** Escapes text content for an XML part after stripping XML-illegal characters. */
 function xmlText(s: string | undefined): string {
     return escapeXml(stripInvalidXmlChars(s ?? ''));
@@ -116,11 +121,19 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
         let at = this.mediaByKey.get(key);
         if (at === undefined) {
             if (!bytes || !bytes.length) return undefined;
-            const sniffed = bytes[0] === 0x89 && bytes[1] === 0x50 ? 'image/png' : bytes[0] === 0xff && bytes[1] === 0xd8 ? 'image/jpeg' : bytes[0] === 0x47 && bytes[1] === 0x49 ? 'image/gif' : bytes[0] === 0x42 && bytes[1] === 0x4d ? 'image/bmp' : undefined;
-            const type = sniffed ?? (mime && /^image\/(png|jpe?g|gif|bmp)$/i.test(mime) ? mime.toLowerCase() : undefined);
-            if (!type) return undefined;
+            // (Its bytes say what it is first: EMF by its signature at 40, a placeable WMF by its key, TIFF either
+            // way round, SVG by its element.)
+            const head = String.fromCharCode(...bytes.subarray(0, 256));
+            const sniffed = bytes[0] === 0x89 && bytes[1] === 0x50 ? 'png' : bytes[0] === 0xff && bytes[1] === 0xd8 ? 'jpg' : bytes[0] === 0x47 && bytes[1] === 0x49 ? 'gif' : bytes[0] === 0x42 && bytes[1] === 0x4d ? 'bmp'
+                : (bytes[0] === 0x49 && bytes[1] === 0x49 && bytes[2] === 0x2a && bytes[3] === 0) || (bytes[0] === 0x4d && bytes[1] === 0x4d && bytes[2] === 0 && bytes[3] === 0x2a) ? 'tiff'
+                : bytes[0] === 1 && bytes[1] === 0 && bytes[2] === 0 && bytes[3] === 0 && bytes[40] === 0x20 && bytes[41] === 0x45 && bytes[42] === 0x4d && bytes[43] === 0x46 ? 'emf'
+                : bytes[0] === 0xd7 && bytes[1] === 0xcd && bytes[2] === 0xc6 && bytes[3] === 0x9a ? 'wmf'
+                : /^\s*(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!DOCTYPE[^>]*>\s*)?<svg[\s>]/i.test(head) ? 'svg' : undefined;
+            // (A type named by the attachment, looked up as a type alone: one that is a name every object has is none.)
+            const ext = sniffed ?? (mime ? PICTURE_TYPES.get(mime.toLowerCase()) : undefined);
+            if (!ext) return undefined;
             at = this.media.length;
-            this.media.push({ path: `Pictures/image${at + 1}.${type.split('/')[1].replace('jpeg', 'jpg')}`, bytes, mime: type });
+            this.media.push({ path: `Pictures/image${at + 1}.${ext}`, bytes, mime: PICTURE_MIME.get(ext)! });
             this.mediaByKey.set(key, at);
         }
         return this.media[at].path;
@@ -133,7 +146,7 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
             // A background picture: a frame the page's size, under the rest.
             const href = this.mediaFor(`background:${index}`, slide.picture, undefined);
             if (href) under = `<draw:frame svg:x="0pt" svg:y="0pt" svg:width="${pt(width)}" svg:height="${pt(height)}"><draw:image xlink:href="${xmlText(href)}" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/></draw:frame>`;
-            else this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { reason: 'a background picture that is not PNG, JPEG, GIF or BMP' });
+            else this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { reason: 'a background picture of a kind ODP output does not hold' });
         } else if (slide.background && hexColor(slide.background)) {
             pageStyle = this.styleNamed(`dp|${hexColor(slide.background)}`, 'dp', name => `<style:style style:name="${name}" style:family="drawing-page"><style:drawing-page-properties draw:fill="solid" draw:fill-color="#${hexColor(slide.background)}" draw:background-size="border"/></style:style>`);
         }
@@ -181,7 +194,11 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
             const a = this.attachmentsByName.get(item.attachment);
             const bytes = a?.data ? decodeBase64(a.data) : undefined;
             const href = this.mediaFor(item.attachment, bytes ?? undefined, a?.mimeType);
-            if (!href) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: item.attachment, reason: a ? 'a picture a slide cannot hold (PNG, JPEG, GIF and BMP it can)' : 'missing attachment' }); return ''; }
+            if (!href) {
+                // (Its alternative text in its place.)
+                this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: item.attachment, reason: a ? 'a picture of a kind ODP output does not hold (PNG, JPEG, GIF, BMP, TIFF, EMF, WMF and SVG it does)' : 'missing attachment' });
+                return item.alt ? this.itemXml({ kind: 'text', box: item.box, paragraphs: [{ runs: [{ text: item.alt }] }] }) : '';
+            }
             const size = bytes ? sniffImageSize(bytes) : null;
             let box = item.box;
             if (!item.fill && size && size.w > 0 && size.h > 0) {
@@ -258,7 +275,7 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
         const pStyle = align || p.bullet || first || spacing ? this.styleNamed(`p|${align}|${p.bullet?.level ?? ''}|${first.toFixed(2)}|${spacing.toFixed(2)}`, 'P', name => `<style:style style:name="${name}" style:family="paragraph"><style:paragraph-properties${align ? ` fo:text-align="${align}"` : ''}${spacing ? ` fo:line-height="${pt(spacing)}"` : ''}${p.bullet ? ` fo:margin-left="${pt(bulletMargin(p.bullet.level))}" fo:text-indent="${pt(-14)}"` : first ? ` fo:margin-left="${pt(Math.max(0, -first))}" fo:text-indent="${pt(first)}"` : ''}/></style:style>`) : undefined;
         const spans = p.runs.map(r => this.spanXml(r, defaultSize, p.mono)).join('');
         // A number is written as the item shows it, as a bullet's character is.
-        const marker = p.bullet ? (p.bullet.numbered ? (p.bullet.text ? `${xmlText(p.bullet.text)}<text:tab/>` : '') : `${xmlText(p.bullet.char ? [...p.bullet.char][0] : '')}<text:tab/>`) : '';
+        const marker = p.bullet ? (p.bullet.numbered ? (p.bullet.text ? `${xmlText(p.bullet.text)}<text:tab/>` : '') : `${xmlText(p.bullet.char ?? '')}<text:tab/>`) : '';
         return `<text:p${pStyle ? ` text:style-name="${pStyle}"` : ''}>${marker}${spans}</text:p>`;
     }
 

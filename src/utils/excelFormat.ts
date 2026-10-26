@@ -20,6 +20,18 @@ export const BUILTIN_NUMBER_FORMATS: ReadonlyMap<string, string> = new Map([
     ['37', '#,##0 ;(#,##0)'], ['38', '#,##0 ;[Red](#,##0)'], ['39', '#,##0.00;(#,##0.00)'], ['40', '#,##0.00;[Red](#,##0.00)'],
 ]);
 
+/**
+ * Excel's other built-in number formats (scientific notation, fractions, its dates and times, text), by id,
+ * as ECMA-376 writes their codes: a cell's format (CellMetadata.numberFormat) for a spreadsheet writer to
+ * write again under the same id, which Excel shows in the machine's own way. A cell's shown text is not read
+ * through them (see BUILTIN_NUMBER_FORMATS).
+ */
+export const BUILTIN_OTHER_FORMATS: ReadonlyMap<string, string> = new Map([
+    ['11', '0.00E+00'], ['12', '# ?/?'], ['13', '# ??/??'], ['14', 'mm-dd-yy'], ['15', 'd-mmm-yy'], ['16', 'd-mmm'], ['17', 'mmm-yy'],
+    ['18', 'h:mm AM/PM'], ['19', 'h:mm:ss AM/PM'], ['20', 'h:mm'], ['21', 'h:mm:ss'], ['22', 'm/d/yy h:mm'],
+    ['45', 'mm:ss'], ['46', '[h]:mm:ss'], ['47', 'mmss.0'], ['48', '##0.0E+0'], ['49', '@'],
+]);
+
 /** Excel's own separators and English names, as its codes are written. */
 const SETTINGS: PictureSettings = {
     decimal: '.', group: ',', ...DEFAULT_TEMPLATE_CONFIG.dateNames, utcOffsetMinutes: 0,

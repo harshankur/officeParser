@@ -81,6 +81,11 @@ export function layoutTableRows(rows: OfficeContentNode[], limit = Infinity): Ta
             // (A span reaching into columns an earlier row's merge still holds stops before them: the two
             // merges overlapped, which a reader repairs or reads as a shifted row.)
             for (let c = col + 1; c < col + colSpan; c++) if (held.has(c)) { colSpan = c - col; break; }
+            // (Nor past the column the row's next cell names for itself: a value a spreadsheet keeps under the
+            // merge, hidden, which an occupancy grid cannot hold there. The merge ends before it, and it and
+            // the cells after it stand in their own columns; after the merge, every later cell moved right.)
+            const after = (cells[ci]?.metadata as { col?: unknown } | undefined)?.col;
+            if (typeof after === 'number' && after > col && after < col + colSpan) colSpan = after - col;
             const rowSpan = Math.max(1, Math.min(MAX_LAYOUT_ROW_SPAN, Math.floor(Number(meta?.rowSpan)) || 1));
             slots.push({ kind: 'cell', cell, col, colSpan, rowSpan });
             positions += colSpan;

@@ -6301,7 +6301,8 @@ async function testSpreadsheetWriters(): Promise<void> {
     assert.ok(/inlineStr/.test(xlsxCell('A1')) && /<v>10\.456<\/v>/.test(xlsxCell('B1')) && /<v>45000<\/v>/.test(xlsxCell('C1')) && /t="b"><v>1<\/v>/.test(xlsxCell('D1')) && /<v>1\.25<\/v>/.test(xlsxCell('E1')), `XLSX: cells hold the kinds of value their file says; got ${typedSheet}`);
     assert.ok(/inlineStr/.test(xlsxCell('G1')) && /inlineStr/.test(xlsxCell('H1')) && /t="e"><v>#DIV\/0!<\/v>/.test(xlsxCell('I1')), `XLSX: a CSV's card number and code stay text, an error is one; got ${typedSheet}`);
     const typedStyles = strFromU8(typedXlsx['xl/styles.xml']);
-    assert.ok(/formatCode="0\.0 &quot;kg&quot;"/.test(typedStyles) && /formatCode="\[h\]:mm:ss"/.test(typedStyles), `XLSX: a cell's own number format is kept, a duration shown in its hours; got ${typedStyles}`);
+    // (A duration in its hours is Excel's built-in format 46, written by its id.)
+    assert.ok(/formatCode="0\.0 &quot;kg&quot;"/.test(typedStyles) && /numFmtId="46"/.test(typedStyles), `XLSX: a cell's own number format is kept, a duration shown in its hours; got ${typedStyles}`);
     const typedOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(typed, 'ods')).value as Uint8Array))['content.xml']);
     assert.ok(/office:value="10\.456"/.test(typedOds) && /office:date-value="2023-03-15"/.test(typedOds) && /office:boolean-value="true"/.test(typedOds) && /office:time-value="PT30H0M0S"/.test(typedOds), `ODS: cells hold the kinds of value their file says; got ${typedOds.slice(0, 3000)}`);
     // XLSX reading says what each cell holds; a place on a sheet whose name is quoted is read as a link.
@@ -6349,6 +6350,57 @@ async function testSpreadsheetWriters(): Promise<void> {
     const odsHeldXlsx = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(odsHeldAst, 'xlsx')).value as Uint8Array))['xl/worksheets/sheet1.xml']);
     for (const held of ['<v>10.456</v>', '<v>123456</v>', '<v>45000.5</v>', '<v>1.25</v>']) assert.ok(odsHeldXlsx.includes(held), `XLSX output of an ODS writes the value it holds (${held}); got ${odsHeldXlsx.slice(0, 1500)}`);
     assert.ok(/t="b"[^>]*><v>1<\/v>/.test(odsHeldXlsx) && /t="e"/.test(odsHeldXlsx), 'XLSX output of an ODS writes a truth value and an error as such');
+
+    // A cell onNode gives text for is that text alone: the value it replaced is not written.
+    const redacted = await OfficeGenerator.generate(odsHeldAst, 'xlsx', { onNode: (n: OfficeContentNode) => n.type === 'cell' ? 'REDACTED' : undefined } as any);
+    const redactedSheet = strFromU8(unzipSync(new Uint8Array(redacted.value as Uint8Array))['xl/worksheets/sheet1.xml']);
+    assert.ok(!/<v>/.test(redactedSheet) && /REDACTED/.test(redactedSheet), `XLSX: a cell onNode replaced holds its new text alone; got ${redactedSheet.slice(0, 600)}`);
+
+    // A 1904 workbook's times and durations are their own counts of days; a time of day on a day is a date shown as its time.
+    const miniXlsx = (sheetData: string, numFmts: string, xfs: string, date1904 = false, extra = '') => Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'),
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}>${date1904 ? '<workbookPr date1904="1"/>' : ''}<sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'),
+        'xl/styles.xml': strToU8(`<?xml version="1.0"?><styleSheet ${ns}>${numFmts}<cellXfs>${xfs}</cellXfs></styleSheet>`),
+        'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData>${sheetData}</sheetData>${extra}</worksheet>`),
+    }));
+    const times = await OfficeParser.parseOffice(miniXlsx('<row r="1"><c r="A1" s="1"><v>0.25</v></c><c r="B1" s="2"><v>1.5</v></c><c r="C1" s="1"><v>45000.25</v></c><c r="D1" s="3"><v>2.5</v></c></row>',
+        '<numFmts count="2"><numFmt numFmtId="164" formatCode="hh:mm"/><numFmt numFmtId="165" formatCode="[h]:mm"/></numFmts>', '<xf numFmtId="0"/><xf numFmtId="164"/><xf numFmtId="165"/><xf numFmtId="11"/>', true), { fileType: 'xlsx' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(collectAllNodes(times).filter(n => n.type === 'cell').map(c => [(c.metadata as any).valueType, (c.metadata as any).value, (c.metadata as any).numberFormat]),
+        [['time', '0.25', 'hh:mm'], ['time', '1.5', '[h]:mm'], ['date', String(45000.25 + 1462), 'hh:mm'], ['number', undefined, '0.00E+00']], 'XLSX: a 1904 workbook\'s times are no dates; a time of day on a day is one; a built-in format is kept');
+    const timesXlsx = unzipSync(new Uint8Array((await OfficeGenerator.generate(times, 'xlsx')).value as Uint8Array));
+    const timesSheet = strFromU8(timesXlsx['xl/worksheets/sheet1.xml']);
+    assert.ok(timesSheet.includes('<v>0.25</v>') && timesSheet.includes('<v>1.5</v>') && /numFmtId="11"/.test(strFromU8(timesXlsx['xl/styles.xml'])), `XLSX: times keep their counts of days, a built-in format its id; got ${timesSheet}`);
+    const timesOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(times, 'ods')).value as Uint8Array))['content.xml']);
+    assert.ok(/office:time-value="PT6H0M0S"/.test(timesOds) && /office:time-value="PT36H0M0S"/.test(timesOds) && /office:date-value="2027-03-16T06:00:00"/.test(timesOds) && !/PT\d{4,}H/.test(timesOds) && /<number:scientific-number/.test(timesOds),
+        `ODS: a time of day on a day is a date shown as its time, no duration of all its days; a format in scientific notation kept; got ${timesOds.slice(0, 2500)}`);
+
+    // A value under a merge (a spreadsheet keeps one there, hidden) moves no cell after it; a sheet's cells far apart stand where they are.
+    const placedCell = (text: string, row: number, col: number, more: object = {}) => ({ type: 'cell', text, children: [{ type: 'text', text }], metadata: { row, col, ...more } });
+    const covered = { type: 'xlsx', metadata: {}, attachments: [], content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [
+        { type: 'row', children: [placedCell('Title', 0, 0, { colSpan: 3 }), placedCell('hidden', 0, 1), placedCell('4', 0, 3), placedCell('5', 0, 4)] },
+        { type: 'row', children: [placedCell('far', 1048575, 16383)] }] }] } as any;
+    const coveredOut = await OfficeGenerator.generate(covered, 'xlsx');
+    const coveredSheet = strFromU8(unzipSync(new Uint8Array(coveredOut.value as Uint8Array))['xl/worksheets/sheet1.xml']);
+    assert.ok(/<c r="B1"[^>]*><is><t[^>]*>hidden</.test(coveredSheet) && /<c r="D1"[^>]*><v>4<\/v>/.test(coveredSheet) && /<c r="XFD1048576"/.test(coveredSheet) && /<mergeCell ref="A1:C1"\/>/.test(coveredSheet) && !coveredOut.messages.length,
+        `XLSX: a value under a merge stays in its column, those after it in theirs, and a far cell where it stands; got ${coveredSheet.slice(0, 900)} ${JSON.stringify(coveredOut.messages)}`);
+    const coveredBack = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(covered, 'ods')).value as Uint8Array), { fileType: 'ods' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(collectAllNodes(coveredBack).filter(n => n.type === 'cell').map(c => [c.text, (c.metadata as any).row, (c.metadata as any).col]),
+        [['Title', 0, 0], ['hidden', 0, 1], ['4', 0, 3], ['5', 0, 4], ['far', 1048575, 16383]], 'ODS: so does it, and a value under a merge is read at its place');
+    const bigMerge = { ...covered, content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [{ type: 'row', children: [placedCell('x', 0, 0, { rowSpan: 3000, colSpan: 1000 })] }, { type: 'row', children: [placedCell('y', 2999, 1001)] }] }] } as any;
+    assert.ok((await OfficeGenerator.generate(bigMerge, 'xlsx')).messages.some(m => /merged cells past/.test(JSON.stringify(m))), 'XLSX: a merge past the positions a workbook merges is reported');
+
+    // A cell's comments are on it (they lost their cell on the Notes sheet); a CSV's `#` line is a row of its sheet.
+    const commented = { ...covered, content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [{ type: 'row', children: [{ ...placedCell('1.5', 1, 1), comments: [{ type: 'comment', text: 'check this price', metadata: { author: 'Ann' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'check this price' }] }] }] }] }] }] } as any;
+    const commentedXlsx = unzipSync(new Uint8Array((await OfficeGenerator.generate(commented, 'xlsx')).value as Uint8Array));
+    assert.ok(/<comment ref="B2" authorId="0">/.test(strFromU8(commentedXlsx['xl/comments1.xml'] ?? new Uint8Array())) && /<author>Ann<\/author>/.test(strFromU8(commentedXlsx['xl/comments1.xml'] ?? new Uint8Array()))
+        && /<legacyDrawing r:id=/.test(strFromU8(commentedXlsx['xl/worksheets/sheet1.xml'])) && !!commentedXlsx['xl/drawings/vmlDrawing1.vml'] && !/Notes/.test(strFromU8(commentedXlsx['xl/workbook.xml'])), 'XLSX: a cell\'s comment is a note on it, not a Notes sheet\'s row');
+    const commentedOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(commented, 'ods')).value as Uint8Array))['content.xml']);
+    assert.ok(/<office:annotation><dc:creator>Ann<\/dc:creator><text:p>check this price<\/text:p><\/office:annotation><text:p>1.5<\/text:p>/.test(commentedOds), 'ODS: a cell\'s comment is its annotation');
+    const hashCsv = await OfficeParser.parseOffice(Buffer.from('color\n#FF0000\n#00FF00\n'), { fileType: 'csv' } as any) as OfficeParserAST;
+    const hashXlsx = unzipSync(new Uint8Array((await OfficeGenerator.generate(hashCsv, 'xlsx')).value as Uint8Array));
+    assert.ok(/#FF0000/.test(strFromU8(hashXlsx['xl/worksheets/sheet1.xml'])) && /#00FF00/.test(strFromU8(hashXlsx['xl/worksheets/sheet1.xml'])) && !hashXlsx['xl/worksheets/sheet2.xml'], 'XLSX: a CSV\'s `#` lines are rows of its sheet, as CSV output writes them');
 }
 
 /**
@@ -6673,6 +6725,27 @@ async function testPresentationWriters(): Promise<void> {
     const crossed = await OfficeParser.parseOffice(Buffer.from('<table><tr><td>A</td><td rowspan="3">B</td><td>C</td></tr><tr><td colspan="3">D wide</td></tr><tr><td>E</td><td>F</td></tr></table>'), { fileType: 'html' } as any) as OfficeParserAST;
     const crossedSlide = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(crossed, 'pptx')).value as Uint8Array))['ppt/slides/slide1.xml']);
     assert.ok(!/gridSpan="3"/.test(crossedSlide) && /D wide/.test(crossedSlide), `pptx: a span stops before a merge from above; got ${crossedSlide.slice(0, 2000)}`);
+
+    // ODP holds EMF and SVG pictures (it held PNG, JPEG, GIF and BMP alone, and left the others out with their
+    // alternative text); one of a kind it does not hold is its alternative text.
+    const pictured = (name: string, mimeType: string, data: Uint8Array, alt: string) => ({ type: 'docx', metadata: {}, attachments: [{ type: 'image', name, mimeType, extension: name.split('.').pop(), data: Buffer.from(data).toString('base64') }],
+        content: [{ type: 'image', metadata: { attachmentName: name, altText: alt } }] }) as any;
+    const odpEmf = unzipSync(new Uint8Array((await OfficeGenerator.generate(pictured('a.emf', 'image/x-emf', emf, 'An EMF'), 'odp')).value as Uint8Array));
+    const odpSvg = unzipSync(new Uint8Array((await OfficeGenerator.generate(pictured('a.svg', 'image/svg+xml', strToU8('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>'), 'An SVG'), 'odp')).value as Uint8Array));
+    assert.ok(odpEmf['Pictures/image1.emf'] && odpSvg['Pictures/image1.svg'] && /image\/svg\+xml/.test(strFromU8(odpSvg['META-INF/manifest.xml'])), 'odp: EMF and SVG pictures are held');
+    const odpOther = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(pictured('a.xyz', 'image/x-unknown', new Uint8Array([1, 2, 3, 4]), 'Something else'), 'odp')).value as Uint8Array))['content.xml']);
+    assert.ok(/Something else/.test(odpOther), 'odp: a picture it cannot hold is its alternative text');
+
+    // A sheet's own picture is on one slide, not two; a marker of more than one character (`.1`) is written whole.
+    const sheetPicture = { type: 'xlsx', metadata: {}, attachments: [{ type: 'image', name: 'p.png', mimeType: 'image/png', extension: 'png', data: TINY_PNG_B64 }], content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [
+        { type: 'row', children: [{ type: 'cell', text: 'a', children: [{ type: 'text', text: 'a' }], metadata: { row: 0, col: 0 } }] }, { type: 'image', metadata: { attachmentName: 'p.png' } }] }] } as any;
+    const sheetDeck = unzipSync(new Uint8Array((await OfficeGenerator.generate(sheetPicture, 'pptx')).value as Uint8Array));
+    const picCount = Object.entries(sheetDeck).filter(([k]) => /slides\/slide\d+\.xml$/.test(k)).reduce((n, [, v]) => n + (strFromU8(v).match(/<p:pic>/g) || []).length, 0);
+    assert.strictEqual(picCount, 1, 'pptx: a sheet\'s picture is on one slide');
+    const marked = { type: 'docx', metadata: {}, attachments: [], content: ['first', 'second'].map((t, i) => ({ type: 'list', text: t, metadata: { listType: 'unordered', listId: 'l', itemIndex: i, indentation: 0, marker: `.${i + 1}` }, children: [{ type: 'text', text: t }] })) } as any;
+    const markedPptx = Object.entries(unzipSync(new Uint8Array((await OfficeGenerator.generate(marked, 'pptx')).value as Uint8Array))).filter(([k]) => /slides\/slide\d+\.xml$/.test(k)).map(([, v]) => strFromU8(v)).join('');
+    const markedOdp = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(marked, 'odp')).value as Uint8Array))['content.xml']);
+    assert.ok(/<a:t>\.1\t<\/a:t>/.test(markedPptx) && /<a:t>\.2\t<\/a:t>/.test(markedPptx) && />\.1<text:tab\/>/.test(markedOdp), `pptx, odp: a marker of more than one character is written whole; got ${markedPptx.slice(0, 1500)}`);
 }
 
 async function testNativePdfFurnitureLimits(): Promise<void> {

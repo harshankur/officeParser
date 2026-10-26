@@ -32,7 +32,7 @@ import { attachmentLookup, repeatPreview, takeRepeats, valuesLength } from '../u
 import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
 import { chargeRawContent, decodeXmlEntities, getChildElements, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, takeNodes } from '../utils/xmlUtils.js';
 import { MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
-import { BUILTIN_NUMBER_FORMATS, excelShownText } from '../utils/excelFormat.js';
+import { BUILTIN_NUMBER_FORMATS, BUILTIN_OTHER_FORMATS, excelShownText } from '../utils/excelFormat.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 import { inRanges } from '../utils/sheetUtils.js';
 
@@ -479,6 +479,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     const cellDateFormatMap: Record<number, DateFormatKind> = {};
     // Each cell style's number format code, which writes the text the sheet shows (see excelShownText).
     const cellNumberFormatMap: Record<number, string> = {};
+    // A built-in format's code a cell keeps (CellMetadata.numberFormat) where its shown text is not read through it.
+    const cellBuiltinFormatMap: Record<number, string> = {};
 
     if (stylesFile) {
         const xml = parseXmlString(stylesFile.content.toString(), { config });
@@ -584,6 +586,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                 if (dateFormatKind) cellDateFormatMap[i] = dateFormatKind;
                 const formatCode = numFmtCodes.get(numFmtId);
                 if (formatCode !== undefined) cellNumberFormatMap[i] = formatCode;
+                else if (BUILTIN_OTHER_FORMATS.has(numFmtId)) cellBuiltinFormatMap[i] = BUILTIN_OTHER_FORMATS.get(numFmtId)!;
 
                 const fontId = xf.getAttribute("fontId");
                 if (fontId) {
@@ -996,9 +999,17 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                         const dateFormatKind = type === 'n' && styleIdx !== undefined ? cellDateFormatMap[styleIdx] : undefined;
                         if (dateFormatKind) {
                             const shown = formatDateSerial(text, dateFormatKind, date1904);
-                            // (Its day count in the 1900 date system, as a spreadsheet writer holds it: a 1904
-                            // workbook's counts 1,462 days fewer.)
-                            if (shown !== undefined) { valueType = dateFormatKind === 'date' || dateFormatKind === 'datetime' ? 'date' : 'time'; value = String(date1904 ? Number(text) + 1462 : Number(text)); text = shown; }
+                            // (A date's day count in the 1900 date system, as a spreadsheet writer holds it: a 1904
+                            // workbook's counts 1,462 days fewer. A time of day on a day (=NOW() shown as a time) is
+                            // a date and time; a time or a duration alone is a count of days of its own, which no
+                            // date system moves.)
+                            if (shown !== undefined) {
+                                const serial = Number(text);
+                                const instant = dateFormatKind === 'date' || dateFormatKind === 'datetime' || (dateFormatKind === 'time' && serial >= 1);
+                                valueType = instant ? 'date' : 'time';
+                                value = String(instant && date1904 ? serial + 1462 : serial);
+                                text = shown;
+                            }
                         }
                         if (type === 'd') {
                             // An ISO date cell (`t="d"`): its day count from the date.
@@ -1006,8 +1017,10 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                             if (Number.isFinite(at)) { valueType = 'date'; value = String((at - Date.UTC(1899, 11, 30)) / 86_400_000); } else valueType = 'text';
                         } else if (!valueType) valueType = type === 'n' && Number.isFinite(Number(text)) && text !== '' ? 'number' : 'text';
                         const formatCode = type === 'n' && styleIdx !== undefined ? cellNumberFormatMap[styleIdx] : undefined;
-                        // (Its format as Excel writes it, for a spreadsheet writer to keep; Excel holds 255 characters of one.)
-                        if (formatCode !== undefined && formatCode.trim() && formatCode !== 'General' && formatCode.length <= 255) numberFormat = formatCode;
+                        // (Its format as Excel writes it, for a spreadsheet writer to keep, a built-in one's too; Excel
+                        // holds 255 characters of one.)
+                        const keptCode = formatCode ?? (type === 'n' && styleIdx !== undefined ? cellBuiltinFormatMap[styleIdx] : undefined);
+                        if (keptCode !== undefined && keptCode.trim() && keptCode !== 'General' && keptCode.length <= 255) numberFormat = keptCode;
                         if (formatCode !== undefined) {
                             const shown = excelShownText(vContent.trim(), formatCode, date1904);
                             if (shown !== undefined && shown !== text) shownText = shown;

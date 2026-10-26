@@ -320,6 +320,12 @@ function cellTextLooks(style: TextFormatting | undefined): TextFormatting | unde
     return Object.keys(looks).length ? looks : undefined;
 }
 
+/** Whether a cell holds something: a value of a type, a paragraph with text, or a comment. */
+function holdsValue(cell: Element): boolean {
+    if (cell.getAttribute('office:value-type')) return true;
+    return getDirectChildren(cell, 'office:annotation').length > 0 || getDirectChildren(cell, 'text:p').some(p => (p.textContent || '').trim() !== '');
+}
+
 /**
  * What an ODS cell holds (see CellMetadata.valueType and CellMetadata.value), from its `office:value-type`:
  * a number (a percentage's or a currency amount's too) as written, a date as Excel counts its days (from
@@ -2241,8 +2247,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         for (let c = 0; c < tableCells.length; c++) {
                             const cell = tableCells[c];
                             const colsRepeated = toRepeatCount(cell.getAttribute("table:number-columns-repeated"));
-                            // A cell a merge covers holds its column (see rowCells).
-                            if (cell.tagName === "table:covered-table-cell") {
+                            // A cell a merge covers holds its column (see rowCells); a sheet's that holds a value (a
+                            // spreadsheet keeps one there, hidden, as XLSX's are read) is read at its place, the
+                            // merge's: it was left out.
+                            if (cell.tagName === "table:covered-table-cell" && !(fileType === 'ods' && holdsValue(cell))) {
                                 colIndex += colsRepeated;
                                 continue;
                             }

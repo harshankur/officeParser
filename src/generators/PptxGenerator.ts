@@ -318,9 +318,13 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
             : first ? ` marL="${emu(Math.max(0, -first))}" indent="${emu(first)}"` : '';
         // A number is written as the item shows it (each item a paragraph or a box of its own, an automatic
         // number restarted at 1 in each).
-        const bullet = !b || b.numbered ? '<a:buNone/>' : b.char ? `<a:buFont typeface="Arial"/><a:buChar char="${xmlText([...b.char][0])}"/>` : '<a:buNone/>';
+        // (A marker of more than one character, `.1` as a right-to-left list sets it, is text too: a bullet is one
+        // character, and the rest was lost.)
+        const long = !!b && !b.numbered && !!b.char && [...b.char].length > 1;
+        const bullet = !b || b.numbered || long ? '<a:buNone/>' : b.char ? `<a:buFont typeface="Arial"/><a:buChar char="${xmlText(b.char)}"/>` : '<a:buNone/>';
         const lead = p.runs.find(r => r.text && !r.lineBreak);
-        const number: DeckRun[] = b?.numbered && b.text ? [{ text: `${b.text}\t`, ...(lead?.size ? { size: lead.size } : {}), ...(lead?.font ? { font: lead.font } : {}), ...(lead?.color ? { color: lead.color } : {}) }] : [];
+        const shown = b?.numbered ? b.text : long ? b!.char : undefined;
+        const number: DeckRun[] = shown ? [{ text: `${shown}\t`, ...(lead?.size ? { size: lead.size } : {}), ...(lead?.font ? { font: lead.font } : {}), ...(lead?.color ? { color: lead.color } : {}) }] : [];
         const runs = [...number, ...p.runs].map(r => this.runXml(r, rel, defaultSize, p.mono)).join('');
         const size = p.runs.find(r => r.size)?.size ?? defaultSize;
         // Lines as far apart as the source set them (spcPts holds at most 1,584 points).
