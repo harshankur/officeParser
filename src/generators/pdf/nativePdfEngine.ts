@@ -19,7 +19,7 @@
 
 import { fillPageNumber } from '../../utils/pageNumbers.js';
 import { EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, SheetMetadata, TextAlignment, TextFormatting, BreakMetadata, ChartData, HeaderFooterMetadata, NodeBounds, ShapeMetadata, SlideMetadata, PageNumberFormat } from '../../types.js';
-import { hasPageSize } from '../../utils/pageLimits.js';
+import { hasPageSize, onDocumentPage } from '../../utils/pageLimits.js';
 import { getAbortError, getOfficeError } from '../../utils/errorUtils.js';
 import { documentLanguage, embedUrl, isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize, writableSpacing } from '../../utils/officeGenUtils.js';
 import { decodeBmp, decodeGif, encodePng } from '../../utils/rasterUtils.js';
@@ -651,7 +651,7 @@ class NativeLayout {
     private onPagesOf(setup: PageSetup | undefined, always: boolean, orDocument = false): void {
         const before = { w: this.pageW, h: this.pageH, margin: this.margin };
         // (A section that sets no page is on the document's: its size, margins and header distances.)
-        const pages = (setup && setup.width === undefined ? this.ast.metadata?.pageSetup ?? setup : setup) ?? (orDocument ? this.ast.metadata?.pageSetup : undefined);
+        const pages = setup ? onDocumentPage(setup, this.ast.metadata?.pageSetup) : orDocument ? this.ast.metadata?.pageSetup : undefined;
         const next = this.sectionPage && (setup || orDocument) ? this.sectionPage(pages) : undefined;
         const fit = next ? this.withFurnitureRoom(next.margin, pages?.headerDistance, pages?.footerDistance) : undefined;
         const nextMargin = fit ? fit.margin : before.margin;
@@ -950,6 +950,8 @@ class NativeLayout {
     private sectionSetups = new Map<number, PageSetup | undefined>();
     /** The format the page whose header and footer are being drawn numbers its pages in (its section's). */
     private fieldFormat?: PageNumberFormat;
+    /** Where the part being drawn saved its page numbers: this page's section, or another's (see fillPageNumber). */
+    private fieldSaved: { own: boolean; format?: PageNumberFormat } = { own: true };
     /** The page fields' numbers while a page's header and footer are drawn (see TextMetadata.field). */
     private fieldPage?: number;
     private fieldPages?: number;
@@ -1106,12 +1108,19 @@ class NativeLayout {
                 this.fieldFormat = this.sectionSetups.get(record.section)?.pageNumberFormat;
                 this.pageW = record.w; this.pageH = record.h; this.margin = record.margin;
                 const header = choose(headers, record, index + 1), footer = choose(footers, record, index + 1);
+                // Where a part's page numbers were saved: in this page's section, or carried on from another's.
+                const savedIn = (part: OfficeContentNode) => {
+                    const section = (part.metadata as HeaderFooterMetadata | undefined)?.section;
+                    this.fieldSaved = typeof section !== 'number' || section === record.section ? { own: true } : { own: false, format: this.sectionSetups.get(section)?.pageNumberFormat };
+                };
                 if (header) {
+                    savedIn(header);
                     this.page = record.page;
                     this.y = record.headerDistance || Math.max(12, record.margin.top / 3);
                     await this.render(header);
                 }
                 if (footer) {
+                    savedIn(footer);
                     // Measured first, on a page made for it and taken away: it ends at its distance from the bottom.
                     let heights = footerHeights.get(footer);
                     if (!heights) footerHeights.set(footer, heights = new Map());
@@ -1129,6 +1138,7 @@ class NativeLayout {
             this.furniture = false;
             this.fieldPage = this.fieldPages = undefined;
             this.fieldFormat = undefined;
+            this.fieldSaved = { own: true };
             Object.assign(this, { page: saved.page, y: saved.y, pageW: saved.w, pageH: saved.h, margin: saved.margin });
         }
     }
@@ -1641,7 +1651,9 @@ class NativeLayout {
         const endField = () => {
             if (!field) return;
             const value = field.kind === 'page' ? this.fieldPage! : this.fieldPages!;
-            const filledTexts = fillPageNumber(field.runs.map(r => r.text), value, field.format ?? (field.kind === 'page' ? this.fieldFormat : undefined));
+            // (A field's own format writes its saved result as its own; the section's, from where it was saved.)
+            const filledTexts = field.format ? fillPageNumber(field.runs.map(r => r.text), value, field.format)
+                : fillPageNumber(field.runs.map(r => r.text), value, field.kind === 'page' ? this.fieldFormat : undefined, field.kind === 'page' ? this.fieldSaved : { own: true });
             field.runs.forEach((r, i) => { r.text = filledTexts[i]; });
             field = undefined;
         };
@@ -3411,13 +3423,13 @@ async function drawDocument(pdf: any, lib: any, fonts: Fonts, customFonts: boole
     // twentieth of one lost its text.
     const isPage = hasPageSize;
     const documentPage = auto && isPage(ast.metadata?.pageSetup) ? ast.metadata!.pageSetup! : undefined;
-    const sectionPage = (setup: PageSetup | undefined) => {
-        const own = isPage(setup);
-        let pw = own ? setup.width : documentPage?.width ?? w, ph = own ? setup.height : documentPage?.height ?? h;
+    const sectionPage = (given: PageSetup | undefined) => {
+        const setup = onDocumentPage(given, documentPage), own = isPage(setup);
+        let pw = own ? setup.width : w, ph = own ? setup.height : h;
         if (own && pc.landscape && pw < ph) [pw, ph] = [ph, pw];
-        const most = Math.min(pw, ph) / 3, given = marginFor(own || setup?.width !== undefined ? setup : documentPage);
+        const most = Math.min(pw, ph) / 3, margins = marginFor(setup);
         const held = (v: number) => Math.min(Number.isFinite(v) && v > 0 ? v : 0, most);
-        return { w: pw, h: ph, margin: { top: held(given.top), right: held(given.right), bottom: held(given.bottom), left: held(given.left) } };
+        return { w: pw, h: ph, margin: { top: held(margins.top), right: held(margins.right), bottom: held(margins.bottom), left: held(margins.left) } };
     };
     const first = auto ? ast.metadata?.pageSetup : undefined;
     const firstPage = first ? sectionPage(first) : { w, h, margin: marginFor(undefined) };

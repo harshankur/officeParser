@@ -1,5 +1,5 @@
-import { BreakMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, IndentationMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphMetadata, TextMetadata } from '../types.js';
-import { hasPageSize, MAX_PAGE_PT, type SizedPageSetup } from '../utils/pageLimits.js';
+import { BreakMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, IndentationMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageNumberFormat, PageSetup, ParagraphMetadata, TextMetadata } from '../types.js';
+import { hasPageSize, MAX_PAGE_PT, onDocumentPage, type SizedPageSetup } from '../utils/pageLimits.js';
 import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
@@ -124,7 +124,8 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         // 4. The document's page (where it gives one), the first section's columns, the header and footer, then the body
         output += documentPageRtf(this.ast.metadata?.pageSetup);
         const columns = columnsRtf(this.ast.metadata?.pageSetup?.columns, this.ast.metadata?.pageSetup);
-        if (columns) output += `\\sectd${columns}\n`;
+        const numbering = this.numberingRtf(this.ast.metadata?.pageSetup?.pageNumberFormat);
+        if (columns || numbering) output += `\\sectd${numbering}${columns}\n`;
         output += running;
         output += '\\f0\\fs24\n';
         output += bodyContent;
@@ -427,7 +428,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                         const starts = typeof meta.section === 'number' && meta.section !== this.currentSection;
                         if (typeof meta.section === 'number') this.currentSection = meta.section;
                         const own = starts ? await this.sectionFurnitureRtf(this.currentSection, meta.pageSetup) : { title: !!meta.pageSetup?.differentFirstPage, rtf: '' };
-                        return `\\sect\\sectd\\${meta.breakType === 'section' ? 'sbknone' : 'sbkpage'}${own.title ? '\\titlepg' : ''}${sectionPageRtf(meta.pageSetup)}${columnsRtf(meta.pageSetup?.columns, meta.pageSetup)}\n${own.rtf}`;
+                        return `\\sect\\sectd\\${meta.breakType === 'section' ? 'sbknone' : 'sbkpage'}${own.title ? '\\titlepg' : ''}${this.numberingRtf(meta.pageSetup?.pageNumberFormat)}${sectionPageRtf(meta.pageSetup)}${columnsRtf(meta.pageSetup?.columns, onDocumentPage(meta.pageSetup, this.ast.metadata?.pageSetup))}\n${own.rtf}`;
                     }
                     return meta?.breakType === 'page' ? '\\page\n' : '\\line\n';
                 }
@@ -567,6 +568,20 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
      * none of its own of is the one before it, as Word gives it, and as RTF reading reads it); and whether it
      * has a title page (`\titlepg`: its own first page's part, or its page's `differentFirstPage`).
      */
+    /** How a section numbers its pages, as RTF's section words (`\\pgnlcrm`); decimal, RTF's own, as nothing. */
+    private numberingRtf(format: PageNumberFormat | undefined): string {
+        if (!format || format === 'decimal') return '';
+        const word = RTF_NUMBERING[format];
+        if (word) return `\\${word}`;
+        if (!this.unwrittenNumbering.has(format)) {
+            this.unwrittenNumbering.add(format);
+            this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'rtf', feature: `page numbers in ${format} (written in digits)` });
+        }
+        return '';
+    }
+    /** The page number formats a section had that RTF has none of, each reported once. */
+    private unwrittenNumbering = new Set<string>();
+
     private async sectionFurnitureRtf(section: number, setup: PageSetup | undefined): Promise<{ title: boolean; rtf: string }> {
         const lists = { header: this.ast.auxiliary?.headers, footer: this.ast.auxiliary?.footers };
         const own = (kind: 'header' | 'footer', type: 'default' | 'first' | 'even') => sectionFurniture(lists[kind], kind, section, type);
@@ -668,6 +683,9 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
             .replace(/[\x00-\x08\x0e-\x1f\x7f]/g, '');
     }
 }
+
+/** RTF's section word for each page number format it has. */
+const RTF_NUMBERING: Partial<Record<PageNumberFormat, string>> = { lowerRoman: 'pgnlcrm', upperRoman: 'pgnucrm', lowerLetter: 'pgnlcltr', upperLetter: 'pgnucltr', decimalFullWidth: 'pgndecd' };
 
 /**
  * Columns as RTF's section controls: their number, the gap in twips, a line between, each one's width

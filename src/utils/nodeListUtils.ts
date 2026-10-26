@@ -335,3 +335,19 @@ export function liftFloatingFrames(roots: OfficeContentNode[]): void {
         for (const node of list) if (node?.children?.length) lists.push(node.children);
     }
 }
+
+/**
+ * Takes off the section starts that end a document's body (a break with BreakMetadata.section, or one
+ * starting a section on the same page): a section with nothing in it after the last text starts no page
+ * (RTF writers end every section with `\sect`; a section's columns ending the document give back the
+ * page's to nothing). Its header and footer parts stay in `auxiliary`. A page break the author typed
+ * there stays: a word processor shows that page.
+ */
+export function dropTrailingSectionStarts(content: OfficeContentNode[]): void {
+    while (content.length) {
+        const last = content[content.length - 1];
+        const meta = last.type === 'break' ? last.metadata as { breakType?: string; section?: unknown } | undefined : undefined;
+        if (!meta || !(meta.breakType === 'section' || typeof meta.section === 'number')) return;
+        content.pop();
+    }
+}

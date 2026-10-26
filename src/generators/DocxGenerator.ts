@@ -5,6 +5,8 @@ import { BreakMetadata, ConversionResult, DocxGeneratorConfig, GeneratorConfig, 
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { heldColumns } from '../utils/columnUtils.js';
+import { onDocumentPage } from '../utils/pageLimits.js';
+import { wordFmtOf } from '../utils/pageNumbers.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, ooxmlCustomPropertiesXml, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
 import { markerPattern, MarkerPattern } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
@@ -215,6 +217,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
 
     private async renderBlocks(nodes: OfficeContentNode[] | undefined): Promise<string> {
         let out = '';
+        // Where the last block that wrote anything starts in `out` (-1: none yet).
+        let lastBlockAt = -1;
         let prevPaginated: string | null = null;
         let prevBareList = false; // previous block was a list carrying no listId
         for (const node of nodes || []) {
@@ -231,7 +235,17 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
             const isBareList = node.type === 'list' && !(node.metadata as any)?.listId;
             if (isBareList && !prevBareList) this.syntheticListRun++;
             if (!OWN_BOOKMARKS.has(node.type)) out += this.pointBookmarks(node);
-            out += await this.renderBlockNode(node, isBareList ? `__run${this.syntheticListRun}` : undefined);
+            const at = out.length;
+            const block = await this.renderBlockNode(node, isBareList ? `__run${this.syntheticListRun}` : undefined);
+            // A section ends in its last paragraph's properties, as Word keeps it: a paragraph of its own
+            // for them was one more empty paragraph on every save. (After a table, or a paragraph ending a
+            // section already, there is no paragraph to hold them: one of their own, as Word has it.)
+            const sectionEnd = this.sectionEndXml;
+            this.sectionEndXml = undefined;
+            const held = sectionEnd !== undefined ? withSectionEnd(out, lastBlockAt, sectionEnd) : undefined;
+            if (held !== undefined) out = held;
+            else out += block;
+            if (block && held === undefined) lastBlockAt = at;
             prevPaginated = (node.type === 'page' || node.type === 'slide') ? node.type : null;
             prevBareList = isBareList;
         }
@@ -853,6 +867,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
 
     // ── breaks / code / admonition / chart / embed ────────────────────────────────
 
+    /** The properties of the section a break just ended, for renderBlocks to put in the paragraph before. */
+    private sectionEndXml: string | undefined;
     /** The section being written: its pages (BreakMetadata.pageSetup), how it starts, and how many have ended. */
     private sectionSetup: PageSetup | undefined;
     private sectionStart: 'nextPage' | 'continuous' = 'nextPage';
@@ -927,8 +943,17 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
                 ? ` w:equalWidth="0">${columns.widths.map((w, i) => `<w:col w:w="${twips(w)}"${i < columns.count - 1 ? ` w:space="${twips(columns.gap)}"` : ''}/>`).join('')}</w:cols>` : '/>'}`
             : '';
         const title = typeof titlePage === 'string' ? titlePage : titlePage ? '<w:titlePg/>' : '';
-        return `<w:sectPr>${refs}${start === 'continuous' ? '<w:type w:val="continuous"/>' : ''}<w:pgSz w:w="${twips(paper.w)}" w:h="${twips(paper.h)}"${orient}/>${pgMar}${cols}${title}</w:sectPr>`;
+        // How it numbers its pages (decimal, Word's own, is written as nothing).
+        const format = setup?.pageNumberFormat, fmt = format && format !== 'decimal' ? wordFmtOf(format) : undefined;
+        if (format && format !== 'decimal' && !fmt && !this.unwrittenNumbering.has(format)) {
+            this.unwrittenNumbering.add(format);
+            this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'docx', feature: `page numbers in ${format} (written in digits)` });
+        }
+        const pgNumType = fmt ? `<w:pgNumType w:fmt="${fmt}"/>` : '';
+        return `<w:sectPr>${refs}${start === 'continuous' ? '<w:type w:val="continuous"/>' : ''}<w:pgSz w:w="${twips(paper.w)}" w:h="${twips(paper.h)}"${orient}/>${pgMar}${pgNumType}${cols}${title}</w:sectPr>`;
     }
+    /** The page number formats a section had that Word has none of, each reported once. */
+    private unwrittenNumbering = new Set<string>();
 
     private async blockBreak(node: OfficeContentNode): Promise<string> {
         const meta = node.metadata as BreakMetadata | undefined;
@@ -943,8 +968,10 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
             // others in the section before, whose header and footer they keep).
             if (typeof meta?.section === 'number') this.currentSection = meta.section;
             const ended = this.sectionProperties(this.sectionSetup ?? this.ast.metadata?.pageSetup, this.sectionStart, own.refs, first ? FIRST_SECTION_TITLE : own.titlePage);
-            this.sectionSetup = meta?.pageSetup ?? this.sectionSetup;
+            // (One that sets no page is on the document's, with its own columns and numbering.)
+            this.sectionSetup = onDocumentPage(meta?.pageSetup, this.ast.metadata?.pageSetup) ?? this.sectionSetup;
             this.sectionStart = t === 'section' ? 'continuous' : 'nextPage';
+            this.sectionEndXml = ended;
             return `<w:p><w:pPr>${ended}</w:pPr></w:p>`;
         }
         if (t === 'page') return `<w:p><w:r><w:br w:type="page"/></w:r></w:p>`;
@@ -1232,6 +1259,45 @@ const FIRST_SECTION_TITLE = '\u0000first-section-title-page\u0000';
 
 /** A paragraph's properties in the order WordprocessingML lists them, which Word requires. */
 const PPR_ORDER = ['pStyle', 'keepNext', 'keepLines', 'pageBreakBefore', 'framePr', 'widowControl', 'numPr', 'suppressLineNumbers', 'pBdr', 'shd', 'tabs', 'suppressAutoHyphens', 'kinsoku', 'wordWrap', 'overflowPunct', 'topLinePunct', 'autoSpaceDE', 'autoSpaceDN', 'bidi', 'adjustRightInd', 'snapToGrid', 'spacing', 'ind', 'contextualSpacing', 'mirrorIndents', 'suppressOverlap', 'jc', 'textDirection', 'textAlignment', 'textboxTightWrap', 'outlineLvl', 'divId', 'cnfStyle', 'rPr', 'sectPr', 'pPrChange'];
+
+/**
+ * `out` with a section's properties (`sectPr`) in the last paragraph of the block starting at `from`, where
+ * that block ends in a paragraph of the body (not in a table, or a text box's) holding none yet; undefined
+ * where it does not.
+ */
+function withSectionEnd(out: string, from: number, sectPr: string): string | undefined {
+    if (from < 0 || !out.endsWith('</w:p>')) return undefined;
+    // The last paragraph at the block's own level: paragraphs nest in text boxes, and tables hold them.
+    let depth = 0, start = -1;
+    const tags = /<(\/?)w:(p|tbl|txbxContent)([\s>/])/g;
+    tags.lastIndex = from;
+    for (let m = tags.exec(out); m; m = tags.exec(out)) {
+        const closing = m[1] === '/', selfClosing = !closing && out.startsWith('/>', out.indexOf('>', m.index) - 1);
+        if (closing) depth--;
+        else if (!selfClosing) {
+            if (depth === 0 && m[2] === 'p') start = m.index;
+            depth++;
+        }
+        if (depth < 0) return undefined;
+    }
+    if (start < 0 || depth !== 0) return undefined;
+    const open = out.indexOf('>', start) + 1;
+    if (!out.startsWith('<w:pPr>', open)) return `${out.slice(0, open)}<w:pPr>${sectPr}</w:pPr>${out.slice(open)}`;
+    // Its own properties end at their matching close (a revision's record of the old ones holds a pPr too).
+    let level = 0, close = -1;
+    const props = /<(\/?)w:pPr>/g;
+    props.lastIndex = open;
+    for (let m = props.exec(out); m; m = props.exec(out)) {
+        level += m[1] ? -1 : 1;
+        if (level === 0) { close = m.index; break; }
+    }
+    if (close < 0) return undefined;
+    const inner = out.slice(open + '<w:pPr>'.length, close);
+    if (/<w:sectPr[\s>]/.test(inner.replace(/<w:pPrChange[\s\S]*<\/w:pPrChange>/, ''))) return undefined;
+    const change = inner.indexOf('<w:pPrChange');
+    const at = change >= 0 ? open + '<w:pPr>'.length + change : close;
+    return `${out.slice(0, at)}${sectPr}${out.slice(at)}`;
+}
 
 /**
  * Gives every paragraph of `body` a style where it has none, a border where it has none, or `indentLeft`

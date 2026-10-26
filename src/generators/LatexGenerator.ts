@@ -1,8 +1,10 @@
 import { zipSync, Zippable } from 'fflate';
 import { UniqueNames } from '../utils/uniqueNames.js';
 import { trimEndChars } from '../utils/textUtils.js';
+import type { PageNumberFormat } from '../types.js';
 import { AdmonitionMetadata, BreakMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, PageSetup, OfficeWarningType, ParagraphMetadata, TexDocumentClass, TextFormatting, TextMetadata } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
+import { onDocumentPage } from '../utils/pageLimits.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { LatexMathPlan, LatexScripts, LatexUnicodePlan, LISTINGS_LANGUAGES, mathCommandsOf, planLatexMath, planLatexUnicode, withLatexMathMacros } from '../utils/latexUtils.js';
 import { escapeLatex, latexComment, latexSourceComment, sanitizeLatexImagePath, sanitizeLatexMath, sanitizeLatexUrl } from '../utils/sanitize.js';
@@ -296,12 +298,14 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
      * at its page break; they were every one the document's first page's. A section on paper of another size
      * is set on the document's, and reported (`geometry` sets one paper for a document).
      */
-    private orientationSwitch(setup: PageSetup | undefined): { close: string; open: string } {
+    private orientationSwitch(given: PageSetup | undefined): { close: string; open: string } {
+        // (A section that sets no page is on the document's: an open landscape ends.)
+        const setup = onDocumentPage(given, this.ast.metadata?.pageSetup);
         const turned = this.turnedOf(setup);
-        if (turned === undefined || !setup?.width || !setup.height) return { close: '', open: '' };
+        if (turned === undefined) return { close: '', open: '' };
         const cfg = this.config.texConfig;
         const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup, cfg.margin);
-        const [long, short] = [Math.max(setup.width, setup.height), Math.min(setup.width, setup.height)];
+        const [long, short] = setup?.width && setup.height ? [Math.max(setup.width, setup.height), Math.min(setup.width, setup.height)] : [Math.max(paper.w, paper.h), Math.min(paper.w, paper.h)];
         if (Math.abs(long - Math.max(paper.w, paper.h)) > 2 || Math.abs(short - Math.min(paper.w, paper.h)) > 2) {
             this.warnOnce('section-paper', OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'a section on paper of another size (set on the document\'s)', format: 'tex' });
         }
@@ -312,11 +316,13 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         return { close, open };
     }
     /** Whether a section's pages are turned from the document's (see orientationSwitch), or undefined where none can be. */
-    private turnedOf(setup: PageSetup | undefined): boolean | undefined {
-        // (A section that sets no page is on the document's: not turned.)
-        if (this.beamer || !setup?.width || !setup.height || !(setup.width > 0 && setup.height > 0)) return undefined;
+    private turnedOf(given: PageSetup | undefined): boolean | undefined {
+        if (this.beamer || !given) return undefined;
         const cfg = this.config.texConfig;
         if (String(cfg.format ?? 'auto').toLowerCase() !== 'auto') return undefined;
+        // (A section that sets no page is on the document's: not turned.)
+        const setup = onDocumentPage(given, this.ast.metadata?.pageSetup);
+        if (!setup?.width || !setup.height) return false;
         return (setup.width > setup.height) !== resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup, cfg.margin).landscape;
     }
 
@@ -417,7 +423,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         // The document's columns, from its first section's page (multicols), closed at its end.
         const opening = this.beamer ? '' : this.columnsSwitch(this.ast.metadata?.pageSetup?.columns);
         // The first section's own first page's and even pages' header and footer, from the start.
-        this.firstSectionSwitch = this.beamer ? '' : this.sectionStyleSwitch(0, this.ast.metadata?.pageSetup);
+        this.firstSectionSwitch = this.beamer ? '' : this.numberingTex(this.ast.metadata?.pageSetup?.pageNumberFormat) + this.sectionStyleSwitch(0, this.ast.metadata?.pageSetup);
         let body = this.beamer ? await this.renderBeamerBody(this.ast.content) : await this.renderFlow(this.ast.content);
         if (opening) body = `${opening}\n${body}`;
         if (this.firstSectionSwitch) body = `${this.firstSectionSwitch}\n${body}`;
@@ -1982,13 +1988,16 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             if (typeof meta?.section === 'number' && turned !== undefined && turned !== this.openLandscape) return this.blockBreak({ ...node, metadata: { ...meta, breakType: 'page' } } as OfficeContentNode);
             // (Its own header and footer from the next page on.)
             const style = !this.beamer && typeof meta?.section === 'number' ? this.sectionStyleSwitch(meta.section, meta.pageSetup, true) : '';
-            return [style, this.columnsSwitch(meta?.pageSetup?.columns)].filter(Boolean).join('\n');
+            // (Its numbering from the next page, as its page style.)
+            const numbering = this.beamer ? '' : this.numberingTex(meta?.pageSetup?.pageNumberFormat);
+            const numberingNext = numbering ? `\\AddToHookNext{shipout/after}{{\\globaldefs=1 ${numbering}}}` : '';
+            return [style, numberingNext, this.columnsSwitch(meta?.pageSetup?.columns)].filter(Boolean).join('\n');
         }
         // A section starting on a new page, in its own columns: the columns before end, the page breaks.
         if (t === 'page' && !this.beamer && body && typeof (node.metadata as BreakMetadata | undefined)?.section === 'number') {
             const setup = (node.metadata as BreakMetadata).pageSetup;
             const columnsEnd = this.columnsSwitch(undefined), turn = this.orientationSwitch(setup);
-            return [columnsEnd, turn.close, '\\clearpage', this.sectionStyleSwitch((node.metadata as BreakMetadata).section!, setup), turn.open, this.columnsSwitch(setup?.columns)].filter(Boolean).join('\n');
+            return [columnsEnd, turn.close, '\\clearpage', this.numberingTex(setup?.pageNumberFormat), this.sectionStyleSwitch((node.metadata as BreakMetadata).section!, setup), turn.open, this.columnsSwitch(setup?.columns)].filter(Boolean).join('\n');
         }
         // A page break in columns: they end on the page, and go on, the same, on the next.
         if (t === 'page' && !this.beamer && body && this.openColumns) {
@@ -2244,6 +2253,22 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         if (continuous) return `\\AddToHookNext{shipout/after}{{\\globaldefs=1 \\pagestyle{osec${section}}}}`;
         return `${every ? `\\pagestyle{osec${section}}` : ''}${first ? `\\thispagestyle{osec${section}first}` : ''}`;
     }
+    /**
+     * How a section numbers its pages, as `\\thepage` (`\\roman{page}`), where it is not what is in force:
+     * the counter goes on, as the document's pages do. A format LaTeX has none of (letters, which `\\alph`
+     * cannot write past 26, words) is in digits, and reported.
+     */
+    private numberingTex(format: PageNumberFormat | undefined): string {
+        if (!format) return '';
+        const command = format === 'decimal' ? 'arabic' : format === 'lowerRoman' ? 'roman' : format === 'upperRoman' ? 'Roman' : undefined;
+        if (!command) this.warnOnce(`numbering:${format}`, OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'tex', feature: `page numbers in ${format} (written in digits)` });
+        const numbering = command ?? 'arabic';
+        if (numbering === this.pageNumbering) return '';
+        this.pageNumbering = numbering;
+        return `\\renewcommand{\\thepage}{\\${numbering}{page}}`;
+    }
+    /** The `\\thepage` numbering in force. */
+    private pageNumbering = 'arabic';
     /** The first section's own page style switch (see sectionStyleSwitch), written at the body's start and again after a title on the first page. */
     private firstSectionSwitch = '';
 

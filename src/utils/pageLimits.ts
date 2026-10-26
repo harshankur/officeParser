@@ -19,3 +19,16 @@ export type SizedPageSetup = PageSetup & { width: number; height: number };
 
 /** Whether a section's setup sets its page (see isPageSize): one that only numbers its pages sets none. */
 export const hasPageSize = (setup: PageSetup | undefined): setup is SizedPageSetup => !!setup && isPageSize(setup.width, setup.height);
+
+/**
+ * A section's setup on the page it is on: its own where it sets a page, else the document's page (its
+ * size, margins and header and footer distances) with the section's own columns, numbering and title
+ * page. (A section that only numbers its pages its own way is on the document's pages, not on A4.)
+ */
+export function onDocumentPage(setup: PageSetup | undefined, documentPage: PageSetup | undefined): PageSetup | undefined {
+    if (!setup || hasPageSize(setup)) return setup;
+    const { width: _w, height: _h, margin: _m, headerDistance: _hd, footerDistance: _fd, ...own } = setup;
+    if (!hasPageSize(documentPage)) return own;
+    const { width, height, margin, headerDistance, footerDistance } = documentPage;
+    return { width, height, ...(margin ? { margin } : {}), ...(headerDistance !== undefined ? { headerDistance } : {}), ...(footerDistance !== undefined ? { footerDistance } : {}), ...own };
+}

@@ -5111,8 +5111,8 @@ async function testTitleAndEvenPagesAsWordShows(): Promise<void> {
     const turnedContent = strFromU8(turnedParts['content.xml']), turnedStyles = strFromU8(turnedParts['styles.xml']);
     const turnTo = /<style:style style:name="(P\d+)"[^>]*style:master-page-name="([^"]+)"/.exec(turnedContent);
     const turnedLayout = turnTo ? new RegExp(`<style:master-page style:name="${turnTo[2]}" style:page-layout-name="([^"]+)"`).exec(turnedStyles)?.[1] : undefined;
-    assert.ok(turnTo && new RegExp(`text:style-name="${turnTo[1]}"/><text:p>Landscape\\.`).test(turnedContent) && turnedLayout && new RegExp(`style:name="${turnedLayout}"><style:page-layout-properties fo:page-width="11in" fo:page-height="8\\.5in"`).test(turnedStyles),
-        `ODT: a section of turned pages starts on a page of its turned master; got ${turnedContent.slice(0, 400)}`);
+    assert.ok(turnTo && new RegExp(`text:style-name="${turnTo[1]}">Landscape\\.`).test(turnedContent) && turnedLayout && new RegExp(`style:name="${turnedLayout}"><style:page-layout-properties fo:page-width="11in" fo:page-height="8\\.5in"`).test(turnedStyles),
+        `ODT: a section of turned pages starts on a page of its turned master (its first paragraph turning to it); got ${turnedContent.slice(0, 400)}`);
     // LaTeX output sets a section of turned pages turned (pdflscape's landscape), the next turned back.
     const turnedTex = String((await OfficeGenerator.generate({ ...turned, content: [block('Portrait.'), { type: 'break', metadata: { breakType: 'page', section: 1, pageSetup: { width: 792, height: 612 } } }, block('Landscape.'),
         { type: 'break', metadata: { breakType: 'page', section: 2, pageSetup: { width: 612, height: 792 } } }, block('Back.')] } as any, 'tex' as any)).value);
@@ -5927,6 +5927,95 @@ async function testPageNumberFormats(): Promise<void> {
     const twoBack = await OfficeParser.parseOffice(Buffer.from(twoPdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false, keepHeadersAndFootersInPages: true } } as any) as OfficeParserAST;
     const secondPage = collectAllNodes({ ...twoBack, content: [twoBack.content.filter(n => n.type === 'page')[1]] } as OfficeParserAST).filter(n => n.type === 'text').map(n => (n.text || '').trim()).filter(Boolean);
     assert.ok(secondPage.join(' ').endsWith('Page 2 2'), `a page field, a line break and another: each page's number twice; got ${JSON.stringify(secondPage.slice(-4))}`);
+}
+
+/**
+ * A document of sections saved again is the same document: DOCX keeps a section's end in its last
+ * paragraph and ODT a break in the next block's style (each wrote a paragraph of its own, one more empty
+ * paragraph on every save), each section keeps how it numbers its pages, and a section that sets no page
+ * is on the document's. A section's start is no text in flowing outputs, and one with nothing after it is
+ * none.
+ */
+async function testSectionRoundTrips(): Promise<void> {
+    const shapeOf = (ast: OfficeParserAST) => ast.content.map(n => n.type === 'break' ? `B${(n.metadata as any)?.section ?? ''}` : n.type === 'table' ? 'T' : (n.text || '').trim() ? 'P' : 'e').join('');
+    const para = (t: string) => ({ type: 'paragraph', text: t, children: [{ type: 'text', text: t }] });
+    const table = { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [para('Cell')] }] }] };
+    const page = { width: 612, height: 792, margin: { top: 72, right: 72, bottom: 72, left: 72 } };
+    const sectioned = (first: any) => ({ type: 'docx', metadata: { pageSetup: { ...page, pageNumberFormat: 'lowerRoman' } }, attachments: [],
+        content: [para('Front one.'), first, { type: 'break', metadata: { breakType: 'page', section: 1, pageSetup: { ...page, pageNumberFormat: 'upperLetter' } } }, para('Body.')] }) as any;
+    for (const [format, fileType] of [['docx', 'docx'], ['odt', 'odt'], ['rtf', 'rtf']] as const) {
+        for (const [what, first] of [['a paragraph', para('Front two.')], ['a table', table]] as const) {
+            for (const includeBreakNodes of [false, true]) {
+                const shapes: string[] = [], formats: string[] = [];
+                let ast: OfficeParserAST = sectioned(first);
+                for (let save = 0; save < 3; save++) {
+                    const bytes = (await OfficeGenerator.generate(ast, format, { onWarning: () => {} } as any)).value;
+                    ast = await OfficeParser.parseOffice(Buffer.from(bytes as any), { fileType, includeBreakNodes } as any) as OfficeParserAST;
+                    shapes.push(shapeOf(ast));
+                    formats.push([ast.metadata.pageSetup?.pageNumberFormat, ...ast.content.filter(n => typeof (n.metadata as any)?.section === 'number').map(n => (n.metadata as any).pageSetup?.pageNumberFormat)].join(','));
+                }
+                assert.ok(shapes.every(s => s === shapes[1]) && shapes[0].endsWith('B1P'), `${format}: a section ending in ${what} is the same saved again (includeBreakNodes ${includeBreakNodes}); got ${JSON.stringify(shapes)}`);
+                assert.ok(formats.every(f => f === 'lowerRoman,upperLetter'), `${format}: each section numbers its pages as it did; got ${JSON.stringify(formats)}`);
+            }
+        }
+    }
+    // Word: the section's end is in its last paragraph, as Word writes it.
+    const docxXml = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(sectioned(para('Front two.')), 'docx')).value as any))['word/document.xml']);
+    assert.ok(/<w:p><w:pPr><w:sectPr>[^]*?<\/w:sectPr><\/w:pPr><w:r>[^]*?Front two\./.test(docxXml) && !/<w:p><w:pPr><w:sectPr>(?:(?!<\/w:p>)[^])*<\/w:pPr><\/w:p>/.test(docxXml) && docxXml.includes('<w:pgNumType w:fmt="upperLetter"/>'),
+        `DOCX: the section ends in its last paragraph, numbered as it is; got ${docxXml.slice(0, 600)}`);
+    // ODT: author page breaks saved again stay as they were.
+    let breaks: OfficeParserAST = { type: 'docx', metadata: {}, attachments: [], content: [para('One.'), { type: 'break', metadata: { breakType: 'page' } }, para('Two.')] } as any;
+    const breakShapes: string[] = [];
+    for (let save = 0; save < 3; save++) {
+        breaks = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(breaks, 'odt')).value as any), { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+        breakShapes.push(shapeOf(breaks));
+    }
+    assert.deepStrictEqual(breakShapes, ['PBP', 'PBP', 'PBP'], 'ODT: a page break is the next paragraph\'s, saved again the same');
+
+    // ODT read: a table's style turning to a page style starts a section; one that sets no layout no longer throws.
+    const ODF = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"';
+    const odtOf = (contentAuto: string, body: string, stylesAuto: string, masters: string) => Buffer.from(zipSync({
+        mimetype: strToU8('application/vnd.oasis.opendocument.text'),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${ODF}><office:automatic-styles>${contentAuto}</office:automatic-styles><office:body><office:text>${body}</office:text></office:body></office:document-content>`),
+        'styles.xml': strToU8(`<?xml version="1.0"?><office:document-styles ${ODF}><office:automatic-styles>${stylesAuto}</office:automatic-styles><office:master-styles>${masters}</office:master-styles></office:document-styles>`),
+    }));
+    const layouts = '<style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in"/></style:page-layout><style:page-layout style:name="pm2"><style:page-layout-properties fo:page-width="11in" fo:page-height="8.5in"/></style:page-layout>';
+    const tableTurns = await OfficeParser.parseOffice(odtOf('<style:style style:name="Table1" style:family="table" style:master-page-name="Land"><style:table-properties style:width="6in" fo:break-before="page"/></style:style>',
+        '<text:p>One.</text:p><table:table table:name="T" table:style-name="Table1"><table:table-column/><table:table-row><table:table-cell><text:p>Cell.</text:p></table:table-cell></table:table-row></table:table>',
+        layouts, '<style:master-page style:name="Standard" style:page-layout-name="pm1"/><style:master-page style:name="Land" style:page-layout-name="pm2"/>'), { fileType: 'odt' } as any) as OfficeParserAST;
+    assert.strictEqual(shapeOf(tableTurns), 'PB1T', 'ODT: a table turning to a page style starts a section');
+    const noLayout = await OfficeParser.parseOffice(odtOf('<style:style style:name="Sect1" style:family="section"><style:section-properties><style:columns fo:column-count="2" fo:column-gap="0.2in"/></style:section-properties></style:style><style:style style:name="P2" style:family="paragraph" style:master-page-name="Other"/>',
+        '<text:p>Before.</text:p><text:section text:name="S" text:style-name="Sect1"><text:p>In.</text:p><text:p text:style-name="P2">Turned.</text:p></text:section><text:p>After.</text:p>',
+        layouts, '<style:master-page style:name="Standard" style:page-layout-name="pm1"/><style:master-page style:name="Other" style:page-layout-name="nope"/>'), { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+    assert.deepStrictEqual(noLayout.content.map(n => n.type === 'break' ? `B:${(n.metadata as any).breakType}` : n.text), ['Before.', 'B:section', 'In.', 'B:page', 'Turned.', 'B:section', 'After.'], 'ODT: a section turning to a page style of no layout is read');
+
+    // A section that sets no page is on the document's: Letter in every writer, landscape closed in LaTeX.
+    const sizeless = { type: 'docx', metadata: { pageSetup: page }, attachments: [], content: [para('Portrait.'), { type: 'break', metadata: { breakType: 'page', section: 1, pageSetup: { width: 792, height: 612 } } }, para('Landscape.'),
+        { type: 'break', metadata: { breakType: 'page', section: 2, pageSetup: { pageNumberFormat: 'lowerRoman' } } }, para('Third.')] } as any;
+    const sizes = [...strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(sizeless, 'docx')).value as any))['word/document.xml']).matchAll(/<w:pgSz w:w="(\d+)" w:h="(\d+)"/g)].map(m => `${m[1]}x${m[2]}`);
+    assert.deepStrictEqual(sizes, ['12240x15840', '15840x12240', '12240x15840'], 'DOCX: a section that sets no page is on the document\'s');
+    const odtStyles = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(sizeless, 'odt')).value as any))['styles.xml']);
+    assert.ok(!/fo:page-width="8\.27/.test(odtStyles), 'ODT: no A4 page for a section that sets none');
+    const tex = String((await OfficeGenerator.generate(sizeless, 'tex')).value);
+    assert.ok(tex.indexOf('\\end{landscape}') >= 0 && tex.indexOf('\\end{landscape}') < tex.indexOf('Third.') && tex.includes('\\renewcommand{\\thepage}{\\roman{page}}'), 'LaTeX: the landscape section ends before a section on the document\'s page, numbered its way');
+
+    // Flowing outputs: a section's start is no text; HTML starts a page there in print, no rule on screen.
+    const flowing = { type: 'docx', metadata: {}, attachments: [], content: [para('Front.'), { type: 'break', metadata: { breakType: 'page', section: 1 } }, para('Body.')] } as any;
+    assert.strictEqual(String((await OfficeGenerator.generate(flowing, 'text')).value).trim(), 'Front.\nBody.', 'text: a section\'s start is no blank line');
+    const html = String((await OfficeGenerator.generate(flowing, 'html')).value).split('<body')[1];
+    assert.ok(!html.includes('<hr class="page-break"') && html.includes('<div class="section-start" style="break-before:page"></div>'), 'HTML: a section\'s start is a page in print, no rule');
+    // A trailing `\sect` (writers end every section with one) starts no section.
+    const trailing = await OfficeParser.parseOffice(Buffer.from('{\\rtf1\\ansi Hello\\par\\sect}'), { fileType: 'rtf' } as any) as OfficeParserAST;
+    assert.strictEqual(shapeOf(trailing), 'P', 'RTF: a section with nothing in it after the text is none');
+
+    // Page numbers in a script's digits: a section format RTF has and this library does not is none,
+    // the saved number's script kept; decimal keeps it too, but not a part carried on from another section's.
+    const rtfSection = async (words: string) => (await OfficeParser.parseOffice(Buffer.from(`{\\rtf1\\ansi${words} Text\\par}`), { fileType: 'rtf' } as any) as OfficeParserAST).metadata.pageSetup?.pageNumberFormat;
+    assert.deepStrictEqual([await rtfSection('\\pgnhindia'), await rtfSection('\\pgnthaia'), await rtfSection('\\pgndecd'), await rtfSection('')], [undefined, undefined, 'decimalFullWidth', 'decimal'], 'RTF: format words this library has none of are none');
+    const arabic = String.fromCodePoint(0x663), arabicFive = String.fromCodePoint(0x665), thai = String.fromCodePoint(0xE53);
+    assert.deepStrictEqual([fillPageNumber([arabic], 5, 'decimal'), fillPageNumber(['3'], 5, 'decimal'), fillPageNumber(['ii'], 5, 'decimal', { own: false, format: 'lowerRoman' }),
+        fillPageNumber([thai], 5, 'decimal', { own: false, format: 'decimalThai' }), fillPageNumber(['ii'], 5, undefined, { own: false, format: 'lowerRoman' }), fillPageNumber(['3'], 5, 'decimalArabicIndic')],
+        [[arabicFive], ['5'], ['5'], ['5'], ['5'], [arabicFive]], 'decimal keeps the saved digits\' script, not a carried part\'s');
 }
 
 /**
@@ -9269,6 +9358,7 @@ async function runTests(): Promise<void> {
         ['Floating frames', testFloatingFrames],
         ['Native PDF shaped text', testNativePdfShapedText],
         ['Page number formats', testPageNumberFormats],
+        ['Sections saved again', testSectionRoundTrips],
         ['PDF lists read whole', testPdfListsReadWhole],
         ['PDF headings by size and weight', testPdfHeadingsBySizeAndWeight],
         ['PDF ruled tables', testPdfRuledTables],

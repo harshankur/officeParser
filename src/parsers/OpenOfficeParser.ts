@@ -290,7 +290,7 @@ import { takeRepeats, valuesLength } from '../utils/repeatUtils.js';
 import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
 import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
-import { appendAll, liftFloatingFrames } from '../utils/nodeListUtils.js';
+import { appendAll, dropTrailingSectionStarts, liftFloatingFrames } from '../utils/nodeListUtils.js';
 import { odfPageNumberFormat } from '../utils/pageNumbers.js';
 import { inRanges } from '../utils/sheetUtils.js';
 
@@ -589,16 +589,17 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         const master = masterName ? masterPages.get(masterName) : undefined;
         const layout = master ? pageLayouts.get(master.getAttribute("style:page-layout-name") || '') : undefined;
         const props = layout ? getDirectChildren(layout, "style:page-layout-properties")[0] : undefined;
-        if (!props) return undefined;
+        if (!master) return undefined;
         const setup: PageSetup = {};
         // A first page of its own: its own first page's parts, or a master that hands over to another after
         // its first page (a word processor's "First Page" style, and ODT output's section title pages).
         const next = master?.getAttribute("style:next-style-name");
         if (shown(master, "style:header-first") || shown(master, "style:footer-first") || (next && next !== masterName && masterPages.has(next))) setup.differentFirstPage = true;
         // How its pages are numbered (`style:num-format`: i for front matter, 1 where it gives none).
-        const pageNumbers = odfPageNumberFormat(props.getAttribute("style:num-format"));
+        // (A master of no page layout is on LibreOffice's default one: numbered 1, 2, 3, of no size here.)
+        const pageNumbers = odfPageNumberFormat(props?.getAttribute("style:num-format"));
         if (pageNumbers) setup.pageNumberFormat = pageNumbers;
-        if (config.ignorePageGeometry) return setup;
+        if (config.ignorePageGeometry || !props) return setup;
         const pt = (el: Element | undefined, attr: string) => { const v = lengthToPt(el?.getAttribute(attr) || undefined); return v != null && v >= 0 && v <= MAX_PAGE_PT ? Math.round(v * 100) / 100 : undefined; };
         const width = pt(props, "fo:page-width"), height = pt(props, "fo:page-height");
         if (!width || !height) return setup;
@@ -769,6 +770,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 if (breakBefore === 'page' || breakBefore === 'column') styleInfo.breakBefore = breakBefore;
                 const breakAfter = paraProps.getAttribute("fo:break-after");
                 if (breakAfter === 'page' || breakAfter === 'column') styleInfo.breakAfter = breakAfter;
+            }
+
+            // A table's breaks before and after it (its style's table properties).
+            const tableProps = getDirectChildren(style, "style:table-properties")[0];
+            if (tableProps && !paraProps) {
+                const before = tableProps.getAttribute("fo:break-before"), after = tableProps.getAttribute("fo:break-after");
+                if (before === 'page' || before === 'column') styleInfo.breakBefore = before;
+                if (after === 'page' || after === 'column') styleInfo.breakAfter = after;
             }
 
             if (Object.keys(styleInfo).length > 0) {
@@ -1942,7 +1951,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 if (config.includeRawContent) {
                     tableNode.rawContent = getRawContent(node, sourceXml, config);
                 }
+                // (A table's style starts a page, or a page style, as a paragraph's does: LibreOffice's way
+                // of turning to a page style at a table.)
+                if (!asSheet) pushStyleBreak(node.getAttribute("table:style-name"), targetArray, 'before');
                 targetArray.push(tableNode);
+                if (!asSheet) pushStyleBreak(node.getAttribute("table:style-name"), targetArray, 'after');
                 lastWasList = false;
             } else if (node.tagName === "text:list") {
                 // Parse list structure with proper listId tracking. A list header (`text:list-header`)
@@ -2259,7 +2272,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     openSectionColumns.pop();
                     delete (opened.metadata as any).openedSection;
                 }
-                const { columns: endColumns, ...endPage } = odfPageSetup(sectionMasters[sectionMasters.length - 1] ?? firstMaster)!;
+                // (The page it ends on may be a master of no layout: the page's setup then, columns none.)
+                const { columns: endColumns, ...endPage } = odfPageSetup(sectionMasters[sectionMasters.length - 1] ?? firstMaster) ?? {};
                 targetArray.push({ type: 'break', metadata: { breakType: 'section', pageSetup: { ...endPage, ...(endColumns ? { columns: endColumns } : {}) } } as BreakMetadata });
             } else if (node.tagName !== "text:tracked-changes") {
                 // (Tracked changes hold what a deletion removed, which is not the document's text.)
@@ -3074,9 +3088,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     // Frames floating beside a paragraph's text, read where they are anchored, stand before it.
     liftFloatingFrames(content);
     for (const part of [...(auxiliary?.headers ?? []), ...(auxiliary?.footers ?? [])]) if (part.children) liftFloatingFrames(part.children);
-    // (A section of columns ending the document gives back the page's columns to nothing after it: no break.)
-    while (fileType === 'odt' && content.length && content[content.length - 1].type === 'break'
-        && (content[content.length - 1].metadata as BreakMetadata | undefined)?.breakType === 'section') content.pop();
+    // (A section starting after the last text, or a section of columns ending the document, starts nothing.)
+    if (fileType === 'odt') dropTrailingSectionStarts(content);
     // A presentation's page is its slide's size alone: slides are laid out as they are, not within margins.
     // (A text document's numbering and first page are no geometry: kept under ignorePageGeometry.)
     const firstPage = config.ignorePageGeometry && fileType !== 'odt' ? undefined : odfPageSetup(firstMaster);

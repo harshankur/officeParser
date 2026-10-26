@@ -75,7 +75,7 @@ import { bulletCharacter, formatListNumber, wordNumberFormat } from '../utils/li
 import { extractFiles, findRequiredPart, maxUncompressedBytesOf, resolvePartPath } from '../utils/zipUtils.js';
 import { lookupTable, plainRecord, setOwn } from '../utils/lookupUtils.js';
 import { cellSpan, MAX_COL_SPAN } from '../utils/numberUtils.js';
-import { appendAll, isFloatingFrame } from '../utils/nodeListUtils.js';
+import { appendAll, dropTrailingSectionStarts, isFloatingFrame } from '../utils/nodeListUtils.js';
 import { diagramList, readDiagram } from '../utils/diagramUtils.js';
 import { UniqueNames } from '../utils/uniqueNames.js';
 import { decodeMarkup, mhtPartText, MhtPart, readMht } from '../utils/mhtUtils.js';
@@ -2027,6 +2027,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
             if (first) metadata.pageSetup = first;
             await readHeadersAndFooters(file.path);
             await readPart(file.path, body, () => readBlocks(body, documentContent, content));
+            // (A section starting after the last text starts nothing.)
+            dropTrailingSectionStarts(content);
         }
     }
     // A chunk standing where no content is read from would be lost unseen.

@@ -499,7 +499,8 @@ export interface CommonOfficeParserConfig {
      * node: Word's `w:br` (text wrapping) and `w:cr`, ODF's `text:line-break`, HTML's `<br>`, a Markdown hard break; so are HTML and
      * Markdown's `<hr>`/`---` (a `thematic`/`page` break). This flag does not gate those. Nor does it gate
      * a section's start (a break with BreakMetadata.section: a Word, RTF or ODF text document's next
-     * section): that is the document's structure, and always a node.
+     * section): that is the document's structure, and always a node (none where nothing comes after it).
+     * Text and Markdown output show a section's start as nothing, HTML as a new page in print.
      */
     includeBreakNodes?: boolean;
     /**
@@ -1559,7 +1560,7 @@ export interface PageSetup {
      * Width in points (the page is landscape when it is wider than it is tall). Width and height are
      * absent where the document does not set its page (an RTF section that only numbers its pages in
      * roman, a Word section with no `w:pgSz`) or under `ignorePageGeometry`: the section's other
-     * properties still apply, on the page the writer would use.
+     * properties still apply, on the document's page (its size, margins and header and footer distances).
      */
     width?: number;
     /** Height in points (absent with the width). */
@@ -1585,17 +1586,22 @@ export interface PageSetup {
     /**
      * How the section numbers its pages (Word's `w:pgNumType w:fmt`, RTF's `\pgndec`, `\pgnlcrm` and the
      * like, an ODF page layout's `style:num-format`): `decimal` unless it says otherwise, a front matter's
-     * i, ii, iii in `lowerRoman`. A reader that knows it writes it, decimal included. A page field in the
-     * section with no format of its own (TextMetadata.fieldFormat) prints its page in it.
+     * i, ii, iii in `lowerRoman`. A reader that knows it writes it, decimal included; absent where the
+     * section numbers its pages in a format none of PageNumberFormat's is (the saved number's form kept). A
+     * page field in the section with no format of its own (TextMetadata.fieldFormat) prints its page in it.
      */
     pageNumberFormat?: PageNumberFormat;
 }
 
 /**
- * How a page number is written: 1, i, I, a, A (27 is `aa`), 1st, one, first, a hexadecimal number, or
- * the number between dashes (`- 1 -`).
+ * How a page number is written: 1, i, I, a, A (27 is `aa`), 1st, one, first, a hexadecimal number, the
+ * number between dashes (`- 1 -`), or digits of a script of its own (full-width, Arabic-Indic, Extended
+ * Arabic-Indic (Persian), Devanagari, Thai). Plain digits (`decimal`, `decimalDash`, `ordinal`) are
+ * written in the script the page number was saved in. A section or field in a format none of these is
+ * (Hebrew letters, CJK counting) has none: the saved number's own form is kept.
  */
-export type PageNumberFormat = 'decimal' | 'lowerRoman' | 'upperRoman' | 'lowerLetter' | 'upperLetter' | 'ordinal' | 'cardinalText' | 'ordinalText' | 'hex' | 'decimalDash';
+export type PageNumberFormat = 'decimal' | 'lowerRoman' | 'upperRoman' | 'lowerLetter' | 'upperLetter' | 'ordinal' | 'cardinalText' | 'ordinalText' | 'hex' | 'decimalDash'
+    | 'decimalFullWidth' | 'decimalArabicIndic' | 'decimalExtendedArabicIndic' | 'decimalDevanagari' | 'decimalThai';
 
 /**
  * Configuration options for PDF generation.
@@ -3460,7 +3466,9 @@ export interface BreakMetadata {
     /**
      * On a page break that starts a section of the document (a Word or RTF section, an ODF page of another
      * style): its number (1 for the second section) and its pages' setup (size and margins where they are
-     * set, its columns, how it numbers its pages). Always a node, whatever `includeBreakNodes` says.
+     * set, its columns, how it numbers its pages). Always a node, whatever `includeBreakNodes` says, but
+     * for a section with nothing in it after the document's last text, which is none. (A break with a
+     * section number starts a section; an author's page break has none.)
      */
     section?: number;
     /** The pages of the section this break starts (see `section`). */

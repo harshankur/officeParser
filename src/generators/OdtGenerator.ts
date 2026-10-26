@@ -1,10 +1,12 @@
 import { zipSync, Zippable } from 'fflate';
 import { UniqueNames } from '../utils/uniqueNames.js';
 import { layoutTableRows } from '../utils/tableLayout.js';
-import { BreakMetadata, ConversionResult, GeneratorConfig, HeaderFooterMetadata, ImageMode, OdtGeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting } from '../types.js';
+import { BreakMetadata, ConversionResult, GeneratorConfig, HeaderFooterMetadata, ImageMode, OdtGeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageNumberFormat, PageSetup, TextFormatting } from '../types.js';
+import { odfNumFormatOf } from '../utils/pageNumbers.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { heldColumns } from '../utils/columnUtils.js';
+import { onDocumentPage } from '../utils/pageLimits.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, odfUserDefinedXml, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
 import { markerPattern, MarkerPattern, odfNumFormat } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
@@ -97,14 +99,36 @@ class StyleRegistry {
     private listStyles: string[] = [];
     private fonts = new Set<string>();
 
+    /** Each automatic style by its name: its family, properties and attributes (see derive). */
+    private byName = new Map<string, { family: StyleFamily; props: string; extraAttrs: string }>();
     intern(family: StyleFamily, prefix: string, props: string, extraAttrs = ''): string {
         const key = `${family}::${extraAttrs}::${props}`;
         const existing = this.byKey.get(key);
         if (existing) return existing;
         const name = `${prefix}${(this.counters[prefix] = (this.counters[prefix] ?? 0) + 1)}`;
         this.byKey.set(key, name);
+        this.byName.set(name, { family, props, extraAttrs });
         this.serialized.push(`<style:style style:name="${name}" style:family="${family}"${extraAttrs}>${props}</style:style>`);
         return name;
+    }
+    /**
+     * A style as `name` is (an automatic style's properties and attributes; a common one, or none, as its
+     * parent) with `attrs` more on its `element` properties and `extra` more on it, each in place of its
+     * own of the name: an automatic style cannot be a parent.
+     */
+    derive(name: string, family: StyleFamily, prefix: string, element: string, attrs: Record<string, string>, extra: Record<string, string>): string {
+        const xmlOf = (given: Record<string, string>) => Object.entries(given).map(([k, v]) => ` ${k}="${v}"`).join('');
+        const without = (xml: string, keys: string[]) => keys.reduce((x, k) => x.split(new RegExp(`\\s${k}="[^"]*"`)).join(''), xml);
+        const own = name ? this.byName.get(name) : undefined;
+        if (own && own.family === family) {
+            const open = new RegExp(`<${element}(?=[\\s/>])([^>]*?)(/?)>`);
+            const props = open.test(own.props)
+                ? own.props.replace(open, (_m, rest: string, close: string) => `<${element}${xmlOf(attrs)}${without(rest, Object.keys(attrs))}${close}>`)
+                : `<${element}${xmlOf(attrs)}/>${own.props}`;
+            return this.intern(family, prefix, props, without(own.extraAttrs, Object.keys(extra)) + xmlOf(extra));
+        }
+        const parent = name || (family === 'paragraph' ? 'Standard' : '');
+        return this.intern(family, prefix, `<${element}${xmlOf(attrs)}/>`, `${parent ? ` style:parent-style-name="${parent}"` : ''}${xmlOf(extra)}`);
     }
     internListStyle(xml: string): void { this.listStyles.push(xml); }
     useFont(name: string): void { this.fonts.add(name); }
@@ -128,7 +152,7 @@ interface ListDef { name: string; registry: StyleRegistry; levels: Map<number, M
  */
 /** A section's master page: its page, and its header and footer for every page, its first page and even pages (rendered once). */
 interface SectionPage {
-    name: string; setup: PageSetup | undefined; key: string;
+    name: string; setup: PageSetup | undefined; key: string; numbering?: PageNumberFormat;
     header?: OfficeContentNode[]; footer?: OfficeContentNode[]; firstHeader?: OfficeContentNode[]; firstFooter?: OfficeContentNode[]; evenHeader?: OfficeContentNode[]; evenFooter?: OfficeContentNode[];
     headerXml?: string; footerXml?: string; firstHeaderXml?: string; firstFooterXml?: string; evenHeaderXml?: string; evenFooterXml?: string;
 }
@@ -248,7 +272,8 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
                     end++;
                 }
                 if (hasText) {
-                    out += await this.paragraph({ type: 'paragraph', children: items.slice(idx, end) } as OfficeContentNode);
+                    const waiting = this.takeBreak();
+                    out += this.carryBreak(await this.paragraph({ type: 'paragraph', children: items.slice(idx, end) } as OfficeContentNode), waiting);
                     prevPaginated = null;
                     idx = end - 1;
                     continue;
@@ -266,23 +291,71 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
                     run.push(items[idx]); idx++;
                 }
                 idx--;
-                out += await this.renderListRun(run);
+                const waiting = this.takeBreak();
+                out += this.carryBreak(await this.renderListRun(run), waiting);
                 prevPaginated = null;
                 continue;
             }
             const override = await this.handleOnNode(node);
             if (override === false) { prevPaginated = null; continue; }
             if (typeof override === 'string') { out += override; prevPaginated = null; continue; }
-            if ((node.type === 'page' || node.type === 'slide') && prevPaginated === node.type) {
-                out += `<text:p text:style-name="${this.pageBreakStyle()}"/>`;
-            }
+            if ((node.type === 'page' || node.type === 'slide') && prevPaginated === node.type) out += this.waitBreak({ before: 'page' });
+            // (A break waits for the block after it, which carries it: see waitBreak.)
+            const waiting = node.type === 'break' ? undefined : this.takeBreak();
             const block = await this.renderBlockNode(node);
             // Paragraphs and headings write their own bookmarks; every other block's go in its first paragraph.
-            out += OWN_BOOKMARKS.has(node.type) ? block : this.withBookmarks(block, node);
+            out += this.carryBreak(OWN_BOOKMARKS.has(node.type) ? block : this.withBookmarks(block, node), waiting);
             prevPaginated = (node.type === 'page' || node.type === 'slide') ? node.type : null;
         }
+        // (A break that ends the blocks: a paragraph of its own carries it.)
+        out += this.waitBreak(undefined);
         return out;
     }
+
+    /**
+     * A page or column break (and the master page a section turns to) waiting for the block after it:
+     * ODF's breaks are its first paragraph's, heading's or table's style's (`fo:break-before`,
+     * `style:master-page-name`). Written as an empty paragraph of their own, they were one more empty
+     * paragraph on every save. Returns the break that was waiting, as a paragraph of its own (two breaks
+     * in a row: the first one's page is empty).
+     */
+    private pendingBreak: { before: 'page' | 'column'; master?: string } | undefined;
+    private waitBreak(next: { before: 'page' | 'column'; master?: string } | undefined): string {
+        const before = this.pendingBreak;
+        this.pendingBreak = next;
+        return before ? this.breakParagraph(before) : '';
+    }
+    /** A break as a paragraph of its own (one that ends the blocks, or the first of two in a row). */
+    private breakParagraph(brk: { before: 'page' | 'column'; master?: string }): string {
+        return `<text:p text:style-name="${this.breakStyle('', 'paragraph', brk)}"/>`;
+    }
+    private takeBreak(): { before: 'page' | 'column'; master?: string } | undefined {
+        const waiting = this.pendingBreak;
+        this.pendingBreak = undefined;
+        return waiting;
+    }
+    /** A style as `name` is, the break before it (see waitBreak). */
+    private breakStyle(name: string, family: 'paragraph' | 'table', brk: { before: 'page' | 'column'; master?: string }): string {
+        return this.activeStyles.derive(name, family, family === 'table' ? 'TB' : 'P', family === 'table' ? 'style:table-properties' : 'style:paragraph-properties',
+            { 'fo:break-before': brk.before }, brk.master ? { 'style:master-page-name': brk.master } : {});
+    }
+    /** `xml` with the break that waited in its first paragraph, heading or table; it waits on where it has none. */
+    private carryBreak(xml: string, waiting: { before: 'page' | 'column'; master?: string } | undefined): string {
+        if (!waiting) return xml;
+        const tag = /<(text:p|text:h|table:table)(?=[\s/>])([^>]*?)(\/?)>/.exec(xml);
+        if (!tag) {
+            // (The block wrote no paragraph: the break waits on, unless it set one of its own.)
+            if (this.pendingBreak) return this.breakParagraph(waiting) + xml;
+            this.pendingBreak = waiting;
+            return xml;
+        }
+        const attr = tag[1] === 'table:table' ? 'table:style-name' : 'text:style-name';
+        const own = new RegExp(`\\s${attr}="([^"]*)"`).exec(tag[2]);
+        const style = this.breakStyle(own?.[1] ?? '', tag[1] === 'table:table' ? 'table' : 'paragraph', waiting);
+        const attrs = own ? tag[2].replace(own[0], ` ${attr}="${style}"`) : `${tag[2]} ${attr}="${style}"`;
+        return `${xml.slice(0, tag.index)}<${tag[1]}${attrs}${tag[3]}>${xml.slice(tag.index + tag[0].length)}`;
+    }
+
 
     private async renderBlockNode(node: OfficeContentNode): Promise<string> {
         switch (node.type) {
@@ -860,7 +933,6 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
 
     // ── breaks / code / admonition / chart / embed ────────────────────────────────
 
-    private pageBreakStyle(): string { return this.internPara(' fo:break-before="page"'); }
 
     /** Whether a section of columns of its own is open, and how many there have been. */
     private openSection = false;
@@ -924,15 +996,18 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             evenHeader: this.sectionPart('header', section, 'even'), evenFooter: this.sectionPart('footer', section, 'even'),
         } : {};
         const more = Object.values(parts).some(Boolean);
+        // (Numbered its own way, it is a page style of its own: ODF numbers a page style's pages.)
+        const numbering = (setup ?? this.ast.metadata?.pageSetup)?.pageNumberFormat ?? 'decimal';
+        const ownNumbering = numbering !== (this.ast.metadata?.pageSetup?.pageNumberFormat ?? 'decimal');
         let master = '', page: SectionPage | undefined;
-        if (!samePaper || header || footer || more) {
+        if (!samePaper || header || footer || more || ownNumbering) {
             const columns = samePaper ? this.ast.metadata?.pageSetup?.columns : setup?.columns;
-            const key = JSON.stringify([own.w, own.h, own.margin, columns ?? null, header?.key ?? null, footer?.key ?? null, ...Object.values(parts).map(p => p?.key ?? null)]);
+            const key = JSON.stringify([own.w, own.h, own.margin, columns ?? null, numbering, header?.key ?? null, footer?.key ?? null, ...Object.values(parts).map(p => p?.key ?? null)]);
             master = this.sectionMasterByKey.get(key) ?? '';
             page = this.sectionPageByName.get(master);
             if (!master) {
                 master = `Section${this.sectionPages.length + 1}`;
-                page = { name: master, setup: samePaper ? this.ast.metadata?.pageSetup : setup, key, header: header?.nodes, footer: footer?.nodes,
+                page = { name: master, setup: samePaper ? this.ast.metadata?.pageSetup : setup, numbering, key, header: header?.nodes, footer: footer?.nodes,
                     firstHeader: parts.firstHeader?.nodes, firstFooter: parts.firstFooter?.nodes, evenHeader: parts.evenHeader?.nodes, evenFooter: parts.evenFooter?.nodes };
                 this.sectionPages.push(page);
                 this.sectionPageByName.set(master, page);
@@ -944,11 +1019,11 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         this.pageColumns = samePaper ? this.ast.metadata?.pageSetup?.columns : setup?.columns;
         // A section of a first page of its own starts on that page's master, which hands over to its own.
         const startsOnFirst = !!(page && (page.firstHeader || page.firstFooter));
-        if (master === this.activeMaster && !startsOnFirst) return `<text:p text:style-name="${this.pageBreakStyle()}"/>`;
+        if (master === this.activeMaster && !startsOnFirst) return this.waitBreak({ before: 'page' });
         const name = startsOnFirst ? `${master}First` : master || 'Body';
         if (!master) this.bodyMasterUsed = true;
         this.activeMaster = master;
-        return `<text:p text:style-name="${this.activeStyles.intern('paragraph', 'P', '<style:paragraph-properties fo:break-before="page"/>', ` style:parent-style-name="Standard" style:master-page-name="${name}"`)}"/>`;
+        return this.waitBreak({ before: 'page', master: name });
     }
     /** A section started on the same page with a header or footer of its own, not yet shown (see blockBreak). */
     private waitingSection: number | undefined;
@@ -966,10 +1041,10 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     /** The columns the current page is set in (null: the body's, before any section page). */
     private pageColumns: PageSetup['columns'] | null = null;
 
-    /** The section page's paper as the document's first page's is resolved (format, landscape, margins). */
+    /** The section page's paper as the document's first page's is resolved (format, landscape, margins; one that sets no page the document's). */
     private paperOf(setup: PageSetup | undefined) {
         const cfg = this.config.odtConfig;
-        return resolvePaper(cfg.format, cfg.landscape, setup, cfg.margin);
+        return resolvePaper(cfg.format, cfg.landscape, onDocumentPage(setup, this.ast.metadata?.pageSetup), cfg.margin);
     }
 
     /**
@@ -978,8 +1053,14 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
      * header's height and its gap to the body the rest of the body's margin (the header and footer stood
      * at the body's margin, a header distance lost).
      */
-    private pageLayoutXml(name: string, paper: ReturnType<typeof resolvePaper>, columns: PageSetup['columns'] | undefined): string {
+    private pageLayoutXml(name: string, paper: ReturnType<typeof resolvePaper>, columns: PageSetup['columns'] | undefined, numbering?: PageNumberFormat): string {
         const mar = { ...paper.margin };
+        // How its pages are numbered (`style:num-format`; 1 is ODF's own, written as nothing).
+        const numFormat = numbering && numbering !== 'decimal' ? odfNumFormatOf(numbering) : undefined;
+        if (numbering && numbering !== 'decimal' && !numFormat && !this.unwrittenNumbering.has(numbering)) {
+            this.unwrittenNumbering.add(numbering);
+            this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'odt', feature: `page numbers in ${numbering} (written in digits)` });
+        }
         let styles = '';
         const hd = paper.headerDistance, fd = paper.footerDistance;
         if (this.writesHeader && hd !== undefined && hd < mar.top) {
@@ -993,8 +1074,10 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         return `<style:page-layout style:name="${name}"><style:page-layout-properties`
             + ` fo:page-width="${fmtIn(paper.w / 72)}" fo:page-height="${fmtIn(paper.h / 72)}" style:print-orientation="${paper.landscape ? 'landscape' : 'portrait'}"`
             + ` fo:margin-top="${fmtPt(mar.top)}" fo:margin-bottom="${fmtPt(mar.bottom)}"`
-            + ` fo:margin-left="${fmtPt(mar.left)}" fo:margin-right="${fmtPt(mar.right)}"${(columns?.count ?? 1) > 1 ? `>${this.columnsXml(columns, paper)}</style:page-layout-properties>` : '/>'}${styles}</style:page-layout>`;
+            + ` fo:margin-left="${fmtPt(mar.left)}" fo:margin-right="${fmtPt(mar.right)}"${numFormat ? ` style:num-format="${numFormat}"` : ''}${(columns?.count ?? 1) > 1 ? `>${this.columnsXml(columns, paper)}</style:page-layout-properties>` : '/>'}${styles}</style:page-layout>`;
     }
+    /** The page number formats a section had that ODF has none of, each reported once. */
+    private unwrittenNumbering = new Set<string>();
     /** Whether the document writes a header (a footer) anywhere: its pages' layouts then hold its distance. */
     private writesHeader = false;
     private writesFooter = false;
@@ -1049,7 +1132,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             return out;
         }
         if (t === 'page') return this.pageStart();
-        if (t === 'column') return `<text:p text:style-name="${this.internPara(' fo:break-before="column"')}"/>`;
+        if (t === 'column') return this.waitBreak({ before: 'column' });
         if (t === 'thematic') return `<text:p text:style-name="${this.internPara(' fo:border-bottom="0.5pt solid #808080" fo:padding-bottom="1pt"')}"/>`;
         if (t === 'lastRenderedPage') return '';
         return '<text:p/>';
@@ -1146,7 +1229,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup, cfg.margin);
         this.writesHeader = !!this.ast.auxiliary?.headers?.length;
         this.writesFooter = !!this.ast.auxiliary?.footers?.length;
-        const pageLayout = this.pageLayoutXml('pm1', paper, this.ast.metadata?.pageSetup?.columns);
+        const pageLayout = this.pageLayoutXml('pm1', paper, this.ast.metadata?.pageSetup?.columns, this.ast.metadata?.pageSetup?.pageNumberFormat);
         // A part on every page, on even pages alone (`style:header-left`, its odd pages' header an empty
         // paragraph: an empty `style:header` is read as none, and its left pages' with it), or
         // on the first page alone: then the first page's master (the document starts on `Standard`)
@@ -1180,7 +1263,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
                 + `<style:master-page style:name="Rest" style:page-layout-name="pm1">${masters('rest')}</style:master-page>`
             : `<style:master-page style:name="Standard" style:page-layout-name="pm1">${masters('rest')}</style:master-page>`;
         // Sections' own pages, and the body's page to return to after them, each with the body's header and footer.
-        const sectionLayouts = this.sectionPages.map((p, i) => this.pageLayoutXml(`pm${i + 2}`, this.paperOf(p.setup), p.setup?.columns)).join('');
+        const sectionLayouts = this.sectionPages.map((p, i) => this.pageLayoutXml(`pm${i + 2}`, this.paperOf(p.setup), p.setup?.columns, p.numbering)).join('');
         // A section's own header and footer, else the first section's (as on the body's pages).
         // Even pages' and a first page's of its own too: its first page on a master of its own (`<name>First`)
         // that hands over to the section's.

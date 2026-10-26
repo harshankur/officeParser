@@ -48,16 +48,26 @@ import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 import { chargeRawContent } from '../utils/xmlUtils.js';
-import { isFloatingFrame } from '../utils/nodeListUtils.js';
+import { dropTrailingSectionStarts, isFloatingFrame } from '../utils/nodeListUtils.js';
 import { fieldSwitchFormat } from '../utils/pageNumbers.js';
 import { attachmentLookup } from '../utils/repeatUtils.js';
 import { ByteDecoder, textDecoder } from '../utils/encodingUtils.js';
 
 /** The document's page words (twips), and their state keys. */
 const PAGE_WORDS = new Map([['paperw', 'w'], ['paperh', 'h'], ['margl', 'ml'], ['margr', 'mr'], ['margt', 'mt'], ['margb', 'mb']]);
+/**
+ * A section's page number format, by its word: `\pgndec` is decimal, `\pgndecd` full-width digits; a
+ * format word of none of PageNumberFormat's (Hindi and Thai letters, Abjad, the CJK and Korean countings)
+ * is none, the saved number's form kept. (Only the format words: `\pgncont`, `\pgnrestart`, `\pgnstarts`
+ * and the chapter words `\pgnhn...` are none of these.)
+ */
+const RTF_PAGE_NUMBERS: ReadonlyMap<string, PageNumberFormat | undefined> = new Map<string, PageNumberFormat | undefined>([
+    ['pgndec', 'decimal'], ['pgnlcrm', 'lowerRoman'], ['pgnucrm', 'upperRoman'], ['pgnlcltr', 'lowerLetter'], ['pgnucltr', 'upperLetter'], ['pgndecd', 'decimalFullWidth'],
+    ...['pgnid', 'pgnbidia', 'pgnbidib', 'pgnchosung', 'pgncnum', 'pgndbnum', 'pgndbnumd', 'pgndbnumk', 'pgndbnumt', 'pgnganada', 'pgngbnum', 'pgngbnumd', 'pgngbnumk',
+        'pgngbnuml', 'pgnhindia', 'pgnhindib', 'pgnhindic', 'pgnhindid', 'pgnthaia', 'pgnthaib', 'pgnthaic', 'pgnvieta', 'pgnzodiac', 'pgnzodiacd', 'pgnzodiacl',
+        'pgnaiu', 'pgnaiud', 'pgniroha', 'pgnirohad'].map(word => [word, undefined] as [string, undefined]),
+]);
 /** A section's own page and column words, and their state keys. */
-/** A section's page number format, by its word (`\pgndec` is 1, 2, 3: none). */
-const RTF_PAGE_NUMBERS: ReadonlyMap<string, PageNumberFormat | undefined> = new Map([['pgndec', 'decimal'], ['pgnlcrm', 'lowerRoman'], ['pgnucrm', 'upperRoman'], ['pgnlcltr', 'lowerLetter'], ['pgnucltr', 'upperLetter']]);
 const SECTION_WORDS = new Map([['pgwsxn', 'w'], ['pghsxn', 'h'], ['marglsxn', 'ml'], ['margrsxn', 'mr'], ['margtsxn', 'mt'], ['margbsxn', 'mb'], ['headery', 'hy'], ['footery', 'fy'], ['cols', 'cols'], ['colsx', 'colsx']]);
 
 /**
@@ -2501,6 +2511,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         if (setup) meta.pageSetup = setup;
     }
     const firstSetup = sectionSetup(firstSection);
+    // (A section starting after the last text, as writers end every section with `\sect`, starts nothing.)
+    dropTrailingSectionStarts(content);
     const result = createAST(
         'rtf',
         {

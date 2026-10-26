@@ -24,10 +24,29 @@ function ordinalWords(words: string): string {
     return words.replace(/[a-z]+$/, word => irregular[word] ?? (word.endsWith('y') ? `${word.slice(0, -1)}ieth` : `${word}th`));
 }
 
+/** Each digit-script format's zero (see PageNumberFormat). */
+const SCRIPT_ZEROS: Partial<Record<PageNumberFormat, number>> = {
+    decimalFullWidth: 0xFF10, decimalArabicIndic: 0x0660, decimalExtendedArabicIndic: 0x06F0, decimalDevanagari: 0x0966, decimalThai: 0x0E50,
+};
+
+/** The digit-script format whose zero this is, where it is one of PageNumberFormat's. */
+function scriptOfZero(zero: number): PageNumberFormat | undefined {
+    for (const [format, z] of Object.entries(SCRIPT_ZEROS)) if (z === zero) return format as PageNumberFormat;
+    return undefined;
+}
+
+/** Whether a format writes its number in plain digits (1, 2, 3 in whatever script they were saved in). */
+const writesDigits = (format: PageNumberFormat | undefined): boolean => format === 'decimal' || format === 'decimalDash' || format === 'ordinal';
+
+/** Digits 0 to 9 in `s` written from another script's zero. */
+const inScript = (s: string, zero: number) => s.replace(/\d/g, d => String.fromCodePoint(zero + Number(d)));
+
 /** `n` written in a page number format: digits where the format cannot write it (0, negatives, a million or more). */
 export function pageNumberText(n: number, format: PageNumberFormat | undefined): string {
     const whole = Number.isFinite(n) ? Math.trunc(n) : 0;
     if (!format || format === 'decimal' || whole < 1) return String(whole);
+    const zero = SCRIPT_ZEROS[format];
+    if (zero !== undefined) return inScript(String(whole), zero);
     switch (format) {
         case 'lowerRoman': case 'upperRoman': case 'lowerLetter': case 'upperLetter': return formatListNumber(whole, format);
         case 'decimalDash': return `- ${whole} -`;
@@ -38,6 +57,7 @@ export function pageNumberText(n: number, format: PageNumberFormat | undefined):
         }
         case 'cardinalText': return whole < 1_000_000 ? cardinal(whole) : String(whole);
         case 'ordinalText': return whole < 1_000_000 ? ordinalWords(cardinal(whole)) : String(whole);
+        default: return String(whole);
     }
 }
 
@@ -66,11 +86,12 @@ export function fieldSwitchFormat(instruction: string): PageNumberFormat | undef
 
 /**
  * A Word section's page number format (`w:pgNumType w:fmt`): decimal where it gives none, undefined for
- * one of none of these.
+ * one of none of these (the saved number's form is then kept).
  */
 export function wordPageNumberFormat(fmt: string | null | undefined): PageNumberFormat | undefined {
     switch (fmt) {
         case null: case undefined: case '': case 'decimal': return 'decimal';
+        case 'decimalFullWidth': case 'decimalFullWidth2': return 'decimalFullWidth';
         case 'lowerRoman': case 'upperRoman': case 'lowerLetter': case 'upperLetter': case 'ordinal': case 'cardinalText': case 'ordinalText': case 'hex':
             return fmt;
         case 'numberInDash': return 'decimalDash';
@@ -79,8 +100,8 @@ export function wordPageNumberFormat(fmt: string | null | undefined): PageNumber
 }
 
 /**
- * An ODF number format (`style:num-format`: `1`, `i`, `I`, `a`, `A`): decimal where it gives none,
- * undefined for one of none of these.
+ * An ODF number format (`style:num-format`: `1`, `i`, `I`, `a`, `A`, or a script's digit one, `١`):
+ * decimal where it gives none, undefined for one of none of these (the saved number's form is then kept).
  */
 export function odfPageNumberFormat(numFormat: string | null | undefined): PageNumberFormat | undefined {
     switch (numFormat) {
@@ -89,7 +110,33 @@ export function odfPageNumberFormat(numFormat: string | null | undefined): PageN
         case 'I': return 'upperRoman';
         case 'a': return 'lowerLetter';
         case 'A': return 'upperLetter';
-        default: return undefined;
+    }
+    // (A script's one: its digits, from the zero before it.)
+    const cp = numFormat.codePointAt(0)!;
+    return [...numFormat].length === 1 && /\p{Nd}/u.test(numFormat) ? scriptOfZero(cp - 1) : undefined;
+}
+
+/** The ODF number format (`style:num-format`) a page number format is written as, where ODF has one. */
+export function odfNumFormatOf(format: PageNumberFormat | undefined): string | undefined {
+    switch (format) {
+        case undefined: case 'decimal': return '1';
+        case 'lowerRoman': return 'i';
+        case 'upperRoman': return 'I';
+        case 'lowerLetter': return 'a';
+        case 'upperLetter': return 'A';
+    }
+    const zero = SCRIPT_ZEROS[format];
+    return zero === undefined ? undefined : String.fromCodePoint(zero + 1);
+}
+
+/** The Word number format (`w:fmt`) a page number format is written as, where Word has one. */
+export function wordFmtOf(format: PageNumberFormat | undefined): string | undefined {
+    switch (format) {
+        case undefined: return 'decimal';
+        case 'decimalDash': return 'numberInDash';
+        case 'decimalFullWidth': return 'decimalFullWidth';
+        case 'decimalArabicIndic': case 'decimalExtendedArabicIndic': case 'decimalDevanagari': case 'decimalThai': return undefined;
+        default: return format;
     }
 }
 
@@ -103,12 +150,17 @@ const ROMAN = /^m{0,4}(cm|cd|d?c{0,3})(xc|xl|l?x{0,3})(ix|iv|v?i{0,3})$/i;
  * the new one takes its place in the run its first character was in; what is around it stays (`- 3 -`,
  * `Page`). Read from the saved text, a number is digits of any script (written back in that script), a
  * roman numeral (in its case; a letter alone only as i, v or x), or a letter repeated (Word's
- * `ALPHABETIC`: 27 is `AA`); a result saved
- * empty is the number, and one of none of these (`three`, a format the field has and the reader did not
- * read) is replaced whole by the number in digits: the right page in another form, not the saved page on
- * every page.
+ * `ALPHABETIC`: 27 is `AA`); a result saved empty is the number, and one of none of these (`three`, a
+ * format the field has and the reader did not read) is replaced whole by the number in digits: the right
+ * page in another form, not the saved page on every page.
+ *
+ * A format of plain digits (decimal, `- 1 -`, 1st) keeps the script the number was saved in (Arabic-Indic
+ * digits stay so). `savedIn` says where the result was saved: in the page's own section (`own`, the default),
+ * or in another's that numbers its pages in `format` (a footer carried on from the front matter). Saved in
+ * another section, its form is that section's, not the page's: no roman read into a body in digits, no
+ * script into digits of another section's.
  */
-export function fillPageNumber(texts: string[], value: number, format: PageNumberFormat | undefined): string[] {
+export function fillPageNumber(texts: string[], value: number, format: PageNumberFormat | undefined, savedIn: { own: boolean; format?: PageNumberFormat } = { own: true }): string[] {
     const saved = texts.join('');
     let start = -1, end = -1, inferred: PageNumberFormat | undefined, zero: number | undefined;
     const digits = /\p{Nd}+/u.exec(saved);
@@ -143,8 +195,11 @@ export function fillPageNumber(texts: string[], value: number, format: PageNumbe
         // Saved empty, or as nothing read as a number: the whole result is the number.
         if (start < 0) { start = 0; end = saved.length; }
     }
-    let written = pageNumberText(value, format ?? inferred);
-    if (zero !== undefined && !format) written = written.replace(/\d/g, d => String.fromCodePoint(zero! + Number(d)));
+    // (Saved in another section that numbers its pages in a format known here, the saved form is that one's.)
+    const carried = !savedIn.own && savedIn.format !== undefined;
+    if (carried && !writesDigits(savedIn.format)) zero = undefined;
+    let written = pageNumberText(value, format ?? (carried ? undefined : inferred));
+    if (zero !== undefined && (!format || writesDigits(format))) written = inScript(written, zero);
     // Each run its text outside the saved number, the number in the run its first character was in.
     const out: string[] = [];
     let at = 0, placed = false;
