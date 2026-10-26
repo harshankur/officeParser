@@ -291,6 +291,7 @@ import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
 import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 import { appendAll, liftFloatingFrames } from '../utils/nodeListUtils.js';
+import { odfPageNumberFormat } from '../utils/pageNumbers.js';
 import { inRanges } from '../utils/sheetUtils.js';
 
 /**
@@ -607,6 +608,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         if (shown(master, "style:header-first") || shown(master, "style:footer-first") || (next && next !== masterName && masterPages.has(next))) setup.differentFirstPage = true;
         const columns = odfColumns(getDirectChildren(props, "style:columns")[0], width - margin.left - margin.right);
         if (columns) setup.columns = columns;
+        // How its pages are numbered (`style:num-format`, i for front matter), where not 1, 2, 3.
+        const pageNumbers = odfPageNumberFormat(props.getAttribute("style:num-format"));
+        if (pageNumbers && pageNumbers !== 'decimal') setup.pageNumberFormat = pageNumbers;
         return setup;
     };
     /** A `style:columns` element's columns (their number, the gap, a line between), where there are two or more. */
@@ -1014,12 +1018,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     // A page field: its text is the number when the file was saved, marked so that each
                     // page can show its own (TextMetadata.field).
                     const text = element.textContent || '';
+                    // (The format it writes its number in, where it sets one: `style:num-format="i"`.)
+                    const fieldFormat = odfPageNumberFormat(element.getAttribute("style:num-format"));
                     fullText += text;
                     children.push({
                         type: 'text',
                         text,
                         formatting: parentFormatting,
-                        metadata: { ...(linkMetadata || {}), field: tagName === 'text:page-number' ? 'page' : 'pages' } as TextMetadata
+                        metadata: { ...(linkMetadata || {}), field: tagName === 'text:page-number' ? 'page' : 'pages', ...(fieldFormat ? { fieldFormat } : {}) } as TextMetadata
                     });
                 } else if (tagName === 'text:span') {
                     // Formatted text span

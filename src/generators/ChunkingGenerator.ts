@@ -263,13 +263,16 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
         }
 
         if (chosenSep === undefined) {
-            // Last resort: hard cut
+            // Last resort: hard cut, in whole characters (a size under one cut pieces of none, and a fraction
+            // repeated a character from one piece to the next).
             const results: { text: string; start: number; end: number }[] = [];
+            const width = Math.max(1, Math.floor(chunkSize));
+            const step = Math.max(1, width - Math.max(0, Math.floor(chunkOverlap)));
             let offset = 0;
             while (offset < text.length) {
-                const slice = text.slice(offset, offset + chunkSize);
+                const slice = text.slice(offset, offset + width);
                 results.push({ text: slice, start: offset, end: offset + slice.length });
-                offset += Math.max(1, chunkSize - chunkOverlap);
+                offset += step;
             }
             return results;
         }
@@ -538,7 +541,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
                 if (item.replaced) { flush(); out.push(item.text); continue; }
                 if (item.size > Math.max(room, maxChunkSize)) {
                     flush();
-                    for (const sub of this.splitTextRecursively(item.text, room, 0, ['\n', ' ', ''], measure)) out.push(sub.text);
+                    for (const sub of this.splitTextRecursively(item.text, room, 0, ['\n', ' ', ''], measure)) if (sub.text.trim()) out.push(sub.text);
                     continue;
                 }
                 if (current.length && size + item.size > room) flush();

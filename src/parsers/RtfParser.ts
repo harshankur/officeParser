@@ -40,7 +40,7 @@
  * @see https://latex2rtf.sourceforge.net/RTF-Spec-1.2.pdf RTF 1.2 Specification
  */
 
-import { BreakMetadata, CellMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, ShapeMetadata, IndentationMetadata, ListMetadata, ParagraphSpacing, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, PageSetup, TextFormatting } from '../types.js';
+import { BreakMetadata, CellMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, ShapeMetadata, PageNumberFormat, IndentationMetadata, ListMetadata, ParagraphSpacing, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, PageSetup, TextFormatting } from '../types.js';
 import { MAX_PAGE_PT } from '../utils/pageLimits.js';
 import { titlePagesTakeHiddenFirsts } from '../utils/officeGenUtils.js';
 import { createAST } from '../utils/astUtils.js';
@@ -49,12 +49,15 @@ import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 import { chargeRawContent } from '../utils/xmlUtils.js';
 import { isFloatingFrame } from '../utils/nodeListUtils.js';
+import { fieldSwitchFormat } from '../utils/pageNumbers.js';
 import { attachmentLookup } from '../utils/repeatUtils.js';
 import { ByteDecoder, textDecoder } from '../utils/encodingUtils.js';
 
 /** The document's page words (twips), and their state keys. */
 const PAGE_WORDS = new Map([['paperw', 'w'], ['paperh', 'h'], ['margl', 'ml'], ['margr', 'mr'], ['margt', 'mt'], ['margb', 'mb']]);
 /** A section's own page and column words, and their state keys. */
+/** A section's page number format, by its word (`\pgndec` is 1, 2, 3: none). */
+const RTF_PAGE_NUMBERS: ReadonlyMap<string, PageNumberFormat | undefined> = new Map([['pgndec', undefined], ['pgnlcrm', 'lowerRoman'], ['pgnucrm', 'upperRoman'], ['pgnlcltr', 'lowerLetter'], ['pgnucltr', 'upperLetter']]);
 const SECTION_WORDS = new Map([['pgwsxn', 'w'], ['pghsxn', 'h'], ['marglsxn', 'ml'], ['margrsxn', 'mr'], ['margtsxn', 'mt'], ['margbsxn', 'mb'], ['headery', 'hy'], ['footery', 'fy'], ['cols', 'cols'], ['colsx', 'colsx']]);
 
 /**
@@ -748,7 +751,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // twips: a section's state from its `\sectd` on; and the break (with includeBreakNodes) each `\sect`
     // ends one with, given the next section's page once its properties are read (see sectionSetup).
     const page: Partial<Record<'w' | 'h' | 'ml' | 'mr' | 'mt' | 'mb' | 'hy' | 'fy', number>> & { landscape?: boolean } = {};
-    type SectionState = Partial<Record<'w' | 'h' | 'ml' | 'mr' | 'mt' | 'mb' | 'hy' | 'fy' | 'cols' | 'colsx', number>> & { landscape?: boolean; ownLandscape?: boolean; ownSize?: boolean; line?: boolean; start?: 'none' | 'page'; title?: boolean; widths: Map<number, number>; colNo: number };
+    type SectionState = Partial<Record<'w' | 'h' | 'ml' | 'mr' | 'mt' | 'mb' | 'hy' | 'fy' | 'cols' | 'colsx', number>> & { pageNumbers?: PageNumberFormat; landscape?: boolean; ownLandscape?: boolean; ownSize?: boolean; line?: boolean; start?: 'none' | 'page'; title?: boolean; widths: Map<number, number>; colNo: number };
     const newSection = (): SectionState => ({ widths: new Map(), colNo: 1 });
     let section = newSection();
     // Each section's state by its number, so a part is shown as its own section says (its `\titlepg`).
@@ -904,7 +907,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     let currentLinkUrl: string | undefined;
     // The page field a run is the result of (`{\\field{\\*\\fldinst PAGE}{\\fldrslt 4}}`): its number is that
     // page's, filled in for each page where printed (TextMetadata.field).
-    let currentPageField: 'page' | 'pages' | undefined;
+    let currentPageField: { field: 'page' | 'pages'; format?: PageNumberFormat } | undefined;
 
     // Blocks read from a shape's text box (`\shptxt`), placed after the paragraph anchoring the shape:
     // read in place, the text box's paragraphs split that paragraph and took its first half as theirs.
@@ -1094,7 +1097,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     linkType: classifyLinkType(currentLinkUrl)
                 };
             }
-            if (currentPageField) node.metadata = { ...(node.metadata ?? {}), field: currentPageField };
+            if (currentPageField) node.metadata = { ...(node.metadata ?? {}), field: currentPageField.field, ...(currentPageField.format ? { fieldFormat: currentPageField.format } : {}) };
             currentParagraphChildren.push(node);
             currentParagraphTextChunks.push(currentRunText);
             currentRunTextChunks = [];
@@ -1418,7 +1421,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
      * deep, a few hundred characters at most); undefined for any other field. The Word and ODT readers mark
      * theirs; RTF's printed the number its file was saved with on every page ("Page 4 of 5").
      */
-    const pageFieldOf = (group: RtfGroup): 'page' | 'pages' | undefined => {
+    const pageFieldOf = (group: RtfGroup): { field: 'page' | 'pages'; format?: PageNumberFormat } | undefined => {
         let text = '';
         const gather = (g: RtfGroup, depth: number) => {
             for (const child of g.content) {
@@ -1429,7 +1432,10 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         };
         for (const child of group.content) if (child.type === 'group' && child.destination === 'fldinst') gather(child, 0);
         const m = /^\s*(PAGE|NUMPAGES)\b/i.exec(text);
-        return m ? (m[1].toUpperCase() === 'PAGE' ? 'page' : 'pages') : undefined;
+        if (!m) return undefined;
+        // (With the format its switch writes its number in, `PAGE \* roman`.)
+        const format = fieldSwitchFormat(text);
+        return { field: m[1].toUpperCase() === 'PAGE' ? 'page' : 'pages', ...(format ? { format } : {}) };
     };
 
     /**
@@ -2057,6 +2063,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             }
             else if (node.value === 'lndscpsxn') { section.landscape = section.ownLandscape = true; pageStated = true; }
             else if (node.value === 'linebetcol') section.line = true;
+            // How the section numbers its pages (`\pgnlcrm`: i, ii, iii).
+            else if (RTF_PAGE_NUMBERS.has(node.value)) { section.pageNumbers = RTF_PAGE_NUMBERS.get(node.value); if (section.pageNumbers) pageStated = true; }
             else if (node.value === 'colno' && node.param !== undefined) section.colNo = Math.max(1, Math.min(16, node.param));
             else if (node.value === 'colw' && node.param !== undefined && node.param > 0) section.widths.set(section.colNo, node.param);
             else if (node.value === 'sbknone') section.start = 'none';
@@ -2469,6 +2477,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             headerDistance: Math.min(pt(state.hy ?? page.hy, 720), height / 3), footerDistance: Math.min(pt(state.fy ?? page.fy, 720), height / 3),
             // Its first page with a header and footer of its own (`\titlepg`), as a Word section's `w:titlePg`.
             ...(state.title ? { differentFirstPage: true } : {}),
+            ...(state.pageNumbers ? { pageNumberFormat: state.pageNumbers } : {}),
         };
         const count = Math.min(16, state.cols ?? 1);
         if (count > 1) {
@@ -2480,10 +2489,10 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     for (const { node, state } of sectionBreaks) {
         const meta = node.metadata as BreakMetadata;
         if (state.start === 'none') meta.breakType = 'section';
-        const setup = pageStated || (state.cols ?? 1) > 1 || state.title ? sectionSetup(state) : undefined;
+        const setup = pageStated || (state.cols ?? 1) > 1 || state.title || state.pageNumbers ? sectionSetup(state) : undefined;
         if (setup) meta.pageSetup = setup;
     }
-    const firstSetup = pageStated || (firstSection.cols ?? 1) > 1 || firstSection.title ? sectionSetup(firstSection) : undefined;
+    const firstSetup = pageStated || (firstSection.cols ?? 1) > 1 || firstSection.title || firstSection.pageNumbers ? sectionSetup(firstSection) : undefined;
     const result = createAST(
         'rtf',
         {

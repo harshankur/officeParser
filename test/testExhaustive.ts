@@ -9,6 +9,8 @@ import { OfficeGenerator } from '../src/OfficeGenerator';
 import { bulletCharacter, formatListNumber } from '../src/utils/listMarkers';
 import { decodeBmp, decodeGif } from '../src/utils/rasterUtils';
 import { excelShownText } from '../src/utils/excelFormat';
+import { fillPageNumber, pageNumberText } from '../src/utils/pageNumbers';
+import { guardShaping } from '../src/generators/pdf/nativePdfEngine';
 import { OfficeTemplate } from '../src/OfficeTemplate';
 import { OfficeConverter } from '../src/OfficeConverter';
 import { zipSync, strToU8, unzipSync, unzlibSync, strFromU8 } from 'fflate';
@@ -1386,6 +1388,14 @@ async function testGeneratedOutput(): Promise<void> {
             assert.ok(tableChunks.length >= 2 && tableChunks.every(c => c.text.startsWith('| Quarter | Revenue | Operating margin |\n|')),
                 `maxChunkSize ${maxChunkSize}: every table chunk starts with the header and holds rows; got ${JSON.stringify(tableChunks.map(c => c.text))}`);
             assert.deepStrictEqual(tableChunks.flatMap(c => c.text.match(/Q\d/g) ?? []), ['Q1', 'Q2', 'Q3'], `maxChunkSize ${maxChunkSize}: each row once, in order`);
+        }
+        // A size under one character, or a fraction, cuts whole characters: none lost, none repeated.
+        const word = await parseMd('| H |\n|---|\n| abcdefgh |');
+        for (const maxChunkSize of [1.5, 2.5]) {
+            const pieces = ((await OfficeGenerator.generate(word, 'chunks', { chunksConfig: { maxChunkSize, tableSplitStrategy: 'row' } } as any)).value as any[])
+                .filter(c => c.metadata?.isTableChunk).map(c => c.text.replace(/^\| H \|\n?/, ''));
+            // (The header, which repeated would be more than twice the table, may be a chunk of its own.)
+            assert.strictEqual(pieces.join('').replace(/[\s|H]/g, ''), 'abcdefgh', `maxChunkSize ${maxChunkSize}: the row's characters each once; got ${JSON.stringify(pieces)}`);
         }
     }
 
@@ -4579,13 +4589,16 @@ async function testXlsxShownText(): Promise<void> {
         ['46296.5', 'mmm d, yyyy h:mm AM/PM', 'Oct 1, 2026 12:00 PM'], ['0.5', 'hh:mm:ss', '12:00:00'], ['1234.5', '#,##0.00 _€;-#,##0.00 _€', '1,234.50'],
         ['12', 'General', undefined], ['3', '@', undefined], ['1.5', '# ?/?', undefined], ['1.5', '0.00E+00', undefined], ['30', '[h]:mm', '720:00'],
         // Elapsed time: the first unit in all, the others after it.
-        ['1.25', '[h]:mm', '30:00'], ['1.5', '[h]:mm:ss', '36:00:00'], ['0.0625', '[mm]:ss', '90:00'], ['0.001', '[ss]', '86'], ['0.25', '[hh]:mm', '06:00'], ['-1.25', '[h]:mm', '-30:00'],
+        ['1.25', '[h]:mm', '30:00'], ['1.5', '[h]:mm:ss', '36:00:00'], ['0.0625', '[mm]:ss', '90:00'], ['0.001', '[ss]', '86'], ['0.25', '[hh]:mm', '06:00'], ['-1.25', '[h]:mm', undefined],
+        // Where Excel shows ####: a negative time in the 1900 date system, or past its last day.
+        ['1e300', '[h]:mm', undefined], ['1e305', '[h]:mm:ss', undefined], ['2958465', '[h]:mm', '71003160:00'],
         // An empty section shows nothing, `mmmmm` the month's letter, and a fill (`*x`) is a space.
         ['0', '0;-0;;@', ''], ['46296', 'mmmmm', 'O'], ['46296', 'mmmmm yy', 'O 26'],
         ['0', '_($* #,##0_);_($* (#,##0);_($* "-"_);_(@_)', '$ -'], ['1234', '_($* #,##0_);_($* (#,##0);_($* "-"_);_(@_)', '$ 1,234'],
         ['0', '_("$"* #,##0.00_);_("$"* \\(#,##0.00\\);_("$"* "-"??_);_(@_)', '$ -'], ['1', '0'.repeat(300), undefined],
     ];
     for (const [value, code, shown] of cases) assert.strictEqual(excelShownText(value, code, false), shown, `${value} through ${code}`);
+    assert.strictEqual(excelShownText('-0.5', '[h]:mm', true), '-12:00', 'the 1904 date system shows a negative elapsed time');
     const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
     const xlsx = Buffer.from(zipSync({
         '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
@@ -5573,6 +5586,17 @@ async function testFloatingFrames(): Promise<void> {
         return collectAllNodes(read).filter(n => n.type === 'text' && n.bounds && (n.text || '').trim());
     };
     const at = (lines: OfficeContentNode[], text: string) => lines.find(n => (n.text || '').includes(text))?.bounds;
+    // Frames nested 300 deep, each more than a page holds, set in the flow once (measured again at each level, a
+    // chain 1,600 deep took half a minute): the innermost text is drawn, in linear time.
+    {
+        const float = { horizontalFrom: 'column', verticalFrom: 'paragraph', x: 0, y: 0, width: 300, wrap: 'beside' };
+        let nested: any = { type: 'drawing', text: '', metadata: { float }, children: Array.from({ length: 80 }, (_, i) => para(`Inner line ${i}`)) };
+        for (let d = 1; d < 300; d++) nested = { type: 'drawing', text: '', metadata: { float }, children: [para(`Level ${d}`), nested] };
+        const started = Date.now();
+        const lines = await linesOf([para('Start.'), nested]);
+        assert.ok(lines.some(n => (n.text || '').includes('Inner line 79')) && lines.some(n => (n.text || '').includes('Level 299')), 'the nested frames\' text is drawn');
+        assert.ok(Date.now() - started < 20000, `nested frames are laid out in linear time; took ${Date.now() - started} ms`);
+    }
     // A slide's text box holding a frame anchored to its paragraph keeps the frame's text in it, in every writer
     // (a frame lifted out of the box had no place on the slide, and the deck writers left it out).
     {
@@ -5694,10 +5718,45 @@ async function testNativePdfShapedText(): Promise<void> {
         const parts = { ...doc, content: [
             { type: 'paragraph', text: 'हिंदी', children: [{ type: 'text', text: 'हि', formatting: { bold: true } }, { type: 'text', text: 'ंदी' }] },
             { type: 'paragraph', text: 'x ि y', children: [{ type: 'text', text: 'x ि y' }] },
+            // Old spellings and doubled signs (अा for आ, a doubled anusvara and virama) ran fontkit's state machine forever too.
+            { type: 'paragraph', text: 'अा कंं क््', children: [{ type: 'text', text: 'अा कंं क््' }] },
             { type: 'paragraph', text: long, children: [{ type: 'text', text: long }] }] };
         const result: any = await OfficeGenerator.generate(parts, 'pdf', { pdfConfig: { engine: 'native', fallbackFonts: [devanagari] } } as any);
         const text = await read(result.value as Uint8Array);
-        assert.ok(text.startsWith('हिंदी') && text.includes('x ि y') && (text.match(/कि/g) || []).length === 120, `stray vowel signs and a long word are drawn and read; got ${JSON.stringify(text.slice(0, 40))}`);
+        assert.ok(text.startsWith('हिंदी') && text.includes('x ि y') && text.includes('अा') && (text.match(/कि/g) || []).length === 120, `stray vowel signs and a long word are drawn and read; got ${JSON.stringify(text.slice(0, 40))}`);
+    }
+    // The bound itself, on a stub font whose state machine inserts glyphs forever on one code point: that
+    // word is laid out unshaped, the others as shaped, and the machine stops within its bound.
+    {
+        let entries = 0;
+        const glyph = (cp: number) => ({ id: cp, advanceWidth: 500, codePoints: [cp] });
+        const subtable = { table: { stateTable: {} } };
+        const machine = {
+            process(glyphs: any[], _reverse: boolean, entry: (...a: unknown[]) => unknown) {
+                for (let i = 0; i < glyphs.length; i++) {
+                    entry(glyphs[i], {}, i);
+                    entries++;
+                    // A "don't advance" loop inserting a glyph a step, on U+0902.
+                    while (glyphs[i].id === 0x902) { entry(glyphs[i], {}, i); entries++; glyphs.splice(i, 0, glyph(0x25CC)); i++; }
+                }
+                return glyphs;
+            },
+        };
+        const stub: any = {
+            glyphForCodePoint: glyph,
+            layout(text: string) {
+                const glyphs = [...text].map(c => glyph(c.codePointAt(0)!));
+                machine.process(glyphs, false, () => undefined);
+                return { glyphs: glyphs.map(g => ({ ...g, shaped: true })), positions: glyphs.map(() => ({ xAdvance: 400, yAdvance: 0, xOffset: 0, yOffset: 0 })) };
+            },
+            _layoutEngine: { engine: { morxProcessor: { morx: { chains: [{ subtables: [subtable] }] }, getStateMachine: () => machine } } },
+        };
+        guardShaping({ embedder: { font: stub } });
+        const run = stub.layout('\u0915\u0902 \u0928');
+        assert.deepStrictEqual(run.glyphs.map((g: any) => [g.id, !!g.shaped]), [[0x915, false], [0x902, false], [0x20, false], [0x928, true]], `the runaway word unshaped, the others shaped; got ${JSON.stringify(run.glyphs.map((g: any) => [g.id, !!g.shaped]))}`);
+        assert.ok(entries < 8 * 3 + 64 + 512, `the machine stopped within its bound; got ${entries} steps`);
+        const plain = stub.layout('\u0928\u0928');
+        assert.ok(plain.glyphs.every((g: any) => g.shaped), 'text that does not run away is shaped as before');
     }
     // A mark over a Latin letter, and Latin text in a font of no shaping: as before.
     const latinFont = systemFont('/System/Library/Fonts/Supplemental/Arial.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf');
@@ -5707,6 +5766,64 @@ async function testNativePdfShapedText(): Promise<void> {
         assert.deepStrictEqual((result.messages || []).map((m: any) => m.code), [], 'the Latin font draws the mark');
         assert.strictEqual(await read(result.value as Uint8Array), 'Caf\u00E9 plain', 'a Latin letter and its mark read as written');
     }
+}
+
+/**
+ * A page field prints each page's number in the field's format (a switch, `\* roman`), else its section's
+ * (`\pgnlcrm`, `w:pgNumType`, a page layout's `style:num-format`), else the form its saved result is in
+ * (digits of any script, a roman numeral, letters), its result's runs read as one: a stale result in any
+ * form not one of these was printed on every page.
+ */
+async function testPageNumberFormats(): Promise<void> {
+    const fill = (texts: string[], n: number, format?: any) => fillPageNumber(texts, n, format);
+    assert.deepStrictEqual(fill(['1', '1'], 3), ['3', ''], 'a number saved in two looks is one number');
+    assert.deepStrictEqual(fill(['- ', 'iii', ' -'], 4), ['- ', 'iv', ' -'], 'a roman numeral with text around it');
+    assert.deepStrictEqual(fill(['३'], 12), ['१२'], 'Devanagari digits stay Devanagari');
+    assert.deepStrictEqual(fill(['٣'], 10), ['١٠'], 'Arabic-Indic digits stay Arabic-Indic');
+    assert.deepStrictEqual(fill(['B'], 28), ['BB'], 'letters as Word writes ALPHABETIC');
+    assert.deepStrictEqual(fill(['three'], 2), ['2'], 'a result of words, its format unknown, is the number');
+    assert.deepStrictEqual(fill([''], 5), ['5'], 'a result saved empty is the number');
+    assert.deepStrictEqual(fill(['Page ', '7'], 9, 'upperRoman'), ['Page ', 'IX'], 'the format given');
+    assert.deepStrictEqual([pageNumberText(21, 'ordinalText'), pageNumberText(123, 'cardinalText'), pageNumberText(12, 'ordinal'), pageNumberText(255, 'hex'), pageNumberText(3, 'decimalDash')],
+        ['twenty-first', 'one hundred twenty-three', '12th', 'FF', '- 3 -'], 'the formats written');
+    // Through RTF: a field's switch, a section's format, and a result of no ASCII digits, page by page.
+    const pagesOf = async (rtf: string) => {
+        const ast = await OfficeParser.parseOffice(Buffer.from(rtf), { fileType: 'rtf' } as any) as OfficeParserAST;
+        const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+        const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+        return (back.auxiliary?.footers ?? []).map(f => (f.text || '').trim()).concat(back.content.flatMap(p => (p.children ?? []).map(c => (c.text || '').trim())).filter(t => /^Page /.test(t)));
+    };
+    const body = 'Body line.\\par '.repeat(110);
+    const rtf = (field: string, section = '') => String.raw`{\rtf1\ansi{\fonttbl{\f0 Times;}}` + section + String.raw`{\footer Page ` + field + String.raw`\par}` + body + '}';
+    for (const [what, field, section, expected] of [
+        ['a switch', String.raw`{\field{\*\fldinst PAGE \\* ROMAN}{\fldrslt 3}}`, '', ['Page I', 'Page II', 'Page III']],
+        ['a section format', String.raw`{\field{\*\fldinst PAGE}{\fldrslt 3}}`, String.raw`\pgnlcrm`, ['Page i', 'Page ii', 'Page iii']],
+        ['words', String.raw`{\field{\*\fldinst PAGE \\* CardText}{\fldrslt three}}`, '', ['Page one', 'Page two', 'Page three']],
+        ['a roman result with dashes', String.raw`{\field{\*\fldinst PAGE}{\fldrslt - iii -}}`, '', ['Page - i -', 'Page - ii -', 'Page - iii -']],
+        ['a split result', String.raw`{\field{\*\fldinst PAGE}{\fldrslt {\b 1}{\i 1}}}`, '', ['Page 1', 'Page 2', 'Page 3']],
+    ] as const) {
+        const got = await pagesOf(rtf(field, section));
+        assert.ok(expected.every(t => got.includes(t)) && new Set(got).size === got.length, `${what}: each page its own number; got ${JSON.stringify(got)}`);
+    }
+    // The readers carry the format: Word's switch and section, ODF's field and page layout.
+    const W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+    const docx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${W_NS}><w:body><w:p><w:fldSimple w:instr=" PAGE \\* alphabetic "><w:r><w:t>c</w:t></w:r></w:fldSimple></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgNumType w:fmt="lowerRoman"/></w:sectPr></w:body></w:document>`),
+    }));
+    const word = await OfficeParser.parseOffice(docx, { fileType: 'docx' } as any) as OfficeParserAST;
+    const wordField = collectAllNodes(word).find(n => (n.metadata as any)?.field === 'page');
+    assert.ok((wordField?.metadata as any)?.fieldFormat === 'lowerLetter' && word.metadata.pageSetup?.pageNumberFormat === 'lowerRoman', `Word: the switch and the section's format; got ${JSON.stringify([wordField?.metadata, word.metadata.pageSetup])}`);
+    const ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"';
+    const odt = Buffer.from(zipSync({
+        mimetype: strToU8('application/vnd.oasis.opendocument.text'),
+        'styles.xml': strToU8(`<?xml version="1.0"?><office:document-styles ${ODF_NS}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" style:num-format="I"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>`),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${ODF_NS}><office:body><office:text><text:p><text:page-number style:num-format="a">c</text:page-number></text:p></office:text></office:body></office:document-content>`),
+    }));
+    const odf = await OfficeParser.parseOffice(odt, { fileType: 'odt' } as any) as OfficeParserAST;
+    const odfField = collectAllNodes(odf).find(n => (n.metadata as any)?.field === 'page');
+    assert.ok((odfField?.metadata as any)?.fieldFormat === 'lowerLetter' && odf.metadata.pageSetup?.pageNumberFormat === 'upperRoman', `ODT: the field's and the page layout's format; got ${JSON.stringify([odfField?.metadata, odf.metadata.pageSetup])}`);
 }
 
 /**
@@ -9047,6 +9164,7 @@ async function runTests(): Promise<void> {
         ['Native PDF SVG pictures', testNativePdfSvgPictures],
         ['Floating frames', testFloatingFrames],
         ['Native PDF shaped text', testNativePdfShapedText],
+        ['Page number formats', testPageNumberFormats],
         ['PDF lists read whole', testPdfListsReadWhole],
         ['PDF headings by size and weight', testPdfHeadingsBySizeAndWeight],
         ['PDF ruled tables', testPdfRuledTables],

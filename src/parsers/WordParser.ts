@@ -61,9 +61,10 @@
  */
 
 import { attachmentLookup, takeRepeats } from '../utils/repeatUtils.js';
-import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, ShapeMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, ShapeMetadata, PageNumberFormat, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { MAX_PAGE_PT } from '../utils/pageLimits.js';
 import { lengthToPt, titlePagesTakeHiddenFirsts } from '../utils/officeGenUtils.js';
+import { fieldSwitchFormat, wordPageNumberFormat } from '../utils/pageNumbers.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError, logWarning } from '../utils/errorUtils.js';
 import { createAttachment, renameAttachments } from '../utils/imageUtils.js';
@@ -1091,10 +1092,14 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         let hiddenResults = 0;
         // The page fields (PAGE, NUMPAGES) whose results are being read, innermost last: their text is
         // the number when the file was saved, marked so that each page can show its own.
-        const pageFields: ('page' | 'pages' | undefined)[] = [];
-        const pageFieldOf = (instruction: string): 'page' | 'pages' | undefined => {
+        // (With the format the field's switch writes its number in, `PAGE \* roman`.)
+        const pageFields: ({ field: 'page' | 'pages'; format?: PageNumberFormat } | undefined)[] = [];
+        const pageFieldOf = (instruction: string): { field: 'page' | 'pages'; format?: PageNumberFormat } | undefined => {
             const name = /^\s*([A-Z]+)/i.exec(instruction)?.[1]?.toUpperCase();
-            return name === 'PAGE' ? 'page' : name === 'NUMPAGES' ? 'pages' : undefined;
+            const field = name === 'PAGE' ? 'page' as const : name === 'NUMPAGES' ? 'pages' as const : undefined;
+            if (!field) return undefined;
+            const format = fieldSwitchFormat(instruction);
+            return format ? { field, format } : { field };
         };
         const resolveField = (field: { instruction: string; resolved: boolean; hidesResult: boolean }): void => {
             if (field.resolved) return;
@@ -1188,8 +1193,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         if (nodeStyle) {
                             textNode.metadata = { style: nodeStyle };
                         }
-                        const field = pageFields[pageFields.length - 1];
-                        if (field) textNode.metadata = { ...(textNode.metadata as TextMetadata), field };
+                        const pageField = pageFields[pageFields.length - 1];
+                        if (pageField) textNode.metadata = { ...(textNode.metadata as TextMetadata), field: pageField.field, ...(pageField.format ? { fieldFormat: pageField.format } : {}) };
                         children.push(textNode);
                     }
                     // Complex fields: where one begins, its instruction, where its result begins, where it ends.
@@ -1631,6 +1636,9 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
             if (sep && !['false', '0', 'off'].includes(sep)) columns.separator = true;
             setup.columns = columns;
         }
+        // How it numbers its pages (`w:pgNumType w:fmt`: lowerRoman for front matter).
+        const pageNumberFormat = wordPageNumberFormat(getDirectChildren(sectPr, "w:pgNumType")[0]?.getAttribute("w:fmt"));
+        if (pageNumberFormat) setup.pageNumberFormat = pageNumberFormat;
         return setup;
     };
 

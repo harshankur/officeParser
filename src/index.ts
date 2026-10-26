@@ -162,6 +162,7 @@ import {
     PageSetup,
     ShapeMetadata,
     ShapeFloat,
+    PageNumberFormat,
     ParagraphMetadata,
     DefinitionMetadata,
 } from './types.js';
@@ -284,6 +285,7 @@ export {
     PageSetup,
     ShapeMetadata,
     ShapeFloat,
+    PageNumberFormat,
     ParagraphMetadata,
     DefinitionMetadata,
 };

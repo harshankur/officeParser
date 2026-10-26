@@ -12234,6 +12234,7 @@
                   },
                   "metadata": {
                     "field": "page",
+                    "fieldFormat": "decimal",
                     "style": "a823"
                   }
                 }
@@ -13253,6 +13254,7 @@
                   },
                   "metadata": {
                     "field": "page",
+                    "fieldFormat": "decimal",
                     "style": "a906"
                   }
                 }
@@ -15236,6 +15238,7 @@
                   },
                   "metadata": {
                     "field": "page",
+                    "fieldFormat": "decimal",
                     "style": "a1134"
                   }
                 }
@@ -23058,6 +23061,7 @@
                   },
                   "metadata": {
                     "field": "page",
+                    "fieldFormat": "decimal",
                     "style": "a1891"
                   }
                 }

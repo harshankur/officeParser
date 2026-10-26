@@ -1573,7 +1573,20 @@ export interface PageSetup {
      * between them.
      */
     columns?: { count: number; gap: number; widths?: number[]; separator?: boolean };
+    /**
+     * How the section numbers its pages where it numbers them other than 1, 2, 3 (Word's `w:pgNumType
+     * w:fmt`, RTF's `\pgnlcrm` and the like, an ODF page layout's `style:num-format`): a front matter's
+     * i, ii, iii. A page field in the section with no format of its own (TextMetadata.fieldFormat) prints
+     * its page in it.
+     */
+    pageNumberFormat?: PageNumberFormat;
 }
+
+/**
+ * How a page number is written: 1, i, I, a, A (27 is `aa`), 1st, one, first, a hexadecimal number, or
+ * the number between dashes (`- 1 -`).
+ */
+export type PageNumberFormat = 'decimal' | 'lowerRoman' | 'upperRoman' | 'lowerLetter' | 'upperLetter' | 'ordinal' | 'cardinalText' | 'ordinalText' | 'hex' | 'decimalDash';
 
 /**
  * Configuration options for PDF generation.
@@ -3373,9 +3386,15 @@ export interface TextMetadata {
      * The run is the result of a field each page fills in: the number of the page it is on (`page`,
      * Word's PAGE, ODF's `text:page-number`) or of pages in the document (`pages`, NUMPAGES,
      * `text:page-count`). Its text is the number when the file was saved; PDF output writes each
-     * page's own.
+     * page's own, in the field's format (`fieldFormat`), else its section's (PageSetup.pageNumberFormat),
+     * else the one its saved text is in (digits of any script, a roman numeral, letters).
      */
     field?: 'page' | 'pages';
+    /**
+     * The format a page field writes its number in, where it sets one (Word's and RTF's `\* roman`,
+     * `\* ALPHABETIC` and the other switches, ODF's `style:num-format`).
+     */
+    fieldFormat?: PageNumberFormat;
 }
 
 /**

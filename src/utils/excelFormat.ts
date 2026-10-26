@@ -207,11 +207,14 @@ const MONTH_LETTERS = 'JFMAMJJASOND';
 /**
  * A day count through an elapsed-time format (`[h]:mm`, `[h]:mm:ss`, `[mm]:ss`, `[ss]`): its first unit
  * in all (30 hours is `30:00`, not 6:00 on the next day), at least as many digits as the code's letters,
- * then the units after it in two digits each. Null for any other code.
+ * then the units after it in two digits each. Undefined where Excel shows `####`: a negative time in the
+ * 1900 date system (the 1904 system shows `-12:00`), or past the last day Excel counts. Null for any
+ * other code.
  */
-function elapsedTime(days: number, code: string): string | null {
+function elapsedTime(days: number, code: string, date1904: boolean): string | undefined | null {
     const match = /^\[(h+|m+|s+)\]((?::mm)?(?::ss)?)$/i.exec(code);
     if (!match) return null;
+    if ((days < 0 && !date1904) || Math.abs(days) > (date1904 ? LAST_DAY_1904 : LAST_DAY_1900)) return undefined;
     const unit = match[1][0].toLowerCase(), rest = match[2].toLowerCase();
     if (!(unit === 'h' ? ['', ':mm', ':mm:ss'] : unit === 'm' ? ['', ':ss'] : ['']).includes(rest)) return null;
     const seconds = Math.round(Math.abs(days) * 86400);
@@ -236,7 +239,7 @@ export function excelShownText(value: string, code: string, date1904: boolean): 
     if (!code || code.length > MAX_CODE_LENGTH || /^general$/i.test(code.trim())) return undefined;
     let number = Number(value);
     if (value.trim() === '' || !Number.isFinite(number)) return undefined;
-    const elapsed = elapsedTime(number, code.trim());
+    const elapsed = elapsedTime(number, code.trim(), date1904);
     if (elapsed !== null) return elapsed;
     const parts = readCode(code);
     let section = parts[0];

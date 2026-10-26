@@ -17,7 +17,8 @@
  * @module generators/pdf/nativePdfEngine
  */
 
-import { EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, SheetMetadata, TextAlignment, TextFormatting, BreakMetadata, ChartData, HeaderFooterMetadata, NodeBounds, ShapeMetadata, SlideMetadata } from '../../types.js';
+import { fillPageNumber } from '../../utils/pageNumbers.js';
+import { EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, SheetMetadata, TextAlignment, TextFormatting, BreakMetadata, ChartData, HeaderFooterMetadata, NodeBounds, ShapeMetadata, SlideMetadata, PageNumberFormat } from '../../types.js';
 import { isPageSize } from '../../utils/pageLimits.js';
 import { getAbortError, getOfficeError } from '../../utils/errorUtils.js';
 import { documentLanguage, embedUrl, isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize, writableSpacing } from '../../utils/officeGenUtils.js';
@@ -227,51 +228,79 @@ function glyphCoder(font: any, lib: any): (glyph: any) => number {
     return note;
 }
 
-/** A mark of the scripts of South and Southeast Asia (a vowel sign, a virama, a nukta). */
-const INDIC_MARK = /[\u0900-\u0DFF\u0E00-\u0FFF\u1000-\u109F\u1780-\u17FF]/u;
+/** Thrown out of a font's state machine when it runs past its bound (see guardShaping). */
+// (No message: it never leaves guardShaping, which catches it by identity.)
+const SHAPING_RAN_AWAY = new Error();
 
 /**
- * Keeps fontkit's shaping of a font from a mark it cannot place. A font of Apple's layout tables (`morx`,
- * which fontkit prefers to OpenType's) is shaped by a state machine that never ends on a vowel sign or
- * virama with no letter of its script before it (alone, after a space, after a Latin letter: a word split
- * where its runs change their look): it filled the heap and ended the process. Such marks are laid out
- * here unshaped (each its glyph, at its own advance), the text around them as the font shapes it.
+ * Keeps fontkit's shaping of a font from running forever. A font of Apple's layout tables (`morx`, which
+ * fontkit prefers to OpenType's) is shaped by state machines that, on some input, never end: a glyph
+ * insertion table inserting a glyph a step without moving on, on a vowel sign alone or after a space,
+ * after an independent vowel (अा, the old spelling of आ), a doubled anusvara or virama. It filled the heap
+ * and ended the process, which no caller can catch. Each of this font's state machines (one a subtable,
+ * kept by fontkit for the font's processor) is bounded, in steps and in glyphs, by the glyphs it was given
+ * (real text takes about two steps a glyph, and adds none); one past its bound stops, and the text is
+ * shaped again a word at a time, then a word that runs away a grapheme cluster at a time, and a cluster
+ * that runs away is laid out unshaped (each character its glyph, at its own advance). Other fonts, and
+ * other users of fontkit, are as they were.
  */
-function guardShaping(font: any): void {
-    const shaper = font.embedder?.font;
-    if (!shaper?.layout || !shaper._layoutEngine?.engine?.morxProcessor) return;
+export function guardShaping(font: any): void {
+    const shaper = font?.embedder?.font;
+    const processor = shaper?.layout ? shaper._layoutEngine?.engine?.morxProcessor : undefined;
+    if (!processor?.getStateMachine) return;
+    let bounded = 0;
+    for (const chain of processor.morx?.chains ?? []) {
+        for (const subtable of chain.subtables ?? []) {
+            if (!subtable?.table?.stateTable) continue;
+            let machine: any;
+            try { machine = processor.getStateMachine(subtable); } catch { continue; }
+            if (!machine || typeof machine.process !== 'function' || machine.bounded) continue;
+            const run = machine.process.bind(machine);
+            machine.process = (glyphs: unknown[], reverse: boolean, entry: (...args: unknown[]) => unknown) => {
+                const given = glyphs.length, steps = { left: 64 * given + 256 };
+                return run(glyphs, reverse, (...args: unknown[]) => {
+                    if (--steps.left < 0 || glyphs.length > 8 * given + 64) throw SHAPING_RAN_AWAY;
+                    return entry(...args);
+                });
+            };
+            machine.bounded = true;
+            bounded++;
+        }
+    }
+    if (!bounded) return;
     const layout = shaper.layout.bind(shaper);
-    shaper.layout = (text: unknown, ...rest: unknown[]) => {
-        if (typeof text !== 'string' || !INDIC_MARK.test(text)) return layout(text, ...rest);
-        // The text in stretches, each shaped or not: a mark is unshaped unless a letter of its script (128
-        // code points a script) is before it, past the marks between.
-        const parts: { text: string; shaped: boolean }[] = [];
-        let base: number | undefined;
-        for (const ch of text) {
-            const cp = ch.codePointAt(0)!;
-            const mark = /\p{M}/u.test(ch);
-            const shaped = !(mark && INDIC_MARK.test(ch) && (base === undefined || base >> 7 !== cp >> 7));
-            if (!mark) base = /\p{L}/u.test(ch) ? cp : undefined;
-            const last = parts[parts.length - 1];
-            if (last && last.shaped === shaped) last.text += ch; else parts.push({ text: ch, shaped });
-        }
-        if (parts.every(p => p.shaped)) return layout(text, ...rest);
+    const unshaped = (text: string) => {
         const glyphs: any[] = [], positions: any[] = [];
-        let run: any;
-        for (const part of parts) {
-            if (part.shaped) {
-                run = layout(part.text, ...rest);
-                glyphs.push(...run.glyphs);
-                positions.push(...run.positions);
-            } else {
-                for (const ch of part.text) {
-                    const glyph = shaper.glyphForCodePoint(ch.codePointAt(0)!);
-                    glyphs.push(glyph);
-                    positions.push({ xAdvance: glyph.advanceWidth, yAdvance: 0, xOffset: 0, yOffset: 0 });
-                }
-            }
+        for (const ch of text) {
+            const glyph = shaper.glyphForCodePoint(ch.codePointAt(0)!);
+            glyphs.push(glyph);
+            positions.push({ xAdvance: glyph.advanceWidth, yAdvance: 0, xOffset: 0, yOffset: 0 });
         }
-        return { ...(run ?? {}), glyphs, positions };
+        return { glyphs, positions };
+    };
+    /** `text` laid out, or undefined where a state machine ran away on it. */
+    const attempt = (text: string, rest: unknown[]): any => {
+        try { return layout(text, ...rest); } catch (error) {
+            if (error !== SHAPING_RAN_AWAY) throw error;
+            return undefined;
+        }
+    };
+    shaper.layout = (text: unknown, ...rest: unknown[]) => {
+        if (typeof text !== 'string') return layout(text, ...rest);
+        const whole = attempt(text, rest);
+        if (whole) return whole;
+        const glyphs: any[] = [], positions: any[] = [];
+        let last: any;
+        const add = (part: any) => { glyphs.push(...part.glyphs); positions.push(...part.positions); };
+        // (Shaping never crosses a space: a word at a time keeps the font's shaping of every other word.)
+        for (const word of text.split(/(\s+)/)) {
+            if (!word) continue;
+            const shaped = /^\s+$/.test(word) ? undefined : attempt(word, rest);
+            if (shaped) { add(last = shaped); continue; }
+            if (/^\s+$/.test(word)) { add(unshaped(word)); continue; }
+            for (const cluster of clustersOf(word)) add(attempt(cluster, rest) ?? unshaped(cluster));
+        }
+        return { ...(last ?? {}), glyphs, positions };
     };
 }
 
@@ -602,6 +631,7 @@ class NativeLayout {
      */
     private startSection(section: number, setup: PageSetup | undefined): void {
         this.section = section;
+        this.sectionSetups.set(section, setup);
         this.startingSection = true;
         this.differentFirstPage = setup?.differentFirstPage;
         this.onPagesOf(setup, true);
@@ -801,7 +831,7 @@ class NativeLayout {
         const insets = shape.textInsets ?? { top: 3.6, right: 7.2, bottom: 3.6, left: 7.2 };
         const flow = async () => { for (const child of node.children || []) await this.render(child); };
         // (A frame of no width it can be drawn at, as only a hand-made one is: its blocks in the flow.)
-        if (!(Number.isFinite(float.width) && float.width > 0)) return flow();
+        if (!(Number.isFinite(float.width) && float.width > 0)) return this.inFlow(flow);
         const width = Math.max(4, Math.min(float.width, this.pageW));
         // Its text, measured in a box of its width (its insets in it).
         const margin = this.margin;
@@ -815,7 +845,7 @@ class NativeLayout {
         } finally { this.margin = margin; }
         // Text more than a page holds is set in the flow, all of it: a frame is one page's, and its text past
         // the page was lost (a word processor cuts it off there).
-        if (textHeight > this.bottom - this.margin.top) return flow();
+        if (textHeight > this.bottom - this.margin.top) return this.inFlow(flow);
         // As tall as it is set, else as its text.
         const height = Math.min(Number.isFinite(float.height) && float.height! > 0 ? float.height! : textHeight, this.pageH);
         let offset = Number.isFinite(float.y) ? float.y! : 0;
@@ -860,6 +890,16 @@ class NativeLayout {
     }
 
     /**
+     * Sets a frame's blocks in the flow, and the frames in them too: measured again at each level of frames
+     * inside frames, a document of frames nested 1,600 deep took half a minute.
+     */
+    private framesInFlow = 0;
+    private async inFlow(draw: () => Promise<void>): Promise<void> {
+        this.framesInFlow++;
+        try { await draw(); } finally { this.framesInFlow--; }
+    }
+
+    /**
      * Moves below the frames floating on this page that a block of this height starting here would reach (a
      * table, a picture, code, a chart: none of them goes round a frame).
      */
@@ -896,6 +936,10 @@ class NativeLayout {
         try { await drawAll(); } finally { this.page.pushOperators(this.lib.popGraphicsState()); }
     }
 
+    /** Each section's page, as its break gave it (the first section's is the document's): its page number format. */
+    private sectionSetups = new Map<number, PageSetup | undefined>();
+    /** The format the page whose header and footer are being drawn numbers its pages in (its section's). */
+    private fieldFormat?: PageNumberFormat;
     /** The page fields' numbers while a page's header and footer are drawn (see TextMetadata.field). */
     private fieldPage?: number;
     private fieldPages?: number;
@@ -1049,6 +1093,7 @@ class NativeLayout {
         try {
             for (const [index, record] of this.pageRecords.entries()) {
                 this.fieldPage = index + 1;
+                this.fieldFormat = (this.sectionSetups.has(record.section) ? this.sectionSetups.get(record.section) : record.section === 0 ? this.ast.metadata?.pageSetup : undefined)?.pageNumberFormat;
                 this.pageW = record.w; this.pageH = record.h; this.margin = record.margin;
                 const header = choose(headers, record, index + 1), footer = choose(footers, record, index + 1);
                 if (header) {
@@ -1073,6 +1118,7 @@ class NativeLayout {
             this.fixedPage = false;
             this.furniture = false;
             this.fieldPage = this.fieldPages = undefined;
+            this.fieldFormat = undefined;
             Object.assign(this, { page: saved.page, y: saved.y, pageW: saved.w, pageH: saved.h, margin: saved.margin });
         }
     }
@@ -1578,10 +1624,17 @@ class NativeLayout {
      */
     private async collectRuns(node: OfficeContentNode): Promise<Run[]> {
         const out: Run[] = [];
-        // The page field of the run before, where it was one, and whether its number is drawn yet: a field's
-        // result saved in several runs (its digits in two looks) is one number, in the first run that holds
-        // the saved one (each drew the whole number: "Page 11 of 33"); what is around it ("- 3 -") stays.
-        let fieldBefore: string | undefined, numbered = false;
+        // The runs of the page field being read: a field's result saved in several runs (its digits in two
+        // looks) is one number, written once (each run drew the whole number: "Page 11 of 33"), in the runs
+        // as a whole (see fillPageNumber).
+        let field: { kind: string; format?: PageNumberFormat; runs: Run[] } | undefined;
+        const endField = () => {
+            if (!field) return;
+            const value = field.kind === 'page' ? this.fieldPage! : this.fieldPages!;
+            const filledTexts = fillPageNumber(field.runs.map(r => r.text), value, field.format ?? (field.kind === 'page' ? this.fieldFormat : undefined));
+            field.runs.forEach((r, i) => { r.text = filledTexts[i]; });
+            field = undefined;
+        };
         const walk = async (n: OfficeContentNode, inherited: TextFormatting, inheritedLink: string | undefined, isRoot: boolean): Promise<void> => {
             let text = n.text;
             let override: string | false | void = undefined;
@@ -1595,21 +1648,19 @@ class NativeLayout {
             }
             const fmt = { ...inherited, ...(n.formatting || {}) };
             // A page field's number for the page being drawn (its header or footer), not the one saved.
-            const field = (n.metadata as { field?: string } | undefined)?.field;
-            const filled = typeof override !== 'string' && ((field === 'page' && this.fieldPage !== undefined) || (field === 'pages' && this.fieldPages !== undefined));
-            if (filled) {
-                if (field !== fieldBefore) numbered = false;
-                const saved = text ?? '', value = String(field === 'page' ? this.fieldPage : this.fieldPages);
-                // The saved number (its digits, or a roman one) is the page's; a result saved empty is its number.
-                const roman = /^\s*[ivxlcdm]+\s*$/i.test(saved);
-                if (!saved) { text = numbered ? '' : value; numbered = true; }
-                else if (/\d/.test(saved) || roman) {
-                    let first = !numbered;
-                    text = roman ? (first ? saved.replace(/[ivxlcdm]+/i, value) : '') : saved.replace(/\d+/g, () => { const put = first ? value : ''; first = false; return put; });
-                    numbered = true;
-                }
+            const meta = n.metadata as { field?: string; fieldFormat?: PageNumberFormat; link?: unknown } | undefined;
+            const kind = meta?.field;
+            const filled = typeof override !== 'string' && ((kind === 'page' && this.fieldPage !== undefined) || (kind === 'pages' && this.fieldPages !== undefined));
+            if (n.type === 'text' && (!filled || kind !== field?.kind)) endField();
+            if (filled && n.type === 'text') {
+                const own = meta?.link;
+                const run: Run = { text: text ?? '', fmt, link: typeof own === 'string' && own ? own : inheritedLink };
+                field ??= { kind: kind!, format: meta?.fieldFormat, runs: [] };
+                field.runs.push(run);
+                out.push(run);
+                cite(n, fmt);
+                return;
             }
-            if (n.type === 'text') fieldBefore = filled ? field : undefined;
             // A link's target, which the words inside it share: a link around formatted runs linked only
             // the run that carried it.
             const own = (n.metadata as { link?: unknown } | undefined)?.link;
@@ -1649,6 +1700,7 @@ class NativeLayout {
             }
         };
         await walk(node, {}, undefined, true);
+        endField();
         if (!out.length && node.text) out.push({ text: node.text, fmt: node.formatting || {} });
         return out;
     }
@@ -2151,7 +2203,7 @@ class NativeLayout {
             case 'code': await this.belowFloats(() => this.code(node)); return this.code(node);
             case 'drawing':
                 // A frame floating beside the text, where it stands; any other shape as any other block.
-                if ((node.metadata as ShapeMetadata | undefined)?.float && !this.fixedPage) return this.floatingFrame(node);
+                if ((node.metadata as ShapeMetadata | undefined)?.float && !this.fixedPage && !this.framesInFlow) return this.floatingFrame(node);
                 if (node.children?.length) { for (const c of node.children) await this.render(c); }
                 else if (node.text) await this.paragraph(node);
                 return;
