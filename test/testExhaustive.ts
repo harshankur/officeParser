@@ -5147,6 +5147,11 @@ async function testNativePdfChartsAndCellPictures(): Promise<void> {
     const splitPdf = (await (await OfficeParser.parseOffice(Buffer.from(split), { fileType: 'rtf' } as any) as OfficeParserAST).to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
     const splitText = String((await (await OfficeParser.parseOffice(Buffer.from(splitPdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).to('text')).value);
     assert.ok(/Page 1\b/.test(splitText) && !/Page 11/.test(splitText), `a page field of several runs prints its number once; got ${JSON.stringify(splitText)}`);
+    // What the field's result holds around its number stays ("- 3 -" saved in three runs).
+    const dashed = String.raw`{\rtf1\ansi{\fonttbl{\f0 Times;}}{\footer {\field{\*\fldinst PAGE}{\fldrslt {- }{\b 7}{ -}}}\par}Body.\par}`;
+    const dashedPdf = (await (await OfficeParser.parseOffice(Buffer.from(dashed), { fileType: 'rtf' } as any) as OfficeParserAST).to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const dashedText = String((await (await OfficeParser.parseOffice(Buffer.from(dashedPdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).to('text')).value);
+    assert.ok(/- 1 -/.test(dashedText) && !/7/.test(dashedText), `the text around a page field's number stays; got ${JSON.stringify(dashedText)}`);
 }
 
 /**
@@ -5547,6 +5552,46 @@ async function testFloatingFrames(): Promise<void> {
     assert.ok(belowIt.length && belowIt.some(n => n.bounds!.x + n.bounds!.width > left + 320), `its lines below the frame have the column's width again; got ${JSON.stringify(belowIt.map(n => n.bounds))}`);
     assert.ok(cell && cell.y > first.y + 70, `a table after it stands below the frame; got ${JSON.stringify(cell)}`);
     assert.ok(banner && under && under.y > banner.y + 30 && Math.abs(banner.x + banner.width / 2 - 306) < 110, `text goes below a frame it may not stand beside; got ${JSON.stringify([banner, under])}`);
+
+    const linesOf = async (content: any[]) => {
+        const out = (await OfficeGenerator.generate({ type: 'odt', metadata: {}, attachments: [], content } as any, 'pdf', { pdfConfig: { engine: 'native', format: 'letter' } } as any)).value as Uint8Array;
+        const read = await OfficeParser.parseOffice(Buffer.from(out), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+        return collectAllNodes(read).filter(n => n.type === 'text' && n.bounds && (n.text || '').trim());
+    };
+    const at = (lines: OfficeContentNode[], text: string) => lines.find(n => (n.text || '').includes(text))?.bounds;
+    // A slide's text box holding a frame anchored to its paragraph keeps the frame's text in it, in every writer
+    // (a frame lifted out of the box had no place on the slide, and the deck writers left it out).
+    {
+        const slideXml = `<draw:page draw:name="S1"><draw:frame svg:x="1cm" svg:y="1cm" svg:width="20cm" svg:height="5cm"><draw:text-box><text:p>Slide words.<draw:frame text:anchor-type="paragraph" svg:width="5cm" svg:height="2cm"><draw:text-box><text:p>InnerFrame</text:p></draw:text-box></draw:frame></text:p></draw:text-box></draw:frame></draw:page>`;
+        const odp = Buffer.from(zipSync({ mimetype: strToU8('application/vnd.oasis.opendocument.presentation'), 'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${ODF_NS} xmlns:presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0"><office:body><office:presentation>${slideXml}</office:presentation></office:body></office:document-content>`) }));
+        const deck = await OfficeParser.parseOffice(odp, { fileType: 'odp' } as any) as OfficeParserAST;
+        for (const format of ['pptx', 'odp'] as const) {
+            const value = (await deck.to(format as any)).value as Uint8Array;
+            const text = JSON.stringify((await OfficeParser.parseOffice(Buffer.from(value), { fileType: format } as any)).content);
+            assert.ok(text.includes('InnerFrame') && text.includes('Slide words'), `${format}: a frame in a slide's text box keeps its text`);
+        }
+    }
+    // A frame placed over text already laid out (measured from the page, above its anchor) stands at its anchor.
+    {
+        const lines = await linesOf([...Array.from({ length: 9 }, (_, i) => para(`Earlier${i} text that runs across the column and wraps on to a second line of its own here.`)),
+            { type: 'drawing', text: 'SIDEBAR', children: [para('SIDEBAR')], metadata: { fill: '#FFCC00', float: { horizontalFrom: 'margin', verticalFrom: 'page', align: 'right', y: 72, width: 200, height: 150, wrap: 'beside' } } },
+            para('Anchor paragraph.')]);
+        const side = at(lines, 'SIDEBAR')!, anchor = at(lines, 'Anchor')!, last = at(lines, 'Earlier8')!;
+        assert.ok(side && anchor && side.y >= last.y + 10 && Math.abs(side.y - anchor.y) < 12, `a frame above its anchor's text stands at its anchor; got ${JSON.stringify([last, anchor, side])}`);
+    }
+    // A frame's text more than a page holds is set in the flow, all of it.
+    {
+        const lines = await linesOf([{ type: 'drawing', text: '', children: Array.from({ length: 120 }, (_, i) => para(`Framed line ${i}`)), metadata: { float: { horizontalFrom: 'column', verticalFrom: 'paragraph', x: 0, y: 0, width: 200, wrap: 'beside' } } }, para('After.')]);
+        const read = new Set(lines.flatMap(n => [...(n.text || '').matchAll(/Framed line (\d+)/g)].map(m => m[1])));
+        assert.strictEqual(read.size, 120, `a frame's text past a page is kept; got ${read.size} of 120 lines`);
+    }
+    // A table starting just above a frame starts below it, instead of running into it.
+    {
+        const lines = await linesOf([para('Lead.'), { type: 'drawing', text: 'LowBox', children: [para('LowBox')], metadata: { float: { horizontalFrom: 'column', verticalFrom: 'paragraph', x: 0, y: 30, width: 200, height: 60, wrap: 'beside' } } },
+            { type: 'table', children: ['Row1', 'Row2', 'Row3'].map(t => ({ type: 'row', children: [{ type: 'cell', children: [para(t)] }] })) }]);
+        const box = at(lines, 'LowBox')!, row = at(lines, 'Row1')!;
+        assert.ok(box && row && row.y > box.y + 50, `a table that would reach a frame starts below it; got ${JSON.stringify([box, row])}`);
+    }
 }
 
 /**
@@ -5626,6 +5671,19 @@ async function testNativePdfShapedText(): Promise<void> {
             if (name === 'CFF') assert.ok(fontFile === 'FontFile3' && openType, `a CFF font is embedded whole, as OpenType; got ${fontFile} ${openType}`);
             else assert.ok(fontFile === 'FontFile2' && !openType, `a TrueType font is embedded as TrueType; got ${fontFile} ${openType}`);
         }
+    }
+    // A vowel sign with no letter of its script before it (alone, a word split where its runs change their
+    // look), and a word longer than a line: drawn and read whole (a font of Apple's layout tables, shaped by
+    // fontkit, filled the heap on such a sign and ended the process).
+    if (devanagari) {
+        const long = 'कि'.repeat(120);
+        const parts = { ...doc, content: [
+            { type: 'paragraph', text: 'हिंदी', children: [{ type: 'text', text: 'हि', formatting: { bold: true } }, { type: 'text', text: 'ंदी' }] },
+            { type: 'paragraph', text: 'x ि y', children: [{ type: 'text', text: 'x ि y' }] },
+            { type: 'paragraph', text: long, children: [{ type: 'text', text: long }] }] };
+        const result: any = await OfficeGenerator.generate(parts, 'pdf', { pdfConfig: { engine: 'native', fallbackFonts: [devanagari] } } as any);
+        const text = await read(result.value as Uint8Array);
+        assert.ok(text.startsWith('हिंदी') && text.includes('x ि y') && (text.match(/कि/g) || []).length === 120, `stray vowel signs and a long word are drawn and read; got ${JSON.stringify(text.slice(0, 40))}`);
     }
     // A mark over a Latin letter, and Latin text in a font of no shaping: as before.
     const latinFont = systemFont('/System/Library/Fonts/Supplemental/Arial.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf');

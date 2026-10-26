@@ -534,7 +534,18 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
                     const shape = (child.metadata ?? {}) as ShapeMetadata;
                     const texts: OfficeContentNode[] = [];
                     while (i + 1 < children.length && ['paragraph', 'heading', 'list'].includes(children[i + 1].type) && sameBox(children[i + 1].bounds, child.bounds)) texts.push(children[++i]);
-                    if (!box) continue;
+                    if (!box) {
+                        // A shape of no place on the slide (a document's frame, its blocks its children): its text
+                        // where the slide's text of no place goes.
+                        const paragraphs = [];
+                        for (const t of [...texts, ...(child.children ?? [])]) {
+                            if (!['paragraph', 'heading', 'list', 'code'].includes(t.type)) continue;
+                            const k = await source.keep(t);
+                            if (k !== false) paragraphs.push(await paragraphOf(t, source, notes, k));
+                        }
+                        if (paragraphs.some(p => p.runs.some(r => r.text.trim()))) slide.items.push({ kind: 'text', box: { ...BODY_BOX, x: width * 0.05, w: width * 0.9, y: height * 0.1 + slide.items.length * 24, h: 24 }, paragraphs });
+                        continue;
+                    }
                     if (texts.length) {
                         const paragraphs = [];
                         for (const t of texts) { const k = await source.keep(t); if (k !== false) paragraphs.push(await paragraphOf(t, source, notes, k)); }

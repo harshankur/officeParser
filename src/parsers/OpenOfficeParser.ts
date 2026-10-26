@@ -866,8 +866,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     const frameFloat = (frame: Element): ShapeMetadata | undefined => {
         const length = (value: string | null | undefined) => { const pt = odpLength(value ?? null); return pt === undefined ? undefined : Math.round(pt * 100) / 100; };
         const anchor = frame.getAttribute("text:anchor-type") || 'paragraph';
-        // (Without geometry, its text is read where it stands, as a frame in its line is.)
-        if (config.ignorePageGeometry) return undefined;
+        // (Without geometry, its text is read where it stands, as a frame in its line is. A slide's or a
+        // drawing's text box has its place on the slide: a frame in its text is read in it.)
+        if (config.ignorePageGeometry || fileType !== 'odt') return undefined;
         if (anchor !== 'paragraph' && anchor !== 'char' && anchor !== 'page') return undefined;
         const doc = frame.ownerDocument, style = frame.getAttribute("draw:style-name");
         const prop = (attr: string) => doc ? styleProperty(doc, style, "style:graphic-properties", attr) : undefined;
