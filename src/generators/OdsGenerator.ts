@@ -53,8 +53,8 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
             case 'number': {
                 // (A spreadsheet's own format where ODF can say it: its scientific notation, its fraction, its words
                 // around the number, `0.0 "kg"`. Else the format read from what it showed.)
-                const own = v.code ? odfNumberParts(v.code) : undefined;
-                if (own) return this.styleNamed(`nc|${own}`, 'N', name => `<number:number-style style:name="${name}">${own}</number:number-style>`);
+                const own = v.code ? this.ownStyle(v.code) : undefined;
+                if (own) return own;
                 // (A whole number of twelve to fifteen digits, an id, is shown in full, not in scientific notation.)
                 if (!v.grouping && !v.decimals && !wholeInFull(v)) return undefined;
                 return this.styleNamed(`n|${v.decimals}|${v.grouping}`, 'N', name => `<number:number-style style:name="${name}">${OdsGenerator.numberXml(v)}</number:number-style>`);
@@ -62,6 +62,9 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
             case 'percent':
                 return this.styleNamed(`p|${v.decimals}|${v.grouping}`, 'N', name => `<number:percentage-style style:name="${name}">${OdsGenerator.numberXml(v)}<number:text>%</number:text></number:percentage-style>`);
             case 'currency': {
+                // (A spreadsheet's own format where ODF can say it, as a number's: `"€"#,##0.0,,` showing millions.)
+                const own = v.code ? this.ownStyle(v.code) : undefined;
+                if (own) return own;
                 const symbol = `<number:currency-symbol>${xmlText(v.symbol)}</number:currency-symbol>`;
                 return this.styleNamed(`c|${v.decimals}|${v.grouping}|${v.symbol}|${v.symbolAfter}`, 'N', name => `<number:currency-style style:name="${name}">`
                     + (v.symbolAfter ? `${OdsGenerator.numberXml(v)}<number:text> </number:text>${symbol}` : `${symbol}${OdsGenerator.numberXml(v)}`) + `</number:currency-style>`);
@@ -80,6 +83,32 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
                 return this.styleNamed('b', 'N', name => `<number:boolean-style style:name="${name}"><number:boolean/></number:boolean-style>`);
             default: return undefined;
         }
+    }
+
+    /**
+     * A spreadsheet's own number format as an ODF number style, where ODF can say it (see odfNumberParts): one
+     * section, or two, the second the negative numbers' (`#,##0.0;(#,##0.0)`), as a style of the negative ones
+     * mapping values of none to the first's, as LibreOffice writes one. Undefined for any other code.
+     */
+    private ownStyle(code: string): string | undefined {
+        // (Its sections, split at semicolons outside quotes and not escaped.)
+        const sections: string[] = [];
+        let current = '', quoted = false;
+        for (let i = 0; i < code.length; i++) {
+            const c = code[i];
+            if (c === '\\' && !quoted) { current += c + (code[i + 1] ?? ''); i++; continue; }
+            if (c === '"') quoted = !quoted;
+            if (c === ';' && !quoted) { sections.push(current); current = ''; continue; }
+            current += c;
+        }
+        sections.push(current);
+        if (sections.length > 2) return undefined;
+        const parts = sections.map(odfNumberParts);
+        if (parts.some(p => p === undefined)) return undefined;
+        const [positive, negative] = parts as string[];
+        const first = this.styleNamed(`nc|${positive}`, 'N', name => `<number:number-style style:name="${name}">${positive}</number:number-style>`);
+        if (negative === undefined) return first;
+        return this.styleNamed(`nc|${positive}|${negative}`, 'N', name => `<number:number-style style:name="${name}">${negative}<style:map style:condition="value()&gt;=0" style:apply-style-name="${first}"/></number:number-style>`);
     }
 
     /** A time of day's data style (`14:05:00`). */
@@ -294,16 +323,18 @@ export function odfNumberParts(code: string): string | undefined {
     // The words before the number.
     let before = '';
     for (let m: RegExpExecArray | null; (m = /^(?:"([^"]*)"|\\(.)|([ \-+$€£¥():/]))/.exec(rest));) { before += m[1] ?? m[2] ?? m[3]; rest = rest.slice(m[0].length); }
-    const body = /^([#0?,]*(?:\.[#0?]+)?)(?:([Ee][+-]0+)|\s+([#0?]+)\/([#0?]+|\d+))?/.exec(rest);
+    const body = /^([#0?,]*(?:\.[#0?]+,*)?)(?:([Ee][+-]0+)|\s+([#0?]+)\/([#0?]+|\d+))?/.exec(rest);
     if (!body || !/[#0?]/.test(body[1] + (body[3] ?? ''))) return undefined;
     rest = rest.slice(body[0].length);
     let after = '';
     for (let m: RegExpExecArray | null; (m = /^(?:"([^"]*)"|\\(.)|([ \-+$€£¥():/]))/.exec(rest));) { after += m[1] ?? m[2] ?? m[3]; rest = rest.slice(m[0].length); }
     if (rest) return undefined;
-    const [written, fraction = ''] = body[1].split('.');
-    // (Commas ending the integer part scale the number by a thousand each, `#,##0,,"M"` showing 1234567 as 1M:
-    // they were read as grouping, and it showed 1,234,567M.)
-    const scaling = /,+$/.exec(written)?.[0].length ?? 0, whole = written.slice(0, written.length - scaling);
+    const [written, writtenFraction = ''] = body[1].split('.');
+    // (Commas ending the integer part, or the decimals, scale the number by a thousand each, `#,##0,,"M"` and
+    // `0.0,"K"` showing 1234567 as 1M and 1234.6K: they were read as grouping, and it showed 1,234,567M.)
+    const ending = (text: string) => /,+$/.exec(text)?.[0].length ?? 0;
+    const scaling = ending(written) + ending(writtenFraction), whole = written.slice(0, written.length - ending(written));
+    const fraction = writtenFraction.slice(0, writtenFraction.length - ending(writtenFraction));
     if (scaling && (body[2] || body[3])) return undefined;
     const decimals = fraction.length, minDecimals = (fraction.match(/0/g) || []).length;
     const minInteger = (whole.match(/0/g) || []).length;

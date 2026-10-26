@@ -5525,8 +5525,10 @@ async function testNativePdfSvgPictures(): Promise<void> {
     assert.ok(marked.messages.some(m => /markers/.test(m)), `markers are named; got ${JSON.stringify(marked.messages)}`);
     // A label's halo (`paint-order: stroke`) is painted under its letters, its fill after it; a fill and stroke in
     // their own order is one pass, the fill under. (The halo covered the letters.)
-    const halo = (await drawn('<text x="5" y="50" fill="black" stroke="white" stroke-width="4" paint-order="stroke">Halo</text>')).streams;
+    const haloDrawn = await drawn('<text x="5" y="50" fill="black" stroke="white" stroke-width="4" paint-order="stroke">Halo</text>'), halo = haloDrawn.streams;
     assert.ok(/1 Tr[\s\S]*0 Tr/.test(halo) && !/2 Tr/.test(halo), 'a halo is stroked first, then filled');
+    // (Its halo's pass is text of none: the label reads once.)
+    assert.strictEqual(haloDrawn.nodes.map(n => n.text || '').join('').split('Halo').length - 1, 1, `a halo's label reads once; got ${JSON.stringify(haloDrawn.nodes.map(n => n.text))}`);
     assert.ok(/2 Tr/.test((await drawn('<text x="5" y="50" fill="black" stroke="white" stroke-width="4">Plain</text>')).streams), 'text filled and stroked is one pass, the fill under');
     // A selector of a long run of blanks is read in linear time (a pattern around `>` took the square of the run).
     const blankStarted = Date.now();
@@ -5790,6 +5792,12 @@ async function testPdfRuledTables(): Promise<void> {
         // (A paragraph a page break cuts reads as two.)
         assert.ok(read.apart.length <= pageBreaks && !read.joined.length, `${file}: each paragraph is read whole; got ${read.apart.length} pieces and ${read.joined.length} joined: ${JSON.stringify([...read.apart, ...read.joined].slice(0, 4))}`);
     }
+    // A form's labels and values beside one another keep their rows, and a paragraph across the page after two
+    // columns stays whole after them (a gutter a line crosses is cut only within columns of text).
+    const form = (await readText('form_labels_libreoffice.pdf')).split('\n');
+    assert.ok(!form.some(t => t.includes('Applicant full legal name') && t.includes('Street address of residence')), `a form's labels are not read as a column apart from their values; got ${JSON.stringify(form.slice(0, 4))}`);
+    const afterColumns = (await readText('columns_then_paragraph_libreoffice.pdf')).split('\n').filter(t => t.trim());
+    assert.ok(/^CLOSING full width paragraph/.test(afterColumns.at(-1) ?? '') && afterColumns.filter(t => t.includes('CLOSING')).length === 1, `a paragraph across the page after two columns is read whole after them; got ${JSON.stringify(afterColumns.slice(-3))}`);
     const englishInHebrew = await authored('english_in_hebrew_libreoffice.pdf');
     assert.ok(!englishInHebrew.joined.length && englishInHebrew.blocks.filter(t => /^P\d+\./.test(t)).length === 8, `English paragraphs in a Hebrew page keep their lines; got ${JSON.stringify(englishInHebrew.blocks.map(t => t.slice(0, 30)))}`);
     // A borderless table's sparse rows stay rows, and the text under it stays under it.
@@ -6423,6 +6431,13 @@ async function testSpreadsheetWriters(): Promise<void> {
     const scaled = { type: 'xlsx', metadata: {}, attachments: [], content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [{ type: 'row', children: [{ type: 'cell', text: '1234567', children: [{ type: 'text', text: '1234567' }], metadata: { row: 0, col: 0, valueType: 'number', numberFormat: '#,##0,,"M"', shownText: '1M' } }] }] }] } as any;
     const scaledOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(scaled, 'ods')).value as Uint8Array))['content.xml']);
     assert.ok(/number:display-factor="1000000"/.test(scaledOds), `ODS: a format's scaling commas are a display factor; got ${scaledOds.match(/<number:number-style[\s\S]*?<\/number:number-style>/)?.[0]}`);
+    // (Commas after the decimals scale too; a currency's code is its style too; a code of a negative section
+    // maps negative values to it.)
+    const scaledCell = (code: string, valueType = 'number') => ({ type: 'row', children: [{ type: 'cell', text: '1234567', children: [{ type: 'text', text: '1234567' }], metadata: { row: 0, col: 0, valueType, numberFormat: code } }] });
+    const moreScaled = { ...scaled, content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [scaledCell('0.0,"K"'), scaledCell('#,##0.0,,;(#,##0.0,,)')].map((r, i) => ({ ...r, children: r.children.map(c => ({ ...c, metadata: { ...c.metadata, row: i } })) })) }] } as any;
+    const moreOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(moreScaled, 'ods')).value as Uint8Array))['content.xml']);
+    assert.ok(/number:decimal-places="1"[^>]*number:display-factor="1000"/.test(moreOds) && /<number:text>\(<\/number:text><number:number[^>]*number:display-factor="1000000"\/><number:text>\)<\/number:text><style:map style:condition="value\(\)&gt;=0"/.test(moreOds),
+        `ODS: commas after the decimals scale, and a negative section maps negative values; got ${(moreOds.match(/<number:number-style[\s\S]*?<\/number:number-style>/g) || []).join(' ')}`);
 
     // A cell onNode gives text for is that text alone: the value it replaced is not written.
     const redacted = await OfficeGenerator.generate(odsHeldAst, 'xlsx', { onNode: (n: OfficeContentNode) => n.type === 'cell' ? 'REDACTED' : undefined } as any);

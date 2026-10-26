@@ -599,18 +599,29 @@ function xyCut(lines: PdfLine[], medianH: number, gutterUnit: number, out: PdfLi
     let vOk = v && (v.gap >= V_MIN || (v.gap >= 4 && lines.some(l => l.gutter !== undefined && Math.abs(l.gutter - v!.at) <= v!.gap / 2 + 0.5)));
     // A column gutter the lines were cut at that a line or two run into (one set past its column's margin, an
     // overfull URL), with no empty strip down the block: the cut still, each line on the side holding most of
-    // it. The page was read across its columns, line by line.
+    // it. The page was read across its columns, line by line. Not where the block has a band across it (a
+    // paragraph above or below the columns is cut off first), nor where a line crossing it is above or below
+    // the lines either side (a paragraph across both columns, a form's notice): a gap it was given beat the band,
+    // a paragraph's halves were read into the columns, and a form's rows lost their pairing.
     let byMiddle = false;
-    if (!vOk) {
+    if (!vOk && !hOk) {
         const cutAt = new Map<number, number>();
         for (const l of lines) if (l.gutter !== undefined) cutAt.set(l.gutter, (cutAt.get(l.gutter) ?? 0) + 1);
         let best: number | undefined, count = 0;
         for (const [g, n] of cutAt) if (n > count) { best = g; count = n; }
         if (best !== undefined && count >= 4) {
             const g = best;
-            const across = lines.filter(l => l.x < g - 0.5 && l.x + l.width > g + 0.5).length;
-            const left = lines.filter(l => l.x + l.width / 2 < g).length;
-            if (across <= Math.max(1, 0.1 * lines.length) && left >= 2 && lines.length - left >= 2) { v = { gap: V_MIN, at: g }; vOk = true; byMiddle = true; }
+            const crossing = lines.filter(l => l.x < g - 0.5 && l.x + l.width > g + 0.5);
+            // (Each line across it within its columns, lines of both above and below it on each side: a line set
+            // past its column's margin. A paragraph or a notice above or below them, across both, is none.)
+            const top = [Infinity, Infinity], bottom = [-Infinity, -Infinity], count2 = [0, 0];
+            for (const l of lines) {
+                if (l.x < g - 0.5 && l.x + l.width > g + 0.5) continue;
+                const side = l.x + l.width / 2 < g ? 0 : 1;
+                top[side] = Math.min(top[side], l.yTop); bottom[side] = Math.max(bottom[side], l.yTop); count2[side]++;
+            }
+            const within = (c: PdfLine) => [0, 1].every(side => top[side] < c.yTop && bottom[side] > c.yTop);
+            if (crossing.length <= Math.max(1, 0.1 * lines.length) && crossing.every(within) && count2[0] >= 2 && count2[1] >= 2) { v = { gap: V_MIN, at: g }; vOk = true; byMiddle = true; }
         }
     }
 

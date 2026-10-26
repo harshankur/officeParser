@@ -863,11 +863,17 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
                     // Filled, stroked, or both: the fill under the stroke (PDF's fill-and-stroke mode), or the stroke under
                     // it where `paint-order` puts it first, in two passes (a label's white halo covered its letters).
                     const passes: number[] = fill && outline ? (run.style.strokeFirst ? [1, 0] : [2]) : outline ? [1] : [0];
-                    for (const mode of passes) {
+                    for (const [k, mode] of passes.entries()) {
                         const strokes = mode !== 0 && outline ? [lib.setStrokingRgbColor(outline.color.red, outline.color.green, outline.color.blue), lib.setLineWidth(coord(run.style.strokeWidth))] : [];
+                        // (The halo's pass, the first of two, is text of none, `/ActualText ()`: a reader read the label twice.)
+                        const silent = passes.length > 1 && k === 0;
+                        if (silent) page.pushOperators(op('BDC', lib.PDFName.of('Span'), page.doc.context.obj({ ActualText: lib.PDFString.of('') })));
                         page.pushOperators(lib.pushGraphicsState(), ...(alpha < 1 || strokeAlpha < 1 ? [op('gs', opacityState(alpha, strokeAlpha))] : []),
                             ...strokes, op('Tr', lib.asPDFNumber(mode)), cm([1, 0, 0, -1, cx, chunk.y + shift * run.style.fontSize]));
-                        try { canvas.text(run.text, face, 0, 0, run.style.fontSize, (mode === 1 ? outline : fill ?? outline)!.color); } finally { page.pushOperators(lib.popGraphicsState()); }
+                        try { canvas.text(run.text, face, 0, 0, run.style.fontSize, (mode === 1 ? outline : fill ?? outline)!.color); } finally {
+                            page.pushOperators(lib.popGraphicsState());
+                            if (silent) page.pushOperators(op('EMC'));
+                        }
                     }
                 }
                 cx += w;
