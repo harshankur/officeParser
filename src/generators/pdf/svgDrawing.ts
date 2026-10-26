@@ -840,14 +840,18 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
                 chunks.push({ x: coord((run.x ?? endX) + (run.dx ?? 0)), y: coord((run.y ?? (prev ? prev.y : y)) + (run.dy ?? 0)), runs: [run] });
             } else chunks[chunks.length - 1].runs.push(run);
         }
-        for (const chunk of chunks) {
+        // Each run's passes, in two lists: halos (`paint-order: stroke`, its stroke under its fill) drawn first, all of
+        // the text's, then the rest. (Drawn run by run, each halo's pass between the label's runs set its gaps' blanks
+        // over the label's own glyphs, and a reader lost the words' spaces.)
+        const under: (() => void)[] = [], over: (() => void)[] = [];
+        drawing: for (const chunk of chunks) {
             const width = chunk.runs.reduce((w, r) => w + canvas.width(r.text, faceOf(r.style), r.style.fontSize), 0);
             // (Anchored as its first run says: a span's own `text-anchor` placed nothing.)
             const anchor = chunk.runs[0].style.textAnchor;
             let cx = chunk.x - (anchor === 'middle' ? width / 2 : anchor === 'end' ? width : 0);
             for (const run of chunk.runs) {
                 // Text past the picture's bound on characters (its `use` copies counted) is not drawn, and named.
-                if (budget.chars <= 0) { left.add('text past the picture\'s limits'); return; }
+                if (budget.chars <= 0) { left.add('text past the picture\'s limits'); break drawing; }
                 budget.chars -= run.text.length;
                 const hidden = run.style.visibility === 'hidden' || run.style.visibility === 'collapse';
                 const fill = hidden ? undefined : paint(run.style.fill, run.style);
@@ -860,25 +864,27 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
                     const alpha = (fill ? fill.alpha * run.style.fillOpacity : 1) * opacity, strokeAlpha = (outline ? outline.alpha * run.style.strokeOpacity : 1) * opacity;
                     // (Its baseline where `dominant-baseline` sets the text: a label centred on its y sat a third of an em high.)
                     const shift = BASELINE_SHIFT[run.style.dominantBaseline] ?? 0;
+                    const x = cx, y = chunk.y + shift * run.style.fontSize;
+                    const pass = (mode: number) => () => {
+                        const strokes = mode !== 0 && outline ? [lib.setStrokingRgbColor(outline.color.red, outline.color.green, outline.color.blue), lib.setLineWidth(coord(run.style.strokeWidth))] : [];
+                        page.pushOperators(lib.pushGraphicsState(), ...(alpha < 1 || strokeAlpha < 1 ? [op('gs', opacityState(alpha, strokeAlpha))] : []),
+                            ...strokes, op('Tr', lib.asPDFNumber(mode)), cm([1, 0, 0, -1, x, y]));
+                        try { canvas.text(run.text, face, 0, 0, run.style.fontSize, (mode === 1 ? outline : fill ?? outline)!.color); } finally { page.pushOperators(lib.popGraphicsState()); }
+                    };
                     // Filled, stroked, or both: the fill under the stroke (PDF's fill-and-stroke mode), or the stroke under
                     // it where `paint-order` puts it first, in two passes (a label's white halo covered its letters).
-                    const passes: number[] = fill && outline ? (run.style.strokeFirst ? [1, 0] : [2]) : outline ? [1] : [0];
-                    for (const [k, mode] of passes.entries()) {
-                        const strokes = mode !== 0 && outline ? [lib.setStrokingRgbColor(outline.color.red, outline.color.green, outline.color.blue), lib.setLineWidth(coord(run.style.strokeWidth))] : [];
-                        // (The halo's pass, the first of two, is text of none, `/ActualText ()`: a reader read the label twice.)
-                        const silent = passes.length > 1 && k === 0;
-                        if (silent) page.pushOperators(op('BDC', lib.PDFName.of('Span'), page.doc.context.obj({ ActualText: lib.PDFString.of('') })));
-                        page.pushOperators(lib.pushGraphicsState(), ...(alpha < 1 || strokeAlpha < 1 ? [op('gs', opacityState(alpha, strokeAlpha))] : []),
-                            ...strokes, op('Tr', lib.asPDFNumber(mode)), cm([1, 0, 0, -1, cx, chunk.y + shift * run.style.fontSize]));
-                        try { canvas.text(run.text, face, 0, 0, run.style.fontSize, (mode === 1 ? outline : fill ?? outline)!.color); } finally {
-                            page.pushOperators(lib.popGraphicsState());
-                            if (silent) page.pushOperators(op('EMC'));
-                        }
-                    }
+                    if (fill && outline && run.style.strokeFirst) { under.push(pass(1)); over.push(pass(0)); }
+                    else over.push(pass(fill && outline ? 2 : outline ? 1 : 0));
                 }
                 cx += w;
             }
         }
+        // (The halos are text of none, `/ActualText ()`: a reader read each label twice.)
+        if (under.length) {
+            page.pushOperators(op('BDC', lib.PDFName.of('Span'), page.doc.context.obj({ ActualText: lib.PDFString.of('') })));
+            try { for (const draw of under) draw(); } finally { page.pushOperators(op('EMC')); }
+        }
+        for (const draw of over) draw();
     };
 
     /** Draws a picture given as data (`data:image/png;base64,...`) in its box. */

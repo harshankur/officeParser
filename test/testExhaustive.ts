@@ -5532,6 +5532,8 @@ async function testNativePdfSvgPictures(): Promise<void> {
     // (Its words in spans keep their spaces.)
     const spanned = await drawn('<text x="5" y="50" fill="black" stroke="white" stroke-width="4" paint-order="stroke" font-size="12">Population <tspan font-weight="bold">12,345</tspan> people</text>');
     assert.ok(spanned.nodes.map(n => n.text || '').join('').includes('Population 12,345 people'), `a halo's label in spans keeps its spaces; got ${JSON.stringify(spanned.nodes.map(n => n.text))}`);
+    const leading = await drawn('<text x="5" y="50" fill="black" stroke="white" stroke-width="4" paint-order="stroke" font-size="14">a<tspan> b</tspan><tspan> c </tspan>d</text>');
+    assert.ok(leading.nodes.map(n => n.text || '').join('').replace(/\s+/g, ' ').includes('a b c d'), `a halo's label of spans each starting with a space keeps them; got ${JSON.stringify(leading.nodes.map(n => n.text))}`);
     assert.ok(/2 Tr/.test((await drawn('<text x="5" y="50" fill="black" stroke="white" stroke-width="4">Plain</text>')).streams), 'text filled and stroked is one pass, the fill under');
     // A selector of a long run of blanks is read in linear time (a pattern around `>` took the square of the run).
     const blankStarted = Date.now();
@@ -6445,6 +6447,14 @@ async function testSpreadsheetWriters(): Promise<void> {
     assert.ok(/<number:number-style[^>]*><style:text-properties fo:color="#FF0000"\/><number:text> \(<\/number:text><number:number[^>]*\/><number:text>\)<\/number:text><style:map style:condition="value\(\)&gt;0" style:apply-style-name="[^"]+"\/><style:map style:condition="value\(\)=0"/.test(sectionedOds)
         && /<number:number-style style:name="[^"]+"><number:text><\/number:text><\/number:number-style>/.test(sectionedOds),
         `ODS: a format's zero section, colour and padding are written, and an empty section hides its numbers; got ${(sectionedOds.match(/<number:number-style[\s\S]*?<\/number:number-style>/g) || []).join(' ')}`);
+    // A format read from what a cell showed is kept only where it shows the value held: a percent sign written in
+    // (`12.5 %` for 12.5), a decimal comma (`1,234` for 1.234), a scale (`€1,235` for 1234567) showed 1250%, 1 and
+    // €1,234,568. A locale's currency in a code (`[$€-407]#,##0,`) is its symbol.
+    const shownCell = (value: string, shownText: string, row: number, numberFormat?: string) => ({ type: 'row', children: [{ type: 'cell', text: value, children: [{ type: 'text', text: value }], metadata: { row, col: 0, valueType: 'number', value, shownText, ...(numberFormat ? { numberFormat } : {}) } }] });
+    const looks = { ...scaled, content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [shownCell('12.5', '12.5 %', 0), shownCell('1.234', '1,234', 1), shownCell('1234567.891', '€1,235', 2, '[$€-407]#,##0,')] }] } as any;
+    const looksOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(looks, 'ods')).value as Uint8Array))['content.xml']);
+    assert.ok(!/office:value-type="percentage"/.test(looksOds) && /office:value-type="float" office:value="12\.5"/.test(looksOds) && /office:value="1\.234"/.test(looksOds)
+        && /<number:text>€<\/number:text><number:number[^>]*number:display-factor="1000"/.test(looksOds), `ODS: a format is kept only where it shows the value; got ${looksOds.slice(looksOds.indexOf('<office:automatic-styles>'), looksOds.indexOf('<office:automatic-styles>') + 1200)}`);
 
     // A cell onNode gives text for is that text alone: the value it replaced is not written.
     const redacted = await OfficeGenerator.generate(odsHeldAst, 'xlsx', { onNode: (n: OfficeContentNode) => n.type === 'cell' ? 'REDACTED' : undefined } as any);

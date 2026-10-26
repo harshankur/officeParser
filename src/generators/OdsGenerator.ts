@@ -59,8 +59,12 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
                 if (!v.grouping && !v.decimals && !wholeInFull(v)) return undefined;
                 return this.styleNamed(`n|${v.decimals}|${v.grouping}`, 'N', name => `<number:number-style style:name="${name}">${OdsGenerator.numberXml(v)}</number:number-style>`);
             }
-            case 'percent':
+            case 'percent': {
+                // (A spreadsheet's own format where ODF can say it, as a number's.)
+                const own = v.code ? this.ownStyle(v.code) : undefined;
+                if (own) return own;
                 return this.styleNamed(`p|${v.decimals}|${v.grouping}`, 'N', name => `<number:percentage-style style:name="${name}">${OdsGenerator.numberXml(v)}<number:text>%</number:text></number:percentage-style>`);
+            }
             case 'currency': {
                 // (A spreadsheet's own format where ODF can say it, as a number's: `"€"#,##0.0,,` showing millions.)
                 const own = v.code ? this.ownStyle(v.code) : undefined;
@@ -324,8 +328,9 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
  */
 export function odfNumberParts(source: string): string | undefined {
     if (source.length > 255) return undefined;
-    // Its colour (`[Red]`), as the text's; its padding the width of a character (`_)`) a space, and its fill (`* `)
-    // none: a code of them (Excel's own accounting and comma styles) was refused, and the value shown bare.
+    // Its colour (`[Red]`), as the text's; its padding the width of a character (`_)`) a space, its fill (`* `) none,
+    // and its locale's currency its symbol: a code of them (Excel's own accounting and comma styles, a currency of
+    // a locale) was refused, and the value shown bare.
     const colour = /^\[(black|blue|cyan|green|magenta|red|white|yellow)\]/i.exec(source);
     let code = '';
     for (let i = colour ? colour[0].length : 0, quoted = false; i < source.length; i++) {
@@ -334,6 +339,13 @@ export function odfNumberParts(source: string): string | undefined {
         else if (!quoted && c === '\\') { code += c + (source[i + 1] ?? ''); i++; continue; }
         else if (!quoted && c === '_') { code += ' '; i++; continue; }
         else if (!quoted && c === '*') { i++; continue; }
+        else if (!quoted && c === '[') {
+            // A locale's currency (`[$€-407]`) is its symbol, a locale alone (`[$-409]`) and a colour by number
+            // (`[Color10]`) nothing; any other (a condition, `[<0]`) is kept, and refused below.
+            const close = source.indexOf(']', i), tag = close > i ? source.slice(i + 1, close) : '';
+            const currency = /^\$([^-\]"]*)(?:-[0-9A-Fa-f]{1,8})?$/.exec(tag);
+            if (currency || /^color\d{1,2}$/i.test(tag)) { if (currency?.[1]) code += `"${currency[1]}"`; i = close; continue; }
+        }
         code += c;
     }
     if (/[;[%@*_]/.test(code.replace(/"[^"]*"|\\./g, ''))) return undefined;

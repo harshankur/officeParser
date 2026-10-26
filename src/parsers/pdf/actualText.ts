@@ -706,13 +706,10 @@ function spans<T extends TextContentItem>(items: T[], events: MarkedEvent[] | un
             continue;
         }
         if (!depth) { out.push(clean(item)); continue; }
-        // A span of no text (a halo drawn under its label, the label drawn again over it): its glyphs are none, and
-        // a blank item pdf.js set for the gap before them is that gap, where it is. As the span's text over its
-        // glyphs' width, the blank lay over the label's own glyphs and was dropped, and the label's words ran together.
-        if (!text.replace(controls, '')) {
-            if (typeof item.str === 'string' && !item.str.trim()) out.push(clean(item));
-            continue;
-        }
+        // A span of no text (a halo drawn under its label, the label drawn after it): nothing of it is text, its
+        // blanks neither. As the span's text over its glyphs' width, a blank before them lay over the label's own
+        // glyphs and was dropped with the label's word space.
+        if (!text.replace(controls, '')) continue;
         // In a span with an ActualText: the first glyph's item holds it, over every glyph's width.
         const t = item.transform;
         if (t && t.length >= 6) {

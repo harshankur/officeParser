@@ -137,9 +137,7 @@ function typedKind(valueType: NonNullable<CellMetadata['valueType']>, held: stri
     switch (valueType) {
         case 'number': {
             if (!held.trim() || !Number.isFinite(n)) return { kind: 'text' };
-            const look = cellValue(shown);
-            if (look.kind === 'percent' || look.kind === 'currency' || (look.kind === 'number' && (look.grouping || look.decimals))) return { ...look, number: n };
-            return { kind: 'number', number: n };
+            return lookOf(shown, n);
         }
         case 'date': {
             // (Before 1900-03-01 the 1900 system counts a day that never was: such a date stays its text.)
@@ -164,6 +162,19 @@ function typedKind(valueType: NonNullable<CellMetadata['valueType']>, held: stri
 }
 
 /**
+ * A value held, `n`, in the format read from what its sheet showed for it, where what it showed is that value
+ * (to the decimals shown, a percentage a hundredth of what it shows); else the value alone. A format's words
+ * read as a look (`12.5 %`, a percent sign written in, read as a percentage), a decimal comma (`1,234`, read as
+ * grouping), a number scaled (`€1,235` for 1234567) made it show another value: 1250%, 1, €1,234,568.
+ */
+function lookOf(shown: string, n: number): CellValue {
+    const look = cellValue(shown);
+    const showsValue = typeof look.number === 'number' && Math.abs(look.number - n) <= (0.5 * 10 ** -(look.decimals ?? 0)) / (look.kind === 'percent' ? 100 : 1) + 1e-9 * Math.max(1, Math.abs(n));
+    if (showsValue && (look.kind === 'percent' || look.kind === 'currency' || (look.kind === 'number' && (look.grouping || look.decimals)))) return { ...look, number: n };
+    return { kind: 'number', number: n };
+}
+
+/**
  * A cell's value from its text (a table's, a CSV's: its source says nothing of it), and from what a
  * spreadsheet showed for it where its text is a value held (`shown`): a number of at most fifteen
  * significant digits, a percentage, a currency amount, a date or a time, else text.
@@ -176,11 +187,7 @@ export function cellValue(text: string, shown?: string): CellValue {
     // A number shown through a format: the value held, the format read from what it showed.
     if (shown !== undefined && shown !== text && (NUMBER.test(s) || GROUPED.test(s))) {
         const n = plainNumber(s);
-        if (n !== undefined) {
-            const look = cellValue(shown);
-            if (look.kind === 'percent' || look.kind === 'currency' || (look.kind === 'number' && (look.grouping || look.decimals))) return { ...look, number: n };
-            return { kind: 'number', number: n };
-        }
+        if (n !== undefined) return lookOf(shown, n);
     }
     if (NUMBER.test(s) || GROUPED.test(s)) {
         const n = plainNumber(s);
