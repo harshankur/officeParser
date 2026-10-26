@@ -174,8 +174,11 @@ function negated(v: CellValue): CellValue {
  */
 function lookOf(shown: string, n: number): CellValue {
     // (A number in brackets is a negative one, as a format's negative section shows it: `(1,234.50)`.)
-    const bracketed = /^\(\s*([^()]*?)\s*\)$/.exec(shown.trim());
-    const look = bracketed && /^[\d.,]+$/.test(bracketed[1]) ? negated(cellValue(bracketed[1])) : cellValue(shown);
+    // (Read as cellValue reads text, 64 characters at most: a pattern of blanks either side of what it holds took
+    // time in the cube of a long run of blanks.)
+    const bracketed = shown.length <= 66 ? /^\(([^()]*)\)$/.exec(shown.trim()) : null;
+    const inside = bracketed?.[1].trim();
+    const look = inside !== undefined && /^[\d.,]+$/.test(inside) ? negated(cellValue(inside)) : cellValue(shown);
     // (Its magnitude alone where the value is negative and the format shows none of its sign, its colour carrying
     // it: `[Red]#,##0.00`, `0.0%;0.0%`. Its format was thrown away, and the column's negatives shown bare.)
     const shownNumber = typeof look.number === 'number' && n < 0 && look.number > 0 ? -look.number : look.number;
@@ -238,7 +241,14 @@ const nextSuffix = new WeakMap<Set<string>, Map<string, number>>();
 
 export function sheetName(wanted: string, taken: Set<string>, fallback: string, max = 31): string {
     // (Neither end an apostrophe nor a blank, after every cut too: a name cut to 31 could end in one.)
-    const ends = (text: string) => text.replace(/^[\s']+|[\s']+$/g, '');
+    // (In one scan from each end: a pattern of either end took time in the square of a long run of them.)
+    const ends = (text: string) => {
+        const edge = (c: string) => c === "'" || /\s/.test(c);
+        let start = 0, end = text.length;
+        while (start < end && edge(text[start])) start++;
+        while (end > start && edge(text[end - 1])) end--;
+        return text.slice(start, end);
+    };
     const clean = (name: string) => ends(cutTo(ends(stripInvalidXmlChars(name).replace(/[[\]:*?/\\\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ')), max));
     let base = clean(wanted) || clean(fallback) || 'Sheet';
     if (base.toLowerCase() === 'history') base = `${cutTo(base, max - 2)} 1`;

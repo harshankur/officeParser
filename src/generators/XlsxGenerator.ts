@@ -4,6 +4,7 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { encUrl, ooxmlCustomPropertiesXml, resolveZipInstant, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BUILTIN_NUMBER_FORMATS, BUILTIN_OTHER_FORMATS } from '../utils/excelFormat.js';
+import { trimEndChars } from '../utils/textUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { buildWorkbook, CellComment, cellTextProcessor, noteLabels, rowAt, sheetIndex, sheetRef, writableLink, MAX_LINK_LENGTH, MAX_SHEET_LINKS, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
 
@@ -96,7 +97,7 @@ export class XlsxGenerator extends BaseGenerator<'xlsx'> {
                 return data ? this.chartTable(data, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode), true) : undefined;
             },
             chartTitle: node => chartData(node)?.title,
-            textOf: async node => (await this.processNodeRecursive(node, textProcessor)).replace(/\n+$/, ''),
+            textOf: async node => trimEndChars(await this.processNodeRecursive(node, textProcessor), '\n'),
             keep,
         }, { sheetPerTable: cfg.sheetPerTable !== false, includeText: cfg.includeText !== false, includeCharts: this.config.includeCharts !== false, imageMode: this.imageMode(), includeFormatting: this.config.includeFormatting !== false, noteLabels: labels });
         for (const feature of unrepresentable) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'xlsx' });

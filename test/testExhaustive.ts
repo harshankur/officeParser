@@ -6458,6 +6458,10 @@ async function testSpreadsheetWriters(): Promise<void> {
     assert.ok(!/office:value-type="percentage"/.test(looksOds) && /office:value-type="float" office:value="12\.5"/.test(looksOds) && /office:value="1\.234"/.test(looksOds)
         && /<number:text>€<\/number:text><number:number[^>]*number:display-factor="1000"/.test(looksOds)
         && /office:value-type="currency" office:value="-1234\.5"/.test(looksOds) && /table:style-name="[^"]+" office:value-type="float" office:value="-1234\.5"/.test(looksOds), `ODS: a format is kept only where it shows the value; got ${looksOds.slice(looksOds.indexOf('<office:automatic-styles>'), looksOds.indexOf('<office:automatic-styles>') + 1200)}`);
+    // (In linear time: a shown text of a bracket and a long run of blanks, a sheet named in a long run of apostrophes.)
+    const slowStarted = Date.now();
+    await OfficeGenerator.generate({ ...scaled, content: [{ type: 'sheet', metadata: { sheetName: `a${"'".repeat(40_000)}b` }, children: [shownCell('1', `(${' '.repeat(10_000)}x`, 0)] }] } as any, 'xlsx');
+    assert.ok(Date.now() - slowStarted < 5_000, `a long shown text and sheet name are read quickly; took ${Date.now() - slowStarted}ms`);
 
     // A cell onNode gives text for is that text alone: the value it replaced is not written.
     const redacted = await OfficeGenerator.generate(odsHeldAst, 'xlsx', { onNode: (n: OfficeContentNode) => n.type === 'cell' ? 'REDACTED' : undefined } as any);

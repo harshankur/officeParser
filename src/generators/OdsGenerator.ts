@@ -3,6 +3,7 @@ import { ConversionResult, GeneratorConfig, OfficeContentNode, OfficeParserAST, 
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { encUrl, odfUserDefinedXml, resolveZipInstant, toW3CDTF } from '../utils/officeGenUtils.js';
+import { trimEndChars } from '../utils/textUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { buildWorkbook, cellTextProcessor, noteLabels, rowAt, sheetIndex, sheetRef, writableLink, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
 
@@ -159,7 +160,7 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
                 return data ? this.chartTable(data, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode), true) : undefined;
             },
             chartTitle: node => chartData(node)?.title,
-            textOf: async node => (await this.processNodeRecursive(node, textProcessor)).replace(/\n+$/, ''),
+            textOf: async node => trimEndChars(await this.processNodeRecursive(node, textProcessor), '\n'),
             keep,
         }, { sheetPerTable: cfg.sheetPerTable !== false, includeText: cfg.includeText !== false, includeCharts: this.config.includeCharts !== false, imageMode: this.imageMode(), includeFormatting: this.config.includeFormatting !== false, noteLabels: labels, sheetNameLength: MAX_SHEET_NAME });
         for (const feature of unrepresentable) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'ods' });

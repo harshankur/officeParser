@@ -106,9 +106,9 @@ async function noteComment(comment: OfficeContentNode, source: DeckSource, notes
 /** Runs with the blanks that start the first of them and end the last taken off, and none left empty (a paragraph's text trimmed). */
 function trimmed(runs: DeckRun[]): DeckRun[] {
     const out = runs.map(r => ({ ...r }));
-    while (out.length && (out[0].lineBreak || !out[0].text.replace(/^\s+/, ''))) out.shift();
-    while (out.length && (out[out.length - 1].lineBreak || !out[out.length - 1].text.replace(/\s+$/, ''))) out.pop();
-    if (out.length) { out[0].text = out[0].text.replace(/^\s+/, ''); out[out.length - 1].text = out[out.length - 1].text.replace(/\s+$/, ''); }
+    while (out.length && (out[0].lineBreak || !out[0].text.trim())) out.shift();
+    while (out.length && (out[out.length - 1].lineBreak || !out[out.length - 1].text.trimEnd())) out.pop();
+    if (out.length) { out[0].text = out[0].text.trimStart(); out[out.length - 1].text = out[out.length - 1].text.trimEnd(); }
     return out;
 }
 
@@ -193,7 +193,7 @@ function placedLines(node: OfficeContentNode, runs: DeckRun[]): { runs: DeckRun[
     lines[lines.length - 1].runs.push(...pending);
     for (const line of lines.slice(0, -1)) {
         const end = line.runs.length - 1;
-        if (end >= 0 && !line.runs[end].lineBreak) line.runs[end] = { ...line.runs[end], text: line.runs[end].text.replace(/\s+$/, '') };
+        if (end >= 0 && !line.runs[end].lineBreak) line.runs[end] = { ...line.runs[end], text: line.runs[end].text.trimEnd() };
     }
     return lines;
 }
