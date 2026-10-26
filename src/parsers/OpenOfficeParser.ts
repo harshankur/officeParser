@@ -580,20 +580,30 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     };
 
     /**
-     * A master page's pages (see PageSetup), from its page layout: the page's size and margins, the body
-     * below its header and above its footer (ODF's top margin is the header's; the header's height and
-     * gap come between it and the body), and whether its first page has a header of its own.
+     * A master page's pages (see PageSetup), from its page layout: how they are numbered and whether the
+     * first has a header of its own always; where geometry is wanted and the layout gives a size, the
+     * page's size and margins, the body below its header and above its footer (ODF's top margin is the
+     * header's; the header's height and gap come between it and the body), and its columns.
      */
     const odfPageSetup = (masterName: string | undefined): PageSetup | undefined => {
         const master = masterName ? masterPages.get(masterName) : undefined;
         const layout = master ? pageLayouts.get(master.getAttribute("style:page-layout-name") || '') : undefined;
         const props = layout ? getDirectChildren(layout, "style:page-layout-properties")[0] : undefined;
         if (!props) return undefined;
+        const setup: PageSetup = {};
+        // A first page of its own: its own first page's parts, or a master that hands over to another after
+        // its first page (a word processor's "First Page" style, and ODT output's section title pages).
+        const next = master?.getAttribute("style:next-style-name");
+        if (shown(master, "style:header-first") || shown(master, "style:footer-first") || (next && next !== masterName && masterPages.has(next))) setup.differentFirstPage = true;
+        // How its pages are numbered (`style:num-format`: i for front matter, 1 where it gives none).
+        const pageNumbers = odfPageNumberFormat(props.getAttribute("style:num-format"));
+        if (pageNumbers) setup.pageNumberFormat = pageNumbers;
+        if (config.ignorePageGeometry) return setup;
         const pt = (el: Element | undefined, attr: string) => { const v = lengthToPt(el?.getAttribute(attr) || undefined); return v != null && v >= 0 && v <= MAX_PAGE_PT ? Math.round(v * 100) / 100 : undefined; };
         const width = pt(props, "fo:page-width"), height = pt(props, "fo:page-height");
-        if (!width || !height) return undefined;
+        if (!width || !height) return setup;
         const margin = { top: pt(props, "fo:margin-top") ?? 0, right: pt(props, "fo:margin-right") ?? 0, bottom: pt(props, "fo:margin-bottom") ?? 0, left: pt(props, "fo:margin-left") ?? 0 };
-        const setup: PageSetup = { width, height, margin };
+        Object.assign(setup, { width, height, margin });
         // The room a header or footer takes: its height and its gap to the body.
         const room = (styleTag: string, gapAttr: string) => {
             const hf = layout ? getDirectChildren(getDirectChildren(layout, styleTag)[0] ?? layout, "style:header-footer-properties")[0] : undefined;
@@ -602,17 +612,12 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         };
         if (shown(master, "style:header")) { setup.headerDistance = margin.top; margin.top += room("style:header-style", "fo:margin-bottom"); }
         if (shown(master, "style:footer")) { setup.footerDistance = margin.bottom; margin.bottom += room("style:footer-style", "fo:margin-top"); }
-        // A first page of its own: its own first page's parts, or a master that hands over to another after
-        // its first page (a word processor's "First Page" style, and ODT output's section title pages).
-        const next = master?.getAttribute("style:next-style-name");
-        if (shown(master, "style:header-first") || shown(master, "style:footer-first") || (next && next !== masterName && masterPages.has(next))) setup.differentFirstPage = true;
         const columns = odfColumns(getDirectChildren(props, "style:columns")[0], width - margin.left - margin.right);
         if (columns) setup.columns = columns;
-        // How its pages are numbered (`style:num-format`, i for front matter), where not 1, 2, 3.
-        const pageNumbers = odfPageNumberFormat(props.getAttribute("style:num-format"));
-        if (pageNumbers && pageNumbers !== 'decimal') setup.pageNumberFormat = pageNumbers;
         return setup;
     };
+    /** A setup where it sets a page (a sheet's or a slide's is its page, nothing without one). */
+    const sized = (setup: PageSetup | undefined) => setup?.width ? setup : undefined;
     /** A `style:columns` element's columns (their number, the gap, a line between), where there are two or more. */
     function odfColumns(columns: Element | undefined, available?: number): PageSetup['columns'] | undefined {
         const count = Math.min(16, Math.round(Number(columns?.getAttribute("fo:column-count")) || 0));
@@ -642,7 +647,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     /** A section style's columns on a page: their widths a share of the page's text width. */
     const sectionColumnsOn = (styleName: string, page: PageSetup | undefined) => {
         const el = sectionColumns.get(styleName);
-        return el ? odfColumns(el, page ? page.width - (page.margin?.left ?? 0) - (page.margin?.right ?? 0) : undefined) : undefined;
+        return el ? odfColumns(el, page?.width ? page.width - (page.margin?.left ?? 0) - (page.margin?.right ?? 0) : undefined) : undefined;
     };
     /** The columns of the sections being read, innermost last (a page break inside one is set in them). */
     const openSectionColumns: (string | undefined)[] = [];
@@ -1019,7 +1024,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     // page can show its own (TextMetadata.field).
                     const text = element.textContent || '';
                     // (The format it writes its number in, where it sets one: `style:num-format="i"`.)
-                    const fieldFormat = odfPageNumberFormat(element.getAttribute("style:num-format"));
+                    // (Without one it writes the page's: absent, not decimal.)
+                    const fieldFormat = element.getAttribute("style:num-format") ? odfPageNumberFormat(element.getAttribute("style:num-format")) : undefined;
                     fullText += text;
                     children.push({
                         type: 'text',
@@ -1817,13 +1823,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     return;
                 } else if (master) {
                     sectionMasters.push(master);
-                    if (config.includeBreakNodes) {
-                        const pageSetup = config.ignorePageGeometry ? undefined : odfPageSetup(master);
+                    // (A section's start is structure, a node whatever includeBreakNodes says.)
+                    {
+                        const pageSetup = odfPageSetup(master);
                         // A page that starts inside a section of columns (LibreOffice turns to a section's page
                         // on its first paragraph) is set in that section's columns: the section's own break,
                         // just before it with nothing between, is this one.
                         const inSection = openSectionColumns[openSectionColumns.length - 1];
-                        if (pageSetup && inSection) {
+                        if (pageSetup?.width && inSection) {
                             const columns = sectionColumnsOn(inSection, pageSetup);
                             if (columns) pageSetup.columns = columns; else delete pageSetup.columns;
                             const before = targetArray[targetArray.length - 1];
@@ -2232,7 +2239,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 }
                 for (const child of linked) targetArray.push(child);
             } else if (node.tagName === "text:section" && readingBody && config.includeBreakNodes && !config.ignorePageGeometry
-                && sectionColumns.get(node.getAttribute("text:style-name") || '') && odfPageSetup(sectionMasters[sectionMasters.length - 1] ?? firstMaster)) {
+                && sectionColumns.get(node.getAttribute("text:style-name") || '') && odfPageSetup(sectionMasters[sectionMasters.length - 1] ?? firstMaster)?.width) {
                 // A section set in columns of its own, on the page it is on: a section break before it
                 // with its columns, and one after it with the page's again (the page it ends on: a page break
                 // inside it turns to another).
@@ -2558,7 +2565,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     // How the sheet prints: its table style's master page's pages.
                     // (A sheet whose style names none prints on the Default page style, as Calc prints it.)
                     const sheetMaster = paragraphStyleMap[table.getAttribute("table:style-name") || '']?.masterPage ?? (masterPages.has('Default') ? 'Default' : firstMaster);
-                    const sheetPage = config.ignorePageGeometry ? undefined : odfPageSetup(sheetMaster);
+                    // (A sheet's print setup is its page: none where it gives no size.)
+                    const sheetPage = config.ignorePageGeometry ? undefined : sized(odfPageSetup(sheetMaster));
                     const sheetNode: OfficeContentNode = {
                         type: 'sheet',
                         children: rows,
@@ -3070,8 +3078,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     while (fileType === 'odt' && content.length && content[content.length - 1].type === 'break'
         && (content[content.length - 1].metadata as BreakMetadata | undefined)?.breakType === 'section') content.pop();
     // A presentation's page is its slide's size alone: slides are laid out as they are, not within margins.
-    const firstPage = config.ignorePageGeometry ? undefined : odfPageSetup(firstMaster);
-    const pageSetup = firstPage && fileType === 'odp' ? { width: firstPage.width, height: firstPage.height } : firstPage;
+    // (A text document's numbering and first page are no geometry: kept under ignorePageGeometry.)
+    const firstPage = config.ignorePageGeometry && fileType !== 'odt' ? undefined : odfPageSetup(firstMaster);
+    const pageSetup = fileType === 'odt' ? firstPage : fileType === 'odp' ? (firstPage?.width ? { width: firstPage.width, height: firstPage.height } : undefined) : sized(firstPage);
 
     return createAST(
         fileType,

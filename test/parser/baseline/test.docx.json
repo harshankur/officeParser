@@ -95,6 +95,7 @@
       "TestBool": true
     },
     "pageSetup": {
+      "pageNumberFormat": "decimal",
       "width": 612,
       "height": 792,
       "margin": {

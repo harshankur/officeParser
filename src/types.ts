@@ -497,7 +497,9 @@ export interface CommonOfficeParserConfig {
      * ODF (`fo:break-before`/`fo:break-after`, `text:soft-page-break`) and LaTeX (`\newpage`, `\clearpage`),
      * where breaks are otherwise invisible. A line break the author typed is content and always a `break`
      * node: Word's `w:br` (text wrapping) and `w:cr`, ODF's `text:line-break`, HTML's `<br>`, a Markdown hard break; so are HTML and
-     * Markdown's `<hr>`/`---` (a `thematic`/`page` break). This flag does not gate those.
+     * Markdown's `<hr>`/`---` (a `thematic`/`page` break). This flag does not gate those. Nor does it gate
+     * a section's start (a break with BreakMetadata.section: a Word, RTF or ODF text document's next
+     * section): that is the document's structure, and always a node.
      */
     includeBreakNodes?: boolean;
     /**
@@ -548,7 +550,9 @@ export interface CommonOfficeParserConfig {
      * page, in points) and, to each page node, the page dimensions ({@link PageMetadata.pageWidth},
      * `pageHeight`, `rotation`). A document's pages (`pageSetup`), slides' shapes and a floating frame's
      * place ({@link ShapeMetadata.float}, its text then read where it stands) are geometry too. Set this
-     * flag to drop all of it, giving a smaller AST that matches the pre-8.0 output shape.
+     * flag to drop all of it, giving a smaller AST that matches the pre-8.0 output shape. What is not
+     * geometry stays: a text document's `pageSetup` keeps how each section numbers its pages and whether
+     * its first page has a header of its own (PageSetup.pageNumberFormat, `differentFirstPage`).
      *
      * Note this also turns off the layout-faithful `.to('text')` rendering, which needs the boxes to
      * align columns and tables; without them the text generator falls back to plain flowing text.
@@ -1551,10 +1555,15 @@ export type PaperFormat =
  * an ODF page style, a presentation's slides, a sheet's print setup.
  */
 export interface PageSetup {
-    /** Width in points (the page is landscape when it is wider than it is tall). */
-    width: number;
-    /** Height in points. */
-    height: number;
+    /**
+     * Width in points (the page is landscape when it is wider than it is tall). Width and height are
+     * absent where the document does not set its page (an RTF section that only numbers its pages in
+     * roman, a Word section with no `w:pgSz`) or under `ignorePageGeometry`: the section's other
+     * properties still apply, on the page the writer would use.
+     */
+    width?: number;
+    /** Height in points (absent with the width). */
+    height?: number;
     /** The margins around the body, in points. */
     margin?: { top: number; right: number; bottom: number; left: number };
     /** From the page's top edge to its header, in points. */
@@ -1574,10 +1583,10 @@ export interface PageSetup {
      */
     columns?: { count: number; gap: number; widths?: number[]; separator?: boolean };
     /**
-     * How the section numbers its pages where it numbers them other than 1, 2, 3 (Word's `w:pgNumType
-     * w:fmt`, RTF's `\pgnlcrm` and the like, an ODF page layout's `style:num-format`): a front matter's
-     * i, ii, iii. A page field in the section with no format of its own (TextMetadata.fieldFormat) prints
-     * its page in it.
+     * How the section numbers its pages (Word's `w:pgNumType w:fmt`, RTF's `\pgndec`, `\pgnlcrm` and the
+     * like, an ODF page layout's `style:num-format`): `decimal` unless it says otherwise, a front matter's
+     * i, ii, iii in `lowerRoman`. A reader that knows it writes it, decimal included. A page field in the
+     * section with no format of its own (TextMetadata.fieldFormat) prints its page in it.
      */
     pageNumberFormat?: PageNumberFormat;
 }
@@ -3449,8 +3458,9 @@ export interface BreakMetadata {
     breakType: 'column' | 'page' | 'lastRenderedPage' | 'textWrapping' | 'carriageReturn' | 'thematic' | 'section';
 
     /**
-     * On a page break that starts a section of the document (a Word section, an ODF page of another
-     * style): its number (1 for the second section) and its pages' size and margins, where they are set.
+     * On a page break that starts a section of the document (a Word or RTF section, an ODF page of another
+     * style): its number (1 for the second section) and its pages' setup (size and margins where they are
+     * set, its columns, how it numbers its pages). Always a node, whatever `includeBreakNodes` says.
      */
     section?: number;
     /** The pages of the section this break starts (see `section`). */

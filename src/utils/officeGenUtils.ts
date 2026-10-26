@@ -13,7 +13,7 @@ import { CellMetadata, EmbedMetadata, HeaderFooterMetadata, ImageMode, OfficeCon
 import { cssColorHex } from './colorUtils.js';
 import { escapeXml, stripInvalidXmlChars } from './sanitize.js';
 import { lookupTable } from './lookupUtils.js';
-import { isPageSize } from './pageLimits.js';
+import { hasPageSize } from './pageLimits.js';
 
 /**
  * Resolves `config.includeImages` - a boolean, a CLI-provided `'true'`/`'false'` string, or an
@@ -332,9 +332,9 @@ export function resolvePaper(format: string | undefined, landscape: boolean | un
     const key = String(format ?? 'auto').toLowerCase();
     let w: number, h: number;
     // (A document's page between an inch and two hundred inches each way (see isPageSize); another is A4.)
-    const own = key === 'auto' && !!setup && isPageSize(setup.width, setup.height);
+    const own = key === 'auto' && hasPageSize(setup);
     if (own) {
-        [w, h] = landscape && setup!.width < setup!.height ? [setup!.height, setup!.width] : [setup!.width, setup!.height];
+        [w, h] = landscape && setup.width < setup.height ? [setup.height, setup.width] : [setup.width, setup.height];
     } else {
         const paper = PAPER_SIZES_PT[key] ?? PAPER_SIZES_PT.a4;
         [w, h] = landscape ? [paper.h, paper.w] : [paper.w, paper.h];

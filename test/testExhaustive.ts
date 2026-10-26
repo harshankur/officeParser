@@ -987,7 +987,7 @@ async function testRtfDestinations(): Promise<void> {
 
     // A table ending a section, before the next section's header.
     const sections = await parse(String.raw`\sectd{\header \pard Head1\par}\pard Intro\par\trowd\cellx3000\cellx6000\pard\intbl A\cell B\cell\row\pard\par\sect\sectd{\header \pard Head2\par}\pard After\par`);
-    assert.deepStrictEqual(sections.content.map(shape), [['paragraph', 'Intro'], ['table', [['row', [['cell', [['paragraph', 'A']]], ['cell', [['paragraph', 'B']]]]]]], ['paragraph', 'After']], 'RTF: a table ending a section stays in the body');
+    assert.deepStrictEqual(sections.content.map(shape), [['paragraph', 'Intro'], ['table', [['row', [['cell', [['paragraph', 'A']]], ['cell', [['paragraph', 'B']]]]]]], ['break', undefined], ['paragraph', 'After']], 'RTF: a table ending a section stays in the body (the next section starting after it)');
     assert.deepStrictEqual(sections.auxiliary?.headers?.map(h => [(h.metadata as any)?.type, h.children!.map(shape)]), [['default', [['paragraph', 'Head1']]], ['default', [['paragraph', 'Head2']]]], 'RTF: the headers hold their own paragraphs only, each a part');
     // A header's own table, and a footer written inside a table cell.
     const headerTable = await parse(String.raw`\trowd\cellx3000\pard\intbl A\cell\row{\header \trowd\cellx3000\pard\intbl H\cell\row\pard Hx\par}\pard After\par`);
@@ -4592,6 +4592,8 @@ async function testXlsxShownText(): Promise<void> {
         ['1.25', '[h]:mm', '30:00'], ['1.5', '[h]:mm:ss', '36:00:00'], ['0.0625', '[mm]:ss', '90:00'], ['0.001', '[ss]', '86'], ['0.25', '[hh]:mm', '06:00'], ['-1.25', '[h]:mm', undefined],
         // Where Excel shows ####: a negative time in the 1900 date system, or past its last day.
         ['1e300', '[h]:mm', undefined], ['1e305', '[h]:mm:ss', undefined], ['2958465', '[h]:mm', '71003160:00'],
+        // (The last day runs to its midnight.)
+        ['2958465.5', '[h]:mm:ss', '71003172:00:00'], ['2958466', '[h]:mm', undefined],
         // An empty section shows nothing, `mmmmm` the month's letter, and a fill (`*x`) is a space.
         ['0', '0;-0;;@', ''], ['46296', 'mmmmm', 'O'], ['46296', 'mmmmm yy', 'O 26'],
         ['0', '_($* #,##0_);_($* (#,##0);_($* "-"_);_(@_)', '$ -'], ['1234', '_($* #,##0_);_($* (#,##0);_($* "-"_);_(@_)', '$ 1,234'],
@@ -5141,10 +5143,10 @@ async function testSheetAndSlidePages(): Promise<void> {
     assert.deepStrictEqual(back.content.filter(n => n.type === 'page').map(p => [(p.metadata as any).pageWidth, (p.metadata as any).pageHeight]), [[841.89, 595.28], [595.28, 841.89]], 'each sheet prints on its own paper, a sheet with none on A4');
     const pptx = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.pptx')), { fileType: 'pptx' } as any) as OfficeParserAST;
     const slide = pptx.metadata.pageSetup!;
-    assert.ok(slide.width > slide.height && !slide.margin, `a presentation's page is its slide's size; got ${JSON.stringify(slide)}`);
+    assert.ok(slide.width! > slide.height! && !slide.margin, `a presentation's page is its slide's size; got ${JSON.stringify(slide)}`);
     const deck = (await pptx.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
     const deckBack = await OfficeParser.parseOffice(Buffer.from(deck), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
-    assert.ok(deckBack.content.filter(n => n.type === 'page').every(p => Math.abs((p.metadata as any).pageWidth - slide.width) < 1), 'its slides print on pages of their size');
+    assert.ok(deckBack.content.filter(n => n.type === 'page').every(p => Math.abs((p.metadata as any).pageWidth - slide.width!) < 1), 'its slides print on pages of their size');
 }
 
 /**
@@ -5786,6 +5788,19 @@ async function testPageNumberFormats(): Promise<void> {
     assert.deepStrictEqual(fill(['Page ', '7'], 9, 'upperRoman'), ['Page ', 'IX'], 'the format given');
     assert.deepStrictEqual([pageNumberText(21, 'ordinalText'), pageNumberText(123, 'cardinalText'), pageNumberText(12, 'ordinal'), pageNumberText(255, 'hex'), pageNumberText(3, 'decimalDash')],
         ['twenty-first', 'one hundred twenty-three', '12th', 'FF', '- 3 -'], 'the formats written');
+    assert.deepStrictEqual([fill(['C'], 4), fill(['I'], 4), fill(['ii'], 4), fill(['Page C'], 4), fill(['x'], 9)], [['D'], ['IV'], ['iv'], ['Page D'], ['ix']],
+        'a letter alone is a roman numeral only as i, v or x, another a page in letters');
+    // Every script's digits: the number in that script's, from its zero (the mathematical digits are five
+    // sets of ten in a row, each its own zero).
+    for (let cp = 0; cp <= 0x10FFFF; cp++) {
+        if (cp >= 0xD800 && cp <= 0xDFFF) continue;
+        const ch = String.fromCodePoint(cp);
+        if (!/\p{Nd}/u.test(ch)) continue;
+        const written = [...fill([ch], 10)[0]].map(c => c.codePointAt(0)!);
+        const folded = ch.normalize('NFKC'), value = /^[0-9]$/.test(folded) ? Number(folded) : undefined;
+        assert.ok(written.length === 2 && written[0] === written[1] + 1 && cp - written[1] >= 0 && cp - written[1] <= 9 && (value === undefined || cp - written[1] === value),
+            `U+${cp.toString(16)}: 10 in its own digits; got ${written.map(c => c.toString(16))}`);
+    }
     // Through RTF: a field's switch, a section's format, and a result of no ASCII digits, page by page.
     const pagesOf = async (rtf: string) => {
         const ast = await OfficeParser.parseOffice(Buffer.from(rtf), { fileType: 'rtf' } as any) as OfficeParserAST;
@@ -5799,7 +5814,9 @@ async function testPageNumberFormats(): Promise<void> {
         ['a switch', String.raw`{\field{\*\fldinst PAGE \\* ROMAN}{\fldrslt 3}}`, '', ['Page I', 'Page II', 'Page III']],
         ['a section format', String.raw`{\field{\*\fldinst PAGE}{\fldrslt 3}}`, String.raw`\pgnlcrm`, ['Page i', 'Page ii', 'Page iii']],
         ['words', String.raw`{\field{\*\fldinst PAGE \\* CardText}{\fldrslt three}}`, '', ['Page one', 'Page two', 'Page three']],
-        ['a roman result with dashes', String.raw`{\field{\*\fldinst PAGE}{\fldrslt - iii -}}`, '', ['Page - i -', 'Page - ii -', 'Page - iii -']],
+        // (A section numbers its pages 1, 2, 3 unless it says otherwise: a result saved in roman is a page's digits.)
+        ['a roman result in a decimal section', String.raw`{\field{\*\fldinst PAGE}{\fldrslt - iii -}}`, '', ['Page - 1 -', 'Page - 2 -', 'Page - 3 -']],
+        ['a digit result in a roman section', String.raw`{\field{\*\fldinst PAGE}{\fldrslt - 3 -}}`, String.raw`\pgnucrm`, ['Page - I -', 'Page - II -', 'Page - III -']],
         ['a split result', String.raw`{\field{\*\fldinst PAGE}{\fldrslt {\b 1}{\i 1}}}`, '', ['Page 1', 'Page 2', 'Page 3']],
     ] as const) {
         const got = await pagesOf(rtf(field, section));
@@ -5824,6 +5841,92 @@ async function testPageNumberFormats(): Promise<void> {
     const odf = await OfficeParser.parseOffice(odt, { fileType: 'odt' } as any) as OfficeParserAST;
     const odfField = collectAllNodes(odf).find(n => (n.metadata as any)?.field === 'page');
     assert.ok((odfField?.metadata as any)?.fieldFormat === 'lowerLetter' && odf.metadata.pageSetup?.pageNumberFormat === 'upperRoman', `ODT: the field's and the page layout's format; got ${JSON.stringify([odfField?.metadata, odf.metadata.pageSetup])}`);
+
+    // Each page's footer number, page by page (the footers kept in their pages).
+    const footerNumbers = async (ast: OfficeParserAST) => {
+        const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+        const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false, keepHeadersAndFootersInPages: true } } as any) as OfficeParserAST;
+        return back.content.filter(n => n.type === 'page').map(p => /Page (\S+)/.exec(collectAllNodes({ ...back, content: [p] } as OfficeParserAST).filter(n => n.type === 'text').map(n => n.text).join(' '))?.[1]);
+    };
+    // A front matter numbered i, ii, then a body in digits (Word's default, said by no w:pgNumType): each
+    // page in its section's numbers, the body's footer its own or the front matter's carried on (saved
+    // `i`), with or without includeBreakNodes (a section's start is a node either way).
+    const W_FULL = `${W_NS} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`;
+    const footerXml = (saved: string) => `<?xml version="1.0"?><w:ftr ${W_FULL}><w:p><w:r><w:t xml:space="preserve">Page </w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>${saved}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:ftr>`;
+    const lines = (label: string, n: number) => Array.from({ length: n }, (_, i) => `<w:p><w:r><w:t>${label} line ${i}.</w:t></w:r></w:p>`).join('');
+    const pg = '<w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>';
+    const sectioned = (ownBodyFooter: boolean) => Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/><Override PartName="/word/footer2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/_rels/document.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdF1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/><Relationship Id="rIdF2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer2.xml"/></Relationships>'),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${W_FULL}><w:body>${lines('Front', 70)}<w:p><w:pPr><w:sectPr><w:footerReference w:type="default" r:id="rIdF1"/>${pg}<w:pgNumType w:fmt="lowerRoman"/></w:sectPr></w:pPr></w:p>${lines('Body', 100)}<w:sectPr>${ownBodyFooter ? '<w:footerReference w:type="default" r:id="rIdF2"/>' : ''}${pg}</w:sectPr></w:body></w:document>`),
+        'word/footer1.xml': strToU8(footerXml('i')),
+        'word/footer2.xml': strToU8(footerXml('3')),
+    }));
+    const frontThenBody = (got: (string | undefined)[]) => {
+        const front = got.findIndex(t => !/^[ivx]+$/.test(t ?? ''));
+        return front >= 2 && got.slice(0, front).every((t, i) => t === pageNumberText(i + 1, 'lowerRoman')) && got.slice(front).every((t, i) => t === String(front + i + 1));
+    };
+    for (const own of [true, false]) {
+        for (const includeBreakNodes of [false, true]) {
+            const ast = await OfficeParser.parseOffice(sectioned(own), { fileType: 'docx', includeBreakNodes } as any) as OfficeParserAST;
+            const breaks = ast.content.filter(n => n.type === 'break' && (n.metadata as any)?.section === 1);
+            assert.ok(breaks.length === 1 && (breaks[0].metadata as any).pageSetup?.pageNumberFormat === 'decimal', `DOCX: the body's section starts in a node, numbering its pages in digits (includeBreakNodes ${includeBreakNodes}); got ${JSON.stringify(breaks.map(b => b.metadata))}`);
+            const got = await footerNumbers(ast);
+            assert.ok(frontThenBody(got), `DOCX: the front matter in roman, the body in digits (its own footer ${own}, includeBreakNodes ${includeBreakNodes}); got ${JSON.stringify(got)}`);
+        }
+    }
+    // The same through RTF (`\pgnlcrm`, then `\sectd` back to digits), the body's footer carried on.
+    const rtfLines = (label: string, n: number) => Array.from({ length: n }, (_, i) => `${label} line ${i}.\\par `).join('');
+    const rtfSectioned = String.raw`{\rtf1\ansi{\fonttbl{\f0 Times;}}\sectd\pgnlcrm{\footer Page {\field{\*\fldinst PAGE}{\fldrslt i}}\par}` + rtfLines('Front', 70) + String.raw`\sect\sectd ` + rtfLines('Body', 100) + '}';
+    for (const includeBreakNodes of [false, true]) {
+        const got = await footerNumbers(await OfficeParser.parseOffice(Buffer.from(rtfSectioned), { fileType: 'rtf', includeBreakNodes } as any) as OfficeParserAST);
+        assert.ok(frontThenBody(got), `RTF: the front matter in roman, the body in digits (includeBreakNodes ${includeBreakNodes}); got ${JSON.stringify(got)}`);
+    }
+    // A continuous section (`\sbknone`) in upper roman: the pages that start in it are numbered in it.
+    const continuous = String.raw`{\rtf1\ansi{\fonttbl{\f0 Times;}}\sectd{\footer Page {\field{\*\fldinst PAGE}{\fldrslt 1}}\par}` + rtfLines('One', 20) + String.raw`\sect\sectd\sbknone\pgnucrm{\footer Page {\field{\*\fldinst PAGE}{\fldrslt II}}\par}` + rtfLines('Two', 120) + '}';
+    const continuousGot = await footerNumbers(await OfficeParser.parseOffice(Buffer.from(continuous), { fileType: 'rtf' } as any) as OfficeParserAST);
+    assert.ok(continuousGot.length >= 3 && continuousGot[0] === '1' && continuousGot.slice(1).every((t, i) => t === pageNumberText(i + 2, 'upperRoman')), `RTF: a continuous section's own numbers from its first page; got ${JSON.stringify(continuousGot)}`);
+
+    // A section's numbers and title page are its own, not its page: a section that sets no page has a
+    // setup without one (RTF set its Letter defaults), and ignorePageGeometry keeps them.
+    const rtfSetup = async (words: string, config: any = {}) => (await OfficeParser.parseOffice(Buffer.from(`{\\rtf1\\ansi${words} Text\\par}`), { fileType: 'rtf', ...config } as any) as OfficeParserAST).metadata.pageSetup;
+    assert.deepStrictEqual(await rtfSetup('\\pgnlcrm'), { pageNumberFormat: 'lowerRoman' }, 'RTF: a section in roman sets no page');
+    assert.deepStrictEqual(await rtfSetup('\\titlepg'), { differentFirstPage: true, pageNumberFormat: 'decimal' }, 'RTF: a title page sets no page');
+    const stated = await rtfSetup('\\paperw11906\\paperh16838\\pgnlcrm');
+    assert.ok(stated?.width === 595.3 && stated.pageNumberFormat === 'lowerRoman', `RTF: a stated page with its numbers; got ${JSON.stringify(stated)}`);
+    assert.deepStrictEqual(await rtfSetup('\\paperw11906\\paperh16838\\cols2\\pgnlcrm', { ignorePageGeometry: true }), { pageNumberFormat: 'lowerRoman' }, 'RTF: ignorePageGeometry keeps the numbers, not the page or columns');
+    const romanPdf = (await (await OfficeParser.parseOffice(Buffer.from('{\\rtf1\\ansi\\pgnlcrm Text\\par}'), { fileType: 'rtf' } as any) as OfficeParserAST).to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const romanBack = await OfficeParser.parseOffice(Buffer.from(romanPdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.strictEqual(Math.round((romanBack.content[0].metadata as any).pageWidth), 595, 'RTF: a section in roman is printed on the default paper, not on Letter');
+    const wordSetup = async (sectPr: string, config: any = {}) => (await OfficeParser.parseOffice(Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${W_NS}><w:body><w:p><w:r><w:t>Text</w:t></w:r></w:p><w:sectPr>${sectPr}</w:sectPr></w:body></w:document>`),
+    })), { fileType: 'docx', ...config } as any) as OfficeParserAST).metadata.pageSetup;
+    assert.deepStrictEqual(await wordSetup('<w:pgNumType w:fmt="upperRoman"/><w:titlePg/>'), { differentFirstPage: true, pageNumberFormat: 'upperRoman' }, 'Word: a section of no w:pgSz keeps its numbers and title page');
+    assert.deepStrictEqual(await wordSetup(`${pg}<w:pgNumType w:fmt="lowerRoman"/>`, { ignorePageGeometry: true }), { pageNumberFormat: 'lowerRoman' }, 'Word: ignorePageGeometry keeps a section\'s numbers');
+    // ODF: a page style of its own starts a section in a node by default.
+    const ODF_STYLE_NS = `${ODF_NS} xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"`;
+    const odtSections = Buffer.from(zipSync({
+        mimetype: strToU8('application/vnd.oasis.opendocument.text'),
+        'styles.xml': strToU8(`<?xml version="1.0"?><office:document-styles ${ODF_STYLE_NS}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" style:num-format="i"/></style:page-layout><style:page-layout style:name="pm2"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/><style:master-page style:name="Body" style:page-layout-name="pm2"/></office:master-styles></office:document-styles>`),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${ODF_STYLE_NS}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:master-page-name="Body"/></office:automatic-styles><office:body><office:text><text:p>Front</text:p><text:p text:style-name="P1">Body</text:p></office:text></office:body></office:document-content>`),
+    }));
+    const odtRead = await OfficeParser.parseOffice(odtSections, { fileType: 'odt' } as any) as OfficeParserAST;
+    const odtBreaks = odtRead.content.filter(n => n.type === 'break').map(n => n.metadata as any);
+    assert.ok(odtRead.metadata.pageSetup?.pageNumberFormat === 'lowerRoman' && odtBreaks.length === 1 && odtBreaks[0].section === 1 && odtBreaks[0].pageSetup?.pageNumberFormat === 'decimal',
+        `ODT: the second page style's section is a node, numbered in digits; got ${JSON.stringify([odtRead.metadata.pageSetup, odtBreaks])}`);
+    // A document of one section has no section break.
+    assert.ok(!(await OfficeParser.parseOffice(Buffer.from('{\\rtf1\\ansi One\\par Two\\par}'), { fileType: 'rtf' } as any) as OfficeParserAST).content.some(n => n.type === 'break'), 'RTF: one section, no break');
+
+    // A field ends where anything else comes between its runs: two page numbers on two lines are two.
+    const twoFields = { type: 'docx', metadata: {}, attachments: [], content: Array.from({ length: 80 }, (_, i) => ({ type: 'paragraph', children: [{ type: 'text', text: `Line ${i}` }] })),
+        auxiliary: { footers: [{ type: 'footer', metadata: { type: 'default' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'Page ' }, { type: 'text', text: '1', metadata: { field: 'page' } }, { type: 'break', metadata: { breakType: 'textWrapping' } }, { type: 'text', text: '1', metadata: { field: 'page' } }] }] }] } } as any;
+    const twoPdf = (await OfficeGenerator.generate(twoFields, 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const twoBack = await OfficeParser.parseOffice(Buffer.from(twoPdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false, keepHeadersAndFootersInPages: true } } as any) as OfficeParserAST;
+    const secondPage = collectAllNodes({ ...twoBack, content: [twoBack.content.filter(n => n.type === 'page')[1]] } as OfficeParserAST).filter(n => n.type === 'text').map(n => (n.text || '').trim()).filter(Boolean);
+    assert.ok(secondPage.join(' ').endsWith('Page 2 2'), `a page field, a line break and another: each page's number twice; got ${JSON.stringify(secondPage.slice(-4))}`);
 }
 
 /**
@@ -6465,9 +6568,10 @@ async function testColumns(): Promise<void> {
 
     // Pages and columns no page holds: the RTF reader holds them as Word's does, and every writer keeps the text.
     const rtfRead = await OfficeParser.parseOffice(Buffer.from('{\\rtf1\\ansi\\sectd\\cols2\\colsx2000000 Hello world\\par}'), { fileType: 'rtf' } as any) as OfficeParserAST;
-    assert.ok((rtfRead.metadata.pageSetup?.columns?.gap ?? Infinity) <= rtfRead.metadata.pageSetup!.width / 4, `RTF: a column gap is at most a quarter of the page; got ${JSON.stringify(rtfRead.metadata.pageSetup)}`);
+    // (A section that states no page is on RTF's Letter page: its gap at most a quarter of 612 points, and no page of its own.)
+    assert.ok((rtfRead.metadata.pageSetup?.columns?.gap ?? Infinity) <= 612 / 4 && rtfRead.metadata.pageSetup?.width === undefined, `RTF: a column gap is at most a quarter of the page; got ${JSON.stringify(rtfRead.metadata.pageSetup)}`);
     const rtfHuge = await OfficeParser.parseOffice(Buffer.from('{\\rtf1\\ansi\\paperw2147483647\\paperh1 Text\\par}'), { fileType: 'rtf' } as any) as OfficeParserAST;
-    assert.strictEqual(rtfHuge.metadata.pageSetup, undefined, 'RTF: a page no page is (two billion twips by one) is none');
+    assert.deepStrictEqual(rtfHuge.metadata.pageSetup, { pageNumberFormat: 'decimal' }, 'RTF: a page no page is (two billion twips by one) is none (its section numbering its pages 1, 2, 3)');
     const absurd = { type: 'docx', metadata: { pageSetup: { ...page, columns: { count: 1e9, gap: 1e9, widths: [1e9, -5] } } }, attachments: [],
         content: [{ type: 'paragraph', children: [{ type: 'text', text: 'Hello absurd' }] }, { type: 'break', metadata: { breakType: 'page', section: 1, pageSetup: { width: 1e12, height: 0.05, margin: { top: 1e9, right: -1, bottom: NaN, left: 5 }, headerDistance: 1e9, columns: { count: 3, gap: 2e6 } } } }, { type: 'paragraph', children: [{ type: 'text', text: 'After absurd' }] }] } as any;
     for (const format of ['docx', 'odt', 'rtf'] as const) {

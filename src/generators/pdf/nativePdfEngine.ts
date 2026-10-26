@@ -19,7 +19,7 @@
 
 import { fillPageNumber } from '../../utils/pageNumbers.js';
 import { EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, SheetMetadata, TextAlignment, TextFormatting, BreakMetadata, ChartData, HeaderFooterMetadata, NodeBounds, ShapeMetadata, SlideMetadata, PageNumberFormat } from '../../types.js';
-import { isPageSize } from '../../utils/pageLimits.js';
+import { hasPageSize } from '../../utils/pageLimits.js';
 import { getAbortError, getOfficeError } from '../../utils/errorUtils.js';
 import { documentLanguage, embedUrl, isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize, writableSpacing } from '../../utils/officeGenUtils.js';
 import { decodeBmp, decodeGif, encodePng } from '../../utils/rasterUtils.js';
@@ -453,6 +453,7 @@ class NativeLayout {
         for (const a of this.ast.attachments || []) {
             if (a.name && !this.attachmentsByName.has(a.name)) this.attachmentsByName.set(a.name, a);
         }
+        this.sectionSetups.set(0, this.ast.metadata?.pageSetup);
         this.newPage();
     }
 
@@ -630,11 +631,16 @@ class NativeLayout {
      * page, or on this one when nothing is drawn on it yet (a page break before the section's own).
      */
     private startSection(section: number, setup: PageSetup | undefined): void {
-        this.section = section;
-        this.sectionSetups.set(section, setup);
+        this.noteSection(section, setup);
         this.startingSection = true;
         this.differentFirstPage = setup?.differentFirstPage;
         this.onPagesOf(setup, true);
+    }
+
+    /** The section the text is in from here, and its setup (how its pages are numbered), for its pages. */
+    private noteSection(section: number, setup: PageSetup | undefined): void {
+        this.section = section;
+        this.sectionSetups.set(section, setup);
     }
 
     /**
@@ -644,7 +650,8 @@ class NativeLayout {
      */
     private onPagesOf(setup: PageSetup | undefined, always: boolean, orDocument = false): void {
         const before = { w: this.pageW, h: this.pageH, margin: this.margin };
-        const pages = setup ?? (orDocument ? this.ast.metadata?.pageSetup : undefined);
+        // (A section that sets no page is on the document's: its size, margins and header distances.)
+        const pages = (setup && setup.width === undefined ? this.ast.metadata?.pageSetup ?? setup : setup) ?? (orDocument ? this.ast.metadata?.pageSetup : undefined);
         const next = this.sectionPage && (setup || orDocument) ? this.sectionPage(pages) : undefined;
         const fit = next ? this.withFurnitureRoom(next.margin, pages?.headerDistance, pages?.footerDistance) : undefined;
         const nextMargin = fit ? fit.margin : before.margin;
@@ -936,7 +943,10 @@ class NativeLayout {
         try { await drawAll(); } finally { this.page.pushOperators(this.lib.popGraphicsState()); }
     }
 
-    /** Each section's page, as its break gave it (the first section's is the document's): its page number format. */
+    /**
+     * Each section's setup, as its break gave it, the first section's the document's (and a document with
+     * no section breaks all one section): its page number format.
+     */
     private sectionSetups = new Map<number, PageSetup | undefined>();
     /** The format the page whose header and footer are being drawn numbers its pages in (its section's). */
     private fieldFormat?: PageNumberFormat;
@@ -1093,7 +1103,7 @@ class NativeLayout {
         try {
             for (const [index, record] of this.pageRecords.entries()) {
                 this.fieldPage = index + 1;
-                this.fieldFormat = (this.sectionSetups.has(record.section) ? this.sectionSetups.get(record.section) : record.section === 0 ? this.ast.metadata?.pageSetup : undefined)?.pageNumberFormat;
+                this.fieldFormat = this.sectionSetups.get(record.section)?.pageNumberFormat;
                 this.pageW = record.w; this.pageH = record.h; this.margin = record.margin;
                 const header = choose(headers, record, index + 1), footer = choose(footers, record, index + 1);
                 if (header) {
@@ -1651,13 +1661,17 @@ class NativeLayout {
             const meta = n.metadata as { field?: string; fieldFormat?: PageNumberFormat; link?: unknown } | undefined;
             const kind = meta?.field;
             const filled = typeof override !== 'string' && ((kind === 'page' && this.fieldPage !== undefined) || (kind === 'pages' && this.fieldPages !== undefined));
-            if (n.type === 'text' && (!filled || kind !== field?.kind)) endField();
+            // (A field's runs are the same field's text runs in a row: anything else between, a picture, a
+            // break, another field, ends it; an empty run that draws nothing does not.)
+            const sameField = filled && n.type === 'text' && kind === field?.kind;
+            if (!isRoot && !sameField && !(n.type === 'text' && !text && !n.notes?.length)) endField();
             if (filled && n.type === 'text') {
                 const own = meta?.link;
                 const run: Run = { text: text ?? '', fmt, link: typeof own === 'string' && own ? own : inheritedLink };
                 field ??= { kind: kind!, format: meta?.fieldFormat, runs: [] };
                 field.runs.push(run);
                 out.push(run);
+                if (!isRoot) this.markAnchors(n);
                 cite(n, fmt);
                 return;
             }
@@ -2547,7 +2561,7 @@ class NativeLayout {
                 await this.setColumns(meta.pageSetup?.columns, true);
                 return;
             }
-            if (typeof meta?.section === 'number') this.section = meta.section;
+            if (typeof meta?.section === 'number') this.noteSection(meta.section, meta.pageSetup);
             await this.setColumns(meta?.pageSetup?.columns, true);
             return;
         }
@@ -3390,17 +3404,18 @@ async function drawDocument(pdf: any, lib: any, fonts: Fonts, customFonts: boole
         const side = (v: string | number | undefined, own: number | undefined) => unset(v) && auto && own !== undefined ? own : toPoints(v, mdef);
         return { top: side(pc.margin?.top, setup?.margin?.top), right: side(pc.margin?.right, setup?.margin?.right), bottom: side(pc.margin?.bottom, setup?.margin?.bottom), left: side(pc.margin?.left, setup?.margin?.left) };
     };
-    // A section's page: its own size (turned to landscape when the caller asks), its own margins. Held as
-    // the readers hold a page: a size that is no page (an inch to two hundred inches each way) is the
+    // A section's page: its own size (turned to landscape when the caller asks), its own margins; one that
+    // sets no page (a section that only numbers its pages its own way) is on the document's. Held as the
+    // readers hold a page: a size that is no page (an inch to two hundred inches each way) is the
     // document's, a margin at most a third of the page: a section of a hundred million points by a
     // twentieth of one lost its text.
-    const isPage = (setup: PageSetup | undefined): setup is PageSetup => !!setup && isPageSize(setup.width, setup.height);
+    const isPage = hasPageSize;
     const documentPage = auto && isPage(ast.metadata?.pageSetup) ? ast.metadata!.pageSetup! : undefined;
     const sectionPage = (setup: PageSetup | undefined) => {
         const own = isPage(setup);
         let pw = own ? setup.width : documentPage?.width ?? w, ph = own ? setup.height : documentPage?.height ?? h;
         if (own && pc.landscape && pw < ph) [pw, ph] = [ph, pw];
-        const most = Math.min(pw, ph) / 3, given = marginFor(setup);
+        const most = Math.min(pw, ph) / 3, given = marginFor(own || setup?.width !== undefined ? setup : documentPage);
         const held = (v: number) => Math.min(Number.isFinite(v) && v > 0 ? v : 0, most);
         return { w: pw, h: ph, margin: { top: held(given.top), right: held(given.right), bottom: held(given.bottom), left: held(given.left) } };
     };

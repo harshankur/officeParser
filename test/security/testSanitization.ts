@@ -2742,7 +2742,7 @@ async function parserHardeningTests() {
     await timed('rtf: 20,000 column widths of a hundred million twips are read', () => OfficeParser.parseOffice(Buffer.from('{\\rtf1\\ansi\\sectd\\cols16' + '\\colno3\\colw99999999'.repeat(n(20_000)) + ' x\\par}'), { fileType: 'rtf' } as any));
     const heldRtf = await OfficeParser.parseOffice(Buffer.from('{\\rtf1\\ansi\\paperw12240\\paperh15840\\margl99999999\\sectd\\cols16\\colsx99999999 x\\par}'), { fileType: 'rtf' } as any) as OfficeParserAST;
     const held = heldRtf.metadata.pageSetup!;
-    check('rtf: margins and a column gap no page holds are held to it', held.margin!.left <= Math.min(held.width, held.height) / 3 && held.columns!.gap <= held.width / 4, JSON.stringify(held));
+    check('rtf: margins and a column gap no page holds are held to it', held.margin!.left <= Math.min(held.width!, held.height!) / 3 && held.columns!.gap <= held.width! / 4, JSON.stringify(held));
     // Footnotes are measured once each and given a page as they are cited: many of them, each cited
     // once, cost in proportion; a stylesheet of many rules over many elements too (see the HTML cases).
     const footnoted = () => astWith(Array.from({ length: n(3000) }, (_, i) => ({ type: 'paragraph', children: [{ type: 'text', text: `Cited ${i}`, notes: [{ type: 'note', metadata: { noteType: i % 3 ? 'footnote' : 'endnote' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: `Note ${i} text.` }] }] }] }] })));

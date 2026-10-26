@@ -214,7 +214,8 @@ const MONTH_LETTERS = 'JFMAMJJASOND';
 function elapsedTime(days: number, code: string, date1904: boolean): string | undefined | null {
     const match = /^\[(h+|m+|s+)\]((?::mm)?(?::ss)?)$/i.exec(code);
     if (!match) return null;
-    if ((days < 0 && !date1904) || Math.abs(days) > (date1904 ? LAST_DAY_1904 : LAST_DAY_1900)) return undefined;
+    // (The last day runs to its midnight: its hours are shown.)
+    if ((days < 0 && !date1904) || Math.abs(days) >= (date1904 ? LAST_DAY_1904 : LAST_DAY_1900) + 1) return undefined;
     const unit = match[1][0].toLowerCase(), rest = match[2].toLowerCase();
     if (!(unit === 'h' ? ['', ':mm', ':mm:ss'] : unit === 'm' ? ['', ':ss'] : ['']).includes(rest)) return null;
     const seconds = Math.round(Math.abs(days) * 86400);

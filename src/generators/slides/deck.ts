@@ -417,7 +417,7 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
         const sizes = new Map<string, number>();
         for (const n of nodes) { const m = n.metadata as { pageWidth?: number; pageHeight?: number } | undefined; if (m?.pageWidth && m.pageHeight) { const k = `${Math.round(m.pageWidth)}x${Math.round(m.pageHeight)}`; sizes.set(k, (sizes.get(k) ?? 0) + 1); } }
         const common = [...sizes].sort((a, b) => b[1] - a[1])[0]?.[0];
-        const [width, height] = isSlides && metadata.pageSetup ? [metadata.pageSetup.width, metadata.pageSetup.height]
+        const [width, height] = isSlides && metadata.pageSetup?.width && metadata.pageSetup.height ? [metadata.pageSetup.width, metadata.pageSetup.height]
             : common ? common.split('x').map(Number) as [number, number] : [metadata.pageSetup?.width ?? FLOW_W, metadata.pageSetup?.height ?? FLOW_H];
         const slides: DeckSlide[] = [];
         const printed = new Set<number>();

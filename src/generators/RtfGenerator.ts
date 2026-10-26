@@ -1,5 +1,5 @@
 import { BreakMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, IndentationMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphMetadata, TextMetadata } from '../types.js';
-import { isPageSize, MAX_PAGE_PT } from '../utils/pageLimits.js';
+import { hasPageSize, MAX_PAGE_PT, type SizedPageSetup } from '../utils/pageLimits.js';
 import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
@@ -693,8 +693,8 @@ const twips = (pt: number) => Number.isFinite(pt) ? Math.max(0, Math.min(MAX_PAG
  * height: a page of a hundred million points by a twentieth of
  * one lost its text.
  */
-function heldPage(setup: PageSetup | undefined): PageSetup | undefined {
-    if (!setup || !isPageSize(setup.width, setup.height)) return undefined;
+function heldPage(setup: PageSetup | undefined): SizedPageSetup | undefined {
+    if (!hasPageSize(setup)) return undefined;
     const most = Math.min(setup.width, setup.height) / 3;
     const held = (v: number | undefined) => Math.min(Number.isFinite(v) && v! > 0 ? v! : 0, most);
     const m = setup.margin;

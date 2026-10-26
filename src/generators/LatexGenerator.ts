@@ -298,7 +298,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
      */
     private orientationSwitch(setup: PageSetup | undefined): { close: string; open: string } {
         const turned = this.turnedOf(setup);
-        if (turned === undefined || !setup) return { close: '', open: '' };
+        if (turned === undefined || !setup?.width || !setup.height) return { close: '', open: '' };
         const cfg = this.config.texConfig;
         const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup, cfg.margin);
         const [long, short] = [Math.max(setup.width, setup.height), Math.min(setup.width, setup.height)];
@@ -313,7 +313,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     }
     /** Whether a section's pages are turned from the document's (see orientationSwitch), or undefined where none can be. */
     private turnedOf(setup: PageSetup | undefined): boolean | undefined {
-        if (this.beamer || !setup || !(setup.width > 0 && setup.height > 0)) return undefined;
+        // (A section that sets no page is on the document's: not turned.)
+        if (this.beamer || !setup?.width || !setup.height || !(setup.width > 0 && setup.height > 0)) return undefined;
         const cfg = this.config.texConfig;
         if (String(cfg.format ?? 'auto').toLowerCase() !== 'auto') return undefined;
         return (setup.width > setup.height) !== resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup, cfg.margin).landscape;

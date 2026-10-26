@@ -1602,43 +1602,48 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
     const sectionEnds = new Map<Element, number>();
 
     /** A section's pages (see PageSetup): `w:pgSz` and `w:pgMar` in twips. Undefined without a size. */
+    // A section's setup: how it numbers its pages and whether its first page has a header of its own
+    // always, its page (size, margins, columns) where it states one and geometry is wanted.
     const pageSetupOf = (sectPr: Element | undefined): PageSetup | undefined => {
         if (!sectPr) return undefined;
+        const setup: PageSetup = {};
+        if (isOn(getDirectChildren(sectPr, "w:titlePg")[0])) setup.differentFirstPage = true;
+        // How it numbers its pages (`w:pgNumType w:fmt`: lowerRoman for front matter; decimal without one).
+        const pageNumberFormat = wordPageNumberFormat(getDirectChildren(sectPr, "w:pgNumType")[0]?.getAttribute("w:fmt"));
+        if (pageNumberFormat) setup.pageNumberFormat = pageNumberFormat;
+        if (config.ignorePageGeometry) return setup;
         const twips = (element: Element | undefined, name: string): number | undefined => {
             const v = Number(element?.getAttribute(name));
             return element?.getAttribute(name) && Number.isFinite(v) ? Math.abs(v) / 20 : undefined;
         };
         const size = getDirectChildren(sectPr, "w:pgSz")[0];
         let width = twips(size, "w:w"), height = twips(size, "w:h");
-        if (!width || !height || width > MAX_PAGE_PT || height > MAX_PAGE_PT) return undefined;
+        const sized = !!width && !!height && width <= MAX_PAGE_PT && height <= MAX_PAGE_PT;
         // A landscape page given in portrait's order is turned, as Word turns it.
-        if (size.getAttribute("w:orient") === 'landscape' && width < height) [width, height] = [height, width];
-        const setup: PageSetup = { width, height };
-        if (isOn(getDirectChildren(sectPr, "w:titlePg")[0])) setup.differentFirstPage = true;
+        if (sized && size.getAttribute("w:orient") === 'landscape' && width! < height!) [width, height] = [height, width];
+        if (sized) { setup.width = width; setup.height = height; }
         const mar = getDirectChildren(sectPr, "w:pgMar")[0];
-        if (mar) {
+        if (sized && mar) {
             const [top, right, bottom, left] = ["w:top", "w:right", "w:bottom", "w:left"].map(name => Math.min(twips(mar, name) ?? 72, Math.min(width!, height!) / 3));
             setup.margin = { top, right, bottom, left };
             const header = twips(mar, "w:header"), footer = twips(mar, "w:footer");
-            if (header !== undefined) setup.headerDistance = Math.min(header, height / 3);
-            if (footer !== undefined) setup.footerDistance = Math.min(footer, height / 3);
+            if (header !== undefined) setup.headerDistance = Math.min(header, height! / 3);
+            if (footer !== undefined) setup.footerDistance = Math.min(footer, height! / 3);
         }
-        // Its columns (`w:cols`): their number and gap, each column's width where they differ, a line between.
+        // Its columns (`w:cols`): their number and gap, each column's width where they differ, a line
+        // between (on Word's own Letter page where the section states none).
         const cols = getDirectChildren(sectPr, "w:cols")[0];
         const own = cols ? getDirectChildren(cols, "w:col") : [];
         const count = Math.min(16, Math.max(1, Math.round(Number(cols?.getAttribute("w:num")) || 0) || own.length || 1));
         if (cols && count > 1) {
             // (The gap: the columns' own where they give none together, as LibreOffice writes unequal columns.)
-            const columns: NonNullable<PageSetup['columns']> = { count, gap: Math.min(twips(cols, "w:space") ?? (own.length ? twips(own[0], "w:space") : undefined) ?? 36, width / 4) };
+            const columns: NonNullable<PageSetup['columns']> = { count, gap: Math.min(twips(cols, "w:space") ?? (own.length ? twips(own[0], "w:space") : undefined) ?? 36, (sized ? width! : 612) / 4) };
             const widths = cols.getAttribute("w:equalWidth") === '0' || cols.getAttribute("w:equalWidth") === 'false' ? own.map(c => twips(c, "w:w") ?? 0) : [];
             if (widths.length === count && widths.every(w => w > 0)) columns.widths = widths;
             const sep = cols.getAttribute("w:sep");
             if (sep && !['false', '0', 'off'].includes(sep)) columns.separator = true;
             setup.columns = columns;
         }
-        // How it numbers its pages (`w:pgNumType w:fmt`: lowerRoman for front matter).
-        const pageNumberFormat = wordPageNumberFormat(getDirectChildren(sectPr, "w:pgNumType")[0]?.getAttribute("w:fmt"));
-        if (pageNumberFormat) setup.pageNumberFormat = pageNumberFormat;
         return setup;
     };
 
@@ -1685,10 +1690,10 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 // The paragraph ends a section: the next starts on a new page (unless it runs on, a
                 // continuous section), with pages of its own.
                 const ended = sectionEnds.get(child);
-                if (ended !== undefined && config.includeBreakNodes && ended + 1 < sections.length) {
+                if (ended !== undefined && ended + 1 < sections.length) {
                     const next = sections[ended + 1];
                     const kind = getDirectChildren(next, "w:type")[0]?.getAttribute("w:val");
-                    const pageSetup = config.ignorePageGeometry ? undefined : pageSetupOf(next);
+                    const pageSetup = pageSetupOf(next);
                     // A continuous section runs on on the same page (as two columns under a title do).
                     const breakType = kind === 'continuous' || kind === 'nextColumn' ? 'section' : 'page';
                     out.push({ type: 'break', text: '', metadata: { breakType, section: ended + 1, ...(pageSetup ? { pageSetup } : {}) } as BreakMetadata });
@@ -2018,7 +2023,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 else if (parent !== body) continue;
                 sections.push(sectPr);
             }
-            const first = config.ignorePageGeometry ? undefined : pageSetupOf(sections[0]);
+            const first = pageSetupOf(sections[0]);
             if (first) metadata.pageSetup = first;
             await readHeadersAndFooters(file.path);
             await readPart(file.path, body, () => readBlocks(body, documentContent, content));

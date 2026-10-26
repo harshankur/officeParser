@@ -181,7 +181,7 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
             const setup = this.ast.metadata?.pageSetup;
             const auto = String(pdfConfig.format ?? 'auto').toLowerCase() === 'auto' && !pdfConfig.width && !pdfConfig.height;
             let autoSize: { width: string; height: string } | undefined;
-            if (auto && setup) {
+            if (auto && setup?.width && setup.height) {
                 const [w, h] = pdfConfig.landscape && setup.width < setup.height ? [setup.height, setup.width] : [setup.width, setup.height];
                 autoSize = { width: `${+(w / 72).toFixed(4)}in`, height: `${+(h / 72).toFixed(4)}in` };
             }

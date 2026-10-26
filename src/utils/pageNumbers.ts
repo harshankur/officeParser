@@ -64,9 +64,13 @@ export function fieldSwitchFormat(instruction: string): PageNumberFormat | undef
     return undefined;
 }
 
-/** A Word section's page number format (`w:pgNumType w:fmt`), where it is one of these and not decimal. */
+/**
+ * A Word section's page number format (`w:pgNumType w:fmt`): decimal where it gives none, undefined for
+ * one of none of these.
+ */
 export function wordPageNumberFormat(fmt: string | null | undefined): PageNumberFormat | undefined {
     switch (fmt) {
+        case null: case undefined: case '': case 'decimal': return 'decimal';
         case 'lowerRoman': case 'upperRoman': case 'lowerLetter': case 'upperLetter': case 'ordinal': case 'cardinalText': case 'ordinalText': case 'hex':
             return fmt;
         case 'numberInDash': return 'decimalDash';
@@ -74,10 +78,13 @@ export function wordPageNumberFormat(fmt: string | null | undefined): PageNumber
     }
 }
 
-/** An ODF number format (`style:num-format`: `1`, `i`, `I`, `a`, `A`), where it is one of these. */
+/**
+ * An ODF number format (`style:num-format`: `1`, `i`, `I`, `a`, `A`): decimal where it gives none,
+ * undefined for one of none of these.
+ */
 export function odfPageNumberFormat(numFormat: string | null | undefined): PageNumberFormat | undefined {
     switch (numFormat) {
-        case '1': return 'decimal';
+        case null: case undefined: case '': case '1': return 'decimal';
         case 'i': return 'lowerRoman';
         case 'I': return 'upperRoman';
         case 'a': return 'lowerLetter';
@@ -95,7 +102,8 @@ const ROMAN = /^m{0,4}(cm|cd|d?c{0,3})(xc|xl|l?x{0,3})(ix|iv|v?i{0,3})$/i;
  * in. The saved number is found in the runs as a whole (a number saved in two looks is one number), and
  * the new one takes its place in the run its first character was in; what is around it stays (`- 3 -`,
  * `Page`). Read from the saved text, a number is digits of any script (written back in that script), a
- * roman numeral (in its case), or a letter repeated (Word's `ALPHABETIC`: 27 is `AA`); a result saved
+ * roman numeral (in its case; a letter alone only as i, v or x), or a letter repeated (Word's
+ * `ALPHABETIC`: 27 is `AA`); a result saved
  * empty is the number, and one of none of these (`three`, a format the field has and the reader did not
  * read) is replaced whole by the number in digits: the right page in another form, not the saved page on
  * every page.
@@ -106,24 +114,31 @@ export function fillPageNumber(texts: string[], value: number, format: PageNumbe
     const digits = /\p{Nd}+/u.exec(saved);
     if (digits) {
         start = digits.index; end = start + digits[0].length;
-        // The script's zero: its digits are ten in a row from it (Unicode's Nd blocks).
-        let cp = digits[0].codePointAt(0)!, first = cp;
-        while (first > cp - 9 && /\p{Nd}/u.test(String.fromCodePoint(first - 1))) first--;
+        // The script's zero: Unicode's digits come in whole runs of ten from a zero, some runs one after
+        // another (the mathematical digits, five), so the zero is ten in a row back from the stretch's start.
+        const cp = digits[0].codePointAt(0)!;
+        let first = cp;
+        while (first > cp - 64 && /\p{Nd}/u.test(String.fromCodePoint(first - 1))) first--;
         zero = cp - ((cp - first) % 10);
         if (zero === 0x30) zero = undefined;
     } else {
         for (const word of saved.matchAll(/\p{L}+/gu)) {
             const w = word[0];
+            // (A letter alone is a roman numeral only as i, v or x, a front matter's first pages: c, d, l
+            // and m are far likelier pages 3, 4, 12 and 13 in letters than 100, 500, 50 and 1000.)
+            if (w.length === 1 && !/[ivx]/i.test(w)) continue;
             if (ROMAN.test(w) && (w === w.toLowerCase() || w === w.toUpperCase())) {
                 start = word.index!; end = start + w.length;
                 inferred = w === w.toLowerCase() ? 'lowerRoman' : 'upperRoman';
                 break;
             }
         }
-        const trimmed = saved.trim();
-        if (start < 0 && /^([A-Za-z])\1*$/.test(trimmed)) {
-            start = saved.indexOf(trimmed); end = start + trimmed.length;
-            inferred = trimmed === trimmed.toLowerCase() ? 'lowerLetter' : 'upperLetter';
+        for (const word of start < 0 ? saved.matchAll(/\p{L}+/gu) : []) {
+            const w = word[0];
+            if (!/^([A-Za-z])\1*$/.test(w)) continue;
+            start = word.index!; end = start + w.length;
+            inferred = w === w.toLowerCase() ? 'lowerLetter' : 'upperLetter';
+            break;
         }
         // Saved empty, or as nothing read as a number: the whole result is the number.
         if (start < 0) { start = 0; end = saved.length; }
