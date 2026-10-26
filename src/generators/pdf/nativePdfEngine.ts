@@ -1300,6 +1300,9 @@ class NativeLayout {
      */
     private async collectRuns(node: OfficeContentNode): Promise<Run[]> {
         const out: Run[] = [];
+        // The page field of the run before, where it was one: a field's result saved in several runs (its
+        // digits in two looks) is one number, the first run's (each drew the whole number: "Page 11 of 33").
+        let fieldBefore: string | undefined;
         const walk = async (n: OfficeContentNode, inherited: TextFormatting, inheritedLink: string | undefined, isRoot: boolean): Promise<void> => {
             let text = n.text;
             let override: string | false | void = undefined;
@@ -1314,8 +1317,9 @@ class NativeLayout {
             const fmt = { ...inherited, ...(n.formatting || {}) };
             // A page field's number for the page being drawn (its header or footer), not the one saved.
             const field = (n.metadata as { field?: string } | undefined)?.field;
-            if (field === 'page' && this.fieldPage !== undefined && typeof override !== 'string') text = String(this.fieldPage);
-            else if (field === 'pages' && this.fieldPages !== undefined && typeof override !== 'string') text = String(this.fieldPages);
+            const filled = typeof override !== 'string' && ((field === 'page' && this.fieldPage !== undefined) || (field === 'pages' && this.fieldPages !== undefined));
+            if (filled) text = field === fieldBefore ? '' : String(field === 'page' ? this.fieldPage : this.fieldPages);
+            if (n.type === 'text') fieldBefore = filled ? field : undefined;
             // A link's target, which the words inside it share: a link around formatted runs linked only
             // the run that carried it.
             const own = (n.metadata as { link?: unknown } | undefined)?.link;

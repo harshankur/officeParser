@@ -176,7 +176,7 @@ function lookOf(shown: string, n: number): CellValue {
     // (A number in brackets is a negative one, as a format's negative section shows it: `(1,234.50)`.)
     // (Read as cellValue reads text, 64 characters at most: a pattern of blanks either side of what it holds took
     // time in the cube of a long run of blanks.)
-    const bracketed = shown.length <= 66 ? /^\(([^()]*)\)$/.exec(shown.trim()) : null;
+    const plain = shown.trim(), bracketed = plain.length <= 66 ? /^\(([^()]*)\)$/.exec(plain) : null;
     const inside = bracketed?.[1].trim();
     const look = inside !== undefined && /^[\d.,]+$/.test(inside) ? negated(cellValue(inside)) : cellValue(shown);
     // (Its magnitude alone where the value is negative and the format shows none of its sign, its colour carrying

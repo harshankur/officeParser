@@ -5138,6 +5138,15 @@ async function testNativePdfChartsAndCellPictures(): Promise<void> {
     const noData = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'chart', text: 'Revenue 10 20', metadata: { attachmentName: 'missing' } }] } as any;
     const textOnly = await OfficeGenerator.generate(noData, 'pdf', { pdfConfig: { engine: 'native' } } as any);
     assert.ok((textOnly.messages || []).some((m: any) => m.details?.reason === 'chart'), 'a chart without data is its text, reported');
+    // A chart's title of no text of its own is the one Office draws ("Chart Title", for a chart of several
+    // series); it was left out.
+    const deck = await OfficeParser.parseOffice(path.join(__dirname, 'files', 'test.pptx'), { extractAttachments: true } as any) as OfficeParserAST;
+    assert.strictEqual(deck.attachments.find(a => a.chartData)?.chartData?.title, 'Chart Title', 'an automatic chart title is read as Office shows it');
+    // A page field's result saved in several runs (its digits in two looks) prints one number.
+    const split = String.raw`{\rtf1\ansi{\fonttbl{\f0 Times;}}{\footer Page {\field{\*\fldinst PAGE}{\fldrslt {\b 1}{\i 0}}}\par}Body.\par}`;
+    const splitPdf = (await (await OfficeParser.parseOffice(Buffer.from(split), { fileType: 'rtf' } as any) as OfficeParserAST).to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const splitText = String((await (await OfficeParser.parseOffice(Buffer.from(splitPdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).to('text')).value);
+    assert.ok(/Page 1\b/.test(splitText) && !/Page 11/.test(splitText), `a page field of several runs prints its number once; got ${JSON.stringify(splitText)}`);
 }
 
 /**
