@@ -290,7 +290,7 @@ import { takeRepeats, valuesLength } from '../utils/repeatUtils.js';
 import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
 import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
-import { appendAll } from '../utils/nodeListUtils.js';
+import { appendAll, liftFloatingFrames } from '../utils/nodeListUtils.js';
 import { inRanges } from '../utils/sheetUtils.js';
 
 /**
@@ -832,6 +832,83 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
      * 
      * @param node - The paragraph element to parse
      */
+    // ── Drawing styles (graphic, presentation and drawing-page families): slides' shapes, documents' frames ──
+    /** The styles of both parts by name (graphic, presentation and drawing-page families among them). */
+    let drawingStyles: Map<string, Element> | undefined;
+    const drawingStyle = (doc: Document, name: string | null): Element | undefined => {
+        if (!name) return undefined;
+        if (!drawingStyles) {
+            drawingStyles = new Map();
+            for (const dom of [doc, stylesDom]) for (const style of dom ? getElementsByTagName(dom, "style:style") : []) {
+                const styleName = style.getAttribute("style:name");
+                if (styleName && !drawingStyles.has(styleName)) drawingStyles.set(styleName, style);
+            }
+        }
+        return drawingStyles.get(name);
+    };
+    /** A style's property (on its graphic or drawing-page properties), or its parent's. */
+    const styleProperty = (doc: Document, name: string | null, tag: string, attr: string): string | undefined => {
+        for (let style = drawingStyle(doc, name), depth = 0; style && depth < 16; style = drawingStyle(doc, style.getAttribute("style:parent-style-name")), depth++) {
+            const value = getDirectChildren(style, tag)[0]?.getAttribute(attr);
+            if (value) return value;
+        }
+        return undefined;
+    };
+    const odpLength = (value: string | null): number | undefined => {
+        const pt = value ? lengthToPt(value) : null;
+        return pt != null && Number.isFinite(pt) && Math.abs(pt) < 16128 ? pt : undefined;
+    };
+    /**
+     * A document's frame that floats beside the text (anchored to a paragraph, a character or the page,
+     * not set in its line as a character): its look and where it stands (ShapeMetadata.float), from its
+     * attributes and its graphic style. Undefined for a frame in its line, or one of no width.
+     */
+    const frameFloat = (frame: Element): ShapeMetadata | undefined => {
+        const length = (value: string | null | undefined) => { const pt = odpLength(value ?? null); return pt === undefined ? undefined : Math.round(pt * 100) / 100; };
+        const anchor = frame.getAttribute("text:anchor-type") || 'paragraph';
+        // (Without geometry, its text is read where it stands, as a frame in its line is.)
+        if (config.ignorePageGeometry) return undefined;
+        if (anchor !== 'paragraph' && anchor !== 'char' && anchor !== 'page') return undefined;
+        const doc = frame.ownerDocument, style = frame.getAttribute("draw:style-name");
+        const prop = (attr: string) => doc ? styleProperty(doc, style, "style:graphic-properties", attr) : undefined;
+        const width = length(frame.getAttribute("svg:width") ?? frame.getAttribute("fo:min-width"));
+        if (!width || width <= 0) return undefined;
+        const height = length(frame.getAttribute("svg:height") ?? frame.getAttribute("fo:min-height"));
+        const hpos = prop("style:horizontal-pos"), hrel = prop("style:horizontal-rel") ?? (anchor === 'page' ? 'page' : 'paragraph');
+        const vpos = prop("style:vertical-pos"), vrel = prop("style:vertical-rel") ?? (anchor === 'page' ? 'page' : 'paragraph');
+        const align = hpos === 'left' || hpos === 'inside' ? 'left' as const : hpos === 'right' || hpos === 'outside' ? 'right' as const : hpos === 'center' ? 'center' as const : undefined;
+        const x = length(frame.getAttribute("svg:x")), y = length(frame.getAttribute("svg:y"));
+        // ODF's `none` is no text beside it (above and below only); `run-through` text over or under it.
+        const wrapping = prop("style:wrap");
+        const wrap = wrapping === 'run-through' ? 'none' as const : !wrapping || wrapping === 'none' ? 'aboveBelow' as const : 'beside' as const;
+        const margin = (side: string) => length(prop(`fo:margin-${side}`) ?? prop("fo:margin")) ?? 0;
+        const gap = { top: margin('top'), right: margin('right'), bottom: margin('bottom'), left: margin('left') };
+        const background = prop("fo:background-color") ?? (prop("draw:fill") === 'solid' ? prop("draw:fill-color") : undefined);
+        const fill = background && /^#[0-9a-f]{6}$/i.test(background) ? background.toUpperCase() : undefined;
+        // `0.5pt solid #3355aa`: the outline's width and colour.
+        const border = /^\s*([\d.]+[a-z]*)\s+[a-z-]+\s+(#[0-9a-f]{6})\s*$/i.exec(prop("fo:border") ?? '');
+        const lineWidth = border ? length(border[1]) : undefined;
+        const line = border && lineWidth ? { color: border[2].toUpperCase(), width: lineWidth } : undefined;
+        const pad = (side: string) => length(prop(`fo:padding-${side}`) ?? prop("fo:padding")) ?? 0;
+        return {
+            ...(fill || line ? { geometry: 'rect' } : {}),
+            ...(fill ? { fill } : {}),
+            ...(line ? { line } : {}),
+            textInsets: { top: pad('top'), right: pad('right'), bottom: pad('bottom'), left: pad('left') },
+            float: {
+                horizontalFrom: hrel === 'page' || hrel === 'page-start-margin' || hrel === 'page-end-margin' ? 'page' : hrel === 'page-content' ? 'margin' : 'column',
+                verticalFrom: vrel === 'page' ? 'page' : vrel === 'page-content' ? 'margin' : 'paragraph',
+                ...(align ? { align } : { x: x ?? 0 }),
+                // (Placed in the middle or at the foot of what it is measured down from: at its top.)
+                y: vpos === 'from-top' || vpos === undefined ? y ?? 0 : 0,
+                width,
+                ...(height ? { height } : {}),
+                wrap,
+                ...(gap.top || gap.right || gap.bottom || gap.left ? { gap } : {}),
+            },
+        };
+    };
+
     /**
      * Helper to parse inline content (text, spans, links, notes, etc.) recursively.
      * 
@@ -1114,9 +1191,16 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     if (drawTextBox) {
                         const textBoxChildren: OfficeContentNode[] = [];
                         traverse(drawTextBox, textBoxChildren, false, sourceXml);
-                        appendAll(children, textBoxChildren);
                         const textBoxText = textBoxChildren.map(c => c.text || '').join('\n');
-                        fullText += textBoxText;
+                        // A frame floating beside the text: its blocks in a `drawing` node, which goes before
+                        // the paragraph (see liftFloatingFrames); its text is not the paragraph's.
+                        const floating = frameFloat(frame);
+                        if (floating) {
+                            children.push({ type: 'drawing', text: textBoxText, children: textBoxChildren, metadata: floating });
+                        } else {
+                            appendAll(children, textBoxChildren);
+                            fullText += textBoxText;
+                        }
                     } else if (drawObject) {
                         const href = drawObject.getAttribute("xlink:href");
                         let isFormula = false;
@@ -1604,31 +1688,6 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         const cellBudget = createCellBudget(config);
 
         // ── Where a slide's shapes are, and what they look like (ODP; see the PPTX reader's) ─────────
-        /** The styles of both parts by name (graphic, presentation and drawing-page families among them). */
-        let drawingStyles: Map<string, Element> | undefined;
-        const drawingStyle = (doc: Document, name: string | null): Element | undefined => {
-            if (!name) return undefined;
-            if (!drawingStyles) {
-                drawingStyles = new Map();
-                for (const dom of [doc, stylesDom]) for (const style of dom ? getElementsByTagName(dom, "style:style") : []) {
-                    const styleName = style.getAttribute("style:name");
-                    if (styleName && !drawingStyles.has(styleName)) drawingStyles.set(styleName, style);
-                }
-            }
-            return drawingStyles.get(name);
-        };
-        /** A style's property (on its graphic or drawing-page properties), or its parent's. */
-        const styleProperty = (doc: Document, name: string | null, tag: string, attr: string): string | undefined => {
-            for (let style = drawingStyle(doc, name), depth = 0; style && depth < 16; style = drawingStyle(doc, style.getAttribute("style:parent-style-name")), depth++) {
-                const value = getDirectChildren(style, tag)[0]?.getAttribute(attr);
-                if (value) return value;
-            }
-            return undefined;
-        };
-        const odpLength = (value: string | null): number | undefined => {
-            const pt = value ? lengthToPt(value) : null;
-            return pt != null && Number.isFinite(pt) && Math.abs(pt) < 16128 ? pt : undefined;
-        };
         /** A slide's fill: its own drawing-page style's, else its master page's. */
         const odpBackground = (page: Element, doc: Document): string | undefined => {
             const fillOf = (style: string | null) => styleProperty(doc, style, "style:drawing-page-properties", "draw:fill") === 'solid'
@@ -2997,6 +3056,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             };
         }
     }
+    // Frames floating beside a paragraph's text, read where they are anchored, stand before it.
+    liftFloatingFrames(content);
+    for (const part of [...(auxiliary?.headers ?? []), ...(auxiliary?.footers ?? [])]) if (part.children) liftFloatingFrames(part.children);
     // (A section of columns ending the document gives back the page's columns to nothing after it: no break.)
     while (fileType === 'odt' && content.length && content[content.length - 1].type === 'break'
         && (content[content.length - 1].metadata as BreakMetadata | undefined)?.breakType === 'section') content.pop();

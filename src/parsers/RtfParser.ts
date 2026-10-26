@@ -40,7 +40,7 @@
  * @see https://latex2rtf.sourceforge.net/RTF-Spec-1.2.pdf RTF 1.2 Specification
  */
 
-import { BreakMetadata, CellMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, IndentationMetadata, ListMetadata, ParagraphSpacing, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, PageSetup, TextFormatting } from '../types.js';
+import { BreakMetadata, CellMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, ShapeMetadata, IndentationMetadata, ListMetadata, ParagraphSpacing, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, PageSetup, TextFormatting } from '../types.js';
 import { MAX_PAGE_PT } from '../utils/pageLimits.js';
 import { titlePagesTakeHiddenFirsts } from '../utils/officeGenUtils.js';
 import { createAST } from '../utils/astUtils.js';
@@ -48,6 +48,7 @@ import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 import { chargeRawContent } from '../utils/xmlUtils.js';
+import { isFloatingFrame } from '../utils/nodeListUtils.js';
 import { attachmentLookup } from '../utils/repeatUtils.js';
 import { ByteDecoder, textDecoder } from '../utils/encodingUtils.js';
 
@@ -133,6 +134,77 @@ export interface RtfControl {
  * Union type representing any RTF parse tree node.
  */
 export type RtfNode = RtfGroup | RtfText | RtfControl;
+
+/** A group's text, a few levels deep (a shape property's name or value). */
+function shapeWords(group: RtfGroup, depth = 0): string {
+    let text = '';
+    for (const item of group.content) {
+        if (item.type === 'text') text += item.value;
+        else if (item.type === 'group' && depth < 4) text += shapeWords(item, depth + 1);
+        if (text.length > 64) break;
+    }
+    return text.trim();
+}
+
+/**
+ * A shape's text box floating beside the text (`\shp`, its `\shpinst`): its look and where it stands
+ * (ShapeMetadata.float), from its box (`\shpleft` .. `\shpbottom`), what that is measured from
+ * (`\shpbx..`, `\shpby..`, or its `posrelh` and `posrelv`), its wrapping (`\shpwr`) and its properties
+ * (`fillColor`, `lineColor`, `lineWidth`, the text's and wrapping's distances). Undefined for a shape
+ * of no width.
+ */
+function rtfShapeFloat(shape: RtfGroup): ShapeMetadata | undefined {
+    const words = new Map<string, number | true>();
+    const props = new Map<string, string>();
+    for (const item of shape.content) {
+        if (item.type === 'control') words.set(item.value, item.param ?? true);
+        else if (item.type === 'group' && item.destination === 'sp' && props.size < 256) {
+            let name = '', value = '';
+            for (const part of item.content) if (part.type === 'group') {
+                if (part.destination === 'sn') name = shapeWords(part);
+                else if (part.destination === 'sv') value = shapeWords(part);
+            }
+            if (name) props.set(name, value);
+        }
+    }
+    const num = (word: string) => { const v = words.get(word); return typeof v === 'number' ? v : undefined; };
+    const prop = (name: string) => { const v = props.get(name); const n = v === undefined || v === '' ? NaN : Number(v); return Number.isFinite(n) ? n : undefined; };
+    const left = num('shpleft') ?? 0, right = num('shpright'), top = num('shptop') ?? 0, bottom = num('shpbottom');
+    if (right === undefined || right <= left) return undefined;
+    const pt = (twips: number) => Math.round(twips / 20 * 100) / 100;
+    const emu = (value: number | undefined, otherwise: number) => value === undefined ? otherwise : Math.round(value / 12700 * 100) / 100;
+    // RTF colours are 0xBBGGRR.
+    const color = (value: number | undefined) => value === undefined || value < 0 ? undefined
+        : '#' + [value & 0xFF, (value >> 8) & 0xFF, (value >> 16) & 0xFF].map(c => c.toString(16).padStart(2, '0')).join('').toUpperCase();
+    const relH = prop('posrelh'), relV = prop('posrelv');
+    const horizontalFrom = words.has('shpbxpage') ? 'page' as const : words.has('shpbxmargin') ? 'margin' as const
+        : words.has('shpbxignore') ? (relH === 1 ? 'page' as const : relH === 0 ? 'margin' as const : 'column' as const) : 'column' as const;
+    const verticalFrom = words.has('shpbypage') ? 'page' as const : words.has('shpbymargin') ? 'margin' as const
+        : words.has('shpbyignore') ? (relV === 1 ? 'page' as const : relV === 0 ? 'margin' as const : 'paragraph' as const) : 'paragraph' as const;
+    const posh = prop('posh');
+    const align = posh === 1 || posh === 4 ? 'left' as const : posh === 3 || posh === 5 ? 'right' as const : posh === 2 ? 'center' as const : undefined;
+    const wr = num('shpwr');
+    const wrap = wr === 1 ? 'aboveBelow' as const : wr === 3 ? 'none' as const : 'beside' as const;
+    const fill = prop('fFilled') === 0 ? undefined : color(prop('fillColor'));
+    const lineColor = prop('fLine') === 0 ? undefined : color(prop('lineColor')) ?? '#000000';
+    const gap = { top: emu(prop('dyWrapDistTop'), 0), right: emu(prop('dxWrapDistRight'), 9), bottom: emu(prop('dyWrapDistBottom'), 0), left: emu(prop('dxWrapDistLeft'), 9) };
+    return {
+        geometry: 'rect',
+        ...(fill ? { fill } : {}),
+        ...(lineColor ? { line: { color: lineColor, width: emu(prop('lineWidth'), 0.75) || 0.75 } } : {}),
+        textInsets: { top: emu(prop('dyTextTop'), 3.6), right: emu(prop('dxTextRight'), 7.2), bottom: emu(prop('dyTextBottom'), 3.6), left: emu(prop('dxTextLeft'), 7.2) },
+        float: {
+            horizontalFrom,
+            verticalFrom,
+            ...(align ? { align } : { x: pt(left) }),
+            y: pt(top),
+            width: pt(right - left),
+            ...(bottom !== undefined && bottom > top ? { height: pt(bottom - top) } : {}),
+            wrap,
+            ...(gap.top || gap.right || gap.bottom || gap.left ? { gap } : {}),
+        },
+    };
+}
 
 /** The characters RTF's symbol control words and control symbols stand for. */
 const RTF_SYMBOLS: ReadonlyMap<string, string> = new Map([
@@ -837,6 +909,9 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // Blocks read from a shape's text box (`\shptxt`), placed after the paragraph anchoring the shape:
     // read in place, the text box's paragraphs split that paragraph and took its first half as theirs.
     let blocksAfterParagraph: OfficeContentNode[] = [];
+    // The shape being read, where its text box floats beside the text (see rtfShapeFloat): the box's blocks
+    // are then a `drawing` node, which stands before the paragraph instead.
+    let currentShapeFloat: ShapeMetadata | undefined;
 
     /**
      * Everything the reading of paragraphs and tables keeps between control words. A destination read
@@ -1143,7 +1218,14 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
             // If we're building a table, add to current cell
             // but ONLY if this paragraph was actually marked as in-table
-            blockContainer().push(node);
+            const container = blockContainer();
+            // A text box floating beside the paragraph's text stands before it, where a writer places it
+            // before laying the paragraph out (see liftFloatingFrames).
+            if (blocksAfterParagraph.some(isFloatingFrame)) {
+                for (const block of blocksAfterParagraph) if (isFloatingFrame(block)) container.push(block);
+                blocksAfterParagraph = blocksAfterParagraph.filter(block => !isFloatingFrame(block));
+            }
+            container.push(node);
 
             currentParagraphTextChunks = [];
             currentParagraphChildren = [];
@@ -1531,6 +1613,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             let isAnnotation = false;
             let isShapeInstance = false;
             let isShapeText = false;
+            let outerShapeFloat: ShapeMetadata | undefined;
 
             // Add group start to raw content
             // Note: We don't add ignored groups to rawContent to keep it clean
@@ -1612,6 +1695,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     isIgnored = true;
                 } else if (node.destination === 'shpinst') {
                     isShapeInstance = true;
+                    outerShapeFloat = currentShapeFloat;
+                    currentShapeFloat = config.ignorePageGeometry ? undefined : rtfShapeFloat(node);
                 } else if (node.destination === 'shptxt') {
                     isShapeText = true;
                 } else if (ignoreList.includes(node.destination)) {
@@ -1888,8 +1973,12 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             }
 
             if (savedFlow) leaveDestination(savedFlow);
-            // A text box's blocks follow the paragraph the shape is anchored in.
-            if (shapeBlocks) for (const block of shapeBlocks) blocksAfterParagraph.push(block);
+            // A text box's blocks follow the paragraph the shape is anchored in; a floating one's, in a
+            // `drawing` node, stand before it (see flushParagraph).
+            if (shapeBlocks && currentShapeFloat && shapeBlocks.length) {
+                blocksAfterParagraph.push({ type: 'drawing', text: shapeBlocks.map(b => b.text || '').join('\n'), children: shapeBlocks, metadata: currentShapeFloat });
+            } else if (shapeBlocks) for (const block of shapeBlocks) blocksAfterParagraph.push(block);
+            if (isShapeInstance) currentShapeFloat = outerShapeFloat;
             // A note's or comment's text is its paragraphs' (a final pass meant to give notes theirs did not
             // reach them, on the runs' `notes`).
             for (const holder of [redirectedComment, footnote, furniturePart]) {

@@ -144,6 +144,9 @@ async function loadFontkit(config: OfficeParserAST['config']): Promise<any> {
     }
 }
 
+/** The most frames floating on one page whose room the text keeps (see floatingFrame). */
+const MAX_FLOATS_PER_PAGE = 256;
+
 /** How many conversions are drawing with embedded fonts right now (see {@link borrowGeneratorRuntime}). */
 let generatorRuntimeUsers = 0;
 
@@ -535,6 +538,8 @@ class NativeLayout {
      * find the end, so a document of thousands of pages took time in their square.
      */
     private appendPage(w: number, h: number): any {
+        // The frames floating on the page before are done with.
+        this.floats = [];
         const pdf = this.pdf as any;
         const tree = pdf.catalog?.Pages?.();
         const treeRef = pdf.catalog?.get?.(this.lib.PDFName.of('Pages'));
@@ -669,6 +674,77 @@ class NativeLayout {
                 // A box, a rounded box, and the outlines not drawn as themselves: their box, in their colours.
                 this.page.drawRectangle({ x: box.x, y: bottom, width: box.width, height: box.height, ...(fill ? { color: fill } : {}), ...line });
         }
+    }
+
+    /**
+     * The frames floating beside the text on their pages (see floatingFrame), with the room the text keeps
+     * from them: lines beside one go round it (see drawRuns), other blocks go below it.
+     */
+    private floats: { page: unknown; top: number; bottom: number; left: number; right: number; wrap: 'beside' | 'aboveBelow' }[] = [];
+
+    /**
+     * Draws a frame floating beside a document's text (ShapeMetadata.float) where it stands, measured from
+     * the paragraph after it (its anchor), the page's text area or the page: its box, and its blocks within
+     * it. Its room on the page is kept for the text after it. A frame that does not fit below its anchor
+     * on the page goes on the next, with its paragraph.
+     */
+    private async floatingFrame(node: OfficeContentNode): Promise<void> {
+        const shape = node.metadata as ShapeMetadata;
+        const float = shape.float!;
+        const insets = shape.textInsets ?? { top: 3.6, right: 7.2, bottom: 3.6, left: 7.2 };
+        const width = Math.max(4, Math.min(float.width, this.pageW));
+        // As tall as it is set, else as its text: measured in a box of its width (its insets in it).
+        let height = float.height ?? 0;
+        if (float.height === undefined) {
+            const margin = this.margin;
+            try {
+                height = insets.top + insets.bottom + await this.measured(async () => {
+                    this.margin = { ...margin, left: insets.left, right: Math.max(0, this.pageW - width + insets.right), top: 0 };
+                    this.y = 0;
+                    for (const child of node.children || []) await this.render(child);
+                });
+            } finally { this.margin = margin; }
+        }
+        height = Math.min(height, this.pageH);
+        const offset = float.y ?? 0;
+        if (float.verticalFrom === 'paragraph') this.ensureSpace(Math.max(0, offset) + Math.min(height, this.bottom - this.margin.top));
+        // Placed across the column (on the page or in the column it may have moved on to), the page's text area or the page.
+        const page = this.pageMargin ?? this.margin;
+        const across = float.horizontalFrom === 'page' ? { left: 0, width: this.pageW }
+            : float.horizontalFrom === 'margin' ? { left: page.left, width: this.pageW - page.left - page.right }
+            : { left: this.margin.left, width: this.contentWidth };
+        const at = float.align === 'right' ? across.left + across.width - width : float.align === 'center' ? across.left + (across.width - width) / 2
+            : float.align === 'left' ? across.left : across.left + (float.x ?? 0);
+        const x = Math.max(0, Math.min(at, this.pageW - width));
+        const from = float.verticalFrom === 'page' ? 0 : float.verticalFrom === 'margin' ? page.top : this.y;
+        const top = Math.max(0, Math.min(from + offset, this.pageH - height));
+        const box = { x, y: top, width, height };
+        // Drawn as a slide's text box is, on this page alone, with no frame around its own text.
+        const saved = { margin: this.margin, fixed: this.fixedPage, y: this.y, floats: this.floats };
+        this.fixedPage = true;
+        this.floats = [];
+        try {
+            this.drawShape(box, shape);
+            await this.drawTextBox(node.children || [], box, shape);
+        } finally {
+            this.margin = saved.margin;
+            this.fixedPage = saved.fixed;
+            this.y = saved.y;
+            this.floats = saved.floats;
+        }
+        if (float.wrap !== 'none') {
+            const gap = float.gap ?? { top: 0, right: 6, bottom: 0, left: 6 };
+            // (Those of the pages before are done with. A page of more frames than a page holds keeps room
+            // for its first ones: each line is measured against every one kept.)
+            this.floats = this.floats.filter(f => f.page === this.page);
+            if (this.floats.length < MAX_FLOATS_PER_PAGE) this.floats.push({ page: this.page, top: top - gap.top, bottom: top + height + gap.bottom, left: x - gap.left, right: x + width + gap.right, wrap: float.wrap });
+        }
+    }
+
+    /** Moves below the frames floating on this page that the next block would stand beside (a table, a picture). */
+    private belowFloats(): void {
+        if (this.furniture) return;
+        for (const f of this.floats) if (f.page === this.page && f.top <= this.y + 1 && f.bottom > this.y) this.y = f.bottom;
     }
 
     /** Draws a shape's text in its box: within its insets, set from its top, middle or bottom, turned with it. */
@@ -1540,7 +1616,10 @@ class NativeLayout {
         // The paragraph's first line starts `firstLine` points in from the others (out, when negative).
         let firstOfParagraph = true;
         const lineStart = () => firstOfParagraph ? (layout.firstLine || 0) : 0;
-        const lineRoom = () => width - lineStart();
+        // A line beside a frame floating on the page (see floatingFrame) starts and ends short of it: the room
+        // it keeps at its left and right, found as its first word is placed.
+        let besideLeft = 0, besideRight = 0, besidePage: unknown, besideColumn = columnLeft;
+        const lineRoom = () => width - lineStart() - besideLeft - besideRight;
 
         /** Draws the line gathered; `last` when it ends the paragraph or a forced break ends it. */
         /** The distance from a line of text this size to the next, as the paragraph spaces its lines. */
@@ -1549,6 +1628,32 @@ class NativeLayout {
             if (layout.lineMultiple) return natural * layout.lineMultiple;
             if (layout.lineHeight) return layout.lineAtLeast ? Math.max(natural, layout.lineHeight) : layout.lineHeight;
             return natural;
+        };
+
+        /**
+         * The room a line of text this size starting here has beside the frames floating on the page: on the
+         * side of each with more room, or, where one leaves too little or the text goes above and below it,
+         * below it.
+         */
+        const fitBeside = (size: number) => {
+            besideLeft = besideRight = 0;
+            besidePage = this.page;
+            besideColumn = columnLeft;
+            if (this.furniture || !this.floats.length) return;
+            const lh = lineAdvance(size);
+            for (let guard = 0; guard < 64; guard++) {
+                const from = left + lineStart(), to = left + width;
+                let l = from, r = to, below = -Infinity, blocked = false;
+                for (const f of this.floats) {
+                    if (f.page !== this.page || f.top >= this.y + lh || f.bottom <= this.y || f.right <= from || f.left >= to) continue;
+                    below = Math.max(below, f.bottom);
+                    if (f.wrap === 'aboveBelow') { blocked = true; continue; }
+                    if (f.left - from >= to - f.right) r = Math.min(r, f.left); else l = Math.max(l, f.right);
+                }
+                if (!blocked && r - l >= Math.min(36, (to - from) / 3)) { besideLeft = l - from; besideRight = to - r; return; }
+                if (!(below > this.y)) return;
+                this.y = below;
+            }
         };
 
         /** Whether the text has run on into a column of another place or width: its lines then follow it. */
@@ -1571,7 +1676,18 @@ class NativeLayout {
             // Run on into another column: its lines move with it, as wide as that column lets them (its
             // indents kept), and the words of this line that no longer fit go on to the next.
             let leftover: typeof line = [];
-            if (followColumn()) {
+            let moved = followColumn();
+            // On another page or column, the frames beside it are that one's; below one past the foot, on to
+            // the next column or page.
+            if (moved || besidePage !== this.page || besideColumn !== columnLeft) {
+                fitBeside(textSize || 11);
+                for (let i = 0; i < 4 && this.y + lh > this.bottom && this.y > this.margin.top && !this.fixedPage; i++) {
+                    this.ensureSpace(lh);
+                    moved = followColumn() || moved;
+                    fitBeside(textSize || 11);
+                }
+            }
+            if (moved || besideLeft + besideRight > 0) {
                 let used = 0, k = 0;
                 for (; k < line.length; k++) {
                     const add = (k && line[k - 1].space ? spaceWidth(line[k - 1].p) : 0) + line[k].w;
@@ -1595,7 +1711,7 @@ class NativeLayout {
             const stretch = layout.align === 'justify' && !last && gaps ? free / gaps : 0;
             const align = layout.align === 'center' || layout.align === 'right' ? layout.align : baseRtl ? 'right' : 'left';
             // (A justified line fills its width: its spaces take what is free, so it starts at the left.)
-            let x = left + lineStart() + (stretch ? 0 : align === 'center' ? free / 2 : align === 'right' ? free : 0);
+            let x = left + lineStart() + besideLeft + (stretch ? 0 : align === 'center' ? free / 2 : align === 'right' ? free : 0);
             // Backgrounds first, under the words: a word's and the gap after it, where the next word has
             // the same one, so a highlighted phrase is one band.
             const ordered = visualOrder(items, baseRtl);
@@ -1639,6 +1755,8 @@ class NativeLayout {
             // Again after each line drawn: a line drawn may run on into a narrower column, the words that no
             // longer fit it put back on the next, and this word must fit after them too (it overran the column).
             for (let prev = line[line.length - 1]; prev && lineWidth + (prev.space ? spaceWidth(prev.p) : 0) + w > lineRoom(); prev = line[line.length - 1]) flush(false);
+            // A new line's room beside the frames floating on the page.
+            if (!line.length) fitBeside(p.size);
             // A word wider than the column it has run on into (one cut to the paragraph's first column's
             // width): cut again to this one's, each piece a word of its own.
             if (!line.length && !p.picture && w > lineRoom() + 0.5 && p.text.length > 1) {
@@ -1813,9 +1931,15 @@ class NativeLayout {
             case 'heading': return this.heading(node);
             case 'paragraph': return this.paragraph(node);
             case 'list': return this.listItem(node);
-            case 'table': return this.table(node);
-            case 'image': return this.image(node);
-            case 'code': return this.code(node);
+            case 'table': this.belowFloats(); return this.table(node);
+            case 'image': this.belowFloats(); return this.image(node);
+            case 'code': this.belowFloats(); return this.code(node);
+            case 'drawing':
+                // A frame floating beside the text, where it stands; any other shape as any other block.
+                if ((node.metadata as ShapeMetadata | undefined)?.float && !this.fixedPage) return this.floatingFrame(node);
+                if (node.children?.length) { for (const c of node.children) await this.render(c); }
+                else if (node.text) await this.paragraph(node);
+                return;
             case 'note': return this.note(node);
             case 'break': return await this.breakNode(node);
             case 'embed': {
@@ -1834,6 +1958,7 @@ class NativeLayout {
                 return;
             }
             case 'chart':
+                this.belowFloats();
                 // includeCharts: false omits charts in every generator. The native engine cannot draw a
                 // chart, so it otherwise renders the chart's data text (in node.text); skip it when off.
                 if (this.config.includeCharts === false) return;

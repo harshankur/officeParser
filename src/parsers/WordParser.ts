@@ -61,9 +61,9 @@
  */
 
 import { attachmentLookup, takeRepeats } from '../utils/repeatUtils.js';
-import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, ShapeMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { MAX_PAGE_PT } from '../utils/pageLimits.js';
-import { titlePagesTakeHiddenFirsts } from '../utils/officeGenUtils.js';
+import { lengthToPt, titlePagesTakeHiddenFirsts } from '../utils/officeGenUtils.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError, logWarning } from '../utils/errorUtils.js';
 import { createAttachment, renameAttachments } from '../utils/imageUtils.js';
@@ -74,7 +74,7 @@ import { bulletCharacter, formatListNumber, wordNumberFormat } from '../utils/li
 import { extractFiles, findRequiredPart, maxUncompressedBytesOf, resolvePartPath } from '../utils/zipUtils.js';
 import { lookupTable, plainRecord, setOwn } from '../utils/lookupUtils.js';
 import { cellSpan, MAX_COL_SPAN } from '../utils/numberUtils.js';
-import { appendAll } from '../utils/nodeListUtils.js';
+import { appendAll, isFloatingFrame } from '../utils/nodeListUtils.js';
 import { diagramList, readDiagram } from '../utils/diagramUtils.js';
 import { UniqueNames } from '../utils/uniqueNames.js';
 import { decodeMarkup, mhtPartText, MhtPart, readMht } from '../utils/mhtUtils.js';
@@ -129,6 +129,117 @@ const noteRefFieldRegex = /^\s*NOTEREF\s+"?([^\s"\\]+)"?([^]*)$/i;
 
 /** A text box's content, which the text box's own blocks are parsed from (see ownFirst). */
 const TEXT_BOX: ReadonlySet<string> = new Set(['w:txbxContent', 'txbxContent']);
+
+/** An element's own child of a local name (`wp:anchor` or `anchor`, whatever its prefix). */
+const childNamed = (el: Element, local: string): Element | undefined => {
+    for (const c of Array.from(el.childNodes)) if (isElement(c) && (c.localName || c.nodeName.replace(/^[^:]*:/, '')) === local) return c;
+    return undefined;
+};
+/** The first element of a local name within `el` (its prefix any), searched to a bounded depth. */
+const firstNamed = (el: Element, local: string, depth = 8): Element | undefined => {
+    for (const c of Array.from(el.childNodes)) {
+        if (!isElement(c)) continue;
+        if ((c.localName || c.nodeName.replace(/^[^:]*:/, '')) === local) return c;
+        const deeper = depth > 0 ? firstNamed(c, local, depth - 1) : undefined;
+        if (deeper) return deeper;
+    }
+    return undefined;
+};
+const emuToPt = (value: string | null | undefined): number | undefined => {
+    const n = value ? Number(value) : NaN;
+    return Number.isFinite(n) && Math.abs(n) < 16128 * 12700 ? Math.round(n / 12700 * 100) / 100 : undefined;
+};
+/** A DrawingML colour given as RGB (`a:srgbClr`) under `el`, `#RRGGBB`; none where it is not filled. */
+const drawingColor = (el: Element | undefined): string | undefined => {
+    if (!el || childNamed(el, 'noFill')) return undefined;
+    const value = firstNamed(childNamed(el, 'solidFill') ?? el, 'srgbClr', 1)?.getAttribute('val');
+    return value && /^[0-9a-f]{6}$/i.test(value) ? `#${value.toUpperCase()}` : undefined;
+};
+
+/**
+ * A text box floating beside the text (a `wp:anchor` drawing, or a VML shape placed absolutely): its look
+ * and where it stands (ShapeMetadata.float). Undefined for one in its line (`wp:inline`). (A drawing of
+ * several text boxes, a group, is not asked: they keep their places in the flow.)
+ */
+function textBoxFloat(drawing: Element): ShapeMetadata | undefined {
+    const anchor = childNamed(drawing, 'anchor');
+    if (anchor) {
+        const extent = childNamed(anchor, 'extent');
+        const width = emuToPt(extent?.getAttribute('cx'));
+        if (!width || width <= 0) return undefined;
+        const height = emuToPt(extent?.getAttribute('cy'));
+        const positionH = childNamed(anchor, 'positionH'), positionV = childNamed(anchor, 'positionV');
+        const fromH = positionH?.getAttribute('relativeFrom'), fromV = positionV?.getAttribute('relativeFrom');
+        const alignH = positionH && childNamed(positionH, 'align')?.textContent?.trim();
+        const align = alignH === 'left' || alignH === 'inside' ? 'left' as const : alignH === 'right' || alignH === 'outside' ? 'right' as const : alignH === 'center' ? 'center' as const : undefined;
+        const x = positionH ? emuToPt(childNamed(positionH, 'posOffset')?.textContent?.trim()) : undefined;
+        const y = positionV ? emuToPt(childNamed(positionV, 'posOffset')?.textContent?.trim()) : undefined;
+        const wrap = childNamed(anchor, 'wrapTopAndBottom') ? 'aboveBelow' as const
+            : childNamed(anchor, 'wrapSquare') || childNamed(anchor, 'wrapTight') || childNamed(anchor, 'wrapThrough') ? 'beside' as const : 'none' as const;
+        const dist = (side: string) => emuToPt(anchor.getAttribute(`dist${side}`)) ?? 0;
+        const gap = { top: dist('T'), right: dist('R'), bottom: dist('B'), left: dist('L') };
+        const spPr = firstNamed(anchor, 'spPr'), bodyPr = firstNamed(anchor, 'bodyPr');
+        const fill = spPr ? drawingColor(spPr) : undefined;
+        const ln = spPr ? childNamed(spPr, 'ln') : undefined;
+        const lineColor = ln ? drawingColor(ln) : undefined;
+        const line = lineColor ? { color: lineColor, width: emuToPt(ln!.getAttribute('w')) || 0.75 } : undefined;
+        const inset = (attr: string, otherwise: number) => emuToPt(bodyPr?.getAttribute(attr)) ?? otherwise;
+        return {
+            ...(fill || line ? { geometry: 'rect' } : {}),
+            ...(fill ? { fill } : {}),
+            ...(line ? { line } : {}),
+            textInsets: { top: inset('tIns', 3.6), right: inset('rIns', 7.2), bottom: inset('bIns', 3.6), left: inset('lIns', 7.2) },
+            float: {
+                horizontalFrom: fromH === 'margin' ? 'margin' : fromH === 'page' || (fromH ?? '').endsWith('Margin') ? 'page' : 'column',
+                verticalFrom: fromV === 'page' || fromV === 'topMargin' || fromV === 'bottomMargin' ? 'page' : fromV === 'margin' ? 'margin' : 'paragraph',
+                ...(align ? { align } : { x: x ?? 0 }),
+                y: y ?? 0,
+                width,
+                ...(height ? { height } : {}),
+                wrap,
+                ...(gap.top || gap.right || gap.bottom || gap.left ? { gap } : {}),
+            },
+        };
+    }
+    // VML (`w:pict`): the shape holding the text box, placed absolutely by its style.
+    const shape = Array.from(drawing.childNodes).find((c): c is Element => isElement(c) && !!c.getAttribute('style'));
+    // `position:absolute;margin-left:302pt;width:158pt;...`: its declarations by name.
+    const style: Record<string, string> | undefined = shape ? Object.create(null) : undefined;
+    if (shape && style) for (const declaration of (shape.getAttribute('style') || '').split(';')) {
+        const colon = declaration.indexOf(':');
+        if (colon > 0) style[declaration.slice(0, colon).trim().toLowerCase()] = declaration.slice(colon + 1);
+    }
+    if (!shape || !style || (style['position'] || '').trim() !== 'absolute') return undefined;
+    const pt = (value: string | undefined) => { const n = value ? lengthToPt(value.trim()) : null; return n != null && Number.isFinite(n) && Math.abs(n) < 16128 ? Math.round(n * 100) / 100 : undefined; };
+    const width = pt(style['width']);
+    if (!width || width <= 0) return undefined;
+    const height = pt(style['height']);
+    const fromH = (style['mso-position-horizontal-relative'] || '').trim(), fromV = (style['mso-position-vertical-relative'] || '').trim();
+    const alignH = (style['mso-position-horizontal'] || '').trim();
+    const align = alignH === 'left' || alignH === 'inside' ? 'left' as const : alignH === 'right' || alignH === 'outside' ? 'right' as const : alignH === 'center' ? 'center' as const : undefined;
+    const wrapType = firstNamed(shape, 'wrap', 1)?.getAttribute('type');
+    const wrap = wrapType === 'topAndBottom' ? 'aboveBelow' as const : wrapType === 'square' || wrapType === 'tight' || wrapType === 'through' ? 'beside' as const : 'none' as const;
+    const fillValue = shape.getAttribute('filled') === 'f' ? undefined : shape.getAttribute('fillcolor');
+    const fill = fillValue && /^#[0-9a-f]{6}$/i.test(fillValue.trim()) ? fillValue.trim().toUpperCase() : undefined;
+    const strokeValue = shape.getAttribute('stroked') === 'f' ? undefined : shape.getAttribute('strokecolor');
+    const line = strokeValue && /^#[0-9a-f]{6}$/i.test(strokeValue.trim()) ? { color: strokeValue.trim().toUpperCase(), width: pt(shape.getAttribute('strokeweight') || undefined) || 0.75 } : undefined;
+    const insets = (firstNamed(shape, 'textbox', 1)?.getAttribute('inset') || '').split(',').map(v => pt(v || undefined));
+    return {
+        ...(fill || line ? { geometry: 'rect' } : {}),
+        ...(fill ? { fill } : {}),
+        ...(line ? { line } : {}),
+        textInsets: { top: insets[1] ?? 3.6, right: insets[2] ?? 7.2, bottom: insets[3] ?? 3.6, left: insets[0] ?? 7.2 },
+        float: {
+            horizontalFrom: fromH === 'margin' ? 'margin' : fromH === 'page' ? 'page' : 'column',
+            verticalFrom: fromV === 'page' ? 'page' : fromV === 'margin' ? 'margin' : 'paragraph',
+            ...(align ? { align } : { x: pt(style['margin-left']) ?? pt(style['left']) ?? 0 }),
+            y: pt(style['margin-top']) ?? pt(style['top']) ?? 0,
+            width,
+            ...(height ? { height } : {}),
+            wrap,
+        },
+    };
+}
 
 /**
  * Parses a Word document (.docx) and extracts content, formatting, and metadata.
@@ -1230,7 +1341,9 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 // is), and text boxes' blocks, read after the paragraph.
                 for (const drawing of runDrawings) {
                     appendAll(lifted, diagramNodes(drawing));
+                    textBoxesFrom.set(drawing, lifted.length);
                     for (const txbx of getOutermostElements(drawing, "w:txbxContent")) readBlocks(txbx, documentContent, lifted);
+                    floatTextBox(drawing, lifted);
                 }
 
                 // Footnotes/Endnotes inside runs
@@ -1346,7 +1459,9 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 // their paragraphs: reading a text box's paragraphs reaches those, and taking them here too
                 // read nested text boxes again at each level (1.3 KB took half a minute).
                 appendAll(lifted, diagramNodes(node));
+                textBoxesFrom.set(node, lifted.length);
                 for (const txbx of getOutermostElements(node, "w:txbxContent")) readBlocks(txbx, documentContent, lifted);
+                floatTextBox(node, lifted);
             } else if (isElement(node) && (node.nodeName === 'm:oMath' || node.nodeName === 'oMath'
                 || node.nodeName === 'm:oMathPara' || node.nodeName === 'oMathPara')) {
                 // Equations. Without this branch they reach the generic fallback below, which
@@ -1519,6 +1634,36 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         return setup;
     };
 
+    /**
+     * A drawing's text box floating beside the text (see textBoxFloat): the blocks just read from it (from
+     * where `textBoxesFrom` notes they start in `lifted`) become a `drawing` node holding them, which
+     * readBlocks stands before the paragraph. (Noted and done apart from the reading: text boxes nest, and
+     * anything the reading's frames hold costs the stack at each level of them.)
+     */
+    const textBoxesFrom = new Map<Element, number>();
+    const floatTextBox = (drawing: Element, lifted: OfficeContentNode[]): void => {
+        const from = textBoxesFrom.get(drawing) ?? lifted.length;
+        textBoxesFrom.delete(drawing);
+        if (config.ignorePageGeometry || lifted.length === from || getOutermostElements(drawing, "w:txbxContent").length !== 1) return;
+        const floating = textBoxFloat(drawing);
+        if (!floating) return;
+        const blocks = lifted.splice(from);
+        lifted.push({ type: 'drawing', text: blocks.map(b => b.text || '').join('\n'), children: blocks, metadata: floating });
+    };
+
+    /**
+     * The text boxes floating beside the paragraph at `at` of `out` (read after it, with what else it lifts)
+     * stand before it, where a writer places them before laying the paragraph out.
+     */
+    const standFloatsBefore = (out: OfficeContentNode[], at: number): void => {
+        let floats = false;
+        for (let i = at + 1; i < out.length && !floats; i++) floats = isFloatingFrame(out[i]);
+        if (!floats) return;
+        const after = out.splice(at);
+        appendAll(out, after.filter(isFloatingFrame));
+        appendAll(out, after.filter(n => !isFloatingFrame(n)));
+    };
+
     const readBlocks = (container: Element, xml: string, out: OfficeContentNode[]): void => {
         let pendingAnchorIds: string[] = [];
         for (const child of layoutChildren(container)) {
@@ -1528,6 +1673,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 out.push(undefined as unknown as OfficeContentNode);
                 out[at] = parseParagraph(child, xml, pendingAnchorIds, out);
                 pendingAnchorIds = [];
+                standFloatsBefore(out, at);
                 // The paragraph ends a section: the next starts on a new page (unless it runs on, a
                 // continuous section), with pages of its own.
                 const ended = sectionEnds.get(child);

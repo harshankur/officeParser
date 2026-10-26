@@ -546,8 +546,9 @@ export interface CommonOfficeParserConfig {
      * By default a parser that knows the geometry attaches, to every content node, a
      * {@link NodeBounds} box (`node.bounds`: the node's `{ x, y, width, height }` rectangle on its
      * page, in points) and, to each page node, the page dimensions ({@link PageMetadata.pageWidth},
-     * `pageHeight`, `rotation`). Today only the PDF parser produces any of this. Set this flag to
-     * drop all of it, giving a smaller AST that matches the pre-8.0 output shape.
+     * `pageHeight`, `rotation`). A document's pages (`pageSetup`), slides' shapes and a floating frame's
+     * place ({@link ShapeMetadata.float}, its text then read where it stands) are geometry too. Set this
+     * flag to drop all of it, giving a smaller AST that matches the pre-8.0 output shape.
      *
      * Note this also turns off the layout-faithful `.to('text')` rendering, which needs the boxes to
      * align columns and tables; without them the text generator falls back to plain flowing text.
@@ -2836,6 +2837,10 @@ export interface SlideMetadata {
  * Metadata for a `drawing` node: a shape drawn on a slide (a filled box, a circle, a line), or the frame
  * a shape's text sits in where that is turned or set within it. Its place is the node's `bounds`; the
  * text in the shape is in the paragraphs after it that have the same bounds. Read from PPTX.
+ *
+ * In a document, a `drawing` node with `float` is a text frame or text box standing beside the text
+ * (ODT `draw:frame`, Word `wp:anchor`, RTF `\shp`): its blocks are its children, and it comes before the
+ * paragraph it is anchored to. Writers that cannot place it write its blocks where it stands.
  */
 export interface ShapeMetadata {
     /** The shape's outline: DrawingML's preset name (`rect`, `roundRect`, `ellipse`, `triangle`, `line`, ...). */
@@ -2853,6 +2858,32 @@ export interface ShapeMetadata {
     textAnchor?: 'top' | 'middle' | 'bottom';
     /** The space between its edges and its text, in points. */
     textInsets?: { top: number; right: number; bottom: number; left: number };
+    /** Where a document's frame stands, beside the text of the paragraph after it, and how that text goes round it. */
+    float?: ShapeFloat;
+}
+
+/**
+ * Where a frame floating in a document's text stands (see {@link ShapeMetadata.float}). Lengths are in
+ * points.
+ */
+export interface ShapeFloat {
+    /** What `x` and `align` are measured across: the text column, the page's text area (between its margins), or the page. */
+    horizontalFrom: 'column' | 'margin' | 'page';
+    /** What `y` is measured down from: the top of the paragraph it is anchored to, the page's text area, or the page. */
+    verticalFrom: 'paragraph' | 'margin' | 'page';
+    /** Its left edge from the left of what it is measured across, where `align` does not place it. */
+    x?: number;
+    /** Placed at the left, centre or right of what it is measured across, instead of at `x`. */
+    align?: 'left' | 'center' | 'right';
+    /** Its top below the top of what it is measured down from. */
+    y?: number;
+    width: number;
+    /** Its height; unset, as tall as its text. */
+    height?: number;
+    /** How the text goes round it: beside it, above and below it only, or not at all (it stands over or behind the text). */
+    wrap: 'beside' | 'aboveBelow' | 'none';
+    /** The space the text keeps from it, at its left, right, top and bottom. */
+    gap?: { top: number; right: number; bottom: number; left: number };
 }
 
 /**

@@ -161,6 +161,7 @@ import {
     ParagraphSpacing,
     PageSetup,
     ShapeMetadata,
+    ShapeFloat,
     ParagraphMetadata,
     DefinitionMetadata,
 } from './types.js';
@@ -282,6 +283,7 @@ export {
     ParagraphSpacing,
     PageSetup,
     ShapeMetadata,
+    ShapeFloat,
     ParagraphMetadata,
     DefinitionMetadata,
 };

@@ -823,7 +823,8 @@ export async function buildWorkbook(content: OfficeContentNode[], source: Workbo
                 else { if (together.length) together.push({ cells: [] }); for (const r of rows) together.push(r); }
                 continue;
             }
-            if (node.type === 'drawing') continue;
+            // A slide's shape (its text the blocks after it); a document's frame holds its text, read as any block's.
+            if (node.type === 'drawing' && !node.children?.length) continue;
             // An embedded video or page: its address.
             if (node.type === 'embed') {
                 const url = (node.metadata as { url?: string } | undefined)?.url ?? node.text;

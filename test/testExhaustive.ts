@@ -16,7 +16,7 @@ import { PDFDocument, PDFHexString, PDFName, PDFOperator, PDFRawStream, Standard
 import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
-import type { ImageMetadata, OfficeContentNode, OfficeParserAST } from '../src/types';
+import type { ImageMetadata, OfficeContentNode, OfficeParserAST, ShapeMetadata } from '../src/types';
 import { parseXmlString } from '../src/utils/xmlUtils';
 import { decodeWindows1252, textDecoder } from '../src/utils/encodingUtils';
 import { ocrTestHooks, performOcr, terminateOcr } from '../src/utils/ocrUtils';
@@ -5442,6 +5442,114 @@ async function testWritersHoldUp(): Promise<void> {
 }
 
 /**
+ * A text frame or text box floating beside a document's text (ODT `draw:frame`, Word `wp:anchor` and
+ * VML, RTF `\shp`) is a `drawing` node holding its blocks, with where it stands (ShapeMetadata.float),
+ * before the paragraph it is anchored to: it was read as that paragraph's text, or as paragraphs after
+ * it. The native PDF engine draws it in its place, the paragraph's lines beside it and other blocks
+ * below it; every writer keeps its text.
+ */
+async function testFloatingFrames(): Promise<void> {
+    const frameOf = (nodes: OfficeContentNode[]) => {
+        const at = nodes.findIndex(n => n.type === 'drawing');
+        return { frame: nodes[at], after: nodes[at + 1], at };
+    };
+    // ODT: a frame anchored to its paragraph, 4.2in from its left, filled and outlined; one set as a character stays in its line.
+    const ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"';
+    const odt = Buffer.from(zipSync({ mimetype: strToU8('application/vnd.oasis.opendocument.text'), 'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${ODF_NS}><office:automatic-styles>`
+        + `<style:style style:name="fr1" style:family="graphic"><style:graphic-properties style:wrap="parallel" style:horizontal-pos="from-left" style:horizontal-rel="paragraph" fo:background-color="#dde8ff" fo:border="0.5pt solid #3355aa" fo:padding="0.05in"/></style:style>`
+        + `</office:automatic-styles><office:body><office:text><text:p>Before.</text:p><text:p><draw:frame draw:style-name="fr1" text:anchor-type="paragraph" svg:x="4.2in" svg:y="0in" svg:width="2.2in" svg:height="1in"><draw:text-box><text:p>Framed words.</text:p></draw:text-box></draw:frame>Beside the frame.</text:p>`
+        + `<text:p>Inline <draw:frame text:anchor-type="as-char" svg:width="1in" svg:height="0.3in"><draw:text-box><text:p>Boxed</text:p></draw:text-box></draw:frame> end.</text:p></office:text></office:body></office:document-content>`) }));
+    const odtAst = await OfficeParser.parseOffice(odt, { fileType: 'odt' } as any) as OfficeParserAST;
+    {
+        const { frame, after, at } = frameOf(odtAst.content);
+        const meta = frame?.metadata as ShapeMetadata | undefined;
+        assert.ok(frame && at === 1 && after?.text === 'Beside the frame.' && frame.children?.[0]?.text === 'Framed words.', `ODT: the frame is a drawing before its paragraph, which keeps its own text; got ${JSON.stringify(odtAst.content.map(n => [n.type, n.text]))}`);
+        assert.deepStrictEqual(meta?.float, { horizontalFrom: 'column', verticalFrom: 'paragraph', x: 302.4, y: 0, width: 158.4, height: 72, wrap: 'beside' }, `ODT: where the frame stands; got ${JSON.stringify(meta?.float)}`);
+        assert.ok(meta?.fill === '#DDE8FF' && meta?.line?.color === '#3355AA' && meta?.line?.width === 0.5 && meta?.textInsets?.left === 3.6, `ODT: the frame's fill, outline and padding; got ${JSON.stringify(meta)}`);
+        assert.ok(/Inline\s*Boxed\s*end\./.test(odtAst.content.find(n => (n.text || '').startsWith('Inline'))?.text || '') && odtAst.content.filter(n => n.type === 'drawing').length === 1, 'ODT: a frame set as a character stays in its line');
+    }
+
+    // DOCX: a DrawingML text box anchored beside the text, one above and below the text, and a VML one placed absolutely.
+    const W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word"';
+    const anchored = (text: string, wrap: string, h: string, v: string) => `<w:r><w:drawing><wp:anchor distT="0" distB="0" distL="114300" distR="114300" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/>${h}${v}<wp:extent cx="2011680" cy="914400"/>${wrap}<wp:docPr id="1" name="Box"/>`
+        + `<a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:prstGeom prst="rect"/><a:solidFill><a:srgbClr val="DDE8FF"/></a:solidFill><a:ln w="12700"><a:solidFill><a:srgbClr val="3355AA"/></a:solidFill></a:ln></wps:spPr>`
+        + `<wps:txbx><w:txbxContent><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:txbxContent></wps:txbx><wps:bodyPr lIns="0" tIns="0" rIns="0" bIns="0"/></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>`;
+    const docxXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W_NS}><w:body>`
+        + `<w:p>${anchored('Boxed beside', '<wp:wrapSquare wrapText="bothSides"/>', '<wp:positionH relativeFrom="column"><wp:posOffset>3840480</wp:posOffset></wp:positionH>', '<wp:positionV relativeFrom="paragraph"><wp:posOffset>12700</wp:posOffset></wp:positionV>')}<w:r><w:t>First anchor.</w:t></w:r></w:p>`
+        + `<w:p>${anchored('Boxed above', '<wp:wrapTopAndBottom/>', '<wp:positionH relativeFrom="margin"><wp:align>right</wp:align></wp:positionH>', '<wp:positionV relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionV>')}<w:r><w:t>Second anchor.</w:t></w:r></w:p>`
+        + `<w:p><w:r><w:pict><v:shape style="position:absolute;margin-left:10pt;margin-top:5pt;width:120pt;height:40pt;mso-position-horizontal-relative:page" fillcolor="#ffeecc" stroked="f"><v:textbox inset="2pt,1pt,2pt,1pt"><w:txbxContent><w:p><w:r><w:t>Old box</w:t></w:r></w:p></w:txbxContent></v:textbox><w10:wrap type="square"/></v:shape></w:pict></w:r><w:r><w:t>Third anchor.</w:t></w:r></w:p>`
+        + `</w:body></w:document>`;
+    const docx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8(`<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`),
+        '_rels/.rels': strToU8(`<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`),
+        'word/document.xml': strToU8(docxXml),
+    }));
+    const docxAst = await OfficeParser.parseOffice(docx, { fileType: 'docx' } as any) as OfficeParserAST;
+    {
+        const shape = docxAst.content.map(n => [n.type, n.type === 'drawing' ? n.children?.map(c => c.text).join() : n.text]);
+        assert.deepStrictEqual(shape, [['drawing', 'Boxed beside'], ['paragraph', 'First anchor.'], ['drawing', 'Boxed above'], ['paragraph', 'Second anchor.'], ['drawing', 'Old box'], ['paragraph', 'Third anchor.']], `DOCX: each floating text box before its paragraph; got ${JSON.stringify(shape)}`);
+        const floats = docxAst.content.filter(n => n.type === 'drawing').map(n => n.metadata as ShapeMetadata);
+        assert.deepStrictEqual(floats[0].float, { horizontalFrom: 'column', verticalFrom: 'paragraph', x: 302.4, y: 1, width: 158.4, height: 72, wrap: 'beside', gap: { top: 0, right: 9, bottom: 0, left: 9 } }, `DOCX: where the text box stands; got ${JSON.stringify(floats[0].float)}`);
+        assert.ok(floats[0].fill === '#DDE8FF' && floats[0].line?.color === '#3355AA' && floats[0].line?.width === 1 && floats[0].textInsets?.left === 0, `DOCX: the text box's look; got ${JSON.stringify(floats[0])}`);
+        assert.ok(floats[1].float?.wrap === 'aboveBelow' && floats[1].float?.align === 'right' && floats[1].float?.horizontalFrom === 'margin' && floats[1].float?.verticalFrom === 'page', `DOCX: a text box above and below the text, at the margin's right; got ${JSON.stringify(floats[1].float)}`);
+        assert.deepStrictEqual(floats[2].float, { horizontalFrom: 'page', verticalFrom: 'paragraph', x: 10, y: 5, width: 120, height: 40, wrap: 'beside' }, `DOCX: a VML text box placed absolutely; got ${JSON.stringify(floats[2].float)}`);
+        assert.ok(floats[2].fill === '#FFEECC' && !floats[2].line && floats[2].textInsets?.top === 1, `DOCX: the VML text box's look; got ${JSON.stringify(floats[2])}`);
+    }
+
+    // RTF: a shape's text box, 6048 to 9215 twips across, square wrapping, its colours 0xBBGGRR.
+    const rtf = String.raw`{\rtf1\ansi{\fonttbl{\f0 Times;}}\pard Lead.\par\pard {\shp{\*\shpinst\shpleft6048\shptop0\shpright9216\shpbottom1440\shpwr2\shpbxcolumn\shpbypara{\sp{\sn fillColor}{\sv 16771293}}{\sp{\sn lineColor}{\sv 11162931}}{\sp{\sn dxTextLeft}{\sv 0}}{\shptxt \pard Shape words.\par}}}Anchor text.\par}`;
+    const rtfAst = await OfficeParser.parseOffice(Buffer.from(rtf), { fileType: 'rtf' } as any) as OfficeParserAST;
+    {
+        const shape = rtfAst.content.map(n => [n.type, n.type === 'drawing' ? n.children?.map(c => c.text).join() : n.text]);
+        assert.deepStrictEqual(shape, [['paragraph', 'Lead.'], ['drawing', 'Shape words.'], ['paragraph', 'Anchor text.']], `RTF: the shape's text box before its paragraph; got ${JSON.stringify(shape)}`);
+        const meta = rtfAst.content[1].metadata as ShapeMetadata;
+        assert.ok(meta.float?.x === 302.4 && meta.float?.width === 158.4 && meta.float?.height === 72 && meta.float?.wrap === 'beside' && meta.float?.horizontalFrom === 'column' && meta.float?.verticalFrom === 'paragraph', `RTF: where the shape stands; got ${JSON.stringify(meta.float)}`);
+        assert.ok(meta.fill === '#DDE8FF' && meta.line?.color === '#3355AA' && meta.textInsets?.left === 0, `RTF: the shape's colours and insets; got ${JSON.stringify(meta)}`);
+    }
+
+    // Without geometry, a frame's text is read where it stands, as before.
+    {
+        const plain = await OfficeParser.parseOffice(docx, { fileType: 'docx', ignorePageGeometry: true } as any) as OfficeParserAST;
+        const shape = plain.content.map(n => [n.type, n.text]);
+        assert.ok(!plain.content.some(n => n.type === 'drawing') && shape[0][1] === 'First anchor.' && shape[1][1] === 'Boxed beside', `ignorePageGeometry: no frame, its text after its paragraph; got ${JSON.stringify(shape)}`);
+        const flat = await OfficeParser.parseOffice(odt, { fileType: 'odt', ignorePageGeometry: true } as any) as OfficeParserAST;
+        assert.ok(!flat.content.some(n => n.type === 'drawing') && /Framed words\.\s*Beside the frame\./.test(flat.content[1]?.text || ''), `ignorePageGeometry: an ODT frame's text in its paragraph; got ${JSON.stringify(flat.content.map(n => n.text))}`);
+    }
+
+    // Every writer keeps a frame's text.
+    for (const format of ['text', 'md', 'html', 'docx', 'odt', 'rtf', 'tex', 'xlsx', 'ods', 'pptx', 'odp'] as const) {
+        const value = (await odtAst.to(format as any)).value;
+        const text = typeof value === 'string' ? value : JSON.stringify((await OfficeParser.parseOffice(Buffer.from(value as Uint8Array), { fileType: format } as any)).content);
+        assert.ok(text.includes('Framed words') && text.includes('Beside the frame'), `${format}: the frame's text and its paragraph's are kept`);
+    }
+
+    // The native PDF engine: the frame at its place, the paragraph's lines beside it, a table below it.
+    const words = Array.from({ length: 60 }, (_, i) => `word${i}`).join(' ');
+    const para = (text: string) => ({ type: 'paragraph', text, children: [{ type: 'text', text }] });
+    const drawn = { type: 'odt', metadata: {}, attachments: [], content: [
+        { type: 'drawing', text: 'Framed words.', children: [para('Framed words.')], metadata: { geometry: 'rect', fill: '#DDE8FF', textInsets: { top: 2, right: 2, bottom: 2, left: 2 }, float: { horizontalFrom: 'column', verticalFrom: 'paragraph', x: 300, y: 0, width: 150, height: 72, wrap: 'beside' } } },
+        para(words),
+        { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [para('Cell text')] }] }] },
+        { type: 'drawing', text: 'Banner box.', children: [para('Banner box.')], metadata: { float: { horizontalFrom: 'column', verticalFrom: 'paragraph', align: 'center', y: 0, width: 200, height: 40, wrap: 'aboveBelow' } } },
+        para('Under the banner.'),
+    ] } as any;
+    const pdf = (await OfficeGenerator.generate(drawn, 'pdf', { pdfConfig: { engine: 'native', format: 'letter', margin: '1in' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    // (A line of the frame's beside one of the paragraph's on its baseline is read as one line.)
+    const lines = collectAllNodes(back).filter(n => n.type === 'text' && n.bounds && (n.text || '').trim());
+    const box = (text: string) => lines.find(n => (n.text || '').includes(text))?.bounds;
+    const left = Math.min(...lines.filter(n => /word\d/.test(n.text || '')).map(n => n.bounds!.x));
+    const first = box('word0')!, framed = box('Framed')!, cell = box('Cell text')!, banner = box('Banner box')!, under = box('Under the banner')!;
+    assert.ok(framed && framed.x + framed.width >= left + 300 + 20, `the frame's text is in the frame, 300pt into the column; got ${JSON.stringify(framed)}`);
+    const beside = lines.filter(n => /word\d/.test(n.text || '') && !(n.text || '').includes('Framed') && n.bounds!.y < first.y + 68);
+    const belowIt = lines.filter(n => /word\d/.test(n.text || '') && n.bounds!.y > first.y + 76);
+    assert.ok(beside.length >= 3 && beside.every(n => n.bounds!.x + n.bounds!.width <= left + 300 - 4), `the paragraph's lines beside the frame end before it; got ${JSON.stringify(beside.map(n => n.bounds))}`);
+    assert.ok(belowIt.length && belowIt.some(n => n.bounds!.x + n.bounds!.width > left + 320), `its lines below the frame have the column's width again; got ${JSON.stringify(belowIt.map(n => n.bounds))}`);
+    assert.ok(cell && cell.y > first.y + 70, `a table after it stands below the frame; got ${JSON.stringify(cell)}`);
+    assert.ok(banner && under && under.y > banner.y + 30 && Math.abs(banner.x + banner.width / 2 - 306) < 110, `text goes below a frame it may not stand beside; got ${JSON.stringify([banner, under])}`);
+}
+
+/**
  * The native PDF engine draws an SVG picture as vector graphics (it was dropped with
  * IMAGE_PROCESSING_FAILED): its shapes, paths, text, symbols and styles, in its place among the text,
  * at its size; what it cannot draw (a gradient in one colour) is reported, and an SVG that cannot be
@@ -8777,6 +8885,7 @@ async function runTests(): Promise<void> {
         ['Formats read as they show', testFormatsReadAsTheyShow],
         ['Writers hold up', testWritersHoldUp],
         ['Native PDF SVG pictures', testNativePdfSvgPictures],
+        ['Floating frames', testFloatingFrames],
         ['PDF lists read whole', testPdfListsReadWhole],
         ['PDF headings by size and weight', testPdfHeadingsBySizeAndWeight],
         ['PDF ruled tables', testPdfRuledTables],
