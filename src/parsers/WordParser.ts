@@ -60,7 +60,7 @@
  * @see https://learn.microsoft.com/en-us/openspecs/office_standards/ms-docx/ [MS-DOCX] Specification
  */
 
-import { attachmentLookup } from '../utils/repeatUtils.js';
+import { attachmentLookup, takeRepeats } from '../utils/repeatUtils.js';
 import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { MAX_PAGE_PT } from '../utils/pageLimits.js';
 import { titlePagesTakeHiddenFirsts } from '../utils/officeGenUtils.js';
@@ -1778,30 +1778,44 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         const settingsDoc = settings ? parseXmlString(settings.content.toString(), { config }) : undefined;
         const evenAndOdd = isOn(settingsDoc ? getFirstElementByTagName(settingsDoc, "w:evenAndOddHeaders") : undefined);
         const rels = relsOf(documentPath);
-        // Each part read once, and a node for every reference to it, with that reference's section and type:
-        // a part two sections refer to (or one section, for two types, as a writer that writes a part once
-        // gives it) was read for its first reference alone, and the later section showed another's.
+        // Each part read once, and a node for every reference to it that changes what its section shows, with that
+        // reference's section and type: a part two sections refer to (or one section, for two types, as a writer
+        // that writes a part once gives it) was read for its first reference alone, and the later section showed
+        // another's. A reference to the part (and hiddenness) already in force for its kind and type gives none:
+        // the section takes it on. The nodes share the part's blocks (they were copied for each, and one part of
+        // thousands of paragraphs that thousands of sections refer to took gigabytes), and each one past the first
+        // is charged to the repeated content budget, going without its blocks once that is spent.
         const byPath = new Map(files.map(f => [f.path, f]));
-        const read = new Map<string, OfficeContentNode[] | null>();
+        const read = new Map<string, { children: OfficeContentNode[]; text: string; weight: number } | null>();
         const given = new Set<string>();
+        const inForce = new Map<string, string>();
         const readInto = async (path: string, kind: 'header' | 'footer', metadata: HeaderFooterMetadata) => {
             const partFile = byPath.get(path);
             if (!partFile) return;
             const key = `${path}|${kind}|${metadata.type}|${metadata.section ?? ''}`;
             if (given.has(key)) return;
             given.add(key);
-            let children = read.get(path);
-            if (children === undefined) {
-                read.set(path, children = null);
+            const state = `${path}|${metadata.hidden ? 1 : 0}`, slot = `${kind}|${metadata.type}`;
+            if (metadata.section !== undefined && inForce.get(slot) === state) return;
+            inForce.set(slot, state);
+            let part = read.get(path);
+            const repeat = part !== undefined;
+            if (part === undefined) {
+                read.set(path, part = null);
                 const partXml = partFile.content.toString();
                 const partDoc = parseXmlString(partXml, { config });
                 if (!partDoc.documentElement) return;
                 const blocks: OfficeContentNode[] = [];
                 await readPart(partFile.path, partDoc.documentElement, () => readBlocks(partDoc.documentElement, partXml, blocks));
-                read.set(path, children = blocks);
-            } else if (children) children = structuredClone(children);
-            if (!children) return;
-            (kind === 'header' ? headers : footers).push({ type: kind, text: children.map(c => c.text || '').join('\n'), children, metadata });
+                const text = blocks.map(c => c.text || '').join('\n');
+                let count = 0;
+                const stack = [...blocks];
+                while (stack.length) { const n = stack.pop()!; count++; for (const c of n.children ?? []) stack.push(c); }
+                read.set(path, part = { children: blocks, text, weight: text.length + 16 * count });
+            }
+            if (!part) return;
+            const kept = !repeat || takeRepeats(config, 1, part.weight) > 0;
+            (kind === 'header' ? headers : footers).push({ type: kind, text: kept ? part.text : '', children: kept ? part.children : [], metadata });
         };
         for (const [index, sectPr] of sections.entries()) {
             const titlePage = isOn(getDirectChildren(sectPr, "w:titlePg")[0]);

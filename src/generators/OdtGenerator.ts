@@ -172,6 +172,8 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         let body = await this.renderBlocks(this.ast.content);
         this.reportUnshownSectionPart();
         if (this.openSection) { body += '</text:section>'; this.openSection = false; }
+        // (A section of columns opened by a break with nothing after it is none.)
+        body = body.replace(/<text:section text:style-name="[^"]*" text:name="[^"]*"><\/text:section>$/, '');
 
         const headers = runningFurniture(this.ast.auxiliary?.headers, 'header'), footers = runningFurniture(this.ast.auxiliary?.footers, 'footer');
         const hasHeader = headers.length > 0;
@@ -1027,13 +1029,17 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             // A section starting on the same page whose header or footer is its own shows it from the next page
             // break (ODF turns to another master page only there); one that ends before any is reported.
             this.reportUnshownSectionPart();
+            // (One on pages of another size, or turned, starts on a page of its own, as a word processor sets it:
+            // it went on on the pages before, of their size.)
+            const before = this.paperOf(this.currentSetup ?? this.ast.metadata?.pageSetup), after = setup ? this.paperOf(setup) : before;
+            const newPage = t === 'page' || Math.abs(before.w - after.w) > 0.5 || Math.abs(before.h - after.h) > 0.5;
             if (typeof meta?.section === 'number') this.currentSection = meta.section;
             if (setup) this.currentSetup = setup;
-            if (t === 'section' && typeof meta?.section === 'number' && this.hasOwnParts(meta.section)) this.waitingSection = meta.section;
+            if (!newPage && typeof meta?.section === 'number' && this.hasOwnParts(meta.section)) this.waitingSection = meta.section;
             // A section on a page of its own size or margins, or with a header or footer of its own: a master
             // page of them (and its columns), which the break's paragraph turns to (and the first's after it).
             // A section starting on the same page takes them at its next page.
-            if (t === 'page') out += this.pageStart();
+            if (newPage) out += this.pageStart();
             const pageColumns = this.pageColumns === null ? this.ast.metadata?.pageSetup?.columns : this.pageColumns;
             this.openSection = (columns?.count ?? 1) !== (pageColumns?.count ?? 1) || (columns?.gap ?? 0) !== (pageColumns?.gap ?? 0);
             if (this.openSection) {

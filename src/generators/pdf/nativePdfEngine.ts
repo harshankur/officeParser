@@ -2142,6 +2142,15 @@ class NativeLayout {
         const t = meta?.breakType;
         // A section that starts on this page: its columns from here (balanced where the next ends it here).
         if (t === 'section') {
+            // (One on pages of another size, or turned, starts on a page of its own, as a word processor sets it:
+            // it went on on the page before, of its size.)
+            const next = meta?.pageSetup && this.sectionPage ? this.sectionPage(meta.pageSetup) : undefined;
+            if (next && typeof meta?.section === 'number' && (Math.abs(next.w - this.pageW) > 0.5 || Math.abs(next.h - this.pageH) > 0.5)) {
+                await this.setColumns(undefined, false);
+                this.startSection(meta.section, meta.pageSetup);
+                await this.setColumns(meta.pageSetup?.columns, true);
+                return;
+            }
             if (typeof meta?.section === 'number') this.section = meta.section;
             await this.setColumns(meta?.pageSetup?.columns, true);
             return;

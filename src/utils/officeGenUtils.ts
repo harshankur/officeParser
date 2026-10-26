@@ -302,7 +302,8 @@ export function titlePagesTakeHiddenFirsts(parts: OfficeContentNode[], kind: 'he
         const own = bySection.get(section);
         if (own) { latest = own; continue; }
         if (titled[section] && latest && meta(latest)?.hidden) {
-            const copy: OfficeContentNode = { type: kind, text: latest.text, children: structuredClone(latest.children ?? []), metadata: { type: 'first', section } as HeaderFooterMetadata };
+            // (Its blocks shared with the part it copies: copied, a large part made a copy for each such section.)
+            const copy: OfficeContentNode = { type: kind, text: latest.text, children: latest.children ?? [], metadata: { type: 'first', section } as HeaderFooterMetadata };
             parts.push(latest = copy);
         }
     }

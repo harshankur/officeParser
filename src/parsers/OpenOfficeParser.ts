@@ -1739,9 +1739,16 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             // document's first pages, a later one's starts a section of its own (with its page).
             if (edge === 'before' && readingBody) {
                 const master = info?.masterPage && masterPages.has(info.masterPage) ? info.masterPage : undefined;
+                // (The master page in force named again, one that hands over to no other: a new page of it, as a
+                // word processor goes on, not a section with a first page of its own.)
+                const inForce = sectionMasters[sectionMasters.length - 1] ?? firstMaster;
+                const handsOver = (name: string) => { const next = masterPages.get(name)?.getAttribute('style:next-style-name'); return !!next && next !== name; };
                 if (!bodyStarted) {
                     bodyStarted = true;
                     if (master) firstMaster = master;
+                } else if (master && master === inForce && !handsOver(master)) {
+                    if (config.includeBreakNodes) targetArray.push({ type: 'break', metadata: { breakType: 'page' } as BreakMetadata });
+                    return;
                 } else if (master) {
                     sectionMasters.push(master);
                     if (config.includeBreakNodes) {
@@ -2922,6 +2929,13 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             const master = masterPages.get(name), next = master?.getAttribute('style:next-style-name');
             return [master, next && next !== name ? masterPages.get(next) : undefined].some(m => shown(m, 'style:header-left') || shown(m, 'style:footer-left'));
         });
+        // Each part read once and its blocks shared by the sections showing it, a node only where a section's
+        // part of a kind and type is other than the one in force (that section takes it on), and each node past
+        // a part's first charged to the repeated content budget, going without its blocks once that is spent:
+        // sections alternating two master pages read their parts again for each section, gigabytes for a
+        // document of kilobytes.
+        const readParts = new Map<Element, { children: OfficeContentNode[]; text: string; weight: number }>();
+        const inForce = new Map<string, Element | null>();
         masters.forEach((name, section) => {
             if (section > 0 && name === masters[section - 1]) return;
             const master = masterPages.get(name);
@@ -2954,12 +2968,25 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             }
             for (const [el, kind, type] of found) {
                 if (!el && !(sectioned && section > 0 && type === 'default')) continue;
-                const children: OfficeContentNode[] = [];
-                if (el) traverse(el, children, false, stylesXmlStr);
-                // Resolve any image/chart nodes the same way the body's are (OCR text, chart data,
-                // attachment linkage): without it a picture in a header would render blank.
-                if (children.length) assignAttachmentData(children);
-                (kind === 'header' ? headers : footers).push({ type: kind, text: children.map(c => c.text || '').join('\n'), children,
+                const slot = `${kind}|${type}`;
+                if (section > 0 && inForce.has(slot) && inForce.get(slot) === (el ?? null)) continue;
+                inForce.set(slot, el ?? null);
+                let part = el ? readParts.get(el) : undefined;
+                const repeat = !!part;
+                if (el && !part) {
+                    const children: OfficeContentNode[] = [];
+                    traverse(el, children, false, stylesXmlStr);
+                    // Resolve any image/chart nodes the same way the body's are (OCR text, chart data,
+                    // attachment linkage): without it a picture in a header would render blank.
+                    if (children.length) assignAttachmentData(children);
+                    const text = children.map(c => c.text || '').join('\n');
+                    let count = 0;
+                    const stack = [...children];
+                    while (stack.length) { const n = stack.pop()!; count++; for (const c of n.children ?? []) stack.push(c); }
+                    readParts.set(el, part = { children, text, weight: text.length + 16 * count });
+                }
+                const kept = part && (!repeat || takeRepeats(config, 1, part.weight) > 0);
+                (kind === 'header' ? headers : footers).push({ type: kind, text: kept ? part!.text : '', children: kept ? part!.children : [],
                     metadata: { type, ...(sectioned ? { section } : {}) } as HeaderFooterMetadata });
             }
         });
@@ -2970,6 +2997,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             };
         }
     }
+    // (A section of columns ending the document gives back the page's columns to nothing after it: no break.)
+    while (fileType === 'odt' && content.length && content[content.length - 1].type === 'break'
+        && (content[content.length - 1].metadata as BreakMetadata | undefined)?.breakType === 'section') content.pop();
     // A presentation's page is its slide's size alone: slides are laid out as they are, not within margins.
     const firstPage = config.ignorePageGeometry ? undefined : odfPageSetup(firstMaster);
     const pageSetup = firstPage && fileType === 'odp' ? { width: firstPage.width, height: firstPage.height } : firstPage;

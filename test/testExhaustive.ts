@@ -5038,6 +5038,42 @@ async function testTitleAndEvenPagesAsWordShows(): Promise<void> {
     assert.deepStrictEqual(await texFurniture('\\documentclass{article}\\usepackage{fancyhdr}\\fancypagestyle{main}{\\fancyhf{}\\fancyhead[L]{MAIN}}\\pagestyle{main}\\begin{document}Body.\\end{document}'), ['undefineddefault:MAIN'], 'a LaTeX page style set is read');
     assert.deepStrictEqual(await texFurniture('\\documentclass{article}\\usepackage{fancyhdr}\\pagestyle{fancy}\\fancyhead[L]{FANCY}\\fancypagestyle{plain}{\\fancyhf{}\\fancyhead[L]{PLAIN}}\\begin{document}Body.\\end{document}'), ['undefineddefault:FANCY'], 'a LaTeX page style only defined is not the pages\'');
     assert.deepStrictEqual(await texFurniture('\\documentclass{article}\\usepackage{fancyhdr}\\pagestyle{fancy}\\fancyhead[L]{\\ifodd\\value{page} {ODD}\\else {EVEN}\\fi}\\begin{document}Body.\\end{document}'), ['undefineddefault:ODD', 'undefinedeven:EVEN'], 'a LaTeX field of odd and even pages is read as their parts');
+
+    // A part a thousand sections refer to is read once, a node where a section's part changes; sections alternating
+    // two master pages share their parts' blocks (each read again for each section took gigabytes).
+    const many = await OfficeParser.parseOffice(sectioned(Array.from({ length: 1000 }, () => [ref('default', 'header1'), false] as [string, boolean]), { header1: 'HD' }), { fileType: 'docx' } as any) as OfficeParserAST;
+    assert.strictEqual(many.auxiliary?.headers?.length, 1, 'a part every section refers to is one node');
+    const alternating = Buffer.from(zipSync({ 'mimetype': strToU8('application/vnd.oasis.opendocument.text'),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:master-page-name="M2"/><style:style style:name="P2" style:family="paragraph" style:master-page-name="Standard"/></office:automatic-styles><office:body><office:text><text:p>One.</text:p>${'<text:p text:style-name="P1">A.</text:p><text:p text:style-name="P2">B.</text:p>'.repeat(500)}</office:text></office:body></office:document-content>`),
+        'styles.xml': strToU8(`<?xml version="1.0"?><office:document-styles ${NS}><office:master-styles>${masterOf('Standard', false)}${masterOf('M2', true)}</office:master-styles></office:document-styles>`) }));
+    const alternatingAst = await OfficeParser.parseOffice(alternating, { fileType: 'odt' } as any) as OfficeParserAST;
+    assert.ok(new Set(alternatingAst.auxiliary!.headers!.map(h => h.children)).size <= 4, 'sections alternating two master pages share their parts\' blocks');
+    // An ODT paragraph naming the master page in force starts a page of it, not a section with a title page.
+    const sameMaster = Buffer.from(zipSync({ 'mimetype': strToU8('application/vnd.oasis.opendocument.text'),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:automatic-styles><style:style style:name="P2" style:family="paragraph" style:master-page-name="Standard"/></office:automatic-styles><office:body><office:text><text:p>One.</text:p><text:p text:style-name="P2">Two.</text:p></office:text></office:body></office:document-content>`),
+        'styles.xml': strToU8(`<?xml version="1.0"?><office:document-styles ${NS}><office:master-styles>${masterOf('Standard', false)}</office:master-styles></office:document-styles>`) }));
+    const sameMasterBreaks = (await OfficeParser.parseOffice(sameMaster, { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST).content.filter(n => n.type === 'break').map(n => [(n.metadata as any).breakType, (n.metadata as any).section]);
+    assert.deepStrictEqual(sameMasterBreaks, [['page', undefined]], 'the master page in force named again is a page break');
+
+    // A section starting on the same page but on pages of another size starts a page of its own (native PDF, ODT).
+    const block = (text: string) => ({ type: 'paragraph', text, children: [{ type: 'text', text }] });
+    const turned = { type: 'docx', metadata: { pageSetup: { width: 612, height: 792 } }, attachments: [], content: [block('Portrait.'),
+        { type: 'break', metadata: { breakType: 'section', section: 1, pageSetup: { width: 792, height: 612 } } }, block('Landscape.')] } as any;
+    const turnedPdf = await PDFDocument.load((await OfficeGenerator.generate(turned, 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array);
+    assert.deepStrictEqual(turnedPdf.getPages().map(p => [Math.round(p.getWidth()), Math.round(p.getHeight())]), [[612, 792], [792, 612]], 'native PDF: a section of turned pages starts one');
+    const turnedParts = unzipSync(new Uint8Array((await OfficeGenerator.generate(turned, 'odt')).value as any));
+    const turnedContent = strFromU8(turnedParts['content.xml']), turnedStyles = strFromU8(turnedParts['styles.xml']);
+    const turnTo = /<style:style style:name="(P\d+)"[^>]*style:master-page-name="([^"]+)"/.exec(turnedContent);
+    const turnedLayout = turnTo ? new RegExp(`<style:master-page style:name="${turnTo[2]}" style:page-layout-name="([^"]+)"`).exec(turnedStyles)?.[1] : undefined;
+    assert.ok(turnTo && new RegExp(`text:style-name="${turnTo[1]}"/><text:p>Landscape\\.`).test(turnedContent) && turnedLayout && new RegExp(`style:name="${turnedLayout}"><style:page-layout-properties fo:page-width="11in" fo:page-height="8\\.5in"`).test(turnedStyles),
+        `ODT: a section of turned pages starts on a page of its turned master; got ${turnedContent.slice(0, 400)}`);
+    // LaTeX output sets a section of turned pages turned (pdflscape's landscape), the next turned back.
+    const turnedTex = String((await OfficeGenerator.generate({ ...turned, content: [block('Portrait.'), { type: 'break', metadata: { breakType: 'page', section: 1, pageSetup: { width: 792, height: 612 } } }, block('Landscape.'),
+        { type: 'break', metadata: { breakType: 'page', section: 2, pageSetup: { width: 612, height: 792 } } }, block('Back.')] } as any, 'tex' as any)).value);
+    assert.ok(/\\usepackage\{pdflscape\}/.test(turnedTex) && /\\begin\{landscape\}[\s\S]*Landscape\.[\s\S]*\\end\{landscape\}[\s\S]*Back\./.test(turnedTex), 'LaTeX output turns a section of turned pages');
+    // (One starting on the same page too: on a page of its own, turned.)
+    const turnedOnPage = String((await OfficeGenerator.generate(turned, 'tex' as any)).value);
+    assert.ok(/\\clearpage[\s\S]*\\begin\{landscape\}[\s\S]*Landscape\.[\s\S]*\\end\{landscape\}/.test(turnedOnPage), 'LaTeX output turns a section of turned pages starting on the same page');
 }
 
 /**
@@ -5465,6 +5501,23 @@ async function testNativePdfSvgPictures(): Promise<void> {
     const atRulesStarted = Date.now();
     await drawn(`<style>${'@a{}'.repeat(60000)}</style><rect width="20" height="20" fill="#00ff00"/>`);
     assert.ok(Date.now() - atRulesStarted < 5000, `a stylesheet of many at-rules is read quickly; took ${Date.now() - atRulesStarted}ms`);
+    // Rules of ancestors (descendant and child combinators, as Mermaid and D3 write them) reach their elements.
+    for (const body of ['<style>#chart .node rect{fill:#00ff00}</style><g id="chart"><g class="node"><rect width="20" height="20" fill="red"/></g></g>',
+        '<style>.axis > path{fill:#00ff00}</style><g class="axis"><path d="M0 0H20V20z" fill="red"/></g>']) {
+        assert.ok(/0 1 0 rg/.test((await drawn(body)).streams), `a rule of ancestors draws green: ${body}`);
+    }
+    assert.ok(!/0 1 0 rg/.test((await drawn('<style>.axis > path{fill:#00ff00}</style><g class="axis"><g><path d="M0 0H20V20z" fill="red"/></g></g>')).streams), 'a child combinator matches a child alone');
+    // A switch draws its first child whose conditions hold, alone (a drawing's "cannot display" note was drawn over it).
+    const switched = await drawn('<switch><g requiredFeatures="http://www.w3.org/TR/SVG11/feature#Extensibility"/><text x="5" y="50">CANNOTDISPLAY</text></switch>'
+        + '<switch><foreignObject width="50" height="20"><p xmlns="http://www.w3.org/1999/xhtml">HTML</p></foreignObject><text x="5" y="80">FALLBACKLABEL</text></switch>');
+    assert.ok(!switched.nodes.some(n => /CANNOTDISPLAY/.test(n.text || '')) && switched.nodes.some(n => /FALLBACKLABEL/.test(n.text || '')), `a switch draws its first child that holds; got ${JSON.stringify(switched.nodes.map(n => n.text))}`);
+    // Text of an outline alone is drawn stroked; a picture keeps its aspect in its box; a nested svg with no size fills its viewport.
+    assert.ok(/1 Tr/.test((await drawn('<text x="5" y="50" fill="none" stroke="#00ff00" font-size="30">Outline</text>')).streams), 'outlined text is drawn stroked');
+    const widePng = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAADUlEQVR4nGP4zwAE/wEHAAH/4iOeWQAAAABJRU5ErkJggg==';
+    const fitted = await drawn(`<image width="100" height="100" href="data:image/png;base64,${widePng}"/>`);
+    assert.ok(/50 0 0 50 0 25 cm/.test(fitted.streams), 'a picture is fitted to its box keeping its aspect');
+    const marked = await drawn('<line x1="0" y1="10" x2="100" y2="10" stroke="black" marker-end="url(#m)"/>');
+    assert.ok(marked.messages.some(m => /markers/.test(m)), `markers are named; got ${JSON.stringify(marked.messages)}`);
 }
 
 /**

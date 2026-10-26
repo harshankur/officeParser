@@ -62,30 +62,48 @@ export interface SvgPicture {
     preserve: string;
     rules: Rule[];
     ids: Map<string, Element>;
+    /** The stylesheet's selectors not read (attribute selectors, sibling combinators, pseudo-classes of position), for the warning. */
+    unreadSelectors: number;
 }
 
 type Matrix = [number, number, number, number, number, number];
 const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
 
-interface Rule { tag?: string; classes: string[]; id?: string; specificity: number; order: number; declarations: Map<string, string>; /** Its `!important` ones, over every other and `style`'s own. */ important: Map<string, string> }
+/** A compound selector: a type (or any), classes, an id. */
+interface Compound { tag?: string; classes: string[]; id?: string }
+interface Rule extends Compound {
+    specificity: number; order: number; declarations: Map<string, string>;
+    /** Its `!important` ones, over every other and `style`'s own. */
+    important: Map<string, string>;
+    /** The compounds the element's ancestors must match, nearest first, each its parent's (`>`) or any ancestor's. */
+    ancestors?: { compound: Compound; child: boolean }[];
+}
 
 /** The style an element draws with, inherited from its parents where SVG inherits it. */
 interface Style {
     fill: string; stroke: string; strokeWidth: number; fillOpacity: number; strokeOpacity: number; opacity: number;
     fillRule: string; lineCap: string; lineJoin: string; dash: string; fontSize: number; fontFamily: string;
     fontWeight: string; fontStyle: string; textAnchor: string; color: string; visibility: string;
+    miterLimit: number; dominantBaseline: string;
 }
 
 const INITIAL_STYLE: Style = {
     fill: 'black', stroke: 'none', strokeWidth: 1, fillOpacity: 1, strokeOpacity: 1, opacity: 1, fillRule: 'nonzero',
     lineCap: 'butt', lineJoin: 'miter', dash: 'none', fontSize: 16, fontFamily: 'sans-serif', fontWeight: 'normal',
-    fontStyle: 'normal', textAnchor: 'start', color: 'black', visibility: 'visible',
+    fontStyle: 'normal', textAnchor: 'start', color: 'black', visibility: 'visible', miterLimit: 4, dominantBaseline: 'auto',
 };
+
+/** How far below the text's y its baseline is, in ems, for each `dominant-baseline` (the y is the text's middle, its top, ...). */
+const BASELINE_SHIFT: Record<string, number> = Object.assign(Object.create(null), {
+    middle: 0.32, central: 0.35, mathematical: 0.35, hanging: 0.8, 'text-before-edge': 0.85, 'before-edge': 0.85, 'text-top': 0.85,
+    'text-after-edge': -0.2, 'after-edge': -0.2, 'text-bottom': -0.2, ideographic: -0.2,
+});
 
 /** The properties read from attributes, `style` and rules. */
 const PROPERTIES = new Set(['fill', 'stroke', 'stroke-width', 'fill-opacity', 'stroke-opacity', 'opacity', 'fill-rule',
     'stroke-linecap', 'stroke-linejoin', 'stroke-dasharray', 'font-size', 'font-family', 'font-weight', 'font-style',
-    'text-anchor', 'color', 'visibility', 'display', 'stop-color', 'stop-opacity', 'font', 'filter', 'mask', 'clip-path']);
+    'text-anchor', 'color', 'visibility', 'display', 'stop-color', 'stop-opacity', 'font', 'filter', 'mask', 'clip-path',
+    'stroke-miterlimit', 'dominant-baseline', 'alignment-baseline', 'marker', 'marker-start', 'marker-mid', 'marker-end']);
 
 const localName = (el: Element): string => (el.localName || el.tagName || '').replace(/^.*:/, '');
 const childElements = (el: Element): Element[] => {
@@ -187,9 +205,31 @@ function declarations(text: string, into = new Map<string, string>(), important?
     return into;
 }
 
-/** The picture's `<style>` rules of simple selectors: a type, classes, an id, or any element. */
-function readRules(css: string): Rule[] {
+/** At most this many ancestors a picture's elements are tried against its rules' ancestors, in all. */
+const MAX_ANCESTOR_STEPS = 2_000_000;
+/** At most this many compounds a selector chains (`#chart .node rect`). */
+const MAX_SELECTOR_COMPOUNDS = 8;
+
+/** A compound selector read (`rect.a.b#c`, `*`), or undefined for one it does not read. */
+function readCompound(text: string): Compound | undefined {
+    const m = /^([a-zA-Z][\w-]*|\*)?((?:[.#][\w-]+)*)$/.exec(text);
+    if (!m || (!m[1] && !m[2])) return undefined;
+    const classes: string[] = [];
+    let id: string | undefined;
+    for (const part of m[2].match(/[.#][\w-]+/g) ?? []) part[0] === '.' ? (classes.includes(part.slice(1)) || classes.length > MAX_SELECTOR_CLASSES || classes.push(part.slice(1))) : (id = part.slice(1));
+    if (classes.length > MAX_SELECTOR_CLASSES) return undefined;
+    return { tag: m[1] && m[1] !== '*' ? m[1] : undefined, classes, id };
+}
+
+/**
+ * The picture's `<style>` rules of the selectors it reads: a type, classes, an id, or any element, alone or
+ * after ancestors' (descendant and child combinators: `#chart .node rect`, `.axis > path`, as Mermaid and D3
+ * write them; they were left out, and their shapes filled black). A rule of a state a still picture never is
+ * in (`:hover`, `:focus`) applies to nothing; one of a selector it does not read is counted.
+ */
+function readRules(css: string): { rules: Rule[]; unread: number } {
     const rules: Rule[] = [];
+    let unread = 0;
     const text = css.slice(0, MAX_CSS_LENGTH).replace(/\/\*[\s\S]*?(?:\*\/|$)/g, ' ');
     let at = 0;
     while (at < text.length && rules.length < MAX_RULES) {
@@ -230,18 +270,26 @@ function readRules(css: string): Rule[] {
         const decls = declarations(body, new Map(), important);
         if (!decls.size && !important.size) continue;
         for (const selector of prelude.split(',')) {
-            const m = /^\s*([a-zA-Z][\w-]*|\*)?((?:[.#][\w-]+)*)\s*$/.exec(selector);
-            if (!m || (!m[1] && !m[2])) continue;
-            const classes: string[] = [];
-            let id: string | undefined;
-            for (const part of m[2].match(/[.#][\w-]+/g) ?? []) part[0] === '.' ? (classes.includes(part.slice(1)) || classes.length > MAX_SELECTOR_CLASSES || classes.push(part.slice(1))) : (id = part.slice(1));
-            if (classes.length > MAX_SELECTOR_CLASSES) continue;
-            const tag = m[1] && m[1] !== '*' ? m[1] : undefined;
-            rules.push({ tag, classes, id, specificity: (id ? 10_000 : 0) + classes.length * 100 + (tag ? 1 : 0), order: rules.length, declarations: decls, important });
+            if (/:(?:hover|active|focus|focus-within|focus-visible|visited|target)\b/.test(selector)) continue;
+            const tokens = selector.trim().replace(/\s*>\s*/g, ' > ').split(/\s+/).filter(Boolean);
+            const compounds: Compound[] = [], links: boolean[] = [];
+            let ok = tokens.length > 0 && tokens[0] !== '>' && tokens[tokens.length - 1] !== '>';
+            for (let k = 0; ok && k < tokens.length; k++) {
+                if (tokens[k] === '>') { if (tokens[k - 1] === '>') ok = false; continue; }
+                const compound = readCompound(tokens[k]);
+                if (!compound || compounds.length >= MAX_SELECTOR_COMPOUNDS) { ok = false; break; }
+                if (compounds.length) links.push(tokens[k - 1] === '>');
+                compounds.push(compound);
+            }
+            if (!ok) { unread++; continue; }
+            const subject = compounds[compounds.length - 1];
+            const specificity = compounds.reduce((sum, c) => sum + (c.id ? 10_000 : 0) + c.classes.length * 100 + (c.tag ? 1 : 0), 0);
+            const ancestors = compounds.slice(0, -1).map((compound, k) => ({ compound, child: links[k] })).reverse();
+            rules.push({ ...subject, specificity, order: rules.length, declarations: decls, important, ...(ancestors.length ? { ancestors } : {}) });
             if (rules.length >= MAX_RULES) break;
         }
     }
-    return rules.sort((a, b) => a.specificity - b.specificity || a.order - b.order);
+    return { rules: rules.sort((a, b) => a.specificity - b.specificity || a.order - b.order), unread };
 }
 
 /**
@@ -274,7 +322,8 @@ export function readSvg(text: string, config?: OfficeParserConfig): SvgPicture |
         const kids = childElements(el);
         for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
     }
-    return { width, height, root, viewBox, preserve: root.getAttribute('preserveAspectRatio') || 'xMidYMid meet', rules: readRules(css), ids };
+    const { rules, unread } = readRules(css);
+    return { width, height, root, viewBox, preserve: root.getAttribute('preserveAspectRatio') || 'xMidYMid meet', rules, ids, unreadSelectors: unread };
 }
 
 /** The matrix that places a viewBox in a viewport of `w` by `h`, as `preserveAspectRatio` says. */
@@ -288,8 +337,9 @@ function viewBoxMatrix(viewBox: [number, number, number, number] | undefined, pr
         sx = sy = s;
     }
     const free = (whole: number, used: number, where: string) => where === 'Mid' ? (whole - used) / 2 : where === 'Max' ? whole - used : 0;
-    const ax = align === 'none' ? 0 : free(w, vw * sx, /^xM(id|ax)/.exec(align)?.[1] ?? 'Min');
-    const ay = align === 'none' ? 0 : free(h, vh * sy, /YM(id|ax)$/.exec(align)?.[1] ?? 'Min');
+    // (The alignment's words whole, `Mid` and `Max`: their ends alone matched none, and every picture sat at the top left.)
+    const ax = align === 'none' ? 0 : free(w, vw * sx, /^x(Mid|Max)/.exec(align)?.[1] ?? 'Min');
+    const ay = align === 'none' ? 0 : free(h, vh * sy, /Y(Mid|Max)$/.exec(align)?.[1] ?? 'Min');
     return [sx, 0, 0, sy, ax - x * sx, ay - y * sy];
 }
 
@@ -495,28 +545,85 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
     });
     const matched = new Map<string, { normal: Map<string, string>; important: Map<string, string> }>();
     const noRules = { normal: new Map<string, string>(), important: new Map<string, string>() };
+    if (svg.unreadSelectors) left.add('stylesheet rules of selectors it does not read');
+    const compoundMatches = (el: Element, c: Compound): boolean => {
+        if (c.tag && localName(el) !== c.tag) return false;
+        if (c.id && el.getAttribute('id') !== c.id) return false;
+        if (!c.classes.length) return true;
+        const own = new Set((el.getAttribute('class') || '').slice(0, 4096).split(/\s+/));
+        return c.classes.every(x => own.has(x));
+    };
+    const parentOf = (el: Element): Element | undefined => { const p = el.parentNode; return p && p.nodeType === 1 ? p as Element : undefined; };
+    /**
+     * Whether an element's ancestors match a rule's (right to left, a descendant's tried at each ancestor up),
+     * within a bound of steps for the picture: past it, rules of ancestors match nothing more, and are named.
+     */
+    let ancestorSteps = MAX_ANCESTOR_STEPS;
+    const ancestorsMatch = (el: Element, ancestors: NonNullable<Rule['ancestors']>): boolean => {
+        if (ancestorSteps <= 0) { left.add('stylesheet rules past the picture\'s limits'); return false; }
+        const from = (node: Element | undefined, k: number): boolean => {
+            if (k === ancestors.length) return true;
+            const { compound, child } = ancestors[k];
+            for (let p = node, depth = 0; p && depth < MAX_DEPTH && ancestorSteps-- > 0; p = parentOf(p), depth++) {
+                if (compoundMatches(p, compound) && from(parentOf(p), k + 1)) return true;
+                if (child) return false;
+            }
+            return false;
+        };
+        return from(parentOf(el), 0);
+    };
+    // The rules every element of a type takes (any element's, its type's, of no ancestors), merged once a type:
+    // with thousands of them, each element of other classes merged them all again.
+    const typeRules = new Map<string, { normal: Map<string, string>; important: Map<string, string>; last: number }>();
+    const typeRulesOf = (tag: string) => {
+        let known = typeRules.get(tag);
+        if (!known) {
+            const normal = new Map<string, string>(), important = new Map<string, string>();
+            let last = -1;
+            const list = [...(ruleIndex.get('*') ?? []), ...(ruleIndex.get(`t:${tag}`) ?? [])].filter(i => !svg.rules[i].ancestors).sort((a, b) => a - b);
+            for (const i of list) {
+                const rule = svg.rules[i];
+                if (rule.tag && rule.tag !== tag) continue;
+                for (const [k, v] of rule.declarations) if (PROPERTIES.has(k)) normal.set(k, v);
+                for (const [k, v] of rule.important) if (PROPERTIES.has(k)) important.set(k, v);
+                last = i;
+            }
+            typeRules.set(tag, known = { normal, important, last });
+        }
+        return known;
+    };
     const matchedRules = (el: Element): { normal: Map<string, string>; important: Map<string, string> } => {
         if (!svg.rules.length) return noRules;
         const tag = localName(el);
         const ownId = el.getAttribute('id') || undefined;
         const id = ownId && ruleIds.has(ownId) ? ownId : undefined;
         const classes = [...new Set((el.getAttribute('class') || '').slice(0, 4096).split(/\s+/).filter(c => c && ruleClasses.has(c)))].sort();
-        const key = `${tag}|${id ?? ''}|${classes.join(' ')}`;
-        const known = matched.get(key);
-        if (known) return known;
         const has = new Set(classes);
         const candidates: number[] = [...(ruleIndex.get('*') ?? []), ...(ruleIndex.get(`t:${tag}`) ?? []), ...(id ? ruleIndex.get(`#${id}`) ?? [] : [])];
         for (const c of classes) for (const i of ruleIndex.get(`.${c}`) ?? []) candidates.push(i);
-        // (In the stylesheet's order of precedence, as the rules are sorted.)
-        candidates.sort((a, b) => a - b);
-        // The properties drawing reads alone, each its last value: bounded by them, however many rules match.
+        // The rules of ancestors the element's own match: part of what it takes, so of the key its properties are found by.
+        const subject = (rule: Rule) => !(rule.tag && rule.tag !== tag) && !(rule.id && rule.id !== id) && rule.classes.every(c => has.has(c));
+        const passing = candidates.filter(i => svg.rules[i].ancestors && subject(svg.rules[i]) && ancestorsMatch(el, svg.rules[i].ancestors!)).sort((a, b) => a - b);
+        const key = `${tag}|${id ?? ''}|${classes.join(' ')}|${passing.join(',')}`;
+        const known = matched.get(key);
+        if (known) return known;
+        const base = typeRulesOf(tag);
+        const passed = new Set(passing);
+        // (In the stylesheet's order of precedence, as the rules are sorted; the type's rules first where every other comes after them.)
+        const rest = candidates.filter(i => svg.rules[i].ancestors ? passed.has(i) : (svg.rules[i].classes.length || svg.rules[i].id) && subject(svg.rules[i])).sort((a, b) => a - b);
         const out = new Map<string, string>(), important = new Map<string, string>();
-        for (const i of candidates) {
-            const rule = svg.rules[i];
-            if ((rule.tag && rule.tag !== tag) || (rule.id && rule.id !== id) || !rule.classes.every(c => has.has(c))) continue;
-            for (const [k, v] of rule.declarations) if (PROPERTIES.has(k)) out.set(k, v);
-            for (const [k, v] of rule.important) if (PROPERTIES.has(k)) important.set(k, v);
-        }
+        const apply = (list: number[]) => {
+            for (const i of list) {
+                const rule = svg.rules[i];
+                for (const [k, v] of rule.declarations) if (PROPERTIES.has(k)) out.set(k, v);
+                for (const [k, v] of rule.important) if (PROPERTIES.has(k)) important.set(k, v);
+            }
+        };
+        if (rest.every(i => i > base.last)) {
+            for (const [k, v] of base.normal) out.set(k, v);
+            for (const [k, v] of base.important) important.set(k, v);
+            apply(rest);
+        } else apply([...new Set([...candidates.filter(i => !svg.rules[i].ancestors && subject(svg.rules[i])), ...passing])].sort((a, b) => a - b));
         const found = { normal: out, important };
         matched.set(key, found);
         return found;
@@ -572,6 +679,9 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
         if (v('font-style')) style.fontStyle = v('font-style')!;
         if (v('text-anchor')) style.textAnchor = v('text-anchor')!;
         if (v('visibility')) style.visibility = v('visibility')!;
+        const miter = num(v('stroke-miterlimit'));
+        if (miter >= 1) style.miterLimit = miter;
+        if (v('dominant-baseline')) style.dominantBaseline = v('dominant-baseline')!;
         return { style, own };
     };
 
@@ -635,6 +745,8 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
             ops.push(lib.setStrokingRgbColor(stroke.color.red, stroke.color.green, stroke.color.blue), lib.setLineWidth(coord(style.strokeWidth)));
             ops.push(op('J', lib.asPDFNumber(style.lineCap === 'round' ? 1 : style.lineCap === 'square' ? 2 : 0)));
             ops.push(op('j', lib.asPDFNumber(style.lineJoin === 'round' ? 1 : style.lineJoin === 'bevel' ? 2 : 0)));
+            // (SVG's miter limit, 4 unless set: a PDF's is 10, and sharp joins ran long.)
+            ops.push(op('M', lib.asPDFNumber(Math.min(coord(style.miterLimit), 1000))));
             const dash = style.dash !== 'none' ? numbers(style.dash, 32).filter(n => n >= 0) : [];
             if (dash.length && dash.some(n => n > 0)) ops.push(lib.setDashPattern((dash.length % 2 ? [...dash, ...dash] : dash).map(coord), 0));
         }
@@ -722,20 +834,28 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
         }
         for (const chunk of chunks) {
             const width = chunk.runs.reduce((w, r) => w + canvas.width(r.text, faceOf(r.style), r.style.fontSize), 0);
-            let cx = chunk.x - (style.textAnchor === 'middle' ? width / 2 : style.textAnchor === 'end' ? width : 0);
+            // (Anchored as its first run says: a span's own `text-anchor` placed nothing.)
+            const anchor = chunk.runs[0].style.textAnchor;
+            let cx = chunk.x - (anchor === 'middle' ? width / 2 : anchor === 'end' ? width : 0);
             for (const run of chunk.runs) {
                 // Text past the picture's bound on characters (its `use` copies counted) is not drawn, and named.
                 if (budget.chars <= 0) { left.add('text past the picture\'s limits'); return; }
                 budget.chars -= run.text.length;
                 const hidden = run.style.visibility === 'hidden' || run.style.visibility === 'collapse';
                 const fill = hidden ? undefined : paint(run.style.fill, run.style);
+                // Its outline too, where it has one (text of an outline alone was not drawn): a PDF's text drawn
+                // stroked, or filled and stroked.
+                const outline = !hidden && run.style.strokeWidth > 0 ? paint(run.style.stroke, run.style) : undefined;
                 const face = faceOf(run.style);
                 const w = canvas.width(run.text, face, run.style.fontSize);
-                if (fill && run.text.trim()) {
-                    const alpha = fill.alpha * run.style.fillOpacity * opacity;
-                    page.pushOperators(lib.pushGraphicsState(), ...(alpha < 1 ? [op('gs', opacityState(alpha, alpha))] : []),
-                        cm([1, 0, 0, -1, cx, chunk.y]));
-                    try { canvas.text(run.text, face, 0, 0, run.style.fontSize, fill.color); } finally { page.pushOperators(lib.popGraphicsState()); }
+                if ((fill || outline) && run.text.trim()) {
+                    const alpha = (fill ? fill.alpha * run.style.fillOpacity : 1) * opacity, strokeAlpha = (outline ? outline.alpha * run.style.strokeOpacity : 1) * opacity;
+                    const stroked = outline ? [lib.setStrokingRgbColor(outline.color.red, outline.color.green, outline.color.blue), lib.setLineWidth(coord(run.style.strokeWidth)), op('Tr', lib.asPDFNumber(fill ? 2 : 1))] : [];
+                    // (Its baseline where `dominant-baseline` sets the text: a label centred on its y sat a third of an em high.)
+                    const shift = BASELINE_SHIFT[run.style.dominantBaseline] ?? 0;
+                    page.pushOperators(lib.pushGraphicsState(), ...(alpha < 1 || strokeAlpha < 1 ? [op('gs', opacityState(alpha, strokeAlpha))] : []),
+                        ...stroked, cm([1, 0, 0, -1, cx, chunk.y + shift * run.style.fontSize]));
+                    try { canvas.text(run.text, face, 0, 0, run.style.fontSize, (fill ?? outline)!.color); } finally { page.pushOperators(lib.popGraphicsState()); }
                 }
                 cx += w;
             }
@@ -746,8 +866,6 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
     const drawImage = async (el: Element, style: Style, opacity: number) => {
         if (style.visibility === 'hidden' || style.visibility === 'collapse') return;
         const href = (el.getAttribute('href') || el.getAttribute('xlink:href') || '').trim();
-        const w = length(el.getAttribute('width'), viewport.w), h = length(el.getAttribute('height'), viewport.h);
-        if (!(w > 0) || !(h > 0)) return;
         let embedding = images.get(href);
         if (!embedding) {
             embedding = (async () => {
@@ -763,9 +881,20 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
         }
         const img = await embedding;
         if (!img) return;
+        // Its box: its width and height, else the picture's own size (a box of no size had it dropped unnamed);
+        // the picture fitted in it as `preserveAspectRatio` says (it was stretched to the box), cut to the box
+        // where it is sliced.
+        const iw = Number(img.width) > 0 ? Number(img.width) : 0, ih = Number(img.height) > 0 ? Number(img.height) : 0;
+        const ownW = length(el.getAttribute('width'), viewport.w), ownH = length(el.getAttribute('height'), viewport.h);
+        const w = ownW > 0 ? ownW : ownH > 0 && iw && ih ? ownH * iw / ih : iw, h = ownH > 0 ? ownH : ownW > 0 && iw && ih ? ownW * ih / iw : ih;
+        if (!(w > 0) || !(h > 0)) { left.add('pictures of no size'); return; }
         const x = length(el.getAttribute('x'), viewport.w) || 0, y = length(el.getAttribute('y'), viewport.h) || 0;
+        const preserve = el.getAttribute('preserveAspectRatio') || 'xMidYMid meet';
+        const fit = iw && ih ? viewBoxMatrix([0, 0, iw, ih], preserve, w, h) : [w / (iw || 1), 0, 0, h / (ih || 1), 0, 0] as Matrix;
+        const sliced = /\bslice\b/.test(preserve);
         page.pushOperators(lib.pushGraphicsState(), ...(opacity < 1 ? [op('gs', opacityState(opacity, opacity))] : []),
-            cm([w, 0, 0, -h, x, y + h]));
+            ...(sliced ? [lib.rectangle(coord(x), coord(y), coord(w), coord(h)), lib.clip(), lib.endPath()] : []),
+            cm([1, 0, 0, 1, x, y]), cm(fit), cm([iw || 1, 0, 0, -(ih || 1), 0, ih || 1]));
         try { page.drawImage(img, { x: 0, y: 0, width: 1, height: 1 }); } finally { page.pushOperators(lib.popGraphicsState()); }
     };
 
@@ -782,12 +911,14 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
         if (own.has('filter') && own.get('filter') !== 'none') left.add('filters');
         if (own.has('mask') && own.get('mask') !== 'none') left.add('masks');
         if (own.has('clip-path') && own.get('clip-path') !== 'none') left.add('clip paths');
+        if (['marker', 'marker-start', 'marker-mid', 'marker-end'].some(k => own.has(k) && own.get(k) !== 'none')) left.add('markers (arrowheads)');
         const opacity = style.opacity * ((parent as Style & { inherited?: number }).inherited ?? 1);
         let matrix = transformOf(el.getAttribute('transform'));
         if (tag === 'svg' && depth > 0) {
             // A nested viewport: placed at x, y, its own viewBox scaled into its size.
             const x = length(el.getAttribute('x'), viewport.w) || 0, y = length(el.getAttribute('y'), viewport.h) || 0;
-            const w = length(el.getAttribute('width'), viewport.w), h = length(el.getAttribute('height'), viewport.h);
+            // (Its size the viewport's where it gives none, as `auto` is: its viewBox was not scaled at all.)
+            const w = length(el.getAttribute('width') ?? '100%', viewport.w), h = length(el.getAttribute('height') ?? '100%', viewport.h);
             const vb = numbers(el.getAttribute('viewBox'), 4);
             matrix = multiply(matrix, [1, 0, 0, 1, x, y]);
             if (vb.length === 4 && vb[2] > 0 && vb[3] > 0 && w > 0 && h > 0) matrix = multiply(matrix, viewBoxMatrix(vb as [number, number, number, number], el.getAttribute('preserveAspectRatio') || 'xMidYMid meet', w, h));
@@ -798,9 +929,24 @@ export async function drawSvg(svg: SvgPicture, canvas: SvgCanvas): Promise<strin
             const inherited = { ...style, inherited: opacity } as Style;
             const L = (k: string, whole: number) => length(el.getAttribute(k), whole, style.fontSize);
             switch (tag) {
-                case 'svg': case 'g': case 'a': case 'switch':
+                case 'svg': case 'g': case 'a':
                     for (const child of childElements(el)) await draw(child, inherited, depth + 1, uses, active);
                     break;
+                case 'switch': {
+                    // Its first child whose conditions hold, as a browser draws it, alone (every child was drawn: a
+                    // drawing's "cannot display" note over the picture). A foreign object is passed over for the
+                    // drawn fallback after it.
+                    const chosen = childElements(el).find(child => {
+                        const kind = localName(child);
+                        if (kind === 'foreignObject' || NOT_DRAWN.has(kind)) return false;
+                        const extensions = child.getAttribute('requiredExtensions');
+                        if (extensions !== null && extensions.trim() !== '') return false;
+                        const languages = child.getAttribute('systemLanguage');
+                        return languages === null || languages.split(',').some(l => /^\s*en\b/i.test(l));
+                    });
+                    if (chosen) await draw(chosen, inherited, depth + 1, uses, active);
+                    break;
+                }
                 case 'path': drawPath(parsePath(el.getAttribute('d') || '', budget.path), style, opacity); break;
                 case 'rect': {
                     const w = L('width', viewport.w), h = L('height', viewport.h);

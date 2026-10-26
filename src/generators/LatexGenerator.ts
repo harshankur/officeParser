@@ -167,7 +167,7 @@ type TableSlot =
 interface PackageUse {
     math: boolean; amssymb: boolean; graphics: boolean; tables: boolean; longtable: boolean; multirow: boolean;
     ulem: boolean; xcolor: boolean; colortbl: boolean; listings: boolean; endnotes: boolean; paragraphFix: boolean; captionof: boolean;
-    multicol: boolean;
+    multicol: boolean; landscape: boolean;
 }
 
 /**
@@ -285,8 +285,40 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
 
     private readonly uses: PackageUse = {
         math: false, amssymb: false, graphics: false, tables: false, longtable: false, multirow: false,
-        ulem: false, xcolor: false, colortbl: false, listings: false, endnotes: false, paragraphFix: false, captionof: false, multicol: false,
+        ulem: false, xcolor: false, colortbl: false, listings: false, endnotes: false, paragraphFix: false, captionof: false, multicol: false, landscape: false,
     };
+    /** Whether a `landscape` environment (a section turned from the document's pages) is open in the body. */
+    private openLandscape = false;
+
+    /**
+     * A section's pages turned from the document's (a landscape section after portrait ones, or the other way):
+     * its body in a `landscape` environment (pdflscape: turned, its PDF pages shown turned), opened or closed
+     * at its page break; they were every one the document's first page's. A section on paper of another size
+     * is set on the document's, and reported (`geometry` sets one paper for a document).
+     */
+    private orientationSwitch(setup: PageSetup | undefined): { close: string; open: string } {
+        const turned = this.turnedOf(setup);
+        if (turned === undefined || !setup) return { close: '', open: '' };
+        const cfg = this.config.texConfig;
+        const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup, cfg.margin);
+        const [long, short] = [Math.max(setup.width, setup.height), Math.min(setup.width, setup.height)];
+        if (Math.abs(long - Math.max(paper.w, paper.h)) > 2 || Math.abs(short - Math.min(paper.w, paper.h)) > 2) {
+            this.warnOnce('section-paper', OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'a section on paper of another size (set on the document\'s)', format: 'tex' });
+        }
+        const close = this.openLandscape && !turned ? '\\end{landscape}' : '';
+        const open = turned && !this.openLandscape ? '\\begin{landscape}' : '';
+        if (turned) this.uses.landscape = true;
+        this.openLandscape = turned;
+        return { close, open };
+    }
+    /** Whether a section's pages are turned from the document's (see orientationSwitch), or undefined where none can be. */
+    private turnedOf(setup: PageSetup | undefined): boolean | undefined {
+        if (this.beamer || !setup || !(setup.width > 0 && setup.height > 0)) return undefined;
+        const cfg = this.config.texConfig;
+        if (String(cfg.format ?? 'auto').toLowerCase() !== 'auto') return undefined;
+        return (setup.width > setup.height) !== resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup, cfg.margin).landscape;
+    }
+
     /** Whether a `multicols` environment (a section's columns) is open in the body, and its columns. */
     private openColumns = false;
     private openColumnsSetup: PageSetup['columns'] | undefined;
@@ -389,6 +421,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         if (opening) body = `${opening}\n${body}`;
         if (this.firstSectionSwitch) body = `${this.firstSectionSwitch}\n${body}`;
         if (this.openColumns) { body += '\n\\end{multicols}}'; this.openColumns = false; }
+        if (this.openLandscape) { body += '\n\\end{landscape}'; this.openLandscape = false; }
         const running = this.beamer ? this.warnBeamerHeaders() : await this.pageHeaderSetup();
         // The sections' own page styles, with the running one (fancyhdr loaded for them where it has none).
         const sectionStyles = this.beamer ? '' : await this.sectionStyleSetup();
@@ -1943,13 +1976,18 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         if (t === 'section') {
             if (!body) return '';
             const meta = node.metadata as BreakMetadata | undefined;
+            // (One on pages turned from those before starts on a page of its own, as a word processor sets it.)
+            const turned = this.turnedOf(meta?.pageSetup);
+            if (typeof meta?.section === 'number' && turned !== undefined && turned !== this.openLandscape) return this.blockBreak({ ...node, metadata: { ...meta, breakType: 'page' } } as OfficeContentNode);
             // (Its own header and footer from the next page on.)
             const style = !this.beamer && typeof meta?.section === 'number' ? this.sectionStyleSwitch(meta.section, meta.pageSetup, true) : '';
             return [style, this.columnsSwitch(meta?.pageSetup?.columns)].filter(Boolean).join('\n');
         }
         // A section starting on a new page, in its own columns: the columns before end, the page breaks.
         if (t === 'page' && !this.beamer && body && typeof (node.metadata as BreakMetadata | undefined)?.section === 'number') {
-            return [this.columnsSwitch(undefined), '\\clearpage', this.sectionStyleSwitch((node.metadata as BreakMetadata).section!, (node.metadata as BreakMetadata).pageSetup), this.columnsSwitch((node.metadata as BreakMetadata | undefined)?.pageSetup?.columns)].filter(Boolean).join('\n');
+            const setup = (node.metadata as BreakMetadata).pageSetup;
+            const columnsEnd = this.columnsSwitch(undefined), turn = this.orientationSwitch(setup);
+            return [columnsEnd, turn.close, '\\clearpage', this.sectionStyleSwitch((node.metadata as BreakMetadata).section!, setup), turn.open, this.columnsSwitch(setup?.columns)].filter(Boolean).join('\n');
         }
         // A page break in columns: they end on the page, and go on, the same, on the next.
         if (t === 'page' && !this.beamer && body && this.openColumns) {
@@ -2425,6 +2463,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         if (u.endnotes) lines.push('\\usepackage{endnotes}');
         if (u.captionof) lines.push('\\usepackage{capt-of}');
         if (u.multicol) lines.push('\\usepackage{multicol}');
+        if (u.landscape) lines.push('\\usepackage{pdflscape}');
         return lines;
     }
 
