@@ -1377,6 +1377,18 @@ async function testGeneratedOutput(): Promise<void> {
         assert.ok(chunkChars >= plainChars * 0.9, `chunking (${origin}): retains >=90% of .to('text') chars (${chunkChars}/${plainChars})`);
     }
 
+    // A split table's header row heads every chunk of its rows, also where the header and one row are more
+    // than a chunk holds (a header over half a chunk was a chunk of its own, the rows after it unnamed).
+    {
+        const table = await parseMd('| Quarter | Revenue | Operating margin |\n|---|---|---|\n| Q1 | 41,900 | 16.2% |\n| Q2 | 43,750 | 17.1% |\n| Q3 | 45,200 | 18.4% |');
+        for (const maxChunkSize of [30, 60, 90]) {
+            const tableChunks = ((await OfficeGenerator.generate(table, 'chunks', { chunksConfig: { maxChunkSize, tableSplitStrategy: 'row' } } as any)).value as any[]).filter(c => c.metadata?.isTableChunk);
+            assert.ok(tableChunks.length >= 2 && tableChunks.every(c => c.text.startsWith('| Quarter | Revenue | Operating margin |\n|')),
+                `maxChunkSize ${maxChunkSize}: every table chunk starts with the header and holds rows; got ${JSON.stringify(tableChunks.map(c => c.text))}`);
+            assert.deepStrictEqual(tableChunks.flatMap(c => c.text.match(/Q\d/g) ?? []), ['Q1', 'Q2', 'Q3'], `maxChunkSize ${maxChunkSize}: each row once, in order`);
+        }
+    }
+
     // 3.B: empty metadata emits no frontmatter fence, and doesn't reparse into a `## ---` heading.
     const emptyMd = String((await OfficeGenerator.generate(await parseHtml('<p>Body only, no head.</p>'), 'md')).value);
     assert.ok(!emptyMd.startsWith('---'), '3.B: empty metadata emits no frontmatter fence');

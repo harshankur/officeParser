@@ -2373,7 +2373,10 @@ export interface DocumentStructureChunkingConfig extends BaseChunkingConfig {
     /**
      * How to handle table nodes when splitting.
      * - 'row': Split by rows, REPEATING the header row in every chunk so the LLM
-     *   always understands what the columns mean. (Highly recommended for RAG)
+     *   always understands what the columns mean. (Highly recommended for RAG) A chunk holds as many
+     *   rows as fit beside the header, and at least one, so where the header and one row are more than
+     *   `maxChunkSize` the chunk is that much longer; a row longer than a whole chunk is cut, each piece
+     *   under the header. A header repeated past twice the table's own size is written once instead.
      * - 'flatten': Convert the table to plain text and split like a regular block.
      * Default is 'row'.
      */
