@@ -6451,10 +6451,13 @@ async function testSpreadsheetWriters(): Promise<void> {
     // (`12.5 %` for 12.5), a decimal comma (`1,234` for 1.234), a scale (`€1,235` for 1234567) showed 1250%, 1 and
     // €1,234,568. A locale's currency in a code (`[$€-407]#,##0,`) is its symbol.
     const shownCell = (value: string, shownText: string, row: number, numberFormat?: string) => ({ type: 'row', children: [{ type: 'cell', text: value, children: [{ type: 'text', text: value }], metadata: { row, col: 0, valueType: 'number', value, shownText, ...(numberFormat ? { numberFormat } : {}) } }] });
-    const looks = { ...scaled, content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [shownCell('12.5', '12.5 %', 0), shownCell('1.234', '1,234', 1), shownCell('1234567.891', '€1,235', 2, '[$€-407]#,##0,')] }] } as any;
+    const looks = { ...scaled, content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [shownCell('12.5', '12.5 %', 0), shownCell('1.234', '1,234', 1), shownCell('1234567.891', '€1,235', 2, '[$€-407]#,##0,'),
+        // (A negative shown without its sign, its colour carrying it, or in brackets, is that value: its format kept.)
+        shownCell('-1234.5', '$1,234.50', 3), shownCell('-1234.5', '(1,234.50)', 4)] }] } as any;
     const looksOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(looks, 'ods')).value as Uint8Array))['content.xml']);
     assert.ok(!/office:value-type="percentage"/.test(looksOds) && /office:value-type="float" office:value="12\.5"/.test(looksOds) && /office:value="1\.234"/.test(looksOds)
-        && /<number:text>€<\/number:text><number:number[^>]*number:display-factor="1000"/.test(looksOds), `ODS: a format is kept only where it shows the value; got ${looksOds.slice(looksOds.indexOf('<office:automatic-styles>'), looksOds.indexOf('<office:automatic-styles>') + 1200)}`);
+        && /<number:text>€<\/number:text><number:number[^>]*number:display-factor="1000"/.test(looksOds)
+        && /office:value-type="currency" office:value="-1234\.5"/.test(looksOds) && /table:style-name="[^"]+" office:value-type="float" office:value="-1234\.5"/.test(looksOds), `ODS: a format is kept only where it shows the value; got ${looksOds.slice(looksOds.indexOf('<office:automatic-styles>'), looksOds.indexOf('<office:automatic-styles>') + 1200)}`);
 
     // A cell onNode gives text for is that text alone: the value it replaced is not written.
     const redacted = await OfficeGenerator.generate(odsHeldAst, 'xlsx', { onNode: (n: OfficeContentNode) => n.type === 'cell' ? 'REDACTED' : undefined } as any);

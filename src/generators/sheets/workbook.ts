@@ -161,6 +161,11 @@ function typedKind(valueType: NonNullable<CellMetadata['valueType']>, held: stri
     }
 }
 
+/** A value read from text, negative. */
+function negated(v: CellValue): CellValue {
+    return typeof v.number === 'number' ? { ...v, number: -v.number } : v;
+}
+
 /**
  * A value held, `n`, in the format read from what its sheet showed for it, where what it showed is that value
  * (to the decimals shown, a percentage a hundredth of what it shows); else the value alone. A format's words
@@ -168,8 +173,13 @@ function typedKind(valueType: NonNullable<CellMetadata['valueType']>, held: stri
  * grouping), a number scaled (`€1,235` for 1234567) made it show another value: 1250%, 1, €1,234,568.
  */
 function lookOf(shown: string, n: number): CellValue {
-    const look = cellValue(shown);
-    const showsValue = typeof look.number === 'number' && Math.abs(look.number - n) <= (0.5 * 10 ** -(look.decimals ?? 0)) / (look.kind === 'percent' ? 100 : 1) + 1e-9 * Math.max(1, Math.abs(n));
+    // (A number in brackets is a negative one, as a format's negative section shows it: `(1,234.50)`.)
+    const bracketed = /^\(\s*([^()]*?)\s*\)$/.exec(shown.trim());
+    const look = bracketed && /^[\d.,]+$/.test(bracketed[1]) ? negated(cellValue(bracketed[1])) : cellValue(shown);
+    // (Its magnitude alone where the value is negative and the format shows none of its sign, its colour carrying
+    // it: `[Red]#,##0.00`, `0.0%;0.0%`. Its format was thrown away, and the column's negatives shown bare.)
+    const shownNumber = typeof look.number === 'number' && n < 0 && look.number > 0 ? -look.number : look.number;
+    const showsValue = typeof shownNumber === 'number' && Math.abs(shownNumber - n) <= (0.5 * 10 ** -(look.decimals ?? 0)) / (look.kind === 'percent' ? 100 : 1) + 1e-9 * Math.max(1, Math.abs(n));
     if (showsValue && (look.kind === 'percent' || look.kind === 'currency' || (look.kind === 'number' && (look.grouping || look.decimals)))) return { ...look, number: n };
     return { kind: 'number', number: n };
 }
