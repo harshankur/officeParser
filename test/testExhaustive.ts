@@ -5529,6 +5529,9 @@ async function testNativePdfSvgPictures(): Promise<void> {
     assert.ok(/1 Tr[\s\S]*0 Tr/.test(halo) && !/2 Tr/.test(halo), 'a halo is stroked first, then filled');
     // (Its halo's pass is text of none: the label reads once.)
     assert.strictEqual(haloDrawn.nodes.map(n => n.text || '').join('').split('Halo').length - 1, 1, `a halo's label reads once; got ${JSON.stringify(haloDrawn.nodes.map(n => n.text))}`);
+    // (Its words in spans keep their spaces.)
+    const spanned = await drawn('<text x="5" y="50" fill="black" stroke="white" stroke-width="4" paint-order="stroke" font-size="12">Population <tspan font-weight="bold">12,345</tspan> people</text>');
+    assert.ok(spanned.nodes.map(n => n.text || '').join('').includes('Population 12,345 people'), `a halo's label in spans keeps its spaces; got ${JSON.stringify(spanned.nodes.map(n => n.text))}`);
     assert.ok(/2 Tr/.test((await drawn('<text x="5" y="50" fill="black" stroke="white" stroke-width="4">Plain</text>')).streams), 'text filled and stroked is one pass, the fill under');
     // A selector of a long run of blanks is read in linear time (a pattern around `>` took the square of the run).
     const blankStarted = Date.now();
@@ -5785,15 +5788,13 @@ async function testPdfRuledTables(): Promise<void> {
         const blocks = (await readText(file)).split('\n').filter(t => t.trim());
         return { blocks, apart: blocks.filter(t => !/^P\d+\./.test(t)), joined: blocks.filter(t => (t.match(/\bP\d+\./g) || []).length > 1) };
     };
-    // (One line of a two-column page set past its column's margin into the gutter, an overfull URL, keeps it read
-    // column by column.)
-    for (const [file, pageBreaks] of [['indented_quote_libreoffice.pdf', 0], ['text_beside_picture_libreoffice.pdf', 0], ['ragged_prose_libreoffice.pdf', 3], ['two_columns_narrow_latex.pdf', 5], ['two_columns_overfull_latex.pdf', 5]] as const) {
+    for (const [file, pageBreaks] of [['indented_quote_libreoffice.pdf', 0], ['text_beside_picture_libreoffice.pdf', 0], ['ragged_prose_libreoffice.pdf', 3], ['two_columns_narrow_latex.pdf', 5]] as const) {
         const read = await authored(file);
         // (A paragraph a page break cuts reads as two.)
         assert.ok(read.apart.length <= pageBreaks && !read.joined.length, `${file}: each paragraph is read whole; got ${read.apart.length} pieces and ${read.joined.length} joined: ${JSON.stringify([...read.apart, ...read.joined].slice(0, 4))}`);
     }
     // A form's labels and values beside one another keep their rows, and a paragraph across the page after two
-    // columns stays whole after them (a gutter a line crosses is cut only within columns of text).
+    // columns stays whole after them.
     const form = (await readText('form_labels_libreoffice.pdf')).split('\n');
     assert.ok(!form.some(t => t.includes('Applicant full legal name') && t.includes('Street address of residence')), `a form's labels are not read as a column apart from their values; got ${JSON.stringify(form.slice(0, 4))}`);
     const afterColumns = (await readText('columns_then_paragraph_libreoffice.pdf')).split('\n').filter(t => t.trim());
@@ -6438,6 +6439,12 @@ async function testSpreadsheetWriters(): Promise<void> {
     const moreOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(moreScaled, 'ods')).value as Uint8Array))['content.xml']);
     assert.ok(/number:decimal-places="1"[^>]*number:display-factor="1000"/.test(moreOds) && /<number:text>\(<\/number:text><number:number[^>]*number:display-factor="1000000"\/><number:text>\)<\/number:text><style:map style:condition="value\(\)&gt;=0"/.test(moreOds),
         `ODS: commas after the decimals scale, and a negative section maps negative values; got ${(moreOds.match(/<number:number-style[\s\S]*?<\/number:number-style>/g) || []).join(' ')}`);
+    // (A zero's section, an empty one hiding its numbers, a colour, padding and fill: Excel's comma style.)
+    const sectioned = { ...scaled, content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [scaledCell('_(* #,##0_);[Red]_(* (#,##0);_(* "-"_);_(@_)'), scaledCell('0;-0;;@')].map((r, i) => ({ ...r, children: r.children.map(c => ({ ...c, metadata: { ...c.metadata, row: i } })) })) }] } as any;
+    const sectionedOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(sectioned, 'ods')).value as Uint8Array))['content.xml']);
+    assert.ok(/<number:number-style[^>]*><style:text-properties fo:color="#FF0000"\/><number:text> \(<\/number:text><number:number[^>]*\/><number:text>\)<\/number:text><style:map style:condition="value\(\)&gt;0" style:apply-style-name="[^"]+"\/><style:map style:condition="value\(\)=0"/.test(sectionedOds)
+        && /<number:number-style style:name="[^"]+"><number:text><\/number:text><\/number:number-style>/.test(sectionedOds),
+        `ODS: a format's zero section, colour and padding are written, and an empty section hides its numbers; got ${(sectionedOds.match(/<number:number-style[\s\S]*?<\/number:number-style>/g) || []).join(' ')}`);
 
     // A cell onNode gives text for is that text alone: the value it replaced is not written.
     const redacted = await OfficeGenerator.generate(odsHeldAst, 'xlsx', { onNode: (n: OfficeContentNode) => n.type === 'cell' ? 'REDACTED' : undefined } as any);

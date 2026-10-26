@@ -87,8 +87,9 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
 
     /**
      * A spreadsheet's own number format as an ODF number style, where ODF can say it (see odfNumberParts): one
-     * section, or two, the second the negative numbers' (`#,##0.0;(#,##0.0)`), as a style of the negative ones
-     * mapping values of none to the first's, as LibreOffice writes one. Undefined for any other code.
+     * section, or more, the second the negative numbers' (`#,##0.0;(#,##0.0)`) and the third zero's, as a style
+     * of the negative ones mapping the others to theirs, as LibreOffice writes one; a fourth, text's, is left.
+     * Undefined for any other code.
      */
     private ownStyle(code: string): string | undefined {
         // (Its sections, split at semicolons outside quotes and not escaped.)
@@ -102,13 +103,19 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
             current += c;
         }
         sections.push(current);
-        if (sections.length > 2) return undefined;
-        const parts = sections.map(odfNumberParts);
+        // (Positive numbers', negative ones', zero's, and text's, which a number never shows: it is left.)
+        if (sections.length > 4) return undefined;
+        const numeric = sections.slice(0, 3);
+        // (A section of nothing shows nothing: `0;-0;;@` hides zero, `;;;` every number.)
+        const parts = numeric.map(section => section === '' ? '<number:text></number:text>' : odfNumberParts(section));
         if (parts.some(p => p === undefined)) return undefined;
-        const [positive, negative] = parts as string[];
-        const first = this.styleNamed(`nc|${positive}`, 'N', name => `<number:number-style style:name="${name}">${positive}</number:number-style>`);
-        if (negative === undefined) return first;
-        return this.styleNamed(`nc|${positive}|${negative}`, 'N', name => `<number:number-style style:name="${name}">${negative}<style:map style:condition="value()&gt;=0" style:apply-style-name="${first}"/></number:number-style>`);
+        const [positive, negative, zero] = parts as string[];
+        const styleOf = (inner: string) => this.styleNamed(`nc|${inner}`, 'N', name => `<number:number-style style:name="${name}">${inner}</number:number-style>`);
+        if (negative === undefined) return styleOf(positive);
+        // The negative numbers' style, mapping the others to theirs, as LibreOffice writes one (the sign is the code's).
+        const maps = zero === undefined ? `<style:map style:condition="value()&gt;=0" style:apply-style-name="${styleOf(positive)}"/>`
+            : `<style:map style:condition="value()&gt;0" style:apply-style-name="${styleOf(positive)}"/><style:map style:condition="value()=0" style:apply-style-name="${styleOf(zero)}"/>`;
+        return this.styleNamed(`nc|${positive}|${negative}|${zero ?? ''}`, 'N', name => `<number:number-style style:name="${name}">${negative}${maps}</number:number-style>`);
     }
 
     /** A time of day's data style (`14:05:00`). */
@@ -315,14 +322,30 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
  * spaces and signs), and a number (`#,##0.00`, scaled by a thousand for each comma ending its integer part),
  * a number in scientific notation (`0.00E+00`) or a fraction (`# ?/?`) between them. Undefined for any other code.
  */
-export function odfNumberParts(code: string): string | undefined {
-    if (code.length > 255 || /[;[%@*_]/.test(code.replace(/"[^"]*"|\\./g, ''))) return undefined;
+export function odfNumberParts(source: string): string | undefined {
+    if (source.length > 255) return undefined;
+    // Its colour (`[Red]`), as the text's; its padding the width of a character (`_)`) a space, and its fill (`* `)
+    // none: a code of them (Excel's own accounting and comma styles) was refused, and the value shown bare.
+    const colour = /^\[(black|blue|cyan|green|magenta|red|white|yellow)\]/i.exec(source);
+    let code = '';
+    for (let i = colour ? colour[0].length : 0, quoted = false; i < source.length; i++) {
+        const c = source[i];
+        if (c === '"') quoted = !quoted;
+        else if (!quoted && c === '\\') { code += c + (source[i + 1] ?? ''); i++; continue; }
+        else if (!quoted && c === '_') { code += ' '; i++; continue; }
+        else if (!quoted && c === '*') { i++; continue; }
+        code += c;
+    }
+    if (/[;[%@*_]/.test(code.replace(/"[^"]*"|\\./g, ''))) return undefined;
     const words: string[] = [];
     let rest = code, number = '';
     const literal = (text: string) => text ? `<number:text>${xmlText(text)}</number:text>` : '';
+    if (colour) words.push(`<style:text-properties fo:color="${COLOURS.get(colour[1].toLowerCase())}"/>`);
     // The words before the number.
     let before = '';
     for (let m: RegExpExecArray | null; (m = /^(?:"([^"]*)"|\\(.)|([ \-+$€£¥():/]))/.exec(rest));) { before += m[1] ?? m[2] ?? m[3]; rest = rest.slice(m[0].length); }
+    // (Words alone, a section showing them for its numbers: `"-"` for zero, `"zero"`.)
+    if (!rest) return before ? [...words, literal(before)].join('') : undefined;
     const body = /^([#0?,]*(?:\.[#0?]+,*)?)(?:([Ee][+-]0+)|\s+([#0?]+)\/([#0?]+|\d+))?/.exec(rest);
     if (!body || !/[#0?]/.test(body[1] + (body[3] ?? ''))) return undefined;
     rest = rest.slice(body[0].length);
@@ -346,6 +369,9 @@ export function odfNumberParts(code: string): string | undefined {
     words.push(literal(before), number, literal(after));
     return words.join('');
 }
+
+/** Excel's colours a format names, as ODF writes them. */
+const COLOURS = new Map([['black', '#000000'], ['blue', '#0000FF'], ['cyan', '#00FFFF'], ['green', '#00FF00'], ['magenta', '#FF00FF'], ['red', '#FF0000'], ['white', '#FFFFFF'], ['yellow', '#FFFF00']]);
 
 /** A value's ODF attributes: its type and the value held (text cells hold theirs in their paragraphs). */
 function valueAttrs(v: CellValue): string {
