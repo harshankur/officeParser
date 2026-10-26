@@ -4987,6 +4987,18 @@ async function testTitleAndEvenPagesAsWordShows(): Promise<void> {
     const rtfAst = await OfficeParser.parseOffice(Buffer.from(rtf), { fileType: 'rtf', includeBreakNodes: true } as any) as OfficeParserAST;
     const second = rtfAst.content.find(n => (n.metadata as any)?.section === 1);
     assert.strictEqual((second?.metadata as any)?.pageSetup?.width ?? rtfAst.metadata.pageSetup?.width, 792, 'an RTF section keeps the section before\'s page until its \\sectd');
+    // A table ending a section stays in it (it was put after the break, on the next section's turned pages);
+    // `\footnote\ftnalt` is an endnote whatever `\fet` says (LibreOffice writes no `\fet2`); a PAGE or NUMPAGES
+    // field's result is marked, for each page's number (every page printed the number it was saved with).
+    const rtfTable = '{\\rtf1\\ansi{\\fonttbl{\\f0 Times;}}\\paperw12240\\paperh15840\\sectd Before.\\par\\trowd\\cellx2000\\cellx4000 A\\cell B\\cell\\row'
+        + '\\sect\\sectd\\lndscpsxn\\pgwsxn15840\\pghsxn12240 Turned{\\chftn{\\*\\footnote\\ftnalt\\chftn End note.}}.\\par'
+        + '{\\footer Page {\\field{\\*\\fldinst PAGE }{\\fldrslt 4}} of {\\field{\\*\\fldinst NUMPAGES }{\\fldrslt 5}}\\par}}';
+    const rtfTableAst = await OfficeParser.parseOffice(Buffer.from(rtfTable), { fileType: 'rtf', includeBreakNodes: true } as any) as OfficeParserAST;
+    assert.deepStrictEqual(rtfTableAst.content.map(n => n.type), ['paragraph', 'table', 'break', 'paragraph'], 'an RTF table before a section break stays in its section');
+    const rtfNote = collectAllNodes(rtfTableAst).flatMap(n => n.notes ?? [])[0];
+    assert.strictEqual((rtfNote?.metadata as any)?.noteType, 'endnote', 'an RTF note marked \\ftnalt is an endnote');
+    const rtfFields = collectAllNodes({ content: rtfTableAst.auxiliary?.footers ?? [] } as any).filter(n => (n.metadata as any)?.field).map(n => [(n.metadata as any).field, n.text]);
+    assert.deepStrictEqual(rtfFields, [['page', '4'], ['pages', '5']], `an RTF page field's result is marked; got ${JSON.stringify(rtfFields)}`);
     // ... but a page size of its own is that section's page, a landscape page kept from before turning it no more.
     const portrait = await OfficeParser.parseOffice(Buffer.from(rtf.replace('\\sect Two.', '\\sect\\pgwsxn12240\\pghsxn15840 Two.')), { fileType: 'rtf', includeBreakNodes: true } as any) as OfficeParserAST;
     const portraitBreak = portrait.content.find(n => (n.metadata as any)?.section === 1);

@@ -830,6 +830,9 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // Hyperlink state (RTF uses \field{\*\fldinst HYPERLINK "url"})
     // ═══════════════════════════════════════════════════════════════════
     let currentLinkUrl: string | undefined;
+    // The page field a run is the result of (`{\\field{\\*\\fldinst PAGE}{\\fldrslt 4}}`): its number is that
+    // page's, filled in for each page where printed (TextMetadata.field).
+    let currentPageField: 'page' | 'pages' | undefined;
 
     // Blocks read from a shape's text box (`\shptxt`), placed after the paragraph anchoring the shape:
     // read in place, the text box's paragraphs split that paragraph and took its first half as theirs.
@@ -1016,6 +1019,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     linkType: classifyLinkType(currentLinkUrl)
                 };
             }
+            if (currentPageField) node.metadata = { ...(node.metadata ?? {}), field: currentPageField };
             currentParagraphChildren.push(node);
             currentParagraphTextChunks.push(currentRunText);
             currentRunTextChunks = [];
@@ -1328,6 +1332,25 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     };
 
     /**
+     * The page field a field group is (`\\fldinst PAGE`, `NUMPAGES`), from its own instruction's text (a few groups
+     * deep, a few hundred characters at most); undefined for any other field. The Word and ODT readers mark
+     * theirs; RTF's printed the number its file was saved with on every page ("Page 4 of 5").
+     */
+    const pageFieldOf = (group: RtfGroup): 'page' | 'pages' | undefined => {
+        let text = '';
+        const gather = (g: RtfGroup, depth: number) => {
+            for (const child of g.content) {
+                if (text.length > 200) return;
+                if (child.type === 'text') text += child.value;
+                else if (child.type === 'group' && depth < 4) gather(child, depth + 1);
+            }
+        };
+        for (const child of group.content) if (child.type === 'group' && child.destination === 'fldinst') gather(child, 0);
+        const m = /^\s*(PAGE|NUMPAGES)\b/i.exec(text);
+        return m ? (m[1].toUpperCase() === 'PAGE' ? 'page' : 'pages') : undefined;
+    };
+
+    /**
      * Determines whether a hyperlink URL is internal or external.
      * Internal = bookmark references (no scheme or starts with "#").
      * External = any scheme like http, https, mailto, ftp, file, etc.
@@ -1499,7 +1522,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
             let isIgnored = false;
             let isFootnote = false;
-            let isHyperlinkField = false;
+            let isHyperlinkField = false, isPageField = false;
             let isPict = false;
             // Where a header's or footer's paragraphs go, and whether the group is an annotation (a
             // comment), a shape whose text box (`\shptxt`) alone is read, or that text box.
@@ -1536,6 +1559,12 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 } else if (node.destination === 'field') {
                     // Check if this is a hyperlink field
                     const url = extractHyperlinkUrl(node);
+                    const page = pageFieldOf(node);
+                    if (page && !currentPageField) {
+                        flushRun();
+                        isPageField = true;
+                        currentPageField = page;
+                    }
                     if (url) {
                         // Flush any pending text before starting the link context
                         // This prevents previous text from inheriting the link
@@ -1741,21 +1770,11 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 flushRun();
                 currentFootnoteId++;
 
-                // Determine note type based on \fet value
-                let noteType: 'footnote' | 'endnote' = 'footnote';
-                if (fetValue === 1) {
-                    // \fet1 means all notes are endnotes
-                    noteType = 'endnote';
-                } else if (fetValue === 2) {
-                    // \fet2 means both types exist
-                    // Check for \ftnalt marker to distinguish endnotes from footnotes
-                    // \footnote\ftnalt indicates an endnote
-                    const hasFtnalt = node.content.some(child =>
-                        child.type === 'control' && child.value === 'ftnalt'
-                    );
-                    noteType = hasFtnalt ? 'endnote' : 'footnote';
-                }
-                // fetValue === 0 (default) means footnotes only
+                // An endnote where the document's notes all are (\fet1), or where the note says it is one
+                // (\footnote\ftnalt), whatever \fet says: LibreOffice writes \ftnalt without \fet2, and its
+                // endnotes were read as footnotes, printed at the foot of their page.
+                const hasFtnalt = node.content.some(child => child.type === 'control' && child.value === 'ftnalt');
+                const noteType: 'footnote' | 'endnote' = fetValue === 1 || hasFtnalt ? 'endnote' : 'footnote';
 
                 const noteNode: OfficeContentNode = {
                     type: 'note',
@@ -1882,6 +1901,10 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 flushRun();
                 currentLinkUrl = undefined;
             }
+            if (isPageField) {
+                flushRun();
+                currentPageField = undefined;
+            }
 
             // Append group end to raw content
             currentParagraphRawChunks.push('}');
@@ -1959,6 +1982,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             else if (node.value === 'sect' && currentTarget === content && paragraphDepth === 0) {
                 flushRun();
                 flushParagraph();
+                // (A table before it ends there: still open, it came after the break, on the next section's pages.)
+                closeTablesTo(0);
                 sectionNumber++;
                 // (The next section has the one before's properties until its `\\sectd`, as the RTF specification gives it.)
                 section = { ...section, widths: new Map(section.widths), ownLandscape: false, ownSize: false };
@@ -1973,6 +1998,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             else if (node.value === 'page' && config.includeBreakNodes && currentTarget === content && paragraphDepth === 0) {
                 flushRun();
                 flushParagraph();
+                closeTablesTo(0);
                 content.push({ type: 'break', metadata: { breakType: 'page' } as BreakMetadata });
             }
             // Paragraph control words
