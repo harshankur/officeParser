@@ -6003,7 +6003,33 @@ async function testSectionRoundTrips(): Promise<void> {
     const flowing = { type: 'docx', metadata: {}, attachments: [], content: [para('Front.'), { type: 'break', metadata: { breakType: 'page', section: 1 } }, para('Body.')] } as any;
     assert.strictEqual(String((await OfficeGenerator.generate(flowing, 'text')).value).trim(), 'Front.\nBody.', 'text: a section\'s start is no blank line');
     const html = String((await OfficeGenerator.generate(flowing, 'html')).value).split('<body')[1];
-    assert.ok(!html.includes('<hr class="page-break"') && html.includes('<div class="section-start" style="break-before:page"></div>'), 'HTML: a section\'s start is a page in print, no rule');
+    assert.ok(!html.includes('<hr class="page-break">') && html.includes('<hr class="page-break section-start">'), 'HTML: a section\'s start is a page break, shown as no rule on screen');
+    const fullHtml = String((await OfficeGenerator.generate(flowing, 'html')).value);
+    assert.ok(fullHtml.includes('.page-break.section-start::after { content: none; }'), 'HTML: a section\'s start has no rule on screen');
+    const htmlBack = await OfficeParser.parseOffice(Buffer.from(fullHtml), { fileType: 'html' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(htmlBack.content.map(n => n.type === 'break' ? `B:${(n.metadata as any).breakType}` : n.text ?? (n.children ?? []).map(c => c.text).join('')), ['Front.', 'B:page', 'Body.'], 'HTML: a section\'s start reads back as a page break, no empty paragraph');
+
+    // ODT: a block an onNode string gives takes the break before it; a block of a named style after a break keeps its look read back.
+    const brk = (extra: any = {}) => ({ type: 'break', metadata: { breakType: 'page', ...extra } });
+    const withOverride = async (content: any[], replacement: string) => {
+        const bytes = (await OfficeGenerator.generate({ type: 'docx', metadata: { pageSetup: page }, attachments: [], content } as any, 'odt', { onNode: (n: any) => n.text === 'X' ? replacement : undefined } as any)).value;
+        return await OfficeParser.parseOffice(Buffer.from(bytes as any), { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+    };
+    const order = (ast: OfficeParserAST) => ast.content.map(n => n.type === 'break' ? `B:${(n.metadata as any).breakType}` : n.text);
+    assert.deepStrictEqual(order(await withOverride([para('A'), brk(), para('X'), para('B')], '<text:p>OVERRIDE</text:p>')), ['A', 'B:page', 'OVERRIDE', 'B'], 'ODT: an onNode block after a page break is on the new page');
+    assert.deepStrictEqual(order(await withOverride([para('A'), brk(), para('X'), para('B')], '')), ['A', 'B:page', 'B'], 'ODT: an onNode block of nothing leaves the break to the next block');
+    const turnedOverride = await withOverride([para('A'), brk({ section: 1, pageSetup: { width: 792, height: 612 } }), para('X'), para('B')], '<text:p>OVERRIDE</text:p>');
+    assert.ok(order(turnedOverride).join('|') === 'A|B:page|OVERRIDE|B' && (turnedOverride.content[1].metadata as any).section === 1, `ODT: an onNode block after a section's start is the section's first; got ${JSON.stringify(order(turnedOverride))}`);
+    const named = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate({ type: 'docx', metadata: { pageSetup: page }, attachments: [], content: [para('A'), brk(),
+        { type: 'paragraph', text: 'Quoted', metadata: { style: 'Quote' }, children: [{ type: 'text', text: 'Quoted' }] }, brk({ section: 1, pageSetup: { width: 792, height: 612 } }),
+        { type: 'heading', text: 'Head', metadata: { level: 1 }, children: [{ type: 'text', text: 'Head' }] }, para('Z')] } as any, 'odt')).value as any), { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+    const quote = named.content.find(n => n.text === 'Quoted'), head = named.content.find(n => n.text === 'Head');
+    assert.ok(order(named).join('|') === 'A|B:page|Quoted|B:page|Head|Z' && quote?.children?.[0]?.formatting?.italic && head?.type === 'heading' && head.children?.[0]?.formatting?.bold,
+        `ODT: a quote and a heading after a break keep their look read back; got ${JSON.stringify([order(named), quote, head])}`);
+
+    // LaTeX: a continuous section's numbering is defined globally after the page ships out (\\globaldefs broke every \\write after it).
+    const continuousTex = String((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [para('One.'), { type: 'break', metadata: { breakType: 'section', section: 1, pageSetup: { pageNumberFormat: 'upperRoman' } } }, para('Two.'), brk(), para('Three.')] } as any, 'tex')).value);
+    assert.ok(continuousTex.includes('\\AddToHookNext{shipout/after}{\\gdef\\thepage{\\Roman{page}}}') && !/\\globaldefs=1 \\renewcommand/.test(continuousTex), 'LaTeX: a continuous section\'s numbering is a global definition');
     // A trailing `\sect` (writers end every section with one) starts no section.
     const trailing = await OfficeParser.parseOffice(Buffer.from('{\\rtf1\\ansi Hello\\par\\sect}'), { fileType: 'rtf' } as any) as OfficeParserAST;
     assert.strictEqual(shapeOf(trailing), 'P', 'RTF: a section with nothing in it after the text is none');

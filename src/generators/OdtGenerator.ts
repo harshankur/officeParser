@@ -119,7 +119,10 @@ class StyleRegistry {
     derive(name: string, family: StyleFamily, prefix: string, element: string, attrs: Record<string, string>, extra: Record<string, string>): string {
         const xmlOf = (given: Record<string, string>) => Object.entries(given).map(([k, v]) => ` ${k}="${v}"`).join('');
         const without = (xml: string, keys: string[]) => keys.reduce((x, k) => x.split(new RegExp(`\\s${k}="[^"]*"`)).join(''), xml);
-        const own = name ? this.byName.get(name) : undefined;
+        // (A style of this writer's own, Quotations or a heading's, is the parent, with its properties too:
+        // a reader that takes a paragraph's look from its style alone, as this library's does, keeps it.)
+        const named = family === 'paragraph' && name ? NAMED_STYLE_PROPS.get(name) : undefined;
+        const own = name ? this.byName.get(name) ?? (named !== undefined ? { family, props: named, extraAttrs: ` style:parent-style-name="${name}"` } : undefined) : undefined;
         if (own && own.family === family) {
             const open = new RegExp(`<${element}(?=[\\s/>])([^>]*?)(/?)>`);
             const props = open.test(own.props)
@@ -298,7 +301,8 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             }
             const override = await this.handleOnNode(node);
             if (override === false) { prevPaginated = null; continue; }
-            if (typeof override === 'string') { out += override; prevPaginated = null; continue; }
+            // (A break waiting goes in the XML given for the block, as in the block's own: see waitBreak.)
+            if (typeof override === 'string') { out += this.carryBreak(override, this.takeBreak()); prevPaginated = null; continue; }
             if ((node.type === 'page' || node.type === 'slide') && prevPaginated === node.type) out += this.waitBreak({ before: 'page' });
             // (A break waits for the block after it, which carries it: see waitBreak.)
             const waiting = node.type === 'break' ? undefined : this.takeBreak();
@@ -1338,3 +1342,5 @@ const NAMED_STYLES = (() => {
         + `<style:style style:name="Preformatted_20_Text" style:display-name="Preformatted Text" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:background-color="#f5f5f5"/><style:text-properties style:font-name="Courier New"/></style:style>`
         + `<style:style style:name="Footnote" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="10pt" style:font-size-asian="10pt"/></style:style>`;
 })();
+/** Each named style's own properties (the elements in it), by its name, for a style derived from it (see StyleRegistry.derive). */
+const NAMED_STYLE_PROPS: ReadonlyMap<string, string> = new Map([...NAMED_STYLES.matchAll(/<style:style style:name="([^"]+)"[^>]*[^/]>(.*?)<\/style:style>/g)].map(m => [m[1], m[2]]));

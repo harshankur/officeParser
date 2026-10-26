@@ -216,8 +216,10 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     // ── block / inline traversal ─────────────────────────────────────────────────
 
     private async renderBlocks(nodes: OfficeContentNode[] | undefined): Promise<string> {
-        let out = '';
-        // Where the last block that wrote anything starts in `out` (-1: none yet).
+        // The blocks' XML in order, joined at the end: a section's end goes into the last block's (see
+        // withSectionEnd), and rewriting the whole of what was written for each one took time in the square of it.
+        const out: string[] = [];
+        // Where in `out` the last block that wrote anything is (-1: none yet).
         let lastBlockAt = -1;
         let prevPaginated: string | null = null;
         let prevBareList = false; // previous block was a list carrying no listId
@@ -225,16 +227,16 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
             checkAbortSignal(this.config.abortSignal);
             const override = await this.handleOnNode(node);
             if (override === false) { prevBareList = false; continue; }
-            if (typeof override === 'string') { out += override; prevPaginated = null; prevBareList = false; continue; }
+            if (typeof override === 'string') { out.push(override); prevPaginated = null; prevBareList = false; continue; }
             // Preserve source pagination: a page break between consecutive page (or slide) nodes.
             if ((node.type === 'page' || node.type === 'slide') && prevPaginated === node.type) {
-                out += '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+                out.push('<w:p><w:r><w:br w:type="page"/></w:r></w:p>');
             }
             // A run of consecutive lists that carry no listId of their own gets one synthetic id, so a
             // later separate list starts fresh instead of continuing the first one's numbering.
             const isBareList = node.type === 'list' && !(node.metadata as any)?.listId;
             if (isBareList && !prevBareList) this.syntheticListRun++;
-            if (!OWN_BOOKMARKS.has(node.type)) out += this.pointBookmarks(node);
+            if (!OWN_BOOKMARKS.has(node.type)) out.push(this.pointBookmarks(node));
             const at = out.length;
             const block = await this.renderBlockNode(node, isBareList ? `__run${this.syntheticListRun}` : undefined);
             // A section ends in its last paragraph's properties, as Word keeps it: a paragraph of its own
@@ -242,14 +244,14 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
             // section already, there is no paragraph to hold them: one of their own, as Word has it.)
             const sectionEnd = this.sectionEndXml;
             this.sectionEndXml = undefined;
-            const held = sectionEnd !== undefined ? withSectionEnd(out, lastBlockAt, sectionEnd) : undefined;
-            if (held !== undefined) out = held;
-            else out += block;
+            const held = sectionEnd !== undefined && lastBlockAt >= 0 ? withSectionEnd(out.slice(lastBlockAt).join(''), 0, sectionEnd) : undefined;
+            if (held !== undefined) out.splice(lastBlockAt, out.length - lastBlockAt, held);
+            else out.push(block);
             if (block && held === undefined) lastBlockAt = at;
             prevPaginated = (node.type === 'page' || node.type === 'slide') ? node.type : null;
             prevBareList = isBareList;
         }
-        return out;
+        return out.join('');
     }
 
     private async renderBlockNode(node: OfficeContentNode, bareListId?: string): Promise<string> {

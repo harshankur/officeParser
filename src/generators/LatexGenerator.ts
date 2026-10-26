@@ -1989,8 +1989,9 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             // (Its own header and footer from the next page on.)
             const style = !this.beamer && typeof meta?.section === 'number' ? this.sectionStyleSwitch(meta.section, meta.pageSetup, true) : '';
             // (Its numbering from the next page, as its page style.)
-            const numbering = this.beamer ? '' : this.numberingTex(meta?.pageSetup?.pageNumberFormat);
-            const numberingNext = numbering ? `\\AddToHookNext{shipout/after}{{\\globaldefs=1 ${numbering}}}` : '';
+            // (Defined globally there: \\globaldefs made \\renewcommand's own settings global, \\escapechar among them, which broke every \\write after it.)
+            const numbering = this.beamer ? '' : this.numberingTex(meta?.pageSetup?.pageNumberFormat, true);
+            const numberingNext = numbering ? `\\AddToHookNext{shipout/after}{${numbering}}` : '';
             return [style, numberingNext, this.columnsSwitch(meta?.pageSetup?.columns)].filter(Boolean).join('\n');
         }
         // A section starting on a new page, in its own columns: the columns before end, the page breaks.
@@ -2258,14 +2259,14 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
      * the counter goes on, as the document's pages do. A format LaTeX has none of (letters, which `\\alph`
      * cannot write past 26, words) is in digits, and reported.
      */
-    private numberingTex(format: PageNumberFormat | undefined): string {
+    private numberingTex(format: PageNumberFormat | undefined, global = false): string {
         if (!format) return '';
         const command = format === 'decimal' ? 'arabic' : format === 'lowerRoman' ? 'roman' : format === 'upperRoman' ? 'Roman' : undefined;
         if (!command) this.warnOnce(`numbering:${format}`, OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'tex', feature: `page numbers in ${format} (written in digits)` });
         const numbering = command ?? 'arabic';
         if (numbering === this.pageNumbering) return '';
         this.pageNumbering = numbering;
-        return `\\renewcommand{\\thepage}{\\${numbering}{page}}`;
+        return global ? `\\gdef\\thepage{\\${numbering}{page}}` : `\\renewcommand{\\thepage}{\\${numbering}{page}}`;
     }
     /** The `\\thepage` numbering in force. */
     private pageNumbering = 'arabic';

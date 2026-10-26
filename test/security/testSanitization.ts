@@ -784,6 +784,10 @@ async function markdownTests() {
             await linear(`${format}: 100,000 ${label} are written`, () => OfficeGenerator.generate(astWith(content() as any), format, { onWarning: () => { } } as any));
         }
     }
+    // A section's end goes in its last paragraph (DOCX), and each one rewrote all written before it.
+    await linear('docx: 20,000 sections are written', () => OfficeGenerator.generate(astWith(Array.from({ length: n(20_000) }, (_, i) => [
+        { type: 'paragraph', children: [{ type: 'text', text: `s${i}` }] },
+        { type: 'break', metadata: { breakType: i % 2 ? 'section' : 'page', section: i + 1 } }]).flat() as any), 'docx', { onWarning: () => { } } as any));
     // A colour table found each run's colour by scanning it.
     const colours = () => astWith([{ type: 'paragraph', children: Array.from({ length: n(many) }, (_, i) => ({ type: 'text', text: `r${i} `, formatting: { color: `#${i.toString(16).padStart(6, '0')}` } })) }] as any);
     await linear('rtf: 100,000 runs of distinct colours are written', () => OfficeGenerator.generate(colours(), 'rtf', { onWarning: () => { } } as any));

@@ -1307,9 +1307,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
             case 'break': {
                 const breakType = (node.metadata as any)?.breakType;
-                // A section starting on a new page: no rule on screen (it is the document's structure, not a
-                // break the author typed), a new page in print.
-                if (breakType === 'page' && typeof (node.metadata as any)?.section === 'number') return `${extraAnchors}<div class="section-start"${idAttr} style="break-before:page"></div>`;
+                // A section starting on a new page: a page break, as the HTML reader reads it and print breaks
+                // the page, but no rule on screen (it is the document's structure, not a break the author typed).
+                if (breakType === 'page' && typeof (node.metadata as any)?.section === 'number') return `${extraAnchors}<hr class="page-break section-start"${idAttr}>`;
                 if (breakType === 'page') return `${extraAnchors}<hr class="page-break"${idAttr}>`;
                 // A thematic break is a plain rule; the parser reads a bare <hr> back as one.
                 if (breakType === 'thematic') return `${extraAnchors}<hr${idAttr}>`;
@@ -2427,9 +2427,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             
             body { margin: 0; padding: 0; }
             
-            .section-start { height: 0; margin: 0; }
             .page-break { border: none; border-top: 2px dashed var(--border-color); margin: 40px 0; position: relative; }
             .page-break::after { content: 'PAGE BREAK'; position: absolute; top: -10px; left: 50%; transform: translateX(-50%); background: white; padding: 0 15px; font-size: 10px; color: #b2bec3; font-weight: bold; letter-spacing: 1px; }
+            .page-break.section-start { border: none; height: 0; margin: 0; }
+            .page-break.section-start::after { content: none; }
 
             /* Metadata Styles */
             .metadata-summary { 
