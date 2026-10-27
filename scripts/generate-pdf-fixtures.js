@@ -14,6 +14,7 @@
  *   - page_sizes.pdf       : pages of several sizes (landscape, a /Rotate 90 page, A4), for sections.
  *   - invisible_text.pdf   : text in rendering modes 3 and 7 (a Type 3 font's and Helvetica's) beside and
  *                            among visible text, as a scan's recognised text layer is drawn.
+ *   - mixed_size_line.pdf  : one line set in three sizes on one baseline, for the runs' baselines.
  *
  * The encryption is the PDF standard security handler, revision 2 (RC4, 40-bit). RC4 is implemented
  * inline because modern OpenSSL/Node no longer expose it, and qpdf is not assumed to be installed.
@@ -498,6 +499,15 @@ function invisibleTextPdf() {
     return buildPdf(content, { extra: scanned.objects, fonts: ` /F2 ${FIRST_EXTRA_OBJ} 0 R` });
 }
 
+/** One line in three sizes on one baseline (24, 10 and 16 points), and a line under it. */
+function mixedSizeLineContent() {
+    return Buffer.from([
+        'BT /F1 24 Tf 1 0 0 1 72 700 Tm (Large) Tj /F1 10 Tf 1 0 0 1 150 700 Tm (small) Tj /F1 16 Tf 1 0 0 1 190 700 Tm (middle) Tj ET',
+        'BT /F1 12 Tf 1 0 0 1 72 670 Tm (A plain line under it.) Tj ET',
+        '',
+    ].join('\n'), 'latin1');
+}
+
 function main() {
     fs.mkdirSync(OUT_DIR, { recursive: true });
 
@@ -526,6 +536,7 @@ function main() {
     fs.writeFileSync(path.join(OUT_DIR, 'tagged_headings.pdf'), buildTaggedHeadingsPdf());
     fs.writeFileSync(path.join(OUT_DIR, 'page_sizes.pdf'), buildPageSizesPdf());
     fs.writeFileSync(path.join(OUT_DIR, 'invisible_text.pdf'), invisibleTextPdf());
+    fs.writeFileSync(path.join(OUT_DIR, 'mixed_size_line.pdf'), buildPdf(mixedSizeLineContent()));
 
     console.log('Wrote fixtures to', OUT_DIR);
 }

@@ -476,6 +476,11 @@ function punctuationApart(runs: RawRun[]): RawRun[] {
     return out;
 }
 
+/** A fragment's box grown over another run of it, on the baseline of its first run. */
+function onBaseline(box: NodeBounds, from: NodeBounds): NodeBounds {
+    return from.baseline === undefined ? box : { ...box, baseline: from.baseline };
+}
+
 function clusterToLine(clusterRuns: RawRun[], cfg: PdfLayoutConfig, rtl = false): PdfLine {
     const runs = [...clusterRuns].sort((a, b) => a.x - b.x);
     const lineFontSize = dominantFontSize(runs);
@@ -531,20 +536,21 @@ function clusterToLine(clusterRuns: RawRun[], cfg: PdfLayoutConfig, rtl = false)
             if (gap >= threshold && !/^\s/.test(r.text) && !/\s$/.test(prev.text)) lead = ' ';
         }
 
-        const box: NodeBounds = { x: r.x, y: r.yTop, width: r.width, height: r.height };
+        // (Its baseline with it: a line's runs are level, see NodeBounds.baseline.)
+        const box: NodeBounds = { x: r.x, y: r.yTop, width: r.width, height: r.height, baseline: r.yBaseline };
         const last = fragments[fragments.length - 1];
         // A blank item that leads or ends the line (the space a producer draws before a cell's text or after
         // a line's last word) is text, not a place: its box put a cell's number where the cell before it
         // ended. Between words it is the line's, as the words around it are.
         if (!r.text.trim()) {
-            if (last) { blankFrom ??= last.bounds; last.text += lead + r.text; last.bounds = unionBounds(last.bounds, box); }
+            if (last) { blankFrom ??= last.bounds; last.text += lead + r.text; last.bounds = onBaseline(unionBounds(last.bounds, box), last.bounds); }
             prev = r;
             continue;
         }
         blankFrom = undefined;
         if (last && sameFormatting(last.formatting, fmt) && sameLink(last.link, r.link)) {
             last.text += lead + r.text;
-            last.bounds = unionBounds(last.bounds, box);
+            last.bounds = onBaseline(unionBounds(last.bounds, box), last.bounds);
         } else {
             fragments.push({ text: lead + r.text, bounds: box, formatting: fmt, link: r.link });
         }

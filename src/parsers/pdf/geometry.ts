@@ -41,9 +41,11 @@ export function round2(n: number): number {
     return r === 0 ? 0 : r;
 }
 
-/** Returns a copy of the box with all fields rounded to 2 decimals. */
+/** Returns a copy of the box with all fields rounded to 2 decimals (its baseline too, where it has one). */
 export function roundBounds(b: NodeBounds): NodeBounds {
-    return { x: round2(b.x), y: round2(b.y), width: round2(b.width), height: round2(b.height) };
+    const out: NodeBounds = { x: round2(b.x), y: round2(b.y), width: round2(b.width), height: round2(b.height) };
+    if (b.baseline !== undefined && Number.isFinite(b.baseline)) out.baseline = round2(b.baseline);
+    return out;
 }
 
 /** Smallest box containing both inputs. */
@@ -55,12 +57,12 @@ export function unionBounds(a: NodeBounds, b: NodeBounds): NodeBounds {
     return { x, y, width: right - x, height: bottom - y };
 }
 
-/** Smallest box containing every input, or undefined for an empty list. */
+/** Smallest box containing every input, or undefined for an empty list (a box of boxes: no baseline, see NodeBounds). */
 export function unionAll(boxes: (NodeBounds | undefined)[]): NodeBounds | undefined {
     let acc: NodeBounds | undefined;
     for (const b of boxes) {
         if (!b) continue;
-        acc = acc ? unionBounds(acc, b) : b;
+        acc = acc ? unionBounds(acc, b) : { x: b.x, y: b.y, width: b.width, height: b.height };
     }
     return acc;
 }
@@ -140,7 +142,8 @@ export function computeRunBox(m: number[], itemWidth: number, ascent: number, de
 /**
  * Maps a box from authored (rotation-0) page space into the page's rendered space for a given
  * `/Rotate`. Reading order is computed in authored space; this is applied only at emit time so the
- * public `NodeBounds` match what pdf.js renders. For rotation 0 it is the identity.
+ * public `NodeBounds` match what pdf.js renders. For rotation 0 it is the identity; on a turned page the
+ * box keeps no baseline (its text is turned on the page as it is seen, see NodeBounds.baseline).
  *
  * @param authoredW - authored page width (rotation-0 viewport width)
  * @param authoredH - authored page height

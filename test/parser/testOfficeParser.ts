@@ -3713,6 +3713,26 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
         add('invisible_text parse', false, 'parsed', e?.message || String(e));
     }
 
+    // --- mixed_size_line fixture: one line in three sizes; each run's baseline is the line's, its box its font's ---
+    try {
+        const runsOf = (ast: any) => { const out: any[] = []; ast.content.forEach((p: any) => walk(p, n => { if (n.type === 'text' && (n.text || '').trim()) out.push(n); })); return out; };
+        const runs = runsOf(await OfficeParser.parseOffice(path.join(pdfDir, 'mixed_size_line.pdf'), { ocr: false }));
+        const line = runs.filter(r => ['Large', 'small', 'middle'].includes(r.text.trim()));
+        const baselines = line.map(r => r.bounds?.baseline);
+        add('Runs of one line share a baseline', line.length === 3 && baselines.every(b => b === 92), '92 for each (792 - 700)', JSON.stringify(baselines));
+        add('Runs of one line have their own boxes', new Set(line.map(r => r.bounds?.y)).size === 3 && line.every(r => r.bounds.y < r.bounds.baseline && r.bounds.y + r.bounds.height > r.bounds.baseline), 'ascent above, descent below', JSON.stringify(line.map(r => r.bounds)));
+        add('Every level run has a baseline', runs.every(r => typeof r.bounds?.baseline === 'number'), `${runs.length}/${runs.length}`, `${runs.filter(r => typeof r.bounds?.baseline === 'number').length}/${runs.length}`);
+        const containers: any[] = [];
+        (await OfficeParser.parseOffice(path.join(pdfDir, 'mixed_size_line.pdf'), { ocr: false })).content.forEach((p: any) => walk(p, n => { if (n.type !== 'text' && n.bounds) containers.push(n); }));
+        add('Container nodes carry no baseline', containers.length > 0 && containers.every(n => n.bounds.baseline === undefined), 'none', containers.map(n => n.bounds.baseline).join(','));
+        const bare = runsOf(await OfficeParser.parseOffice(path.join(pdfDir, 'mixed_size_line.pdf'), { ocr: false, ignorePageGeometry: true }));
+        add('ignorePageGeometry drops baselines with bounds', bare.length > 0 && bare.every(r => r.bounds === undefined), 'no bounds', bare.filter(r => r.bounds).length);
+        const turned = runsOf(await OfficeParser.parseOffice(path.join(pdfDir, 'rotated.pdf'), { ocr: false }));
+        add('Text of a turned page has no baseline', turned.length > 0 && turned.every(r => r.bounds && r.bounds.baseline === undefined), 'none', turned.filter(r => r.bounds?.baseline !== undefined).length);
+    } catch (e: any) {
+        add('mixed_size_line parse', false, 'parsed', e?.message || String(e));
+    }
+
     // --- LibreOffice's PDFs of Indic and Thai text: each cluster placed on its own and wrapped in an
     // ActualText, its glyphs given no advance by pdf.js; read word for word as pdftotext reads them ---
     try {

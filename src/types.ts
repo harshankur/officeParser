@@ -3623,9 +3623,13 @@ export interface NodeBounds {
     /** Box height. */
     height: number;
     /**
-     * Distance from the page's top edge to the text's baseline, on a run of level text (PDF). The box
-     * runs from the font's ascent above the baseline to its descent below it, so they are
-     * `baseline - y` and `y + height - baseline`.
+     * Distance from the page's top edge to the text's baseline, on a run of level text (PDF), from the
+     * text matrix it is drawn with; a run set a little askew (within 15 degrees, as a scan's text layer)
+     * has the baseline at its start. The box runs from the font's ascent above the baseline to its
+     * descent below it (the font's own metrics, or 0.8 and 0.2 of its size where it has none), so they
+     * are `baseline - y` and `y + height - baseline`. Absent on text that is turned on the page as it is
+     * seen (a rotated run, or any run of a page with a `/Rotate`), on container nodes, and with
+     * `ignorePageGeometry`.
      */
     baseline?: number;
 }
