@@ -7169,6 +7169,64 @@ async function testSpreadsheetWriters(): Promise<void> {
 }
 
 /**
+ * A PDF's invisible text (TextFormatting.invisible: a scan's recognised words over its picture): fully
+ * transparent in PPTX and ODP, drawn in text rendering mode 3 by the native PDF engine and transparent by the
+ * 'html' one, and plain text everywhere else; in each, still there to read back.
+ */
+async function testInvisibleTextWriters(): Promise<void> {
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    const run = (text: string, x: number, baseline: number, invisible: boolean, more: object = {}) => ({ type: 'text', text, formatting: { size: '12pt', ...(invisible ? { invisible: true } : {}) }, bounds: { x, y: baseline - 9.6, width: text.length * 6, height: 12, baseline }, ...more });
+    const cell = (text: string, x: number) => ({ type: 'cell', text, children: [run(text, x, 330, true)], bounds: { x, y: 318, width: 80, height: 16 } });
+    const scan = { type: 'pdf', metadata: {}, attachments: [{ type: 'image', name: 'scan.png', mimeType: 'image/png', extension: 'png', data: png }], content: [{ type: 'page', metadata: { pageWidth: 612, pageHeight: 792 }, children: [
+        { type: 'image', bounds: { x: 0, y: 0, width: 612, height: 792 }, metadata: { attachmentName: 'scan.png' } },
+        { type: 'paragraph', text: 'Invisibleword alpha', bounds: { x: 72, y: 90.4, width: 120, height: 12 }, children: [run('Invisibleword alpha', 72, 100, true)] },
+        { type: 'paragraph', text: 'Shownword Invisiblegamma', bounds: { x: 72, y: 150.4, width: 150, height: 12 }, children: [run('Shownword', 72, 160, false), run(' Invisiblegamma', 126, 160, true)] },
+        { type: 'list', text: 'Invisibleitem', bounds: { x: 90, y: 200.4, width: 90, height: 12 }, metadata: { listType: 'unordered', indentation: 0 }, children: [run('Invisibleitem', 90, 210, true)] },
+        { type: 'paragraph', text: 'Invisiblelink', bounds: { x: 72, y: 250.4, width: 80, height: 12 }, children: [run('Invisiblelink', 72, 260, true, { metadata: { link: 'https://example.com/' } })] },
+        { type: 'table', bounds: { x: 72, y: 318, width: 160, height: 16 }, children: [{ type: 'row', children: [cell('Invisiblecell', 72), cell('Invisibleother', 152)] }] },
+    ] }] } as any;
+    const words = ['Invisibleword', 'Invisiblegamma', 'Invisibleitem', 'Invisiblelink', 'Invisiblecell', 'Shownword'];
+    const parts = (bytes: Uint8Array) => Object.entries(unzipSync(bytes)).filter(([k]) => /\.(xml|x?html|rels)$/.test(k)).map(([, v]) => strFromU8(v)).join('\n');
+    const readBack = async (bytes: Uint8Array, fileType: string) => JSON.stringify(await OfficeParser.parseOffice(Buffer.from(bytes), { fileType, ocr: false, pdfParserConfig: { separateProcess: false } } as any));
+
+    // PPTX: each invisible run (and an invisible item's bullet, written as text) transparent; the shown one not.
+    const pptx = unzipSync(new Uint8Array((await OfficeGenerator.generate(scan, 'pptx')).value as Uint8Array));
+    const slide = strFromU8(pptx['ppt/slides/slide1.xml']);
+    const runOf = (xml: string, text: string) => [...xml.matchAll(/<a:r>([\s\S]*?)<\/a:r>/g)].map(m => m[1]).find(r => r.includes(`<a:t>${text}`)) ?? '';
+    for (const text of ['Invisibleword alpha', ' Invisiblegamma', 'Invisibleitem', 'Invisiblelink', 'Invisiblecell', '•\t']) assert.ok(/<a:solidFill><a:srgbClr val="000000"><a:alpha val="0"\/><\/a:srgbClr><\/a:solidFill>/.test(runOf(slide, text)), `PPTX: "${text}" is fully transparent; got ${runOf(slide, text)}`);
+    assert.ok(!/alpha/.test(runOf(slide, 'Shownword')), 'PPTX: shown text keeps its colour');
+    assert.ok(!/<a:buChar/.test(slide) && /hlinkClr[^>]*val="tx"/.test(runOf(slide, 'Invisiblelink')), 'PPTX: an invisible item has no bullet a reader draws in its own colour; an invisible link keeps its transparent colour');
+    const pptxBack = await readBack((await OfficeGenerator.generate(scan, 'pptx')).value as Uint8Array, 'pptx');
+    assert.ok(words.every(w => pptxBack.includes(w)), 'PPTX: the invisible text reads back');
+    // ODP: a transparent span, in the namespace LibreOffice reads it in.
+    const odp = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(scan, 'odp')).value as Uint8Array))['content.xml']);
+    const styleOf = (text: string) => { const name = new RegExp(`<text:span text:style-name="([^"]+)">${text}`).exec(odp)?.[1]; return new RegExp(`<style:style style:name="${name}"[^>]*><style:text-properties([^>]*)/>`).exec(odp)?.[1] ?? ''; };
+    for (const text of ['Invisibleword alpha', ' Invisiblegamma', 'Invisibleitem', 'Invisiblecell', '•<text:tab/>']) assert.ok(/fo:color="#000000" loext:opacity="0%"/.test(styleOf(text)), `ODP: "${text}" is fully transparent; got ${styleOf(text)}`);
+    assert.ok(!/opacity/.test(styleOf('Shownword')) && /xmlns:loext="urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0"/.test(odp), 'ODP: shown text is not transparent; the opacity\'s namespace is declared');
+    assert.ok(words.every(w => odp.includes(w)), 'ODP: the invisible text is written');
+    // Native PDF: drawn in rendering mode 3, still read back; the shown word not.
+    const native = (await OfficeGenerator.generate(scan, 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const loaded = await PDFDocument.load(native);
+    let ops = '';
+    for (const [, obj] of loaded.context.enumerateIndirectObjects()) if (obj instanceof PDFRawStream) { try { ops += strFromU8(unzlibSync(obj.contents)); } catch { /* not Flate */ } }
+    assert.strictEqual((ops.match(/\b3 Tr\b/g) ?? []).length >= 6, true, `native PDF: each invisible run, the invisible item's marker and cells drawn in mode 3; got ${(ops.match(/\b3 Tr\b/g) ?? []).length}`);
+    const nativeBack = await readBack(native, 'pdf');
+    assert.ok(words.every(w => nativeBack.includes(w)), 'native PDF: the invisible text reads back');
+    // The 'html' engine's page: invisible text (and an invisible item's marker) transparent; HTML output shows it.
+    const { HtmlGenerator } = await import('../src/generators/HtmlGenerator');
+    const printed = (await new HtmlGenerator(scan, { htmlConfig: { standalone: true } } as any, { drawsInvisibleText: true }).generate()).value as string;
+    assert.ok(/<span class="op-invisible-text">(?:<span[^>]*>)?Invisibleword alpha</.test(printed) && /<li[^>]*class="op-invisible-text"/.test(printed) && /\.op-invisible-text::marker \{ color: transparent !important/.test(printed) && !/op-invisible-text">Shownword/.test(printed),
+        `html engine: invisible text and an invisible item's marker are drawn transparent; got ${printed.match(/<style>\.op[^<]*<\/style>|<li[^>]*>.{0,80}|<p[^>]*>.{0,80}/g)}`);
+    // Every other writer: the invisible text is its content, written as text.
+    for (const format of ['html', 'md', 'text', 'rtf', 'csv', 'chunks', 'epub', 'docx', 'odt', 'tex', 'xlsx', 'ods'] as const) {
+        const value = (await OfficeGenerator.generate(scan, format)).value as unknown;
+        const out = value instanceof Uint8Array ? parts(value) : typeof value === 'string' ? value : JSON.stringify(value);
+        const expected = format === 'csv' ? ['Invisiblecell'] : words;
+        assert.ok(expected.every(w => out.includes(w)) && !/op-invisible-text|transparent|w:vanish|text:display="none"/.test(out.replace(/background(-color)?: ?transparent/g, '')), `${format}: invisible text is written as text; missing ${expected.filter(w => !out.includes(w))}`);
+    }
+}
+
+/**
  * PPTX and ODP output: a deck written as a deck (its slides, notes and charts, as tables of their data),
  * a PDF's pages as slides with their text where the page set it (lines kept, a paragraph beside a floating
  * table in two boxes, a shaded header cell's colour), a document flowed onto slides (a slide a section,
@@ -9421,6 +9479,7 @@ async function runTests(): Promise<void> {
         ['PDF ActualText', testPdfActualText],
         ['Spreadsheet writers', testSpreadsheetWriters],
         ['Presentation writers', testPresentationWriters],
+        ['Invisible text in writers', testInvisibleTextWriters],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],
