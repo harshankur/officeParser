@@ -507,7 +507,8 @@ export interface CommonOfficeParserConfig {
      * `cmaps/` folder of `pdfjs-dist` at the version the library uses. pdf.js reads the text of a
      * font a PDF does not embed through one of these when the font names a predefined CJK encoding
      * (UniJIS-UTF16-H, 90ms-RKSJ-H...); without it every character in such a font is lost. Only the
-     * CMaps a document needs are read, each once, at most 4 MB and 15 seconds each. One that cannot
+     * CMaps a document needs are read, each once, at most 4 MB and 15 seconds each, and a folder that
+     * keeps a document waiting 15 seconds in all is asked nothing more for it. One that cannot
      * be had raises `PDF_ASSET_UNAVAILABLE` (once per document, with the first page that needed it),
      * and the rest of the document is read.
      *
@@ -526,7 +527,8 @@ export interface CommonOfficeParserConfig {
      * fallback beside it (`*_nowasm_fallback.js`) that pdf.js's worker loads itself where WebAssembly
      * cannot run (a Content Security Policy without `'wasm-unsafe-eval'`). Without them such
      * pictures cannot be decoded. Only the decoders a document needs are read, each once, at most 4 MB
-     * and 15 seconds each. One that cannot be had raises `PDF_ASSET_UNAVAILABLE` (once per document,
+     * and 15 seconds each, and a folder that keeps a document waiting 15 seconds in all is asked
+     * nothing more for it. One that cannot be had raises `PDF_ASSET_UNAVAILABLE` (once per document,
      * with the first page that needed it), and each picture that then could not be decoded an
      * `IMAGE_EXTRACTION_FAILED`.
      *

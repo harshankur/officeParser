@@ -139,7 +139,8 @@
                 <td><strong>PDF CJK text</strong>: the folder (ending in <code>/</code>) of pdf.js's packed CMaps, through
                     which pdf.js reads the text of a font a PDF does not embed when it names a predefined CJK encoding
                     (<code>UniJIS-UTF16-H</code>, <code>90ms-RKSJ-H</code>...). Only the files a document needs are read,
-                    each at most 4 MB and 15 s; one that cannot be had raises <code>PDF_ASSET_UNAVAILABLE</code> (once,
+                    each at most 4 MB and 15 s, and a folder that keeps a document waiting 15 s in all is asked nothing
+                    more for it; one that cannot be had raises <code>PDF_ASSET_UNAVAILABLE</code> (once,
                     with the first page that needed it) and the rest of the document is read.</td>
             </tr>
             <tr>
