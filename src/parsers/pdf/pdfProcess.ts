@@ -16,6 +16,7 @@
 import type { ChildProcess } from 'child_process';
 import type { Readable } from 'stream';
 import { getAbortError } from '../../utils/errorUtils.js';
+import { MAX_WARNING_LENGTH, MAX_WORKER_WARNINGS, PDFJS_WARNING_KIND_SOURCE } from './pdfAssets.js';
 
 /**
  * Typed arrays arrive over IPC as views into the message's own buffer (at an offset); pdf.js reads a
@@ -91,15 +92,17 @@ try {
     const usage = process.cpuUsage();
     require(['f', 's'].join('')).writeSync(4, clock ? Math.floor((usage.user + usage.system) / 1000) + '\\n' : '-\\n');
 } catch { process.exit(3); }
-// pdf.js's warnings ("Warning: ..."; its worker runs at warning verbosity) go to the host, which reports
-// those about content pdf.js left out: at most 1,000 a document, 300 characters each. Nothing else is
-// written anywhere (the process has no output).
-let warningsSent = 0;
+// pdf.js's warnings about content it left out ("Warning: ..."; its worker runs at warning verbosity) go
+// to the host, which reports them: at most ${MAX_WORKER_WARNINGS} of each kind a document, ${MAX_WARNING_LENGTH} characters each.
+// Its other warnings, and anything else, are written nowhere (the process has no output).
+const warningKind = ${PDFJS_WARNING_KIND_SOURCE};
+const warningsSent = new Map();
 console.warn = (...args) => {
-    const line = typeof args[0] === 'string' ? args[0] : '';
-    if (!line.startsWith('Warning: ') || warningsSent >= 1000 || !process.connected) return;
-    warningsSent++;
-    try { process.send({ officeparserWarning: line.slice(0, 300) }); } catch { /* the host is gone */ }
+    const kind = warningKind(args[0]);
+    const sent = warningsSent.get(kind) || 0;
+    if (!kind || sent >= ${MAX_WORKER_WARNINGS} || !process.connected) return;
+    warningsSent.set(kind, sent + 1);
+    try { process.send({ officeparserWarning: args[0].slice(0, ${MAX_WARNING_LENGTH}) }); } catch { /* the host is gone */ }
 };
 const listeners = new Set();
 const port = {
@@ -113,7 +116,7 @@ const port = {
 };
 process.on('message', (data) => {
     data = ownArrays(data);
-    if (data && data.action === 'GetDocRequest') warningsSent = 0;
+    if (data && data.action === 'GetDocRequest') warningsSent.clear();
     for (const listener of listeners) listener({ data });
 });
 process.on('disconnect', () => process.exit(0));

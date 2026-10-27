@@ -4472,6 +4472,25 @@ async function pdfAssetTests() {
                 });
                 check(`pdf assets: an abort ends a parse waiting on a file that never comes (separateProcess ${separateProcess})`, abortedRun.within && abortedRun.result === 'AbortError', `${abortedRun.ms}ms ${abortedRun.result}`);
             }
+            // A server trickling a byte a second, alongside: a file that timed out is not asked for again,
+            // one asked for twice while it is read is read once, and once the folder has kept the document
+            // waiting its 15 s, the other files are not asked of it (each font naming a CMap it could not
+            // have asked anew, 15 s a font).
+            const asked: string[] = [];
+            const trickling = http.createServer((request, response) => {
+                asked.push(String(request.url));
+                response.writeHead(200, { 'content-type': 'application/octet-stream' });
+                const beat = setInterval(() => { response.write(Buffer.from([0])); }, 1000);
+                request.on('close', () => clearInterval(beat));
+            });
+            await new Promise<void>(resolve => trickling.listen(0, '127.0.0.1', () => resolve()));
+            const slowRun = (async () => {
+                const slow = session({ cMapUrl: `http://127.0.0.1:${(trickling.address() as any).port}/cmaps/`, wasmUrl: '' });
+                const first = await Promise.all([1, 2].map(() => outcome(() => slow.assets.fetchAsset({ kind: 'cMapUrl', filename: 'UniJIS-UTF16-H.bcmap' }))));
+                const started = performance.now();
+                const after = await Promise.all(['UniJIS-UTF16-H.bcmap', 'UniJIS-UTF16-V.bcmap', '90ms-RKSJ-H.bcmap'].map(filename => outcome(() => slow.assets.fetchAsset({ kind: 'cMapUrl', filename }))));
+                return { first, after, afterMs: Math.round(performance.now() - started), warnings: slow.warnings };
+            })();
             const warnings: any[] = [];
             const timedRun = await withinTime(25_000, async () => {
                 warnings.length = 0;
@@ -4483,6 +4502,17 @@ async function pdfAssetTests() {
                 `${timedRun.ms}ms, ${timedRun.result} pictures, ${timedOut?.message}`);
             const notText = warnings.find(w => w.code === 'PDF_NO_TEXT_EXTRACTED');
             check('pdf assets: a document whose CMap could not be had is not called scanned', !!notText && /UniJIS-UTF16-H/.test(notText.message) && !/scanned/.test(notText.message), notText?.message);
+            try {
+                const slow = await slowRun;
+                const reported = slow.warnings.filter(w => w.code === 'PDF_ASSET_UNAVAILABLE').map(w => w.details?.asset);
+                check('pdf assets: a file asked for twice while it is read is read once', asked.length === 1 && slow.first.every(o => /longer than 15 s/.test(o) || /could not load/.test(o)), `${asked.join()} ${slow.first.join(' | ')}`);
+                check('pdf assets: after a folder kept a document waiting its time, no file is asked of it again, and each is refused at once', asked.length === 1 && slow.afterMs < 1000 && slow.after.every(o => !o.startsWith('read')),
+                    `${asked.length} asked, ${slow.afterMs}ms, ${slow.after.join(' | ')}`);
+                check('pdf assets: each file a slow folder could not give is reported once', reported.join() === 'UniJIS-UTF16-H.bcmap,UniJIS-UTF16-V.bcmap,90ms-RKSJ-H.bcmap' && /in all/.test(slow.warnings[1]?.message), `${reported.join()} ${slow.warnings[1]?.message}`);
+            } finally {
+                trickling.closeAllConnections?.();
+                trickling.close();
+            }
         } finally {
             hanging.closeAllConnections?.();
             hanging.close();

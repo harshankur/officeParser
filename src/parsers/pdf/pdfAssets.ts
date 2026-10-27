@@ -29,11 +29,15 @@ import { getAbortError, logWarning } from '../../utils/errorUtils.js';
 
 /** The largest CMap or decoder file read (the largest pdf.js ships is about 250 KB). */
 export const MAX_ASSET_BYTES = 4 * 1024 * 1024;
-/** How long reading one CMap or decoder file may take, from asking to the last byte. */
+/**
+ * How long a document may wait on the files of one folder, in all: reading one file may take no longer,
+ * and once the files read from a folder have kept the document waiting this long (counting the time any
+ * of them was being read), nothing more is asked of that folder.
+ */
 export const ASSET_TIMEOUT_MS = 15_000;
 /** How long a browser worker of this module's may take to start pdf.js before pdf.js starts its own. */
 const WORKER_START_MS = 15_000;
-/** The pdf.js warnings one document's worker may send, and how much of each is kept. */
+/** The pdf.js warnings of each kind (see PDFJS_WARNINGS) one document's worker may send, and how much of each is kept. */
 export const MAX_WORKER_WARNINGS = 1000;
 export const MAX_WARNING_LENGTH = 300;
 /** A packed CMap's file name, as pdf.js names one it has (`UniJIS-UTF16-H.bcmap`). */
@@ -53,6 +57,31 @@ export const PDFJS_WARNINGS = {
     xObjectTextNotRead: 'getTextContent - ignoring XObject: ',
     imageUndecodable: 'Unable to decode image ',
 } as const;
+
+/**
+ * Which of PDFJS_WARNINGS a line from pdf.js's worker ("Warning: ...") is, or undefined for any other
+ * line (pdf.js's own notes, which the parser does not act on). The same test, as source, runs where
+ * the lines are written (see PDFJS_WARNING_KIND_SOURCE).
+ */
+export function pdfjsWarningKind(line: string): keyof typeof PDFJS_WARNINGS | undefined {
+    if (!line.startsWith('Warning: ')) return undefined;
+    for (const [kind, words] of Object.entries(PDFJS_WARNINGS) as [keyof typeof PDFJS_WARNINGS, string][]) {
+        if (line.startsWith(words, 'Warning: '.length)) return kind;
+    }
+    return undefined;
+}
+
+/**
+ * The test of pdfjsWarningKind as source, for the separate process and the browser Worker: a function
+ * of a line giving its kind or ''. Each sends only the lines it names, at most MAX_WORKER_WARNINGS of
+ * each kind a document, so pdf.js's notes (one for every picture pdf.js is told to leave out when
+ * pictures are not extracted) cannot use up what may be sent before a line the parser reports.
+ */
+export const PDFJS_WARNING_KIND_SOURCE = `((kinds) => (line) => {
+    if (typeof line !== 'string' || !line.startsWith('Warning: ')) return '';
+    for (const [kind, words] of kinds) if (line.startsWith(words, 9)) return kind;
+    return '';
+})(${JSON.stringify(Object.entries(PDFJS_WARNINGS))})`;
 
 export type PdfAssetKind = 'cMapUrl' | 'wasmUrl';
 /** Why a file could not be had: it is not there (or no folder is set), reading it failed, or `allowRemoteAssets` forbids its address. */
@@ -232,6 +261,25 @@ interface Unavailable {
 }
 
 /**
+ * How long the files of one folder have kept a document waiting: the time any of them was being read,
+ * so files read side by side count their time once.
+ */
+class FolderWait {
+    private reading = 0;
+    private since = 0;
+    private before = 0;
+    waited(): number {
+        return this.before + (this.reading ? Date.now() - this.since : 0);
+    }
+    start(): void {
+        if (!this.reading++) this.since = Date.now();
+    }
+    end(): void {
+        if (!--this.reading) this.before += Date.now() - this.since;
+    }
+}
+
+/**
  * One parse's CMap and decoder files, and what its pdf.js worker says about content it leaves out
  * (see the module's comment). It reports through the parse's config, naming the page being read
  * (see `follow`), and nothing once the read has ended or the parse has (`close`).
@@ -242,9 +290,14 @@ export class PdfAssetSession {
     private position: PdfReadPosition | undefined;
     private closed = false;
     private readonly unavailable = new Map<string, Unavailable>();
+    /** The files being read, by name: pdf.js asking for one again before it has arrived is given the same read. */
+    private readonly reads = new Map<string, Promise<Uint8Array>>();
+    /** How long each folder has kept the document waiting (see ASSET_TIMEOUT_MS). */
+    private readonly waits: Record<PdfAssetKind, FolderWait> = { cMapUrl: new FolderWait(), wasmUrl: new FolderWait() };
     /** Why pdf.js could not decode a picture, by the id it gave it (its warning comes before the empty picture). */
     private readonly undecodable = new Map<string, string>();
-    private warningsTaken = 0;
+    /** The worker's lines acted on, by kind (see workerWarning). */
+    private readonly warningsTaken = new Map<string, number>();
 
     constructor(private readonly folders: PdfAssetFolders, private readonly config: FullOfficeParserConfig, private readonly maxImagePixels: number) { }
 
@@ -293,7 +346,10 @@ export class PdfAssetSession {
     /**
      * One file pdf.js asks for: a CMap or a decoder, by its own name, from its folder. Anything else is
      * refused: the standard fonts' data (pdf.js then uses its own metrics, as before) and any name
-     * that is not one of pdf.js's files. A file that cannot be had is reported once (see report).
+     * that is not one of pdf.js's files. A file that cannot be had is reported once (see report), and
+     * refused at once when pdf.js asks for it again: pdf.js keeps only the CMaps it could load, so each
+     * font naming one that could not be had asked for it anew, and a server that never answered cost
+     * the parse 15 seconds a font. A file asked for again while it is being read is given that read.
      */
     async fetchAsset(request: { kind?: unknown; filename?: unknown }): Promise<Uint8Array> {
         const kind = request?.kind;
@@ -302,15 +358,36 @@ export class PdfAssetSession {
         if (kind === 'cMapUrl' ? !CMAP_FILE.test(name) : !DECODER_FILES.has(name)) {
             throw new AssetRefused(`${JSON.stringify(name.slice(0, 60))} is not one of pdf.js's ${kind === 'cMapUrl' ? 'CMap' : 'decoder'} files`);
         }
+        const known = this.unavailable.get(name);
+        if (known) throw this.report(kind, name, known.reason);
+        const pending = this.reads.get(name);
+        // Each asker has bytes of its own: pdf.js may hand the ones it is given on to its worker.
+        if (pending) return (await pending).slice();
+        const read = this.read(kind, name);
+        this.reads.set(name, read);
+        const forget = () => { this.reads.delete(name); };
+        read.then(forget, forget);
+        return read;
+    }
+
+    /** Reads a file pdf.js asked for (see fetchAsset). */
+    private async read(kind: PdfAssetKind, name: string): Promise<Uint8Array> {
         const folder = this.folders[kind];
         if (folder.blocked) throw this.report(kind, name, 'blocked');
         if (!folder.url) throw this.report(kind, name, 'missing', 'no folder is set for it');
-        // Bounded by its own time, the parse's abortSignal and the parse's end.
+        const wait = this.waits[kind];
+        const left = ASSET_TIMEOUT_MS - wait.waited();
+        if (left <= 0) throw this.report(kind, name, 'failed', `files from ${folder.url} have kept this document waiting ${ASSET_TIMEOUT_MS / 1000} s in all, so nothing more is read from there`);
+        // Bounded by the time the folder has left, the parse's abortSignal and the parse's end.
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(new AssetUnavailable('failed', `reading it took longer than ${ASSET_TIMEOUT_MS / 1000} s`)), ASSET_TIMEOUT_MS);
+        const ranOut = left < ASSET_TIMEOUT_MS
+            ? `reading it took longer than the ${Math.ceil(left / 1000)} s left of the ${ASSET_TIMEOUT_MS / 1000} s a document waits on files from one folder`
+            : `reading it took longer than ${ASSET_TIMEOUT_MS / 1000} s`;
+        const timer = setTimeout(() => controller.abort(new AssetUnavailable('failed', ranOut)), left);
         const sources = [this.ended.signal, this.config.abortSignal].filter((s): s is AbortSignal => !!s);
         const stop = (source: AbortSignal) => () => controller.abort(source.reason);
         const stops = sources.map(source => { const onAbort = stop(source); if (source.aborted) onAbort(); else source.addEventListener('abort', onAbort, { once: true }); return { source, onAbort }; });
+        wait.start();
         try {
             const url = new URL(name, folder.url);
             const read = url.protocol === 'file:' && !isBrowser
@@ -327,6 +404,7 @@ export class PdfAssetSession {
             throw this.report(kind, name, reason, detail);
         } finally {
             clearTimeout(timer);
+            wait.end();
             for (const { source, onAbort } of stops) source.removeEventListener('abort', onAbort);
         }
     }
@@ -368,62 +446,124 @@ export class PdfAssetSession {
     /**
      * A warning line from pdf.js's worker ("Warning: ..."). The ones about content pdf.js left out are
      * reported with the page being read: pictures only when pictures are extracted (`extractAttachments`;
-     * without it pdf.js is told to leave every picture out), text always. Others are pdf.js's own notes,
-     * which it printed nowhere before either. At most MAX_WORKER_WARNINGS lines a document are read.
+     * without it pdf.js is told to leave every picture out, and says so for each), text always. Others
+     * are pdf.js's own notes, which it printed nowhere before either. At most MAX_WORKER_WARNINGS lines
+     * of each kind a document are acted on; a line that is not acted on is not counted, so it cannot
+     * use up the count before one that is reported.
      */
     workerWarning(line: unknown): void {
-        if (typeof line !== 'string' || !line.startsWith('Warning: ')) return;
-        if (this.warningsTaken >= MAX_WORKER_WARNINGS) return;
-        this.warningsTaken++;
-        if (!this.reporting || this.position!.spent) return;
+        if (typeof line !== 'string') return;
+        const kind = pdfjsWarningKind(line);
+        if (!kind || !this.reporting || this.position!.spent) return;
+        const pictures = !!this.config.extractAttachments;
+        if (!pictures && kind !== 'imageUndecodable' && kind !== 'xObjectTextNotRead') return;
+        const taken = this.warningsTaken.get(kind) ?? 0;
+        if (taken >= MAX_WORKER_WARNINGS) return;
+        this.warningsTaken.set(kind, taken + 1);
         const text = line.slice('Warning: '.length, MAX_WARNING_LENGTH);
         const page = this.position!.pageBeingRead;
         const where = page !== undefined ? `from page ${page}` : 'from the document';
-        const pictures = !!this.config.extractAttachments;
         const quoted = (prefix: string) => text.slice(prefix.length).replace(/^"/, '').replace(/"\.?$/, '');
-        if (text.startsWith(PDFJS_WARNINGS.imageUndecodable)) {
+        if (kind === 'imageUndecodable') {
             const match = /^Unable to decode image "([^"]{1,100})": "?(.*?)"?\.?$/s.exec(text);
             if (match) this.undecodable.set(match[1], match[2]);
             return;
         }
-        if (text.startsWith(PDFJS_WARNINGS.xObjectTextNotRead)) {
+        if (kind === 'xObjectTextNotRead') {
             logWarning(OfficeWarningType.CONTENT_PART_NOT_READ, this.config, { part: `an XObject ${page !== undefined ? `on page ${page}` : 'of the document'}`, reason: `pdf.js could not read it (${quoted(PDFJS_WARNINGS.xObjectTextNotRead)})` }, undefined, { page });
             return;
         }
-        if (!pictures) return;
-        let lost: string | undefined;
-        if (text.startsWith(PDFJS_WARNINGS.imageTooLarge)) {
+        let lost: string;
+        if (kind === 'imageTooLarge') {
             lost = `pdf.js left out a picture larger than pdfParserConfig.maxImagePixels (${this.maxImagePixels} pixels); raise the option to extract it`;
-        } else if (text.startsWith(PDFJS_WARNINGS.inlineImageUndecodable)) {
+        } else if (kind === 'inlineImageUndecodable') {
             lost = `pdf.js could not decode an inline picture (${quoted(PDFJS_WARNINGS.inlineImageUndecodable)})`;
-        } else if (text.startsWith(PDFJS_WARNINGS.imageWithoutSize)) {
+        } else if (kind === 'imageWithoutSize') {
             lost = 'pdf.js left out a picture whose width or height is missing';
-        } else if (text.startsWith(PDFJS_WARNINGS.xObjectNotDrawn)) {
+        } else {
             lost = `pdf.js left out an XObject it could not read, with any picture in it (${quoted(PDFJS_WARNINGS.xObjectNotDrawn)})`;
         }
-        if (lost) logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, this.config, where, lost, { page });
+        logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, this.config, where, lost, { page });
+    }
+}
+
+/** The file a stack frame's code is in, as the stack names it (V8's `at f (file:1:2)`, or `f@file:1:2`). */
+function frameFile(frame: string): string | undefined {
+    const match = /(?:^\s*at (?:.*? \()?|@)(.+?):\d+:\d+\)?\s*$/.exec(frame);
+    return match?.[1];
+}
+
+/** The files of the code that called the function this is called in, nearest first (at most `depth`). */
+function callerFiles(depth: number): string[] {
+    const errorClass = Error as { stackTraceLimit?: number };
+    const limit = errorClass.stackTraceLimit;
+    try {
+        if (typeof limit === 'number') errorClass.stackTraceLimit = depth + 2;
+        const stack = new Error().stack;
+        if (typeof stack !== 'string') return [];
+        const files = stack.split('\n').map(frameFile).filter((file): file is string => !!file);
+        // This function's frame, and the caller's own.
+        return files.slice(2, depth + 2);
+    } catch {
+        return [];
+    } finally {
+        if (typeof limit === 'number') errorClass.stackTraceLimit = limit;
     }
 }
 
 /**
- * Sends the console warnings pdf.js gives in this process to `sink` until the returned function is
- * called. pdf.js's worker module, run in this process, writes its warnings with `console.warn`
- * ("Warning: ..."): while any sink is open, such a line goes to the newest sink and not the console
- * (at verbosity 0 pdf.js printed nothing either); every other call reaches the console as before.
+ * The file pdf.js's worker runs from in this process, as a stack names it: the module pdf.js's fake
+ * worker is given (the caller's preloaded `globalThis.pdfjsWorker`, or the one imported from
+ * `workerSrc`), found by asking its `WorkerMessageHandler.setup` to register its listeners with a
+ * handler of this function's, which notes where it was called from. Undefined where it cannot be
+ * found: the module does not load, `setup` no longer calls the handler, or the runtime gives no stack.
+ */
+export async function pdfjsWorkerFile(pdfjs: any): Promise<string | undefined> {
+    try {
+        const handler = await pdfjs.PDFWorker?._setupFakeWorkerGlobal;
+        if (typeof handler?.setup !== 'function') return undefined;
+        let file: string | undefined;
+        handler.setup({ on: () => { file ??= callerFiles(1)[0]; }, send: () => { /* nothing is sent */ } }, null);
+        return file;
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * Sends the warnings pdf.js's worker writes in this process to `sink` until the returned function is
+ * called. pdf.js's worker module, run in this process, writes them with `console.warn` ("Warning: ...")
+ * from its own `warn`: while any sink is open, a line that starts so and was written by code in
+ * `workerFile` (see pdfjsWorkerFile) goes to the newest sink and not the console (at verbosity 0
+ * pdf.js printed nothing either); every other call reaches the console as before, the caller's own
+ * "Warning: " lines with it. A line is pdf.js's when one of the few frames nearest the call is in that
+ * file: pdf.js's worker in this process answers the main thread's messages a microtask later, so no
+ * code of the caller's runs inside its calls but the `onWarning` a reported line reaches, whose own
+ * lines pass on. What this cannot tell apart is left as it is: a line the caller writes from the very
+ * file pdf.js's worker is in, or from code called from it (an application bundling pdf.js's worker
+ * into its own code), is taken while a PDF is open, and a line pdf.js writes for a document of the
+ * caller's own read by the same worker module at that moment is taken as the parse's.
  */
 /* eslint-disable no-console -- this takes pdf.js's console warnings; it writes nothing to the console itself */
-const consoleSinks: ((line: string) => void)[] = [];
+const consoleSinks: { sink: (line: string) => void; workerFile: string }[] = [];
 let consoleWrapper: ((...args: unknown[]) => void) | undefined;
 let consoleOriginal: ((...args: unknown[]) => void) | undefined;
-export function captureConsoleWarnings(sink: (line: string) => void): () => void {
-    consoleSinks.push(sink);
+/** The frames nearest a `console.warn` call looked at for pdf.js's worker (wrappers others put round the console come first). */
+const WARN_FRAMES = 8;
+export function captureConsoleWarnings(sink: (line: string) => void, workerFile: string): () => void {
+    const entry = { sink, workerFile };
+    consoleSinks.push(entry);
     if (!consoleWrapper || console.warn !== consoleWrapper) {
         const passOn = console.warn;
         consoleOriginal = passOn;
+        // A line written while one is being reported (an `onWarning` of the caller's writing its own,
+        // with pdf.js's `warn` still below it on the stack) is the caller's.
+        let reporting = false;
         const wrapper = function (this: unknown, ...args: unknown[]): void {
             const current = consoleSinks[consoleSinks.length - 1];
-            if (current && typeof args[0] === 'string' && args[0].startsWith('Warning: ')) {
-                try { current(args[0].slice(0, MAX_WARNING_LENGTH)); } catch { /* a report is never the console's concern */ }
+            if (current && !reporting && typeof args[0] === 'string' && args[0].startsWith('Warning: ') && callerFiles(WARN_FRAMES).includes(current.workerFile)) {
+                reporting = true;
+                try { current.sink(args[0].slice(0, MAX_WARNING_LENGTH)); } catch { /* a report is never the console's concern */ } finally { reporting = false; }
                 return;
             }
             passOn.apply(console, args as []);
@@ -435,7 +575,7 @@ export function captureConsoleWarnings(sink: (line: string) => void): () => void
     return () => {
         if (!open) return;
         open = false;
-        const index = consoleSinks.lastIndexOf(sink);
+        const index = consoleSinks.lastIndexOf(entry);
         if (index >= 0) consoleSinks.splice(index, 1);
         // Put back only where nothing replaced the wrapper since; a wrapper left in another's chain
         // passes every call on once no sink is open.
@@ -459,7 +599,8 @@ export interface WarningWorker {
 /**
  * pdf.js's worker in a browser Worker that sends pdf.js's warnings back (as `{ officeparserWarning }`
  * messages, which pdf.js's own listeners never see) to `sink`. The Worker runs a small module from a
- * Blob that sends each "Warning: ..." line `console.warn` is given and then imports `workerSrc`;
+ * Blob that sends each line of PDFJS_WARNINGS `console.warn` is given (at most MAX_WORKER_WARNINGS of
+ * each kind) and passes other calls on, and then imports `workerSrc`;
  * once pdf.js in it says it is ready, a `PDFWorker` is made on it. Undefined where it cannot be made:
  * no Worker or Blob, a Content Security Policy that forbids a `blob:` worker, a worker port the caller
  * set (`GlobalWorkerOptions.workerPort`), or pdf.js not starting in WORKER_START_MS. pdf.js then
@@ -471,12 +612,15 @@ export async function openWarningWorker(pdfjs: any, workerSrc: string, sink: (li
     let href: string;
     try { href = new URL(workerSrc, typeof document !== 'undefined' ? document.baseURI : undefined).href; } catch { return undefined; }
     const source = `const send = (line) => { try { self.postMessage({ officeparserWarning: line }); } catch { /* not reported */ } };
-let sent = 0;
+const kindOf = ${PDFJS_WARNING_KIND_SOURCE};
+const sent = new Map();
 const passOn = console.warn.bind(console);
 console.warn = (...args) => {
     const line = typeof args[0] === 'string' ? args[0] : '';
     if (!line.startsWith('Warning: ')) { passOn(...args); return; }
-    if (sent < ${MAX_WORKER_WARNINGS}) { sent++; send(line.slice(0, ${MAX_WARNING_LENGTH})); }
+    const kind = kindOf(line);
+    const count = sent.get(kind) || 0;
+    if (kind && count < ${MAX_WORKER_WARNINGS}) { sent.set(kind, count + 1); send(line.slice(0, ${MAX_WARNING_LENGTH})); }
 };
 try { await import(${JSON.stringify(href)}); } catch { self.postMessage({ officeparserWorkerFailed: true }); }`;
     let blobUrl: string | undefined;

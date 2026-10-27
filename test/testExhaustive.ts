@@ -8026,6 +8026,126 @@ async function testPdfPicturesLeftOut(): Promise<void> {
 }
 
 /**
+ * pdf.js in this process has one document open at a time (see takeInProcessTurn in PdfParser), and a
+ * turn is never held while code of the caller's is waited on: an `onPassword` that parses another PDF
+ * first, an `onWarning` that starts one, and OCR (here a worker that parses one before it answers) each
+ * finished, where they waited on themselves for ever; a parse waiting on its `onPassword` held up no
+ * other, and an abort ends that wait. pdf.js's notes about pictures it was told to leave out (every one
+ * when pictures are not extracted) use up no part of the warnings a document may send before one it
+ * reports, in a separate process and in this one. A caller's own "Warning: " lines reach its console
+ * while a PDF is read, and pdf.js's lines do not.
+ */
+async function testPdfInProcessTurns(): Promise<void> {
+    const { deflateSync } = await import('zlib');
+    const pdfFrom = (objects: (string | Buffer)[]): Buffer => {
+        const parts: Buffer[] = [Buffer.from('%PDF-1.7\n')];
+        const offsets: number[] = [];
+        let at = parts[0].length;
+        objects.forEach((o, i) => { const b = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), typeof o === 'string' ? Buffer.from(o, 'latin1') : o, Buffer.from('\nendobj\n')]); offsets.push(at); at += b.length; parts.push(b); });
+        parts.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+        return Buffer.concat(parts);
+    };
+    const stream = (content: Buffer, dict = '') => Buffer.concat([Buffer.from(`<< /Length ${content.length} ${dict} >>\nstream\n`), content, Buffer.from('\nendstream')]);
+    // Page 1 draws one picture `draws` times; page 2 draws a form XObject that is not a stream, which pdf.js cannot read.
+    const drawnOften = (draws: number) => pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> /XObject << /I 8 0 R >> >> /Contents 5 0 R >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> /XObject << /Bad 9 0 R >> >> /Contents 6 0 R >>',
+        stream(deflateSync(Buffer.from('BT /F1 12 Tf 72 700 Td (Page one text) Tj ET\n' + 'q 10 0 0 10 72 500 cm /I Do Q\n'.repeat(draws))), '/Filter /FlateDecode'),
+        stream(Buffer.from('BT /F1 12 Tf 72 700 Td (Page two text) Tj ET\n/Bad Do\n')),
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+        stream(deflateSync(Buffer.alloc(16 * 16 * 3, 0x40)), '/Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode'),
+        '<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] >>',
+    ]);
+    const inProcess = { pdfParserConfig: { separateProcess: false } };
+    const plain = path.join(__dirname, 'files', 'pdf', 'columns_untagged.pdf');
+    const encrypted = path.join(__dirname, 'files', 'pdf', 'encrypted.pdf');
+    const readPlain = async () => (await OfficeParser.parseOffice(plain, { ...inProcess, onWarning: () => { } } as any) as OfficeParserAST).content.length;
+    // `run`'s outcome, or 'HUNG' after `ms`.
+    const settled = async <T>(ms: number, run: Promise<T>): Promise<T | 'HUNG'> => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try { return await Promise.race([run, new Promise<'HUNG'>(resolve => { timer = setTimeout(() => resolve('HUNG'), ms); })]); } finally { clearTimeout(timer); }
+    };
+    const textOf = (ast: OfficeParserAST) => ast.content.map(n => n.text).join('\n');
+
+    // onPassword parses another PDF in this process before it answers.
+    let innerPages = 0;
+    const nested = await settled(20_000, OfficeParser.parseOffice(encrypted, { ...inProcess, onPassword: async () => { innerPages = await readPlain(); return 'test123'; } } as any)
+        .then(ast => textOf(ast as OfficeParserAST), (e: any) => `rejected ${e?.message}`));
+    assert.ok(innerPages > 0 && typeof nested === 'string' && nested.includes('SECRET CONTENT'), `an onPassword parsing a PDF in this process does not wait on itself; got ${String(nested).slice(0, 80)}, inner ${innerPages}`);
+
+    // While one parse waits on its onPassword, another is read.
+    let answer: ((password: string) => void) | undefined;
+    const waiting = OfficeParser.parseOffice(encrypted, { ...inProcess, onPassword: () => new Promise<string>(resolve => { answer = resolve; }) } as any);
+    for (let i = 0; i < 200 && !answer; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    const beside = await settled(10_000, readPlain());
+    answer?.('test123');
+    assert.ok(typeof beside === 'number' && beside > 0, `a parse waiting on its onPassword holds up no other parse in this process; got ${beside}`);
+    assert.ok(textOf(await waiting as OfficeParserAST).includes('SECRET CONTENT'), 'and the waiting parse goes on with the password given');
+
+    // An abort ends a wait on an onPassword that never answers.
+    const unanswered = await settled(5_000, OfficeParser.parseOffice(encrypted, { ...inProcess, abortSignal: AbortSignal.timeout(300), onPassword: () => new Promise(() => { }) } as any).then(() => 'parsed', (e: any) => String(e?.name)));
+    assert.strictEqual(unanswered, 'AbortError', 'an abort ends a parse waiting on its onPassword');
+
+    // onWarning starts a parse of another PDF in this process at each warning.
+    const started: Promise<number>[] = [];
+    const warned = await settled(20_000, OfficeParser.parseOffice(drawnOften(3), { fileType: 'pdf', ...inProcess, onWarning: () => { started.push(readPlain()); } } as any).then(() => 'parsed', (e: any) => `rejected ${e?.message}`));
+    const fromWarnings = await settled(20_000, Promise.all(started));
+    assert.ok(warned === 'parsed' && started.length > 0 && Array.isArray(fromWarnings) && fromWarnings.every(pages => pages > 0), `parses an onWarning starts in this process are read; got ${warned}, ${started.length} started, ${JSON.stringify(fromWarnings)}`);
+
+    // OCR, by a worker that parses a PDF in this process before it answers.
+    let ocrInner = 0;
+    ocrTestHooks.createWorker = async () => ({
+        recognize: async () => { ocrInner = await readPlain(); return { data: { text: 'RECOGNIZED' } }; },
+        reinitialize: async () => { },
+        terminate: async () => { },
+    });
+    try {
+        const ocred = await settled(20_000, OfficeParser.parseOffice(drawnOften(1), { fileType: 'pdf', ...inProcess, ocr: true, extractAttachments: true, onWarning: () => { } } as any)
+            .then(ast => (ast as OfficeParserAST).attachments.map(a => a.ocrText).join(), (e: any) => `rejected ${e?.message}`));
+        assert.ok(ocrInner > 0 && ocred === 'RECOGNIZED', `OCR that parses a PDF in this process does not wait on its own parse; got ${ocred}, inner ${ocrInner}`);
+    } finally {
+        ocrTestHooks.createWorker = undefined;
+        await terminateOcr();
+    }
+
+    // 1,100 pictures pdf.js is told to leave out (pictures are not extracted), then an XObject it cannot read.
+    const many = drawnOften(1100);
+    for (const separateProcess of [true, false]) {
+        const found: any[] = [];
+        await OfficeParser.parseOffice(many, { fileType: 'pdf', onWarning: (issue: any) => found.push(issue), pdfParserConfig: { separateProcess } } as any);
+        const notRead = found.filter(issue => issue.code === 'CONTENT_PART_NOT_READ');
+        assert.ok(notRead.length === 1 && notRead[0].page === 2, `${separateProcess ? 'in a separate process' : 'in this process'}: an XObject not read after 1,100 pictures left out is reported; got ${JSON.stringify(found.map(i => [i.code, i.page]))}`);
+    }
+
+    // The caller's own "Warning: " lines while a PDF is read in this process, from a timer and from its onWarning.
+    const original = console.warn;
+    const printed: string[] = [];
+    let sent = 0;
+    let sentDuring = 0;
+    let reading = false;
+    const own = "Warning: getTextContent - ignoring XObject: the caller's own line";
+    console.warn = (...args: unknown[]) => { printed.push(String(args[0])); };
+    const timer = setInterval(() => { sent++; if (reading) sentDuring++; console.warn(own); }, 1);
+    const found: any[] = [];
+    try {
+        reading = true;
+        await OfficeParser.parseOffice(many, { fileType: 'pdf', ...inProcess, onWarning: (issue: any) => { found.push(issue); console.warn(`Warning: the caller's onWarning saw ${issue.code}`); } } as any);
+        reading = false;
+    } finally {
+        clearInterval(timer);
+        console.warn = original;
+    }
+    const notOwn = printed.filter(line => line !== own && !line.startsWith("Warning: the caller's onWarning saw"));
+    assert.ok(sentDuring > 0, 'the caller wrote its own lines while the PDF was read');
+    assert.deepStrictEqual(notOwn, [], 'none of pdf.js\'s lines reach the caller\'s console');
+    assert.strictEqual(printed.filter(line => line === own).length, sent, 'every line the caller wrote reached its console');
+    assert.ok(printed.some(line => line === "Warning: the caller's onWarning saw CONTENT_PART_NOT_READ"), 'a line the caller\'s onWarning writes while pdf.js\'s is reported reaches its console');
+    assert.ok(found.filter(issue => issue.code === 'CONTENT_PART_NOT_READ').length === 1 && !found.some(issue => /the caller's own line/.test(issue.message)), `only pdf.js's own line is reported; got ${JSON.stringify(found.map(i => i.message))}`);
+    console.log('  PDF in-process turns: All assertions passed ✓');
+}
+
+/**
  * RTF's symbol control words and control symbols are the characters they stand for: \emdash and the
  * rest were dropped, and \~ was read as a tilde.
  */
@@ -9730,6 +9850,7 @@ async function runTests(): Promise<void> {
         ['Markdown attributes', testMarkdownAttributes],
         ['PDF warning pages', testPdfWarningPages],
         ['PDF pictures left out', testPdfPicturesLeftOut],
+        ['PDF in-process turns', testPdfInProcessTurns],
         ['Cancellation', testCancellation],
     ];
 

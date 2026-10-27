@@ -51,7 +51,7 @@ import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, 
 import { buildTaggedNodes } from './pdf/structTree.js';
 import { setOwn } from '../utils/lookupUtils.js';
 import { acquirePdfProcess, PdfProcess } from './pdf/pdfProcess.js';
-import { captureConsoleWarnings, openWarningWorker, PdfAssetSession, resolvePdfAssetFolders, WarningWorker } from './pdf/pdfAssets.js';
+import { captureConsoleWarnings, openWarningWorker, PdfAssetSession, pdfjsWorkerFile, resolvePdfAssetFolders, WarningWorker } from './pdf/pdfAssets.js';
 import { appendAll } from '../utils/nodeListUtils.js';
 
 /**
@@ -1517,45 +1517,52 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     }
     if (!pdfProcess && !isBrowser) settleCallerPreloadedWorker();
     // pdf.js's worker for this parse runs at warning verbosity, and its warnings are taken: from the
-    // separate process's messages; in this process from the console, one document at a time (see
-    // takeInProcessTurn), in a PDFWorker of the parse's own, as also in a browser whose caller preloaded
-    // pdf.js's worker to run on the page (`globalThis.pdfjsWorker`: no Worker is started, nothing is
-    // fetched); in another browser from a Worker that sends them back (see openWarningWorker), or, where
-    // none can be made, from nowhere, pdf.js starting its own.
+    // separate process's messages; in this process from the console while the parse's document is open
+    // (see takeInProcessTurn and captureConsoleWarnings), in a PDFWorker of the parse's own, as also in a
+    // browser whose caller preloaded pdf.js's worker to run on the page (`globalThis.pdfjsWorker`: no
+    // Worker is started, nothing is fetched); in another browser from a Worker that sends them back (see
+    // openWarningWorker), or, where none can be made, from nowhere, pdf.js starting its own. In this
+    // process a worker whose file cannot be told (see pdfjsWorkerFile) runs at verbosity 0, as pdf.js
+    // did before its warnings were taken: its lines could not be told from the caller's own.
     let ownWorker: WarningWorker | undefined;
-    let endTurn: (() => void) | undefined;
-    let stopCapture: (() => void) | undefined;
+    let inProcessTurn: (() => Promise<() => void>) | undefined;
     try {
         if (pdfProcess) {
             pdfProcess.onWarning(takeWarning);
         } else if (isBrowser && !callerPreloadedWorker()) {
             ownWorker = await openWarningWorker(pdfjs, String(pdfjs.GlobalWorkerOptions.workerSrc ?? ''), takeWarning, config.abortSignal);
         } else {
-            endTurn = await takeInProcessTurn(config.abortSignal);
-            stopCapture = captureConsoleWarnings(takeWarning);
             // A worker port the caller set is pdf.js's to use; one PDFWorker per port.
+            const workerFile = pdfjs.GlobalWorkerOptions.workerPort ? undefined : await pdfjsWorkerFile(pdfjs);
             if (!pdfjs.GlobalWorkerOptions.workerPort) {
-                const worker = new pdfjs.PDFWorker({ verbosity: 1 });
+                const worker = new pdfjs.PDFWorker({ verbosity: workerFile ? 1 : 0 });
                 ownWorker = { worker, close: () => worker.destroy() };
             }
+            inProcessTurn = async () => {
+                const endTurn = await takeInProcessTurn(config.abortSignal);
+                const stopCapture = workerFile ? captureConsoleWarnings(takeWarning, workerFile) : undefined;
+                return () => { stopCapture?.(); endTurn(); };
+            };
         }
-        return await readPdf(pdfjs, buffer, config, pdfCfg, maxImageSize, pdfProcess, assets, pdfProcess?.worker ?? ownWorker?.worker);
+        return await readPdf(pdfjs, buffer, config, pdfCfg, maxImageSize, pdfProcess, assets, pdfProcess?.worker ?? ownWorker?.worker, inProcessTurn);
     } finally {
         assets.close();
         try { ownWorker?.close(); } catch { /* already ended */ }
-        stopCapture?.();
-        endTurn?.();
         pdfProcess?.release();
     }
 };
 
 /**
- * pdf.js in this process reads one document at a time. Its image decoders keep the message handler of
- * the document opened last in a static field (pdf.js's `WasmImage`), so with two documents open in one
- * worker, a decoder the first asked for after the second had closed waited on a closed handler forever:
- * of two parses at once, the one finishing first left the other's JBIG2 or JPEG 2000 pictures hanging.
- * A separate process reads one document at a time already, and each browser document has a Worker of
- * its own. The turn is waited for until `signal` aborts; the parse before it is bounded by its own.
+ * pdf.js in this process has one document open at a time. Its image decoders keep the message handler
+ * of the document opened last in a static field (pdf.js's `WasmImage`), so with two documents open in
+ * one worker, a decoder the first asked for after the second had closed waited on a closed handler
+ * forever: of two parses at once, the one finishing first left the other's JBIG2 or JPEG 2000 pictures
+ * hanging. A separate process reads one document at a time already, and each browser document has a
+ * Worker of its own. A turn lasts from opening a document to closing it (see readPdf), and no code of
+ * the caller's is waited on in it: `onPassword` is asked with no document open, OCR runs once the
+ * document is closed, and `onWarning` is called, not waited on. A parse an `onPassword` waits on, or
+ * any other, so takes its turn in between. The turn is waited for until `signal` aborts; the document
+ * before it is bounded by its own parse's limits.
  */
 let inProcessTail: Promise<void> = Promise.resolve();
 async function takeInProcessTurn(signal?: AbortSignal | null): Promise<() => void> {
@@ -1585,8 +1592,13 @@ async function takeInProcessTurn(signal?: AbortSignal | null): Promise<() => voi
     return end;
 }
 
-/** Opens the document, retrying with an onPassword-supplied password when it is encrypted, and reads it. */
-async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, maxImageSize: number, pdfProcess: PdfProcess | undefined, assets: PdfAssetSession, worker: any): Promise<OfficeParserAST> {
+/**
+ * Opens the document, retrying with an onPassword-supplied password when it is encrypted, and reads it.
+ * In this process each attempt opens its document in a turn of its own (`inProcessTurn`, see
+ * takeInProcessTurn), given up once that document has closed: before `onPassword` is asked, and once
+ * pdf.js has given all the parse reads from it, before the pages are laid out and their pictures OCRed.
+ */
+async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, maxImageSize: number, pdfProcess: PdfProcess | undefined, assets: PdfAssetSession, worker: any, inProcessTurn?: () => Promise<() => void>): Promise<OfficeParserAST> {
     // Password / onPassword are top-level (they apply to every encryptable format); PDF reads them
     // the same way the OOXML/ODF decryptors do.
     const onPassword = config.onPassword;
@@ -1609,33 +1621,60 @@ async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfi
     aborted?.catch(() => { /* raced below */ });
     const stoppers = [died, aborted].filter((p): p is Promise<never> => !!p);
     const whileAlive = <T>(promise: Promise<T>): Promise<T> => stoppers.length ? Promise.race([promise, ...stoppers]) : promise;
+    // Closes a document pdf.js was asked to open, bounded: closing waits for pdf.js's tasks, and one
+    // that never ends must not hold the parse (nor one whose process has ended, which never answers).
+    // A process whose document did not close is still at work on it: it is ended, not handed to the
+    // next parse, whose requests would wait behind that work (and pay for it).
+    const closeTask = async (loadingTask: any): Promise<void> => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const closed = Promise.resolve().then(() => loadingTask.destroy()).then(() => true, () => true);
+        const wait = pdfProcess && !pdfProcess.alive ? 0 : 2000;
+        const done = await Promise.race([closed, new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), wait); })]);
+        clearTimeout(timer);
+        if (!done) pdfProcess?.end();
+    };
     try {
         while (true) {
             checkAbortSignal(config.abortSignal);
-            // A fresh copy per attempt: pdf.js transfers the data buffer to its worker, detaching it, so
-            // reusing the same Uint8Array on a password retry would fail with a transfer error.
-            const loadingTask = pdfjs.getDocument({
-                data: new Uint8Array(buffer),
-                verbosity: 0,
-                isEvalSupported: false,
-                maxImageSize,
-                password,
-                ...assets.documentOptions(),
-                ...(worker ? { worker } : {}),
-            });
+            const endTurn = inProcessTurn ? await inProcessTurn() : undefined;
+            let loadingTask: any;
+            try {
+                // A fresh copy per attempt: pdf.js transfers the data buffer to its worker, detaching it, so
+                // reusing the same Uint8Array on a password retry would fail with a transfer error.
+                loadingTask = pdfjs.getDocument({
+                    data: new Uint8Array(buffer),
+                    verbosity: 0,
+                    isEvalSupported: false,
+                    maxImageSize,
+                    password,
+                    ...assets.documentOptions(),
+                    ...(worker ? { worker } : {}),
+                });
+            } catch (e) {
+                endTurn?.();
+                throw e;
+            }
+            // The attempt's document closes once (see closeTask), and the turn passes on after it.
+            let closing: Promise<void> | undefined;
+            const closeDocument = (): Promise<void> => closing ??= closeTask(loadingTask).then(() => endTurn?.());
 
             let pdfDocument;
             try {
                 pdfDocument = await whileAlive(loadingTask.promise);
             } catch (e: any) {
-                if (e?.officeIssue || e?.name === 'AbortError') throw e;
-                try { await loadingTask.destroy(); } catch { /* best effort cleanup */ }
+                if (e?.officeIssue || e?.name === 'AbortError') { await closeDocument(); throw e; }
+                // A document that failed to open closes at once, and its process serves the next attempt.
+                closing ??= Promise.resolve().then(() => loadingTask.destroy()).then(() => endTurn?.(), () => endTurn?.());
+                await closing;
                 if (e?.name === 'PasswordException') {
                     const need = pdfjs.PasswordResponses?.NEED_PASSWORD;
                     const reason: 'required' | 'incorrect' = e.code === need ? 'required' : 'incorrect';
                     if (onPassword && passwordAttempts < MAX_PASSWORD_ATTEMPTS) {
                         passwordAttempts++;
-                        const supplied = await onPassword(reason);
+                        // Asked with no document open, and given up on when the parse is aborted.
+                        const asked = Promise.resolve().then(() => onPassword(reason));
+                        asked.catch(() => { /* raced below */ });
+                        const supplied = await whileAlive(asked);
                         if (supplied) { password = supplied; continue; }
                     }
                     throw getOfficeError(reason === 'required' ? OfficeErrorType.PASSWORD_REQUIRED : OfficeErrorType.PASSWORD_INCORRECT, config);
@@ -1651,20 +1690,11 @@ async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfi
             const budget = work = new PdfWorkBudget(pdfDocument, config, pdfCfg, buffer.length, pdfProcess);
             assets.follow(budget);
             try {
-                return await whileAlive(buildAst(pdfjs, pdfDocument, config, pdfCfg, budget, buffer, assets));
+                return await whileAlive(buildAst(pdfjs, pdfDocument, config, pdfCfg, budget, buffer, assets, closeDocument));
             } finally {
                 // Whatever ended the parse, the read ends with it (see PdfWorkBudget.cancel).
                 budget.cancel();
-                // Bounded: closing waits for pdf.js's tasks, and one that never ends must not hold the
-                // parse (nor one whose process has ended, which never answers).
-                let timer: ReturnType<typeof setTimeout> | undefined;
-                const closed = Promise.resolve(loadingTask.destroy()).then(() => true, () => true);
-                const wait = pdfProcess && !pdfProcess.alive ? 0 : 2000;
-                const done = await Promise.race([closed, new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), wait); })]);
-                clearTimeout(timer);
-                // A process whose document did not close is still at work on it: it is ended, not
-                // handed to the next parse, whose requests would wait behind that work (and pay for it).
-                if (!done) pdfProcess?.end();
+                await closeDocument();
             }
         }
     } finally {
@@ -1675,7 +1705,7 @@ async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfi
 }
 
 /** Assembles the AST from an opened document. Separated so the caller can guarantee task cleanup. */
-async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, work: PdfWorkBudget, buffer: Buffer, assets: PdfAssetSession): Promise<OfficeParserAST> {
+async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, work: PdfWorkBudget, buffer: Buffer, assets: PdfAssetSession, closeDocument: () => Promise<void>): Promise<OfficeParserAST> {
     const content: OfficeContentNode[] = [];
     const attachments: OfficeAttachment[] = [];
     const numPages = pdfDocument.numPages;
@@ -1813,6 +1843,20 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         }
     }
     work.reading(undefined);
+    work.throwIfCancelled();
+
+    // Document outline (bookmarks / TOC), when present, into auxiliary. A malformed or hostile
+    // outline must never cost the caller the whole document, so anything thrown here is a warning.
+    let outline: OfficeContentNode[] | undefined;
+    // Past the budget the document is closed (its process ended): nothing more is asked of pdf.js.
+    if (!config.ignoreInternalLinks && !work.spent) {
+        try { outline = await buildOutline(pdfDocument, destCache, sectionLinks, config, work); }
+        catch { logWarning(OfficeWarningType.PDF_OUTLINE_TRUNCATED, config, 'it could not be read'); }
+    }
+    work.throwIfCancelled();
+    // Nothing more is asked of pdf.js: the document closes before the pages are laid out and their
+    // pictures OCRed, which in this process gives the next document its turn (see takeInProcessTurn).
+    await closeDocument();
     work.throwIfCancelled();
 
     const allRuns = extracts.flatMap(e => e.runs);
@@ -2006,16 +2050,6 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         }
         content.push(pageNode);
     }
-
-    // Document outline (bookmarks / TOC), when present, into auxiliary. A malformed or hostile
-    // outline must never cost the caller the whole document, so anything thrown here is a warning.
-    let outline: OfficeContentNode[] | undefined;
-    // Past the budget the document is closed (its process ended): nothing more is asked of pdf.js.
-    if (!config.ignoreInternalLinks && !work.spent) {
-        try { outline = await buildOutline(pdfDocument, destCache, sectionLinks, config, work); }
-        catch { logWarning(OfficeWarningType.PDF_OUTLINE_TRUNCATED, config, 'it could not be read'); }
-    }
-    work.throwIfCancelled();
 
     // Now that every page's headings and their positions are known, point each internal link at the
     // nearest heading on its target page (falling back to the page itself), rather than a page jump.
