@@ -27,7 +27,7 @@ import { sanitizeOfficePackageUrl } from '../../utils/sanitize.js';
 import { cssColorHex } from '../../utils/colorUtils.js';
 import { formatListNumber } from '../../utils/listMarkers.js';
 import { drawSvg, readSvg } from './svgDrawing.js';
-import { colorTables, fontkitUnbrotli, nativeUnbrotli, sfntOf, substitutes, trueTypeOutlines, Unbrotli, UnreadableFont } from './fontFiles.js';
+import { cffOutlines, colorTables, fontkitUnbrotli, nativeUnbrotli, sfntOf, substitutes, trueTypeOutlines, Unbrotli, UnreadableFont } from './fontFiles.js';
 
 /** The largest of `values` and `floor`, without spreading them into one call (which a long list overflows). */
 function maxOf(values: readonly number[], floor: number): number {
@@ -3374,6 +3374,8 @@ async function embedFonts(pdf: any, lib: any, pc: FullGeneratorConfig['pdfConfig
             // viewers draw (each glyph another's, or none).
             const cff = sfnt.length >= 4 && sfnt[0] === 0x4F && sfnt[1] === 0x54 && sfnt[2] === 0x54 && sfnt[3] === 0x4F;
             const outlines = trueTypeOutlines(sfnt);
+            // (A CFF font's outlines are read from its charstrings, not as fontkit draws them: see CffOutlines.)
+            const glyphOutlines = outlines ?? cffOutlines(sfnt);
             const color = colorTables(sfnt);
             // How a font draws a character: `drawn` when its glyph draws something, or the character is
             // blank by design (see BLANK); `empty` when its glyph draws nothing in a font that substitutes
@@ -3381,17 +3383,14 @@ async function embedFonts(pdf: any, lib: any, pc: FullGeneratorConfig['pdfConfig
             // other character goes to a font after it that draws it, or is lost: drawn blank, it showed
             // nothing while it was counted as drawn. A color font's empty glyph stands in for a color one,
             // drawn from tables a PDF does not hold, so it is not the font's at all, nor is a glyph that
-            // cannot be read.
+            // cannot be read, nor one of a font of neither TrueType nor CFF outlines.
             const shapes = !color.length && substitutes(sfnt);
             const drawing = (fontkitFont: any, cp: number): 'drawn' | 'empty' | undefined => {
                 if (isBlank(cp)) return 'drawn';
                 let glyph: any;
                 try { glyph = fontkitFont.glyphForCodePoint(cp); } catch { return undefined; }
-                if (outlines) return outlines.draws(glyph?.id) ? 'drawn' : shapes && outlines.reads(glyph?.id) ? 'empty' : undefined;
-                // (A CFF font's outlines, as fontkit reads them.)
-                let draws: boolean;
-                try { draws = glyph.path.commands.some((c: any) => c.command !== 'moveTo' && c.command !== 'closePath'); } catch { return undefined; }
-                return draws ? 'drawn' : shapes ? 'empty' : undefined;
+                if (!glyphOutlines) return undefined;
+                return glyphOutlines.draws(glyph?.id) ? 'drawn' : shapes && glyphOutlines.reads(glyph?.id) ? 'empty' : undefined;
             };
             // A font of color glyphs alone draws none of its characters: it is reported, and not used.
             if (color.length) {

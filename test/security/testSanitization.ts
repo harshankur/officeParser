@@ -30,7 +30,8 @@ import { OfficeErrorType } from '../../src/types';
 import { buildTaggedNodes } from '../../src/parsers/pdf/structTree';
 import { computeDocContext } from '../../src/parsers/pdf/textLayout';
 import { MarkedContent } from '../../src/parsers/pdf/actualText';
-import { nativeUnbrotli, sfntOf, TrueTypeOutlines } from '../../src/generators/pdf/fontFiles';
+import { CffOutlines, nativeUnbrotli, sfntOf, TrueTypeOutlines } from '../../src/generators/pdf/fontFiles';
+import { cffTable, charString, EMPTY } from '../helpers/cffFontWriter';
 import * as zlib from 'zlib';
 
 let passed = 0;
@@ -4463,6 +4464,24 @@ async function fontFileTests() {
         const outlines = new TrueTypeOutlines(glyf, new Uint8Array(loca.buffer), true, undefined);
         for (let id = 2; id < glyphs.length; id++) if (!outlines.reads(id)) throw new Error(`glyph ${id} could not be read`);
     });
+    // CFF glyphs, read from their charstrings without running them: many of stem hints, a hint mask and
+    // arithmetic that draw nothing, one long one of the same, and one calling subroutines nested 26 deep,
+    // each calling the next twice (fontkit, running them, took time doubling with each level).
+    let cffOutcome = '';
+    await linear('font: CFF charstrings are read', () => {
+        const stems = (op: string) => charString(...Array.from({ length: 48 }, (_, i) => i % 2 ? 10 : 20 * i), op);
+        const busy = [...stems('hstemhm'), ...stems('vstemhm'), ...charString('hintmask', [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], 1, 2, 'add', 'dup', 'exch', 'drop', 'drop', 10, 20, 'rmoveto', 'endchar')];
+        const long = stems('hstemhm');
+        const unit = charString('hintmask', [0xFF, 0x05, 0x08], 1, 2, 'add', 'drop', 5, 'hmoveto');
+        for (let i = 0; i < n(40000); i++) for (const byte of unit) long.push(byte);
+        long.push(...charString('endchar'));
+        const subrs = Array.from({ length: 26 }, (_, level) => level < 25 ? charString(level + 1 - 107, 'callsubr', level + 1 - 107, 'callsubr', 'return') : charString(0, 0, 'rmoveto', 10, 10, 'rlineto', 'return'));
+        const charStrings = [EMPTY, long, charString(-107, 'callsubr', 'endchar'), ...Array.from({ length: n(20000) }, () => busy)];
+        const outlines = new CffOutlines(cffTable({ charStrings, subrs }));
+        const wrong = charStrings.findIndex((_, id) => !outlines.reads(id) || outlines.draws(id) !== (id === 2));
+        cffOutcome = wrong < 0 ? 'each read' : `glyph ${wrong}: ${outlines.reads(wrong) ? 'read' : 'unread'}, ${outlines.draws(wrong) ? 'drawn' : 'empty'}`;
+    });
+    check('font: CFF glyphs of hints alone are empty, and the one calling subroutines drawn', cffOutcome === 'each read', cffOutcome);
 }
 
 async function htmlReadingTests() {

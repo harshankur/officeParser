@@ -11,7 +11,7 @@
  * The TrueType outlines of the glyphs drawn are checked before they are embedded, and a character whose
  * glyph draws nothing (empty, or a color glyph's stand-in) is not counted as one the font draws, unless it
  * is blank by design, or a mark a font that substitutes glyphs draws with its letter (see TrueTypeOutlines,
- * and the engine's BLANK).
+ * CffOutlines for a font of CFF outlines, and the engine's BLANK).
  *
  * @module generators/pdf/fontFiles
  */
@@ -742,5 +742,335 @@ export class TrueTypeOutlines {
         const draws = 'contours' in outline ? outline.contours.some(points => points >= 3) : outline.components.some(component => this.drawsChecked(component));
         this.drawing.set(id, draws);
         return draws;
+    }
+}
+
+/** What a CFF table is called where it cannot be read. */
+const CFF_TABLE = 'its CFF table';
+
+/**
+ * An INDEX of a CFF table (the CFF specification's section 5): its number of items, and where each lies,
+ * read only for the item asked for. Throws where the INDEX does not fit in the table.
+ */
+class CffIndex {
+    readonly count: number;
+    /** Where the INDEX ends, and the structure after it starts. */
+    readonly end: number;
+    private readonly offSize: number = 0;
+    private readonly offsets: number = 0;
+    /** The byte before the items' data, from which their offsets count (the first is 1). */
+    private readonly data: number = 0;
+    constructor(private readonly table: Uint8Array, at: number, cff2: boolean) {
+        const r = new Reader(table, at, table.length, CFF_TABLE);
+        this.count = cff2 ? r.u32() : r.u16();
+        if (!this.count) { this.end = r.pos; return; }
+        this.offSize = r.u8();
+        if (this.offSize < 1 || this.offSize > 4) throw new UnreadableFont(`${CFF_TABLE} has an INDEX of offsets ${this.offSize} bytes long`);
+        this.offsets = r.pos;
+        r.take((this.count + 1) * this.offSize);
+        this.data = r.pos - 1;
+        this.end = this.data + this.offset(this.count);
+        if (this.end < r.pos || this.end > table.length) throw new UnreadableFont(`${CFF_TABLE} has an INDEX that runs past its end`);
+    }
+
+    private offset(i: number): number {
+        let value = 0;
+        for (let b = 0, at = this.offsets + i * this.offSize; b < this.offSize; b++) value = value * 256 + this.table[at + b];
+        return value;
+    }
+
+    /** Where an item lies, its start and end in the table, or undefined for one not inside the INDEX's data. */
+    item(i: number): [number, number] | undefined {
+        if (!Number.isInteger(i) || i < 0 || i >= this.count) return undefined;
+        const start = this.data + this.offset(i), end = this.data + this.offset(i + 1);
+        return start > this.data && start <= end && end <= this.end ? [start, end] : undefined;
+    }
+}
+
+/**
+ * A DICT of a CFF table (the CFF specification's section 4): each operator's operands, an escaped
+ * operator (12 n) as 1200 + n. Throws for one that cannot be read.
+ */
+function cffDict(table: Uint8Array, start: number, end: number): Map<number, number[]> {
+    if (start < 0 || start > end || end > table.length) throw new UnreadableFont(`${CFF_TABLE} has a DICT that lies outside it`);
+    const dict = new Map<number, number[]>();
+    let operands: number[] = [];
+    const r = new Reader(table, start, end, `a DICT of ${CFF_TABLE}`);
+    while (r.pos < end) {
+        const b0 = r.u8();
+        if (b0 === 12) { dict.set(1200 + r.u8(), operands); operands = []; }
+        else if (b0 <= 27) { dict.set(b0, operands); operands = []; }
+        else if (b0 === 28) operands.push(r.i16());
+        else if (b0 === 29) operands.push(r.u32() | 0);
+        else if (b0 === 30) {
+            // (A real number: a nibble for each digit, point, exponent or sign, ended by 0xF.)
+            let text = '';
+            for (let ended = false; !ended;) {
+                const byte = r.u8();
+                for (const nibble of [byte >> 4, byte & 0xF]) {
+                    if (nibble === 0xF) { ended = true; break; }
+                    text += nibble <= 9 ? String(nibble) : ['.', 'E', 'E-', '', '-'][nibble - 10];
+                }
+            }
+            operands.push(Number(text));
+        }
+        else if (b0 >= 32 && b0 <= 246) operands.push(b0 - 139);
+        else if (b0 >= 247 && b0 <= 250) operands.push((b0 - 247) * 256 + r.u8() + 108);
+        else if (b0 >= 251 && b0 <= 254) operands.push(-(b0 - 251) * 256 - r.u8() - 108);
+        else throw new UnreadableFont(`a DICT of ${CFF_TABLE} holds the reserved byte ${b0}`);
+    }
+    return dict;
+}
+
+/**
+ * The CFF outlines (`CFF `, or a variable font's `CFF2`) of a font, or undefined for a font of other
+ * outlines (TrueType). Throws for a CFF table whose glyphs cannot be found in it.
+ */
+export function cffOutlines(sfnt: Uint8Array): CffOutlines | undefined {
+    // (Of a font with both, fontkit draws the CFF2 table's.)
+    const table = sfntTable(sfnt, 'CFF2') ?? sfntTable(sfnt, 'CFF ');
+    return table && new CffOutlines(table);
+}
+
+/** How a CFF glyph draws: something, nothing, or what cannot be read. */
+type CffDrawing = 'drawn' | 'empty' | 'unreadable';
+
+/** The operands of one line or curve of each Type 2 operator that draws them (an escaped one, 12 n, as 1200 + n). */
+const CFF_SEGMENT_OPERANDS = new Map<number, number>([
+    [5, 2], [6, 1], [7, 1], [8, 6], [24, 2], [25, 6], [26, 4], [27, 4], [30, 4], [31, 4], // rlineto to hvcurveto
+    [1234, 7], [1235, 13], [1236, 9], [1237, 11], // hflex, flex, hflex1, flex1
+]);
+
+/** The operands each arithmetic operator of a CFF (not CFF2) charstring takes (12 n, by n), and how many it leaves more or fewer. */
+const CFF_ARITHMETIC = new Map<number, [number, number]>([
+    [3, [2, -1]], [4, [2, -1]], [5, [1, 0]], [9, [1, 0]], [10, [2, -1]], [11, [2, -1]], [12, [2, -1]], [14, [1, 0]], [15, [2, -1]],
+    [18, [1, -1]], [20, [2, -2]], [21, [1, 0]], [22, [4, -3]], [23, [0, 1]], [24, [2, -1]], [26, [1, 0]], [27, [1, 1]], [28, [2, 0]],
+    [29, [1, 0]], [30, [2, -2]],
+]);
+
+/**
+ * The CFF outlines of a font: whether each glyph draws something, read from its Type 2 charstring (Adobe's
+ * Technical Note #5177, and the OpenType CFF2 table's) without running it.
+ *
+ * fontkit's outline of a CFF glyph is not read for this. @pdf-lib/fontkit 1.1.1 runs the first glyph of each
+ * range of a CID-keyed font's FDSelect (Noto Sans KR, SC, TC and JP) with the font dictionary of the range
+ * before it, so with its subroutines, and the outline comes back empty, or not at all; it draws nothing
+ * of an accented glyph made of two others (seac); and it runs subroutines nested to any depth, in time
+ * that doubles with each level of a subroutine calling the next twice.
+ *
+ * A glyph draws something when its charstring draws a line or a curve, calls a subroutine (none is run:
+ * one called is taken to draw), or ends as an accented glyph of two others (endchar with four operands,
+ * or five with its width). It is empty when it ends (at endchar, or at its end) having done none of these.
+ * Its stem hints are counted, so a hint mask's bytes are passed over, not read as operators. A charstring
+ * that cannot be read (an operator reserved or unknown, operands missing or too many, data past its end)
+ * draws nothing. Each glyph is read once, in time linear in its charstring.
+ */
+export class CffOutlines {
+    private readonly cff2: boolean;
+    private readonly topDict: Map<number, number[]>;
+    private readonly charStrings: CffIndex;
+    /** The most operands a charstring's stack holds: 48 in CFF, a CFF2 font's maxstack (193 unless it says) in CFF2. */
+    private readonly maxStack: number;
+    private readonly drawing = new Map<number, CffDrawing>();
+    /** A CFF2 font's, read when a glyph first blends: the regions of each of its variation store's data, and its font dictionaries. */
+    private regionCounts?: number[];
+    private fontDicts?: Map<number, number[]>[];
+
+    constructor(private readonly table: Uint8Array) {
+        const header = new Reader(table, 0, table.length, CFF_TABLE);
+        const major = header.u8();
+        header.u8(); // minor version
+        const headerSize = header.u8();
+        if (major === 1) {
+            this.cff2 = false;
+            const names = new CffIndex(table, headerSize, false);
+            const top = new CffIndex(table, names.end, false).item(0);
+            if (!top) throw new UnreadableFont(`${CFF_TABLE} has no Top DICT`);
+            this.topDict = cffDict(table, top[0], top[1]);
+            this.maxStack = 48;
+        } else if (major === 2) {
+            this.cff2 = true;
+            this.topDict = cffDict(table, headerSize, headerSize + header.u16());
+            this.maxStack = Math.min(this.topDict.get(25)?.[0] ?? 193, 513);
+        } else throw new UnreadableFont(`${CFF_TABLE} is of version ${major}`);
+        const type = this.topDict.get(1206)?.[0] ?? 2;
+        if (type !== 2) throw new UnreadableFont(`${CFF_TABLE}'s glyphs are charstrings of type ${type}, not 2`);
+        const at = this.topDict.get(17)?.[0];
+        if (at === undefined) throw new UnreadableFont(`${CFF_TABLE} has no CharStrings`);
+        this.charStrings = new CffIndex(table, at, this.cff2);
+    }
+
+    /** Whether a glyph draws something (see the class). */
+    draws(id: number): boolean {
+        return this.drawingOf(id) === 'drawn';
+    }
+
+    /** Whether a glyph's charstring can be read: one that cannot draws nothing. */
+    reads(id: number): boolean {
+        return this.drawingOf(id) !== 'unreadable';
+    }
+
+    private drawingOf(id: number): CffDrawing {
+        let known = this.drawing.get(id);
+        if (known === undefined) {
+            try { known = this.scan(id); } catch { known = 'unreadable'; }
+            this.drawing.set(id, known);
+        }
+        return known;
+    }
+
+    /** Reads a glyph's charstring, operator by operator, until it draws or ends (see the class). */
+    private scan(id: number): CffDrawing {
+        const where = this.charStrings.item(id);
+        if (!where) return 'unreadable';
+        const b = this.table, cff2 = this.cff2;
+        let at = where[0];
+        const end = where[1];
+        // (The operands on the stack: each number pushed, or NaN for one worked out. Only CFF2's vsindex
+        // and blend read them, and a CFF2 charstring works none out: it has no arithmetic.)
+        const stack: number[] = [];
+        let stems = 0;
+        let regions: number | undefined;
+        while (at < end) {
+            const op = b[at++];
+            if (op >= 32 || op === 28) {
+                let value: number;
+                if (op === 28) { if (at + 2 > end) return 'unreadable'; value = ((b[at] << 24) >> 16) | b[at + 1]; at += 2; }
+                else if (op <= 246) value = op - 139;
+                else if (op === 255) { if (at + 4 > end) return 'unreadable'; value = ((b[at] << 24) | (b[at + 1] << 16) | (b[at + 2] << 8) | b[at + 3]) / 65536; at += 4; }
+                else { if (at >= end) return 'unreadable'; value = op <= 250 ? (op - 247) * 256 + b[at] + 108 : -(op - 251) * 256 - b[at] - 108; at++; }
+                if (stack.length >= this.maxStack) return 'unreadable';
+                stack.push(value);
+                continue;
+            }
+            let key = op;
+            if (op === 12) { if (at >= end) return 'unreadable'; key = 1200 + b[at++]; }
+            const segment = CFF_SEGMENT_OPERANDS.get(key);
+            if (segment !== undefined) {
+                // (Too few operands for one line or curve draws none.)
+                if (stack.length >= segment) return 'drawn';
+                stack.length = 0;
+                continue;
+            }
+            switch (key) {
+                case 10: case 29: return 'drawn'; // callsubr, callgsubr
+                case 1: case 3: case 18: case 23: // hstem, vstem, hstemhm, vstemhm: two operands a stem (a width first, where odd)
+                    stems += stack.length >> 1;
+                    stack.length = 0;
+                    break;
+                case 19: case 20: // hintmask, cntrmask: the vstems left before it, then a bit for each stem
+                    stems += stack.length >> 1;
+                    stack.length = 0;
+                    at += (stems + 7) >> 3;
+                    if (at > end) return 'unreadable';
+                    break;
+                case 4: case 21: case 22: // vmoveto, rmoveto, hmoveto
+                    stack.length = 0;
+                    break;
+                case 14: // endchar, with the two glyphs of an accented one (seac) where it has four operands, or five
+                    if (cff2) return 'unreadable';
+                    return stack.length === 4 || stack.length === 5 ? 'drawn' : 'empty';
+                case 11: // return, which ends a charstring outside a subroutine
+                    return cff2 ? 'unreadable' : 'empty';
+                case 1200: // dotsection, which does nothing
+                    if (cff2) return 'unreadable';
+                    stack.length = 0;
+                    break;
+                case 15: // vsindex: the variation store data blends are by
+                    if (!cff2 || !stack.length) return 'unreadable';
+                    regions = this.regionCount(stack.pop()!);
+                    if (regions === undefined) return 'unreadable';
+                    break;
+                case 16: { // blend: n values, a delta for each region of each, then n; n values left
+                    if (!cff2 || !stack.length) return 'unreadable';
+                    regions ??= this.regionCount(this.defaultVsindex(id));
+                    const n = stack.pop()!;
+                    if (regions === undefined || !Number.isInteger(n) || n < 0 || stack.length < n * (regions + 1)) return 'unreadable';
+                    stack.length -= n * regions;
+                    stack.fill(NaN, stack.length - n);
+                    break;
+                }
+                default: {
+                    const arithmetic = !cff2 && key > 1200 ? CFF_ARITHMETIC.get(key - 1200) : undefined;
+                    if (!arithmetic) return 'unreadable';
+                    const [takes, leaves] = arithmetic;
+                    if (stack.length < takes || stack.length + leaves > this.maxStack) return 'unreadable';
+                    if (leaves > 0) stack.push(NaN);
+                    else stack.length += leaves;
+                }
+            }
+        }
+        // (A CFF2 charstring ends at its end, and so does a CFF one that runs out before endchar.)
+        return 'empty';
+    }
+
+    /** How many regions a CFF2 font's variation store gives its data of this index, or undefined where it has none. */
+    private regionCount(vsindex: number): number | undefined {
+        if (!this.regionCounts) {
+            this.regionCounts = [];
+            const at = this.topDict.get(24)?.[0];
+            if (at !== undefined) {
+                try {
+                    // (Its length, then an ItemVariationStore, whose data lie at offsets from its start.)
+                    const store = at + 2;
+                    const r = new Reader(this.table, store, this.table.length, CFF_TABLE);
+                    r.u16(); r.u32(); // format, the region list's offset
+                    const count = r.u16();
+                    const offsets: number[] = [];
+                    for (let i = 0; i < count; i++) offsets.push(r.u32());
+                    for (const offset of offsets) {
+                        const data = new Reader(this.table, store + offset, this.table.length, CFF_TABLE);
+                        data.u16(); data.u16(); // item count, word delta count
+                        this.regionCounts.push(data.u16());
+                    }
+                } catch { this.regionCounts = []; }
+            }
+        }
+        return Number.isInteger(vsindex) ? this.regionCounts[vsindex] : undefined;
+    }
+
+    /** The variation store data a CFF2 glyph blends by unless it says: its font dictionary's Private DICT's vsindex, or 0. */
+    private defaultVsindex(id: number): number {
+        try {
+            if (!this.fontDicts) {
+                this.fontDicts = [];
+                const at = this.topDict.get(1236)?.[0];
+                if (at !== undefined) {
+                    const fds = new CffIndex(this.table, at, true);
+                    for (let i = 0; i < fds.count; i++) {
+                        const item = fds.item(i);
+                        this.fontDicts.push(item ? cffDict(this.table, item[0], item[1]) : new Map());
+                    }
+                }
+            }
+            const priv = this.fontDicts[this.fdOf(id)]?.get(18);
+            if (!priv || priv.length < 2) return 0;
+            return cffDict(this.table, priv[1], priv[1] + priv[0]).get(22)?.[0] ?? 0;
+        } catch { return 0; }
+    }
+
+    /** A CFF2 glyph's font dictionary, by the font's FDSelect (of format 0, 3 or 4), or the first where it has none. */
+    private fdOf(id: number): number {
+        const at = this.topDict.get(1237)?.[0];
+        if (at === undefined) return 0;
+        const r = new Reader(this.table, at, this.table.length, CFF_TABLE);
+        const format = r.u8();
+        if (format === 0) { r.take(id); return r.u8(); }
+        if (format !== 3 && format !== 4) return 0;
+        // (Ranges in order of their first glyph, each up to the next one's first: the last range whose
+        // first glyph is at or before this one is its range.)
+        const wide = format === 4, size = wide ? 6 : 3;
+        const ranges = wide ? r.u32() : r.u16();
+        const records = r.pos;
+        r.take(ranges * size);
+        const firstOf = (i: number) => new Reader(this.table, records + i * size, this.table.length, CFF_TABLE)[wide ? 'u32' : 'u16']();
+        if (!ranges || id < firstOf(0)) return 0;
+        let lo = 0, hi = ranges - 1;
+        while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1;
+            if (firstOf(mid) <= id) lo = mid; else hi = mid - 1;
+        }
+        const fd = new Reader(this.table, records + lo * size + (wide ? 4 : 2), this.table.length, CFF_TABLE);
+        return wide ? fd.u16() : fd.u8();
     }
 }

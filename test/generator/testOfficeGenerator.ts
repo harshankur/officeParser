@@ -35,6 +35,7 @@ import { createAST } from '../../src/utils/astUtils.js';
 import { isHeaderRow } from '../../src/utils/officeGenUtils.js';
 import { fontkitUnbrotli, nativeUnbrotli, sfntOf } from '../../src/generators/pdf/fontFiles.js';
 import { toWoff, toWoff2 } from '../helpers/webFontWriter';
+import { BOX, cffTable, type CffSpec, charString, EMPTY, withCffOutlines } from '../helpers/cffFontWriter';
 
 // ============================================================================
 // CONSTANTS & CONFIGURATION
@@ -2532,6 +2533,57 @@ async function runNativePdfEngineTests(): Promise<GenFeatureTest[]> {
         'INVALID_CONFIG_VALUE for pdfConfig.fallbackFonts[0] naming sbix; loss counted as without fonts', `${JSON.stringify(coloredOptions)}; ${JSON.stringify(lossOf(colored.messages)?.details)}`,
         coloredOptions.some(m => m.includes('pdfConfig.fallbackFonts[0]') && m.includes('sbix')) && lossOf(colored.messages)?.details.count === plainLoss?.details.count,
         'Apple Color Emoji drew nothing for an emoji, and nothing was reported lost'));
+
+    // --- A CFF glyph draws when its charstring draws, read without running it ---
+    // Liberation Sans with CFF outlines of these tests' own (see cffFontWriter): a box for each glyph but
+    // those given. fontkit's outline was read before: @pdf-lib/fontkit 1.1.1 runs the first glyph of each
+    // FDSelect range with the font dictionary of the range before it (Noto Sans KR, SC, TC and JP), and
+    // draws nothing of a glyph made of two others (seac).
+    const cffFont = (glyphs: Map<number, number[]>, spec: Omit<CffSpec, 'charStrings'> = {}): Uint8Array =>
+        withCffOutlines(liberation, cffTable({ ...spec, charStrings: Array.from({ length: reference.numGlyphs }, (_, id) => glyphs.get(id) ?? BOX) }));
+    const gid = (cp: number) => reference.glyphForCodePoint(cp).id;
+    /** The runs text is read back in when drawn in this font, with Liberation Sans Bold after it (a run marked bold is drawn in it), and the characters lost. */
+    const drawnIn = async (font: Uint8Array, text: string) => {
+        const res = await OfficeGenerator.generate(synthAst('md', [{ type: 'paragraph', children: [{ type: 'text', text }] }] as OfficeContentNode[]), 'pdf' as any, { pdfConfig: { engine: 'native', fonts: { regular: font }, fallbackFonts: [liberationBold] } } as any);
+        const back: any = await OfficeParser.parseOffice(Buffer.from(res.value as Uint8Array), { ...PARSER_CONFIG, ocr: false });
+        const runs: string[] = [];
+        const runsIn = (node: any) => { if (node?.type === 'text' && node.text) runs.push(`${node.text}${node.formatting?.bold ? ' (bold)' : ''}`); (node?.children || []).forEach(runsIn); };
+        back.content.forEach(runsIn);
+        return { runs, lost: lossOf((res as any).messages || [])?.details };
+    };
+    const allInFont = (out: { runs: string[]; lost: any }, text: string) => !out.lost && !out.runs.some(r => r.endsWith('(bold)')) && out.runs.join('').replace(/\s/g, '') === text.replace(/\s/g, '');
+    // An empty glyph (endchar alone) draws nothing: П alone is lost, and with a font after it drawn there.
+    const cffEmptied = cffFont(new Map([[gid(0x041F), EMPTY]]));
+    const cffAlone = await native(scriptsAst, { fallbackFonts: [cffEmptied] });
+    const cffBacked = await native(scriptsAst, { fallbackFonts: [cffEmptied, liberation] });
+    results.push(mk('a CFF glyph that draws nothing is passed over; one that draws, drawn',
+        'П counted lost with the CFF font alone, the other words drawn; no loss with Liberation Sans after it',
+        `${JSON.stringify(lossOf(cffAlone.messages)?.details)} | ${JSON.stringify(lossOf(cffBacked.messages)?.details)}`,
+        lossOf(cffAlone.messages)?.details.sample === 'П' && cffAlone.text.includes('ривет') && cffAlone.text.includes('Καλημέρα') && !lossOf(cffBacked.messages) && scriptWords.every(w => cffBacked.text.includes(w)),
+        "a CFF font's empty glyph drew a blank where the character was, and nothing was reported lost"));
+    // A glyph drawn only through a subroutine (р a local one, и a global one): drawn, the subroutine not run.
+    const subroutine = charString(50, 0, 'rmoveto', 400, 0, 'rlineto', 0, 600, 'rlineto', -400, 0, 'rlineto', 'return');
+    const throughSubrs = await drawnIn(cffFont(new Map([[gid(0x0440), charString(-107, 'callsubr', 'endchar')], [gid(0x0438), charString(-107, 'callgsubr', 'endchar')]]), { subrs: [subroutine], globalSubrs: [subroutine] }), 'Привет мир');
+    results.push(mk('a CFF glyph drawn through a subroutine is drawn in its font',
+        'Привет мир in the CFF font, no run in the bold font after it, no loss', JSON.stringify(throughSubrs),
+        allInFont(throughSubrs, 'Привет мир'),
+        "a CFF glyph drawn by its subroutines was judged by fontkit's outline of it"));
+    // An accented glyph made of two others (seac: endchar with four operands, or five with a width): é of
+    // e (StandardEncoding 101) and acute (194), è of e and grave (193), each named in the font as seac finds it.
+    const seacFont = cffFont(new Map([[gid(0x00E9), charString(0, 0, 101, 194, 'endchar')], [gid(0x00E8), charString(556, 0, 0, 101, 193, 'endchar')]]),
+        { names: new Map([[gid(0x0065), 70], [gid(0x00B4), 125], [gid(0x0060), 124]]) });
+    const seac = await drawnIn(seacFont, 'Café crème');
+    results.push(mk('a CFF glyph made of two others (seac) is drawn in its font',
+        'Café crème in the CFF font, no run in the bold font after it, no loss', JSON.stringify(seac),
+        allInFont(seac, 'Café crème'),
+        'an accented CFF glyph of two others (seac) was drawn in the next font, or counted lost: fontkit draws nothing of it'));
+    // A CID-keyed font of two font dictionaries, the second's range starting at Ж's glyph, which calls the
+    // second's subroutine: fontkit ran it with the first's (none), and drew nothing.
+    const cid = await drawnIn(cffFont(new Map([[gid(0x0416), charString(-107, 'callsubr', 'endchar')]]), { cid: { fds: [[], [subroutine]], ranges: [[0, 0], [gid(0x0416), 1]] } }), 'Жук');
+    results.push(mk('the first glyph of a CID-keyed CFF font\'s FDSelect range is drawn in its font',
+        'Жук in the CFF font, no run in the bold font after it, no loss', JSON.stringify(cid),
+        allInFont(cid, 'Жук'),
+        'Noto Sans KR drew U+0391, U+2190, U+FF1A and U+02C7 as ? and reported them lost, and Noto Sans SC drew U+2018 in another font: fontkit read the first glyph of each FDSelect range with the font dictionary before it'));
 
     // fontkit failing as it writes a subset (on a later turn of the event loop, in @pdf-lib/fontkit 1.x).
     const subsetType = Object.getPrototypeOf(fontkit.create(liberation).createSubset());
