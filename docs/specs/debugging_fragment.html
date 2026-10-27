@@ -59,6 +59,11 @@ await terminateOcr(); // Snappy exit</code></pre>
         <li><strong>Version Matching:</strong> If you host the worker locally, ensure it matches the
             <code>pdfjs-dist@6.2.108</code> used by the library.
         </li>
+        <li><strong>CJK text or scanned pictures missing:</strong> pdf.js loads CMaps (<code>pdfCMapUrl</code>) for the
+            text of fonts a PDF does not embed, and image decoders (<code>pdfDecoderUrl</code>) for JBIG2, CCITT fax and
+            JPEG 2000 pictures, from the CDN by default. A <code>PDF_ASSET_UNAVAILABLE</code> warning names the file it
+            could not load and why; host <code>cmaps/</code> and <code>wasm/</code> from
+            <code>node_modules/pdfjs-dist</code> and point the options at them.</li>
     </ul>
 
     <h2>3. OCR Accuracy & Performance</h2>

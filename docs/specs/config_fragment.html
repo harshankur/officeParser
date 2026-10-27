@@ -133,13 +133,38 @@
                     browser.</td>
             </tr>
             <tr>
+                <td><code>pdfCMapUrl</code></td>
+                <td><code>string</code></td>
+                <td>pdfjs-dist's <code>cmaps/</code> (Node); CDN (browser); <code>''</code> (slim)</td>
+                <td><strong>PDF CJK text</strong>: the folder (ending in <code>/</code>) of pdf.js's packed CMaps, through
+                    which pdf.js reads the text of a font a PDF does not embed when it names a predefined CJK encoding
+                    (<code>UniJIS-UTF16-H</code>, <code>90ms-RKSJ-H</code>...). Only the files a document needs are read,
+                    each at most 4 MB and 15 s; one that cannot be had raises <code>PDF_ASSET_UNAVAILABLE</code> (once,
+                    with the first page that needed it) and the rest of the document is read.</td>
+            </tr>
+            <tr>
+                <td><code>pdfDecoderUrl</code></td>
+                <td><code>string</code></td>
+                <td>pdfjs-dist's <code>wasm/</code> (Node); CDN (browser); <code>''</code> (slim)</td>
+                <td><strong>PDF pictures</strong>: the folder (ending in <code>/</code>) of pdf.js's image decoders,
+                    <code>jbig2.wasm</code> (JBIG2 and CCITT fax) and <code>openjpeg.wasm</code> (JPEG 2000), with their
+                    JavaScript fallbacks (<code>*_nowasm_fallback.js</code>). Read as <code>pdfCMapUrl</code> is; one
+                    that cannot be had raises <code>PDF_ASSET_UNAVAILABLE</code>, and each picture then not decoded
+                    <code>IMAGE_EXTRACTION_FAILED</code>. To host both yourself, copy <code>cmaps/</code> and
+                    <code>wasm/</code> from <code>node_modules/pdfjs-dist</code> and allow their address in
+                    <code>connect-src</code>.</td>
+            </tr>
+            <tr>
                 <td><code>allowRemoteAssets</code></td>
                 <td><code>boolean</code></td>
                 <td><code>true</code></td>
                 <td><strong>No third-party requests</strong>: <code>false</code> stops the library falling back to its
-                    built-in CDN addresses for the pdf.js worker and Tesseract's worker, core and language data. A parse
-                    that would use one rejects with <code>REMOTE_ASSET_BLOCKED</code>, naming the option to set
-                    (<code>pdfWorkerSrc</code>, <code>ocrConfig.workerPath</code>/<code>corePath</code>/<code>langPath</code>).
+                    built-in CDN addresses for the pdf.js worker, pdf.js's CMaps and image decoders, and Tesseract's
+                    worker, core and language data. A parse that would use the worker's or Tesseract's default rejects
+                    with <code>REMOTE_ASSET_BLOCKED</code>, naming the option to set (<code>pdfWorkerSrc</code>,
+                    <code>ocrConfig.workerPath</code>/<code>corePath</code>/<code>langPath</code>); a CMap or decoder a
+                    document needs is not fetched from its default, and the parse goes on with
+                    <code>PDF_ASSET_UNAVAILABLE</code> naming <code>pdfCMapUrl</code> or <code>pdfDecoderUrl</code>.
                     An address you pass yourself is used as given. HTML and PDF written from such a parse name no chart
                     script address either, unless <code>htmlConfig.chartJsSrc</code> is set: a chart is written as its
                     data table.</td>
@@ -298,7 +323,9 @@
                     of work; past the text or time limit the rest of the document is not read, past the operator limit its images, text colours and font
                     styles are not (its text is), and <code>PDF_CONTENT_LIMIT_EXCEEDED</code> names the limit. Being CPU time, the time limit is not
                     spent by a busy host or machine; pdf.js in the host has none. <code>maxAnnotations</code> (default <code>10000</code>, plus one per
-                    32 bytes) bounds the links and highlights read. <code>Infinity</code> is no limit. <code>separateProcess</code> (default
+                    32 bytes) bounds the links and highlights read. <code>maxImagePixels</code> (default <code>40000000</code>)
+                    is the most pixels a picture may have to be extracted: pdf.js leaves out a larger one, reported with
+                    <code>IMAGE_EXTRACTION_FAILED</code> naming the option. <code>Infinity</code> is no limit. <code>separateProcess</code> (default
                     <code>true</code>) runs pdf.js in separate Node processes, at most one per CPU, under <code>processMemoryMb</code> (default
                     <code>1024</code>), so a PDF that inflates into gigabytes inside pdf.js rejects with <code>PDF_PROCESS_FAILED</code> instead of ending
                     the host, and <code>abortSignal</code> can stop it mid-stream; where one cannot start, pdf.js runs in the host with

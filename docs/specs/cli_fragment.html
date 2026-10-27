@@ -136,7 +136,19 @@
                 <td><code>--allowRemoteAssets</code></td>
                 <td><code>boolean</code></td>
                 <td><code>true</code></td>
-                <td><code>false</code> fails with <code>REMOTE_ASSET_BLOCKED</code> where the pdf.js worker or Tesseract's files would come from the library's default CDN address.</td>
+                <td><code>false</code> fails with <code>REMOTE_ASSET_BLOCKED</code> where the pdf.js worker or Tesseract's files would come from the library's default CDN address, and fetches no pdf.js CMap or image decoder from it (<code>PDF_ASSET_UNAVAILABLE</code>).</td>
+            </tr>
+            <tr>
+                <td><code>--pdfCMapUrl</code></td>
+                <td>string</td>
+                <td>pdfjs-dist's <code>cmaps/</code></td>
+                <td>Folder of pdf.js's CMaps, for the text of fonts a PDF does not embed (Chinese, Japanese, Korean).</td>
+            </tr>
+            <tr>
+                <td><code>--pdfDecoderUrl</code></td>
+                <td>string</td>
+                <td>pdfjs-dist's <code>wasm/</code></td>
+                <td>Folder of pdf.js's image decoders (JBIG2, CCITT fax, JPEG 2000).</td>
             </tr>
             <tr>
                 <td><code>--pdfConfig.fonts.regular</code></td>
@@ -305,6 +317,12 @@
                 <td>number</td>
                 <td><code>5000</code></td>
                 <td>Base of the CPU time the separate pdf.js process may spend on one PDF, plus 20 ms per KB of the file. Past it the rest of the document is not read.</td>
+            </tr>
+            <tr>
+                <td><code>--pdfParserConfig.maxImagePixels</code></td>
+                <td>number</td>
+                <td><code>40000000</code></td>
+                <td>The most pixels a PDF picture may have to be extracted; a larger one is left out and reported.</td>
             </tr>
             <tr>
                 <td><code>--pdfParserConfig.separateProcess</code></td>

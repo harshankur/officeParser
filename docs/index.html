@@ -3512,6 +3512,9 @@
                 { id: 'cfg_pdfKeepHeadersAndFootersInPages', label: 'PDF Headers and Footers in Pages', type: 'switch', default: false, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_ignorePageGeometry', label: 'Ignore Page Geometry', type: 'switch', default: false, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfWorkerSrc', label: 'PDF Worker URL', type: 'text', default: window.SITE_PDF_WORKER_SRC, replaces: /^https:\/\/cdn\.jsdelivr\.net\/npm\/pdfjs-dist@[^/]+\/build\/pdf\.worker\.min\.mjs$/, fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfCMapUrl', label: 'PDF CMaps Folder URL', type: 'text', default: '', placeholder: 'the library default (pdfjs-dist cmaps/ on the CDN)', fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfDecoderUrl', label: 'PDF Image Decoders Folder URL', type: 'text', default: '', placeholder: 'the library default (pdfjs-dist wasm/ on the CDN)', fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfMaxImagePixels', label: 'PDF Max Image Pixels', type: 'number', default: 40000000, width: '95px', min: 0, formatGroup: 'pdf', formats: ['pdf'] },
 
                 // HTML / EPUB Options
                 { id: 'cfg_preserveAttributes', label: 'Preserve HTML Attributes', type: 'switch', default: false, formatGroup: 'html', formats: ['html', 'epub', 'md'] },
@@ -6093,7 +6096,8 @@
                         pageRange: document.getElementById('cfg_pdfPageRange').value,
                         normalizeText: document.getElementById('cfg_pdfNormalizeText').checked,
                         extractTextColor: document.getElementById('cfg_pdfExtractTextColor').checked,
-                        keepHeadersAndFootersInPages: document.getElementById('cfg_pdfKeepHeadersAndFootersInPages').checked
+                        keepHeadersAndFootersInPages: document.getElementById('cfg_pdfKeepHeadersAndFootersInPages').checked,
+                        maxImagePixels: ((value) => value.trim() === '' ? undefined : Number(value))(document.getElementById('cfg_pdfMaxImagePixels').value)
                     },
                     htmlParserConfig: {
                         preserveAttributes: document.getElementById('cfg_preserveAttributes').checked,
@@ -6104,6 +6108,9 @@
                     texParserConfig: { today: document.getElementById('cfg_texToday').value },
                     csvDelimiter: document.getElementById('cfg_csvDelimiter').value,
                     pdfWorkerSrc: document.getElementById('cfg_pdfWorkerSrc').value.trim() || window.SITE_PDF_WORKER_SRC,
+                    // Empty is the library's own default, not "none".
+                    pdfCMapUrl: document.getElementById('cfg_pdfCMapUrl').value.trim() || undefined,
+                    pdfDecoderUrl: document.getElementById('cfg_pdfDecoderUrl').value.trim() || undefined,
                     decompressionLimits: {
                         maxUncompressedBytes: parseInt(document.getElementById('cfg_maxUncompressedBytes').value, 10) * 1024 * 1024,
                         maxZipEntries: parseInt(document.getElementById('cfg_maxZipEntries').value, 10),
