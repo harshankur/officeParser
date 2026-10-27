@@ -11,7 +11,7 @@
  * @module parsers/pdf/textLayout
  */
 
-import { ListMetadata, NodeBounds, OfficeContentNode, TextFormatting, TextMetadata } from '../../types.js';
+import { CellMetadata, ListMetadata, NodeBounds, OfficeContentNode, TextFormatting, TextMetadata } from '../../types.js';
 import { rotateBoundsToRendered, roundBounds, unionAll, unionBounds } from './geometry.js';
 import { PdfLayoutConfig, PdfLine, RawRun, TextFragment } from './pdfTypes.js';
 import { median } from '../../utils/numberUtils.js';
@@ -1211,20 +1211,42 @@ export function detectTables(lines: PdfLine[], page: PageContext, doc: DocContex
         else rows.push([l]);
     }
     for (const r of rows) r.sort((a, b) => a.x - b.x);
-    // A row of fewer lines just under one of cells is those cells' text wrapped onto another line where each
-    // line is under one cell of it, within a line's height of that cell's last line, starting where it starts
-    // (or centred under it) and ending within its column, and that cell's last line had no room for its first
-    // word (before the next cell, or its column's end): a row of one cell ended the table's run of rows, and a
-    // table of wrapped cells was read as loose paragraphs. (A sparse row, a label's row, the text under the
-    // table are not.)
+    // The usual distance between two rows of cells near each row, from the baselines of rows of two cells or more
+    // next to one another: a header's second line is nearer its first than a row is to the next.
+    const pitchNear = (() => {
+        const gaps: number[] = [];
+        for (let k = 1; k < rows.length; k++) if (rows[k].length >= 2 && rows[k - 1].length >= 2) gaps.push(rows[k][0].baseline - rows[k - 1][0].baseline); else gaps.push(NaN);
+        return (k: number) => median(gaps.slice(Math.max(0, k - 8), k + 8).filter(g => g > 0));
+    })();
+    // A row of lines just under one of cells is those cells' text wrapped onto another line where each line is
+    // under one cell of it, within a line's height of that cell's last line, starting where it starts (or
+    // centred under it) and ending within its column, and either that cell's last line had no room for its
+    // first word (before the next cell, or its column's end), or it is the second line of a table's first row
+    // set nearer that row than the table's rows are to one another (a header over two lines, its words parted
+    // where the producer chose): a row of one cell ended the table's run of rows, and a table of wrapped cells
+    // was read as loose paragraphs. (A sparse row, a label's row, the text under the table are not; nor a row
+    // as full as the row above but for a table's first, as a table's rows set close are rows.)
     const wrapped = new Map<PdfLine, PdfLine[]>();
     const cellRows: PdfLine[][] = [];
-    for (const r of rows) {
+    for (const [ri, r] of rows.entries()) {
         const above = cellRows[cellRows.length - 1];
-        if (above && above.length >= 2 && r.length < above.length) {
-            const owners = r.map(l => { const under = above.filter(c => c.x < l.x + l.width && l.x < c.x + c.width); return under.length === 1 ? under[0] : undefined; });
+        if (above && above.length >= 2 && r.length <= above.length) {
+            // The one cell of the row above each line is under (by halving: the row's cells are apart, left to right).
+            const owners = r.map(l => {
+                let lo = 0, hi = above.length;
+                while (lo < hi) { const mid = (lo + hi) >> 1; if (above[mid].x < l.x + l.width) lo = mid + 1; else hi = mid; }
+                let under: PdfLine | undefined;
+                for (let k = lo - 1; k >= 0 && above[k].x + above[k].width > l.x; k--) { if (under) return undefined; under = above[k]; }
+                return under;
+            });
+            const seen = new Set<PdfLine>(), place = new Map(above.map((c, k) => [c, k]));
+            // (The first row of a table: none of two cells or more just above it.)
+            const before = cellRows[cellRows.length - 2];
+            const first = !before || before.length < 2 || above[0].baseline - before[0].baseline > 2 * above.reduce((h, c) => Math.max(h, c.height), 0);
+            const pitch = pitchNear(ri);
             const fits = owners.every((o, k) => {
-                if (!o || owners.indexOf(o) !== k) return false;
+                if (!o || seen.has(o)) return false;
+                seen.add(o);
                 const line = r[k], tail = wrapped.get(o)?.at(-1) ?? o, gap = line.baseline - tail.baseline, em = o.fontSize || 10;
                 if (!(gap > 0 && gap <= 1.6 * Math.max(tail.height, line.height))) return false;
                 const startsUnder = (o.rtl ? Math.abs(line.x + line.width - (o.x + o.width)) : Math.abs(line.x - o.x)) <= 0.7 * em
@@ -1232,20 +1254,52 @@ export function detectTables(lines: PdfLine[], page: PageContext, doc: DocContex
                 if (!startsUnder) return false;
                 // Where the cell's text could run to: the next cell's start (the one before it read right to left), else
                 // its column's end, as far as the rows above set it.
-                const at = above.indexOf(o), word = firstWordWidth(line) + 0.25 * em;
+                const at = place.get(o)!, word = firstWordWidth(line) + 0.25 * em;
                 let end: number;
                 if (o.rtl) {
                     end = at > 0 ? above[at - 1].x + above[at - 1].width + 0.5 * em : o.x;
                     if (at <= 0) for (const row of cellRows.slice(-8)) for (const c of row) if (c.x < o.x + o.width && o.x < c.x + c.width) end = Math.min(end, c.x);
-                    return tail.x - word < end && line.x >= end - 0.5 * em;
+                    if (line.x < end - 0.5 * em) return false;
+                    return tail.x - word < end || (first && gap <= 0.8 * pitch);
                 }
                 end = at < above.length - 1 ? above[at + 1].x - 0.5 * em : o.x + o.width;
                 if (at === above.length - 1) for (const row of cellRows.slice(-8)) for (const c of row) if (c.x < o.x + o.width && o.x < c.x + c.width) end = Math.max(end, c.x + c.width);
-                return tail.x + tail.width + word > end && line.x + line.width <= end + 0.5 * em;
+                if (line.x + line.width > end + 0.5 * em) return false;
+                return tail.x + tail.width + word > end || (first && gap <= 0.8 * pitch);
             });
-            if (fits) { owners.forEach((o, k) => { const more = wrapped.get(o!); if (more) more.push(r[k]); else wrapped.set(o!, [r[k]]); }); continue; }
+            if (fits && (r.length < above.length || (first && pitch > 0))) { owners.forEach((o, k) => { const more = wrapped.get(o!); if (more) more.push(r[k]); else wrapped.set(o!, [r[k]]); }); continue; }
         }
         cellRows.push(r);
+    }
+    // A row whose cells stand between two rows of cells, midway, in columns both leave empty, where those two
+    // rows are no further apart than the table's rows usually are, is a cell of both (a merged cell set in the
+    // middle of the rows it covers): it ended the table's run of rows. (A sparse row of a table is a row's
+    // distance from each, not half of it.)
+    const spanned = new Set<PdfLine>();
+    {
+        const direct: number[] = [];
+        for (let k = 1; k < cellRows.length; k++) if (cellRows[k].length >= 2 && cellRows[k - 1].length >= 2) direct.push(cellRows[k][0].baseline - cellRows[k - 1][0].baseline);
+        const pitch = median(direct.filter(g => g > 0));
+        if (pitch > 0) {
+            const absorbed = new Set<PdfLine[]>();
+            for (let k = 1; k + 1 < cellRows.length; k++) {
+                const a = cellRows[k - 1], mid = cellRows[k], b = cellRows[k + 1];
+                if (absorbed.has(a) || a.length < 2 || b.length < 2 || mid.length >= a.length) continue;
+                const span = b[0].baseline - a[0].baseline, at = mid[0].baseline - a[0].baseline;
+                if (span > 1.25 * pitch || at < 0.3 * span || at > 0.7 * span) continue;
+                const apart = (l: PdfLine, row: PdfLine[]) => row.every(c => {
+                    let left = c.x, right = c.x + c.width;
+                    for (const w of wrapped.get(c) ?? []) { left = Math.min(left, w.x); right = Math.max(right, w.x + w.width); }
+                    return l.x + l.width <= left || l.x >= right;
+                });
+                if (!mid.every(l => apart(l, a) && apart(l, b))) continue;
+                for (const l of mid) spanned.add(l);
+                appendAll(a, mid);
+                a.sort((x, y) => x.x - y.x);
+                absorbed.add(mid);
+            }
+            if (absorbed.size) { const kept = cellRows.filter(r => !absorbed.has(r)); cellRows.length = 0; appendAll(cellRows, kept); }
+        }
     }
     rows.length = 0;
     appendAll(rows, cellRows);
@@ -1323,7 +1377,9 @@ export function detectTables(lines: PdfLine[], page: PageContext, doc: DocContex
             const cellNodes = r.map(line => {
                 const col = Math.max(colOf(edge(line)), lastCol + 1);
                 lastCol = col;
-                return cellFromLine([line, ...wrapped.get(line) ?? []], ri, col, page, doc.cfg);
+                const cell = cellFromLine([line, ...wrapped.get(line) ?? []], ri, col, page, doc.cfg);
+                if (spanned.has(line)) (cell.metadata as CellMetadata).rowSpan = 2;
+                return cell;
             });
             const rowNode: OfficeContentNode = { type: 'row', children: cellNodes, text: cellNodes.map(c => c.text || '').join(' ').trim() };
             const rb = unionAll(cellNodes.map(c => c.bounds)); if (rb) rowNode.bounds = rb;
