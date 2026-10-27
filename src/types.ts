@@ -1870,14 +1870,21 @@ export interface PptxGeneratorConfig {
     /**
      * A picture for each page (PNG or JPEG bytes, in page order; null or undefined for a page without
      * one), drawn as its slide's background under its text: a PDF's page drawn without its text, so its
-     * shapes, backgrounds, charts and gradients look as they did, with its text over it to edit.
+     * shapes, backgrounds, charts and gradients look as they did, with its text over it to edit. The
+     * page's pictures are placed over it as objects of their own too, so a picture the background also
+     * holds is there twice, and moving one uncovers its copy beneath. A page's invisible text (a scan's
+     * recognised words, TextFormatting.invisible) is written fully transparent, so it is not seen twice.
      */
     backgrounds?: (Uint8Array | null | undefined)[];
 }
 
 /** Configuration options for ODP (OpenDocument presentation) generation, as {@link PptxGeneratorConfig}'s. */
 export interface OdpGeneratorConfig {
-    /** A picture for each page (PNG or JPEG bytes, in page order), under its slide's text. */
+    /**
+     * A picture for each page (PNG or JPEG bytes, in page order), under its slide's text, as
+     * {@link PptxGeneratorConfig.backgrounds}: the page's pictures are placed over it as objects of their own
+     * too, and its invisible text is written fully transparent.
+     */
     backgrounds?: (Uint8Array | null | undefined)[];
 }
 

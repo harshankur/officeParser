@@ -779,7 +779,9 @@ await ast.to('md', {
             scaled into it, centred). Each paragraph is a text box where the page set it, its lines broken and spaced as on the page,
             in its runs' fonts, sizes and colours; a paragraph set beside a floating table or picture is a box for each
             group of its lines. Tables keep their measured row heights and their cells' shading, pictures their places,
-            and footnotes and a page's notes are at the foot of their page.</li>
+            and footnotes and a page's notes are at the foot of their page. A page's invisible text (a scan's recognised
+            words laid over its picture, <code>TextFormatting.invisible</code>) is written fully transparent: not seen,
+            still there to select and search.</li>
         <li><strong>Any other document</strong> flows onto 16:9 slides: a slide for each heading of the first two levels,
             titled by it, with the text under it as bullets (lower headings bold), carried on to more slides of the same
             title where it does not fit. Text before the first heading is under the document's title, from its metadata.
@@ -816,7 +818,9 @@ await ast.to('md', {
                     slide's background under its text; <code>null</code> or <code>undefined</code> for one without. Give a
                     PDF's pages drawn without their text, and the slides look as the pages did (shapes, gradients and
                     charts included) with the text over them to edit; a page's tables are then their cells' text in place over
-                    the picture, which holds their rules. A flowing document's slides take them in order. The CLI takes
+                    the picture, which holds their rules. The page's pictures are placed over the background as objects of
+                    their own too, so a picture the background also holds is there twice and moving one uncovers its copy
+                    beneath. A flowing document's slides take them in order. The CLI takes
                     picture files: <code>--pptxConfig.backgrounds=a.png,b.png</code>.</td>
             </tr>
         </tbody>
@@ -846,7 +850,9 @@ await ast.to('md', {
                     slide's background under its text; <code>null</code> or <code>undefined</code> for one without. Give a
                     PDF's pages drawn without their text, and the slides look as the pages did (shapes, gradients and
                     charts included) with the text over them to edit; a page's tables are then their cells' text in place over
-                    the picture, which holds their rules. A flowing document's slides take them in order. The CLI takes
+                    the picture, which holds their rules. The page's pictures are placed over the background as objects of
+                    their own too, so a picture the background also holds is there twice and moving one uncovers its copy
+                    beneath. A flowing document's slides take them in order. The CLI takes
                     picture files: <code>--odpConfig.backgrounds=a.png,b.png</code>.</td>
             </tr>
         </tbody>
