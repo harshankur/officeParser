@@ -1627,8 +1627,9 @@ export interface PdfGeneratorConfig {
      */
     engine?: 'html' | 'native';
     /**
-     * Fonts the `'native'` engine draws in, each the bytes of a TrueType or OpenType file (`.ttf`,
-     * `.otf`), one per style. Without them the engine draws in the Standard-14 Helvetica and Courier
+     * Fonts the `'native'` engine draws in, each the bytes of a TrueType, OpenType, WOFF or WOFF2 file
+     * (`.ttf`, `.otf`, `.woff`, `.woff2`; a web font is embedded as the TrueType or OpenType font it
+     * holds), one per style. Without them the engine draws in the Standard-14 Helvetica and Courier
      * fonts, which have Western European characters only: every other character is drawn as `?` and
      * reported in one `CONTENT_NOT_REPRESENTABLE` warning. A style given no font is drawn in `regular`
      * when that is given (so bold text is not bold unless `bold` is given too); code stays in Courier
@@ -1636,10 +1637,13 @@ export interface PdfGeneratorConfig {
      * `fallbackFonts`, then in the Standard-14 font of the style.
      *
      * Embedding a font needs the optional peer dependency `@pdf-lib/fontkit`. A file that cannot be
-     * read as a font fails the conversion with `PDF_GENERATION_FAILED`; a value that is not a file's
-     * bytes (a file name, an empty file), or `fonts` given as anything but an object of styles, is
-     * reported (`INVALID_CONFIG_VALUE`) and the style drawn as if none were given, and a style name not
-     * listed here is reported as `UNRECOGNIZED_CONFIG_OPTION`. Ignored by the `'html'` engine.
+     * read as a font (a damaged one, a collection of fonts such as a `.ttc`), or one whose glyphs to be
+     * drawn cannot be read or written into the PDF, fails the conversion with `PDF_GENERATION_FAILED`,
+     * naming it. A value that is not a file's bytes (a file name, an empty file), `fonts` given as
+     * anything but an object of styles, or a color font none of whose characters has an outline (see
+     * `fallbackFonts`), is reported (`INVALID_CONFIG_VALUE`) and the style drawn as if none were given,
+     * and a style name not listed here is reported as `UNRECOGNIZED_CONFIG_OPTION`. Ignored by the
+     * `'html'` engine.
      *
      * Defaults to no fonts.
      */
@@ -1653,9 +1657,19 @@ export interface PdfGeneratorConfig {
     /**
      * More fonts for the `'native'` engine, tried in order for each character the style's own font and
      * `fonts.regular` lack, so one document can mix scripts (Latin, Devanagari, Chinese) by listing a
-     * font for each. Each is the bytes of a TrueType or OpenType file. Given with no `fonts`, text
-     * stays in the Standard-14 fonts (bold and italic included) and these draw only the characters
-     * those lack.
+     * font for each. Each is the bytes of a TrueType, OpenType, WOFF or WOFF2 file. Given with no
+     * `fonts`, text stays in the Standard-14 fonts (bold and italic included) and these draw only the
+     * characters those lack.
+     *
+     * A character is drawn by a font that has a glyph of outlines for it. The Standard-14 fonts have
+     * neither the rupee sign `₹` (U+20B9) nor the ruble sign `₽` (U+20BD), nor any emoji; a font must
+     * be given for them, and which characters a font has is that font's (of Fontsource's files, Noto
+     * Sans has both signs in its `latin-ext` file and neither in its `latin` one, and Noto Sans
+     * Devanagari has `₹` but not `₽`). Emoji are drawn by a monochrome font of outlines such as Noto
+     * Emoji. A color emoji font (Noto Color Emoji, Apple Color Emoji) draws them from color images or
+     * layers that the engine does not draw: its emoji are counted with the characters no font has, and
+     * a color font none of whose characters has an outline is reported (`INVALID_CONFIG_VALUE`) and
+     * not used.
      *
      * Words are shaped by the font (ligatures, Arabic joining, Indic conjuncts) and a right-to-left
      * line is laid out from the right edge, its words in visual order. Text of the Indic and Southeast
@@ -1669,9 +1683,11 @@ export interface PdfGeneratorConfig {
     fallbackFonts?: (Uint8Array | ArrayBuffer)[];
     /**
      * Embed only the glyphs the document uses of each font given in `fonts` and `fallbackFonts`
-     * (`'native'` engine). Set false to embed whole font files, for a font whose subset a viewer does
-     * not draw. An OpenType font of CFF outlines (`.otf` starting `OTTO`) is embedded whole either way:
-     * its subset is not one viewers draw. Defaults to true.
+     * (`'native'` engine). Set false to embed whole fonts, for a font whose subset a viewer does not
+     * draw; a WOFF or WOFF2 file is embedded as the TrueType or OpenType font it holds either way. An
+     * OpenType font of CFF outlines (`.otf` starting `OTTO`) is embedded whole either way: its subset
+     * is not one viewers draw. So is a font with color layers (`COLR`), which fontkit does not subset.
+     * Defaults to true.
      */
     subsetFonts?: boolean;
     /**
