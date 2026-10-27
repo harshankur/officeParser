@@ -1197,16 +1197,30 @@ export function detectTables(lines: PdfLine[], page: PageContext, doc: DocContex
     if (!found.tables.length) return found;
     const within = new Set(lines.filter(l => found.consumed.has(l)));
     // The row just above each table, within one and a half of its rows' pitch, of short lines: its header's
-    // first line, read as one line where its cells are set closer than a wide gap.
+    // first line, read as one line where its cells are set closer than a wide gap. (Found by halving the page's
+    // baselines for each table, and its lines once for all the rows above: a page of many tables is not read
+    // over again for each.)
+    const free = lines.filter(l => !found.consumed.has(l)).sort((a, b) => a.baseline - b.baseline);
+    const aboves: number[] = [];
     for (const run of found.runs) {
         const top = run[0][0].baseline, gaps: number[] = [];
         for (let k = 1; k < run.length; k++) gaps.push(run[k][0].baseline - run[k - 1][0].baseline);
         const pitch = median(gaps.filter(g => g > 0));
         if (!(pitch > 0)) continue;
-        let above = -Infinity;
-        for (const l of lines) if (!found.consumed.has(l) && l.baseline < top && top - l.baseline <= 1.5 * pitch) above = Math.max(above, l.baseline);
-        for (const l of lines) {
-            if (!found.consumed.has(l) && Math.abs(l.baseline - above) <= 0.5 * l.fontSize && l.fragments.reduce((n, f) => n + f.text.trim().length, 0) <= 40) within.add(l);
+        // The nearest baseline above the table's top: the line before the first at it or below it.
+        let lo = 0, hi = free.length;
+        while (lo < hi) { const mid = (lo + hi) >> 1; if (free[mid].baseline < top) lo = mid + 1; else hi = mid; }
+        if (lo > 0 && top - free[lo - 1].baseline <= 1.5 * pitch) aboves.push(free[lo - 1].baseline);
+    }
+    if (aboves.length) {
+        aboves.sort((a, b) => a - b);
+        const near = (l: PdfLine, y: number) => Math.abs(l.baseline - y) <= 0.5 * l.fontSize;
+        for (const l of free) {
+            if (l.fragments.reduce((n, f) => n + f.text.trim().length, 0) > 40) continue;
+            // Whether it is on one of those rows: the nearest of them on each side of its baseline is the one it is on.
+            let lo = 0, hi = aboves.length;
+            while (lo < hi) { const mid = (lo + hi) >> 1; if (aboves[mid] < l.baseline) lo = mid + 1; else hi = mid; }
+            if ((lo > 0 && near(l, aboves[lo - 1])) || (lo < aboves.length && near(l, aboves[lo]))) within.add(l);
         }
     }
     const cut = cutAtColumnEdges(lines, doc.cfg, within);

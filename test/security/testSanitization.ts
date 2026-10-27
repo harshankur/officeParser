@@ -4191,6 +4191,23 @@ async function pdfProcessTests(h: {
     let cut = { error: '', text: '' } as { error: string; text: string };
     await linear('pdf: a ruled table of rows drawn as one string across 56 rules is read', async () => { cut = await read(cutPage(n(76))); });
     check('pdf: a table of rows drawn across its rules keeps its text', !cut.error && cut.text.includes('Cut page') && cut.text.includes('w55'), cut.error || cut.text.slice(0, 80));
+    // A page of thousands of small tables between lines of prose: the row just above each (its header's first
+    // line) is found by halving the page's baselines, not by reading every line of the page for each table.
+    const tablesPage = (count: number) => {
+        const pitch = 1.6, height = Math.ceil(count * 4 * pitch) + 20;
+        let y = height - 10, body = 'BT /F1 1 Tf\n';
+        for (let t = 0; t < count; t++) {
+            for (let r = 0; r < 3; r++, y -= pitch) for (let c = 0; c < 8; c++) body += `1 0 0 1 ${10 + c * 20} ${y.toFixed(2)} Tm (c${c}) Tj\n`;
+            body += `1 0 0 1 10 ${y.toFixed(2)} Tm (This is a long line of prose that separates the tables) Tj\n`;
+            y -= pitch;
+        }
+        body += 'ET\n';
+        return pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [5 0 R] /Count 1 >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', flate(Buffer.from(body)),
+            `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 220 ${height}] /Resources << /Font << /F1 3 0 R >> >> /Contents 4 0 R >>`]);
+    };
+    let tabled = { error: '', text: '' } as { error: string; text: string };
+    await linear('pdf: a page of 2,000 small tables between lines of prose is read', async () => { tabled = await read(tablesPage(n(2000))); });
+    check('pdf: a page of small tables keeps its text', !tabled.error && tabled.text.includes('c7') && tabled.text.includes('prose'), tabled.error || tabled.text.slice(0, 80));
     // A page's marked content is read for its ActualText (see actualText): in time in proportion to its
     // operators, and within its bound on what it inflates (a stream of zeros inflating far past it).
     const markedPage = (body: Buffer) => pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [5 0 R] /Count 1 >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', flate(body),
