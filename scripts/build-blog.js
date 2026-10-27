@@ -328,7 +328,8 @@ function readRevisions(post, { published, updated, releases, siteUrl }) {
  * with `<del data-revision="id">` and what it put in with `<ins data-revision="id">`, around text
  * inside a block. What was taken out followed by what replaced it is one change; each change is
  * followed by a note of the revision's kind and day: on the page, a button that opens it (with the
- * release linked, and a link to the list of revisions), and away from it (a feed reader, which has
+ * release linked, a link to the list of revisions, and a button, shown by the script, that puts the
+ * changes away), and away from it (a feed reader, which has
  * no buttons), the note written out. The first change of a revision is where the list links. A mark
  * that names no listed revision, holds a block or another mark, or has other attributes, and a
  * revision that marks nothing, are errors naming them.
@@ -358,7 +359,8 @@ function markRevisions(body, revisions, { name, standalone }) {
         if (standalone) return ` <em>(${said}: ${escapeHtml(revision.note)})</em>`;
         const id = count === 1 ? revision.anchor : `${revision.anchor}-${count}`;
         return `<button type="button" class="revision-mark" id="${id}" popovertarget="${id}-note">${revision.label}</button>`
-            + `<span class="revision-note" id="${id}-note" popover><strong>${said}.</strong> ${escapeHtml(revision.note)} <a href="#revisions">All revisions</a></span>`;
+            + `<span class="revision-note" id="${id}-note" popover><strong>${said}.</strong> ${escapeHtml(revision.note)} <a href="#revisions">All revisions</a>`
+            + '<button type="button" class="revision-note-hide" hidden>Hide all changes</button></span>';
     };
     let out = '';
     let last = 0;
@@ -416,7 +418,7 @@ function readBlog(sourceDir = SOURCE_DIR) {
             ...post,
             body: markRevisions(prepared, revisions, { name, standalone: false }),
             feedBody: markRevisions(prepared, revisions, { name, standalone: true }),
-            revisionList: revisions.length ? { changes: revisions } : null,
+            revisionList: revisions.length ? { changes: revisions, changesLabel: `${revisions.length} ${revisions.length === 1 ? 'change' : 'changes'}` } : null,
             text: plainText(now),
             link: pageOf(post.slug),
             address: `${blog.url}${post.slug}.html`,
@@ -529,6 +531,7 @@ function renderSite(sourceDir = SOURCE_DIR) {
         isPost: false,
         published: null,
         updated: null,
+        hasRevisions: false,
         main: renderTemplate(list, { categories, posts }).trimEnd(),
     }));
 
@@ -542,6 +545,7 @@ function renderSite(sourceDir = SOURCE_DIR) {
             isPost: true,
             published: post.published,
             updated: post.updated,
+            hasRevisions: post.revisionList !== null,
             main: renderTemplate(postPage, { ...post, previous: posts[index - 1] ?? null, next: posts[index + 1] ?? null }).trimEnd(),
         }));
     });

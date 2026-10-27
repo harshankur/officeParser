@@ -56,10 +56,15 @@
             <nav class="nav-actions" aria-label="Site">
                 <a href="./" class="nav-link"><span class="nav-long">All Articles</span><span
                         class="nav-short">Articles</span></a>
-                <a href="../" class="nav-link"><span class="nav-long">Visualizer &amp; Docs</span><span
+                <a href="../" class="nav-link nav-home"><span class="nav-long">Visualizer &amp; Docs</span><span
                         class="nav-short">Docs</span></a>
                 <a href="https://github.com/harshankur/officeParser" class="nav-link nav-secondary" target="_blank"
                     rel="noopener">GitHub</a>
+                <button class="theme-toggle-btn revision-toggle" id="revision-toggle" type="button" aria-pressed="true"
+                    aria-label="Hide changes" title="Hide changes" hidden>
+                    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"
+                        stroke-linecap="round" aria-hidden="true"><path d="M8 2.5v6M5 5.5h6M5 12.5h6"/></svg>
+                </button>
                 <button class="theme-toggle-btn" id="theme-toggle" type="button" aria-label="Toggle theme">
                     <span id="theme-icon" aria-hidden="true">🌙</span>
                 </button>
@@ -79,9 +84,7 @@
                     <div>
                         <a href="https://harshankur.com" target="_blank" rel="noopener" class="author-name">Harsh
                             Ankur</a>
-                        <div>Published <time datetime="2026-10-04">4 October 2026</time>, updated <time datetime="2026-10-27">27 October 2026</time> · 5 min read</div>
-                        <button type="button" class="revision-toggle" id="revision-toggle" role="switch" aria-checked="true" hidden>
-                            <span class="revision-toggle-track" aria-hidden="true"></span>Show changes</button>
+                        <div>Published <time datetime="2026-10-04">4 October 2026</time>, updated <time datetime="2026-10-27">27 October 2026</time> · <a href="#revisions" class="byline-changes">2 changes</a> · 5 min read</div>
                     </div>
                 </div>
             </div>
@@ -149,7 +152,7 @@
     When it reads an <code>.xlsx</code> file, it reads the <strong>values</strong>: for a formula cell,
     the result Excel computed and saved the last time the file was written. It does not read the formula
     text<del datetime="2026-10-27" cite="../#doc/changelog/830---2026-10-26">, it does not evaluate anything, and it cannot write an <code>.xlsx</code> back out</del><ins datetime="2026-10-27" cite="../#doc/changelog/830---2026-10-26"> and it does not evaluate anything, so an <code>.xlsx</code> it writes back out holds the values,
-    not the formulas</ins><button type="button" class="revision-mark" id="change-xlsx-written" popovertarget="change-xlsx-written-note">Updated</button><span class="revision-note" id="change-xlsx-written-note" popover><strong>Updated 27 Oct 2026 for <a href="../#doc/changelog/830---2026-10-26">8.3.0</a>.</strong> officeParser now writes .xlsx files, with each cell&#39;s value and not its formula. <a href="#revisions">All revisions</a></span> (see section 4).
+    not the formulas</ins><button type="button" class="revision-mark" id="change-xlsx-written" popovertarget="change-xlsx-written-note">Updated</button><span class="revision-note" id="change-xlsx-written-note" popover><strong>Updated 27 Oct 2026 for <a href="../#doc/changelog/830---2026-10-26">8.3.0</a>.</strong> officeParser now writes .xlsx files, with each cell&#39;s value and not its formula. <a href="#revisions">All revisions</a><button type="button" class="revision-note-hide" hidden>Hide all changes</button></span> (see section 4).
 </p>
 
 <div class="callout">
@@ -175,7 +178,7 @@
     <code>soffice --headless --convert-to docx old-file.doc</code>. Then parse the result.
 </p>
 
-<h2>4. You Need <del datetime="2026-10-26" cite="../#doc/changelog/830---2026-10-26">to Write Spreadsheets or Slides</del><ins datetime="2026-10-26" cite="../#doc/changelog/830---2026-10-26">Formulas or Native Charts in the Files You Write</ins><button type="button" class="revision-mark" id="change-spreadsheets-and-slides" popovertarget="change-spreadsheets-and-slides-note">Updated</button><span class="revision-note" id="change-spreadsheets-and-slides-note" popover><strong>Updated 26 Oct 2026 for <a href="../#doc/changelog/830---2026-10-26">8.3.0</a>.</strong> officeParser now writes .xlsx, .ods, .pptx and .odp files, so this section is now about what those files leave out. <a href="#revisions">All revisions</a></span></h2>
+<h2>4. You Need <del datetime="2026-10-26" cite="../#doc/changelog/830---2026-10-26">to Write Spreadsheets or Slides</del><ins datetime="2026-10-26" cite="../#doc/changelog/830---2026-10-26">Formulas or Native Charts in the Files You Write</ins><button type="button" class="revision-mark" id="change-spreadsheets-and-slides" popovertarget="change-spreadsheets-and-slides-note">Updated</button><span class="revision-note" id="change-spreadsheets-and-slides-note" popover><strong>Updated 26 Oct 2026 for <a href="../#doc/changelog/830---2026-10-26">8.3.0</a>.</strong> officeParser now writes .xlsx, .ods, .pptx and .odp files, so this section is now about what those files leave out. <a href="#revisions">All revisions</a><button type="button" class="revision-note-hide" hidden>Hide all changes</button></span></h2>
 <p>
     <del datetime="2026-10-26" cite="../#doc/changelog/830---2026-10-26">officeParser reads fourteen formats but writes fewer. It generates DOCX, ODT, PDF, HTML, Markdown,
     LaTeX, RTF, EPUB, CSV, plain text, and chunks for retrieval. It does <strong>not</strong> generate
@@ -184,7 +187,7 @@
     <code>.ods</code>, <code>.pptx</code> and <code>.odp</code>, next to DOCX, ODT, PDF, HTML, Markdown,
     LaTeX, RTF, EPUB, CSV, plain text and chunks for retrieval. What it writes is what it read: a
     workbook's <strong>values</strong>, shown in their number formats, and a deck's text boxes, pictures,
-    shapes, tables and speaker notes.</ins><button type="button" class="revision-mark" id="change-spreadsheets-and-slides-2" popovertarget="change-spreadsheets-and-slides-2-note">Updated</button><span class="revision-note" id="change-spreadsheets-and-slides-2-note" popover><strong>Updated 26 Oct 2026 for <a href="../#doc/changelog/830---2026-10-26">8.3.0</a>.</strong> officeParser now writes .xlsx, .ods, .pptx and .odp files, so this section is now about what those files leave out. <a href="#revisions">All revisions</a></span>
+    shapes, tables and speaker notes.</ins><button type="button" class="revision-mark" id="change-spreadsheets-and-slides-2" popovertarget="change-spreadsheets-and-slides-2-note">Updated</button><span class="revision-note" id="change-spreadsheets-and-slides-2-note" popover><strong>Updated 26 Oct 2026 for <a href="../#doc/changelog/830---2026-10-26">8.3.0</a>.</strong> officeParser now writes .xlsx, .ods, .pptx and .odp files, so this section is now about what those files leave out. <a href="#revisions">All revisions</a><button type="button" class="revision-note-hide" hidden>Hide all changes</button></span>
 </p>
 <p>
     <del datetime="2026-10-26" cite="../#doc/changelog/830---2026-10-26">A spreadsheet can go out as CSV, and a deck can go out as a document, but if the deliverable has to
@@ -193,7 +196,7 @@
     <ins datetime="2026-10-26" cite="../#doc/changelog/830---2026-10-26">It does <strong>not</strong> write formulas, since it never reads them (see section 2), and it writes
     a chart as a table of its data, on a sheet or a slide, not as a chart Excel or PowerPoint can edit. If
     the deliverable needs live formulas or editable charts, use a library built for authoring them, such
-    as ExcelJS or PptxGenJS.</ins><button type="button" class="revision-mark" id="change-spreadsheets-and-slides-3" popovertarget="change-spreadsheets-and-slides-3-note">Updated</button><span class="revision-note" id="change-spreadsheets-and-slides-3-note" popover><strong>Updated 26 Oct 2026 for <a href="../#doc/changelog/830---2026-10-26">8.3.0</a>.</strong> officeParser now writes .xlsx, .ods, .pptx and .odp files, so this section is now about what those files leave out. <a href="#revisions">All revisions</a></span>
+    as ExcelJS or PptxGenJS.</ins><button type="button" class="revision-mark" id="change-spreadsheets-and-slides-3" popovertarget="change-spreadsheets-and-slides-3-note">Updated</button><span class="revision-note" id="change-spreadsheets-and-slides-3-note" popover><strong>Updated 26 Oct 2026 for <a href="../#doc/changelog/830---2026-10-26">8.3.0</a>.</strong> officeParser now writes .xlsx, .ods, .pptx and .odp files, so this section is now about what those files leave out. <a href="#revisions">All revisions</a><button type="button" class="revision-note-hide" hidden>Hide all changes</button></span>
 </p>
 
 <h2>5. You Need to Run Macros</h2>

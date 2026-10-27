@@ -89,7 +89,7 @@ const markRefused = (body, revisions) => { try { marked(body, false, revisions);
 const replaced = marked('<p>a <del data-revision="fixed">old</del> <ins data-revision="fixed">new</ins> b <ins data-revision="shipped">added</ins></p>');
 check('revisions: what was taken out and what replaced it are one change, with one note after it',
     replaced.startsWith('<p>a <del datetime="2026-10-27">old</del> <ins datetime="2026-10-27">new</ins><button type="button" class="revision-mark" id="change-fixed" popovertarget="change-fixed-note">Corrected</button>'
-        + '<span class="revision-note" id="change-fixed-note" popover><strong>Corrected 27 Oct 2026.</strong> Why fixed changed. <a href="#revisions">All revisions</a></span> b '), replaced);
+        + '<span class="revision-note" id="change-fixed-note" popover><strong>Corrected 27 Oct 2026.</strong> Why fixed changed. <a href="#revisions">All revisions</a><button type="button" class="revision-note-hide" hidden>Hide all changes</button></span> b '), replaced);
 check('revisions: an update names its release, linked to the release\'s section of the changelog reader',
     replaced.includes('<ins datetime="2026-10-27" cite="../#doc/changelog/840---2026-10-27">added</ins><button type="button" class="revision-mark" id="change-shipped" popovertarget="change-shipped-note">Updated</button>')
     && replaced.includes('<strong>Updated 27 Oct 2026 for <a href="../#doc/changelog/840---2026-10-27">8.4.0</a>.</strong>'), replaced);
@@ -304,10 +304,13 @@ try {
         revisedPage.includes(`<li><strong>Corrected</strong> <time datetime="${latestDay}">`) && revisedPage.includes(': A word was wrong. <a href="#change-word">See the change</a></li>')
         && revisedPage.includes(` for <a href="../#doc/changelog/${latestAnchor}">${latest}</a>: Something came with the release. <a href="#change-release">See the change</a></li>`)
         && revisedPage.indexOf('id="revisions"') > revisedPage.indexOf('id="change-release"') && revisedPage.indexOf('id="revisions"') < revisedPage.indexOf('article-nav-footer'), revisedPage.slice(0, 200));
-    check('revisions: a revised post has the switch that shows its changes, on and hidden until the script shows it, and no other post has one',
-        blog.posts.every(post => /<button type="button" class="revision-toggle" id="revision-toggle" role="switch" aria-checked="true" hidden>/.test(String(files.get(`${post.slug}.html`) ?? '')) === (post.revisions || []).length > 0));
+    check('revisions: a revised post has the button in its header that shows its changes, pressed and hidden until the script shows it, and no other page has one',
+        blog.posts.every(post => /<header class="blog-header">[\s\S]*<button class="theme-toggle-btn revision-toggle" id="revision-toggle" type="button" aria-pressed="true"\s+aria-label="Hide changes" title="Hide changes" hidden>[\s\S]*<\/header>/.test(String(files.get(`${post.slug}.html`) ?? '')) === (post.revisions || []).length > 0)
+        && !String(files.get('index.html') ?? '').includes('revision-toggle'));
+    check('revisions: a revised post\'s byline counts its changes, linked to their list', blog.posts.filter(post => (post.revisions || []).length).every(post =>
+        String(files.get(`${post.slug}.html`) ?? '').includes(` · <a href="#revisions" class="byline-changes">${post.revisions.length} ${post.revisions.length === 1 ? 'change' : 'changes'}</a> · `)));
     const css = fs.readFileSync(path.join(SOURCE_DIR, 'assets', 'blog.css'), 'utf8');
-    const written = ['revision-mark', 'revision-note', 'revision-removed', 'revision-toggle', 'revision-toggle-track', 'article-revisions', 'changes-hidden'];
+    const written = ['revision-mark', 'revision-note', 'revision-removed', 'revision-toggle', 'revision-note-hide', 'byline-changes', 'article-revisions', 'changes-hidden'];
     check('revisions: every class the build and the script give a revision has its look in the stylesheet', written.every(name => css.includes(`.${name}`)), written.filter(name => !css.includes(`.${name}`)).join(', '));
     check('revisions: a post lists revisions when it has some, and only then', blog.posts.every(post => String(files.get(`${post.slug}.html`) ?? '').includes('id="revisions"') === (post.revisions || []).length > 0));
     const revisedSearch = typeof withRevisions === 'string' ? [] : JSON.parse(String(withRevisions.get('search.json'))).posts;

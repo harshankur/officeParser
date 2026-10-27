@@ -62,10 +62,17 @@
                 <a href="./" class="nav-link"><span class="nav-long">All Articles</span><span
                         class="nav-short">Articles</span></a>
 {{/isPost}}
-                <a href="../" class="nav-link"><span class="nav-long">Visualizer &amp; Docs</span><span
+                <a href="../" class="nav-link nav-home"><span class="nav-long">Visualizer &amp; Docs</span><span
                         class="nav-short">Docs</span></a>
                 <a href="https://github.com/harshankur/officeParser" class="nav-link nav-secondary" target="_blank"
                     rel="noopener">GitHub</a>
+{{#hasRevisions}}
+                <button class="theme-toggle-btn revision-toggle" id="revision-toggle" type="button" aria-pressed="true"
+                    aria-label="Hide changes" title="Hide changes" hidden>
+                    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"
+                        stroke-linecap="round" aria-hidden="true"><path d="M8 2.5v6M5 5.5h6M5 12.5h6"/></svg>
+                </button>
+{{/hasRevisions}}
                 <button class="theme-toggle-btn" id="theme-toggle" type="button" aria-label="Toggle theme">
                     <span id="theme-icon" aria-hidden="true">🌙</span>
                 </button>

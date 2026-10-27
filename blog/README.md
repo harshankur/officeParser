@@ -67,9 +67,10 @@ summary, topic and text as soon as it is built.
 
 A post that is changed after it went out gets `"updated"` with the day, and each change is a revision,
 shown where it was made: what it took out struck, what it put in marked, and a button after it that
-opens a note of what changed and when. The post's page lists every revision after its body. A switch
-in its byline, on at first, lets a reader put the changes away and read the post as it is now; the
-choice is kept for every post, and the list of revisions stays.
+opens a note of what changed and when. The post's page lists every revision after its body, and its
+byline counts them. A button in the header, beside the theme's, and one in each note let a reader put
+the changes away and read the post as it is now. Changes are shown at first, the choice is kept for
+every post, and the list of revisions stays.
 
 1. List the revisions in the post's entry in `posts.json`, in the order they appear in the post:
 

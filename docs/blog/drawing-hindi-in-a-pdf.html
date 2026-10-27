@@ -56,10 +56,15 @@
             <nav class="nav-actions" aria-label="Site">
                 <a href="./" class="nav-link"><span class="nav-long">All Articles</span><span
                         class="nav-short">Articles</span></a>
-                <a href="../" class="nav-link"><span class="nav-long">Visualizer &amp; Docs</span><span
+                <a href="../" class="nav-link nav-home"><span class="nav-long">Visualizer &amp; Docs</span><span
                         class="nav-short">Docs</span></a>
                 <a href="https://github.com/harshankur/officeParser" class="nav-link nav-secondary" target="_blank"
                     rel="noopener">GitHub</a>
+                <button class="theme-toggle-btn revision-toggle" id="revision-toggle" type="button" aria-pressed="true"
+                    aria-label="Hide changes" title="Hide changes" hidden>
+                    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"
+                        stroke-linecap="round" aria-hidden="true"><path d="M8 2.5v6M5 5.5h6M5 12.5h6"/></svg>
+                </button>
                 <button class="theme-toggle-btn" id="theme-toggle" type="button" aria-label="Toggle theme">
                     <span id="theme-icon" aria-hidden="true">🌙</span>
                 </button>
@@ -79,9 +84,7 @@
                     <div>
                         <a href="https://harshankur.com" target="_blank" rel="noopener" class="author-name">Harsh
                             Ankur</a>
-                        <div>Published <time datetime="2026-10-26">26 October 2026</time>, updated <time datetime="2026-10-27">27 October 2026</time> · 8 min read</div>
-                        <button type="button" class="revision-toggle" id="revision-toggle" role="switch" aria-checked="true" hidden>
-                            <span class="revision-toggle-track" aria-hidden="true"></span>Show changes</button>
+                        <div>Published <time datetime="2026-10-26">26 October 2026</time>, updated <time datetime="2026-10-27">27 October 2026</time> · <a href="#revisions" class="byline-changes">5 changes</a> · 8 min read</div>
                     </div>
                 </div>
             </div>
@@ -150,7 +153,7 @@
     it is written into the page now:
 </p>
 <pre><code>/Span &lt;&lt; /ActualText &lt;FEFF0939093F090209260940&gt; &gt;&gt; BDC
-1 0 0 1 48 <del datetime="2026-10-27">765.89</del><ins datetime="2026-10-27">782.89</ins><button type="button" class="revision-mark" id="change-tm-value" popovertarget="change-tm-value-note">Corrected</button><span class="revision-note" id="change-tm-value-note" popover><strong>Corrected 27 Oct 2026.</strong> The sample said 765.89 when the post went out. The engine draws this line at 782.89. <a href="#revisions">All revisions</a></span> Tm
+1 0 0 1 48 <del datetime="2026-10-27">765.89</del><ins datetime="2026-10-27">782.89</ins><button type="button" class="revision-mark" id="change-tm-value" popovertarget="change-tm-value-note">Corrected</button><span class="revision-note" id="change-tm-value-note" popover><strong>Corrected 27 Oct 2026.</strong> The sample said 765.89 when the post went out. The engine draws this line at 782.89. <a href="#revisions">All revisions</a><button type="button" class="revision-note-hide" hidden>Hide all changes</button></span> Tm
 [ &lt;0001&gt; &lt;0002&gt; &lt;0003&gt; &lt;0004&gt; &lt;0005&gt; ] TJ
 EMC</code></pre>
 <p>
@@ -250,7 +253,7 @@ EMC</code></pre>
     walks the page's drawing operators glyph by glyph, puts each piece of text where its glyphs are
     really drawn, and keeps a space only where the page draws one or leaves a gap. Words now read whole
     from LibreOffice's PDFs in the Indian languages and Thai I tested, and the space after a conjunct is
-    kept.</ins><button type="button" class="revision-mark" id="change-whole-words" popovertarget="change-whole-words-note">Updated</button><span class="revision-note" id="change-whole-words-note" popover><strong>Updated 27 Oct 2026 for <a href="../#doc/changelog/840---2026-10-27">8.4.0</a>.</strong> The reader now reads words whole from PDFs that place each letter cluster apart, as LibreOffice&#39;s do. <a href="#revisions">All revisions</a></span>
+    kept.</ins><button type="button" class="revision-mark" id="change-whole-words" popovertarget="change-whole-words-note">Updated</button><span class="revision-note" id="change-whole-words-note" popover><strong>Updated 27 Oct 2026 for <a href="../#doc/changelog/840---2026-10-27">8.4.0</a>.</strong> The reader now reads words whole from PDFs that place each letter cluster apart, as LibreOffice&#39;s do. <a href="#revisions">All revisions</a><button type="button" class="revision-note-hide" hidden>Hide all changes</button></span>
 </p>
 
 <h2>Using It</h2>
@@ -266,9 +269,9 @@ const pdf = await ast.to('pdf', {
 });
 writeFileSync('report.pdf', pdf.value);</code></pre>
 <p>
-    Each character is drawn in the first font <del datetime="2026-10-27" cite="../#doc/changelog/840---2026-10-27">that has it</del><ins datetime="2026-10-27" cite="../#doc/changelog/840---2026-10-27">whose glyph for it draws something</ins><button type="button" class="revision-mark" id="change-first-font-that-draws" popovertarget="change-first-font-that-draws-note">Updated</button><span class="revision-note" id="change-first-font-that-draws-note" popover><strong>Updated 27 Oct 2026 for <a href="../#doc/changelog/840---2026-10-27">8.4.0</a>.</strong> A font whose glyph for a character draws nothing is now passed over for the next font. <a href="#revisions">All revisions</a></span>, so one Latin font in
+    Each character is drawn in the first font <del datetime="2026-10-27" cite="../#doc/changelog/840---2026-10-27">that has it</del><ins datetime="2026-10-27" cite="../#doc/changelog/840---2026-10-27">whose glyph for it draws something</ins><button type="button" class="revision-mark" id="change-first-font-that-draws" popovertarget="change-first-font-that-draws-note">Updated</button><span class="revision-note" id="change-first-font-that-draws-note" popover><strong>Updated 27 Oct 2026 for <a href="../#doc/changelog/840---2026-10-27">8.4.0</a>.</strong> A font whose glyph for a character draws nothing is now passed over for the next font. <a href="#revisions">All revisions</a><button type="button" class="revision-note-hide" hidden>Hide all changes</button></span>, so one Latin font in
     <code>pdfConfig.fonts</code> and a font for each other script in <code>fallbackFonts</code> covers a document
-    that mixes them. <ins datetime="2026-10-27" cite="../#doc/changelog/840---2026-10-27">A font may be a TrueType or OpenType file, and since 8.4.0 a WOFF or WOFF2 file too.</ins><button type="button" class="revision-mark" id="change-web-fonts" popovertarget="change-web-fonts-note">Updated</button><span class="revision-note" id="change-web-fonts-note" popover><strong>Updated 27 Oct 2026 for <a href="../#doc/changelog/840---2026-10-27">8.4.0</a>.</strong> The native engine now takes WOFF and WOFF2 fonts. <a href="#revisions">All revisions</a></span>
+    that mixes them. <ins datetime="2026-10-27" cite="../#doc/changelog/840---2026-10-27">A font may be a TrueType or OpenType file, and since 8.4.0 a WOFF or WOFF2 file too.</ins><button type="button" class="revision-mark" id="change-web-fonts" popovertarget="change-web-fonts-note">Updated</button><span class="revision-note" id="change-web-fonts-note" popover><strong>Updated 27 Oct 2026 for <a href="../#doc/changelog/840---2026-10-27">8.4.0</a>.</strong> The native engine now takes WOFF and WOFF2 fonts. <a href="#revisions">All revisions</a><button type="button" class="revision-note-hide" hidden>Hide all changes</button></span>
     The fonts need the optional peer dependency <code>@pdf-lib/fontkit</code>.
 </p>
 
@@ -278,7 +281,7 @@ writeFileSync('report.pdf', pdf.value);</code></pre>
         copying there can still put ि before its letter.</li>
     <li class="revision-removed"><del datetime="2026-10-27" cite="../#doc/changelog/840---2026-10-27">officeParser's own reader can still lose the space <em>after</em> a conjunct when a Latin word
         follows it: <code>क्ष end</code> reads back as <code>क्षend</code>. pdf.js gives the conjunct no
-        width, so there is no gap left to find.</del><button type="button" class="revision-mark" id="change-space-after-conjunct" popovertarget="change-space-after-conjunct-note">Updated</button><span class="revision-note" id="change-space-after-conjunct-note" popover><strong>Updated 27 Oct 2026 for <a href="../#doc/changelog/840---2026-10-27">8.4.0</a>.</strong> The reader now keeps the space after a conjunct, so this is no longer a problem. <a href="#revisions">All revisions</a></span></li>
+        width, so there is no gap left to find.</del><button type="button" class="revision-mark" id="change-space-after-conjunct" popovertarget="change-space-after-conjunct-note">Updated</button><span class="revision-note" id="change-space-after-conjunct-note" popover><strong>Updated 27 Oct 2026 for <a href="../#doc/changelog/840---2026-10-27">8.4.0</a>.</strong> The reader now keeps the space after a conjunct, so this is no longer a problem. <a href="#revisions">All revisions</a><button type="button" class="revision-note-hide" hidden>Hide all changes</button></span></li>
     <li>Arabic and Hebrew marks are drawn where pdf-lib draws them: right for the fonts I tested, but not
         placed by the font's positioning table.</li>
 </ul>

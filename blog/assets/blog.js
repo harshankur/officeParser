@@ -509,7 +509,9 @@
     };
 
     /**
-     * The switch in a revised post's byline. Off, the post reads as it is now; the choice is kept for
+     * The button in a revised post's header, beside the theme's, which stays in reach wherever the
+     * reader is: pressed, the changes are shown; not, the post reads as it is now. Each change's note
+     * offers to put them away too, where a reader puzzled by struck text looks. The choice is kept for
      * every post. A link to a change in the list of revisions shows the changes on this page first
      * (without changing the choice), so it never lands where nothing is to be seen.
      */
@@ -518,13 +520,20 @@
         if (!toggle) return;
         const show = (shown, keep) => {
             root.classList.toggle('changes-hidden', !shown);
-            toggle.setAttribute('aria-checked', String(shown));
+            const label = shown ? 'Hide changes' : 'Show changes';
+            toggle.setAttribute('aria-pressed', String(shown));
+            toggle.setAttribute('aria-label', label);
+            toggle.title = label;
             if (!shown) for (const open of document.querySelectorAll('.revision-note:popover-open')) open.hidePopover();
             if (keep) { try { localStorage.setItem(CHANGES_KEY, shown ? 'shown' : 'hidden'); } catch { /* the choice lasts for this page */ } }
         };
         show(!root.classList.contains('changes-hidden'), false);
         toggle.hidden = false;
-        toggle.addEventListener('click', () => show(toggle.getAttribute('aria-checked') !== 'true', true));
+        toggle.addEventListener('click', () => show(toggle.getAttribute('aria-pressed') !== 'true', true));
+        for (const hide of document.querySelectorAll('.revision-note-hide')) {
+            hide.hidden = false;
+            hide.addEventListener('click', () => show(false, true));
+        }
         for (const link of document.querySelectorAll('.article-revisions a[href^="#change-"]')) {
             link.addEventListener('click', () => { if (root.classList.contains('changes-hidden')) show(true, false); });
         }
