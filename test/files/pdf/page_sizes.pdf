@@ -1,0 +1,136 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R 14 0 R] /Count 6 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>
+endobj
+5 0 obj
+<< /Length 120 >>
+stream
+BT
+/F1 18 Tf
+1 0 0 1 72 692 Tm
+(Letter page one) Tj
+/F1 12 Tf
+1 0 0 1 72 652 Tm
+(This page is 612 by 792 points.) Tj
+ET
+
+endstream
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 7 0 R >>
+endobj
+7 0 obj
+<< /Length 120 >>
+stream
+BT
+/F1 18 Tf
+1 0 0 1 72 692 Tm
+(Letter page two) Tj
+/F1 12 Tf
+1 0 0 1 72 652 Tm
+(This page is 612 by 792 points.) Tj
+ET
+
+endstream
+endobj
+8 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 792 612] /Resources << /Font << /F1 3 0 R >> >> /Contents 9 0 R >>
+endobj
+9 0 obj
+<< /Length 125 >>
+stream
+BT
+/F1 18 Tf
+1 0 0 1 72 512 Tm
+(Landscape page three) Tj
+/F1 12 Tf
+1 0 0 1 72 472 Tm
+(This page is 792 by 612 points.) Tj
+ET
+
+endstream
+endobj
+10 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Rotate 90 /Resources << /Font << /F1 3 0 R >> >> /Contents 11 0 R >>
+endobj
+11 0 obj
+<< /Length 146 >>
+stream
+BT
+/F1 18 Tf
+1 0 0 1 72 692 Tm
+(Turned page four) Tj
+/F1 12 Tf
+1 0 0 1 72 652 Tm
+(This page is 612 by 792 points, shown turned 90 degrees.) Tj
+ET
+
+endstream
+endobj
+12 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 13 0 R >>
+endobj
+13 0 obj
+<< /Length 121 >>
+stream
+BT
+/F1 18 Tf
+1 0 0 1 72 692 Tm
+(Letter page five) Tj
+/F1 12 Tf
+1 0 0 1 72 652 Tm
+(This page is 612 by 792 points.) Tj
+ET
+
+endstream
+endobj
+14 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 15 0 R >>
+endobj
+15 0 obj
+<< /Length 116 >>
+stream
+BT
+/F1 18 Tf
+1 0 0 1 72 742 Tm
+(A4 page six) Tj
+/F1 12 Tf
+1 0 0 1 72 702 Tm
+(This page is 595 by 842 points.) Tj
+ET
+
+endstream
+endobj
+xref
+0 16
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000154 00000 n 
+0000000224 00000 n 
+0000000350 00000 n 
+0000000521 00000 n 
+0000000647 00000 n 
+0000000818 00000 n 
+0000000944 00000 n 
+0000001120 00000 n 
+0000001259 00000 n 
+0000001457 00000 n 
+0000001585 00000 n 
+0000001758 00000 n 
+0000001886 00000 n 
+trailer
+<< /Size 16 /Root 1 0 R /ID [<30313233343536373839414243444548> <30313233343536373839414243444548>] >>
+startxref
+2054
+%%EOF

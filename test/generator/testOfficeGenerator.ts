@@ -2552,6 +2552,56 @@ async function runDegradeFidelityTests(): Promise<GenFeatureTest[]> {
 // MAIN RUNNERS
 // ============================================================================
 
+/**
+ * A PDF's pages of other sizes are sections (a page break with BreakMetadata.section and the page's
+ * size), so the writers that lay out pages keep each one: DOCX, ODT and RTF output read back with the
+ * same pages, LaTeX sets the landscape ones in a `landscape` environment, and the native engine and
+ * the slide writers keep a page (or slide) for each.
+ */
+async function runPdfSectionTests(): Promise<GenFeatureTest[]> {
+    const results: GenFeatureTest[] = [];
+    const category = 'PDF Sections';
+    const mk = (feature: string, destFormat: string, exp: any, act: any, ok: boolean, details: string): GenFeatureTest => ({
+        category, feature, sourceFormat: 'pdf', destFormat: destFormat as any,
+        result: { status: ok ? 'PASS' : 'FAIL', expected: exp, actual: act, details, duration: 0 }
+    });
+    // Letter, Letter, landscape, a /Rotate 90 page shown landscape, Letter, A4 (see scripts/generate-pdf-fixtures.js).
+    const ast = await OfficeParser.parseOffice(path.join(__dirname, '..', 'files', 'pdf', 'page_sizes.pdf'), { ...PARSER_CONFIG, ocr: false });
+    // The document's page, then each section's, as whole points.
+    const pagesOf = (a: OfficeParserAST) => [a.metadata.pageSetup, ...a.content.filter(n => n.type === 'break' && typeof (n.metadata as any)?.section === 'number').map(n => (n.metadata as any).pageSetup)]
+        .map(s => `${Math.round(s?.width ?? 0)}x${Math.round(s?.height ?? 0)}`).join(' ');
+    const want = '612x792 792x612 612x792 595x842';
+    results.push(mk('a PDF\'s sections are its pages\' sizes', 'pdf', want, pagesOf(ast), pagesOf(ast) === want, 'a page of another size or turned starts a section'));
+    for (const fmt of ['docx', 'odt', 'rtf'] as const) {
+        try {
+            const out = await OfficeGenerator.generate(ast, fmt, {} as any);
+            const value = out.value as string | Uint8Array;
+            const back = await OfficeParser.parseOffice(typeof value === 'string' ? Buffer.from(value, 'utf8') : Buffer.from(value), { ...PARSER_CONFIG, ocr: false, fileType: fmt } as any);
+            results.push(mk('each section of PDF pages written with its page', fmt, want, pagesOf(back), pagesOf(back) === want, `${fmt} output read back has the PDF's pages`));
+        } catch (e: any) {
+            results.push(mk('each section of PDF pages written with its page', fmt, want, e?.message || String(e), false, 'generation or reading back failed'));
+        }
+    }
+    const tex = String((await OfficeGenerator.generate(ast, 'tex', {} as any)).value);
+    const turned = /\\begin\{landscape\}[\s\S]*Landscape page three[\s\S]*Turned page four[\s\S]*\\end\{landscape\}[\s\S]*Letter page five/.test(tex);
+    results.push(mk('PDF landscape pages in a landscape environment', 'tex', 'pages three and four turned', turned ? 'turned' : 'not turned', turned, 'pdflscape for the landscape section'));
+    try {
+        const pdf = await OfficeGenerator.generate(ast, 'pdf' as any, { pdfConfig: { engine: 'native' } } as any);
+        const back = await OfficeParser.parseOffice(Buffer.from(pdf.value as Uint8Array), { ...PARSER_CONFIG, ocr: false });
+        const sizes = back.content.filter(n => n.type === 'page').map(n => `${Math.round((n.metadata as any)?.pageWidth)}x${Math.round((n.metadata as any)?.pageHeight)}`).join(' ');
+        const wantPages = '612x792 612x792 792x612 792x612 612x792 595x842';
+        results.push(mk('native engine prints each PDF page at its size', 'pdf', wantPages, sizes, sizes === wantPages, 'a section start and the page after it make one page'));
+    } catch (e: any) {
+        results.push(mk('native engine prints each PDF page at its size', 'pdf', 'printed', e?.message || String(e), false, 'native engine failed'));
+    }
+    for (const fmt of ['pptx', 'odp'] as const) {
+        const deck = unzipSync((await OfficeGenerator.generate(ast, fmt as any, {} as any)).value as unknown as Uint8Array);
+        const slides = fmt === 'pptx' ? Object.keys(deck).filter(k => /^ppt\/slides\/slide\d+\.xml$/.test(k)).length : (strFromU8(deck['content.xml']).match(/<draw:page /g) || []).length;
+        results.push(mk('a slide for each PDF page, sections or not', fmt, 6, slides, slides === 6, 'the slide writers take the page nodes'));
+    }
+    return results;
+}
+
 async function runAllTests(): Promise<void> {
     const startTime = Date.now();
     console.log('Starting OfficeGenerator comprehensive test suite...\n');
@@ -2644,6 +2694,14 @@ async function runAllTests(): Promise<void> {
     const nativePdfResults = await runNativePdfEngineTests();
     allResults.push(...nativePdfResults);
     console.log(nativePdfResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' ✗' : ' ✓');
+
+    // A PDF's pages of other sizes as sections, through every writer that lays out pages (PDF: not in fast mode)
+    if (!FAST_MODE) {
+        process.stdout.write('  pdf sections...');
+        const pdfSectionResults = await runPdfSectionTests();
+        allResults.push(...pdfSectionResults);
+        console.log(pdfSectionResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' ✗' : ' ✓');
+    }
 
     // Table geometry: sparse spreadsheet grids, header rows, onNode call counts
     process.stdout.write('  table geometry...');

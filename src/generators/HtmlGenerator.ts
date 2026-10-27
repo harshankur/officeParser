@@ -644,6 +644,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         // Whether these siblings form a run of text (a paragraph's children) rather than a list of blocks.
         const runHasText = nodes.some(n => n.type === 'text');
         let html = '';
+        // The node written before this one (see afterPage).
+        let previous: OfficeContentNode | undefined;
         // Stack to track active lists. `liClose` is the currently-open item's deferred closing
         // suffix (`</li>`, or `</div></li>` for a task item): a list item is rendered WITHOUT its
         // close so a deeper list can land inside it (spec-valid `<li>a<ul>...</ul></li>` rather
@@ -699,6 +701,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 continue;
             }
 
+            this.afterPage = previous?.type === 'page';
+            previous = node;
             if (node.type === 'list') {
                 const meta = node.metadata as ListMetadata;
                 const type = meta?.listType === 'ordered' ? 'ordered' : 'unordered';
@@ -739,6 +743,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // Non-list node closes all active lists
                 closeListsToLevel(-1);
                 let result = await this.processNodeRecursive(node, this.boundNodeProcessor, { value: override });
+                // (A section's start after a page writes nothing, and no gap either.)
+                if (!result && this.afterPage && node.type === 'break') continue;
 
                 // Add a blank line after BLOCK nodes for readable HTML source. Inline nodes (a
                 // paragraph's text/link runs) must concatenate with no separator: adding `\n\n`
@@ -821,6 +827,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
     private tableNestingLevel = 0;
     /** How many paragraphs or headings are being written: a picture in one is written inline. */
     private inlineDepth = 0;
+    /** Whether the node being written comes right after a page (a PDF's), which breaks the page after it itself. */
+    private afterPage = false;
 
     protected override async processNodeRecursive(
         node: OfficeContentNode,
@@ -1310,7 +1318,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // A section starting on a new page: a page break, as the HTML reader reads it and print breaks
                 // the page, but no rule on screen (it is the document's structure, not a break the author typed).
                 // (Styled in place too: without this writer's stylesheet, in EPUB or a fragment, it was a rule.)
-                if (breakType === 'page' && typeof (node.metadata as any)?.section === 'number') return `${extraAnchors}<hr class="page-break section-start"${idAttr} style="border:none;height:0;margin:0;break-after:page">`;
+                // Right after a page (a PDF's page of another size), whose own break ends it, it breaks
+                // nothing more: a second break printed a blank page.
+                if (breakType === 'page' && typeof (node.metadata as any)?.section === 'number') return this.afterPage ? `${extraAnchors}${idAttr ? `<a${idAttr}></a>` : ''}` : `${extraAnchors}<hr class="page-break section-start"${idAttr} style="border:none;height:0;margin:0;break-after:page">`;
                 if (breakType === 'page') return `${extraAnchors}<hr class="page-break"${idAttr}>`;
                 // A thematic break is a plain rule; the parser reads a bare <hr> back as one.
                 if (breakType === 'thematic') return `${extraAnchors}<hr${idAttr}>`;

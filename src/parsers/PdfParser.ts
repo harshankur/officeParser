@@ -1728,6 +1728,9 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
 
     const taggedListCounter = { n: 0 };
     let imageCounter = 0;
+    // The page of the section being read (see below), and how many sections came before it.
+    let sectionPage: { width: number; height: number } | undefined;
+    let sectionsBefore = 0;
     for (const extract of extracts) {
         checkAbortSignal(config.abortSignal);
         work.throwIfCancelled();
@@ -1849,8 +1852,19 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             pageNode.metadata.pageWidth = Math.round(extract.width * 100) / 100;
             pageNode.metadata.pageHeight = Math.round(extract.height * 100) / 100;
             if (extract.rotation) pageNode.metadata.rotation = extract.rotation;
-            // The document's page, for the writers that lay out pages (DOCX, ODT and PDF output kept A4).
-            if (!metadata.pageSetup && extract.width > 0 && extract.height > 0) metadata.pageSetup = { width: pageNode.metadata.pageWidth, height: pageNode.metadata.pageHeight };
+            // The document's page, for the writers that lay out pages (DOCX, ODT and PDF output kept A4);
+            // a page of another size, or turned (a landscape page among upright ones, a `/Rotate` page shown
+            // so), starts a section of the pages from it, as a word processor's section of another page
+            // does, so DOCX, ODT, RTF and LaTeX output keep each page's size. Its setup is its size alone,
+            // as the first page's is: a PDF has no margins, so the writers' own are used.
+            const page = { width: pageNode.metadata.pageWidth!, height: pageNode.metadata.pageHeight! };
+            if (extract.width > 0 && extract.height > 0) {
+                if (!metadata.pageSetup) metadata.pageSetup = { ...page };
+                else if (sectionPage && (Math.abs(page.width - sectionPage.width) > 0.5 || Math.abs(page.height - sectionPage.height) > 0.5)) {
+                    content.push({ type: 'break', text: '', metadata: { breakType: 'page', section: ++sectionsBefore, pageSetup: { ...page } } });
+                }
+                sectionPage = page;
+            }
         }
         if (pageNode.type === 'page' && pageNode.metadata) {
             const label = pageLabels?.[extract.pageNumber - 1];

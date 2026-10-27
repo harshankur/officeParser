@@ -1019,7 +1019,8 @@ Break Node (type: 'break')
 
 > [!NOTE]
 > **Sections and columns.** A `'page'` break that starts a section (a Word section, a paragraph of an
-> ODT style naming another master page, an RTF `\sect`), and a `'section'` break, which starts a section
+> ODT style naming another master page, an RTF `\sect`, a PDF page of another size or turned, before its
+> `page` node), and a `'section'` break, which starts a section
 > on the same page (a Word continuous section, an ODF section set in columns of its own, an RTF section
 > of `\sbknone`), carry the new section's
 > `pageSetup` (under `ignorePageGeometry`, only its page numbering and first-page headers). Its `columns` are
@@ -1032,14 +1033,17 @@ Break Node (type: 'break')
 > page; DOCX output writes each section with its page, columns, header and footer, ODT a master page
 > for a section on a page of its own (with its header and footer) and a section of the columns, RTF
 > each section's page words, columns, header and footer, and LaTeX `multicols` (a long table between
-> the columns, across the page); other outputs write nothing for a `'section'` break.
+> the columns, across the page); other outputs write nothing for a `'section'` break. A PDF section's
+> `pageSetup` is its page's width and height alone, as `ast.metadata.pageSetup` is the first page's: a
+> PDF has no margins, so the writers' own are used. HTML writes no break for it (the page before ends
+> there already), and under `ignorePageGeometry` a PDF has no sections.
 
 > [!NOTE]
 > Break nodes have no `text` property, but `ast.to('text')` automatically converts them to the configured newline delimiter.
 
 > [!NOTE]
 > `includeBreakNodes` gates layout breaks in DOCX, ODF and LaTeX only (page and column breaks, otherwise invisible); a
-> section's start in a Word, RTF or ODT document is always a `break` node with `metadata.section`. A
+> section's start in a Word, RTF or ODT document, or at a PDF's page of another size, is always a `break` node with `metadata.section`. A
 > line break the author typed (DOCX `w:br`/`w:cr`, ODF `text:line-break`, LaTeX `\\`) is content, and is a `break` node whatever the flag says. **HTML and
 > Markdown always emit break nodes regardless of the flag**, because a break is explicit content there:
 > a `<br>`/hard line break becomes a `carriageReturn` break, and `<hr>`/`---` a `thematic` break (a
@@ -1475,7 +1479,7 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `includeRawContent` | `boolean` | `false` | Attach raw XML/RTF source to each node |
 | `serializeRawContent` | `boolean` | `true` | Re-serialize XML to clean strings (only if `includeRawContent: true`) |
 | `preserveXmlWhitespace` | `boolean` | `false` | Preserve original XML whitespace during serialization |
-| `includeBreakNodes` | `boolean` | `false` | Include layout break nodes: DOCX page, column and last-rendered-page breaks, ODF `fo:break-before`/`fo:break-after` and `text:soft-page-break`, LaTeX `\newpage`/`\clearpage`, and the breaks of an ODF section in columns of its own. The break that starts a Word, RTF or ODT section (with `metadata.section` and its `pageSetup`) is the document's structure and always a node. A line break the author typed (DOCX `w:br`/`w:cr`, ODF `text:line-break`, a LaTeX `\\` or `\newline`, HTML `<br>`) is always a `break` node inside its paragraph, and a DOCX tab is always a `\t` in the text |
+| `includeBreakNodes` | `boolean` | `false` | Include layout break nodes: DOCX page, column and last-rendered-page breaks, ODF `fo:break-before`/`fo:break-after` and `text:soft-page-break`, LaTeX `\newpage`/`\clearpage`, and the breaks of an ODF section in columns of its own. The break that starts a Word, RTF or ODT section, or a PDF's page of another size (with `metadata.section` and its `pageSetup`), is the document's structure and always a node. A line break the author typed (DOCX `w:br`/`w:cr`, ODF `text:line-break`, a LaTeX `\\` or `\newline`, HTML `<br>`) is always a `break` node inside its paragraph, and a DOCX tab is always a `\t` in the text |
 | `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal cross-references from AST (now honored for PDF too) |
 | `ignorePageGeometry` | `boolean` | `false` | Omit the geometric layout data: per-node bounding boxes (`node.bounds`: PDF pages, PPTX and ODP slides), page dimensions and page setups (`metadata.pageSetup`, a section's or sheet's `pageSetup`; a text document's keeps how each section numbers its pages and whether its first page has a header of its own), slides' `drawing` nodes and backgrounds, and a floating frame's place (`ShapeMetadata.float`: its text is read where it stands) |
 | `fileType` | `SupportedFileType \| FileTypeAlias \| null` | `null` | **Required for text-based binary data** (`'md'`, `'html'`, `'csv'`, `'tex'`) as these lack magic bytes. Also accepts the names the matching extensions route by (`FileTypeAlias`): `'latex'`/`'ltx'` for `tex`, the ODF template names `'ott'`/`'ots'`/`'otp'`/`'otg'`, and `'zip'` (parsed as whatever the archive holds). |

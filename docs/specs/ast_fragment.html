@@ -198,7 +198,12 @@
         document the <code>break</code> that starts each later section is always a node, whatever
         <code>includeBreakNodes</code> says (a section's start is the document's structure), and carries
         <code>metadata.section</code> (1 for the second) and its <code>pageSetup</code> (a section with nothing after the
-        last text is none; text and Markdown output show a section's start as nothing, HTML as a new page in print); a section that starts on the same page (a Word
+        last text is none; text and Markdown output show a section's start as nothing, HTML as a new page in print). A
+        PDF's page of another size than the page before it, or turned (landscape among upright pages, a <code>/Rotate</code>
+        page shown so), starts a section too: a <code>'page'</code> break before its <code>page</code> node, whose
+        <code>pageSetup</code> is the page's size alone, as <code>metadata.pageSetup</code> is the first page's (a PDF has
+        no margins, so the writers' own are used), so DOCX, ODT, RTF and LaTeX output keep each page's size; HTML writes no
+        break for it, the page before ending there already, and under <code>ignorePageGeometry</code> there is none. A section that starts on the same page (a Word
         continuous section, an ODF section set in columns of its own, an RTF section of <code>\sbknone</code>) is a <code>break</code> of type <code>'section'</code> with its
         <code>pageSetup</code>. A section's columns are <code>PageSetup.columns</code>:
         <code>{ count, gap, widths?, separator? }</code>, the number of columns, the gap between them in points,
@@ -353,7 +358,7 @@
                 <li><code>'section'</code>: A section of the document starts here, on the same page (a Word continuous section, an ODF section set in columns of its own), with its <code>pageSetup</code> and its columns: no break in the text. An ODF section in columns has one before it and one after it, which returns to the page's own columns. Outputs other than PDF, DOCX, ODT, RTF and LaTeX write nothing for it.</li>
             </ul>
         </li>
-        <li><strong><code>section</code></strong> and <strong><code>pageSetup</code></strong>: On a break that starts a section of the document (a <code>'page'</code> break that starts a Word section or an ODT page of another style, or a <code>'section'</code> break): its number (1 for the second, where the document numbers it) and the section's pages (see Pages and Sections).
+        <li><strong><code>section</code></strong> and <strong><code>pageSetup</code></strong>: On a break that starts a section of the document (a <code>'page'</code> break that starts a Word or RTF section, an ODT page of another style or a PDF page of another size, or a <code>'section'</code> break): its number (1 for the second, where the document numbers it) and the section's pages (see Pages and Sections).
         </li>
         <li><strong><code>clear</code></strong>: (Only for <code>textWrapping</code>) Specifies where the next available line should start when wrapping around floating objects (<code>all</code>, <code>left</code>, <code>right</code>, <code>none</code>).</li>
         <li><strong><code>anchorIds</code></strong>: Bookmark ids on a rule or page break (HTML <code>&lt;hr id&gt;</code>, a Markdown <code>&lt;a id&gt;</code> line before <code>---</code>), so a link can target it.</li>

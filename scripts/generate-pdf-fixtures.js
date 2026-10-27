@@ -11,6 +11,7 @@
  *   - rotated.pdf          : the same content on a /Rotate 90 page.
  *   - encrypted.pdf        : single page, RC4 40-bit standard security, user password "test123".
  *   - tagged_headings.pdf  : tagged headings beside headings guessed from font size, for headingDetection.
+ *   - page_sizes.pdf       : pages of several sizes (landscape, a /Rotate 90 page, A4), for sections.
  *
  * The encryption is the PDF standard security handler, revision 2 (RC4, 40-bit). RC4 is implemented
  * inline because modern OpenSSL/Node no longer expose it, and qpdf is not assumed to be installed.
@@ -412,6 +413,37 @@ function buildTaggedHeadingsPdf() {
     return serialize(o, '', '30313233343536373839414243444547');
 }
 
+/**
+ * A document of pages of several sizes, for sections read from a PDF's pages: two US Letter pages, a
+ * landscape one, an upright one shown landscape (`/Rotate 90`, the same page as the one before it as it
+ * is seen), an upright Letter page again and an A4 page. Each page says which it is.
+ */
+function buildPageSizesPdf() {
+    const pages = [
+        { box: [612, 792], text: 'Letter page one' },
+        { box: [612, 792], text: 'Letter page two' },
+        { box: [792, 612], text: 'Landscape page three' },
+        { box: [612, 792], rotate: 90, text: 'Turned page four' },
+        { box: [612, 792], text: 'Letter page five' },
+        { box: [595, 842], text: 'A4 page six' },
+    ];
+    const o = [];
+    const put = (n, body) => { o[n - 1] = Buffer.from(body, 'latin1'); };
+    // Objects: 1 catalog, 2 pages, 3 font, then a page and its content for each page.
+    put(1, '<< /Type /Catalog /Pages 2 0 R >>');
+    put(2, `<< /Type /Pages /Kids [${pages.map((_, i) => `${4 + 2 * i} 0 R`).join(' ')}] /Count ${pages.length} >>`);
+    put(3, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+    pages.forEach((p, i) => {
+        put(4 + 2 * i, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${p.box[0]} ${p.box[1]}]${p.rotate ? ` /Rotate ${p.rotate}` : ''} ` +
+            `/Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + 2 * i} 0 R >>`);
+        o[4 + 2 * i] = streamObject('', contentStream([
+            { x: 72, y: p.box[1] - 100, size: 18, text: p.text },
+            { x: 72, y: p.box[1] - 140, size: 12, text: `This page is ${p.box[0]} by ${p.box[1]} points${p.rotate ? `, shown turned ${p.rotate} degrees` : ''}.` },
+        ]));
+    });
+    return serialize(o, '', '30313233343536373839414243444548');
+}
+
 function main() {
     fs.mkdirSync(OUT_DIR, { recursive: true });
 
@@ -438,6 +470,7 @@ function main() {
 
     fs.writeFileSync(path.join(OUT_DIR, 'tagged_lists.pdf'), buildTaggedListsPdf());
     fs.writeFileSync(path.join(OUT_DIR, 'tagged_headings.pdf'), buildTaggedHeadingsPdf());
+    fs.writeFileSync(path.join(OUT_DIR, 'page_sizes.pdf'), buildPageSizesPdf());
 
     console.log('Wrote fixtures to', OUT_DIR);
 }

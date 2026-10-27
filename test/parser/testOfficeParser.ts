@@ -3530,6 +3530,37 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
         add('rotated parse', false, 'parsed', e?.message || String(e));
     }
 
+    // --- page_sizes fixture: a page of another size or turned starts a section of the pages from it ---
+    // Letter, Letter, landscape, an upright page shown landscape (/Rotate 90: the same page as it is seen,
+    // so no section), Letter, A4. Each section's start is a page break with its number and its size alone.
+    try {
+        const shape = (a: any) => a.content.map((n: any) => n.type === 'page' ? `p${n.metadata?.pageNumber}`
+            : n.type === 'break' ? `${n.metadata?.breakType}(${n.metadata?.section}:${n.metadata?.pageSetup?.width}x${n.metadata?.pageSetup?.height})` : n.type).join(' ');
+        const ast = await OfficeParser.parseOffice(path.join(pdfDir, 'page_sizes.pdf'), { ocr: false });
+        const want = 'p1 p2 page(1:792x612) p3 p4 page(2:612x792) p5 page(3:595x842) p6';
+        add('A page of another size starts a section', shape(ast) === want, want, shape(ast));
+        add('The document page is the first page', JSON.stringify(ast.metadata.pageSetup) === '{"width":612,"height":792}', '{"width":612,"height":792}', JSON.stringify(ast.metadata.pageSetup));
+        const starts = ast.content.filter((n: any) => n.type === 'break');
+        add('A section of PDF pages sets no margins', starts.every((n: any) => Object.keys(n.metadata.pageSetup).join() === 'width,height'), 'width,height', starts.map((n: any) => Object.keys(n.metadata.pageSetup).join()).join(' | '));
+        // A section's start is the document's structure: a node whatever includeBreakNodes says.
+        const withBreaks = await OfficeParser.parseOffice(path.join(pdfDir, 'page_sizes.pdf'), { ocr: false, includeBreakNodes: true });
+        add('PDF section starts whatever includeBreakNodes says', shape(withBreaks) === want, want, shape(withBreaks));
+        // Under ignorePageGeometry the pages' sizes are left out, and with them the sections they make.
+        const flat = await OfficeParser.parseOffice(path.join(pdfDir, 'page_sizes.pdf'), { ocr: false, ignorePageGeometry: true });
+        add('No PDF section starts under ignorePageGeometry', shape(flat) === 'p1 p2 p3 p4 p5 p6' && !flat.metadata.pageSetup, 'p1 p2 p3 p4 p5 p6, no pageSetup', `${shape(flat)}, ${JSON.stringify(flat.metadata.pageSetup)}`);
+        // A page range: the first page read is the document's page, and a section starts against the page before it read.
+        const range = await OfficeParser.parseOffice(path.join(pdfDir, 'page_sizes.pdf'), { ocr: false, pdfParserConfig: { pageRange: '3-5' } });
+        const wantRange = 'p3 p4 page(1:612x792) p5';
+        add('PDF sections of a page range', shape(range) === wantRange && range.metadata.pageSetup?.width === 792, `${wantRange}, document 792 wide`, `${shape(range)}, document ${range.metadata.pageSetup?.width} wide`);
+        // Text shows nothing for a section's start, and HTML no second break after a page (a blank page in print).
+        const text = (await ast.to('text')).value;
+        add('PDF section start in text output', !/\n{3,}/.test(text) && text.includes('Turned page four'), 'no gap at a section start', JSON.stringify(text.slice(0, 200)));
+        const html = (await ast.to('html')).value;
+        add('PDF section start writes no break in HTML', !html.includes('<hr class="page-break section-start"') && (html.match(/<section class="page"/g) || []).length === 6, 'six pages, no section-start rule', `${(html.match(/<hr class="page-break section-start"/g) || []).length} section-start, ${(html.match(/<section class="page"/g) || []).length} pages`);
+    } catch (e: any) {
+        add('page_sizes parse', false, 'parsed', e?.message || String(e));
+    }
+
     // --- cm_transform fixture: a page that opens with the Chrome/Skia y-flipping `cm` ---
     // pdf.js reports text through the full CTM, so ignoring the page `cm` put the colour marks (and
     // the image box) in a frame the text never occupied: no colour was ever found and the image

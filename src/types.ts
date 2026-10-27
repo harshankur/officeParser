@@ -499,7 +499,8 @@ export interface CommonOfficeParserConfig {
      * node: Word's `w:br` (text wrapping) and `w:cr`, ODF's `text:line-break`, HTML's `<br>`, a Markdown hard break; so are HTML and
      * Markdown's `<hr>`/`---` (a `thematic`/`page` break). This flag does not gate those. Nor does it gate
      * a section's start (a break with BreakMetadata.section: a Word, RTF or ODF text document's next
-     * section): that is the document's structure, and always a node (none where nothing comes after it).
+     * section, a PDF's page of another size): that is the document's structure, and always a node (none
+     * where nothing comes after it).
      * Text and Markdown output show a section's start as nothing, HTML as a new page in print.
      */
     includeBreakNodes?: boolean;
@@ -3474,8 +3475,9 @@ export interface BreakMetadata {
 
     /**
      * On a page break that starts a section of the document (a Word or RTF section, an ODF page of another
-     * style): its number (1 for the second section) and its pages' setup (size and margins where they are
-     * set, its columns, how it numbers its pages). Always a node, whatever `includeBreakNodes` says, but
+     * style, a PDF page of another size or turned, before its `page` node, its setup its size alone): its
+     * number (1 for the second section) and its pages' setup (size and margins where they are set, its
+     * columns, how it numbers its pages). Always a node, whatever `includeBreakNodes` says, but
      * for a section with nothing in it after the document's last text, which is none. (A break with a
      * section number starts a section; an author's page break has none.)
      */
@@ -3896,7 +3898,8 @@ export interface OfficeMetadata {
     /**
      * The size and margins of the document's pages (its first section's, where sections differ: each
      * later one's is on the page break that starts it, BreakMetadata.pageSetup): a Word document's
-     * section, an ODF document's page style, a presentation's slide size, a sheet's print setup.
+     * section, an ODF document's page style, a presentation's slide size, a sheet's print setup, a PDF's
+     * first page (its size alone: a PDF has no margins, so a writer's own are used).
      */
     pageSetup?: PageSetup;
     /** Document-wide default formatting settings (font, size, color). */
