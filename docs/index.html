@@ -24,13 +24,13 @@
         data-operator="Harsh Ankur"></script>
 
     <meta name="description"
-        content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 14 formats (including EPUB and LaTeX) and generate DOCX, ODT, XLSX, ODS, PPTX, ODP, LaTeX, RAG-ready Markdown, HTML, EPUB, and high-fidelity PDF with native document awareness.">
+        content="The industry's first dual-purpose Office Parser & Generator. Read 14 formats (including EPUB and LaTeX) into one structured AST, and write 15: DOCX, XLSX, PPTX, ODT, ODS, ODP, high-fidelity PDF, LaTeX, EPUB, HTML, Markdown, RTF, CSV, plain text and RAG-ready chunks.">
 
     <!-- OpenGraph Metadata -->
     <meta property="og:title"
         content="officeParser | The Most Versatile Office Parser & Generator for Node.js & Browser">
     <meta property="og:description"
-        content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 14 formats (including EPUB and LaTeX) and generate DOCX, ODT, XLSX, ODS, PPTX, ODP, LaTeX, RAG-ready Markdown, HTML, EPUB, and high-fidelity PDF with native document awareness.">
+        content="The industry's first dual-purpose Office Parser & Generator. Read 14 formats (including EPUB and LaTeX) into one structured AST, and write 15: DOCX, XLSX, PPTX, ODT, ODS, ODP, high-fidelity PDF, LaTeX, EPUB, HTML, Markdown, RTF, CSV, plain text and RAG-ready chunks.">
     <meta property="og:image"
         content="https://raw.githubusercontent.com/harshankur/officeParser/master/docs/favicon.png">
     <meta property="og:url" content="https://officeparser.harshankur.com">
@@ -794,7 +794,7 @@
 
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 2rem;
             width: 100%;
             padding: 2rem;
@@ -886,6 +886,18 @@
 
         .support-card:hover {
             border-color: var(--accent);
+        }
+
+        .support-io {
+            display: inline-block;
+            margin-top: 0.75rem;
+            padding: 0.15rem 0.6rem;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            color: var(--text-dim);
+            font-size: 0.7rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
         }
 
         .feature-icon {
@@ -1064,6 +1076,10 @@
         @media (max-width: 1024px) {
             .results-layout {
                 grid-template-columns: 1fr;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
             }
         }
 
@@ -3787,9 +3803,10 @@
                     </a>
                 </div>
                 <h1>The Industry's First <span class="gradient-text">Parser & Generator</span></h1>
-                <p>One library, every transformation. Parse complex documents, LaTeX included, into a structured AST
-                    and generate high-fidelity Word, OpenDocument, LaTeX, PDF, EPUB, Markdown, HTML, or RAG-ready
-                    chunks optimized for LLM integration and modern AI workflows.
+                <p>One library, every transformation. <strong>Read 14 formats</strong>, LaTeX included, into one structured
+                    AST, and <strong>write 15</strong>: Word, Excel and PowerPoint, their OpenDocument twins, high-fidelity PDF,
+                    LaTeX, EPUB, HTML, Markdown, RTF, CSV, plain text, and RAG-ready chunks for LLM integration and modern AI
+                    workflows.
                 </p>
                 <div class="cta-group">
                     <a href="#visualizer" class="btn btn-primary">Try Visualizer</a>
@@ -3819,7 +3836,11 @@
                 </div>
                 <div class="stat-item">
                     <h3>14</h3>
-                    <p>Formats Supported</p>
+                    <p>Formats Read</p>
+                </div>
+                <div class="stat-item">
+                    <h3>15</h3>
+                    <p>Formats Written</p>
                 </div>
             </div>
         </section>
@@ -3827,7 +3848,8 @@
         <section id="support" class="support">
             <div class="section-title">
                 <h2>Universal Support</h2>
-                <p>One library to rule them all. Built to handle the complexities of legacy and modern office standards.
+                <p>One library to rule them all: it reads 14 formats and writes 15, built to handle the complexities of
+                    legacy and modern office standards.
                 </p>
             </div>
             <div class="support-grid">
@@ -3842,6 +3864,7 @@
                     </span>
                     <h3>DOCX</h3>
                     <p>Modern Word</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
                 <div class="support-card">
                     <span class="feature-icon">
@@ -3854,6 +3877,7 @@
                     </span>
                     <h3>XLSX</h3>
                     <p>Modern Excel</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
                 <div class="support-card">
                     <span class="feature-icon">
@@ -3866,6 +3890,7 @@
                     </span>
                     <h3>PPTX</h3>
                     <p>Modern Powerpoint</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
                 <div class="support-card">
                     <span class="feature-icon">
@@ -3878,6 +3903,7 @@
                     </span>
                     <h3>PDF</h3>
                     <p>Documents</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
                 <div class="support-card">
                     <span class="feature-icon">
@@ -3890,6 +3916,7 @@
                     </span>
                     <h3>ODT</h3>
                     <p>OpenDocument Text</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
                 <div class="support-card">
                     <span class="feature-icon">
@@ -3902,6 +3929,7 @@
                     </span>
                     <h3>ODS</h3>
                     <p>OpenDocument Spreadsheet</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
                 <div class="support-card">
                     <span class="feature-icon">
@@ -3914,6 +3942,7 @@
                     </span>
                     <h3>ODP</h3>
                     <p>OpenDocument Presentation</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
                 <div class="support-card">
                     <span class="feature-icon">
@@ -3927,6 +3956,7 @@
                     </span>
                     <h3>ODG</h3>
                     <p>OpenDocument Graphics</p>
+                    <span class="support-io">Read</span>
                 </div>
                 <div class="support-card">
                     <span class="feature-icon">
@@ -3939,6 +3969,7 @@
                     </span>
                     <h3>RTF</h3>
                     <p>Rich Text</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
                 <div class="support-card">
                     <span class="feature-icon">
@@ -3951,6 +3982,7 @@
                     </span>
                     <h3>CSV</h3>
                     <p>Spreadsheets</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
                 <div class="support-card">
                     <span class="feature-icon">
@@ -3963,6 +3995,7 @@
                     </span>
                     <h3>MD</h3>
                     <p>Markdown</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
                 <div class="support-card">
                     <span class="feature-icon">
@@ -3975,6 +4008,7 @@
                     </span>
                     <h3>HTML</h3>
                     <p>Web Pages</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
                 <div class="support-card">
                     <span class="feature-icon">
@@ -3987,6 +4021,7 @@
                     </span>
                     <h3>EPUB</h3>
                     <p>eBooks</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
                 <div class="support-card">
                     <span class="feature-icon">
@@ -3999,6 +4034,20 @@
                     </span>
                     <h3>TEX</h3>
                     <p>LaTeX &amp; Overleaf Projects</p>
+                    <span class="support-io">Read &middot; Write</span>
+                </div>
+                <div class="support-card">
+                    <span class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                            style="width:3.5rem;height:3.5rem;">
+                            <path d="M4 4V20H20V8L16 4H4Z" fill="#64748B" />
+                            <path d="M16 4V8H20" stroke="white" stroke-width="1.5" /><text x="5.5" y="15.5" fill="white"
+                                font-family="Outfit" font-weight="800" font-size="4.5">TXT</text>
+                        </svg>
+                    </span>
+                    <h3>TXT</h3>
+                    <p>Plain Text &amp; RAG Chunks</p>
+                    <span class="support-io">Write</span>
                 </div>
             </div>
         </section>
