@@ -345,7 +345,7 @@
 
     <h3>5. Breaks (The <code>break</code> Node)</h3>
     <p>Breaks are added as <code>break</code> nodes when <code>includeBreakNodes</code> is enabled in the configuration (a
-        section's start, with <code>metadata.section</code>, always is one). They represent physical layout changes within the document flow. DOCX writes them inline (<code>w:br</code>/<code>w:cr</code>), so they appear as children of the paragraph; ODF carries page and column breaks on the paragraph style (<code>fo:break-before</code>/<code>fo:break-after</code>), so those are emitted as siblings around the paragraph. LaTeX <code>\newpage</code>/<code>\clearpage</code> become <code>page</code> breaks between blocks, and <code>\\</code>/<code>\newline</code> stay inside the paragraph as line breaks.</p>
+        section's start, with <code>metadata.section</code>, always is one, as are the <code>'section'</code> breaks around an ODF section in columns of its own). They represent physical layout changes within the document flow. DOCX writes them inline (<code>w:br</code>/<code>w:cr</code>), so they appear as children of the paragraph; ODF carries page and column breaks on the paragraph style (<code>fo:break-before</code>/<code>fo:break-after</code>), so those are emitted as siblings around the paragraph. LaTeX <code>\newpage</code>/<code>\clearpage</code> become <code>page</code> breaks between blocks, and <code>\\</code>/<code>\newline</code> stay inside the paragraph as line breaks.</p>
     <ul>
         <li><strong><code>breakType</code></strong>: 
             <ul>

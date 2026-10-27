@@ -2251,11 +2251,12 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     }
                 }
                 for (const child of linked) targetArray.push(child);
-            } else if (node.tagName === "text:section" && readingBody && config.includeBreakNodes && !config.ignorePageGeometry
+            } else if (node.tagName === "text:section" && readingBody && !config.ignorePageGeometry
                 && sectionColumns.get(node.getAttribute("text:style-name") || '') && odfPageSetup(sectionMasters[sectionMasters.length - 1] ?? firstMaster)?.width) {
                 // A section set in columns of its own, on the page it is on: a section break before it
                 // with its columns, and one after it with the page's again (the page it ends on: a page break
-                // inside it turns to another).
+                // inside it turns to another). Its start is structure, as a Word continuous section's is: a node
+                // whatever includeBreakNodes says (its columns are geometry: none under ignorePageGeometry).
                 const styleName = node.getAttribute("text:style-name") || '';
                 const { columns: _pageColumns, ...page } = odfPageSetup(sectionMasters[sectionMasters.length - 1] ?? firstMaster)!;
                 const opened: OfficeContentNode = { type: 'break', metadata: { breakType: 'section', pageSetup: { ...page, columns: sectionColumnsOn(styleName, page) } } as BreakMetadata };

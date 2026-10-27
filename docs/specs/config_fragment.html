@@ -212,10 +212,10 @@
                 <td><code>includeBreakNodes</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Layout Break Parsing</strong>: Page, column and last-rendered-page breaks, and the breaks of an
-                    ODF section set in columns of its own (a <code>'section'</code> break with its <code>pageSetup</code>).
+                <td><strong>Layout Break Parsing</strong>: Page, column and last-rendered-page breaks.
                     The break that starts a Word, RTF or ODT section, or a PDF's page of another size (with <code>metadata.section</code> and the section's
-                    <code>pageSetup</code>) is the document's structure and always a node. A line break the author
+                    <code>pageSetup</code>), and the <code>'section'</code> breaks around an ODF section set in columns of its
+                    own, are the document's structure and always nodes. A line break the author
                     typed (DOCX <code>w:br</code>/<code>w:cr</code>, LaTeX <code>\\</code>, HTML <code>&lt;br&gt;</code>) is
                     always a <code>break</code> node, and a DOCX tab a <code>\t</code> in the text, whatever this says.
                     Supported for Word (DOCX), OpenDocument (ODT/ODP/ODS)

@@ -499,9 +499,10 @@ export interface CommonOfficeParserConfig {
      * node: Word's `w:br` (text wrapping) and `w:cr`, ODF's `text:line-break`, HTML's `<br>`, a Markdown hard break; so are HTML and
      * Markdown's `<hr>`/`---` (a `thematic`/`page` break). This flag does not gate those. Nor does it gate
      * a section's start (a break with BreakMetadata.section: a Word, RTF or ODF text document's next
-     * section, a PDF's page of another size): that is the document's structure, and always a node (none
-     * where nothing comes after it).
-     * Text and Markdown output show a section's start as nothing, HTML as a new page in print.
+     * section, a PDF's page of another size) or the `'section'` breaks around an ODF section set in columns
+     * of its own: that is the document's structure, and always a node (none where nothing comes after it).
+     * Text and Markdown output show a section's start as nothing, HTML as a new page in print (nothing
+     * for a `'section'` break).
      */
     includeBreakNodes?: boolean;
     /**

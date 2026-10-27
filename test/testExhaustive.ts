@@ -5995,6 +5995,27 @@ async function testSectionRoundTrips(): Promise<void> {
         '<text:p>Before.</text:p><text:section text:name="S" text:style-name="Sect1"><text:p>In.</text:p><text:p text:style-name="P2">Turned.</text:p></text:section><text:p>After.</text:p>',
         layouts, '<style:master-page style:name="Standard" style:page-layout-name="pm1"/><style:master-page style:name="Other" style:page-layout-name="nope"/>'), { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
     assert.deepStrictEqual(noLayout.content.map(n => n.type === 'break' ? `B:${(n.metadata as any).breakType}` : n.text), ['Before.', 'B:section', 'In.', 'B:page', 'Turned.', 'B:section', 'After.'], 'ODT: a section turning to a page style of no layout is read');
+    // A section in columns of its own is the document's structure, as a Word continuous section is: its breaks
+    // are nodes whatever includeBreakNodes says. Its columns are geometry: none under ignorePageGeometry.
+    const columnsShape = (a: OfficeParserAST) => a.content.map(n => n.type === 'break' ? `B:${(n.metadata as any).breakType}:${(n.metadata as any).pageSetup?.columns?.count ?? 1}` : n.text);
+    const columnsOdt = odtOf('<style:style style:name="Sect1" style:family="section"><style:section-properties><style:columns fo:column-count="2" fo:column-gap="0.2in"/></style:section-properties></style:style>',
+        '<text:p>Before.</text:p><text:section text:name="S" text:style-name="Sect1"><text:p>In.</text:p></text:section><text:p>After.</text:p>',
+        layouts, '<style:master-page style:name="Standard" style:page-layout-name="pm1"/>');
+    const columnsRead = await OfficeParser.parseOffice(columnsOdt, { fileType: 'odt' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(columnsShape(columnsRead), ['Before.', 'B:section:2', 'In.', 'B:section:1', 'After.'], 'ODT: a section in columns of its own is read without includeBreakNodes');
+    const columnsFlat = await OfficeParser.parseOffice(columnsOdt, { fileType: 'odt', ignorePageGeometry: true } as any) as OfficeParserAST;
+    assert.deepStrictEqual(columnsShape(columnsFlat), ['Before.', 'In.', 'After.'], 'ODT: no column section breaks under ignorePageGeometry');
+    // Its columns reach every writer that sets columns, and the flowing outputs show nothing for them.
+    const columnsDocx = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(columnsRead, 'docx')).value as any))['word/document.xml']);
+    assert.ok(/<w:cols w:num="2"/.test(columnsDocx) && (columnsDocx.match(/<w:type w:val="continuous"\/>/g) || []).length === 2, 'DOCX: an ODT section in columns is a continuous section of its columns');
+    const columnsOdtOut = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(columnsRead, 'odt')).value as any))['content.xml']);
+    assert.ok(/fo:column-count="2"/.test(columnsOdtOut) && /<text:section [^>]*>[^]*In\.[^]*<\/text:section>/.test(columnsOdtOut), 'ODT: an ODT section in columns is written as a section of its columns');
+    assert.ok(/\\cols2/.test(String((await OfficeGenerator.generate(columnsRead, 'rtf')).value)), 'RTF: an ODT section in columns is written in its columns');
+    assert.ok(/\\begin\{multicols\}\{2\}[^]*In\.[^]*\\end\{multicols\}/.test(String((await OfficeGenerator.generate(columnsRead, 'tex')).value)), 'LaTeX: an ODT section in columns is in multicols');
+    assert.strictEqual(String((await OfficeGenerator.generate(columnsRead, 'text')).value).trim(), 'Before.\nIn.\nAfter.', 'text: an ODT section in columns shows nothing');
+    assert.strictEqual(String((await OfficeGenerator.generate(columnsRead, 'md')).value).trim(), 'Before.\n\nIn.\n\nAfter.', 'Markdown: an ODT section in columns shows nothing');
+    const columnsHtml = String((await OfficeGenerator.generate(columnsRead, 'html', { htmlConfig: { standalone: false } } as any)).value);
+    assert.ok(!/<hr/.test(columnsHtml) && columnsHtml.includes('In.'), 'HTML: an ODT section in columns shows nothing');
 
     // A section that sets no page is on the document's: Letter in every writer, landscape closed in LaTeX.
     const sizeless = { type: 'docx', metadata: { pageSetup: page }, attachments: [], content: [para('Portrait.'), { type: 'break', metadata: { breakType: 'page', section: 1, pageSetup: { width: 792, height: 612 } } }, para('Landscape.'),
