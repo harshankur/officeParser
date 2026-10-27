@@ -436,6 +436,7 @@ button:focus-visible {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 0.75rem;
     border-top: 1px solid var(--border-subtle);
     padding-top: 1rem;
     font-size: 0.825rem;
@@ -448,6 +449,14 @@ button:focus-visible {
     display: flex;
     align-items: center;
     gap: 0.25rem;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+/* A post changed since it went out: the day, under the day it was published. */
+.card-updated {
+    display: block;
+    margin-top: 0.2rem;
 }
 
 /* ==========================================================================

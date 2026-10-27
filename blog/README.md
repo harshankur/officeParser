@@ -30,7 +30,7 @@ Nothing in `docs/blog/` is edited by hand.
    hyphens. `category` is the `id` of a topic in `categories`. A new topic is a new entry there.
    `published` is the day the post goes out. The list, the feed and the previous and next links follow
    the order of `posts`, so a new post goes first. A post changed after it went out also gets
-   `"updated": "2026-12-02"`: the page says so, and the feed and the sitemap take that day.
+   `"updated": "2026-12-02"`: its page and its card in the list say so, and the feed and the sitemap take that day.
 
 2. Write the body in `posts/<slug>.html`.
 

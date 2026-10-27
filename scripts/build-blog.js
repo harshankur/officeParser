@@ -284,6 +284,7 @@ function readBlog(sourceDir = SOURCE_DIR) {
             publishedAt: published.instant,
             updated: updated ? post.updated : null,
             updatedLong: updated ? longDate(updated) : null,
+            updatedShort: updated ? shortDate(updated) : null,
             lastChanged: updated ? post.updated : post.published,
             minutes: readingMinutes(body),
         };
