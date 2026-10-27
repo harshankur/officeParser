@@ -61,7 +61,7 @@
     it is written into the page now:
 </p>
 <pre><code>/Span &lt;&lt; /ActualText &lt;FEFF0939093F090209260940&gt; &gt;&gt; BDC
-1 0 0 1 48 782.89 Tm
+1 0 0 1 48 <del data-revision="tm-value">765.89</del><ins data-revision="tm-value">782.89</ins> Tm
 [ &lt;0001&gt; &lt;0002&gt; &lt;0003&gt; &lt;0004&gt; &lt;0005&gt; ] TJ
 EMC</code></pre>
 <p>
@@ -152,7 +152,7 @@ EMC</code></pre>
     <code>pdfParserConfig.normalizeText</code> is on, as pdf.js does for the glyphs' text.
 </p>
 <p>
-    That was not the whole of it. pdf.js tells such a glyph by a regular expression,
+    <ins data-revision="whole-words">That was not the whole of it. pdf.js tells such a glyph by a regular expression,
     <code>/^(\s)|(\p{Mn})|(\p{Cf})$/u</code>, whose middle part has no anchors, so any glyph whose text
     holds a mark counts: a conjunct, and a syllable like <code>ते</code> too. It gives that glyph no
     advance and does not move past it, so the gap it measures to the next glyph starts from the wrong
@@ -161,7 +161,7 @@ EMC</code></pre>
     walks the page's drawing operators glyph by glyph, puts each piece of text where its glyphs are
     really drawn, and keeps a space only where the page draws one or leaves a gap. Words now read whole
     from LibreOffice's PDFs in the Indian languages and Thai I tested, and the space after a conjunct is
-    kept.
+    kept.</ins>
 </p>
 
 <h2>Using It</h2>
@@ -177,9 +177,9 @@ const pdf = await ast.to('pdf', {
 });
 writeFileSync('report.pdf', pdf.value);</code></pre>
 <p>
-    Each character is drawn in the first font whose glyph for it draws something, so one Latin font in
+    Each character is drawn in the first font <del data-revision="first-font-that-draws">that has it</del><ins data-revision="first-font-that-draws">whose glyph for it draws something</ins>, so one Latin font in
     <code>pdfConfig.fonts</code> and a font for each other script in <code>fallbackFonts</code> covers a document
-    that mixes them. A font may be a TrueType or OpenType file, and since 8.4.0 a WOFF or WOFF2 file too.
+    that mixes them. <ins data-revision="web-fonts">A font may be a TrueType or OpenType file, and since 8.4.0 a WOFF or WOFF2 file too.</ins>
     The fonts need the optional peer dependency <code>@pdf-lib/fontkit</code>.
 </p>
 
@@ -187,6 +187,9 @@ writeFileSync('report.pdf', pdf.value);</code></pre>
 <ul>
     <li>Viewers built on pdf.js build their text from the glyphs, not from <code>/ActualText</code>, so
         copying there can still put ि before its letter.</li>
+    <li><del data-revision="space-after-conjunct">officeParser's own reader can still lose the space <em>after</em> a conjunct when a Latin word
+        follows it: <code>क्ष end</code> reads back as <code>क्षend</code>. pdf.js gives the conjunct no
+        width, so there is no gap left to find.</del></li>
     <li>Arabic and Hebrew marks are drawn where pdf-lib draws them: right for the fonts I tested, but not
         placed by the font's positioning table.</li>
 </ul>

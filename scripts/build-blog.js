@@ -4,7 +4,8 @@
  * The blog is written as content and built into pages:
  *
  *   blog/posts.json           the blog's title and address, its topics, and every post's title, topic,
- *                             month and summary, in the order shown
+ *                             month and summary, in the order shown, and what was changed in a post
+ *                             after it went out (its revisions)
  *   blog/posts/<slug>.html    a post's body: content only, no page shell, no styles, no scripts
  *                             (blog/README.md says what a post is written with)
  *   blog/templates/*.html     the page every post is set in (layout), the list page and a post's page
@@ -30,6 +31,8 @@ const SOURCE_DIR = path.join(ROOT, 'blog');
 const OUTPUT_DIR = path.join(ROOT, 'docs', 'blog');
 /** The site's root, which the blog is a folder of: where the site's sitemap and robots.txt stand. */
 const SITE_DIR = path.join(ROOT, 'docs');
+/** The changelog, whose sections a post's revision names when it came with a release. */
+const CHANGELOG = path.join(ROOT, 'CHANGELOG.md');
 
 /** Words read in a minute, for a post's reading time. */
 const WORDS_PER_MINUTE = 220;
@@ -46,8 +49,13 @@ const POST_LINK = /href="post:([^"]*)"/g;
 const POST_ELEMENTS = new Set([
     'p', 'h2', 'h3', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'hr', 'br', 'div', 'span',
     'a', 'strong', 'em', 'sub', 'sup', 'img', 'figure', 'figcaption',
-    'table', 'thead', 'tbody', 'tr', 'th', 'td',
+    'table', 'thead', 'tbody', 'tr', 'th', 'td', 'del', 'ins',
 ]);
+/**
+ * The elements a revision's mark (`<del>`, `<ins>`) cannot hold: it marks text inside a block, so the
+ * note after it stands in that block's line.
+ */
+const BLOCK_ELEMENTS = /<\/?(?:p|h2|h3|ul|ol|li|blockquote|pre|hr|div|figure|figcaption|table|thead|tbody|tr|th|td|del|ins)\b/i;
 /**
  * The months, as a date is written for readers. They are not taken from the runtime (`Intl`), whose
  * names for them differ between versions: the same content builds the same pages on every one.
@@ -249,9 +257,130 @@ function preparePostBody(body, { name, slugs, assets, classes }) {
     return decorateTables(linked, name);
 }
 
+// ---------------------------------------------------------------------------
+// Revisions
+// ---------------------------------------------------------------------------
+
 /**
- * The blog as its pages show it: posts.json, with each post's body, reading time, topic's name and
- * dates worked out. What cannot be built (a post with no body, a link to a post there is not, a date
+ * The id the site's changelog reader gives a heading, as GitHub does: lower case, punctuation left out,
+ * each space a hyphen (`[8.4.0] - 2026-10-27` is `840---2026-10-27`). It is the rule of
+ * docs/site/repo-docs.js, which opens `#doc/changelog/<id>` at that heading.
+ */
+const headingId = text => text.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s/g, '-');
+
+/** The changelog's releases, by version: the day each went out and the id of its section. */
+function readReleases(changelog = CHANGELOG) {
+    const releases = new Map();
+    for (const [, heading, version, day] of fs.readFileSync(changelog, 'utf8').matchAll(/^## (\[(\d+\.\d+\.\d+)\] - (\d{4}-\d{2}-\d{2}))\s*$/gm)) {
+        releases.set(version, { day, anchor: headingId(heading) });
+    }
+    return releases;
+}
+
+/**
+ * A post's revisions as posts.json lists them, worked out: each a change made after the post went out,
+ * on a day between the day it was published and the day it was last updated. One that came with a
+ * release names it, and is an update for that release, linked to its section of the changelog; one
+ * that did not is a correction. What cannot be one (an id that is not a slug or is used twice, a day
+ * outside the post's, a release the changelog has no section for, or one that went out after the
+ * revision, a revision with no note) is an error naming it.
+ */
+function readRevisions(post, { published, updated, releases, siteUrl }) {
+    const where = `posts.json: ${post.slug}`;
+    if (post.revisions === undefined) return [];
+    if (!Array.isArray(post.revisions)) throw new Error(`${where}: revisions is a list`);
+    if (post.revisions.length && !updated) throw new Error(`${where}: a post with revisions has the day it was updated`);
+    const ids = new Set();
+    return post.revisions.map(revision => {
+        const id = revision?.id;
+        if (typeof id !== 'string' || !SLUG.test(id)) throw new Error(`${where}: "${id}" is not a revision id (lower-case words joined by hyphens)`);
+        if (ids.has(id)) throw new Error(`${where}: the revision "${id}" is listed twice`);
+        ids.add(id);
+        const day = dayOf(revision.date, `${where}: revision ${id}: date`);
+        if (day.instant < published.instant || day.instant > updated.instant) {
+            throw new Error(`${where}: the revision "${id}" (${revision.date}) is not between the day the post was published (${post.published}) and the day it was updated (${post.updated})`);
+        }
+        if (typeof revision.note !== 'string' || !revision.note.trim()) throw new Error(`${where}: the revision "${id}" has no note`);
+        let release = null;
+        if (revision.release !== undefined) {
+            release = releases.get(revision.release);
+            if (!release) throw new Error(`${where}: the revision "${id}" names the release ${revision.release}, which CHANGELOG.md has no section for`);
+            if (release.day > revision.date) throw new Error(`${where}: the revision "${id}" (${revision.date}) is for ${revision.release}, which went out on ${release.day}`);
+        }
+        return {
+            id,
+            date: revision.date,
+            dateLong: longDate(day),
+            dateShort: shortDate(day),
+            label: release ? 'Updated' : 'Corrected',
+            note: revision.note.trim(),
+            release: release ? revision.release : null,
+            // From a post's page, the home page's changelog reader at the release's section; away from it, the same, whole.
+            releaseLink: release ? `../#doc/changelog/${release.anchor}` : null,
+            releaseAddress: release ? `${siteUrl}#doc/changelog/${release.anchor}` : null,
+            anchor: `change-${id}`,
+        };
+    });
+}
+
+/**
+ * A post's body with its revisions shown where they were made. A post marks what a revision took out
+ * with `<del data-revision="id">` and what it put in with `<ins data-revision="id">`, around text
+ * inside a block. What was taken out followed by what replaced it is one change; each change is
+ * followed by a note of the revision's kind and day: on the page, a button that opens it (with the
+ * release linked, and a link to the list of revisions), and away from it (a feed reader, which has
+ * no buttons), the note written out. The first change of a revision is where the list links. A mark
+ * that names no listed revision, holds a block or another mark, or has other attributes, and a
+ * revision that marks nothing, are errors naming them.
+ *
+ * @param {string} body
+ * @param {ReturnType<typeof readRevisions>} revisions
+ * @param {{ name: string, standalone: boolean }} options
+ */
+function markRevisions(body, revisions, { name, standalone }) {
+    const byId = new Map(revisions.map(revision => [revision.id, revision]));
+    const marks = [...body.matchAll(/<(del|ins)\b([^>]*)>([\s\S]*?)<\/\1>/g)].map(match => {
+        const [whole, tag, attributes, inner] = match;
+        const id = /^\s+data-revision="([^"]*)"\s*$/.exec(attributes)?.[1];
+        if (id === undefined) throw new Error(`${name}: <${tag}${attributes}> names its revision, and nothing else: <${tag} data-revision="id">`);
+        if (!byId.has(id)) throw new Error(`${name}: <${tag}> names the revision "${id}", which posts.json does not list for the post`);
+        if (BLOCK_ELEMENTS.test(inner)) throw new Error(`${name}: <${tag} data-revision="${id}"> holds a block or another mark. A mark is put inside a block, around its text`);
+        return { tag, id, inner, start: match.index, end: match.index + whole.length };
+    });
+    const unmarked = revisions.filter(revision => !marks.some(mark => mark.id === revision.id));
+    if (unmarked.length) throw new Error(`${name}: the revision "${unmarked[0].id}" marks nothing in the post`);
+    const seen = new Map();
+    const note = revision => {
+        const count = (seen.get(revision.id) ?? 0) + 1;
+        seen.set(revision.id, count);
+        const release = revision.release ? ` for <a href="${standalone ? revision.releaseAddress : revision.releaseLink}">${escapeHtml(revision.release)}</a>` : '';
+        const said = `${revision.label} ${revision.dateShort}${release}`;
+        if (standalone) return ` <em>(${said}: ${escapeHtml(revision.note)})</em>`;
+        const id = count === 1 ? revision.anchor : `${revision.anchor}-${count}`;
+        return `<button type="button" class="revision-mark" id="${id}" popovertarget="${id}-note">${revision.label}</button>`
+            + `<span class="revision-note" id="${id}-note" popover><strong>${said}.</strong> ${escapeHtml(revision.note)} <a href="#revisions">All revisions</a></span>`;
+    };
+    let out = '';
+    let last = 0;
+    marks.forEach((mark, index) => {
+        const revision = byId.get(mark.id);
+        const next = marks[index + 1];
+        const replaced = mark.tag === 'del' && next?.tag === 'ins' && next.id === mark.id && !body.slice(mark.end, next.start).trim();
+        const cite = revision.release ? ` cite="${standalone ? revision.releaseAddress : revision.releaseLink}"` : '';
+        out += body.slice(last, mark.start) + `<${mark.tag} datetime="${revision.date}"${cite}>${mark.inner}</${mark.tag}>` + (replaced ? '' : note(revision));
+        last = mark.end;
+    });
+    out += body.slice(last);
+    if (/<\/?(?:del|ins)\b/.test(out.replace(/<(del|ins)\b[^>]*>[\s\S]*?<\/\1>/g, ''))) throw new Error(`${name}: a <del> or <ins> is not closed`);
+    return out;
+}
+
+/** A post's body as it reads now: what its revisions took out left out. */
+const currentBody = body => body.replace(/<del\b[^>]*>[\s\S]*?<\/del>/g, '');
+
+/**
+ * The blog as its pages show it: posts.json, with each post's body (its revisions marked where they
+ * were made, see markRevisions), reading time, topic's name and dates worked out. What cannot be built (a post with no body, a link to a post there is not, a date
  * that is not one) is an error naming it.
  */
 function readBlog(sourceDir = SOURCE_DIR) {
@@ -261,21 +390,28 @@ function readBlog(sourceDir = SOURCE_DIR) {
     if (slugs.size !== posts.length) throw new Error('posts.json: a slug is used twice');
     const assets = new Set(fs.readdirSync(path.join(sourceDir, 'assets')));
     const classes = new Set([...fs.readFileSync(path.join(sourceDir, 'assets', 'blog.css'), 'utf8').matchAll(/\.([A-Za-z_][\w-]*)/g)].map(match => match[1]));
+    const releases = readReleases();
 
     const read = posts.map(post => {
         if (!SLUG.test(post.slug)) throw new Error(`posts.json: "${post.slug}" is not a slug (lower-case words joined by hyphens)`);
         if (!labelOf.has(post.category)) throw new Error(`posts.json: ${post.slug} has the topic "${post.category}", which is not listed`);
         const bodyPath = path.join(sourceDir, 'posts', `${post.slug}.html`);
         if (!fs.existsSync(bodyPath)) throw new Error(`blog/posts/${post.slug}.html: the post is listed and has no body`);
-        const body = preparePostBody(fs.readFileSync(bodyPath, 'utf8').trimEnd(), { name: `blog/posts/${post.slug}.html`, slugs, assets, classes });
+        const name = `blog/posts/${post.slug}.html`;
+        const prepared = preparePostBody(fs.readFileSync(bodyPath, 'utf8').trimEnd(), { name, slugs, assets, classes });
         // The day a post went out, and the day it was last changed when it has been since.
         const published = dayOf(post.published, `posts.json: ${post.slug}: published`);
         const updated = post.updated === undefined ? null : dayOf(post.updated, `posts.json: ${post.slug}: updated`);
         if (updated && updated.instant < published.instant) throw new Error(`posts.json: ${post.slug} was updated (${post.updated}) before it was published (${post.published})`);
+        const revisions = readRevisions(post, { published, updated, releases, siteUrl: siteOf(blog) });
+        // What a revision took out is shown struck on the page and in the feed, and is not searched or counted as read.
+        const now = currentBody(prepared);
         return {
             ...post,
-            body,
-            text: plainText(body),
+            body: markRevisions(prepared, revisions, { name, standalone: false }),
+            feedBody: markRevisions(prepared, revisions, { name, standalone: true }),
+            revisionList: revisions.length ? { changes: revisions } : null,
+            text: plainText(now),
             link: pageOf(post.slug),
             address: `${blog.url}${post.slug}.html`,
             categoryLabel: labelOf.get(post.category),
@@ -286,7 +422,7 @@ function readBlog(sourceDir = SOURCE_DIR) {
             updatedLong: updated ? longDate(updated) : null,
             updatedShort: updated ? shortDate(updated) : null,
             lastChanged: updated ? post.updated : post.published,
-            minutes: readingMinutes(body),
+            minutes: readingMinutes(now),
         };
     });
     return { blog, categories, posts: read };
@@ -313,7 +449,7 @@ function renderFeed(blog, posts) {
       <dc:creator>${escapeHtml(blog.author)}</dc:creator>
       <category>${escapeHtml(post.categoryLabel)}</category>
       <description>${escapeHtml(post.description)}</description>
-      <content:encoded><![CDATA[${standaloneBody(post.body, post, blog.url).replace(/]]>/g, ']]]]><![CDATA[>')}]]></content:encoded>
+      <content:encoded><![CDATA[${standaloneBody(post.feedBody, post, blog.url).replace(/]]>/g, ']]]]><![CDATA[>')}]]></content:encoded>
     </item>
 `;
     const latest = lastChanged(posts);
@@ -434,7 +570,7 @@ function build(sourceDir = SOURCE_DIR, outputDir = OUTPUT_DIR, siteDir = SITE_DI
     return files;
 }
 
-module.exports = { SOURCE_DIR, OUTPUT_DIR, SITE_DIR, parseTemplate, renderTemplate, preparePostBody, plainText, standaloneBody, readBlog, renderSite, renderSiteRoot, build };
+module.exports = { SOURCE_DIR, OUTPUT_DIR, SITE_DIR, parseTemplate, renderTemplate, preparePostBody, markRevisions, currentBody, plainText, standaloneBody, readBlog, renderSite, renderSiteRoot, build };
 
 if (require.main === module) {
     try {

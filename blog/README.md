@@ -63,13 +63,50 @@ the home page loads, not pages.
 The list page's search and topic filter need nothing from a post: a new post is found by its title,
 summary, topic and text as soon as it is built.
 
+## Changing a post after it went out
+
+A post that is changed after it went out gets `"updated"` with the day, and each change is a revision,
+shown where it was made: what it took out struck, what it put in marked, and a button after it that
+opens a note of what changed and when. The post's page lists every revision after its body.
+
+1. List the revisions in the post's entry in `posts.json`, in the order they appear in the post:
+
+   ```json
+   "updated": "2026-10-27",
+   "revisions": [
+       { "id": "tm-value", "date": "2026-10-27", "note": "The sample said 765.89 when the post went out." },
+       { "id": "web-fonts", "date": "2026-10-27", "release": "8.4.0", "note": "The native engine now takes WOFF and WOFF2 fonts." }
+   ]
+   ```
+
+   A revision that came with a release names it (`release`), and is shown as an update for that
+   release, linked to its section of the changelog on the home page. One that names no release is a
+   correction: the post was wrong when it went out. The note says what changed, without repeating
+   the release, which the note's heading names. The `id` is lower-case words joined by hyphens.
+
+2. Mark the change in the body, around text inside a block (a paragraph, a list item, a line of code),
+   never around a block:
+
+   ```html
+   <del data-revision="tm-value">765.89</del><ins data-revision="tm-value">782.89</ins>
+   ```
+
+   What was taken out, followed by what replaced it, is one change with one note. A `<del>` or an
+   `<ins>` alone is a change too. A sentence that was removed keeps its place, struck; a paragraph
+   that was added has its text marked, as `<p><ins data-revision="id">…</ins></p>`.
+
+The build refuses a mark that names no revision of the post, a revision that marks nothing, a release
+the changelog has no section for, and a revision dated outside the post's days. What a revision took
+out is not searched for or counted in the reading time. The feed, which has no buttons, writes each
+note out after its change.
+
 ## What a body is written with
 
 A body starts at its first paragraph. The page writes the headline, the deck and the byline, so a body
 has no `<h1>`, and no page shell, styles, scripts or inline `style`.
 
 - **Text:** `<p>`, `<h2>`, `<h3>`, `<ul>`, `<ol>`, `<li>`, `<blockquote>`, `<hr>`, `<strong>`, `<em>`,
-  `<code>`, `<a>`.
+  `<code>`, `<a>`, and `<del>` and `<ins>` for a revision (see above).
 - **Code:** `<pre><code>…</code></pre>`. Sample markup is written escaped: `&lt;w:p&gt;`, not `<w:p>`.
   The build refuses a tag it does not know, because a browser would show nothing of it.
 - **A callout:**

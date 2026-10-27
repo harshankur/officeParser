@@ -660,6 +660,116 @@ a.author-name:hover,
     font-size: 1em;
 }
 
+/*
+   Revisions: what a change after the post went out took out is struck, what it put in is marked, and
+   a button after each change opens its note (a popover: centred where the script cannot place it by
+   the button). A screen reader is told which is which, since it does not say a strike.
+*/
+.article-content del {
+    color: var(--text-muted);
+    text-decoration: line-through;
+    text-decoration-thickness: 1.5px;
+}
+
+.article-content ins {
+    text-decoration: none;
+    background-color: var(--accent-subtle);
+    border-radius: 3px;
+    box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
+/* What replaced struck text stands a little apart from it. */
+.article-content del + ins {
+    margin-left: 0.3em;
+}
+
+.article-content del::before,
+.article-content del::after,
+.article-content ins::before,
+.article-content ins::after {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+.article-content del::before {
+    content: " [removed: ";
+}
+
+.article-content ins::before {
+    content: " [added: ";
+}
+
+.article-content del::after,
+.article-content ins::after {
+    content: "] ";
+}
+
+/* Copying a sample gives the code as it is now. */
+.article-content pre del,
+.article-content pre .revision-mark {
+    user-select: none;
+}
+
+.revision-mark {
+    font-family: var(--font-sans);
+    font-size: 0.7rem;
+    font-weight: 600;
+    line-height: 1.4;
+    letter-spacing: 0.02em;
+    color: var(--accent);
+    background-color: var(--accent-subtle);
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    padding: 0 0.5em;
+    margin-left: 0.4em;
+    vertical-align: 0.15em;
+    cursor: pointer;
+}
+
+.revision-mark:hover,
+.revision-mark:focus-visible {
+    color: var(--bg-surface);
+    background-color: var(--accent);
+}
+
+.revision-note {
+    /* The page's reset takes away the margin that centres a popover. */
+    margin: auto;
+    max-width: min(22rem, calc(100vw - 32px));
+    padding: 0.75rem 1rem;
+    font-family: var(--font-sans);
+    font-size: 0.9rem;
+    font-style: normal;
+    line-height: 1.55;
+    white-space: normal;
+    text-align: left;
+    color: var(--text-secondary);
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: var(--shadow-hover);
+}
+
+.revision-note strong {
+    color: var(--text-primary);
+}
+
+.article-revisions {
+    margin-top: 3rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border-color);
+    font-size: 0.95rem;
+}
+
+.article-revisions h2 {
+    font-size: 1.4rem;
+    margin-top: 1.5rem;
+}
+
 /* Tables */
 .article-content table {
     width: 100%;

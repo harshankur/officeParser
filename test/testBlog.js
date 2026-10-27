@@ -19,7 +19,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { DOMParser } = require('@xmldom/xmldom');
-const { SOURCE_DIR, OUTPUT_DIR, SITE_DIR, parseTemplate, renderTemplate, preparePostBody, plainText, standaloneBody, renderSite, renderSiteRoot } = require('../scripts/build-blog.js');
+const { SOURCE_DIR, OUTPUT_DIR, SITE_DIR, parseTemplate, renderTemplate, preparePostBody, markRevisions, currentBody, plainText, standaloneBody, renderSite, renderSiteRoot } = require('../scripts/build-blog.js');
 
 let passed = 0;
 let failed = 0;
@@ -76,6 +76,44 @@ check('body: its text is what a reader reads, sample markup as it is shown', pla
 check('body: away from its page, every address in it is whole',
     standaloneBody('<a href="./other-post.html">o</a> <a href="#part">p</a> <img src="figure.png" alt="f"> <a href="https://example.com/">w</a> <code>&lt;img src="x.png"&gt;</code>', { address: 'https://blog.example/this.html' }, 'https://blog.example/')
     === '<a href="https://blog.example/other-post.html">o</a> <a href="https://blog.example/this.html#part">p</a> <img src="https://blog.example/figure.png" alt="f"> <a href="https://example.com/">w</a> <code>&lt;img src="x.png"&gt;</code>');
+
+// ── A post's revisions, marked where they were made, against fixed inputs ──
+const revision = (id, release) => ({
+    id, date: '2026-10-27', dateShort: '27 Oct 2026', label: release ? 'Updated' : 'Corrected', note: `Why ${id} changed.`, release: release ?? null,
+    releaseLink: release ? '../#doc/changelog/840---2026-10-27' : null, releaseAddress: release ? 'https://site.example/#doc/changelog/840---2026-10-27' : null, anchor: `change-${id}`,
+});
+const fixed = revision('fixed');
+const shipped = revision('shipped', '8.4.0');
+const marked = (body, standalone = false, revisions = [fixed, shipped]) => markRevisions(body, revisions, { name: 'sample', standalone });
+const markRefused = (body, revisions) => { try { marked(body, false, revisions); return ''; } catch (error) { return error.message; } };
+const replaced = marked('<p>a <del data-revision="fixed">old</del> <ins data-revision="fixed">new</ins> b <ins data-revision="shipped">added</ins></p>');
+check('revisions: what was taken out and what replaced it are one change, with one note after it',
+    replaced.startsWith('<p>a <del datetime="2026-10-27">old</del> <ins datetime="2026-10-27">new</ins><button type="button" class="revision-mark" id="change-fixed" popovertarget="change-fixed-note">Corrected</button>'
+        + '<span class="revision-note" id="change-fixed-note" popover><strong>Corrected 27 Oct 2026.</strong> Why fixed changed. <a href="#revisions">All revisions</a></span> b '), replaced);
+check('revisions: an update names its release, linked to the release\'s section of the changelog reader',
+    replaced.includes('<ins datetime="2026-10-27" cite="../#doc/changelog/840---2026-10-27">added</ins><button type="button" class="revision-mark" id="change-shipped" popovertarget="change-shipped-note">Updated</button>')
+    && replaced.includes('<strong>Updated 27 Oct 2026 for <a href="../#doc/changelog/840---2026-10-27">8.4.0</a>.</strong>'), replaced);
+const twice = marked('<p><del data-revision="fixed">x</del></p><p><del data-revision="fixed">y</del><ins data-revision="shipped">z</ins></p>');
+check('revisions: a change on its own has its own note, and a revision\'s later changes are numbered',
+    (twice.match(/class="revision-mark"/g) || []).length === 3 && twice.includes('id="change-fixed"') && twice.includes('id="change-fixed-2"') && twice.includes('id="change-shipped"'), twice);
+check('revisions: away from the page, a note is written out and its release linked whole',
+    marked('<p><del data-revision="fixed">old</del><ins data-revision="fixed">new</ins> <ins data-revision="shipped">added</ins></p>', true)
+    === '<p><del datetime="2026-10-27">old</del><ins datetime="2026-10-27">new</ins> <em>(Corrected 27 Oct 2026: Why fixed changed.)</em> <ins datetime="2026-10-27" cite="https://site.example/#doc/changelog/840---2026-10-27">added</ins>'
+    + ' <em>(Updated 27 Oct 2026 for <a href="https://site.example/#doc/changelog/840---2026-10-27">8.4.0</a>: Why shipped changed.)</em></p>');
+check('revisions: a note\'s words are text, not markup', marked('<p><del data-revision="x">a</del></p>', false, [{ ...fixed, id: 'x', anchor: 'change-x', note: '<b>&' }]).includes('</strong> &lt;b&gt;&amp; <a'));
+check('body: the text searched for is the post as it reads now', plainText(currentBody('<p>a <del datetime="d">old</del><ins datetime="d">new</ins></p>')) === 'a new');
+for (const [what, body, said, revisions] of [
+    ['a mark that names no revision', '<p><del>old</del></p>', /names its revision, and nothing else/],
+    ['a mark with another attribute', '<p><ins data-revision="fixed" class="x">new</ins></p>', /names its revision, and nothing else/],
+    ['a mark of a revision the post does not list', '<p><ins data-revision="other">new</ins></p>', /revision "other", which posts.json does not list/],
+    ['a mark around a block', '<ins data-revision="fixed"><p>new</p></ins>', /holds a block or another mark/],
+    ['a mark that is not closed', '<p><del data-revision="fixed">old</p><p><del data-revision="fixed">x</del></p>', /holds a block or another mark|is not closed/],
+    ['a revision that marks nothing', '<p><ins data-revision="fixed">new</ins></p>', /revision "shipped" marks nothing/],
+]) check(`revisions: ${what} is refused, and said`, said.test(markRefused(body, revisions)), markRefused(body, revisions) || 'it was built');
+// The build's id for a changelog heading is the changelog reader's, or a release's link opens the changelog at its top.
+const ruleOf = (file, pattern) => (pattern.exec(fs.readFileSync(path.join(__dirname, '..', file), 'utf8')) || [])[1];
+const readerRule = ruleOf('docs/site/repo-docs.js', /const base = text(\.trim\(\)\.toLowerCase\(\)\.replace\([^\n]*?);\n/);
+check('revisions: a changelog heading\'s id is worked out as the changelog reader works it out', !!readerRule && ruleOf('scripts/build-blog.js', /const headingId = text => text(\.trim[^\n]*?);\n/) === readerRule, String(readerRule));
 
 // ── posts.json ──
 const blog = JSON.parse(fs.readFileSync(path.join(SOURCE_DIR, 'posts.json'), 'utf8'));
@@ -245,6 +283,39 @@ try {
         && String(later.get('sitemap.xml')).includes(`<loc>${blog.blog.url}</loc>\n    <lastmod>2027-01-20</lastmod>`)
         && String(later.get('feed.xml')).includes('<lastBuildDate>Wed, 20 Jan 2027 00:00:00 GMT</lastBuildDate>')
         && String(later.get('feed.xml')).includes('<pubDate>Thu, 03 Sep 2026 00:00:00 GMT</pubDate>'));
+    // A revision of the second post: a correction of a word of its first paragraph, and an update for the latest release.
+    const releases = [...fs.readFileSync(path.join(__dirname, '..', 'CHANGELOG.md'), 'utf8').matchAll(/^## \[(\d+\.\d+\.\d+)\] - (\d{4}-\d{2}-\d{2})/gm)];
+    const [, latest, latestDay] = releases[0];
+    const latestAnchor = `${latest.replace(/\./g, '')}---${latestDay}`;
+    const original = fs.readFileSync(path.join(SOURCE_DIR, 'posts', `${second.slug}.html`), 'utf8');
+    const firstWord = /<p>\s*([A-Za-z]+)/.exec(original);
+    const revised = original.slice(0, firstWord.index) + original.slice(firstWord.index).replace(firstWord[1],
+        `<del data-revision="word">Formerly</del><ins data-revision="word">${firstWord[1]}</ins> <ins data-revision="release">Added</ins>`);
+    fs.writeFileSync(path.join(copy, 'posts', `${second.slug}.html`), revised);
+    const correction = { id: 'word', date: latestDay, note: 'A word was wrong.' };
+    const update = { id: 'release', date: latestDay, release: latest, note: 'Something came with the release.' };
+    const withRevisions = builtWith({ published: '2026-01-01', updated: latestDay, revisions: [correction, update] });
+    const revisedPage = typeof withRevisions === 'string' ? withRevisions : String(withRevisions.get(`${second.slug}.html`));
+    check('revisions: a post lists its revisions after its body, each linked to its change and an update to its release\'s section of the changelog',
+        revisedPage.includes(`<li><strong>Corrected</strong> <time datetime="${latestDay}">`) && revisedPage.includes(': A word was wrong. <a href="#change-word">See the change</a></li>')
+        && revisedPage.includes(` for <a href="../#doc/changelog/${latestAnchor}">${latest}</a>: Something came with the release. <a href="#change-release">See the change</a></li>`)
+        && revisedPage.indexOf('id="revisions"') > revisedPage.indexOf('id="change-release"') && revisedPage.indexOf('id="revisions"') < revisedPage.indexOf('article-nav-footer'), revisedPage.slice(0, 200));
+    check('revisions: a post lists revisions when it has some, and only then', blog.posts.every(post => String(files.get(`${post.slug}.html`) ?? '').includes('id="revisions"') === (post.revisions || []).length > 0));
+    const revisedSearch = typeof withRevisions === 'string' ? [] : JSON.parse(String(withRevisions.get('search.json'))).posts;
+    check('revisions: what a revision took out is not searched for, and what it put in is',
+        revisedSearch.some(post => post.slug === second.slug && !post.text.includes('Formerly') && post.text.includes('Added')));
+    check('revisions: the feed writes each note out, its release linked whole', typeof withRevisions !== 'string'
+        && String(withRevisions.get('feed.xml')).includes(`<em>(Updated ${Number(latestDay.slice(8))} `) && String(withRevisions.get('feed.xml')).includes(`for <a href="${new URL('../', blog.blog.url).href}#doc/changelog/${latestAnchor}">${latest}</a>: Something came with the release.)</em>`));
+    for (const [what, days, said] of [
+        ['a release the changelog has no section for', { updated: latestDay, revisions: [correction, { ...update, release: '0.0.99' }] }, /names the release 0.0.99, which CHANGELOG.md has no section for/],
+        ['an update dated before its release', { published: '2020-01-01', updated: latestDay, revisions: [correction, { ...update, date: '2020-01-02' }] }, /is for .*, which went out on/],
+        ['a revision after the day the post was updated', { updated: '2026-01-02', published: '2026-01-01', revisions: [{ ...correction, date: latestDay }, update] }, /is not between the day the post was published/],
+        ['revisions on a post never updated', { updated: undefined, revisions: [correction, update] }, /a post with revisions has the day it was updated/],
+        ['a revision id used twice', { updated: latestDay, revisions: [correction, update, { ...correction }] }, /"word" is listed twice/],
+        ['a revision with no note', { updated: latestDay, revisions: [{ ...correction, note: ' ' }, update] }, /"word" has no note/],
+        ['a revision the post does not mark', { updated: latestDay, revisions: [correction, update, { ...correction, id: 'unused' }] }, /"unused" marks nothing/],
+    ]) check(`revisions: ${what} is refused, and said`, typeof builtWith(days) === 'string' && said.test(builtWith(days)), String(builtWith(days)).slice(0, 160));
+    fs.writeFileSync(path.join(copy, 'posts', `${second.slug}.html`), original);
     for (const [what, days, said] of [
         ['a month for a day', { published: '2026-10' }, /"2026-10" is not a date/],
         ['a day the calendar does not have', { published: '2026-02-30' }, /"2026-02-30" is not a date/],

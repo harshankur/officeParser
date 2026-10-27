@@ -1,6 +1,7 @@
 /**
  * What the blog's pages do once they are loaded: keep the reader's theme, filter the list by topic
- * and by the words searched for, and bring a post's interactive figures to life. The pages themselves are built (scripts/build-blog.js) and
+ * and by the words searched for, bring a post's interactive figures to life, and place a revision's
+ * note by its button. The pages themselves are built (scripts/build-blog.js) and
  * are complete without this script: every post is in its page, and the list shows every post.
  * Views are counted by the viewcounter, whose consent prompt the layout loads.
  */
@@ -453,10 +454,60 @@
         }
     };
 
+    /**
+     * A revision's note, by its button: opened by a click (the page's own popover, which works without
+     * this script) or by resting the pointer on the button, and placed beside the button where the page
+     * alone would centre it. A note opened by the pointer closes when the pointer leaves the button and
+     * the note, and a click keeps it open.
+     */
+    const wireRevisionNotes = () => {
+        const GUTTER = 16;
+        for (const button of document.querySelectorAll('.revision-mark[popovertarget]')) {
+            const note = document.getElementById(button.getAttribute('popovertarget'));
+            if (!note || typeof note.showPopover !== 'function') continue;
+            let byPointer = false;
+            let closing = 0;
+            const place = () => {
+                const at = button.getBoundingClientRect();
+                const width = note.offsetWidth;
+                const height = note.offsetHeight;
+                const left = Math.min(Math.max(GUTTER, at.left + at.width / 2 - width / 2), window.innerWidth - GUTTER - width);
+                const below = at.bottom + 8;
+                const top = below + height <= window.innerHeight - GUTTER || at.top - 8 - height < GUTTER ? below : at.top - 8 - height;
+                Object.assign(note.style, { position: 'fixed', inset: 'auto', margin: '0', left: `${Math.max(GUTTER, left)}px`, top: `${top}px` });
+            };
+            note.addEventListener('toggle', event => {
+                if (event.newState === 'open') place();
+                else byPointer = false;
+            });
+            const stay = () => clearTimeout(closing);
+            const leave = () => {
+                if (!byPointer) return;
+                closing = setTimeout(() => { if (byPointer && note.matches(':popover-open')) note.hidePopover(); }, 200);
+            };
+            button.addEventListener('pointerenter', event => {
+                if (event.pointerType !== 'mouse') return;
+                stay();
+                if (!note.matches(':popover-open')) { byPointer = true; note.showPopover(); }
+            });
+            button.addEventListener('click', event => {
+                // A note the pointer opened is kept open by a click, not closed by it.
+                if (byPointer && note.matches(':popover-open')) { event.preventDefault(); byPointer = false; }
+            });
+            for (const part of [button, note]) {
+                part.addEventListener('pointerleave', leave);
+                part.addEventListener('pointerenter', stay);
+            }
+            window.addEventListener('scroll', () => { if (note.matches(':popover-open')) place(); }, { passive: true });
+            window.addEventListener('resize', () => { if (note.matches(':popover-open')) place(); });
+        }
+    };
+
     const start = () => {
         wireThemeToggle();
         wireListFilter();
         wireDemos();
+        wireRevisionNotes();
     };
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);

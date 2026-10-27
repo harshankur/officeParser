@@ -17,6 +17,17 @@
             <article class="article-content">
 {{{body}}}
 
+{{#revisionList}}
+                <section class="article-revisions" id="revisions" aria-labelledby="revisions-title">
+                    <h2 id="revisions-title">Revisions</h2>
+                    <ol>
+{{#changes}}
+                        <li><strong>{{label}}</strong> <time datetime="{{date}}">{{dateLong}}</time>{{#release}} for <a href="{{releaseLink}}">{{release}}</a>{{/release}}: {{note}} <a href="#{{anchor}}">See the change</a></li>
+{{/changes}}
+                    </ol>
+                </section>
+
+{{/revisionList}}
                 <div class="article-nav-footer">
 {{#previous}}
                     <a href="{{link}}" class="back-to-blog">&larr; Previous: {{shortTitle}}</a>

@@ -249,15 +249,16 @@ DOCX   HTML   PDF   Markdown   chunks</code></pre>
 </p>
 <p>
     Parsing is JavaScript all the way down. PDF reading uses pdf.js, and OCR uses Tesseract compiled to
-    WebAssembly. That is also why the same code runs in a browser, from a bundle of about 6 MB, so a
+    WebAssembly. That is also why the same code runs in a browser, from a bundle of about <del datetime="2026-10-27" cite="../#doc/changelog/830---2026-10-26">5.5 MB</del><ins datetime="2026-10-27" cite="../#doc/changelog/830---2026-10-26">6 MB</ins><button type="button" class="revision-mark" id="change-bundle-size" popovertarget="change-bundle-size-note">Updated</button><span class="revision-note" id="change-bundle-size-note" popover><strong>Updated 27 Oct 2026 for <a href="../#doc/changelog/830---2026-10-26">8.3.0</a>.</strong> The browser bundle was about 5.5 MB when this post went out, and grew to about 6 MB with this release. <a href="#revisions">All revisions</a></span>, so a
     file can be parsed without leaving the user's machine.
 </p>
 <p>
     There is one place where I traded that purity for fidelity, and it is opt-out. The default PDF
     <em>output</em> engine renders through headless Chromium (Puppeteer, an optional peer dependency),
     because a browser's layout engine gives the most faithful page. If you do not want a browser, the
-    <code>native</code> engine writes PDF directly with <code>pdf-lib</code>, with simpler layout, in
-    the standard PDF fonts or in fonts you give it.
+    <code>native</code> engine writes PDF directly with <code>pdf-lib</code>, with simpler layout<del datetime="2026-10-27" cite="../#doc/changelog/820---2026-10-20"> and
+    the standard PDF fonts</del><ins datetime="2026-10-27" cite="../#doc/changelog/820---2026-10-20">, in
+    the standard PDF fonts or in fonts you give it</ins><button type="button" class="revision-mark" id="change-own-fonts" popovertarget="change-own-fonts-note">Updated</button><span class="revision-note" id="change-own-fonts-note" popover><strong>Updated 27 Oct 2026 for <a href="../#doc/changelog/820---2026-10-20">8.2.0</a>.</strong> The native engine now also draws in TrueType and OpenType fonts you give it, for any script. <a href="#revisions">All revisions</a></span>.
 </p>
 
 <table role="table">
@@ -308,6 +309,14 @@ DOCX   HTML   PDF   Markdown   chunks</code></pre>
     <code>.docx</code>, turning Markdown into a Word report, and chunking a PDF for retrieval look like
     three features. They are one tree with different things attached to each end.
 </p>
+
+                <section class="article-revisions" id="revisions" aria-labelledby="revisions-title">
+                    <h2 id="revisions-title">Revisions</h2>
+                    <ol>
+                        <li><strong>Updated</strong> <time datetime="2026-10-27">27 October 2026</time> for <a href="../#doc/changelog/830---2026-10-26">8.3.0</a>: The browser bundle was about 5.5 MB when this post went out, and grew to about 6 MB with this release. <a href="#change-bundle-size">See the change</a></li>
+                        <li><strong>Updated</strong> <time datetime="2026-10-27">27 October 2026</time> for <a href="../#doc/changelog/820---2026-10-20">8.2.0</a>: The native engine now also draws in TrueType and OpenType fonts you give it, for any script. <a href="#change-own-fonts">See the change</a></li>
+                    </ol>
+                </section>
 
                 <div class="article-nav-footer">
                     <a href="./security-war-stories-zip-bombs-and-ssrf.html" class="back-to-blog">&larr; Previous: Security War Stories</a>
