@@ -44,7 +44,7 @@ import { collectColorMarks, ColorLookup, makeColorLookup } from './pdf/pdfColor.
 import { collectGlyphs, GlyphFont, PageGlyphs } from './pdf/textGlyphs.js';
 import { collectShapes, PdfShape, shapeBullets } from './pdf/pdfShapes.js';
 import { MarkedContent, readableItems } from './pdf/actualText.js';
-import { ruledFrames, ruledTables, shadeCells } from './pdf/rulings.js';
+import { RuledFrame, ruledFrames, ruledTables, shadeCells } from './pdf/rulings.js';
 import { computeRunBox, identityMatrix, mulMatrix, roundBounds, rotateBoundsToRendered, toMatrix6, unionAll } from './pdf/geometry.js';
 import { PageExtract, PdfImage, PdfLayoutConfig, RawRun, ResolvedFont } from './pdf/pdfTypes.js';
 import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, emitBounds, indentLevels as indentLevelsOf, joinMarkerLines, leadingMarker, ListCarry, markerLefts, PageContext, lineDirections, recoverTaggedGrids, rightToLeftLean, relevelHeadings, runsToParagraph, segmentIntoBlocks } from './pdf/textLayout.js';
@@ -1801,8 +1801,9 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             // buildTaggedNodes guards against a hostile deep/cyclic tree internally, but wrap the call
             // too: any unexpected failure here must degrade to the geometry path, never fail the parse.
             let nodes: OfficeContentNode[] = [], coveredMcids = new Set<string>();
+            let frames: RuledFrame[] | undefined;
             try {
-                ({ nodes, coveredMcids } = buildTaggedNodes(extract.structTree, runsByMcid, layoutCtx, docCtx, { ignoreNotes: config.ignoreNotes, listCounter: taggedListCounter }));
+                ({ nodes, coveredMcids } = buildTaggedNodes(extract.structTree, runsByMcid, layoutCtx, docCtx, { ignoreNotes: config.ignoreNotes, listCounter: taggedListCounter, frames: () => frames ??= ruledFrames(extract.shapes, pageCtx.authoredW, pageCtx.authoredH) }));
             } catch { warnStruct('the tag tree could not be processed'); }
             // Coverage measures the tag tree against the page's *tagged* text, so artifact runs
             // (which by definition live outside the structure) never drag the trust signal down.
