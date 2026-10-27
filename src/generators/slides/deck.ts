@@ -24,7 +24,7 @@ import { layoutTableRows } from '../../utils/tableLayout.js';
 /** A box on a slide, in points from its top left. */
 export interface Box { x: number; y: number; w: number; h: number }
 
-export interface DeckRun { text: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; size?: number; color?: string; font?: string; link?: string; superscript?: boolean; subscript?: boolean; lineBreak?: boolean }
+export interface DeckRun { text: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; size?: number; color?: string; font?: string; link?: string; superscript?: boolean; subscript?: boolean; lineBreak?: boolean; /** Text there but not shown (TextFormatting.invisible): written fully transparent, still there to select and search. */ invisible?: boolean }
 export interface DeckParagraph { runs: DeckRun[]; align?: 'left' | 'center' | 'right' | 'justify'; bullet?: { level: number; char?: string; numbered?: boolean; /** A numbered item's marker as it is shown (`2.`, `1.1.`, `iv.`), written as text: each item is a paragraph, often a box, of its own. */ text?: string } ; mono?: boolean; /** The first line's indent past the others, in points (negative: hanging). */ firstIndent?: number; /** From baseline to baseline, in points, where the source measured it. */ lineSpacing?: number }
 
 /** Where a list item's text starts in its box, past its marker: a margin for each level (in points). */
@@ -129,7 +129,7 @@ async function runsOf(node: OfficeContentNode, source: DeckSource, notes: NoteSt
                 text: child.text, ...(fmt.bold ? { bold: true } : {}), ...(fmt.italic ? { italic: true } : {}), ...(fmt.underline ? { underline: true } : {}),
                 ...(fmt.strikethrough ? { strike: true } : {}), ...(fmt.superscript ? { superscript: true } : {}), ...(fmt.subscript ? { subscript: true } : {}),
                 ...(sizeOf(fmt) ? { size: sizeOf(fmt) } : {}), ...(fmt.color ? { color: fmt.color } : {}), ...(fmt.font ? { font: fontFamily(fmt.font) } : child.type === 'code' ? { font: 'Courier New' } : {}),
-                ...(linkOf(child.metadata as TextMetadata) ? { link: linkOf(child.metadata as TextMetadata) } : {}),
+                ...(linkOf(child.metadata as TextMetadata) ? { link: linkOf(child.metadata as TextMetadata) } : {}), ...(fmt.invisible ? { invisible: true } : {}),
             });
             const target = (child.metadata as { link?: unknown } | undefined)?.link;
             if (typeof target === 'string' && target.startsWith('#')) notes.placeLinks = true;
@@ -289,8 +289,9 @@ async function paragraphOf(node: OfficeContentNode, source: DeckSource, notes: N
     const meta = node.metadata as (ListMetadata & { alignment?: string }) | undefined;
     const align = meta?.alignment === 'center' || meta?.alignment === 'right' || meta?.alignment === 'justify' ? meta.alignment : undefined;
     const joined = lines ? joinLines(lines) : read;
-    // Plain runs where the caller asked for no formatting: their text, links and breaks.
-    const plain = source.includeFormatting ? joined : joined.map(r => ({ text: r.text, ...(r.link ? { link: r.link } : {}), ...(r.lineBreak ? { lineBreak: true } : {}) }));
+    // Plain runs where the caller asked for no formatting: their text, links and breaks (and invisible text still
+    // invisible, which is not a look: shown, a scan's recognised words stood over the scan a second time).
+    const plain = source.includeFormatting ? joined : joined.map(r => ({ text: r.text, ...(r.link ? { link: r.link } : {}), ...(r.lineBreak ? { lineBreak: true } : {}), ...(r.invisible ? { invisible: true } : {}) }));
     const p: DeckParagraph = { runs: plain, ...(align ? { align } : {}), ...(pitch ? { lineSpacing: pitch } : {}) };
     if (node.type === 'list') {
         const index = typeof meta?.itemIndex === 'number' && Number.isFinite(meta.itemIndex) ? Math.max(0, Math.trunc(meta.itemIndex)) : 0;
@@ -712,7 +713,7 @@ function cutParagraph(p: DeckParagraph, lines: number, width: number, size: numb
     return out.map((q, i) => i ? { ...q, bullet: q.bullet ? { ...q.bullet, char: '' } : undefined } : q);
 }
 
-const sameLook = (a: DeckRun, b: DeckRun) => a.bold === b.bold && a.italic === b.italic && a.underline === b.underline && a.size === b.size && a.color === b.color && a.font === b.font && a.link === b.link && a.superscript === b.superscript && a.subscript === b.subscript && a.strike === b.strike;
+const sameLook = (a: DeckRun, b: DeckRun) => a.bold === b.bold && a.italic === b.italic && a.underline === b.underline && a.size === b.size && a.color === b.color && a.font === b.font && a.link === b.link && a.superscript === b.superscript && a.subscript === b.subscript && a.strike === b.strike && a.invisible === b.invisible;
 
 /** A flowing document's deck (see the module's description). */
 async function flowDeck(content: OfficeContentNode[], metadata: OfficeMetadata, source: DeckSource, notes: NoteState, unrepresentable: Set<string>): Promise<Deck> {
