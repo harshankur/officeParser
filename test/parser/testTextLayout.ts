@@ -350,11 +350,16 @@ export async function testTextLayout(): Promise<LayoutTest[]> {
         add('Prose paragraphs are not a table', !out.some(n => n.type === 'table') && out.length === 6, 'no table, 6 paragraphs', `${out.filter(n => n.type === 'table').length} table(s), ${out.length} nodes`);
     }
     {
-        // A two-column stack of short paragraphs is not a grid: fewer than three columns.
-        const nodes: OfficeContentNode[] = [];
-        for (let i = 0; i < 5; i++) { nodes.push(paraNode('L' + i, 100, 100 + i * 20, 8, 12), paraNode('R' + i, 300, 100 + i * 20, 8, 12)); }
-        const out = recoverTaggedGrids(nodes);
-        add('Two-column short paragraphs are not a table', !out.some(n => n.type === 'table'), 'no table', `${out.filter(n => n.type === 'table').length} table(s)`);
+        // Two columns of short paragraphs tagged one column after the other are two columns, not a table; tagged
+        // across, a label and its value row by row (as a browser tags a table of them with no borders), a table.
+        const down: OfficeContentNode[] = [], across: OfficeContentNode[] = [];
+        for (let i = 0; i < 5; i++) down.push(paraNode('L' + i, 100, 100 + i * 20, 8, 12));
+        for (let i = 0; i < 5; i++) down.push(paraNode('R' + i, 300, 100 + i * 20, 8, 12));
+        for (let i = 0; i < 5; i++) across.push(paraNode('L' + i, 100, 100 + i * 20, 8, 12), paraNode('R' + i, 300, 100 + i * 20, 8, 12));
+        const outDown = recoverTaggedGrids(down), outAcross = recoverTaggedGrids(across);
+        const pairs = outAcross.find(n => n.type === 'table')?.children?.map(r => r.children!.map(c => c.text).join('|'));
+        add('Two columns of paragraphs read down are not a table', !outDown.some(n => n.type === 'table'), 'no table', `${outDown.filter(n => n.type === 'table').length} table(s)`);
+        add('Labels and values read across are a two-column table', JSON.stringify(pairs) === JSON.stringify(['L0|R0', 'L1|R1', 'L2|R2', 'L3|R3', 'L4|R4']), 'L0|R0 ... L4|R4', JSON.stringify(pairs));
     }
 
     // ── Tagged TOC entries: a dot leader is one space, however many runs of dots it is split into ──

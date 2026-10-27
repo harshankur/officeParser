@@ -1174,11 +1174,12 @@ function cutAtColumnEdges(lines: PdfLine[], cfg: PdfLayoutConfig): PdfLine[][] {
  * Recovers grid tables from a page's lines *before* block/column segmentation, which would otherwise
  * carve a table's columns into separate reading blocks. Lines are cut where the page's columns are (see
  * cutAtColumnEdges) and grouped into rows by baseline; a run of at least three consecutive rows that each
- * carry two or more cells, whose cell left-edges cluster into three or more stable columns, and whose cells
- * are short (median ≤ 25 characters) becomes a `table`. The short-cell and ≥3-column guards keep a
- * multi-column article of long wrapped lines from being mistaken for a table. Returns each table with the y
- * it should be spliced in at, the set of lines it consumed, and the lines left for the caller to lay out (in
- * reading order: a line cut for a table that took none of its pieces is the line it was).
+ * carry two or more cells, whose cell left-edges cluster into three or more stable columns (or two, of a
+ * column of labels and one of their values, see twoColumnTable), and whose cells are short (median ≤ 25
+ * characters) becomes a `table`. The short-cell and column guards keep a multi-column article of long
+ * wrapped lines from being mistaken for a table. Returns each table with the y it should be spliced in at,
+ * the set of lines it consumed, and the lines left for the caller to lay out (in reading order: a line
+ * cut for a table that took none of its pieces is the line it was).
  */
 export function detectTables(lines: PdfLine[], page: PageContext, doc: DocContext): { tables: { node: OfficeContentNode; y: number }[]; consumed: Set<PdfLine>; rest: PdfLine[] } {
     const tables: { node: OfficeContentNode; y: number }[] = [];
@@ -1338,6 +1339,7 @@ export function detectTables(lines: PdfLine[], page: PageContext, doc: DocContex
 
     let i = 0;
     const candidates: PdfLine[][][] = [];
+    const rowIndex = new Map(rows.map((r, k) => [r, k]));
     while (i < rows.length) {
         if (rows[i].length < 2) { i++; continue; }
         let j = i;
@@ -1360,7 +1362,11 @@ export function detectTables(lines: PdfLine[], page: PageContext, doc: DocContex
         for (const x of cells.map(edge).sort((a, b) => a - b)) {
             if (!colStarts.length || x - colStarts[colStarts.length - 1] > 12) colStarts.push(x);
         }
-        if (colStarts.length < 3) continue;
+        if (colStarts.length < 2) continue;
+        if (colStarts.length === 2) {
+            const at = rowIndex.get(run[0])!, last = at + run.length - 1;
+            if (!twoColumnTable(run, rtl, at > 0 ? rows[at - 1] : undefined, last + 1 < rows.length ? rows[last + 1] : undefined, proseBetween)) continue;
+        }
         // Short-cell guard: long lines are prose columns, not table cells.
         if (median(cells.map(c => c.fragments.reduce((n, f) => n + f.text.trim().length, 0))) > 25) continue;
 
@@ -1394,6 +1400,53 @@ export function detectTables(lines: PdfLine[], page: PageContext, doc: DocContex
     // (The lines a table took whole, by the lines given.)
     for (const [i, pieces] of cut.entries()) if (pieces.length > 1 && pieces.every(p => consumed.has(p))) consumed.add(lines[i]);
     return { tables, consumed, rest: left };
+}
+
+/**
+ * Whether rows of two cells are a table of two columns (labels and their values, a key and its figure) and not
+ * two columns of a page's text, two lists side by side, a list, or code: the first column's cells (in reading
+ * order) are no list's markers, and either end ragged (two ems and more apart: a column of text fills its
+ * width) or are of two words at most; neither column runs on alone into the row just after the
+ * rows (or the second into the row just before them), at their distance from one another, as two lists of
+ * their own do, of different lengths; and the text is not set on a grid of characters (a monospaced font),
+ * where every line lines up with the next and two columns are as likely code and its comments, or a drawn
+ * tree, as a table.
+ */
+function twoColumnTable(run: PdfLine[][], rtl: boolean, before: PdfLine[] | undefined, after: PdfLine[] | undefined, proseBetween: (a: number, b: number) => boolean): boolean {
+    if (run.some(r => r.length !== 2)) return false;
+    const firsts = run.map(r => rtl ? r[1] : r[0]);
+    if (firsts.every(l => detectLineMarker(lineTextOf(l)) || STANDALONE_MARKER_RE.test(lineTextOf(l).trim()))) return false;
+    const em = median(firsts.map(l => l.fontSize)) || 10;
+    let least = Infinity, most = -Infinity;
+    for (const l of firsts) { const end = rtl ? l.x : l.x + l.width; least = Math.min(least, end); most = Math.max(most, end); }
+    const ragged = most - least >= 2 * em;
+    const short = median(firsts.map(l => lineTextOf(l).trim().split(/\s+/).length)) <= 2;
+    if (!ragged && !short) return false;
+    // A column running on alone: a row of one line, as near as the rows are, starting where a column starts.
+    const pitches: number[] = [];
+    for (let k = 1; k < run.length; k++) pitches.push(run[k][0].baseline - run[k - 1][0].baseline);
+    const pitch = median(pitches);
+    const start = (l: PdfLine) => rtl ? l.x + l.width : l.x;
+    const inColumn = (l: PdfLine, k: number) => Math.abs(start(l) - median(run.map(r => start(rtl ? r[1 - k] : r[k])))) <= 0.7 * em;
+    const near = (a: PdfLine, b: PdfLine) => b.baseline - a.baseline <= 1.5 * pitch && !proseBetween(a.baseline, b.baseline);
+    if (after?.length === 1 && near(run[run.length - 1][0], after[0]) && (inColumn(after[0], 0) || inColumn(after[0], 1))) return false;
+    if (before?.length === 1 && near(before[0], run[0][0]) && inColumn(before[0], 1)) return false;
+    return !onCharacterGrid(run.flat());
+}
+
+/**
+ * Whether lines are set in a monospaced font: their runs of letters (three characters and more) advance as far
+ * for each character, within three in a hundred, nine in ten of them (at least four). (Runs of digits alone
+ * are left out: a proportional font's digits are of one width too.)
+ */
+function onCharacterGrid(lines: PdfLine[]): boolean {
+    const advances: number[] = [];
+    for (const l of lines) for (const r of LINE_RUNS.get(l) ?? []) {
+        if (r.text.length >= 3 && /\p{L}/u.test(r.text) && r.width > 0 && r.fontSize > 0) advances.push(r.width / r.text.length / r.fontSize);
+    }
+    if (advances.length < 4) return false;
+    const m = median(advances);
+    return advances.filter(a => Math.abs(a - m) <= 0.03 * m).length >= 0.9 * advances.length;
 }
 
 // ── hybrid grid recovery over tag-derived paragraphs ───────────────────────────
@@ -1514,8 +1567,9 @@ function gridToTable(rows: GridRow[], colStarts: number[], keep: boolean[]): Off
  * is always a clean block and surrounding paragraphs (a "December 2007" title, an intro line) are left
  * in place.
  */
-function recoverGridFromRun(run: GridCell[]): { table: OfficeContentNode; from: number; to: number } | null {
+function recoverGridFromRun(run: GridCell[], twoColumns = false): { table: OfficeContentNode; from: number; to: number } | null {
     if (run.length < GRID_MIN_ROWS) return null;
+    const minCols = twoColumns ? 2 : GRID_MIN_COLS;
     const rows = groupRowsByOverlap(run);
 
     // Columns from horizontal centres; a column counts only when it appears in >=2 rows.
@@ -1527,7 +1581,7 @@ function recoverGridFromRun(run: GridCell[]): { table: OfficeContentNode; from: 
         for (const k of seen) support[k]++;
     }
     const keep = colStarts.map((_, k) => support[k] >= GRID_COL_MIN_SUPPORT);
-    if (keep.filter(Boolean).length < GRID_MIN_COLS) return null;
+    if (twoColumns ? keep.filter(Boolean).length !== 2 : keep.filter(Boolean).length < GRID_MIN_COLS) return null;
 
     // Count each row's cells that land in a kept column, then trim only leading/trailing sparse rows so
     // a lone title above the grid, or a stray line below it, is not swept in.
@@ -1540,8 +1594,9 @@ function recoverGridFromRun(run: GridCell[]): { table: OfficeContentNode; from: 
     if (grid.filter(r => keptCount(r) >= 2).length < GRID_MIN_MULTICELL_ROWS) return null;
 
     const gridCells = grid.flatMap(r => r.cells.filter(c => keep[nearestCluster(c.cx, colStarts)]));
-    if (gridCells.length < GRID_MIN_COLS * GRID_MIN_ROWS) return null;
+    if (gridCells.length < minCols * GRID_MIN_ROWS) return null;
     if (median(gridCells.map(c => c.len)) > GRID_MEDIAN_CELL_CAP) return null;
+    if (twoColumns && !twoColumnGrid(grid, colStarts, keep)) return null;
 
     // Vertical adjacency: a genuine grid has an even row pitch; a big jump between two rows means a
     // paragraph break was folded in, so bail rather than glue unrelated blocks together.
@@ -1558,6 +1613,30 @@ function recoverGridFromRun(run: GridCell[]): { table: OfficeContentNode; from: 
     if (to - from + 1 !== idxs.length) return null;
 
     return { table: gridToTable(grid, colStarts, keep), from, to };
+}
+
+/**
+ * Whether grid rows (their columns by their cells' left edges) are a table of two columns, as
+ * {@link twoColumnTable} tells it of lines: each row two cells, tagged in the order of the rows (a label, its
+ * value, the next label: the producer reads across them; two columns of paragraphs it reads one after the
+ * other are two columns), the first column's no list's markers, and either ragged (their ends two lines'
+ * height and more apart) or of two words at most.
+ */
+function twoColumnGrid(grid: GridRow[], colStarts: number[], keep: boolean[]): boolean {
+    const rows = grid.map(r => r.cells.filter(c => keep[nearestCluster(c.cx, colStarts)]));
+    if (rows.some(r => r.length !== 2)) return false;
+    // (In reading order: right to left, the right one first.)
+    const cells = rows.flat();
+    const rtl = cells.filter(c => RTL_LETTER.test(c.node.text || '')).length * 2 > cells.length;
+    const read = rows.map(r => [...r].sort((a, b) => rtl ? b.cx - a.cx : a.cx - b.cx));
+    if (read.flat().some((c, k, all) => k > 0 && c.index < all[k - 1].index)) return false;
+    const firsts = read.map(r => r[0]);
+    const text = (c: GridCell) => (c.node.text || '').trim();
+    if (firsts.every(c => detectLineMarker(text(c)) || STANDALONE_MARKER_RE.test(text(c)))) return false;
+    let least = Infinity, most = -Infinity;
+    for (const c of firsts) { const b = c.node.bounds!, end = rtl ? b.x : b.x + b.width; least = Math.min(least, end); most = Math.max(most, end); }
+    const lineHeight = median(firsts.map(c => c.bottom - c.top)) || 12;
+    return most - least >= 2 * lineHeight || median(firsts.map(c => text(c).split(/\s+/).length)) <= 2;
 }
 
 /**
@@ -1587,7 +1666,9 @@ export function recoverTaggedGrids(nodes: OfficeContentNode[]): OfficeContentNod
             run.push({ node: nodes[j], index: j, cx: b.x + b.width / 2, top: b.y, bottom: b.y + b.height, len: (nodes[j].text || '').trim().length });
             j++;
         }
-        const found = recoverGridFromRun(run);
+        // (By their centres, as a calendar's are set; else, of two columns, by their left edges, as labels and their
+        // values are: a browser tags a table of them with no borders or headers as no table.)
+        const found = recoverGridFromRun(run) ?? recoverGridFromRun(run.map(c => ({ ...c, cx: c.node.bounds!.x })), true);
         if (!found) { out.push(nodes[i]); i++; continue; }
         // Emit the paragraphs before the grid untouched, then the table, then continue after the grid.
         for (let k = i; k < found.from; k++) out.push(nodes[k]);
