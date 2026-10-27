@@ -8,8 +8,10 @@
  * WOFF2 specification, section 5), which is rebuilt here. fontkit reads both formats, but neither its
  * subset of a WOFF2 font nor a WOFF or WOFF2 file embedded whole is a font viewers draw.
  *
- * The TrueType outlines of the glyphs drawn are checked before they are embedded, and a color font's
- * character whose glyph draws nothing is not counted as one the font draws (see TrueTypeOutlines).
+ * The TrueType outlines of the glyphs drawn are checked before they are embedded, and a character whose
+ * glyph draws nothing (empty, or a color glyph's stand-in) is not counted as one the font draws, unless it
+ * is blank by design, or a mark a font that substitutes glyphs draws with its letter (see TrueTypeOutlines,
+ * and the engine's BLANK).
  *
  * @module generators/pdf/fontFiles
  */
@@ -589,6 +591,14 @@ export function colorTables(sfnt: Uint8Array): string[] {
     return COLOR_TABLES.filter(tag => sfntTable(sfnt, tag));
 }
 
+/** The tables a font substitutes glyphs by as it shapes text: OpenType's, and Apple's. */
+const SUBSTITUTION_TABLES = ['GSUB', 'morx', 'mort'];
+
+/** Whether an sfnt substitutes glyphs as it shapes text (see SUBSTITUTION_TABLES); not one whose table lies outside the file. */
+export function substitutes(sfnt: Uint8Array): boolean {
+    try { return SUBSTITUTION_TABLES.some(tag => sfntTable(sfnt, tag)); } catch { return false; }
+}
+
 /**
  * The TrueType outlines (`glyf`) of a font, read as viewers read them, or undefined for a font of other
  * outlines (CFF).
@@ -710,10 +720,10 @@ export class TrueTypeOutlines {
     }
 
     /**
-     * Whether a glyph draws anything: a contour of three points or more, its own or a component's. The
-     * glyph of a character in a color font (Apple Color Emoji, Noto Color Emoji) is drawn from the color
-     * tables, and its outline is empty or a placeholder of single points; one that cannot be read draws
-     * nothing either.
+     * Whether a glyph draws anything: a contour of three points or more, its own or a component's. An
+     * empty glyph draws nothing (a font's blank, or its defect), nor does the glyph of a character in a
+     * color font (Apple Color Emoji, Noto Color Emoji), drawn from the color tables, whose outline is
+     * empty or a placeholder of single points; one that cannot be read draws nothing either.
      */
     draws(id: number): boolean {
         const known = this.drawing.get(id);

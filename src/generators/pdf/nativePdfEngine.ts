@@ -27,7 +27,7 @@ import { sanitizeOfficePackageUrl } from '../../utils/sanitize.js';
 import { cssColorHex } from '../../utils/colorUtils.js';
 import { formatListNumber } from '../../utils/listMarkers.js';
 import { drawSvg, readSvg } from './svgDrawing.js';
-import { colorTables, fontkitUnbrotli, nativeUnbrotli, sfntOf, trueTypeOutlines, Unbrotli, UnreadableFont } from './fontFiles.js';
+import { colorTables, fontkitUnbrotli, nativeUnbrotli, sfntOf, substitutes, trueTypeOutlines, Unbrotli, UnreadableFont } from './fontFiles.js';
 
 /** The largest of `values` and `floor`, without spreading them into one call (which a long list overflows). */
 function maxOf(values: readonly number[], floor: number): number {
@@ -67,14 +67,17 @@ function isInvisible(cp: number): boolean {
 }
 
 /**
- * Characters a font draws nothing for by design: spaces, controls and format characters, and those Unicode
- * says are ignored where they are not supported (variation selectors, fillers). Any other character a
- * color font maps to a glyph that draws nothing is not the font's to draw (its glyph is drawn from color
- * images or layers a PDF does not hold; see embedFonts); in another font an empty glyph is its blank.
+ * Characters a font draws nothing for by design: spaces, controls and format characters, those Unicode
+ * says are ignored where they are not supported (variation selectors, fillers), and U+2800 BRAILLE PATTERN
+ * BLANK, the blank cell. Any other character a font maps to a glyph that draws nothing is not the font's
+ * to draw, but for a combining mark drawn with its letter (see Face.has): a font after it that draws it
+ * does, and one no font draws is lost (see embedFonts). Such a glyph is the font's defect (U+FC39 in one
+ * of Fontsource's files of Noto Sans Arabic), or a color glyph's stand-in, drawn from color images or
+ * layers a PDF does not hold.
  */
 const BLANK = /[\p{Z}\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}]/u;
 function isBlank(cp: number): boolean {
-    return isInvisible(cp) || BLANK.test(String.fromCodePoint(cp));
+    return isInvisible(cp) || cp === 0x2800 || BLANK.test(String.fromCodePoint(cp));
 }
 
 /** Hebrew, Arabic and the other right-to-left blocks of the Basic Multilingual Plane. */
@@ -84,6 +87,8 @@ function isRtlChar(cp: number): boolean {
 
 const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
 const OTHER_SPACE = /[\p{Zs}\u000B\u000C\u2028\u2029]/u;
+/** What text is cut into words at. */
+const WHITESPACE = /\s/;
 const CONTROL = /\p{Cc}/u;
 /** The most code points shaped as one string (see NativeLayout.segments). */
 const MAX_SHAPED = 256;
@@ -426,7 +431,15 @@ interface LineLayout { align?: TextAlignment; firstLine?: number; lineMultiple?:
 /** One embedded font and the code points it has a glyph for. */
 interface Face {
     font: any;
+    /** Whether the font draws the character: its glyph draws something, or the character is blank by design (see BLANK). */
     covers: (cp: number) => boolean;
+    /**
+     * Whether the font may draw the character: it covers it, or its glyph for it is empty in a font that
+     * substitutes glyphs as it shapes text (GSUB, morx). There a combining mark drawn with the letter
+     * before it (an invisible virama that stacks the next letter, a mark composed into its letter) may
+     * have an empty glyph of its own; a font that substitutes none draws an empty glyph as nothing.
+     */
+    has: (cp: number) => boolean;
     /** For a font given (not a Standard-14 one): the number a glyph is shown by, the glyph kept in the font (see glyphCoder). */
     code?: (glyph: any) => number;
 }
@@ -1494,25 +1507,31 @@ class NativeLayout {
     /**
      * Makes text drawable in a style before it is measured or drawn: a tab is four spaces, a line break
      * or a space the fonts lack a plain space (a drawn string cannot hold a line break), and any other
-     * character none of the style's fonts has is a `?`, counted for the one warning
-     * {@link reportLostCharacters} gives, unless `count` is false (text measured, not drawn).
+     * character none of the style's fonts draws is a `?`, counted for the one warning
+     * {@link reportLostCharacters} gives, unless `count` is false (text measured, not drawn). A combining
+     * mark the font of the character before it has stays, drawn with it (see segments).
      */
     private enc(text: string, key: FaceKey = 'regular', count = true): string {
         const chain = this.fonts[key];
         let out = '';
+        // (The font the character last written is drawn in, as segments finds it; none after a space, where
+        // text is cut into words, so a mark there is one standing alone.)
+        let previous: Face | undefined;
+        const write = (s: string) => { out += s; previous = WHITESPACE.test(s) ? undefined : chain.find(face => face.covers(s.codePointAt(0)!)); };
         for (const ch of text) {
             const cp = ch.codePointAt(0)!;
-            if (cp === 0x09) out += '    ';
-            else if (cp === 0x0A || cp === 0x0D) out += ' ';
+            if (cp === 0x09) write('    ');
+            else if (cp === 0x0A || cp === 0x0D) write(' ');
             else if (cp === 0xAD) { /* a soft hyphen shows only where a line is broken at it, and none is */ }
-            else if (chain.some(face => face.covers(cp))) out += ch;
+            else if ((isInvisible(cp) || COMBINING_MARK.test(ch)) && previous?.has(cp)) out += ch;
+            else if (chain.some(face => face.covers(cp))) write(ch);
             else if (isInvisible(cp)) { /* draws nothing: no loss */ }
             // A space of another width (an em space, a thin space, an ideographic space) or a line
             // separator the fonts lack is a space; any other control character draws nothing.
-            else if (OTHER_SPACE.test(ch)) out += ' ';
+            else if (OTHER_SPACE.test(ch)) write(' ');
             else if (CONTROL.test(ch)) { /* no glyph: no loss */ }
             else {
-                out += '?';
+                write('?');
                 if (!count) continue;
                 this.lostCharacters++;
                 if (this.lostSample.length < 8 && !this.lostSample.includes(ch)) this.lostSample.push(ch);
@@ -1524,14 +1543,15 @@ class NativeLayout {
     /** Warns, once, of the characters no font could draw: how many, and the first few distinct ones. */
     reportLostCharacters(): void {
         if (!this.lostCharacters) return;
-        const feature = this.customFonts ? 'characters none of the given fonts has (native engine)' : 'non-WinAnsi characters (native engine)';
+        const feature = this.customFonts ? 'characters none of the given fonts draws (native engine)' : 'non-WinAnsi characters (native engine)';
         this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature, reason: 'unencodable-text', count: this.lostCharacters, sample: this.lostSample.join('') });
     }
 
     /**
      * Splits drawable text into stretches of one font each: every character goes to the first font of
-     * the style that has it. A combining mark or a joiner stays with the font of the character before
-     * it when that font has it, since a mark drawn in another font is not attached to its letter.
+     * the style that draws it. A combining mark or a joiner stays with the font of the character before
+     * it when that font has it (see Face.has), since a mark drawn in another font is not attached to its
+     * letter.
      */
     private segments(text: string, key: FaceKey): { text: string; face: Face }[] {
         const chain = this.fonts[key];
@@ -1542,10 +1562,11 @@ class NativeLayout {
             const attached = isInvisible(cp) || COMBINING_MARK.test(ch);
             let face: Face | undefined;
             if (chain.length === 1) face = chain[0];
-            else if (current && attached && current.face.covers(cp)) face = current.face;
-            else face = chain.find(f => f.covers(cp));
-            if (!face) { if (isInvisible(cp)) continue; face = chain[chain.length - 1]; }
-            const drawn = chain.length === 1 || face.covers(cp) ? ch : '?';
+            else if (current && attached && current.face.has(cp)) face = current.face;
+            // (A mark enc kept with its letter, here at the start of a stretch cut from it: in a font that has it.)
+            else face = chain.find(f => f.covers(cp)) ?? (attached ? chain.find(f => f.has(cp)) : undefined);
+            let drawn = ch;
+            if (!face) { if (isInvisible(cp)) continue; face = chain[chain.length - 1]; drawn = '?'; }
             // A stretch is shaped as one string, in time that grows with the square of its length on a run
             // of marks (fontkit), so it is cut at MAX_SHAPED code points: before a character that starts a
             // cluster, or, in a cluster longer than that (a letter under thousands of marks), anywhere.
@@ -3294,7 +3315,7 @@ function fontBytes(value: unknown, name: string, reportWarning: (type: OfficeWar
  * guardEmbedding). A color font none of whose characters has an outline is reported, and not used.
  */
 async function embedFonts(pdf: any, lib: any, pc: FullGeneratorConfig['pdfConfig'], config: OfficeParserAST['config'], reportWarning: (type: OfficeWarningType, info?: any) => void): Promise<{ fonts: Fonts; custom: boolean }> {
-    const standard = (font: any): Face => ({ font, covers: winAnsiCovers });
+    const standard = (font: any): Face => ({ font, covers: winAnsiCovers, has: winAnsiCovers });
     const std: Record<FaceKey, Face> = {
         regular: standard(await pdf.embedFont(lib.StandardFonts.Helvetica)),
         bold: standard(await pdf.embedFont(lib.StandardFonts.HelveticaBold)),
@@ -3354,24 +3375,28 @@ async function embedFonts(pdf: any, lib: any, pc: FullGeneratorConfig['pdfConfig
             const cff = sfnt.length >= 4 && sfnt[0] === 0x4F && sfnt[1] === 0x54 && sfnt[2] === 0x54 && sfnt[3] === 0x4F;
             const outlines = trueTypeOutlines(sfnt);
             const color = colorTables(sfnt);
-            // A character is the font's to draw when its glyph draws something (or it is blank by nature): a
-            // color font's glyph is drawn from tables a PDF does not hold, and its outline, drawn instead,
-            // showed nothing while the character was counted as drawn.
-            const draws = (fontkitFont: any, cp: number): boolean => {
-                if (isBlank(cp)) return true;
+            // How a font draws a character: `drawn` when its glyph draws something, or the character is
+            // blank by design (see BLANK); `empty` when its glyph draws nothing in a font that substitutes
+            // glyphs, which only a combining mark drawn with its letter is drawn with (see Face.has). Any
+            // other character goes to a font after it that draws it, or is lost: drawn blank, it showed
+            // nothing while it was counted as drawn. A color font's empty glyph stands in for a color one,
+            // drawn from tables a PDF does not hold, so it is not the font's at all, nor is a glyph that
+            // cannot be read.
+            const shapes = !color.length && substitutes(sfnt);
+            const drawing = (fontkitFont: any, cp: number): 'drawn' | 'empty' | undefined => {
+                if (isBlank(cp)) return 'drawn';
                 let glyph: any;
-                try { glyph = fontkitFont.glyphForCodePoint(cp); } catch { return false; }
-                // (Only a color font's outlines stand in for what it draws: another font's empty glyph is
-                // the font's blank by design, as U+2800 BRAILLE PATTERN BLANK's. A glyph that cannot be read
-                // is no font's.)
-                if (outlines) return color.length ? outlines.draws(glyph?.id) : outlines.reads(glyph?.id);
-                if (!color.length) return true;
-                try { return glyph.path.commands.some((c: any) => c.command !== 'moveTo' && c.command !== 'closePath'); } catch { return false; }
+                try { glyph = fontkitFont.glyphForCodePoint(cp); } catch { return undefined; }
+                if (outlines) return outlines.draws(glyph?.id) ? 'drawn' : shapes && outlines.reads(glyph?.id) ? 'empty' : undefined;
+                // (A CFF font's outlines, as fontkit reads them.)
+                let draws: boolean;
+                try { draws = glyph.path.commands.some((c: any) => c.command !== 'moveTo' && c.command !== 'closePath'); } catch { return undefined; }
+                return draws ? 'drawn' : shapes ? 'empty' : undefined;
             };
             // A font of color glyphs alone draws none of its characters: it is reported, and not used.
             if (color.length) {
                 const probe = fontkit.create(sfnt);
-                if (!probe.characterSet.some((cp: number) => !isBlank(cp) && draws(probe, cp))) {
+                if (!probe.characterSet.some((cp: number) => !isBlank(cp) && drawing(probe, cp) === 'drawn')) {
                     reportWarning(OfficeWarningType.INVALID_CONFIG_VALUE, { option: `pdfConfig.${name}`, value: `a color font (${color.map(t => t.trim()).join(', ')})`, expected: "a font of outlines: the native engine draws a font's outlines, and this font's glyphs are color images or layers", fallback: undefined });
                     inBuffer.set(span, null);
                     return undefined;
@@ -3384,17 +3409,16 @@ async function embedFonts(pdf: any, lib: any, pc: FullGeneratorConfig['pdfConfig
             // them in failed halfway through the layout, naming no font.
             if (!Number.isFinite(font.embedder?.font?.getGlyph?.(0)?.advanceWidth)) throw new UnreadableFont('its glyph widths (hmtx, hhea, maxp) cannot be read');
             const set = new Set<number>(font.getCharacterSet());
-            const drawn = new Map<number, boolean>();
-            const covers = (cp: number): boolean => {
-                if (!set.has(cp)) return false;
-                let known = drawn.get(cp);
-                if (known === undefined) drawn.set(cp, known = draws(font.embedder.font, cp));
-                return known;
+            const drawings = new Map<number, 'drawn' | 'empty' | undefined>();
+            const drawingOf = (cp: number): 'drawn' | 'empty' | undefined => {
+                if (!set.has(cp)) return undefined;
+                if (!drawings.has(cp)) drawings.set(cp, drawing(font.embedder.font, cp));
+                return drawings.get(cp);
             };
             guardShaping(font);
             guardEmbedding(font, glyphs => outlines?.check(glyphs), error => (error as any)?.officeIssue ? error as Error
                 : getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, config, `pdfConfig.${name} could not be embedded (${(error as any)?.message || String(error)})`));
-            face = { font, covers, code: glyphCoder(font, lib) };
+            face = { font, covers: cp => drawingOf(cp) === 'drawn', has: cp => drawingOf(cp) !== undefined, code: glyphCoder(font, lib) };
         } catch (e: any) {
             throw getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, config, `pdfConfig.${name} could not be read as a TrueType, OpenType, WOFF or WOFF2 font (${e?.message || String(e)})`);
         }

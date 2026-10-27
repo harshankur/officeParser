@@ -1661,9 +1661,15 @@ export interface PdfGeneratorConfig {
      * `fonts`, text stays in the Standard-14 fonts (bold and italic included) and these draw only the
      * characters those lack.
      *
-     * A character is drawn by the first font that has a glyph for it (in a color font, a glyph of outlines). The Standard-14 fonts have
-     * neither the rupee sign `₹` (U+20B9) nor the ruble sign `₽` (U+20BD), nor any emoji; a font must
-     * be given for them, and which characters a font has is that font's (of Fontsource's files, Noto
+     * A character is drawn by the first font whose glyph for it draws something. A font whose glyph
+     * for it is empty is passed over, and a character no font draws is drawn as `?` and reported with
+     * the characters no font has: an empty glyph is a font's defect, or, in a color font, the stand-in
+     * for a color glyph. A character blank by design (a space, a control or format character, the
+     * Braille blank cell U+2800) is drawn by the first font that has it, and so is a combining mark
+     * that a font substituting glyphs as it shapes (`GSUB`, `morx`) has with the letter before it (an
+     * invisible virama that stacks the next letter). The Standard-14 fonts have neither the rupee
+     * sign `₹` (U+20B9) nor the ruble sign `₽` (U+20BD), nor any emoji; a font must be given for
+     * them, and which characters a font has is that font's (of Fontsource's files, Noto
      * Sans has both signs in its `latin-ext` file and neither in its `latin` one, and Noto Sans
      * Devanagari has `₹` but not `₽`). Emoji are drawn by a monochrome font of outlines such as Noto
      * Emoji. A color emoji font (Noto Color Emoji, Apple Color Emoji) draws them from color images or

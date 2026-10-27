@@ -2437,26 +2437,47 @@ async function runNativePdfEngineTests(): Promise<GenFeatureTest[]> {
         }
         return out;
     };
-    // The glyph of Cyrillic П made empty as a font keeps one (no data: loca gives it its end as its start),
-    // and, in another font, made of itself (a composite glyph whose one component is itself: fontkit,
-    // reading it, filled the heap and ended the process).
-    const emptied = liberation.slice();
-    {
-        const view = new DataView(emptied.buffer), loca = tableAt(emptied, 'loca');
-        const long = view.getInt16(tableAt(emptied, 'head').offset + 50) === 1;
-        const id = reference.glyphForCodePoint(0x041F).id;
+    /** A font with the glyph Liberation Sans draws this character with made empty, as a font keeps one (no data: loca gives it its end as its start). */
+    const withEmptyGlyph = (source: Uint8Array, cp: number): Uint8Array => {
+        const font = source.slice();
+        const view = new DataView(font.buffer), loca = tableAt(font, 'loca');
+        const long = view.getInt16(tableAt(font, 'head').offset + 50) === 1;
+        const id = reference.glyphForCodePoint(cp).id;
         if (long) view.setUint32(loca.offset + id * 4, view.getUint32(loca.offset + (id + 1) * 4));
         else view.setUint16(loca.offset + id * 2, view.getUint16(loca.offset + (id + 1) * 2));
-    }
+        return font;
+    };
+    /**
+     * Liberation Sans with this character (one after U+2666 and before U+F001) given an empty glyph: the
+     * cmap's segment of U+266A to U+266C moved to end at it, and the glyph of U+266C, now its, made empty.
+     */
+    const emptyAt = (cp: number): Uint8Array => {
+        const font = liberation.slice();
+        const view = new DataView(font.buffer), cmap = tableAt(font, 'cmap').offset;
+        // (Its two subtables are one table, of format 4: once moved, no segment ends at U+266C to be moved again.)
+        for (let i = 0; i < view.getUint16(cmap + 2); i++) {
+            const table = cmap + view.getUint32(cmap + 8 + i * 8);
+            if (view.getUint16(table) !== 4) continue;
+            const segments = view.getUint16(table + 6) / 2;
+            for (let s = 0; s < segments; s++) {
+                const end = table + 14 + s * 2, start = end + 2 + segments * 2, delta = start + segments * 2;
+                if (view.getUint16(end) !== 0x266C) continue;
+                const shift = cp - 0x266C;
+                view.setUint16(end, cp);
+                view.setUint16(start, view.getUint16(start) + shift);
+                view.setInt16(delta, view.getInt16(delta) - shift);
+            }
+        }
+        return withEmptyGlyph(font, 0x266C);
+    };
+    // The glyph of Cyrillic П made empty, and, in another font, made of itself (a composite glyph whose
+    // one component is itself: fontkit, reading it, filled the heap and ended the process).
+    const emptied = withEmptyGlyph(liberation, 0x041F);
     const selfMade = withGlyphs([0x041F], (view, at, id) => { view.setInt16(at, -1); view.setUint16(at + 10, 0); view.setUint16(at + 12, id); });
-    // An empty glyph is a font's own blank (Braille's blank cell, a font's empty marks), as viewers draw it.
-    const blankAlone = [await native(scriptsAst, { fallbackFonts: [emptied] }), await native(scriptsAst, { fallbackFonts: [emptied], subsetFonts: false })];
-    results.push(mk('a character whose glyph is empty is drawn by its font, blank',
-        'no loss with the font alone, subset or whole', blankAlone.map(out => JSON.stringify(lossOf(out.messages)?.details)).join(' | '),
-        blankAlone.every(out => !lossOf(out.messages) && out.text.includes('ривет') && out.text.includes('Καλημέρα')),
-        "a font's blank glyph (U+2800, Braille's blank cell) was drawn as ? and counted lost"));
-    // In a color font, an empty glyph is a color glyph's stand-in, and a glyph made of itself is in any font no glyph.
+    // An empty glyph draws nothing: a font's defect (U+FC39 in one of Fontsource's files of Noto Sans
+    // Arabic), or, in a color font, a color glyph's stand-in; and a glyph made of itself is no glyph.
     for (const [what, bytes, why] of [
+        ['empty', emptied, "a font's empty glyph drew a blank where the character was, and nothing was reported lost"],
         ['empty in a color font', renamed(emptied, 'prep', 'sbix'), 'a color font drew a blank where its color glyph was, and viewers showed a gap'],
         ['made of itself', selfMade, 'fontkit, reading a glyph made of itself, filled the heap and ended the process'],
     ] as [string, Uint8Array, string][]) {
@@ -2468,6 +2489,40 @@ async function runNativePdfEngineTests(): Promise<GenFeatureTest[]> {
             alone.every(out => lossOf(out.messages)?.details.sample === 'П' && out.text.includes('ривет') && out.text.includes('Καλημέρα')) && !lossOf(backed.messages) && scriptWords.every(w => backed.text.includes(w)),
             why));
     }
+    // The font after it draws it, not the empty glyph: П in Liberation Sans Bold, given after the font whose П is empty.
+    const laterAst = synthAst('md', [{ type: 'paragraph', children: [{ type: 'text', text: 'Пример' }] }] as OfficeContentNode[]);
+    const later = await OfficeGenerator.generate(laterAst, 'pdf' as any, { pdfConfig: { engine: 'native', fonts: { regular: emptied }, fallbackFonts: [liberationBold] } } as any);
+    const laterBack: any = await OfficeParser.parseOffice(Buffer.from(later.value as Uint8Array), { ...PARSER_CONFIG, ocr: false });
+    const laterRuns: string[] = [];
+    const runsOf = (node: any) => { if (node?.type === 'text' && node.text) laterRuns.push(`${node.text}${node.formatting?.bold ? ' (bold)' : ''}`); (node?.children || []).forEach(runsOf); };
+    laterBack.content.forEach(runsOf);
+    results.push(mk('a character whose glyph is empty is drawn by a font after it that draws it',
+        'П in the bold font after it, the rest in the font given, no loss', `${JSON.stringify(laterRuns)}; ${JSON.stringify(lossOf((later as any).messages || [])?.details)}`,
+        laterRuns.some(r => r.startsWith('П') && r.endsWith('(bold)')) && laterRuns.some(r => r.includes('ример') && !r.endsWith('(bold)')) && !lossOf((later as any).messages || []),
+        "a font's empty glyph was drawn, blank, though a font after it drew the character (U+FC39 in Noto Sans Arabic's 400 weight, with its 500 weight after it)"));
+    // A character blank by design is drawn by a font whose glyph for it is empty: U+2800 BRAILLE PATTERN
+    // BLANK, as Apple Braille has it (without the font, the Standard-14 fonts have no U+2800).
+    const brailleBlank = String.fromCodePoint(0x2800);
+    const brailleAst = synthAst('md', [{ type: 'paragraph', children: [{ type: 'text', text: `Braille ${brailleBlank} blank` }] }] as OfficeContentNode[]);
+    const brailleFont = emptyAt(0x2800);
+    const braille = [await native(brailleAst, { fallbackFonts: [brailleFont] }), await native(brailleAst, { fallbackFonts: [brailleFont], subsetFonts: false })];
+    const brailleWithout = await native(brailleAst);
+    results.push(mk('a character blank by design whose glyph is empty is drawn by its font',
+        'no loss with the font, subset or whole; U+2800 counted lost without it', `${braille.map(out => JSON.stringify(lossOf(out.messages)?.details)).join(' | ')} | ${JSON.stringify(lossOf(brailleWithout.messages)?.details)}`,
+        braille.every(out => !lossOf(out.messages) && out.text.includes('Braille') && out.text.includes('blank')) && lossOf(brailleWithout.messages)?.details.sample === brailleBlank,
+        "a font's blank glyph (U+2800, Braille's blank cell) was drawn as ? and counted lost"));
+    // A combining mark whose glyph is empty is drawn with its letter in a font that substitutes glyphs as it
+    // shapes (an invisible virama stacking the next letter, a mark composed into its letter): U+3099 after
+    // A. In a font that substitutes none (its GSUB renamed) the empty glyph draws nothing, and the mark is
+    // lost, as is the mark after a space, with no letter to be drawn with.
+    const markFont = emptyAt(0x3099);
+    const mark = String.fromCodePoint(0x3099);
+    const markOf = async (text: string, font: Uint8Array) => lossOf((await native(synthAst('md', [{ type: 'paragraph', children: [{ type: 'text', text }] }] as OfficeContentNode[]), { fonts: { regular: font } })).messages)?.details;
+    const marks = [await markOf(`xA${mark}x`, markFont), await markOf(`xA${mark}x`, renamed(markFont, 'GSUB', 'GSUX')), await markOf(`x ${mark}x`, markFont)];
+    results.push(mk('a combining mark whose glyph is empty is drawn with its letter only in a font that substitutes glyphs',
+        'no loss after A in the font; U+3099 lost in the font without GSUB, and after a space', JSON.stringify(marks),
+        !marks[0] && marks[1]?.sample === mark && marks[2]?.sample === mark,
+        "a mark's empty glyph was drawn as nothing in a font that could not draw it, and nothing was reported lost"));
     // A color font: its glyphs drawn from a table a PDF does not hold (here every outline emptied, and a
     // table named sbix, as Apple Color Emoji's), so none of its characters is drawn.
     const colorFont = renamed(withGlyphs(reference.characterSet, (view, at) => view.setInt16(at, 0)), 'prep', 'sbix');
