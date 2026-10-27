@@ -987,6 +987,12 @@ export interface OfficeIssue {
     code: OfficeWarningType | OfficeErrorType;
     /** Optional additional context or original error object. */
     details?: any;
+    /**
+     * The page of the PDF being read that the issue is on (1-based), where the reader knows it: a
+     * picture that could not be extracted or decoded, a page or its links that could not be read, an
+     * object a page waited for, and the page a content budget ran out on. The message names it too.
+     */
+    page?: number;
 }
 
 /**

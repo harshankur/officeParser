@@ -7863,6 +7863,77 @@ async function testPdfIdeographLookalikes(): Promise<void> {
 }
 
 /**
+ * A PDF warning about a page says which (`OfficeIssue.page`), so a caller acts on it without reading the
+ * message: a picture pdf.js could not decode (which was dropped with no warning at all), a page that
+ * could not be loaded, links past the annotation budget and a page past the operator budget. A warning
+ * about the whole document has no page.
+ */
+async function testPdfWarningPages(): Promise<void> {
+    const { deflateSync } = await import('zlib');
+    const pdfFrom = (objects: (string | Buffer)[]): Buffer => {
+        const parts: Buffer[] = [Buffer.from('%PDF-1.7\n')];
+        const offsets: number[] = [];
+        let at = parts[0].length;
+        objects.forEach((o, i) => { const b = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), typeof o === 'string' ? Buffer.from(o, 'latin1') : o, Buffer.from('\nendobj\n')]); offsets.push(at); at += b.length; parts.push(b); });
+        parts.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+        return Buffer.concat(parts);
+    };
+    const stream = (content: Buffer, dict = '') => Buffer.concat([Buffer.from(`<< /Length ${content.length} ${dict} >>\nstream\n`), content, Buffer.from('\nendstream')]);
+    const flate = (content: Buffer, dict = '') => stream(deflateSync(content), `/Filter /FlateDecode ${dict}`);
+    const issues = async (pdf: Buffer, config: object = {}) => {
+        const found: any[] = [];
+        const ast = await OfficeParser.parseOffice(pdf, { fileType: 'pdf', onWarning: (issue: any) => found.push(issue), ...config } as any) as OfficeParserAST;
+        return { ast, found };
+    };
+    const blank = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>';
+
+    // A JPEG pdf.js cannot decode, drawn twice on page 2 beside one it can: reported once, with its page.
+    const pictures = pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>', blank,
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Bad 6 0 R /Good 7 0 R >> >> /Contents 5 0 R >>',
+        stream(Buffer.from('q 50 0 0 50 0 0 cm /Bad Do Q q 50 0 0 50 50 0 cm /Bad Do Q q 50 0 0 50 0 50 cm /Good Do Q')),
+        stream(Buffer.from('not a JPEG'), '/Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode'),
+        stream(Buffer.alloc(48, 0x80), '/Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceRGB /BitsPerComponent 8'),
+    ]);
+    const read = await issues(pictures, { extractAttachments: true });
+    const lost = read.found.filter(issue => issue.code === 'IMAGE_EXTRACTION_FAILED');
+    assert.strictEqual(lost.length, 1, `an undecodable picture is reported once; got ${JSON.stringify(read.found.map(i => i.code))}`);
+    assert.strictEqual(lost[0].page, 2, `an undecodable picture's warning names its page; got ${lost[0].page}`);
+    assert.ok(/page 2/.test(lost[0].message) && /could not decode/.test(String(lost[0].details)), `the warning says where and why; got ${lost[0].message} ${lost[0].details}`);
+    assert.strictEqual(read.ast.attachments.length, 1, 'the picture pdf.js decodes is still extracted');
+    const whole = read.found.find(issue => issue.code === 'PDF_NO_TEXT_EXTRACTED');
+    assert.ok(whole && !('page' in whole), 'a warning about the whole document has no page');
+    const withoutPictures = await issues(pictures);
+    assert.ok(!withoutPictures.found.some(issue => issue.code === 'IMAGE_EXTRACTION_FAILED'), 'pictures not asked for are not reported');
+
+    // Page 2 is not in the file.
+    const missing = await issues(pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R 9 0 R] /Count 2 >>', blank,
+    ]));
+    const notLoaded = missing.found.find(issue => issue.code === 'PAGE_LOAD_FAILED');
+    assert.strictEqual(notLoaded?.page, 2, `a page that cannot be loaded is named; got ${JSON.stringify(missing.found.map(i => [i.code, i.page]))}`);
+
+    // Ten pages sharing a hundred links, past a budget of 50 (plus one per 32 bytes of the file).
+    const links = await issues(pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', `<< /Type /Pages /Kids [${Array.from({ length: 10 }, (_, i) => `${5 + i} 0 R`).join(' ')}] /Count 10 >>`,
+        '<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (https://example.com/) >> >>', `[${'3 0 R '.repeat(100)}]`,
+        ...Array.from({ length: 10 }, () => '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots 4 0 R >>'),
+    ]), { pdfParserConfig: { maxAnnotations: 50 } });
+    const capped = links.found.find(issue => issue.code === 'ANNOTATION_EXTRACTION_FAILED');
+    assert.ok(capped && Number.isInteger(capped.page) && capped.page > 1 && capped.message.includes(`page ${capped.page}`), `the page the link budget ran out on is named; got ${JSON.stringify(capped)}`);
+
+    // Page 2 sets its text colour far more often than the operator budget allows.
+    const colours = await issues(pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>', blank,
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 5 0 R >>',
+        flate(Buffer.from('0 0 0 rg 1 0 0 rg '.repeat(20_000))),
+    ]), { pdfParserConfig: { maxOperators: 0 } });
+    const budget = colours.found.find(issue => issue.code === 'PDF_CONTENT_LIMIT_EXCEEDED');
+    assert.strictEqual(budget?.page, 2, `the page the operator budget ran out on is named; got ${JSON.stringify(colours.found.map(i => [i.code, i.page]))}`);
+    console.log('  PDF warning pages: All assertions passed ✓');
+}
+
+/**
  * RTF's symbol control words and control symbols are the characters they stand for: \emdash and the
  * rest were dropped, and \~ was read as a tilde.
  */
@@ -9565,6 +9636,7 @@ async function runTests(): Promise<void> {
         ['Slide text on its baselines', testSlideBaselines],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
+        ['PDF warning pages', testPdfWarningPages],
         ['Cancellation', testCancellation],
     ];
 

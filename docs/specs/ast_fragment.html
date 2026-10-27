@@ -379,6 +379,7 @@
     message: string;
     node?: OfficeContentNode; // the node that triggered the issue, if applicable
     details?: any;            // original error object or extra context
+    page?: number;            // the PDF page it is on (1-based), where the reader knows it
 }</code></pre>
     <p>Use <code>issue.code</code> for programmatic handling (e.g. <code>if (issue.code === 'OCR_FAILED') { ... }</code>).</p>
 

@@ -327,8 +327,9 @@ export const getWrappedError = (error: any, config: OfficeParserConfig, filePath
  * @param config - Optional parser configuration
  * @param info - Optional additional information for dynamic messages or context
  * @param error - Optional original error object
+ * @param where - Where in the document the issue is: the PDF page it is on (`OfficeIssue.page`)
  */
-export const logWarning = (type: OfficeWarningType, config?: OfficeParserConfig, info?: any, error?: any): void => {
+export const logWarning = (type: OfficeWarningType, config?: OfficeParserConfig, info?: any, error?: any, where?: { page?: number }): void => {
     let message: string;
     let details = info;
 
@@ -349,6 +350,7 @@ export const logWarning = (type: OfficeWarningType, config?: OfficeParserConfig,
         message,
         details
     };
+    if (where?.page !== undefined) issue.page = where.page;
 
     reportIssue(issue, config);
 };

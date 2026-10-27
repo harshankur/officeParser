@@ -387,7 +387,7 @@ async function resolveAnnotations(
         if (!read) return { links, highlights };
         annots = read;
     } catch (e) {
-        logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, config, page.pageNumber, e);
+        logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, config, page.pageNumber, e, { page: page.pageNumber });
         return { links, highlights };
     }
     annots = annots.slice(0, work.takeAnnotations(annots.length, page.pageNumber));
@@ -430,7 +430,7 @@ async function resolveAnnotations(
             links.push({ rect, meta });
         }
     }
-    if (capped) logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, config, page.pageNumber, `the page has more than ${MAX_PAGE_ANNOTATIONS} distinct links or highlight areas; the rest were not read`);
+    if (capped) logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, config, page.pageNumber, `the page has more than ${MAX_PAGE_ANNOTATIONS} distinct links or highlight areas; the rest were not read`, { page: page.pageNumber });
     return { links, highlights };
 }
 
@@ -858,7 +858,7 @@ class PdfWorkBudget {
         this.annotationsLeft -= count;
         if (this.annotationsLeft < 0 && !this.annotationsWarned) {
             this.annotationsWarned = true;
-            logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, this.config, pageNumber, 'the document\'s annotations passed pdfParserConfig.maxAnnotations (plus one per 32 bytes of the file); from this page on, the rest were not read');
+            logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, this.config, pageNumber, 'the document\'s annotations passed pdfParserConfig.maxAnnotations (plus one per 32 bytes of the file); from this page on, the rest were not read', { page: pageNumber });
         }
         return allowed;
     }
@@ -914,7 +914,7 @@ class PdfWorkBudget {
         this.operatorsLeft -= count;
         if (this.operatorsLeft >= 0) return true;
         this.operatorsSpent = true;
-        if (!this.cancelled) logWarning(OfficeWarningType.PDF_CONTENT_LIMIT_EXCEEDED, this.config, { limit: 'maxOperators', pageNumber });
+        if (!this.cancelled) logWarning(OfficeWarningType.PDF_CONTENT_LIMIT_EXCEEDED, this.config, { limit: 'maxOperators', pageNumber }, undefined, { page: pageNumber });
         return false;
     }
     /**
@@ -936,7 +936,7 @@ class PdfWorkBudget {
         this.spent = true;
         clearTimeout(this.timer);
         this.stop();
-        logWarning(OfficeWarningType.PDF_CONTENT_LIMIT_EXCEEDED, this.config, { limit, pageNumber, budgetMs: limit === 'maxTimeMs' ? this.timeLimit : undefined });
+        logWarning(OfficeWarningType.PDF_CONTENT_LIMIT_EXCEEDED, this.config, { limit, pageNumber, budgetMs: limit === 'maxTimeMs' ? this.timeLimit : undefined }, undefined, { page: pageNumber });
         try { Promise.resolve(this.pdfDocument.loadingTask.destroy()).catch(() => { /* already closed */ }); } catch { /* already closed */ }
         // A separate process ends at once, whatever it was doing.
         this.pdfProcess?.end();
@@ -1278,6 +1278,14 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
         const ctmStack: number[][] = [];
         let inlineSeq = 0;
         let missingReported = false;
+        // A picture pdf.js could not decode (its data damaged, or in a format it cannot read) arrives as
+        // nothing, or as no pixels: reported once for each picture, with its page, not dropped silently.
+        const undecodable = new Set<string>();
+        const reportUndecodable = (imgName: string): void => {
+            if (undecodable.has(imgName)) return;
+            undecodable.add(imgName);
+            logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `from page ${pageNumber}`, `pdf.js could not decode the image ${String(imgName)}`, { page: pageNumber });
+        };
 
         /**
          * Encodes one decoded image object to PNG at the current CTM and records it. Shared by the
@@ -1286,7 +1294,7 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
          * XObjects, but an inline image's declared dimensions reach `convertToRgbaBuffer` directly).
          */
         const pushImage = async (imgObj: any, imgName: string, placement: number[] = ctm): Promise<void> => {
-            if (!imgObj) return;
+            if (!imgObj) { reportUndecodable(imgName); return; }
             if (isBrowser && !imgObj.data && imgObj.bitmap) {
                 try {
                     const canvas = document.createElement('canvas');
@@ -1294,12 +1302,12 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
                     const ctx = canvas.getContext('2d');
                     if (ctx) { ctx.drawImage(imgObj.bitmap, 0, 0); imgObj.data = ctx.getImageData(0, 0, imgObj.width, imgObj.height).data; imgObj.kind = 3; }
                 } catch (e) {
-                    logWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, config, undefined, e);
+                    logWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, config, undefined, e, { page: pageNumber });
                 }
             }
-            if (!(imgObj.data && imgObj.width > 0 && imgObj.height > 0)) return;
+            if (!(imgObj.data && imgObj.width > 0 && imgObj.height > 0)) { reportUndecodable(imgName); return; }
             if (imgObj.width * imgObj.height > 40_000_000) {
-                logWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, config, `image on page ${pageNumber} is too large to extract (${imgObj.width}x${imgObj.height} pixels)`);
+                logWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, config, `image on page ${pageNumber} is too large to extract (${imgObj.width}x${imgObj.height} pixels)`, undefined, { page: pageNumber });
                 return;
             }
             // `placement` maps the image's unit square onto the page ([a,b,c,d,e,f]); it defaults to the
@@ -1312,7 +1320,7 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
                 const png = encodePng(imgObj.width, imgObj.height, new Uint8Array(rgba));
                 images.push({ name: imgName, bounds, png, pixelWidth: imgObj.width, pixelHeight: imgObj.height });
             } catch (e) {
-                logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `on page ${pageNumber}`, e);
+                logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `on page ${pageNumber}`, e, { page: pageNumber });
             }
         };
 
@@ -1347,7 +1355,7 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
                         }));
                         if (arrived === false) work.objectWaitRanOut();
                     } catch (e) {
-                        logWarning(OfficeWarningType.DEPENDENCY_LOAD_FAILED, config, dep, e);
+                        logWarning(OfficeWarningType.DEPENDENCY_LOAD_FAILED, config, dep, e, { page: pageNumber });
                     }
                 }
             }
@@ -1373,7 +1381,7 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
                     if (!hasObj && page.commonObjs.has(imgName)) { hasObj = true; targetObjs = page.commonObjs; }
                     if (!hasObj) {
                         // Not dropped silently: once per page, the images pdf.js never sent are reported.
-                        if (!missingReported) logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `from page ${pageNumber}`, `pdf.js did not send the image ${String(imgName)} it draws (or others after it on the page)`);
+                        if (!missingReported) logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `from page ${pageNumber}`, `pdf.js did not send the image ${String(imgName)} it draws (or others after it on the page)`, { page: pageNumber });
                         missingReported = true;
                         continue;
                     }
@@ -1392,7 +1400,7 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
             }
         }
     } catch (e) {
-        logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `from page ${pageNumber}`, e);
+        logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `from page ${pageNumber}`, e, { page: pageNumber });
     }
     return images;
 }
@@ -1718,7 +1726,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         } catch (e: any) {
             // A page failing because its parse has ended (its process ended with it) is not reported.
             work.throwIfCancelled();
-            logWarning(OfficeWarningType.PAGE_LOAD_FAILED, config, pageNum, e);
+            logWarning(OfficeWarningType.PAGE_LOAD_FAILED, config, pageNum, e, { page: pageNum });
         }
     }
     work.throwIfCancelled();
