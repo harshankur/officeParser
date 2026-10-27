@@ -33,6 +33,8 @@ import {
 import { resolveGeneratorConfig } from '../../src/utils/configUtils.js';
 import { createAST } from '../../src/utils/astUtils.js';
 import { isHeaderRow } from '../../src/utils/officeGenUtils.js';
+import { fontkitUnbrotli, nativeUnbrotli, sfntOf } from '../../src/generators/pdf/fontFiles.js';
+import { toWoff, toWoff2 } from '../helpers/webFontWriter';
 
 // ============================================================================
 // CONSTANTS & CONFIGURATION
@@ -2250,6 +2252,182 @@ async function runNativePdfEngineTests(): Promise<GenFeatureTest[]> {
         'PDF_GENERATION_FAILED naming pdfConfig.fonts.regular', badFontCode,
         badFontCode.startsWith('PDF_GENERATION_FAILED') && badFontCode.includes('pdfConfig.fonts.regular'),
         'drawing in another font without a word would be a different document'));
+
+    // --- Fonts in the web's formats, WOFF and WOFF2, are embedded as the font each holds ---
+    // (Written here from Liberation Sans by the test's own writer; a WOFF2 with its outlines, and its
+    // metrics, in the specification's transformed forms, and one with neither.)
+    const fontkitModule: any = await import('@pdf-lib/fontkit');
+    const fontkit = fontkitModule.default || fontkitModule;
+    const pdfLib: any = await import('pdf-lib');
+    const webFonts: Record<string, Uint8Array> = {
+        'WOFF': toWoff(liberation),
+        'WOFF2': toWoff2(liberation).bytes,
+        'WOFF2 (hmtx transformed)': toWoff2(liberation, { transformHmtx: true }).bytes,
+        'WOFF2 (outlines untransformed)': toWoff2(liberation, { transformGlyf: false }).bytes,
+    };
+    const reference = fontkit.create(liberation);
+    const referenceOutlines = new Set<string>();
+    for (let g = 0; g < reference.numGlyphs; g++) referenceOutlines.add(reference.getGlyph(g).path.toSVG());
+    /** How a font differs from Liberation Sans: its glyphs, code points, widths and outlines. */
+    const unlikeLiberation = (font: any): string[] => {
+        const problems: string[] = [];
+        if (font.numGlyphs !== reference.numGlyphs) problems.push(`${font.numGlyphs} glyphs`);
+        if (font.characterSet.join() !== reference.characterSet.join()) problems.push('another character set');
+        let outlines = 0, widths = 0;
+        for (let g = 0; g < Math.min(font.numGlyphs, reference.numGlyphs); g++) {
+            if (font.getGlyph(g).path.toSVG() !== reference.getGlyph(g).path.toSVG()) outlines++;
+            if (font.getGlyph(g).advanceWidth !== reference.getGlyph(g).advanceWidth) widths++;
+        }
+        if (outlines) problems.push(`${outlines} outlines differ`);
+        if (widths) problems.push(`${widths} widths differ`);
+        return problems;
+    };
+    for (const [format, bytes] of Object.entries(webFonts)) {
+        const unpacked = sfntOf(bytes, () => nativeUnbrotli() ?? fontkitUnbrotli(fontkit));
+        const viaFontkit = sfntOf(bytes, () => fontkitUnbrotli(fontkit));
+        const problems = unlikeLiberation(fontkit.create(unpacked));
+        if (Buffer.compare(Buffer.from(unpacked), Buffer.from(viaFontkit)) !== 0) problems.push("fontkit's Brotli decoder gave another font");
+        results.push(mk(`a ${format} font unpacks to the font it holds`,
+            'same glyphs, code points, widths and outlines as Liberation Sans, by either Brotli decoder', problems.join('; ') || 'the same',
+            problems.length === 0,
+            'a WOFF2 font was subset by fontkit into glyphs viewers drew blank, and a WOFF or WOFF2 embedded whole was not a font at all'));
+    }
+    /** The font programs a PDF embeds, decoded. */
+    const embeddedFonts = async (pdfBytes: Uint8Array): Promise<Uint8Array[]> => {
+        const doc = await pdfLib.PDFDocument.load(pdfBytes);
+        const programs: Uint8Array[] = [];
+        for (const [, object] of doc.context.enumerateIndirectObjects()) {
+            if (!(object instanceof pdfLib.PDFDict) || object.get(pdfLib.PDFName.of('Type')) !== pdfLib.PDFName.of('FontDescriptor')) continue;
+            for (const key of ['FontFile2', 'FontFile3']) {
+                const ref = object.get(pdfLib.PDFName.of(key));
+                if (ref) programs.push(pdfLib.decodePDFRawStream(doc.context.lookup(ref)).decode());
+            }
+        }
+        return programs;
+    };
+    /** What is wrong with the fonts a PDF embeds: each must be an sfnt of Liberation Sans's outlines. */
+    const unlikeEmbedded = (programs: Uint8Array[]): string[] => {
+        const problems: string[] = [];
+        if (!programs.length) problems.push('no font embedded');
+        for (const program of programs) {
+            const signature = (program[0] << 24 | program[1] << 16 | program[2] << 8 | program[3]) >>> 0;
+            // (A TrueType font starts 0x00010000, or `true`, as fontkit writes its subsets.)
+            if (signature !== 0x00010000 && signature !== 0x74727565) { problems.push(`a font file starting ${Buffer.from(program.subarray(0, 4)).toString('latin1')}`); continue; }
+            const font = fontkit.create(program);
+            let drawn = 0;
+            for (let g = 0; g < font.numGlyphs; g++) {
+                const outline = font.getGlyph(g).path.toSVG();
+                if (!outline) continue;
+                drawn++;
+                if (!referenceOutlines.has(outline)) { problems.push(`glyph ${g} is no glyph of the font given`); break; }
+            }
+            if (!drawn) problems.push('a font of no outlines');
+        }
+        return problems;
+    };
+    for (const format of ['WOFF', 'WOFF2']) {
+        for (const where of ['fonts', 'fallbackFonts']) {
+            for (const subsetFonts of [true, false]) {
+                const given = webFonts[format];
+                const out = await native(scriptsAst, { ...(where === 'fonts' ? { fonts: { regular: given, bold: given } } : { fallbackFonts: [given] }), subsetFonts });
+                const problems = unlikeEmbedded(await embeddedFonts(out.bytes));
+                const read = scriptWords.filter(w => out.text.includes(w)).length;
+                results.push(mk(`a ${format} font in pdfConfig.${where}, ${subsetFonts ? 'subset' : 'embedded whole'}, is drawn`,
+                    'every word read back, no loss warning, the font embedded a TrueType font of its outlines', `${read}/${scriptWords.length}; ${problems.join('; ') || 'a TrueType font of its outlines'}; ${JSON.stringify(lossOf(out.messages)?.details)}`,
+                    read === scriptWords.length && !lossOf(out.messages) && problems.length === 0,
+                    "a WOFF2 subset crashed the process or drew nothing; a WOFF or WOFF2 embedded whole was its own bytes, which viewers could not read"));
+            }
+        }
+    }
+
+    // --- A font that cannot be read or embedded fails the conversion, naming it, and never ends the process ---
+    const tableAt = (bytes: Uint8Array, tag: string) => {
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        for (let i = 0; i < view.getUint16(4); i++) {
+            const at = 12 + i * 16;
+            if (String.fromCharCode(...bytes.subarray(at, at + 4)) === tag) return { offset: view.getUint32(at + 8), length: view.getUint32(at + 12) };
+        }
+        return { offset: 0, length: 0 };
+    };
+    const failureOf = async (pdfConfig: any): Promise<string> => {
+        try { await native(scriptsAst, pdfConfig); return 'generated'; } catch (e: any) { return `${e?.officeIssue?.code}: ${e?.message}`; }
+    };
+    // Every glyph's outline placed past the end of glyf (its offsets in loca).
+    const misplaced = liberation.slice();
+    {
+        const view = new DataView(misplaced.buffer), loca = tableAt(misplaced, 'loca'), glyf = tableAt(misplaced, 'glyf');
+        const long = view.getInt16(tableAt(misplaced, 'head').offset + 50) === 1;
+        for (let i = 1; i < loca.length / (long ? 4 : 2); i++) long ? view.setUint32(loca.offset + i * 4, glyf.length + 4 * i) : view.setUint16(loca.offset + i * 2, (glyf.length + 4 * i) / 2);
+    }
+    const damagedWoff2 = webFonts['WOFF2'].slice();
+    for (let i = 200; i < 400; i++) damagedWoff2[i] ^= 0x5A;
+    for (const [what, bytes, cause] of [
+        ['a font whose outlines lie outside its glyf table', misplaced, 'lies outside its glyf table'],
+        ['a WOFF2 font whose compressed data is damaged', damagedWoff2, 'do not decompress'],
+        ['a WOFF2 font cut short', webFonts['WOFF2'].slice(0, 30_000), 'WOFF2 file ends before its data does'],
+    ] as [string, Uint8Array, string][]) {
+        const failures = [await failureOf({ fonts: { regular: bytes }, subsetFonts: true }), await failureOf({ fonts: { regular: bytes }, subsetFonts: false })];
+        results.push(mk(`${what} fails the conversion, subset or whole, naming the option`,
+            `PDF_GENERATION_FAILED naming pdfConfig.fonts.regular: ${cause}`, failures.join(' | '),
+            failures.every(f => f.startsWith('PDF_GENERATION_FAILED') && f.includes('pdfConfig.fonts.regular') && f.includes(cause)),
+            'a damaged font crashed the process from a timer fontkit set, or was embedded for viewers to draw nothing'));
+    }
+
+    // --- A character is a font's to draw only when its glyph draws something ---
+    /** Liberation Sans with the outline of the glyph of each of these characters changed by `change` (given the outline's offset). */
+    const withGlyphs = (codePoints: number[], change: (view: DataView, at: number, id: number) => void): Uint8Array => {
+        const font = liberation.slice();
+        const view = new DataView(font.buffer), loca = tableAt(font, 'loca'), glyf = tableAt(font, 'glyf');
+        const long = view.getInt16(tableAt(font, 'head').offset + 50) === 1;
+        for (const cp of codePoints) {
+            const id = reference.glyphForCodePoint(cp).id;
+            change(view, glyf.offset + (long ? view.getUint32(loca.offset + id * 4) : view.getUint16(loca.offset + id * 2) * 2), id);
+        }
+        return font;
+    };
+    // The glyph of Cyrillic П made empty (no contours), and, in another font, made of itself (a composite
+    // glyph whose one component is itself: fontkit, reading it, filled the heap and ended the process).
+    const emptied = withGlyphs([0x041F], (view, at) => view.setInt16(at, 0));
+    const selfMade = withGlyphs([0x041F], (view, at, id) => { view.setInt16(at, -1); view.setUint16(at + 10, 0); view.setUint16(at + 12, id); });
+    for (const [what, bytes] of [['empty', emptied], ['made of itself', selfMade]] as [string, Uint8Array][]) {
+        const alone = [await native(scriptsAst, { fallbackFonts: [bytes] }), await native(scriptsAst, { fallbackFonts: [bytes], subsetFonts: false })];
+        const backed = await native(scriptsAst, { fallbackFonts: [bytes, liberation] });
+        results.push(mk(`a character whose glyph is ${what} is drawn by the next font, or counted lost`,
+            'П counted lost with the font alone (subset or whole), the other words drawn; no loss with Liberation Sans after it',
+            `${alone.map(out => JSON.stringify(lossOf(out.messages)?.details)).join(' | ')} | ${JSON.stringify(lossOf(backed.messages)?.details)}`,
+            alone.every(out => lossOf(out.messages)?.details.sample === 'П' && out.text.includes('ривет') && out.text.includes('Καλημέρα')) && !lossOf(backed.messages) && scriptWords.every(w => backed.text.includes(w)),
+            'a character mapped to a glyph that draws nothing was counted as drawn, and viewers showed a gap'));
+    }
+    // A color font: its glyphs drawn from a table a PDF does not hold (here every outline emptied, and a
+    // table named sbix, as Apple Color Emoji's), so none of its characters is drawn.
+    const colorFont = withGlyphs(reference.characterSet, (view, at) => view.setInt16(at, 0));
+    for (let i = 0; i < new DataView(colorFont.buffer).getUint16(4); i++) {
+        const at = 12 + i * 16;
+        if (String.fromCharCode(...colorFont.subarray(at, at + 4)) === 'prep') colorFont.set([0x73, 0x62, 0x69, 0x78], at);
+    }
+    const colored = await native(scriptsAst, { fallbackFonts: [colorFont] });
+    const coloredOptions = colored.messages.filter((m: any) => m.code === OfficeWarningType.INVALID_CONFIG_VALUE).map((m: any) => String(m.message));
+    results.push(mk('a color font is reported and not used, its characters counted lost',
+        'INVALID_CONFIG_VALUE for pdfConfig.fallbackFonts[0] naming sbix; loss counted as without fonts', `${JSON.stringify(coloredOptions)}; ${JSON.stringify(lossOf(colored.messages)?.details)}`,
+        coloredOptions.some(m => m.includes('pdfConfig.fallbackFonts[0]') && m.includes('sbix')) && lossOf(colored.messages)?.details.count === plainLoss?.details.count,
+        'Apple Color Emoji drew nothing for an emoji, and nothing was reported lost'));
+
+    // fontkit failing as it writes a subset (on a later turn of the event loop, in @pdf-lib/fontkit 1.x).
+    const subsetType = Object.getPrototypeOf(fontkit.create(liberation).createSubset());
+    const encode = subsetType.encode;
+    let encodeCalls = 0;
+    subsetType.encode = function () { encodeCalls++; throw new RangeError('Index out of range'); };
+    let subsetFailure: string;
+    try {
+        subsetFailure = await failureOf({ fonts: { regular: liberation } });
+        await new Promise(resolve => setTimeout(resolve, 50));
+    } finally {
+        subsetType.encode = encode;
+    }
+    results.push(mk('fontkit failing to write a subset fails the conversion, and the process lives',
+        'PDF_GENERATION_FAILED naming pdfConfig.fonts.regular: Index out of range', `${encodeCalls} call(s); ${subsetFailure}`,
+        encodeCalls > 0 && subsetFailure.startsWith('PDF_GENERATION_FAILED') && subsetFailure.includes('pdfConfig.fonts.regular') && subsetFailure.includes('Index out of range'),
+        "fontkit writes a subset on a timer: what it threw there was no caller's to catch, and ended the process while the conversion never settled"));
 
     results.push(mk('a conversion with fonts leaves no global behind',
         'no regeneratorRuntime', typeof (globalThis as any).regeneratorRuntime,

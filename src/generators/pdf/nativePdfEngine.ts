@@ -27,6 +27,7 @@ import { sanitizeOfficePackageUrl } from '../../utils/sanitize.js';
 import { cssColorHex } from '../../utils/colorUtils.js';
 import { formatListNumber } from '../../utils/listMarkers.js';
 import { drawSvg, readSvg } from './svgDrawing.js';
+import { colorTables, fontkitUnbrotli, nativeUnbrotli, sfntOf, trueTypeOutlines, Unbrotli, UnreadableFont } from './fontFiles.js';
 
 /** The largest of `values` and `floor`, without spreading them into one call (which a long list overflows). */
 function maxOf(values: readonly number[], floor: number): number {
@@ -63,6 +64,16 @@ function isInvisible(cp: number): boolean {
     return cp === 0x200B || cp === 0x200C || cp === 0x200D || cp === 0x2060 || cp === 0xFEFF
         || cp === 0x200E || cp === 0x200F || (cp >= 0x202A && cp <= 0x202E) || (cp >= 0x2066 && cp <= 0x2069)
         || (cp >= 0xFE00 && cp <= 0xFE0F);
+}
+
+/**
+ * Characters a font draws nothing for by design: spaces, controls and format characters, and those Unicode
+ * says are ignored where they are not supported (variation selectors, fillers). Any other character a
+ * font maps to a glyph that draws nothing is not the font's to draw (see embedFonts).
+ */
+const BLANK = /[\p{Z}\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}]/u;
+function isBlank(cp: number): boolean {
+    return isInvisible(cp) || BLANK.test(String.fromCodePoint(cp));
 }
 
 /** Hebrew, Arabic and the other right-to-left blocks of the Basic Multilingual Plane. */
@@ -226,6 +237,43 @@ function glyphCoder(font: any, lib: any): (glyph: any) => number {
         embedder.embedFontStream = async (context: any) => context.register(context.flateStream(await embedder.serializeFont(), { Subtype: 'OpenType' }));
     }
     return note;
+}
+
+/**
+ * Makes a font given to the engine that cannot be embedded fail the conversion, with `fail`'s error
+ * (which names the font), when the PDF is saved. First the outlines of the glyphs it is to hold are given
+ * to `check` (see TrueTypeOutlines.check): a glyph that viewers cannot draw was embedded without a word.
+ * Then fontkit writes it: pdf-lib takes a font's subset from `@pdf-lib/fontkit` 1.x as a stream that
+ * fontkit writes on a later turn of the event loop, and a glyph it could not copy threw there, where no
+ * caller could catch it, and the process ended while the conversion waited. The subset's writing is
+ * wrapped so that what it throws is kept, and the font's embedding fails with it.
+ */
+function guardEmbedding(font: any, check: (glyphs: number[]) => void, fail: (error: unknown) => Error): void {
+    const embedder = font?.embedder;
+    if (!embedder || typeof embedder.embedIntoContext !== 'function') return;
+    const subset = embedder.subset;
+    let failure: { error: unknown } | undefined;
+    if (subset && typeof subset.encode === 'function') {
+        const encode = subset.encode;
+        subset.encode = function (this: unknown, ...args: unknown[]) {
+            try { return encode.apply(this, args); } catch (error) {
+                failure ??= { error };
+                return undefined;
+            }
+        };
+    }
+    const embedInto = embedder.embedIntoContext.bind(embedder);
+    embedder.embedIntoContext = async (...args: unknown[]) => {
+        let done: unknown;
+        try {
+            // (A subset holds the glyphs it was given, a font embedded whole writes the widths of those drawn.)
+            const glyphs: unknown[] = subset ? subset.glyphs ?? [] : (embedder.glyphCache?.access?.() ?? []).map((glyph: any) => glyph?.id);
+            check(glyphs.filter((id): id is number => typeof id === 'number'));
+            done = await embedInto(...args);
+        } catch (error) { throw fail(failure ? failure.error : error); }
+        if (failure) throw fail(failure.error);
+        return done;
+    };
 }
 
 /** Thrown out of a font's state machine when it runs past its bound (see guardShaping). */
@@ -3219,15 +3267,16 @@ function applyMetadata(pdf: any, m: OfficeMetadata): void {
 }
 
 /**
- * A font as a caller gives it: the bytes of a TrueType or OpenType file. Anything else given (a file
- * name, an empty file) is reported and the default font used, rather than passed over without a word.
+ * A font as a caller gives it: the bytes of a TrueType, OpenType, WOFF or WOFF2 file. Anything else
+ * given (a file name, an empty file) is reported and the default font used, rather than passed over
+ * without a word.
  */
 function fontBytes(value: unknown, name: string, reportWarning: (type: OfficeWarningType, info?: any) => void): Uint8Array | null {
     if (value === undefined || value === null) return null;
     if (value instanceof Uint8Array && value.byteLength) return value;
     if (value instanceof ArrayBuffer && value.byteLength) return new Uint8Array(value);
     const shown = value instanceof Uint8Array || value instanceof ArrayBuffer ? 'an empty file' : typeof value === 'string' ? value : Object.prototype.toString.call(value);
-    reportWarning(OfficeWarningType.INVALID_CONFIG_VALUE, { option: `pdfConfig.${name}`, value: shown, expected: 'the bytes of a TrueType or OpenType font file (a Uint8Array or ArrayBuffer)', fallback: undefined });
+    reportWarning(OfficeWarningType.INVALID_CONFIG_VALUE, { option: `pdfConfig.${name}`, value: shown, expected: 'the bytes of a TrueType, OpenType, WOFF or WOFF2 font file (a Uint8Array or ArrayBuffer)', fallback: undefined });
     return null;
 }
 
@@ -3237,7 +3286,8 @@ function fontBytes(value: unknown, name: string, reportWarning: (type: OfficeWar
  * drawn in the regular one given, or in its Standard-14 font when that is not given either, the
  * fallback fonts drawing what it lacks; code keeps Courier unless a `mono` font is given. A font file that
  * cannot be read fails the conversion, naming which one: drawing in another font without a word would
- * be a different document.
+ * be a different document. So does one fontkit cannot write into the PDF, when it is saved (see
+ * guardEmbedding). A color font none of whose characters has an outline is reported, and not used.
  */
 async function embedFonts(pdf: any, lib: any, pc: FullGeneratorConfig['pdfConfig'], config: OfficeParserAST['config'], reportWarning: (type: OfficeWarningType, info?: any) => void): Promise<{ fonts: Fonts; custom: boolean }> {
     const standard = (font: any): Face => ({ font, covers: winAnsiCovers });
@@ -3275,27 +3325,71 @@ async function embedFonts(pdf: any, lib: any, pc: FullGeneratorConfig['pdfConfig
     const custom = given.some(g => g.bytes) || fallbackGiven.some(g => g.bytes);
     if (!custom) return { fonts: Object.fromEntries(allKeys.map(key => [key, [std[key]]])) as Fonts, custom };
 
-    pdf.registerFontkit(await loadFontkit(config));
+    const fontkit = await loadFontkit(config);
+    pdf.registerFontkit(fontkit);
+    // (Brotli, for a WOFF2 font: Node's where it has one, else the decoder fontkit carries.)
+    let unbrotli: Unbrotli | undefined;
+    const brotli = () => unbrotli ??= nativeUnbrotli() ?? fontkitUnbrotli(fontkit);
     // The same bytes given for two styles are embedded once: the same view, or views of the same part of
     // one buffer (an ArrayBuffer given twice is viewed anew each time).
-    const embedded = new Map<ArrayBufferLike, Map<string, Face>>();
+    const embedded = new Map<ArrayBufferLike, Map<string, Face | null>>();
     const embed = async (name: string, bytes: Uint8Array | null): Promise<Face | undefined> => {
         if (!bytes) return undefined;
         const span = `${bytes.byteOffset}:${bytes.byteLength}`;
         let inBuffer = embedded.get(bytes.buffer);
         if (!inBuffer) embedded.set(bytes.buffer, inBuffer = new Map());
-        let face = inBuffer.get(span);
-        if (face) return face;
+        const known = inBuffer.get(span);
+        if (known !== undefined) return known ?? undefined;
+        let face: Face;
         try {
+            // A WOFF or WOFF2 font is embedded as the TrueType or OpenType font it holds: fontkit's subset
+            // of a WOFF2 font, and either embedded as it is, are fonts viewers do not draw.
+            const sfnt = sfntOf(bytes, brotli);
             // An OpenType font of CFF outlines (`OTTO`) is embedded whole: its subset (fontkit's) is not one
             // viewers draw (each glyph another's, or none).
-            const cff = bytes.length >= 4 && bytes[0] === 0x4F && bytes[1] === 0x54 && bytes[2] === 0x54 && bytes[3] === 0x4F;
-            const font = await pdf.embedFont(bytes, { subset: pc.subsetFonts !== false && !cff });
+            const cff = sfnt.length >= 4 && sfnt[0] === 0x4F && sfnt[1] === 0x54 && sfnt[2] === 0x54 && sfnt[3] === 0x4F;
+            const outlines = trueTypeOutlines(sfnt);
+            const color = colorTables(sfnt);
+            // A character is the font's to draw when its glyph draws something (or it is blank by nature): a
+            // color font's glyph is drawn from tables a PDF does not hold, and its outline, drawn instead,
+            // showed nothing while the character was counted as drawn.
+            const draws = (fontkitFont: any, cp: number): boolean => {
+                if (isBlank(cp)) return true;
+                let glyph: any;
+                try { glyph = fontkitFont.glyphForCodePoint(cp); } catch { return false; }
+                if (outlines) return outlines.draws(glyph?.id);
+                if (!color.length) return true;
+                try { return glyph.path.commands.some((c: any) => c.command !== 'moveTo' && c.command !== 'closePath'); } catch { return false; }
+            };
+            // A font of color glyphs alone draws none of its characters: it is reported, and not used.
+            if (color.length) {
+                const probe = fontkit.create(sfnt);
+                if (!probe.characterSet.some((cp: number) => !isBlank(cp) && draws(probe, cp))) {
+                    reportWarning(OfficeWarningType.INVALID_CONFIG_VALUE, { option: `pdfConfig.${name}`, value: `a color font (${color.map(t => t.trim()).join(', ')})`, expected: "a font of outlines: the native engine draws a font's outlines, and this font's glyphs are color images or layers", fallback: undefined });
+                    inBuffer.set(span, null);
+                    return undefined;
+                }
+            }
+            // (fontkit subsets no font of color layers, COLR, whose glyphs it reads as layers alone.)
+            const whole = cff || color.includes('COLR');
+            const font = await pdf.embedFont(sfnt, { subset: pc.subsetFonts !== false && !whole });
+            // Every glyph is placed by its width (hmtx, read with hhea and maxp): a font fontkit cannot read
+            // them in failed halfway through the layout, naming no font.
+            if (!Number.isFinite(font.embedder?.font?.getGlyph?.(0)?.advanceWidth)) throw new UnreadableFont('its glyph widths (hmtx, hhea, maxp) cannot be read');
             const set = new Set<number>(font.getCharacterSet());
+            const drawn = new Map<number, boolean>();
+            const covers = (cp: number): boolean => {
+                if (!set.has(cp)) return false;
+                let known = drawn.get(cp);
+                if (known === undefined) drawn.set(cp, known = draws(font.embedder.font, cp));
+                return known;
+            };
             guardShaping(font);
-            face = { font, covers: cp => set.has(cp), code: glyphCoder(font, lib) };
+            guardEmbedding(font, glyphs => outlines?.check(glyphs), error => (error as any)?.officeIssue ? error as Error
+                : getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, config, `pdfConfig.${name} could not be embedded (${(error as any)?.message || String(error)})`));
+            face = { font, covers, code: glyphCoder(font, lib) };
         } catch (e: any) {
-            throw getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, config, `pdfConfig.${name} could not be read as a TrueType or OpenType font (${e?.message || String(e)})`);
+            throw getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, config, `pdfConfig.${name} could not be read as a TrueType, OpenType, WOFF or WOFF2 font (${e?.message || String(e)})`);
         }
         inBuffer.set(span, face);
         return face;
