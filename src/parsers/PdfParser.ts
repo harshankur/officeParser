@@ -1518,15 +1518,17 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     if (!pdfProcess && !isBrowser) settleCallerPreloadedWorker();
     // pdf.js's worker for this parse runs at warning verbosity, and its warnings are taken: from the
     // separate process's messages; in this process from the console, one document at a time (see
-    // takeInProcessTurn), in a PDFWorker of the parse's own; in the browser from a Worker that sends them
-    // back (see openWarningWorker), or, where none can be made, from nowhere, pdf.js starting its own.
+    // takeInProcessTurn), in a PDFWorker of the parse's own, as also in a browser whose caller preloaded
+    // pdf.js's worker to run on the page (`globalThis.pdfjsWorker`: no Worker is started, nothing is
+    // fetched); in another browser from a Worker that sends them back (see openWarningWorker), or, where
+    // none can be made, from nowhere, pdf.js starting its own.
     let ownWorker: WarningWorker | undefined;
     let endTurn: (() => void) | undefined;
     let stopCapture: (() => void) | undefined;
     try {
         if (pdfProcess) {
             pdfProcess.onWarning(takeWarning);
-        } else if (isBrowser) {
+        } else if (isBrowser && !callerPreloadedWorker()) {
             ownWorker = await openWarningWorker(pdfjs, String(pdfjs.GlobalWorkerOptions.workerSrc ?? ''), takeWarning, config.abortSignal);
         } else {
             endTurn = await takeInProcessTurn(config.abortSignal);
