@@ -3,6 +3,10 @@ import { ChunkingConfig, CsvGeneratorConfig, DeepRequired, DocumentStructureChun
 const PDFJS_VERSION = '6.2.108';
 /** The pdf.js worker address the non-slim builds fall back to (see `allowRemoteAssets`). Empty in the slim builds. */
 export const DEFAULT_PDF_WORKER_SRC = typeof __SLIM__ !== 'undefined' && __SLIM__ ? '' : `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
+/** The folder of pdf.js's CMaps the non-slim builds fall back to in the browser (see `pdfCMapUrl`). Empty in the slim builds. */
+export const DEFAULT_PDF_CMAP_URL = typeof __SLIM__ !== 'undefined' && __SLIM__ ? '' : `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/cmaps/`;
+/** The folder of pdf.js's image decoders the non-slim builds fall back to in the browser (see `pdfDecoderUrl`). Empty in the slim builds. */
+export const DEFAULT_PDF_DECODER_URL = typeof __SLIM__ !== 'undefined' && __SLIM__ ? '' : `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/wasm/`;
 
 /**
  * The default regex used for identifying sentence boundaries.
@@ -68,6 +72,7 @@ const DEFAULT_PDF_PARSER_CONFIG: DeepRequired<PdfParserConfig> = {
     maxOperators: 250_000,
     maxAnnotations: 10_000,
     maxTimeMs: 5_000,
+    maxImagePixels: 40_000_000,
     separateProcess: true,
     processMemoryMb: 1024,
 };
@@ -104,6 +109,8 @@ export const DEFAULT_OFFICE_PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     serializeRawContent: true,
     preserveXmlWhitespace: false,
     pdfWorkerSrc: DEFAULT_PDF_WORKER_SRC,
+    pdfCMapUrl: DEFAULT_PDF_CMAP_URL,
+    pdfDecoderUrl: DEFAULT_PDF_DECODER_URL,
     includeBreakNodes: false,
     ignoreInternalLinks: false,
     ignorePageGeometry: false,

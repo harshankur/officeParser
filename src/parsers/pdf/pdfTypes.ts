@@ -144,4 +144,6 @@ export interface PdfLayoutConfig {
     maxOperators: number;
     maxAnnotations: number;
     maxTimeMs: number;
+    /** The most pixels a picture may have to be extracted (`pdfParserConfig.maxImagePixels`): at least 0, Infinity for no limit. */
+    maxImagePixels: number;
 }

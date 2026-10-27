@@ -133,13 +133,36 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
     [OfficeWarningType.INVALID_STYLE_MAP_TAG]: (tag: string) => `styleMap output.tag ${JSON.stringify(tag)} is not an allowed element name and was ignored; the node's default tag was used instead. A tag name is written into both the opening and closing tag, so only a known-safe set of block, heading and inline elements is accepted.`,
     [OfficeWarningType.PDF_STRUCT_TREE_UNRELIABLE]: (reason: string) => `PDF tagged-structure tree was not used${reason ? ` (${reason})` : ''}; recovered structure from page geometry instead.`,
     [OfficeWarningType.PDF_TEXT_ENCODING_SUSPECT]: (info: string) => `PDF text extraction produced many unmappable glyphs${info ? ` (${info})` : ''}; the font is likely missing a usable ToUnicode map, so the extracted text may be garbage. Consider OCR.`,
-    [OfficeWarningType.PDF_NO_TEXT_EXTRACTED]: (pages: number) => `No text was extracted from this PDF${pages ? ` (${pages} page${pages === 1 ? '' : 's'})` : ''}. It is very likely a scanned or image-only document with no text layer; set 'ocr: true' (with 'extractAttachments: true') to recognize text from the page images.`,
+    [OfficeWarningType.PDF_NO_TEXT_EXTRACTED]: (info: number | { pages: number; cMaps: string[] }) => {
+        const pages = typeof info === 'number' ? info : info?.pages;
+        const read = `No text was extracted from this PDF${pages ? ` (${pages} page${pages === 1 ? '' : 's'})` : ''}.`;
+        const cMaps = typeof info === 'object' && info ? info.cMaps : [];
+        if (cMaps?.length) return `${read} Its fonts read their text through ${cMaps.length === 1 ? 'a CMap' : 'CMaps'} that could not be loaded (${cMaps.join(', ')}; see PDF_ASSET_UNAVAILABLE), so the text in them is missing: set pdfCMapUrl to a folder holding pdf.js's cmaps/ files.`;
+        return `${read} It is very likely a scanned or image-only document with no text layer; set 'ocr: true' (with 'extractAttachments: true') to recognize text from the page images.`;
+    },
     [OfficeWarningType.PDF_OUTLINE_TRUNCATED]: (reason: string) => `PDF document outline (bookmarks) is incomplete${reason ? ` (${reason})` : ''}; ast.auxiliary.outline holds only what was recovered.`,
     [OfficeWarningType.PDF_CONTENT_LIMIT_EXCEEDED]: (info: { limit?: 'maxTextItems' | 'maxOperators' | 'maxTimeMs'; pageNumber?: number; budgetMs?: number } = {}) => {
         const at = info.pageNumber ? ` on page ${info.pageNumber}` : '';
         if (info.limit === 'maxOperators') return `PDF content limit reached${at}: pdf.js produced more drawing operators than pdfParserConfig.maxOperators allows (plus four per byte of the file), so from there on the document's images, text colours and font styles were not read; its text was. Nested form XObjects can multiply a few KB into millions of operators. Raise the limit if the document legitimately holds more.`;
         if (info.limit === 'maxTimeMs') return `PDF content limit reached${at}: pdf.js spent more CPU time on this document than pdfParserConfig.maxTimeMs allows (plus 20 ms per KB of the file${info.budgetMs !== undefined ? `: ${Math.round(info.budgetMs)} ms in all` : ''}), so the rest of the document was not read. Nested form XObjects can multiply a few KB into minutes of work. Raise the limit if the document legitimately needs more.`;
         return `PDF content limit reached${at}: pdf.js produced more text than pdfParserConfig.maxTextItems allows (plus one item per byte of the file, an item counting once more per 64 characters), so the rest of the document was not read. Nested form XObjects can multiply a few KB into millions of items. Raise the limit if the document legitimately holds more.`;
+    },
+    [OfficeWarningType.PDF_ASSET_UNAVAILABLE]: (info: { asset: string; kind: 'cmap' | 'decoder'; reason: 'missing' | 'failed' | 'blocked'; option: string; folder?: string; detail?: string; page?: number }) => {
+        const what = info.kind === 'cmap' ? `the CMap ${info.asset.replace(/\.bcmap$/, '')}` : `the image decoder ${info.asset}`;
+        const at = info.page !== undefined ? `, first needed on page ${info.page},` : '';
+        const why = info.reason === 'blocked'
+            ? `it would have come from the library's default CDN address, and allowRemoteAssets is false`
+            : info.reason === 'missing'
+                ? (info.detail && info.folder ? info.detail : `no folder is set for it`)
+                : `reading it failed${info.detail ? ` (${info.detail})` : ''}`;
+        const loss = info.kind === 'cmap'
+            ? `the text in the fonts that use it is missing`
+            : `pictures that need it (${info.asset === 'jbig2.wasm' ? 'JBIG2 and CCITT fax' : 'JPEG 2000'}) are not decoded, each reported with IMAGE_EXTRACTION_FAILED`;
+        const folder = info.kind === 'cmap' ? 'cmaps/' : 'wasm/';
+        const fix = info.reason === 'blocked'
+            ? `Set ${info.option} to a copy you host of pdf.js's ${folder} folder (from pdfjs-dist), or leave allowRemoteAssets on.`
+            : `Set ${info.option} to a folder holding pdf.js's ${folder} files (from pdfjs-dist).`;
+        return `pdf.js could not load ${what}${at} because ${why}: ${loss}. ${fix}`;
     },
     [OfficeWarningType.PDF_SEPARATE_PROCESS_UNAVAILABLE]: `pdf.js could not start in a separate process, so it runs in this one: a hostile PDF can then exhaust this process's memory, and the time pdf.js takes is not bounded (pdfParserConfig.maxTimeMs applies to the separate process; bound the parse with abortSignal). Set pdfParserConfig.separateProcess to false to read in this process without trying.`,
     [OfficeWarningType.OCR_REQUIRES_ATTACHMENTS]: () => `'ocr: true' was set without 'extractAttachments: true'; OCR runs over extracted images, so no OCR was performed. Add 'extractAttachments: true' to recognize text from the document's images.`,

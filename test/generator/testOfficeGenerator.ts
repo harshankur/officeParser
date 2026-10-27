@@ -78,6 +78,9 @@ const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     ignoreNotes: false,
     newlineDelimiter: '\n',
     pdfWorkerSrc: '',
+    // '' in Node is pdfjs-dist's own folders.
+    pdfCMapUrl: '',
+    pdfDecoderUrl: '',
     serializeRawContent: true,
     preserveXmlWhitespace: false,
     includeBreakNodes: false,
@@ -119,6 +122,7 @@ const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
         maxOperators: 250_000,
         maxAnnotations: 10_000,
         maxTimeMs: 5_000,
+        maxImagePixels: 40_000_000,
         // pdf.js in a process of its own, as it runs by default in Node.
         separateProcess: true,
         processMemoryMb: 1024,

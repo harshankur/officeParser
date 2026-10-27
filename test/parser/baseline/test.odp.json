@@ -20,6 +20,8 @@
     "ignoreNotes": false,
     "newlineDelimiter": "\n",
     "pdfWorkerSrc": "",
+    "pdfCMapUrl": "",
+    "pdfDecoderUrl": "",
     "serializeRawContent": true,
     "preserveXmlWhitespace": false,
     "includeBreakNodes": true,
@@ -63,6 +65,7 @@
       "maxOperators": 250000,
       "maxAnnotations": 10000,
       "maxTimeMs": 5000,
+      "maxImagePixels": 40000000,
       "separateProcess": true,
       "processMemoryMb": 1024
     },

@@ -432,6 +432,8 @@ if (fileArg && !showHelp) {
     console.log('  --password=secret                           Password for an encrypted document (PDF, OOXML, or ODF)');
     console.log('                                              (or set OFFICEPARSER_PASSWORD to keep it out of the process list)');
     console.log('  --allowRemoteAssets=false                   Fail, not fetch, where the pdf.js worker or OCR files would come from a CDN (default: true)');
+    console.log('  --pdfCMapUrl=dir/                           Folder of pdf.js\'s CMaps, for CJK text in fonts a PDF does not embed (default: pdfjs-dist\'s cmaps/)');
+    console.log('  --pdfDecoderUrl=dir/                        Folder of pdf.js\'s JBIG2, CCITT and JPEG 2000 decoders (default: pdfjs-dist\'s wasm/)');
     console.log('  --ocrConfig.cacheMethod=none                Where OCR keeps language data: write | readOnly | refresh | none (default: write)');
     console.log('  --htmlParserConfig.preserveIframes          Keep non-YouTube <iframe> embeds (dropped by default)');
     console.log('  --htmlParserConfig.preserveComments         Keep HTML/EPUB <!-- --> comments as comment nodes (default: false)');
@@ -451,6 +453,7 @@ if (fileArg && !showHelp) {
     console.log('  --pdfParserConfig.maxOperators=250000       Base of the drawing operators kept, plus four per byte (default: 250000)');
     console.log('  --pdfParserConfig.maxAnnotations=10000      Base of the annotations read, plus one per 32 bytes (default: 10000)');
     console.log('  --pdfParserConfig.maxTimeMs=5000            Base of the CPU time the pdf.js process may spend, plus 20 ms per KB (default: 5000)');
+    console.log('  --pdfParserConfig.maxImagePixels=40000000   Most pixels a picture may have to be extracted (default: 40000000)');
     console.log('  --pdfParserConfig.separateProcess=false     Run pdf.js in this process, not a separate one (default: true)');
     console.log('  --pdfParserConfig.processMemoryMb=1024      Heap of the separate pdf.js process (default: 1024)');
     console.log('');

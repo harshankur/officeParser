@@ -116,6 +116,9 @@ const FULL_CONFIG: DeepRequired<OfficeParserConfig> = {
     ignoreNotes: false,
     newlineDelimiter: '\n',
     pdfWorkerSrc: '',
+    // '' in Node is pdfjs-dist's own folders.
+    pdfCMapUrl: '',
+    pdfDecoderUrl: '',
     serializeRawContent: true,
     preserveXmlWhitespace: false,
     includeBreakNodes: true,
@@ -159,6 +162,7 @@ const FULL_CONFIG: DeepRequired<OfficeParserConfig> = {
         maxOperators: 250_000,
         maxAnnotations: 10_000,
         maxTimeMs: 5_000,
+        maxImagePixels: 40_000_000,
         // pdf.js in a process of its own, as it runs by default in Node.
         separateProcess: true,
         processMemoryMb: 1024,
@@ -3501,6 +3505,26 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
         add('ignoreInternalLinks removes internal links', internal === 0, 0, internal);
     } catch (e: any) {
         add('ignoreInternalLinks parse', false, 'parsed', e?.message || String(e));
+    }
+
+    // --- cjk_ccitt_jpx fixture: what pdf.js reads only with the files it loads on demand ---
+    // Japanese text in a font the file does not embed (read through the CMap UniJIS-UTF16-H), a CCITT
+    // Group 4 picture (jbig2.wasm) and a JPEG 2000 picture (openjpeg.wasm): lost, all three, while pdf.js
+    // was given none of its folders. The same in a separate process and in this one.
+    for (const separateProcess of [true, false]) {
+        try {
+            const issues: any[] = [];
+            const ast = await OfficeParser.parseOffice(path.join(pdfDir, 'cjk_ccitt_jpx.pdf'), { ocr: false, extractAttachments: true, onWarning: (issue: any) => issues.push(issue), pdfParserConfig: { separateProcess } });
+            const where = separateProcess ? 'separate process' : 'in process';
+            const text = textOf(ast);
+            add(`CJK text of a CMap read (${where})`, text.includes('日本語テキスト'), '日本語テキスト', text);
+            const pngs = ast.attachments.filter((a: any) => a.mimeType === 'image/png');
+            add(`CCITT and JPEG 2000 pictures decoded (${where})`, pngs.length === 2, 2, pngs.length);
+            const lost = issues.filter(i => i.code === 'PDF_ASSET_UNAVAILABLE' || i.code === 'IMAGE_EXTRACTION_FAILED');
+            add(`No CMap or decoder missing (${where})`, lost.length === 0, 'none', lost.map(i => i.code).join(', '));
+        } catch (e: any) {
+            add(`cjk_ccitt_jpx parse (separateProcess ${separateProcess})`, false, 'parsed', e?.message || String(e));
+        }
     }
 
     // --- columns_untagged fixture: reading order left column before right column ---

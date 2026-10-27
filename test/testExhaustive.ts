@@ -7944,6 +7944,88 @@ async function testPdfWarningPages(): Promise<void> {
 }
 
 /**
+ * The pictures pdf.js leaves out without drawing them are reported, with their page: one larger than
+ * `pdfParserConfig.maxImagePixels` (named, and extracted when the option is raised) and a small inline
+ * picture pdf.js cannot decode, in a separate process and in this one. pdf.js says so only in its
+ * worker's warnings, whose wording a test checks is still in the installed worker. Two PDFs read at once
+ * in this process keep their pictures (pdf.js's decoders followed the document opened last, so one
+ * closing left the other's waiting on it), checked in a fresh process, where no decoder is loaded yet.
+ */
+async function testPdfPicturesLeftOut(): Promise<void> {
+    const { deflateSync } = await import('zlib');
+    const pdfFrom = (objects: (string | Buffer)[]): Buffer => {
+        const parts: Buffer[] = [Buffer.from('%PDF-1.7\n')];
+        const offsets: number[] = [];
+        let at = parts[0].length;
+        objects.forEach((o, i) => { const b = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), typeof o === 'string' ? Buffer.from(o, 'latin1') : o, Buffer.from('\nendobj\n')]); offsets.push(at); at += b.length; parts.push(b); });
+        parts.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+        return Buffer.concat(parts);
+    };
+    const stream = (content: Buffer, dict = '') => Buffer.concat([Buffer.from(`<< /Length ${content.length} ${dict} >>\nstream\n`), content, Buffer.from('\nendstream')]);
+    // An A3 page scanned at 600 dpi, one bit a pixel (69.6 million pixels), and an inline JPEG that is not one.
+    const [width, height] = [7016, 9921];
+    const scan = pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im1 5 0 R >> /Font << /F1 6 0 R >> >> /Contents 4 0 R >>',
+        stream(Buffer.from('q 400 0 0 560 100 100 cm /Im1 Do Q\nq 20 0 0 20 50 50 cm BI /W 10 /H 10 /BPC 8 /CS /RGB /F /DCT ID \xff\xd8\xff\xe0garbagegarbage\xff\xd9 EI Q\nBT /F1 12 Tf 72 40 Td (A scanned page.) Tj ET', 'latin1')),
+        stream(deflateSync(Buffer.alloc(Math.ceil(width / 8) * height, 0xff), { level: 9 }), `/Type /XObject /Subtype /Image /Width ${width} /Height ${height} /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /FlateDecode`),
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    ]);
+    const read = async (config: object) => {
+        const found: any[] = [];
+        const ast = await OfficeParser.parseOffice(scan, { fileType: 'pdf', extractAttachments: true, onWarning: (issue: any) => found.push(issue), ...config } as any) as OfficeParserAST;
+        return { ast, lost: found.filter(issue => issue.code === 'IMAGE_EXTRACTION_FAILED') };
+    };
+    for (const separateProcess of [true, false]) {
+        const { ast, lost } = await read({ pdfParserConfig: { separateProcess } });
+        const where = separateProcess ? 'in a separate process' : 'in this process';
+        assert.strictEqual(ast.attachments.length, 0, `${where}: neither picture is extracted`);
+        assert.ok(lost.length === 2 && lost.every(issue => issue.page === 1), `${where}: both pictures are reported, with their page; got ${JSON.stringify(lost.map(i => [i.page, String(i.details)]))}`);
+        assert.ok(lost.some(issue => /pdfParserConfig\.maxImagePixels \(40000000 pixels\)/.test(String(issue.details))), `${where}: the large picture's warning names the option`);
+        assert.ok(lost.some(issue => /inline picture/.test(String(issue.details))), `${where}: the inline picture's warning says what it was`);
+    }
+    const raised = await read({ pdfParserConfig: { maxImagePixels: 80e6 } });
+    assert.strictEqual(raised.ast.attachments.length, 1, 'with maxImagePixels raised, the large picture is extracted');
+    assert.ok(raised.lost.length === 1 && !/maxImagePixels/.test(String(raised.lost[0].details)), `and only the inline picture is reported; got ${JSON.stringify(raised.lost.map(i => String(i.details)))}`);
+    const untold = await OfficeParser.parseOffice(scan, { fileType: 'pdf', onWarning: (issue: any) => assert.notStrictEqual(issue.code, 'IMAGE_EXTRACTION_FAILED', 'pictures not asked for are not reported') } as any) as OfficeParserAST;
+    assert.strictEqual(untold.attachments.length, 0);
+    const invalid: any[] = [];
+    await OfficeParser.parseOffice(scan, { fileType: 'pdf', onWarning: (issue: any) => invalid.push(issue), pdfParserConfig: { maxImagePixels: -1 } } as any);
+    assert.ok(invalid.some(issue => issue.code === 'INVALID_CONFIG_VALUE' && /maxImagePixels/.test(issue.message)), 'a negative maxImagePixels is reported');
+
+    // pdf.js's own words for what it leaves out, in each worker the library runs.
+    const { PDFJS_WARNINGS } = await import('../src/parsers/pdf/pdfAssets');
+    const pdfjsRoot = path.dirname(path.dirname(path.dirname(require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs'))));
+    for (const worker of ['legacy/build/pdf.worker.mjs', 'build/pdf.worker.mjs', 'build/pdf.worker.min.mjs']) {
+        const source = fs.readFileSync(path.join(pdfjsRoot, worker), 'utf8');
+        for (const [name, words] of Object.entries(PDFJS_WARNINGS)) {
+            assert.ok(source.includes(words), `pdf.js's ${worker} still words its ${name} warning ${JSON.stringify(words)}`);
+        }
+    }
+
+    // Two at once in a fresh process: the pictures' document opened first, a text one second and done first.
+    const os = await import('os');
+    const childProcess = await import('child_process');
+    const script = path.join(os.tmpdir(), `officeparser-pdf-together-${process.pid}.ts`);
+    fs.writeFileSync(script, [
+        `const { OfficeParser } = require(${JSON.stringify(path.join(__dirname, '..', 'src', 'OfficeParser'))});`,
+        `const config = { extractAttachments: true, onWarning: () => {}, pdfParserConfig: { separateProcess: false } };`,
+        `Promise.all([`,
+        `    OfficeParser.parseOffice(${JSON.stringify(path.join(__dirname, 'files', 'pdf', 'cjk_ccitt_jpx.pdf'))}, config),`,
+        `    OfficeParser.parseOffice(${JSON.stringify(path.join(__dirname, 'files', 'pdf', 'columns_untagged.pdf'))}, config),`,
+        `]).then(([pictures, text]) => { console.log('PICTURES ' + pictures.attachments.length + ' ' + text.attachments.length); process.exit(0); });`,
+    ].join('\n'));
+    let out = '';
+    try {
+        out = childProcess.execFileSync(process.execPath, [...process.execArgv, script], { encoding: 'utf8', timeout: 60_000 });
+    } finally {
+        fs.rmSync(script, { force: true });
+    }
+    assert.ok(/PICTURES 2 0/.test(out), `two PDFs read at once in one process keep their pictures; got ${JSON.stringify(out.trim())}`);
+    console.log('  PDF pictures left out: All assertions passed ✓');
+}
+
+/**
  * RTF's symbol control words and control symbols are the characters they stand for: \emdash and the
  * rest were dropped, and \~ was read as a tilde.
  */
@@ -9647,6 +9729,7 @@ async function runTests(): Promise<void> {
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['PDF warning pages', testPdfWarningPages],
+        ['PDF pictures left out', testPdfPicturesLeftOut],
         ['Cancellation', testCancellation],
     ];
 

@@ -3425,6 +3425,7 @@ async function parserHardeningTests() {
     const outlined = outlinedRun.result;
     check('pdf: bookmarks naming pages deep in a long page tree are resolved within maxTimeMs', !outlined.error && outlinedRun.within && outlined.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED'), `${outlinedRun.ms}ms ${deepOutline.length} bytes ${outlined.codes} ${outlined.error}`);
     await pdfProcessTests({ pdfFrom, flate, pdfForms, drawnOften, parseQuiet, files });
+    await pdfAssetTests();
 
     // Tables write within bounds however ragged or spanned: rows padded to the widest (a 4 KB DOCX,
     // 100 million positions), a staircase of rows each spanning a thousand below (a 1.5 KB EPUB, 500 MB
@@ -4396,6 +4397,99 @@ async function pdfProcessTests(h: {
     const afterHereRun = await withinTime(4000, () => read(drawnOften, { pdfParserConfig: { maxTimeMs: 200 } }));
     const afterHere = afterHereRun.result;
     check('pdf: after pdf.js ran in this process, the next parse still runs it in a separate one', !afterHere.error && afterHereRun.within && named(afterHere.warnings, 'maxTimeMs'), `${afterHereRun.ms}ms ${afterHere.codes} ${afterHere.error}`);
+}
+
+/**
+ * The files pdf.js loads for a PDF (its CMaps and image decoders) are read only as asked for by name,
+ * from inside their folder, bounded in size and time, never from the built-in CDN address under
+ * `allowRemoteAssets: false`; and nothing waiting on one outlives its bound or the parse's abortSignal.
+ */
+async function pdfAssetTests() {
+    console.log('\n=== PDF assets: CMaps and image decoders ===');
+    const { PdfAssetSession, MAX_ASSET_BYTES } = await import('../../src/parsers/pdf/pdfAssets');
+    const { DEFAULT_OFFICE_PARSER_CONFIG, DEFAULT_PDF_CMAP_URL, DEFAULT_PDF_DECODER_URL } = await import('../../src/defaults');
+    const { pathToFileURL } = await import('url');
+    const http = await import('http');
+    const fixture = path.join(__dirname, '..', 'files', 'pdf', 'cjk_ccitt_jpx.pdf');
+    const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'officeparser-assets-'));
+    const cmaps = path.join(folder, 'cmaps');
+    fs.mkdirSync(cmaps);
+    fs.writeFileSync(path.join(folder, 'Outside.bcmap'), 'outside');
+    fs.writeFileSync(path.join(cmaps, 'Small-H.bcmap'), 'small');
+    fs.writeFileSync(path.join(cmaps, 'Huge-H.bcmap'), Buffer.alloc(MAX_ASSET_BYTES + 1));
+    const session = (urls: { cMapUrl: string; wasmUrl: string }, blocked = false) => {
+        const warnings: any[] = [];
+        const config = { ...DEFAULT_OFFICE_PARSER_CONFIG, onWarning: (issue: any) => warnings.push(issue) } as any;
+        const assets = new PdfAssetSession({
+            cMapUrl: { url: urls.cMapUrl, option: 'pdfCMapUrl', blocked },
+            wasmUrl: { url: urls.wasmUrl, option: 'pdfDecoderUrl', blocked },
+        }, config, 40_000_000);
+        return { assets, warnings };
+    };
+    const outcome = async (run: () => Promise<Uint8Array>): Promise<string> => { try { return `read ${(await run()).length}`; } catch (e: any) { return String(e?.message); } };
+    try {
+        const local = session({ cMapUrl: `${pathToFileURL(cmaps).href}/`, wasmUrl: `${pathToFileURL(folder).href}/` });
+        check('pdf assets: a CMap in its folder is read', (await outcome(() => local.assets.fetchAsset({ kind: 'cMapUrl', filename: 'Small-H.bcmap' }))) === 'read 5');
+        const escaped = await outcome(() => local.assets.fetchAsset({ kind: 'cMapUrl', filename: '../Outside.bcmap' }));
+        check('pdf assets: a name leading out of the folder is refused', !escaped.startsWith('read'), escaped);
+        const kind = await outcome(() => local.assets.fetchAsset({ kind: 'standardFontDataUrl', filename: 'FoxitSans.pfb' }));
+        check('pdf assets: a kind of file not loaded is refused', !kind.startsWith('read'), kind);
+        const named = await Promise.all(['qcms_bg.wasm', 'jbig2_nowasm_fallback.js', '/etc/passwd'].map(filename => outcome(() => local.assets.fetchAsset({ kind: 'wasmUrl', filename }))));
+        check('pdf assets: a file that is not one of the decoders is refused', named.every(o => !o.startsWith('read')), named.join(' | '));
+        const huge = await outcome(() => local.assets.fetchAsset({ kind: 'cMapUrl', filename: 'Huge-H.bcmap' }));
+        check('pdf assets: a file past the size limit is refused and reported', !huge.startsWith('read') && local.warnings.some(w => w.code === 'PDF_ASSET_UNAVAILABLE' && w.details?.reason === 'failed' && w.details?.asset === 'Huge-H.bcmap'), `${huge} ${JSON.stringify(local.warnings.map(w => w.details))}`);
+        check('pdf assets: refused names and kinds are not reported as missing files', local.warnings.length === 1, local.warnings.map(w => w.details?.asset).join());
+
+        // Under allowRemoteAssets: false the built-in CDN address is never asked; a document needing a file says so.
+        const originalFetch = globalThis.fetch;
+        let fetches = 0;
+        globalThis.fetch = (async () => { fetches++; throw new Error('no fetch'); }) as any;
+        try {
+            const blocked = session({ cMapUrl: DEFAULT_PDF_CMAP_URL, wasmUrl: DEFAULT_PDF_DECODER_URL }, true);
+            const refused = await Promise.all([
+                outcome(() => blocked.assets.fetchAsset({ kind: 'cMapUrl', filename: 'UniJIS-UTF16-H.bcmap' })),
+                outcome(() => blocked.assets.fetchAsset({ kind: 'wasmUrl', filename: 'jbig2.wasm' })),
+            ]);
+            const reasons = blocked.warnings.filter(w => w.code === 'PDF_ASSET_UNAVAILABLE').map(w => `${w.details.asset} ${w.details.reason}`);
+            check('pdf assets: under allowRemoteAssets false the CDN is not asked, and each file needed is reported', fetches === 0 && refused.every(o => !o.startsWith('read')) && reasons.join() === 'UniJIS-UTF16-H.bcmap blocked,jbig2.wasm blocked' && blocked.warnings.every(w => /allowRemoteAssets/.test(w.message)), `${fetches} fetches, ${reasons}`);
+            check('pdf assets: under allowRemoteAssets false pdf.js is given no decoder address to import a fallback from', blocked.assets.documentOptions().wasmUrl === undefined);
+            // The address a caller gives is used as given, through fetch().
+            const given = session({ cMapUrl: 'https://cmaps.example/', wasmUrl: '' });
+            await outcome(() => given.assets.fetchAsset({ kind: 'cMapUrl', filename: 'UniJIS-UTF16-H.bcmap' }));
+            check('pdf assets: an address the caller gives is fetched', fetches === 1, `${fetches} fetches`);
+        } finally {
+            globalThis.fetch = originalFetch;
+        }
+
+        // A server that never answers: an abort ends the parse at once, and without one the file's own time bound does.
+        const hanging = http.createServer(() => { /* never answers */ });
+        await new Promise<void>(resolve => hanging.listen(0, '127.0.0.1', () => resolve()));
+        const address = `http://127.0.0.1:${(hanging.address() as any).port}/`;
+        try {
+            for (const separateProcess of [true, false]) {
+                const abortedRun = await withinTime(5000, async () => {
+                    try { await OfficeParser.parseOffice(fixture, { extractAttachments: true, onWarning: () => { }, abortSignal: AbortSignal.timeout(500), pdfCMapUrl: address, pdfDecoderUrl: address, pdfParserConfig: { separateProcess } } as any); return 'parsed'; } catch (e: any) { return String(e?.name); }
+                });
+                check(`pdf assets: an abort ends a parse waiting on a file that never comes (separateProcess ${separateProcess})`, abortedRun.within && abortedRun.result === 'AbortError', `${abortedRun.ms}ms ${abortedRun.result}`);
+            }
+            const warnings: any[] = [];
+            const timedRun = await withinTime(25_000, async () => {
+                warnings.length = 0;
+                const ast = await OfficeParser.parseOffice(fixture, { extractAttachments: true, onWarning: (issue: any) => warnings.push(issue), pdfCMapUrl: address } as any) as OfficeParserAST;
+                return ast.attachments.length;
+            });
+            const timedOut = warnings.find(w => w.code === 'PDF_ASSET_UNAVAILABLE');
+            check('pdf assets: a file that never comes is given up after its time bound, and the rest of the document is read', timedRun.within && timedRun.result === 2 && timedOut?.details?.reason === 'failed' && timedOut?.page === 1 && /longer than/.test(timedOut.message),
+                `${timedRun.ms}ms, ${timedRun.result} pictures, ${timedOut?.message}`);
+            const notText = warnings.find(w => w.code === 'PDF_NO_TEXT_EXTRACTED');
+            check('pdf assets: a document whose CMap could not be had is not called scanned', !!notText && /UniJIS-UTF16-H/.test(notText.message) && !/scanned/.test(notText.message), notText?.message);
+        } finally {
+            hanging.closeAllConnections?.();
+            hanging.close();
+        }
+    } finally {
+        fs.rmSync(folder, { recursive: true, force: true });
+    }
 }
 
 /**

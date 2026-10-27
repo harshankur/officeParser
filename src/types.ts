@@ -126,7 +126,7 @@ export enum OfficeWarningType {
     REPEATED_CONTENT_LIMIT_EXCEEDED = 'REPEATED_CONTENT_LIMIT_EXCEEDED',
     /** A DOCX alternative-format chunk (`w:altChunk`) could not be read (its part is missing, of a format not read, a DOCX inside a DOCX chunk, or unreadable: not a ZIP, no document part, nested too deep); its content is not in the AST, and the rest of the document is */
     ALT_CHUNK_NOT_READ = 'ALT_CHUNK_NOT_READ',
-    /** A part of the document was not read, and what it holds is not in the AST: an EPUB chapter its package lists that is missing from the archive or encrypted; or, in a PPTX, the presentation's slide list or relationships, or the relationships of a notes page or a slide master, that are not XML */
+    /** A part of the document was not read, and what it holds is not in the AST: an EPUB chapter its package lists that is missing from the archive or encrypted; in a PPTX, the presentation's slide list or relationships, or the relationships of a notes page or a slide master, that are not XML; or, in a PDF, an XObject whose text pdf.js could not read (with its page) */
     CONTENT_PART_NOT_READ = 'CONTENT_PART_NOT_READ',
     /** A metadata override could not be represented in the destination format's vocabulary */
     METADATA_NOT_REPRESENTABLE = 'METADATA_NOT_REPRESENTABLE',
@@ -150,7 +150,7 @@ export enum OfficeWarningType {
     PDF_STRUCT_TREE_UNRELIABLE = 'PDF_STRUCT_TREE_UNRELIABLE',
     /** A fifth or more of a PDF's characters (of at least 50) are unmappable glyphs (broken/missing ToUnicode); extracted text is likely garbage */
     PDF_TEXT_ENCODING_SUSPECT = 'PDF_TEXT_ENCODING_SUSPECT',
-    /** A PDF yielded essentially no text; it is very likely a scanned/image-only document needing OCR */
+    /** A PDF yielded essentially no text: it is very likely a scanned/image-only document needing OCR, or, when a CMap its fonts need could not be had (see `PDF_ASSET_UNAVAILABLE`), its text is in those fonts */
     PDF_NO_TEXT_EXTRACTED = 'PDF_NO_TEXT_EXTRACTED',
     /** A PDF's bookmark outline was cut short by the depth/size cap or could not be read; `ast.auxiliary.outline` holds only what was recovered */
     PDF_OUTLINE_TRUNCATED = 'PDF_OUTLINE_TRUNCATED',
@@ -158,6 +158,14 @@ export enum OfficeWarningType {
     PDF_CONTENT_LIMIT_EXCEEDED = 'PDF_CONTENT_LIMIT_EXCEEDED',
     /** pdf.js could not start in a separate process (see `pdfParserConfig.separateProcess`), so it runs in this one */
     PDF_SEPARATE_PROCESS_UNAVAILABLE = 'PDF_SEPARATE_PROCESS_UNAVAILABLE',
+    /**
+     * A file pdf.js needed for a PDF could not be had: a CMap (the text of the fonts using it is
+     * missing) or an image decoder (pictures needing it are not decoded). Raised once per file per
+     * document, with the first page that needed it; the message names the file, why (it is missing,
+     * reading it failed, or `allowRemoteAssets` is false and it would have come from the built-in CDN
+     * address) and the option to set (`pdfCMapUrl` or `pdfDecoderUrl`). The rest of the document is read.
+     */
+    PDF_ASSET_UNAVAILABLE = 'PDF_ASSET_UNAVAILABLE',
     /** `ocr: true` was set without `extractAttachments: true`; OCR runs over extracted images (in every format), so no OCR was performed */
     OCR_REQUIRES_ATTACHMENTS = 'OCR_REQUIRES_ATTACHMENTS',
     /** A config option was passed that this version does not recognize (e.g. a key renamed in a major release); it had no effect */
@@ -377,15 +385,18 @@ export interface CommonOfficeParserConfig {
     maxPasswordAttempts?: number;
     /**
      * Whether the library may fall back to the addresses it has built in for files it loads at run
-     * time: the pdf.js worker (`pdfWorkerSrc`, in the browser, and in Node when the installed worker
-     * cannot be found) and Tesseract's worker, core and language data (`ocrConfig.workerPath`,
-     * `corePath`, `langPath`), all on a public CDN.
+     * time: the pdf.js worker (`pdfWorkerSrc`), pdf.js's CMaps (`pdfCMapUrl`) and image decoders
+     * (`pdfDecoderUrl`), in the browser and in Node when the installed pdfjs-dist cannot be found, and
+     * Tesseract's worker, core and language data (`ocrConfig.workerPath`, `corePath`, `langPath`), all
+     * on a public CDN.
      *
      * Set false for an application that must make no request to another site: a parse that would use
-     * one of those defaults rejects with `REMOTE_ASSET_BLOCKED`, naming the option to set, in place of
-     * fetching it. An address you pass yourself is used as given, wherever it points. HTML and PDF
-     * written from an AST parsed with false also name no chart script address unless
-     * `htmlConfig.chartJsSrc` is set.
+     * the worker's or Tesseract's default rejects with `REMOTE_ASSET_BLOCKED`, naming the option to set,
+     * in place of fetching it. A CMap or decoder is fetched only when a document needs one, so a parse
+     * that would fetch one from its default fetches nothing and goes on without it, with a
+     * `PDF_ASSET_UNAVAILABLE` warning naming the option. An address you pass yourself is used as given,
+     * wherever it points. HTML and PDF written from an AST parsed with false also name no chart script
+     * address unless `htmlConfig.chartJsSrc` is set.
      *
      * Default is true.
      */
@@ -491,6 +502,42 @@ export interface CommonOfficeParserConfig {
      * slim browser bundle ships no default, so there it is required for PDF parsing. Ignored in Node.
      */
     pdfWorkerSrc?: string;
+    /**
+     * The folder (ending in '/'; one is added if missing) holding pdf.js's packed CMaps, the
+     * `cmaps/` folder of `pdfjs-dist` at the version the library uses. pdf.js reads the text of a
+     * font a PDF does not embed through one of these when the font names a predefined CJK encoding
+     * (UniJIS-UTF16-H, 90ms-RKSJ-H...); without it every character in such a font is lost. Only the
+     * CMaps a document needs are read, each once, at most 4 MB and 15 seconds each. One that cannot
+     * be had raises `PDF_ASSET_UNAVAILABLE` (once per document, with the first page that needed it),
+     * and the rest of the document is read.
+     *
+     * In Node the installed package's own folder is used, unless this is set to another address (a
+     * path, or a `file:` or `http(s):` address). In the browser it defaults to
+     * `https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/cmaps/`; a page with a Content Security Policy,
+     * or one that must work offline, sets it to a copy of that folder it hosts (and allows the address
+     * in `connect-src`). The slim browser bundle has no default: there, set it to read such text.
+     * Not fetched from its default when `allowRemoteAssets` is false.
+     */
+    pdfCMapUrl?: string;
+    /**
+     * The folder (ending in '/'; one is added if missing) holding pdf.js's image decoders, the `wasm/`
+     * folder of `pdfjs-dist` at the version the library uses: `jbig2.wasm` (JBIG2 and CCITT fax
+     * pictures, common in scanned documents) and `openjpeg.wasm` (JPEG 2000), each with a JavaScript
+     * fallback beside it (`*_nowasm_fallback.js`) that pdf.js's worker loads itself where WebAssembly
+     * cannot run (a Content Security Policy without `'wasm-unsafe-eval'`). Without them such
+     * pictures cannot be decoded. Only the decoders a document needs are read, each once, at most 4 MB
+     * and 15 seconds each. One that cannot be had raises `PDF_ASSET_UNAVAILABLE` (once per document,
+     * with the first page that needed it), and each picture that then could not be decoded an
+     * `IMAGE_EXTRACTION_FAILED`.
+     *
+     * In Node the installed package's own folder is used, unless this is set to another address (a
+     * path, or a `file:` or `http(s):` address). In the browser it defaults to
+     * `https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/wasm/`; a page with a Content Security Policy,
+     * or one that must work offline, sets it to a copy of that folder it hosts (and allows the address
+     * in `connect-src`). The slim browser bundle has no default: there, set it to decode such pictures.
+     * Not fetched from its default when `allowRemoteAssets` is false.
+     */
+    pdfDecoderUrl?: string;
     /**
      * Flag to include break nodes for layout breaks in the AST. Default is false.
      * Applies to Word page, column and last-rendered-page breaks (`w:br w:type`, `w:lastRenderedPageBreak`),
@@ -751,6 +798,17 @@ export interface PdfParserConfig {
      * Default is 5000.
      */
     maxTimeMs?: number;
+    /**
+     * The most pixels (width times height) a picture in a PDF may have to be extracted, when
+     * `extractAttachments` is on. A few bytes of a compressed picture can declare dimensions that
+     * decode to gigabytes, so pdf.js leaves out a larger picture without decoding it; each is reported
+     * with `IMAGE_EXTRACTION_FAILED` (with its page), naming this option. Raise it for scans at high
+     * resolution (an A3 page at 600 dpi is about 42 million pixels). `Infinity` is no limit; a negative
+     * or non-numeric value is reported (`INVALID_CONFIG_VALUE`) and the default used.
+     *
+     * Default is 40000000.
+     */
+    maxImagePixels?: number;
     /**
      * Run pdf.js in a separate process (Node only). pdf.js reads a PDF's content streams itself, and a
      * 100 KB file can hold a stream that inflates to a string pdf.js turns into gigabytes before any of

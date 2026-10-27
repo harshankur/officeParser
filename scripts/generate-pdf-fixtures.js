@@ -15,6 +15,10 @@
  *   - invisible_text.pdf   : text in rendering modes 3 and 7 (a Type 3 font's and Helvetica's) beside and
  *                            among visible text, as a scan's recognised text layer is drawn.
  *   - mixed_size_line.pdf  : one line set in three sizes on one baseline, for the runs' baselines.
+ *   - cjk_ccitt_jpx.pdf    : what pdf.js reads with files it loads on demand: Japanese text in a font the
+ *                            file does not embed (KozMinPr6N-Regular, read through the predefined CMap
+ *                            UniJIS-UTF16-H), a CCITT Group 4 picture (jbig2.wasm) and a JPEG 2000
+ *                            picture (openjpeg.wasm).
  *
  * The encryption is the PDF standard security handler, revision 2 (RC4, 40-bit). RC4 is implemented
  * inline because modern OpenSSL/Node no longer expose it, and qpdf is not assumed to be installed.
@@ -511,6 +515,41 @@ function mixedSizeLineContent() {
     ].join('\n'), 'latin1');
 }
 
+/**
+ * The CCITT Group 4 data of a 64x32 one-bit picture (the strip of a TIFF written with Group 4
+ * compression), and a 16x16 RGB JPEG 2000 file written by OpenJPEG 2.5.4. Neither format can be written
+ * here in a few lines, so their bytes are kept as made.
+ */
+const CCITT_G4_64x32 = Buffer.from('JqB4b//8iiX//////////4//wAQAQA==', 'base64');
+const JPX_16x16 = Buffer.from(
+    'AAAADGpQICANCocKAAAAFGZ0eXBqcDIgAAAAAGpwMiAAAAAtanAyaAAAABZpaGRyAAAAEAAAABAAAwcHAAAAAAAPY29scgEAAAAAABAAAAC+anAy' +
+    'Y/9P/1EALwAAAAAAEAAAABAAAAAAAAAAAAAAABAAAAAQAAAAAAAAAAAAAwcBAQcBAQcBAf9SAAwAAAABAQEEBAAB/1wAB0BASEhQ/2QAJQABQ3Jl' +
+    'YXRlZCBieSBPcGVuSlBFRyB2ZXJzaW9uIDIuNS40/5AACgAAAAAAQwAB/5PH1BgRUFSvgj1IAAGEhL+A34D4FABcon22kAADCQjVChhISEBoBhIR' +
+    '7hgwkJCA0AwkI4CAgP/Z', 'base64');
+
+/**
+ * 日本語テキスト in a Type0 font the file does not embed, whose encoding is the predefined CMap
+ * UniJIS-UTF16-H (the codes are UTF-16), beside a CCITT Group 4 picture and a JPEG 2000 picture. pdf.js
+ * reads the text only with its cmaps/ folder and decodes the pictures only with its wasm/ folder.
+ */
+function cjkCcittJpxPdf() {
+    const font = FIRST_EXTRA_OBJ;
+    const content = Buffer.from([
+        'BT /F2 12 Tf 72 700 Td <65E5672C8A9E30C630AD30B930C8> Tj ET',
+        'q 128 0 0 64 72 500 cm /Im1 Do Q',
+        'q 32 0 0 32 72 400 cm /Im2 Do Q',
+        '',
+    ].join('\n'), 'latin1');
+    const extra = [
+        Buffer.from(`<< /Type /Font /Subtype /Type0 /BaseFont /KozMinPr6N-Regular-UniJIS-UTF16-H /Encoding /UniJIS-UTF16-H /DescendantFonts [${font + 1} 0 R] >>`, 'latin1'),
+        Buffer.from(`<< /Type /Font /Subtype /CIDFontType0 /BaseFont /KozMinPr6N-Regular /CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 6 >> /FontDescriptor ${font + 2} 0 R /DW 1000 >>`, 'latin1'),
+        Buffer.from('<< /Type /FontDescriptor /FontName /KozMinPr6N-Regular /Flags 4 /FontBBox [0 -120 1000 880] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 700 /StemV 80 >>', 'latin1'),
+        streamObject('/Type /XObject /Subtype /Image /Width 64 /Height 32 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 64 /Rows 32 /BlackIs1 false >>', CCITT_G4_64x32),
+        streamObject('/Type /XObject /Subtype /Image /Width 16 /Height 16 /BitsPerComponent 8 /ColorSpace /DeviceRGB /Filter /JPXDecode', JPX_16x16),
+    ];
+    return buildPdf(content, { extra, fonts: ` /F2 ${font} 0 R`, resources: ` /XObject << /Im1 ${font + 3} 0 R /Im2 ${font + 4} 0 R >>` });
+}
+
 function main() {
     fs.mkdirSync(OUT_DIR, { recursive: true });
 
@@ -540,6 +579,7 @@ function main() {
     fs.writeFileSync(path.join(OUT_DIR, 'page_sizes.pdf'), buildPageSizesPdf());
     fs.writeFileSync(path.join(OUT_DIR, 'invisible_text.pdf'), invisibleTextPdf());
     fs.writeFileSync(path.join(OUT_DIR, 'mixed_size_line.pdf'), buildPdf(mixedSizeLineContent()));
+    fs.writeFileSync(path.join(OUT_DIR, 'cjk_ccitt_jpx.pdf'), cjkCcittJpxPdf());
 
     console.log('Wrote fixtures to', OUT_DIR);
 }

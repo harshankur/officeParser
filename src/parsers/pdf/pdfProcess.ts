@@ -91,6 +91,16 @@ try {
     const usage = process.cpuUsage();
     require(['f', 's'].join('')).writeSync(4, clock ? Math.floor((usage.user + usage.system) / 1000) + '\\n' : '-\\n');
 } catch { process.exit(3); }
+// pdf.js's warnings ("Warning: ..."; its worker runs at warning verbosity) go to the host, which reports
+// those about content pdf.js left out: at most 1,000 a document, 300 characters each. Nothing else is
+// written anywhere (the process has no output).
+let warningsSent = 0;
+console.warn = (...args) => {
+    const line = typeof args[0] === 'string' ? args[0] : '';
+    if (!line.startsWith('Warning: ') || warningsSent >= 1000 || !process.connected) return;
+    warningsSent++;
+    try { process.send({ officeparserWarning: line.slice(0, 300) }); } catch { /* the host is gone */ }
+};
 const listeners = new Set();
 const port = {
     postMessage(message) { if (process.connected) process.send(capArrays(message, 0)); },
@@ -101,7 +111,11 @@ const port = {
     },
     removeEventListener(type, listener) { listeners.delete(listener); },
 };
-process.on('message', (data) => { data = ownArrays(data); for (const listener of listeners) listener({ data }); });
+process.on('message', (data) => {
+    data = ownArrays(data);
+    if (data && data.action === 'GetDocRequest') warningsSent = 0;
+    for (const listener of listeners) listener({ data });
+});
 process.on('disconnect', () => process.exit(0));
 import(process.env.OFFICEPARSER_PDF_WORKER).then(
     ({ WorkerMessageHandler }) => WorkerMessageHandler.initializeFromPort(port),
@@ -131,6 +145,8 @@ export interface PdfProcess {
     end(): void;
     /** Hands the process back for the next parse, or ends it. Nothing once it was released or ended. */
     release(): void;
+    /** Where pdf.js's warnings for this lease's document go (see pdfAssets); nowhere once released or ended. */
+    onWarning(sink: (line: string) => void): void;
 }
 
 interface Handle {
@@ -145,6 +161,8 @@ interface Handle {
     cpuMs: number | undefined;
     /** Whether the process holds one of the pool's places (from its start until it ends). */
     placed: boolean;
+    /** Where pdf.js's warnings go: the parse holding the process, if it asked for them. */
+    warningSink?: (line: string) => void;
     rejectDied?: (reason: string) => void;
 }
 
@@ -275,6 +293,11 @@ const start = async (pdfjs: any, workerUrl: string, memoryMb: number): Promise<H
     if (!(await ready) || !handle.alive) { kill(handle); return undefined; }
     const listeners = new Set<(event: { data: unknown }) => void>();
     child.on('message', (data: unknown) => {
+        // pdf.js's warnings are this module's, not pdf.js's own listeners'.
+        if (data && typeof data === 'object' && typeof (data as any).officeparserWarning === 'string') {
+            try { handle.warningSink?.((data as any).officeparserWarning); } catch { /* a report never ends the process */ }
+            return;
+        }
         const event = { data: ownArrays(data) };
         for (const listener of listeners) listener(event);
     });
@@ -287,7 +310,8 @@ const start = async (pdfjs: any, workerUrl: string, memoryMb: number): Promise<H
         },
         removeEventListener(_type: string, listener: (event: { data: unknown }) => void) { listeners.delete(listener); },
     };
-    try { handle.worker = new pdfjs.PDFWorker({ port }); } catch { kill(handle); return undefined; }
+    // At warning verbosity, so pdf.js says what it leaves out (see the child's console.warn).
+    try { handle.worker = new pdfjs.PDFWorker({ port, verbosity: 1 }); } catch { kill(handle); return undefined; }
     return handle;
 };
 
@@ -340,17 +364,20 @@ export const acquirePdfProcess = async (pdfjs: any, workerUrl: string, memoryMb:
         worker: current.worker,
         died,
         get alive() { return current.alive; },
+        onWarning: (sink) => { if (held) current.warningSink = sink; },
         clock: () => (current.cpuMs !== undefined && !Number.isNaN(current.cpuMs) ? current.cpuMs : performance.now()),
         end: () => {
             if (!held) return;
             held = false;
             current.rejectDied = undefined;
+            current.warningSink = undefined;
             kill(current);
         },
         release: () => {
             if (!held) return;
             held = false;
             current.rejectDied = undefined;
+            current.warningSink = undefined;
             if (current.alive && current.uses < USES_PER_PROCESS) {
                 setRef(current, false);
                 idle.push(current);

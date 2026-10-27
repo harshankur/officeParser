@@ -51,6 +51,7 @@ import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, 
 import { buildTaggedNodes } from './pdf/structTree.js';
 import { setOwn } from '../utils/lookupUtils.js';
 import { acquirePdfProcess, PdfProcess } from './pdf/pdfProcess.js';
+import { captureConsoleWarnings, openWarningWorker, PdfAssetSession, resolvePdfAssetFolders, WarningWorker } from './pdf/pdfAssets.js';
 import { appendAll } from '../utils/nodeListUtils.js';
 
 /**
@@ -221,7 +222,7 @@ function resolvePdfLayoutConfig(config: FullOfficeParserConfig): PdfLayoutConfig
     /** Only a number or its text is one here: `num` reads `null`, `true` and '' as 0 or 1. */
     const given = (v: unknown) => typeof v === 'number' || (typeof v === 'string' && v.trim() !== '');
     /** A budget: 0 or more, `Infinity` for no limit. */
-    const budget = (key: 'maxTextItems' | 'maxOperators' | 'maxAnnotations' | 'maxTimeMs'): number => {
+    const budget = (key: 'maxTextItems' | 'maxOperators' | 'maxAnnotations' | 'maxTimeMs' | 'maxImagePixels'): number => {
         const value = p[key];
         if (value === undefined) return defaults[key];
         const n = given(value) ? num(value, NaN, true) : NaN;
@@ -251,6 +252,7 @@ function resolvePdfLayoutConfig(config: FullOfficeParserConfig): PdfLayoutConfig
         maxOperators: budget('maxOperators'),
         maxAnnotations: budget('maxAnnotations'),
         maxTimeMs: budget('maxTimeMs'),
+        maxImagePixels: budget('maxImagePixels'),
     };
 }
 
@@ -797,8 +799,11 @@ class PdfWorkBudget {
     cancelled = false;
     /** The operator budget ran out: no more operators are read, text still is. */
     operatorsSpent = false;
-    /** The page being read, which the time budget names when it runs out there; none between pages and after them. */
-    private pageBeingRead: number | undefined;
+    /** The page being read, which the time budget and pdf.js's warnings name; none between pages and after them. */
+    private page: number | undefined;
+    get pageBeingRead(): number | undefined {
+        return this.page;
+    }
     constructor(private pdfDocument: any, private config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, fileBytes: number, private pdfProcess?: PdfProcess) {
         this.textLeft = pdfCfg.maxTextItems + fileBytes;
         this.operatorsLeft = pdfCfg.maxOperators + 4 * fileBytes;
@@ -826,7 +831,7 @@ class PdfWorkBudget {
     private checkTime(): void {
         if (this.spent || this.clockStart === undefined) return;
         const used = this.pdfProcess!.clock() - this.clockStart;
-        if (used >= this.timeLimit) { this.spend('maxTimeMs', this.pageBeingRead); return; }
+        if (used >= this.timeLimit) { this.spend('maxTimeMs', this.page); return; }
         this.timer = setTimeout(() => this.checkTime(), Math.min(MAX_TIMER_MS, Math.max(20, this.timeLimit - used)));
     }
     /**
@@ -933,9 +938,9 @@ class PdfWorkBudget {
      * Closes the document once the text or time budget is spent, which stops pdf.js's tasks. A stream
      * being read is left unread rather than cancelled (see leaveUnread).
      */
-    /** Says which page is being read (none once the pages are read), for the time budget's warning. */
+    /** Says which page is being read (none once the pages are read), for the time budget's warning and pdf.js's (see PdfAssetSession). */
     reading(pageNumber: number | undefined): void {
-        this.pageBeingRead = pageNumber;
+        this.page = pageNumber;
     }
     spend(limit: 'maxTextItems' | 'maxTimeMs', pageNumber?: number): void {
         if (this.spent) return;
@@ -1097,7 +1102,7 @@ async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep
 async function collectPage(
     pdfjs: any, pdfDocument: any, pageNumber: number, config: FullOfficeParserConfig,
     pdfCfg: PdfLayoutConfig, fontCache: Map<string, ResolvedFont>, destCache: Map<string, SectionTarget | null>,
-    sectionLinks: SectionLinks, work: PdfWorkBudget, markedContent?: MarkedContent,
+    sectionLinks: SectionLinks, work: PdfWorkBudget, assets: PdfAssetSession, markedContent?: MarkedContent,
 ): Promise<PageExtract | undefined> {
     const page = await work.within(pdfDocument.getPage(pageNumber) as Promise<any>);
     if (!page) return undefined;
@@ -1251,7 +1256,7 @@ async function collectPage(
     // extractAttachments), so collecting images for `ocr` alone would decode and then drop them.
     // Gate on extractAttachments only; `ocr` without it raised OCR_REQUIRES_ATTACHMENTS above.
     const images = config.extractAttachments && !work.spent
-        ? await collectImages(pdfjs, page, layoutViewport, config, pageNumber, work, ops)
+        ? await collectImages(pdfjs, page, layoutViewport, config, pdfCfg, pageNumber, work, assets, ops)
         : [];
 
     let structTree: unknown | null = null;
@@ -1267,7 +1272,7 @@ async function collectPage(
 }
 
 /** Extracts images from a page's operator list, positioned in layout-viewport space. */
-async function collectImages(pdfjs: any, page: any, viewport: any, config: FullOfficeParserConfig, pageNumber: number, work: PdfWorkBudget, prefetchedOps?: any): Promise<PdfImage[]> {
+async function collectImages(pdfjs: any, page: any, viewport: any, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, pageNumber: number, work: PdfWorkBudget, assets: PdfAssetSession, prefetchedOps?: any): Promise<PdfImage[]> {
     const images: PdfImage[] = [];
     try {
         const ops = prefetchedOps || await readOperatorList(pdfjs, page, work, 'drawing');
@@ -1284,20 +1289,22 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
         const ctmStack: number[][] = [];
         let inlineSeq = 0;
         let missingReported = false;
-        // A picture pdf.js could not decode (its data damaged, or in a format it cannot read) arrives as
-        // nothing, or as no pixels: reported once for each picture, with its page, not dropped silently.
+        // A picture pdf.js could not decode (its data damaged, in a format it cannot read, or needing a
+        // decoder that could not be loaded) arrives as nothing, or as no pixels: reported once for each
+        // picture, with its page and why where pdf.js said (see PdfAssetSession.undecodablePicture).
         const undecodable = new Set<string>();
         const reportUndecodable = (imgName: string): void => {
             if (undecodable.has(imgName)) return;
             undecodable.add(imgName);
-            logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `from page ${pageNumber}`, `pdf.js could not decode the image ${String(imgName)}`, { page: pageNumber });
+            logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `from page ${pageNumber}`, assets.undecodablePicture(String(imgName)), { page: pageNumber });
         };
 
         /**
          * Encodes one decoded image object to PNG at the current CTM and records it. Shared by the
-         * named-XObject, repeated-XObject and inline-image ops so all three collect identically. The
-         * megapixel guard bounds an inline image's allocation (pdf.js `maxImageSize` gates decoded
-         * XObjects, but an inline image's declared dimensions reach `convertToRgbaBuffer` directly).
+         * named-XObject, repeated-XObject and inline-image ops so all three collect identically. pdf.js's
+         * `maxImageSize` gates a picture by the dimensions its dictionary declares; the pixel guard here
+         * bounds the allocation by the dimensions the decoded picture has (a JPEG 2000 stream's own can
+         * differ), against the same `maxImagePixels`.
          */
         const pushImage = async (imgObj: any, imgName: string, placement: number[] = ctm): Promise<void> => {
             if (!imgObj) { reportUndecodable(imgName); return; }
@@ -1312,8 +1319,8 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
                 }
             }
             if (!(imgObj.data && imgObj.width > 0 && imgObj.height > 0)) { reportUndecodable(imgName); return; }
-            if (imgObj.width * imgObj.height > 40_000_000) {
-                logWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, config, `image on page ${pageNumber} is too large to extract (${imgObj.width}x${imgObj.height} pixels)`, undefined, { page: pageNumber });
+            if (imgObj.width * imgObj.height > pdfCfg.maxImagePixels) {
+                logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `from page ${pageNumber}`, `the picture ${String(imgName)} (${imgObj.width}x${imgObj.height} pixels) is larger than pdfParserConfig.maxImagePixels (${pdfCfg.maxImagePixels} pixels); raise the option to extract it`, { page: pageNumber });
                 return;
             }
             // `placement` maps the image's unit square onto the page ([a,b,c,d,e,f]); it defaults to the
@@ -1487,12 +1494,17 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // bitmap, and getOperatorList otherwise decodes every image on every page for nothing. We read
     // image bytes only when collecting attachments (page-image OCR runs over collected images too, so
     // `ocr` alone - without extractAttachments - collects nothing and must NOT raise this). When we do
-    // need pixels, cap at a generous 40 megapixels so a decompression-bomb image (a few bytes of
-    // headers declaring enormous dimensions) cannot drive a multi-GB, uncatchable allocation.
+    // need pixels, cap at `pdfParserConfig.maxImagePixels` (40 megapixels by default) so a
+    // decompression-bomb image (a few bytes of headers declaring enormous dimensions) cannot drive a
+    // multi-GB, uncatchable allocation; pdf.js reads anything but a whole number as no limit.
     // `ocr: true` without `extractAttachments: true` collects no images, so no OCR runs and no page
     // image is decoded for it. The OCR_REQUIRES_ATTACHMENTS warning is raised centrally in OfficeParser
     // (it applies to every format, not just PDF), so it is not repeated here.
-    const maxImageSize = config.extractAttachments ? 40_000_000 : 1;
+    const maxImageSize = !config.extractAttachments ? 1 : Number.isFinite(pdfCfg.maxImagePixels) ? Math.floor(pdfCfg.maxImagePixels) : -1;
+
+    // The CMaps and image decoders pdf.js may need, and what its worker says it left out (see pdfAssets).
+    const assets = new PdfAssetSession(await resolvePdfAssetFolders(config), config, pdfCfg.maxImagePixels);
+    const takeWarning = (line: string) => assets.workerWarning(line);
 
     // pdf.js's worker in a process of its own (see pdfProcess), so what pdf.js does inside one stream
     // cannot exhaust this one's memory. Only for a worker Node can import from disk; one the caller
@@ -1504,15 +1516,75 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         if (!pdfProcess) logWarning(OfficeWarningType.PDF_SEPARATE_PROCESS_UNAVAILABLE, config);
     }
     if (!pdfProcess && !isBrowser) settleCallerPreloadedWorker();
+    // pdf.js's worker for this parse runs at warning verbosity, and its warnings are taken: from the
+    // separate process's messages; in this process from the console, one document at a time (see
+    // takeInProcessTurn), in a PDFWorker of the parse's own; in the browser from a Worker that sends them
+    // back (see openWarningWorker), or, where none can be made, from nowhere, pdf.js starting its own.
+    let ownWorker: WarningWorker | undefined;
+    let endTurn: (() => void) | undefined;
+    let stopCapture: (() => void) | undefined;
     try {
-        return await readPdf(pdfjs, buffer, config, pdfCfg, maxImageSize, pdfProcess);
+        if (pdfProcess) {
+            pdfProcess.onWarning(takeWarning);
+        } else if (isBrowser) {
+            ownWorker = await openWarningWorker(pdfjs, String(pdfjs.GlobalWorkerOptions.workerSrc ?? ''), takeWarning, config.abortSignal);
+        } else {
+            endTurn = await takeInProcessTurn(config.abortSignal);
+            stopCapture = captureConsoleWarnings(takeWarning);
+            // A worker port the caller set is pdf.js's to use; one PDFWorker per port.
+            if (!pdfjs.GlobalWorkerOptions.workerPort) {
+                const worker = new pdfjs.PDFWorker({ verbosity: 1 });
+                ownWorker = { worker, close: () => worker.destroy() };
+            }
+        }
+        return await readPdf(pdfjs, buffer, config, pdfCfg, maxImageSize, pdfProcess, assets, pdfProcess?.worker ?? ownWorker?.worker);
     } finally {
+        assets.close();
+        try { ownWorker?.close(); } catch { /* already ended */ }
+        stopCapture?.();
+        endTurn?.();
         pdfProcess?.release();
     }
 };
 
+/**
+ * pdf.js in this process reads one document at a time. Its image decoders keep the message handler of
+ * the document opened last in a static field (pdf.js's `WasmImage`), so with two documents open in one
+ * worker, a decoder the first asked for after the second had closed waited on a closed handler forever:
+ * of two parses at once, the one finishing first left the other's JBIG2 or JPEG 2000 pictures hanging.
+ * A separate process reads one document at a time already, and each browser document has a Worker of
+ * its own. The turn is waited for until `signal` aborts; the parse before it is bounded by its own.
+ */
+let inProcessTail: Promise<void> = Promise.resolve();
+async function takeInProcessTurn(signal?: AbortSignal | null): Promise<() => void> {
+    checkAbortSignal(signal);
+    const before = inProcessTail;
+    let end!: () => void;
+    const turn = new Promise<void>(resolve => { end = resolve; });
+    inProcessTail = before.then(() => turn);
+    if (!signal) {
+        await before;
+        return end;
+    }
+    let onAbort!: () => void;
+    const aborted = new Promise<never>((_, reject) => {
+        onAbort = () => reject(getAbortError());
+        signal.addEventListener('abort', onAbort, { once: true });
+    });
+    try {
+        await Promise.race([before, aborted]);
+    } catch (e) {
+        // The turn passes on to the next parse once the one before ends.
+        before.then(end);
+        throw e;
+    } finally {
+        signal.removeEventListener('abort', onAbort);
+    }
+    return end;
+}
+
 /** Opens the document, retrying with an onPassword-supplied password when it is encrypted, and reads it. */
-async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, maxImageSize: number, pdfProcess: PdfProcess | undefined): Promise<OfficeParserAST> {
+async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, maxImageSize: number, pdfProcess: PdfProcess | undefined, assets: PdfAssetSession, worker: any): Promise<OfficeParserAST> {
     // Password / onPassword are top-level (they apply to every encryptable format); PDF reads them
     // the same way the OOXML/ODF decryptors do.
     const onPassword = config.onPassword;
@@ -1546,7 +1618,8 @@ async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfi
                 isEvalSupported: false,
                 maxImageSize,
                 password,
-                ...(pdfProcess ? { worker: pdfProcess.worker } : {}),
+                ...assets.documentOptions(),
+                ...(worker ? { worker } : {}),
             });
 
             let pdfDocument;
@@ -1574,8 +1647,9 @@ async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfi
 
             // Every request to pdf.js goes through the document's budget, from the first (see PdfWorkBudget).
             const budget = work = new PdfWorkBudget(pdfDocument, config, pdfCfg, buffer.length, pdfProcess);
+            assets.follow(budget);
             try {
-                return await whileAlive(buildAst(pdfjs, pdfDocument, config, pdfCfg, budget, buffer));
+                return await whileAlive(buildAst(pdfjs, pdfDocument, config, pdfCfg, budget, buffer, assets));
             } finally {
                 // Whatever ended the parse, the read ends with it (see PdfWorkBudget.cancel).
                 budget.cancel();
@@ -1599,7 +1673,7 @@ async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfi
 }
 
 /** Assembles the AST from an opened document. Separated so the caller can guarantee task cleanup. */
-async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, work: PdfWorkBudget, buffer: Buffer): Promise<OfficeParserAST> {
+async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, work: PdfWorkBudget, buffer: Buffer, assets: PdfAssetSession): Promise<OfficeParserAST> {
     const content: OfficeContentNode[] = [];
     const attachments: OfficeAttachment[] = [];
     const numPages = pdfDocument.numPages;
@@ -1728,7 +1802,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         if (work.spent) break;
         work.reading(pageNum);
         try {
-            const extract = await collectPage(pdfjs, pdfDocument, pageNum, config, pdfCfg, fontCache, destCache, sectionLinks, work, markedContent);
+            const extract = await collectPage(pdfjs, pdfDocument, pageNum, config, pdfCfg, fontCache, destCache, sectionLinks, work, assets, markedContent);
             if (extract) extracts.push(extract);
         } catch (e: any) {
             // A page failing because its parse has ended (its process ended with it) is not reported.
@@ -1752,9 +1826,10 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     // can tell "genuinely empty" from "font could not be decoded" and reach for OCR.
     warnIfEncodingSuspect(allRuns, config);
 
-    // Warn when a document yields essentially no text and OCR is off: it is very likely scanned, and
-    // silent empty output is otherwise indistinguishable from a genuine failure. Only when OCR is off,
-    // since with OCR the caller is already handling image-only content.
+    // Warn when a document yields essentially no text and OCR is off: it is very likely scanned (or its
+    // text is in fonts whose CMaps could not be loaded, which the warning then says instead), and silent
+    // empty output is otherwise indistinguishable from a genuine failure. Only when OCR is off, since
+    // with OCR the caller is already handling image-only content.
     if (!config.ocr) {
         // Scale the "looks empty" threshold to the pages actually read, not the whole document: with
         // a pageRange, `allRuns` covers only the selected pages, and a content limit can stop the read
@@ -1763,7 +1838,8 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         const processedPages = extracts.length;
         const textChars = allRuns.reduce((sum, r) => sum + r.text.replace(/\s/g, '').length, 0);
         if (processedPages > 0 && textChars < Math.max(10, processedPages)) {
-            logWarning(OfficeWarningType.PDF_NO_TEXT_EXTRACTED, config, processedPages);
+            const cMaps = assets.unavailableCMaps;
+            logWarning(OfficeWarningType.PDF_NO_TEXT_EXTRACTED, config, cMaps.length ? { pages: processedPages, cMaps } : processedPages);
         }
     }
 
