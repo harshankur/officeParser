@@ -286,8 +286,9 @@ const TEXT_LAYER_FONT = /^GlyphLessFont$/i;
 /**
  * Resolves a font id once per document into name/weight/style plus ascent/descent for geometry.
  *
- * The name is a typeface's, or none: a Type 3 font draws its glyphs itself and has no typeface (pdf.js names
- * one without a FontName "Type3"; a scan's invisible text layer is often in one), pdf.js's stand-in for a
+ * The name is a typeface's, or none: a Type 3 font without a FontName has no typeface (pdf.js names it
+ * "Type3"; a scan's invisible text layer is often in one; Chrome names the system fonts it draws as Type 3
+ * fonts, HiraKakuProN-W3 or ITFDevanagari-Book, and those are typefaces), pdf.js's stand-in for a
  * font it could not read has a made-up name, and the family in the text content's styles is only ever a CSS
  * generic one (serif, sans-serif, monospace) pdf.js chose from the font's flags. A font made to carry an
  * invisible text layer and nothing else (Tesseract's and OCRmyPDF's `GlyphLessFont`) is no typeface either.
@@ -309,7 +310,7 @@ async function resolveFont(fontKey: string, commonObjs: any, styles: Record<stri
             const rawName: string | undefined = typeof fontData?.name === 'string' ? fontData.name : undefined;
             if (rawName) {
                 const name = rawName.replace(/^[A-Z]{6}\+/, '');
-                if (name && !fontData.isType3Font && !fontData.isInvalidPDFjsFont && !TEXT_LAYER_FONT.test(name)) resolved.name = name;
+                if (name && !(fontData.isType3Font && name === 'Type3') && !fontData.isInvalidPDFjsFont && !TEXT_LAYER_FONT.test(name)) resolved.name = name;
                 const lower = rawName.toLowerCase();
                 resolved.bold = lower.includes('bold') || (typeof fontData.black === 'boolean' && fontData.black);
                 resolved.italic = lower.includes('italic') || lower.includes('oblique');
@@ -1982,7 +1983,8 @@ function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext
 
 /**
  * Recovers turned runs (a quarter turn, or any other angle) as trailing paragraphs, one per angle, in
- * content order, each with its angle (ParagraphMetadata.rotation).
+ * content order, each with its angle (ParagraphMetadata.rotation). Text drawn invisibly is a run of its own,
+ * marked so (TextFormatting.invisible), never in one with visible text.
  */
 function rotatedTextNodes(runs: RawRun[], pageCtx: PageContext, pdfCfg: PdfLayoutConfig): OfficeContentNode[] {
     const out: OfficeContentNode[] = [];
@@ -1995,22 +1997,40 @@ function rotatedTextNodes(runs: RawRun[], pageCtx: PageContext, pdfCfg: PdfLayou
     for (const [turn, group] of byTurn) {
         // Joined once, a space between runs that do not already meet at one; testing the end of the
         // growing text for each run instead copied all of it every time.
-        const parts: string[] = [];
+        const pieces: { parts: string[]; runs: RawRun[]; invisible: boolean }[] = [];
         let endsInSpace = true;
         for (const r of group) {
-            if (!endsInSpace && !/^\s/.test(r.text)) parts.push(' ');
-            parts.push(r.text);
+            const invisible = r.formatting.invisible === true;
+            let piece = pieces[pieces.length - 1];
+            if (!piece || piece.invisible !== invisible) pieces.push(piece = { parts: [], runs: [], invisible });
+            if (!endsInSpace && !/^\s/.test(r.text)) piece.parts.push(' ');
+            piece.parts.push(r.text);
+            piece.runs.push(r);
             if (r.text) endsInSpace = /\s/.test(r.text[r.text.length - 1]);
         }
-        const text = parts.join('').replace(/\s+/g, ' ').trim();
-        if (!text) continue;
-        const node: OfficeContentNode = { type: 'paragraph', text, children: [{ type: 'text', text }], metadata: { rotation: turn } as ParagraphMetadata };
-        const box = unionAll(group.map(r => ({ x: r.x, y: r.yTop, width: r.width, height: r.height })));
-        if (pdfCfg.includeBounds && box) {
-            const rendered = roundBounds(rotateBoundsToRendered(box, pageCtx.rotation, pageCtx.authoredW, pageCtx.authoredH));
-            node.bounds = rendered;
-            if (node.children && node.children[0]) node.children[0].bounds = rendered;
+        const rendered = (rs: RawRun[]) => {
+            const box = unionAll(rs.map(r => ({ x: r.x, y: r.yTop, width: r.width, height: r.height })));
+            return pdfCfg.includeBounds && box ? roundBounds(rotateBoundsToRendered(box, pageCtx.rotation, pageCtx.authoredW, pageCtx.authoredH)) : undefined;
+        };
+        const children: OfficeContentNode[] = [];
+        for (const piece of pieces) {
+            // (One space where two runs meet, and none at the paragraph's start.)
+            let text = piece.parts.join('').replace(/\s+/g, ' ');
+            if (!children.length || children[children.length - 1].text!.endsWith(' ')) text = text.replace(/^ /, '');
+            if (!text.trim()) continue;
+            const child: OfficeContentNode = { type: 'text', text };
+            if (piece.invisible) child.formatting = { invisible: true };
+            const bounds = rendered(piece.runs);
+            if (bounds) child.bounds = bounds;
+            children.push(child);
         }
+        if (!children.length) continue;
+        // (And none at its end.)
+        const last = children[children.length - 1];
+        last.text = last.text!.replace(/ $/, '');
+        const node: OfficeContentNode = { type: 'paragraph', text: children.map(c => c.text).join(''), children, metadata: { rotation: turn } as ParagraphMetadata };
+        const bounds = rendered(group);
+        if (bounds) node.bounds = bounds;
         out.push(node);
     }
     return out;

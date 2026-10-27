@@ -3704,6 +3704,7 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
         add('Mode restored with the graphics state', !!run('Visible again after the state is restored.') && !invisible('Visible again after the state is restored.'), 'visible', run('Visible again after the state is restored.')?.formatting);
         add('Invisible text parted from visible text on its line', !!run('Seen words then') && !invisible('Seen words then') && invisible('unseen words.'), '"Seen words then" seen, "unseen words." invisible', runs.map(r => `${r.text}${r.formatting?.invisible ? ' (invisible)' : ''}`).join(' | '));
         add('Invisible text is read as content', textOf(ast).includes('Large unseen line') && invisible('Large unseen line'), 'read, invisible', textOf(ast));
+        add('Turned invisible text is invisible, apart from turned visible text', invisible('Scanned sideways words') && !!run('Visible sideways label') && !invisible('Visible sideways label'), '"Scanned sideways words" invisible, "Visible sideways label" seen', runs.filter(r => /sideways/.test(r.text)).map(r => `${r.text}${r.formatting?.invisible ? ' (invisible)' : ''}`).join(' | '));
         const visible = runs.filter(r => !r.formatting?.invisible).map(r => r.text.trim());
         add('Visible runs stay visible', ['Visible first line of the page.', 'A visible body line of ordinary text.', 'Another visible body line of ordinary text.'].every(t => visible.includes(t)), 'visible', visible.join(' | '));
         // A Type 3 font has no typeface: pdf.js names it "Type3", and the styles' family is a CSS generic one.
@@ -3859,14 +3860,13 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
             }
         };
         // Untagged, set by spacing alone: cells set closer than a wide gap (the invoice's header, the calendar's
-        // days) are cut where the table's columns are; a header over two lines is one row; labels and their values
-        // are a table of two columns. (A merged header's span says nothing of itself without rules or tags.)
+        // days) are cut where the table's other rows part them; a header over two lines is one row. (Labels and
+        // their values set closer than a wide gap on every row, and a header over sub-columns, are read as text:
+        // no row parts them, and cutting lines where no table was found read justified columns as tables.)
         await expect('tables_borderless_chrome.pdf', [
             { name: 'cells set close are read apart', rows: invoice },
             { name: 'a header over two lines is one row', rows: twoLine },
-            { name: 'labels and values are a two-column table', rows: labels },
             { name: 'a calendar\'s days set close stand in their columns', rows: calendar },
-            { name: 'a header over sub-columns stands over them', rows: spans },
         ]);
         // Tagged: a row's cells left out of the tags (a calendar's empty days, the cells merged ones cover) stand in
         // their columns, a ruled table's merged cells keep their spans from its rules, and labels and values a
@@ -3889,6 +3889,26 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
             add('Side-by-side lists, code and a list are not tables', found.length === 0, 'no table', `${found.length} table(s): ${JSON.stringify(found.map(t => t.rows)).slice(0, 160)}`);
         } catch (e: any) {
             add('two_columns_not_tables_chrome.pdf parse', false, 'parsed', e?.message || String(e));
+        }
+        // Names in two columns, two poems and two addresses side by side, and justified articles in three narrow
+        // columns are prose, read column by column: they were read as tables, row by row across the columns.
+        try {
+            const found = await tablesIn('prose_not_tables_chrome.pdf');
+            // (The AST's reading order: text output lays the page out, the two columns on the same lines.)
+            const prose = textOf(await OfficeParser.parseOffice(path.join(pdfDir, 'prose_not_tables_chrome.pdf'), { ocr: false }));
+            add('Columns of prose and short lines are not tables', found.length === 0 && prose.indexOf('Bob Carter') < prose.indexOf('Frank Green'), 'no table; a column read before the next',
+                `${found.length} table(s); Bob at ${prose.indexOf('Bob Carter')}, Frank at ${prose.indexOf('Frank Green')}`);
+        } catch (e: any) {
+            add('prose_not_tables_chrome.pdf parse', false, 'parsed', e?.message || String(e));
+        }
+        // Chrome on macOS writes system fonts as Type 3 fonts named in their descriptors: the names are typefaces.
+        try {
+            const ast = await OfficeParser.parseOffice(path.join(pdfDir, 'cjk_wrapped_chrome.pdf'), { ocr: false });
+            const fonts = new Set<string>();
+            for (const p of ast.content) walk(p, (n: any) => { if (n.type === 'text' && n.formatting?.font) fonts.add(n.formatting.font); });
+            add('A Type 3 font named in its descriptor keeps its name', fonts.has('HiraKakuProN-W3') && !fonts.has('Type3'), 'HiraKakuProN-W3, no Type3', [...fonts].join(', '));
+        } catch (e: any) {
+            add('cjk_wrapped_chrome.pdf fonts', false, 'parsed', e?.message || String(e));
         }
     }
 

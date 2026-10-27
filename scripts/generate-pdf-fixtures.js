@@ -481,7 +481,8 @@ function type3Font(first, text) {
  * Text drawn invisibly (rendering mode 3, and 7, which adds it to the clip) among visible text: a line in a
  * Type 3 font inside a `q`/`Q` (the mode is restored with the graphics state, so the line after it is
  * seen), a Helvetica line in mode 7, a line whose second half is invisible in the same text object, a
- * large invisible line (no heading by its size), and visible body lines.
+ * large invisible line (no heading by its size), visible body lines, and a line turned a quarter, invisible,
+ * beside a turned visible label.
  */
 function invisibleTextPdf() {
     const scanned = type3Font(FIRST_EXTRA_OBJ, 'Scanned words of a page');
@@ -494,6 +495,8 @@ function invisibleTextPdf() {
         'BT 3 Tr /F1 24 Tf 1 0 0 1 72 600 Tm (Large unseen line) Tj 0 Tr ET',
         'BT /F1 12 Tf 1 0 0 1 72 570 Tm (A visible body line of ordinary text.) Tj ET',
         'BT /F1 12 Tf 1 0 0 1 72 550 Tm (Another visible body line of ordinary text.) Tj ET',
+        'BT 3 Tr /F1 12 Tf 0 1 -1 0 300 200 Tm (Scanned sideways words) Tj 0 Tr ET',
+        'BT /F1 12 Tf 0 1 -1 0 330 200 Tm (Visible sideways label) Tj ET',
         '',
     ].join('\n'), 'latin1');
     return buildPdf(content, { extra: scanned.objects, fonts: ` /F2 ${FIRST_EXTRA_OBJ} 0 R` });
