@@ -173,19 +173,25 @@
     <code>soffice --headless --convert-to docx old-file.doc</code>. Then parse the result.
 </p>
 
-<h2>4. You Need Formulas or Native Charts in the Files You Write</h2>
+<h2>4. You Need <del datetime="2026-10-26" cite="../#doc/changelog/830---2026-10-26">to Write Spreadsheets or Slides</del><ins datetime="2026-10-26" cite="../#doc/changelog/830---2026-10-26">Formulas or Native Charts in the Files You Write</ins><button type="button" class="revision-mark" id="change-spreadsheets-and-slides" popovertarget="change-spreadsheets-and-slides-note">Updated</button><span class="revision-note" id="change-spreadsheets-and-slides-note" popover><strong>Updated 26 Oct 2026 for <a href="../#doc/changelog/830---2026-10-26">8.3.0</a>.</strong> officeParser now writes .xlsx, .ods, .pptx and .odp files, so this section is now about what those files leave out. <a href="#revisions">All revisions</a></span></h2>
 <p>
-    Since 8.3.0, officeParser writes spreadsheets and slides as well as documents: <code>.xlsx</code>,
+    <del datetime="2026-10-26" cite="../#doc/changelog/830---2026-10-26">officeParser reads fourteen formats but writes fewer. It generates DOCX, ODT, PDF, HTML, Markdown,
+    LaTeX, RTF, EPUB, CSV, plain text, and chunks for retrieval. It does <strong>not</strong> generate
+    <code>.xlsx</code>, <code>.pptx</code>, <code>.ods</code>, or <code>.odp</code>.</del>
+    <ins datetime="2026-10-26" cite="../#doc/changelog/830---2026-10-26">Since 8.3.0, officeParser writes spreadsheets and slides as well as documents: <code>.xlsx</code>,
     <code>.ods</code>, <code>.pptx</code> and <code>.odp</code>, next to DOCX, ODT, PDF, HTML, Markdown,
     LaTeX, RTF, EPUB, CSV, plain text and chunks for retrieval. What it writes is what it read: a
     workbook's <strong>values</strong>, shown in their number formats, and a deck's text boxes, pictures,
-    shapes, tables and speaker notes.
+    shapes, tables and speaker notes.</ins><button type="button" class="revision-mark" id="change-spreadsheets-and-slides-2" popovertarget="change-spreadsheets-and-slides-2-note">Updated</button><span class="revision-note" id="change-spreadsheets-and-slides-2-note" popover><strong>Updated 26 Oct 2026 for <a href="../#doc/changelog/830---2026-10-26">8.3.0</a>.</strong> officeParser now writes .xlsx, .ods, .pptx and .odp files, so this section is now about what those files leave out. <a href="#revisions">All revisions</a></span>
 </p>
 <p>
-    It does <strong>not</strong> write formulas, since it never reads them (see section 2), and it writes
+    <del datetime="2026-10-26" cite="../#doc/changelog/830---2026-10-26">A spreadsheet can go out as CSV, and a deck can go out as a document, but if the deliverable has to
+    open in Excel or PowerPoint as a native file, use a library built for writing them, such as ExcelJS
+    or PptxGenJS.</del>
+    <ins datetime="2026-10-26" cite="../#doc/changelog/830---2026-10-26">It does <strong>not</strong> write formulas, since it never reads them (see section 2), and it writes
     a chart as a table of its data, on a sheet or a slide, not as a chart Excel or PowerPoint can edit. If
     the deliverable needs live formulas or editable charts, use a library built for authoring them, such
-    as ExcelJS or PptxGenJS.
+    as ExcelJS or PptxGenJS.</ins><button type="button" class="revision-mark" id="change-spreadsheets-and-slides-3" popovertarget="change-spreadsheets-and-slides-3-note">Updated</button><span class="revision-note" id="change-spreadsheets-and-slides-3-note" popover><strong>Updated 26 Oct 2026 for <a href="../#doc/changelog/830---2026-10-26">8.3.0</a>.</strong> officeParser now writes .xlsx, .ods, .pptx and .odp files, so this section is now about what those files leave out. <a href="#revisions">All revisions</a></span>
 </p>
 
 <h2>5. You Need to Run Macros</h2>
@@ -316,6 +322,7 @@
                     <h2 id="revisions-title">Revisions</h2>
                     <ol>
                         <li><strong>Updated</strong> <time datetime="2026-10-27">27 October 2026</time> for <a href="../#doc/changelog/830---2026-10-26">8.3.0</a>: officeParser now writes .xlsx files, with each cell&#39;s value and not its formula. <a href="#change-xlsx-written">See the change</a></li>
+                        <li><strong>Updated</strong> <time datetime="2026-10-26">26 October 2026</time> for <a href="../#doc/changelog/830---2026-10-26">8.3.0</a>: officeParser now writes .xlsx, .ods, .pptx and .odp files, so this section is now about what those files leave out. <a href="#change-spreadsheets-and-slides">See the change</a></li>
                     </ol>
                 </section>
 

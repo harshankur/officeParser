@@ -93,6 +93,7 @@
             "published": "2026-10-04",
             "updated": "2026-10-27",
             "revisions": [
+                { "id": "more-outputs", "date": "2026-10-27", "release": "8.3.0", "note": "XLSX, ODS, PPTX and ODP output took the outputs from 11 to 15." },
                 { "id": "bundle-size", "date": "2026-10-27", "release": "8.3.0", "note": "The browser bundle was about 5.5 MB when this post went out, and grew to about 6 MB with this release." },
                 { "id": "own-fonts", "date": "2026-10-27", "release": "8.2.0", "note": "The native engine now also draws in TrueType and OpenType fonts you give it, for any script." }
             ],
@@ -107,7 +108,8 @@
             "published": "2026-10-04",
             "updated": "2026-10-27",
             "revisions": [
-                { "id": "xlsx-written", "date": "2026-10-27", "release": "8.3.0", "note": "officeParser now writes .xlsx files, with each cell's value and not its formula." }
+                { "id": "xlsx-written", "date": "2026-10-27", "release": "8.3.0", "note": "officeParser now writes .xlsx files, with each cell's value and not its formula." },
+                { "id": "spreadsheets-and-slides", "date": "2026-10-26", "release": "8.3.0", "note": "officeParser now writes .xlsx, .ods, .pptx and .odp files, so this section is now about what those files leave out." }
             ],
             "description": "The jobs officeParser does not do: PDFs that match Word exactly, formula recalculation, legacy .doc files, formulas and native charts in what it writes, macros, and TeX typesetting, and what to use instead.",
             "deck": "Most documentation reads like a sales pitch, with the drawbacks in the fine print. I would rather be plain: here are the problems officeParser does not solve, and the tools to use instead."

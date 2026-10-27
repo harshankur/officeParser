@@ -744,6 +744,8 @@ a.author-name:hover,
     font-family: var(--font-sans);
     font-size: 0.9rem;
     font-style: normal;
+    font-weight: 400;
+    letter-spacing: normal;
     line-height: 1.55;
     white-space: normal;
     text-align: left;
