@@ -776,7 +776,8 @@ await ast.to('md', {
             (<code>bounds</code>), the slide's background colour, and its speaker notes on the slide's notes page. A chart
             is a table of its data in the chart's place.</li>
         <li><strong>A PDF</strong> becomes a slide for each page, at the pages' most common size (a page of another size is
-            scaled into it, centred). Each paragraph is a text box where the page set it, its lines broken and spaced as on the page,
+            scaled into it, centred). Each paragraph is a text box where the page set it, its lines broken and spaced as on the page
+            (each line on the baseline the page drew it on, where the runs' <code>bounds.baseline</code> give it),
             in its runs' fonts, sizes and colours; a paragraph set beside a floating table or picture is a box for each
             group of its lines. Tables keep their measured row heights and their cells' shading, pictures their places,
             and footnotes and a page's notes are at the foot of their page. A page's invisible text (a scan's recognised
