@@ -2545,6 +2545,18 @@ async function runDegradeFidelityTests(): Promise<GenFeatureTest[]> {
         /<w:hyperlink r:id="[^"]+"><w:r><w:drawing>/.test(documentXml) && relsXml.includes('https://example.com/target'),
         'ODT wraps the frame in <draw:a>; DOCX dropped ImageMetadata.link entirely'));
 
+    // --- RTF breaks the page between a source's pages and slides, as DOCX does ---
+    const para = (text: string): OfficeContentNode => ({ type: 'paragraph', text, children: [{ type: 'text', text } as OfficeContentNode] } as OfficeContentNode);
+    for (const kind of ['page', 'slide'] as const) {
+        const paged = synthAst(kind === 'page' ? 'pdf' : 'pptx', ['One', 'Two', 'Three'].map(t => ({ type: kind, children: [para(`${kind} ${t}`)] } as OfficeContentNode)));
+        const rtf = String((await OfficeGenerator.generate(paged as any, 'rtf' as any, {} as any)).value);
+        const ordered = new RegExp(`${kind} One[\\s\\S]*\\\\page\\n[\\s\\S]*${kind} Two[\\s\\S]*\\\\page\\n[\\s\\S]*${kind} Three`).test(rtf);
+        const breaks = (rtf.match(/\\page\n/g) || []).length;
+        results.push(mk('rtf', `a page break between consecutive ${kind}s`,
+            '2 breaks, one between each two', `${breaks} breaks`, ordered && breaks === 2,
+            `each ${kind} on a page of its own, none before the first; a PDF's pages ran together into one`));
+    }
+
     return results;
 }
 

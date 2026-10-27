@@ -547,8 +547,13 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
             if (ownEven[kind]) running += `{\\${kind}l ${await this.renderApart(ownEven[kind]!)}}\n`;
         }
 
+        // A page break between consecutive pages (or slides), as the source paginates them: a PDF's pages ran
+        // together. (A section's start between two is its own break.)
+        let prevPaginated: string | null = null;
         for (const node of ast.content) {
+            if ((node.type === 'page' || node.type === 'slide') && prevPaginated === node.type) body += '\\page\n';
             body += await this.processNodeRecursive(node, processor);
+            prevPaginated = (node.type === 'page' || node.type === 'slide') ? node.type : null;
         }
         if (this.collectedNotes.length > 0) {
             body += '\\pard\\sb120\\sa120\\keepn{\\b Notes:}\\par\n';
