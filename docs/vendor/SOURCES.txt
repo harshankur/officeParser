@@ -18,8 +18,10 @@ latex.css-1.14.0/               npm latex.css@1.14.0 (fonts/LM-*.woff2): Latin M
 computer-modern-0.1.3/          npm computer-modern@0.1.3 (fonts/cmu-*.woff2, the ones the LaTeX
                                 preview uses): Computer Modern Unicode, SIL Open Font License 1.1:
                                 OFL.txt
-pdfjs-dist-6.2.108/             npm pdfjs-dist@6.2.108 (build/pdf.worker.min.mjs), the version the
-                                browser bundle is built with, Apache-2.0: LICENSE
+pdfjs-dist-6.2.108/             npm pdfjs-dist@6.2.108 (build/pdf.worker.min.mjs, cmaps/, and of wasm/
+                                the JBIG2 and OpenJPEG decoders with their JavaScript fallbacks), the
+                                version the browser bundle is built with, Apache-2.0: LICENSE; the
+                                decoders' own licences: wasm/LICENSE_*
 tesseract.js-7.0.0/             npm tesseract.js@7.0.0 (dist/worker.min.js), the OCR worker of the
                                 version the browser bundle is built with, Apache-2.0: LICENSE.md
 tesseract.js-core-7.0.0/        npm tesseract.js-core@7.0.0 (tesseract-core-lstm.wasm.js,

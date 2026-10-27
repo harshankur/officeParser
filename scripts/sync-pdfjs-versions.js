@@ -115,6 +115,15 @@ function syncVersions() {
             + ` (and its LICENSE) there, and remove the old version's folder. The site would otherwise load a worker of another version.`);
         process.exitCode = 1;
     }
+    // Beside the worker, its CMaps and image decoders, which the site passes as pdfCMapUrl and pdfDecoderUrl.
+    const vendoredFolder = path.dirname(vendored);
+    const assets = ['cmaps/UniJIS-UTF16-H.bcmap', 'wasm/jbig2.wasm', 'wasm/openjpeg.wasm', 'wasm/jbig2_nowasm_fallback.js', 'wasm/openjpeg_nowasm_fallback.js'];
+    const missingAssets = assets.filter(file => !fs.existsSync(path.join(vendoredFolder, file)));
+    if (missingAssets.length) {
+        console.error(`\n[!] docs/vendor/pdfjs-dist-${pdfJsVersion}/ lacks ${missingAssets.join(', ')}: copy node_modules/pdfjs-dist/cmaps/ there,`
+            + ` and of node_modules/pdfjs-dist/wasm/ the JBIG2 and OpenJPEG decoders, their *_nowasm_fallback.js files and their LICENSE_* files.`);
+        process.exitCode = 1;
+    }
 
     // OCR on the site: Tesseract's worker and engine are vendored too, at the versions the browser bundle
     // is built with (the installed ones: the worker must match the bundle's tesseract.js). The page is

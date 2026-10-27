@@ -3453,8 +3453,12 @@
          * The copies of the pdf.js worker and of Chart.js this site serves (docs/vendor), by their full
          * address on the site the page is opened from: the pdf.js worker is loaded from it, and a
          * downloaded HTML file names its charts script by it, so the address works outside the site too.
+         * pdf.js's CMaps (the text of fonts a PDF does not embed, as many Chinese, Japanese and Korean
+         * PDFs do) and its image decoders (fax scans, JBIG2, JPEG 2000) are served beside the worker.
          */
         window.SITE_PDF_WORKER_SRC = new URL('vendor/pdfjs-dist-6.2.108/pdf.worker.min.mjs', document.baseURI).href;
+        window.SITE_PDF_CMAP_URL = new URL('vendor/pdfjs-dist-6.2.108/cmaps/', document.baseURI).href;
+        window.SITE_PDF_DECODER_URL = new URL('vendor/pdfjs-dist-6.2.108/wasm/', document.baseURI).href;
         window.SITE_CHART_JS_SRC = new URL('vendor/chart.js-4.5.1/chart.umd.min.js', document.baseURI).href;
         /**
          * OCR's worker and engine, served by this site too (absolute, as Tesseract starts its worker from a
@@ -3512,8 +3516,8 @@
                 { id: 'cfg_pdfKeepHeadersAndFootersInPages', label: 'PDF Headers and Footers in Pages', type: 'switch', default: false, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_ignorePageGeometry', label: 'Ignore Page Geometry', type: 'switch', default: false, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfWorkerSrc', label: 'PDF Worker URL', type: 'text', default: window.SITE_PDF_WORKER_SRC, replaces: /^https:\/\/cdn\.jsdelivr\.net\/npm\/pdfjs-dist@[^/]+\/build\/pdf\.worker\.min\.mjs$/, fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
-                { id: 'cfg_pdfCMapUrl', label: 'PDF CMaps Folder URL', type: 'text', default: '', placeholder: 'the library default (pdfjs-dist cmaps/ on the CDN)', fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
-                { id: 'cfg_pdfDecoderUrl', label: 'PDF Image Decoders Folder URL', type: 'text', default: '', placeholder: 'the library default (pdfjs-dist wasm/ on the CDN)', fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfCMapUrl', label: 'PDF CMaps Folder URL', type: 'text', default: '', placeholder: 'this site\'s copy of pdfjs-dist cmaps/', fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfDecoderUrl', label: 'PDF Image Decoders Folder URL', type: 'text', default: '', placeholder: 'this site\'s copy of pdfjs-dist wasm/', fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfMaxImagePixels', label: 'PDF Max Image Pixels', type: 'number', default: 40000000, width: '95px', min: 0, formatGroup: 'pdf', formats: ['pdf'] },
 
                 // HTML / EPUB Options
@@ -6109,8 +6113,8 @@
                     csvDelimiter: document.getElementById('cfg_csvDelimiter').value,
                     pdfWorkerSrc: document.getElementById('cfg_pdfWorkerSrc').value.trim() || window.SITE_PDF_WORKER_SRC,
                     // Empty is the library's own default, not "none".
-                    pdfCMapUrl: document.getElementById('cfg_pdfCMapUrl').value.trim() || undefined,
-                    pdfDecoderUrl: document.getElementById('cfg_pdfDecoderUrl').value.trim() || undefined,
+                    pdfCMapUrl: document.getElementById('cfg_pdfCMapUrl').value.trim() || window.SITE_PDF_CMAP_URL,
+                    pdfDecoderUrl: document.getElementById('cfg_pdfDecoderUrl').value.trim() || window.SITE_PDF_DECODER_URL,
                     decompressionLimits: {
                         maxUncompressedBytes: parseInt(document.getElementById('cfg_maxUncompressedBytes').value, 10) * 1024 * 1024,
                         maxZipEntries: parseInt(document.getElementById('cfg_maxZipEntries').value, 10),
@@ -7328,7 +7332,7 @@ ${sectioning.filter(Boolean).join('\n')}
                 // A string is the generated source; bytes are a LaTeX bundle (main.tex plus its images).
                 const bytes = typeof source === 'string' ? new TextEncoder().encode(source) : source;
                 // The site's own pdf.js worker, never the library's CDN default (allowRemoteAssets: false).
-                const reparsed = await window.officeParser.parseOffice(bytes, { fileType, extractAttachments: true, pdfWorkerSrc: window.SITE_PDF_WORKER_SRC, allowRemoteAssets: false });
+                const reparsed = await window.officeParser.parseOffice(bytes, { fileType, extractAttachments: true, pdfWorkerSrc: window.SITE_PDF_WORKER_SRC, pdfCMapUrl: window.SITE_PDF_CMAP_URL, pdfDecoderUrl: window.SITE_PDF_DECODER_URL, allowRemoteAssets: false });
                 const layout = typeof tex === 'string' ? texLayoutOf(tex) : null;
                 // Charts from the site's own Chart.js, and embeds as placeholders the preview turns into buttons.
                 const htmlConfig = { chartJsSrc: window.SITE_CHART_JS_SRC, gatedEmbeds: true, ...(layout ? { standalone: { styles: 'none' } } : {}) };
@@ -8555,7 +8559,7 @@ ${sectioning.filter(Boolean).join('\n')}
             async function inspect(bytes) {
                 // Any file can be dropped here, a PDF too: the site's own pdf.js worker, never the library's
                 // CDN default (allowRemoteAssets: false), as for every parse on this page.
-                const ast = await window.officeParser.parseOffice(bytes, { onWarning: () => { }, pdfWorkerSrc: window.SITE_PDF_WORKER_SRC, allowRemoteAssets: false });
+                const ast = await window.officeParser.parseOffice(bytes, { onWarning: () => { }, pdfWorkerSrc: window.SITE_PDF_WORKER_SRC, pdfCMapUrl: window.SITE_PDF_CMAP_URL, pdfDecoderUrl: window.SITE_PDF_DECODER_URL, allowRemoteAssets: false });
                 // Gated as the visualizer's previews are: a video or page an uploaded document frames loads only on a click.
                 const html = window.gatePreviewEmbeds((((await ast.to('html', { htmlConfig: { standalone: false, gatedEmbeds: true } })).value) || ''));
                 const text = ((((await ast.to('text')).value) || '')).toString();
