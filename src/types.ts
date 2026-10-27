@@ -2840,6 +2840,14 @@ export interface TextFormatting {
      * @example "center", "right"
      */
     alignment?: TextAlignment;
+
+    /**
+     * The text is there but not shown: a PDF's invisible text (text rendering modes 3 and 7), as a
+     * scan's recognised text is laid over its picture so it can be searched and copied. Slide output
+     * (PPTX, ODP) writes it fully transparent and the native PDF engine invisibly, so a scan's page
+     * still looks like the scan with its words there to find; other outputs write it as text.
+     */
+    hidden?: boolean;
 }
 
 /**
@@ -3603,6 +3611,12 @@ export interface NodeBounds {
     width: number;
     /** Box height. */
     height: number;
+    /**
+     * Distance from the page's top edge to the text's baseline, on a run of level text (PDF). The box
+     * runs from the font's ascent above the baseline to its descent below it, so they are
+     * `baseline - y` and `y + height - baseline`.
+     */
+    baseline?: number;
 }
 
 /**
