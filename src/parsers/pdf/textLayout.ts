@@ -88,7 +88,7 @@ export function buildLines(runs: RawRun[], cfg: PdfLayoutConfig, pageLean = 0, k
         for (const r of pieces[i].runs) { const k = known.get(r); if (k === true) yes++; else if (k === false) no++; }
         return yes + no ? yes > no : own;
     });
-    const lines = pieces.map((c, i) => { const line = clusterToLine(c.runs, cfg, rtl[i]); if (c.gutter !== undefined) line.gutter = c.gutter; return line; });
+    const lines = pieces.map((c, i) => { const line = clusterToLine(c.runs, cfg, rtl[i]); if (c.gutter !== undefined) line.gutter = c.gutter; LINE_RUNS.set(line, c.runs); return line; });
     // Top to bottom; lines on one baseline (a line cut at a wide gap) left to right.
     return inReadingOrder(lines);
 }
@@ -1058,23 +1058,148 @@ function cellFromLine(lines: PdfLine[], row: number, col: number, page: PageCont
     return cell;
 }
 
+/** Each line's runs as buildLines gathered them, for cutting a line where a table's columns are (see cutAtColumnEdges). */
+const LINE_RUNS = new WeakMap<PdfLine, RawRun[]>();
+
+/** A gap between two runs on a baseline at least this many ems wide may part two cells (a word space is about a quarter). */
+const CELL_GAP_EM = 0.7;
+/** Column edges this close (in points) are one. */
+const EDGE_TOL = 1.5;
+/** An edge holds for the rows within this many ems of the rows that show it. */
+const EDGE_REACH_EM = 8;
+
+/**
+ * Lines cut where a table's columns start or end, where its cells were set closer than a wide gap (see
+ * segmentsOf): a browser's table with a little padding has its cells nine points apart, and a row read as
+ * one line ("Description Quantity Unit price Amount", a calendar's "9 10 11"). A column edge is an x where
+ * text starts after a gap of {@link CELL_GAP_EM} or more on its baseline (or ends before one), on three
+ * baselines or more, each within {@link EDGE_REACH_EM} of the next; a line is cut before a run that starts
+ * on an edge (or after one that ends on one) with that gap beside it. A line of prose has its gaps cut
+ * nowhere unless three baselines' text starts at one x after a gap that wide (a word space in a monospaced
+ * font is six tenths of an em), and its pieces make no table's cells unless they make a table (see
+ * detectTables), so they are read as the line they were.
+ * Returns each line's pieces: the line itself where it is not cut.
+ */
+function cutAtColumnEdges(lines: PdfLine[], cfg: PdfLayoutConfig): PdfLine[][] {
+    // The text runs of each baseline, as detectTables groups lines into rows.
+    const order = lines.map((_, i) => i).sort((a, b) => lines[a].baseline - lines[b].baseline || lines[a].x - lines[b].x);
+    const rows: { y: number; em: number; runs: RawRun[] }[] = [];
+    for (const i of order) {
+        const l = lines[i], last = rows[rows.length - 1];
+        const runs = (LINE_RUNS.get(l) ?? []).filter(r => r.text.trim());
+        if (last && Math.abs(last.y - l.baseline) <= 0.5 * Math.min(last.em, l.fontSize)) appendAll(last.runs, runs);
+        else rows.push({ y: l.baseline, em: l.fontSize || 10, runs });
+    }
+    // Where text starts after a wide gap, and ends before one.
+    type Edge = { x: number; y: number; em: number };
+    const starts: Edge[] = [], ends: Edge[] = [];
+    for (const row of rows) {
+        row.runs.sort((a, b) => a.x - b.x);
+        let end = -Infinity;
+        for (const [k, r] of row.runs.entries()) {
+            if (k && r.x - end >= CELL_GAP_EM * (r.fontSize || row.em)) { starts.push({ x: r.x, y: row.y, em: row.em }); ends.push({ x: end, y: row.y, em: row.em }); }
+            end = Math.max(end, r.x + r.width);
+        }
+    }
+    // The edges three baselines or more share, each near the next: an x, and the spans of baselines it holds for
+    // (apart, top to bottom). An x is a cluster of edges, each within EDGE_TOL of the cluster's first, so a few at
+    // most are within EDGE_TOL of any x.
+    type Column = { x: number; spans: [number, number][] };
+    const columnsOf = (edges: Edge[]): Column[] => {
+        edges.sort((a, b) => a.x - b.x);
+        const out: Column[] = [];
+        for (let i = 0; i < edges.length;) {
+            let j = i + 1;
+            while (j < edges.length && edges[j].x - edges[i].x <= EDGE_TOL) j++;
+            const group = edges.slice(i, j).sort((a, b) => a.y - b.y);
+            const spans: [number, number][] = [];
+            for (let a = 0; a < group.length;) {
+                let b = a + 1, rowsSeen = 1;
+                while (b < group.length && group[b].y - group[b - 1].y <= EDGE_REACH_EM * group[b].em) { if (group[b].y - group[b - 1].y > 0.5 * group[b].em) rowsSeen++; b++; }
+                if (rowsSeen >= 3) {
+                    const reach = EDGE_REACH_EM * group[a].em, top = group[a].y - reach, bottom = group[b - 1].y + reach;
+                    const last = spans[spans.length - 1];
+                    if (last && top <= last[1]) last[1] = Math.max(last[1], bottom); else spans.push([top, bottom]);
+                }
+                a = b;
+            }
+            if (spans.length) out.push({ x: median(group.map(e => e.x)), spans });
+            i = j;
+        }
+        return out.sort((a, b) => a.x - b.x);
+    };
+    const startColumns = columnsOf(starts), endColumns = columnsOf(ends);
+    if (!startColumns.length && !endColumns.length) return lines.map(l => [l]);
+    // Whether an x on a baseline is one of the columns' edges (by halving, on x and then on the baselines).
+    const onEdge = (columns: Column[], x: number, y: number): boolean => {
+        let lo = 0, hi = columns.length;
+        while (lo < hi) { const mid = (lo + hi) >> 1; if (columns[mid].x < x - EDGE_TOL) lo = mid + 1; else hi = mid; }
+        for (let k = lo; k < columns.length && columns[k].x <= x + EDGE_TOL; k++) {
+            const spans = columns[k].spans;
+            let a = 0, c = spans.length;
+            while (a < c) { const mid = (a + c) >> 1; if (spans[mid][0] <= y) a = mid + 1; else c = mid; }
+            if (a > 0 && y <= spans[a - 1][1]) return true;
+        }
+        return false;
+    };
+    return lines.map(l => {
+        const runs = LINE_RUNS.get(l);
+        if (!runs || runs.length < 2) return [l];
+        const sorted = [...runs].sort((a, b) => a.x - b.x);
+        const text = sorted.filter(r => r.text.trim());
+        // Where the line is cut: before each run that starts a column after a wide gap.
+        const cuts: number[] = [];
+        let end = -Infinity;
+        for (const [k, r] of text.entries()) {
+            if (k && r.x - end >= CELL_GAP_EM * (r.fontSize || l.fontSize) && (onEdge(startColumns, r.x, l.baseline) || onEdge(endColumns, end, l.baseline))) cuts.push(r.x);
+            end = Math.max(end, r.x + r.width);
+        }
+        if (!cuts.length) return [l];
+        const pieces: RawRun[][] = cuts.map(() => []);
+        pieces.push([]);
+        let k = 0;
+        for (const r of sorted) {
+            while (k < cuts.length && r.x >= cuts[k]) k++;
+            pieces[k].push(r);
+        }
+        return pieces.filter(p => p.some(r => r.text.trim())).map(p => {
+            const piece = clusterToLine(p, cfg, l.rtl);
+            LINE_RUNS.set(piece, p);
+            return piece;
+        });
+    });
+}
+
 /**
  * Recovers grid tables from a page's lines *before* block/column segmentation, which would otherwise
- * carve a table's columns into separate reading blocks. Lines are grouped into rows by baseline; a
- * run of at least three consecutive rows that each carry two or more cells, whose cell left-edges
- * cluster into three or more stable columns, and whose cells are short (median ≤ 25 characters)
- * becomes a `table`. The short-cell and ≥3-column guards keep a multi-column article of long wrapped
- * lines from being mistaken for a table. Returns each table with the y it should be spliced in at,
- * plus the set of lines it consumed so the caller lays out the remaining lines normally.
+ * carve a table's columns into separate reading blocks. Lines are cut where the page's columns are (see
+ * cutAtColumnEdges) and grouped into rows by baseline; a run of at least three consecutive rows that each
+ * carry two or more cells, whose cell left-edges cluster into three or more stable columns, and whose cells
+ * are short (median ≤ 25 characters) becomes a `table`. The short-cell and ≥3-column guards keep a
+ * multi-column article of long wrapped lines from being mistaken for a table. Returns each table with the y
+ * it should be spliced in at, the set of lines it consumed, and the lines left for the caller to lay out (in
+ * reading order: a line cut for a table that took none of its pieces is the line it was).
  */
-export function detectTables(lines: PdfLine[], page: PageContext, doc: DocContext): { tables: { node: OfficeContentNode; y: number }[]; consumed: Set<PdfLine> } {
+export function detectTables(lines: PdfLine[], page: PageContext, doc: DocContext): { tables: { node: OfficeContentNode; y: number }[]; consumed: Set<PdfLine>; rest: PdfLine[] } {
     const tables: { node: OfficeContentNode; y: number }[] = [];
     const consumed = new Set<PdfLine>();
+    const cut = cutAtColumnEdges(lines, doc.cfg);
+    // The lines a table did not take: the line itself where a table took none of its pieces, else the pieces it left.
+    const rest = (): PdfLine[] => {
+        const out: PdfLine[] = [];
+        cut.forEach((pieces, i) => {
+            if (pieces.length === 1) { if (!consumed.has(pieces[0])) out.push(pieces[0]); return; }
+            const left = pieces.filter(p => !consumed.has(p));
+            if (left.length === pieces.length) out.push(lines[i]); else appendAll(out, left);
+        });
+        return out;
+    };
+    const all = cut.flat();
     // Only short segments can be table cells: a long line is prose, and letting it join a row would
     // bleed neighbouring text (and side-by-side tables) into the grid. So it never becomes a cell.
     const lineLen = (l: PdfLine) => l.fragments.reduce((n, f) => n + f.text.trim().length, 0);
-    const items = lines.filter(l => l.fragments.length && lineLen(l) <= 40);
-    if (items.length < 6) return { tables, consumed };
+    const items = all.filter(l => l.fragments.length && lineLen(l) <= 40);
+    if (items.length < 6) return { tables, consumed, rest: lines };
 
     // Group lines into rows by shared baseline; sort each row left-to-right.
     const sorted = [...items].sort((a, b) => a.baseline - b.baseline || a.x - b.x);
@@ -1130,7 +1255,7 @@ export function detectTables(lines: PdfLine[], page: PageContext, doc: DocContex
     // paragraphs between them, which is how an invoice's scattered label rows ("Invoice No: | 12345
     // | Date:", then "Subtotal | $10 | Tax") used to splice into one bogus table. So a run is broken
     // wherever a prose line lies between two rows, or the pitch between them jumps.
-    const excludedYs = lines.filter(l => l.fragments.length && lineLen(l) > 40).map(l => l.baseline).sort((a, b) => a - b);
+    const excludedYs = all.filter(l => l.fragments.length && lineLen(l) > 40).map(l => l.baseline).sort((a, b) => a - b);
     // Binary-search the sorted excludedYs for any prose line in (a, b): find the first y > a and test it
     // is < b. A linear `.some()` here was O(rows x proseLines), which a page of tens of thousands of
     // short lines could drive superlinear (a bounded but real DoS on the geometric path).
@@ -1209,7 +1334,10 @@ export function detectTables(lines: PdfLine[], page: PageContext, doc: DocContex
         tables.push({ node: table, y: run[0][0].yTop });
         for (const l of cells) { consumed.add(l); for (const more of wrapped.get(l) ?? []) consumed.add(more); }
     }
-    return { tables, consumed };
+    const left = rest();
+    // (The lines a table took whole, by the lines given.)
+    for (const [i, pieces] of cut.entries()) if (pieces.length > 1 && pieces.every(p => consumed.has(p))) consumed.add(lines[i]);
+    return { tables, consumed, rest: left };
 }
 
 // ── hybrid grid recovery over tag-derived paragraphs ───────────────────────────

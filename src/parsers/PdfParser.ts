@@ -1951,11 +1951,11 @@ function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext
     // Tables are found before a list's markers are joined to their text: a table's first column of numbers
     // (`1.`, `2.`) joined to the cell beside it gave each row a cell fewer than its header.
     const built = buildLines(runs, pdfCfg, pageCtx.rtl);
-    const { tables, consumed } = detectGridTables
+    const { tables, rest } = detectGridTables
         ? detectTables(built, pageCtx, docCtx)
-        : { tables: [] as { node: OfficeContentNode; y: number }[], consumed: new Set<typeof built[number]>() };
+        : { tables: [] as { node: OfficeContentNode; y: number }[], rest: built };
     for (const node of ruled.tables) tables.push({ node, y: node.bounds?.y ?? Infinity });
-    const remaining = joinMarkerLines(consumed.size ? built.filter(l => !consumed.has(l)) : built);
+    const remaining = joinMarkerLines(rest);
 
     const out: OfficeContentNode[] = [];
     // A list runs on from block to block, and its levels are the page's (see ListCarry).
