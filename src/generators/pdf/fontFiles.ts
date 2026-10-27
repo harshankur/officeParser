@@ -891,7 +891,9 @@ export class CffOutlines {
         } else if (major === 2) {
             this.cff2 = true;
             this.topDict = cffDict(table, headerSize, headerSize + header.u16());
-            this.maxStack = Math.min(this.topDict.get(25)?.[0] ?? 193, 513);
+            // (A maxstack of no whole number, a real read as NaN, kept every stack check false and the cap with it.)
+            const maxStack = this.topDict.get(25)?.[0];
+            this.maxStack = typeof maxStack === 'number' && Number.isFinite(maxStack) ? Math.min(Math.max(Math.floor(maxStack), 0), 513) : 193;
         } else throw new UnreadableFont(`${CFF_TABLE} is of version ${major}`);
         const type = this.topDict.get(1206)?.[0] ?? 2;
         if (type !== 2) throw new UnreadableFont(`${CFF_TABLE}'s glyphs are charstrings of type ${type}, not 2`);
