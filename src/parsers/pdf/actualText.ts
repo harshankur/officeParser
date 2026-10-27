@@ -579,8 +579,8 @@ export class MarkedContent {
     }
 }
 
-/** A pdf.js text content item, as far as reading it needs (`measured`: see measureItems). */
-interface TextContentItem { type?: string; str?: string; transform?: number[]; width?: number; measured?: boolean }
+/** A pdf.js text content item, as far as reading it needs (`measured` and `invisible`: see measureItems). */
+interface TextContentItem { type?: string; str?: string; transform?: number[]; width?: number; measured?: boolean; invisible?: boolean }
 
 /**
  * A page's text items as they read: each span with an ActualText (see readMarkedContent) as one item of
@@ -688,8 +688,8 @@ function spans<T extends TextContentItem>(items: T[], events: MarkedEvent[] | un
     const out: T[] = [];
     let at = 0, depth = 0, text = '';
     let target: T | undefined, minX = Infinity, maxX = -Infinity, level = true;
-    // Whether an item of the span was measured from its glyphs.
-    let measured = false;
+    // Whether an item of the span was measured from its glyphs, and how many of its glyph items there are and are invisible.
+    let measured = false, glyphItems = 0, invisibleItems = 0;
     // The span's text with the space before it (where pdf.js put one among its items, before its glyphs):
     // its text, which way it reads, the first glyph's place, and whether it has that space yet.
     let said = '', rtl = false, glyphX: number | undefined, spaced = false;
@@ -699,7 +699,11 @@ function spans<T extends TextContentItem>(items: T[], events: MarkedEvent[] | un
             target.transform[4] = minX;
             target.width = maxX - minX;
         }
-        if (target && measured) target.measured = true;
+        if (target) {
+            if (measured) target.measured = true;
+            if (glyphItems && invisibleItems === glyphItems) target.invisible = true;
+            else delete target.invisible;
+        }
         target = undefined;
     };
     for (const item of items) {
@@ -709,7 +713,7 @@ function spans<T extends TextContentItem>(items: T[], events: MarkedEvent[] | un
             if (depth) depth++;
             else if (event?.actualText !== undefined) {
                 depth = 1; text = event.actualText; target = undefined; minX = Infinity; maxX = -Infinity; level = true;
-                measured = false;
+                measured = false; glyphItems = 0; invisibleItems = 0;
             }
             continue;
         }
@@ -732,6 +736,7 @@ function spans<T extends TextContentItem>(items: T[], events: MarkedEvent[] | un
         }
         const blank = !(item.str ?? '').trim();
         if (item.measured) measured = true;
+        if (!blank) { glyphItems++; if (item.invisible) invisibleItems++; }
         if (!target) {
             // A space pdf.js put before the glyphs (a ligature's own width lost) stays on that side of the text:
             // before it, or after it for right-to-left text, which is read from the other side.

@@ -1181,6 +1181,8 @@ async function collectPage(
         }
 
         const formatting: TextFormatting = {};
+        // Drawn invisibly (rendering mode 3 or 7: a scan's recognised text over its picture): read, and marked so.
+        if ((item as { invisible?: boolean }).invisible) formatting.invisible = true;
         if (font.name) formatting.font = font.name;
         if (font.bold) formatting.bold = true;
         if (font.italic) formatting.italic = true;

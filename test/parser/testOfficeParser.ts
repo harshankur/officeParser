@@ -3691,6 +3691,28 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
         add('tagged_lists parse', false, 'parsed', e?.message || String(e));
     }
 
+    // --- invisible_text fixture: rendering modes 3 and 7, a Type 3 font's line and Helvetica's, beside
+    // and among visible text; the mode is graphics state, restored with it ---
+    try {
+        const ast = await OfficeParser.parseOffice(path.join(pdfDir, 'invisible_text.pdf'), { ocr: false });
+        const runs: any[] = [];
+        ast.content.forEach((p: any) => walk(p, n => { if (n.type === 'text' && (n.text || '').trim()) runs.push(n); }));
+        const run = (text: string) => runs.find(r => r.text.trim() === text);
+        const invisible = (text: string) => run(text)?.formatting?.invisible === true;
+        add('Mode 3 Type 3 line is invisible', invisible('Scanned words of a page'), true, run('Scanned words of a page')?.formatting);
+        add('Mode 7 line is invisible', invisible('Clipped and unseen words.'), true, run('Clipped and unseen words.')?.formatting);
+        add('Mode restored with the graphics state', !!run('Visible again after the state is restored.') && !invisible('Visible again after the state is restored.'), 'visible', run('Visible again after the state is restored.')?.formatting);
+        add('Invisible text parted from visible text on its line', !!run('Seen words then') && !invisible('Seen words then') && invisible('unseen words.'), '"Seen words then" seen, "unseen words." invisible', runs.map(r => `${r.text}${r.formatting?.invisible ? ' (invisible)' : ''}`).join(' | '));
+        add('Invisible text is read as content', textOf(ast).includes('Large unseen line') && invisible('Large unseen line'), 'read, invisible', textOf(ast));
+        const visible = runs.filter(r => !r.formatting?.invisible).map(r => r.text.trim());
+        add('Visible runs stay visible', ['Visible first line of the page.', 'A visible body line of ordinary text.', 'Another visible body line of ordinary text.'].every(t => visible.includes(t)), 'visible', visible.join(' | '));
+        // A Type 3 font has no typeface: pdf.js names it "Type3", and the styles' family is a CSS generic one.
+        const fonts = [...new Set(runs.map(r => r.formatting?.font).filter(Boolean))];
+        add('Type 3 font leaves the typeface unset', run('Scanned words of a page')?.formatting?.font === undefined && fonts.every(f => !/^(Type3|serif|sans-serif|monospace|cursive|fantasy)$/.test(f)), 'no Type3 or generic family', fonts.join(', '));
+    } catch (e: any) {
+        add('invisible_text parse', false, 'parsed', e?.message || String(e));
+    }
+
     // --- LibreOffice's PDFs of Indic and Thai text: each cluster placed on its own and wrapped in an
     // ActualText, its glyphs given no advance by pdf.js; read word for word as pdftotext reads them ---
     try {

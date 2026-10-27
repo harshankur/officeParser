@@ -1,6 +1,7 @@
 /**
  * A page's glyphs, read from its operator list: where each is drawn, how far it truly advances, the
- * colour it is filled with, and the text items pdf.js made of them (see measureItems).
+ * rendering mode it is drawn in and the colour it is filled with, and the text items pdf.js made of them
+ * (see measureItems).
  *
  * pdf.js's text items are not always where their glyphs are. Its text extraction gives no advance to a
  * glyph whose text holds a nonspacing mark (its test for a "zero-width diacritic" matches a mark anywhere
@@ -40,6 +41,8 @@ export interface TextShow {
 const SPACE = 1;
 /** pdf.js's text extraction gives the glyph no advance (see the module's note). */
 const LOST = 2;
+/** The glyph is drawn invisibly (rendering mode 3 or 7). */
+const INVISIBLE = 4;
 
 /**
  * A page's glyphs, in the order they are drawn, as parallel arrays (a page may hold many thousands). All
@@ -164,6 +167,7 @@ export function collectGlyphs(ops: any, OPS: any, fontOf: (id: string) => GlyphF
 
             case OPS.showText: {
                 const glyphs: unknown[] = Array.isArray(a?.[0]) ? a[0] : [];
+                const invisible = s.mode === 3 || s.mode === 7;
                 const color = (s.mode === 1 || s.mode === 5) ? s.stroke : s.fill;
                 out.shows.push({ x: userX(tm, s.rise), y: userY(tm, s.rise), ...(color ? { color } : {}), mode: s.mode });
                 if (s.font?.vertical) break; // (placed down the page: not measured here)
@@ -202,7 +206,7 @@ export function collectGlyphs(ops: any, OPS: any, fontOf: (id: string) => GlyphF
                         const end = translate(tm, width * h, 0);
                         out.x1.push(userX(end, s.rise)); out.y1.push(userY(end, s.rise));
                         out.em.push(em);
-                        out.flags.push((blank ? SPACE : 0) | (special?.[2] || special?.[3] ? LOST : 0));
+                        out.flags.push((blank ? SPACE : 0) | (special?.[2] || special?.[3] ? LOST : 0) | (invisible ? INVISIBLE : 0));
                         out.text.push(special?.[1] || special?.[3] ? '' : unicode);
                         out.count++;
                     }
@@ -228,6 +232,8 @@ export interface MeasuredItem {
     width?: number;
     /** Its place and width are its glyphs' as the page draws them (see measureItems). */
     measured?: boolean;
+    /** Every glyph of it is drawn invisibly (rendering mode 3 or 7). */
+    invisible?: boolean;
 }
 
 /** How near (in user space) pdf.js's place for an item is to the glyph it starts at. */
@@ -241,6 +247,7 @@ const NEAR = 0.05;
  * - an item of level text is given the place and width its glyphs are drawn over, where pdf.js's are not
  *   theirs (a glyph in it pdf.js gave no advance, or one before it in its show): marked `measured`, as
  *   every item matched is, so no later guess at a lost width moves it;
+ * - an item whose glyphs are all drawn invisibly is marked `invisible`;
  * - a blank item pdf.js put before a glyph, for the gap it measured to it, is left out where the gap is
  *   none (the glyph drawn before it ends within a tenth of an em of it, and no space glyph is between):
  *   the gap was measured from where pdf.js lost the widths of the glyphs between. Kept, it is placed over
@@ -319,12 +326,14 @@ export function measureItems<T extends MeasuredItem>(items: T[], glyphs: PageGly
         // The item's glyphs: from its first, on its line, as far as pdf.js's width for it reaches (a glyph it
         // gives no advance is not placed by it: it is the item's, wherever the page draws it).
         const reach = t[4] + Math.max(0, it.width || 0) + NEAR;
-        let lo = Infinity, hi = -Infinity, lost = false, last = g;
+        let lo = Infinity, hi = -Infinity, lost = false, seen = 0, hidden = 0, last = g;
         for (let k = g; k < ends[i] && k < g + 4096; k++) {
             if (Math.abs(py[k] - t[5]) > NEAR || (!(flags[k] & LOST) && (px[k] > reach || px[k] < t[4] - NEAR))) break;
             last = k;
             if (flags[k] & LOST) lost = true;
             if (flags[k] & SPACE) continue;
+            seen++;
+            if (flags[k] & INVISIBLE) hidden++;
             lo = Math.min(lo, x0[k]);
             hi = Math.max(hi, x1[k]);
         }
@@ -332,8 +341,17 @@ export function measureItems<T extends MeasuredItem>(items: T[], glyphs: PageGly
         // (Its glyphs reach past its width: a glyph pdf.js read as a blank, its advance left out.)
         const short = hi > t[4] + Math.max(0, it.width || 0) + NEAR;
         const item: T = { ...it, measured: true };
-        // (One matched out of order is known by its first glyph alone.)
-        if (!inOrder[i]) { out.push(it); return; }
+        if (seen && hidden === seen) item.invisible = true;
+        // (One matched out of order is known by its first glyph alone: whether it is seen.)
+        if (!inOrder[i]) { delete item.measured; out.push(item); return; }
+        // Seen and unseen glyphs in one item (pdf.js does not part its items where the rendering mode changes):
+        // parted where it does, so invisible text is never read as a visible run's. (Left whole, and seen,
+        // where its text cannot be told glyph by glyph.)
+        if (hidden && hidden < seen) {
+            const parts = level(t) ? partedByVisibility(item, g, last) : undefined;
+            if (parts) { out.push(...parts); return; }
+            delete item.invisible;
+        }
         // Its spaces where the page has them, where pdf.js measured a gap from a glyph whose advance it lost.
         if ((lost || short || /^\s/.test(it.str!)) && /\s/.test(it.str!) && level(t)) {
             const spaced = respaced(it, g, last);
@@ -417,6 +435,49 @@ export function measureItems<T extends MeasuredItem>(items: T[], glyphs: PageGly
         for (let k = g; k <= last; k++) { before.push(n); n += text[k].replace(/\s/g, '').length; }
         before.push(n);
         return n === str.replace(/\s/g, '').length ? before : undefined;
+    }
+
+    /**
+     * An item whose glyphs are partly drawn invisibly, as one item a run of glyphs drawn alike, each placed
+     * over its own glyphs and marked `invisible` where they are. Undefined where its text cannot be parted
+     * glyph by glyph.
+     */
+    function partedByVisibility(item: T, g: number, last: number): T[] | undefined {
+        const str = item.str!;
+        const before = charsBefore(str, item.dir, g, last);
+        if (!before) return undefined;
+        // Where each run of glyphs drawn alike starts (a space glyph goes with the run it is in).
+        const starts: number[] = [g];
+        let state = -1;
+        for (let k = g; k <= last; k++) {
+            if (flags[k] & SPACE) continue;
+            const hiddenHere = flags[k] & INVISIBLE ? 1 : 0;
+            if (state >= 0 && hiddenHere !== state) starts.push(k);
+            state = hiddenHere;
+        }
+        // The text's index of each character (not a blank) read, so a run's text is cut before the blanks ahead of it.
+        const index: number[] = [];
+        for (let c = 0; c < str.length; c++) if (!/\s/.test(str[c])) index.push(c);
+        index.push(str.length);
+        const parts: T[] = [];
+        for (let r = 0; r < starts.length; r++) {
+            const from = starts[r], to = r + 1 < starts.length ? starts[r + 1] - 1 : last;
+            const a = r === 0 ? 0 : index[before[from - g]], b = r + 1 < starts.length ? index[before[starts[r + 1] - g]] : str.length;
+            const piece = str.slice(a, b);
+            if (!piece) continue;
+            let lo = Infinity, hi = -Infinity, unseen = false;
+            for (let k = from; k <= to; k++) {
+                if (flags[k] & SPACE) continue;
+                lo = Math.min(lo, x0[k]); hi = Math.max(hi, x1[k]);
+                unseen = !!(flags[k] & INVISIBLE);
+            }
+            if (!Number.isFinite(lo)) continue;
+            const t = item.transform!;
+            const part: T = { ...item, str: piece, transform: [t[0], t[1], t[2], t[3], lo, y0[from]], width: hi - lo, measured: true };
+            if (unseen) part.invisible = true; else delete part.invisible;
+            parts.push(part);
+        }
+        return parts.length ? parts : undefined;
     }
 
     /** A blank item: left out, or placed over the gap before the glyph it is put before (see above). */

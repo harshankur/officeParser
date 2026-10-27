@@ -12,6 +12,8 @@
  *   - encrypted.pdf        : single page, RC4 40-bit standard security, user password "test123".
  *   - tagged_headings.pdf  : tagged headings beside headings guessed from font size, for headingDetection.
  *   - page_sizes.pdf       : pages of several sizes (landscape, a /Rotate 90 page, A4), for sections.
+ *   - invisible_text.pdf   : text in rendering modes 3 and 7 (a Type 3 font's and Helvetica's) beside and
+ *                            among visible text, as a scan's recognised text layer is drawn.
  *
  * The encryption is the PDF standard security handler, revision 2 (RC4, 40-bit). RC4 is implemented
  * inline because modern OpenSSL/Node no longer expose it, and qpdf is not assumed to be installed.
@@ -77,7 +79,7 @@ function serialize(objects, trailerExtra, idHex) {
  * image XObject or an outline can reference them by a number it knows up front.
  *
  * @param {Buffer} content
- * @param {{ rotate?: number, encrypt?: { userPassword: string }, extra?: Buffer[], resources?: string, catalog?: string }} opts
+ * @param {{ rotate?: number, encrypt?: { userPassword: string }, extra?: Buffer[], resources?: string, fonts?: string, catalog?: string }} opts
  */
 function buildPdf(content, opts = {}) {
     const rotate = opts.rotate || 0;
@@ -88,7 +90,7 @@ function buildPdf(content, opts = {}) {
     const rotateEntry = rotate ? ` /Rotate ${rotate}` : '';
     objects[2] = Buffer.from(
         `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]${rotateEntry} ` +
-        `/Resources << /Font << /F1 5 0 R >>${opts.resources || ''} >> /Contents 4 0 R >>`, 'latin1');
+        `/Resources << /Font << /F1 5 0 R${opts.fonts || ''} >>${opts.resources || ''} >> /Contents 4 0 R >>`, 'latin1');
     // object 4 (content) filled below, possibly encrypted
     objects[4] = Buffer.from('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', 'latin1');
 
@@ -444,6 +446,58 @@ function buildPageSizesPdf() {
     return serialize(o, '', '30313233343536373839414243444548');
 }
 
+/**
+ * A Type 3 font with no BaseFont and no FontName, its glyphs drawing nothing (as a scan's invisible text
+ * layer is often set), mapped to the letters of `text` by its ToUnicode: the font, its one empty glyph
+ * procedure and its CMap are three objects from `first` on. Returns the objects and the hex string that
+ * shows `text` in it.
+ */
+function type3Font(first, text) {
+    const letters = [...new Set(text)];
+    const code = new Map(letters.map((c, i) => [c, i + 1]));
+    const hex2 = n => n.toString(16).padStart(2, '0').toUpperCase();
+    const cmap = [
+        '/CIDInit /ProcSet findresource begin 12 dict begin begincmap',
+        '/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def',
+        '/CMapName /Adobe-Identity-UCS def /CMapType 2 def',
+        '1 begincodespacerange <00> <FF> endcodespacerange',
+        `${letters.length} beginbfchar`,
+        ...letters.map(c => `<${hex2(code.get(c))}> <${c.charCodeAt(0).toString(16).padStart(4, '0').toUpperCase()}>`),
+        'endbfchar endcmap CMapName currentdict /CMap defineresource pop end end',
+    ].join('\n');
+    const names = letters.map(c => `/g${code.get(c)}`).join(' ');
+    const procs = letters.map(c => `/g${code.get(c)} ${first + 1} 0 R`).join(' ');
+    const font = `<< /Type /Font /Subtype /Type3 /FontBBox [0 0 600 700] /FontMatrix [0.001 0 0 0.001 0 0] ` +
+        `/CharProcs << ${procs} >> /Encoding << /Type /Encoding /Differences [1 ${names}] >> ` +
+        `/FirstChar 1 /LastChar ${letters.length} /Widths [${letters.map(() => 600).join(' ')}] /Resources << >> /ToUnicode ${first + 2} 0 R >>`;
+    return {
+        objects: [Buffer.from(font, 'latin1'), streamObject('', Buffer.from('600 0 d0', 'latin1')), streamObject('', Buffer.from(cmap, 'latin1'))],
+        hex: [...text].map(c => hex2(code.get(c))).join(''),
+    };
+}
+
+/**
+ * Text drawn invisibly (rendering mode 3, and 7, which adds it to the clip) among visible text: a line in a
+ * Type 3 font inside a `q`/`Q` (the mode is restored with the graphics state, so the line after it is
+ * seen), a Helvetica line in mode 7, a line whose second half is invisible in the same text object, a
+ * large invisible line (no heading by its size), and visible body lines.
+ */
+function invisibleTextPdf() {
+    const scanned = type3Font(FIRST_EXTRA_OBJ, 'Scanned words of a page');
+    const content = Buffer.from([
+        'BT /F1 12 Tf 1 0 0 1 72 720 Tm (Visible first line of the page.) Tj ET',
+        `q BT 3 Tr /F2 12 Tf 1 0 0 1 72 700 Tm <${scanned.hex}> Tj ET Q`,
+        'BT /F1 12 Tf 1 0 0 1 72 680 Tm (Visible again after the state is restored.) Tj ET',
+        'BT 7 Tr /F1 12 Tf 1 0 0 1 72 660 Tm (Clipped and unseen words.) Tj 0 Tr ET',
+        'BT /F1 12 Tf 1 0 0 1 72 640 Tm (Seen words then ) Tj 3 Tr (unseen words.) Tj 0 Tr ET',
+        'BT 3 Tr /F1 24 Tf 1 0 0 1 72 600 Tm (Large unseen line) Tj 0 Tr ET',
+        'BT /F1 12 Tf 1 0 0 1 72 570 Tm (A visible body line of ordinary text.) Tj ET',
+        'BT /F1 12 Tf 1 0 0 1 72 550 Tm (Another visible body line of ordinary text.) Tj ET',
+        '',
+    ].join('\n'), 'latin1');
+    return buildPdf(content, { extra: scanned.objects, fonts: ` /F2 ${FIRST_EXTRA_OBJ} 0 R` });
+}
+
 function main() {
     fs.mkdirSync(OUT_DIR, { recursive: true });
 
@@ -471,6 +525,7 @@ function main() {
     fs.writeFileSync(path.join(OUT_DIR, 'tagged_lists.pdf'), buildTaggedListsPdf());
     fs.writeFileSync(path.join(OUT_DIR, 'tagged_headings.pdf'), buildTaggedHeadingsPdf());
     fs.writeFileSync(path.join(OUT_DIR, 'page_sizes.pdf'), buildPageSizesPdf());
+    fs.writeFileSync(path.join(OUT_DIR, 'invisible_text.pdf'), invisibleTextPdf());
 
     console.log('Wrote fixtures to', OUT_DIR);
 }

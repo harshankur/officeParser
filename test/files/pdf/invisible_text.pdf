@@ -1,0 +1,82 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R /F2 7 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 635 >>
+stream
+BT /F1 12 Tf 1 0 0 1 72 720 Tm (Visible first line of the page.) Tj ET
+q BT 3 Tr /F2 12 Tf 1 0 0 1 72 700 Tm <010203040405060708090A060B07090C0703070D030E05> Tj ET Q
+BT /F1 12 Tf 1 0 0 1 72 680 Tm (Visible again after the state is restored.) Tj ET
+BT 7 Tr /F1 12 Tf 1 0 0 1 72 660 Tm (Clipped and unseen words.) Tj 0 Tr ET
+BT /F1 12 Tf 1 0 0 1 72 640 Tm (Seen words then ) Tj 3 Tr (unseen words.) Tj 0 Tr ET
+BT 3 Tr /F1 24 Tf 1 0 0 1 72 600 Tm (Large unseen line) Tj 0 Tr ET
+BT /F1 12 Tf 1 0 0 1 72 570 Tm (A visible body line of ordinary text.) Tj ET
+BT /F1 12 Tf 1 0 0 1 72 550 Tm (Another visible body line of ordinary text.) Tj ET
+
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+6 0 obj
+null
+endobj
+7 0 obj
+<< /Type /Font /Subtype /Type3 /FontBBox [0 0 600 700] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /g1 8 0 R /g2 8 0 R /g3 8 0 R /g4 8 0 R /g5 8 0 R /g6 8 0 R /g7 8 0 R /g8 8 0 R /g9 8 0 R /g10 8 0 R /g11 8 0 R /g12 8 0 R /g13 8 0 R /g14 8 0 R >> /Encoding << /Type /Encoding /Differences [1 /g1 /g2 /g3 /g4 /g5 /g6 /g7 /g8 /g9 /g10 /g11 /g12 /g13 /g14] >> /FirstChar 1 /LastChar 14 /Widths [600 600 600 600 600 600 600 600 600 600 600 600 600 600] /Resources << >> /ToUnicode 9 0 R >>
+endobj
+8 0 obj
+<< /Length 8 >>
+stream
+600 0 d0
+endstream
+endobj
+9 0 obj
+<< /Length 488 >>
+stream
+/CIDInit /ProcSet findresource begin 12 dict begin begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+/CMapName /Adobe-Identity-UCS def /CMapType 2 def
+1 begincodespacerange <00> <FF> endcodespacerange
+14 beginbfchar
+<01> <0053>
+<02> <0063>
+<03> <0061>
+<04> <006E>
+<05> <0065>
+<06> <0064>
+<07> <0020>
+<08> <0077>
+<09> <006F>
+<0A> <0072>
+<0B> <0073>
+<0C> <0066>
+<0D> <0070>
+<0E> <0067>
+endbfchar endcmap CMapName currentdict /CMap defineresource pop end end
+endstream
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000257 00000 n 
+0000000943 00000 n 
+0000001013 00000 n 
+0000001033 00000 n 
+0000001538 00000 n 
+0000001595 00000 n 
+trailer
+<< /Size 10 /Root 1 0 R /ID [<30313233343536373839414243444546> <30313233343536373839414243444546>] >>
+startxref
+2134
+%%EOF
