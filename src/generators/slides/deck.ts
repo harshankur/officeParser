@@ -25,7 +25,7 @@ import { layoutTableRows } from '../../utils/tableLayout.js';
 export interface Box { x: number; y: number; w: number; h: number }
 
 export interface DeckRun { text: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; size?: number; color?: string; font?: string; link?: string; superscript?: boolean; subscript?: boolean; lineBreak?: boolean; /** Text there but not shown (TextFormatting.invisible): written fully transparent, still there to select and search. */ invisible?: boolean }
-export interface DeckParagraph { runs: DeckRun[]; align?: 'left' | 'center' | 'right' | 'justify'; bullet?: { level: number; char?: string; numbered?: boolean; /** A numbered item's marker as it is shown (`2.`, `1.1.`, `iv.`), written as text: each item is a paragraph, often a box, of its own. */ text?: string } ; mono?: boolean; /** The first line's indent past the others, in points (negative: hanging). */ firstIndent?: number; /** From baseline to baseline, in points, where the source measured it. */ lineSpacing?: number }
+export interface DeckParagraph { runs: DeckRun[]; align?: 'left' | 'center' | 'right' | 'justify'; bullet?: { level: number; char?: string; numbered?: boolean; /** A numbered item's marker as it is shown (`2.`, `1.1.`, `iv.`), written as text: each item is a paragraph, often a box, of its own. */ text?: string } ; mono?: boolean; /** The first line's indent past the others, in points (negative: hanging). */ firstIndent?: number; /** From baseline to baseline, in points, where the source measured it. */ lineSpacing?: number; /** A page paragraph's box's top and bottom where its lines' baselines are known (see baselineSet), in its page's points. */ baselineBox?: { top: number; bottom: number } }
 
 /** Where a list item's text starts in its box, past its marker: a margin for each level (in points). */
 export const bulletMargin = (level: number) => 18 * (level + 1);
@@ -158,18 +158,21 @@ async function runsOf(node: OfficeContentNode, source: DeckSource, notes: NoteSt
     return runs;
 }
 
+/** A page paragraph's line: its runs, its box, its tallest run's box (`main`) and size, and whether each of its runs has its baseline. */
+interface PlacedLine { runs: DeckRun[]; box: NodeBounds; main: NodeBounds; size?: number; based: boolean }
+
 /**
  * A page paragraph's lines as the page set them, each its runs and its box (where every run of text has
  * its place; else none): a line starts where a run sits below the one before it.
  */
-function placedLines(node: OfficeContentNode, runs: DeckRun[]): { runs: DeckRun[]; box: NodeBounds }[] | undefined {
+function placedLines(node: OfficeContentNode, runs: DeckRun[]): PlacedLine[] | undefined {
     const placed: NodeBounds[] = [];
     const walk = (n: OfficeContentNode, d: number) => { for (const c of n.children ?? []) { if ((c.type === 'text' || c.type === 'code') && c.text) { if (c.bounds) placed.push(c.bounds); else placed.length = 0; } else if (d < 16) walk(c, d + 1); } };
     walk(node, 0);
     // (A note's number, which no text node gave, is no placed run.)
     const texts = runs.filter(r => !r.lineBreak && r.text && !(r.superscript && /^\d+$/.test(r.text)));
     if (!texts.length || placed.length !== texts.length) return undefined;
-    const lines: { runs: DeckRun[]; box: NodeBounds }[] = [];
+    const lines: PlacedLine[] = [];
     let pending: DeckRun[] = [], at = 0, last: NodeBounds | undefined;
     for (const run of runs) {
         if (run !== texts[at]) { pending.push(run); continue; }
@@ -178,12 +181,15 @@ function placedLines(node: OfficeContentNode, runs: DeckRun[]): { runs: DeckRun[
             // The line before ends without its trailing space or break; this one starts without its leading space.
             const prev = lines[lines.length - 1];
             if (prev) { while (pending.length && pending[pending.length - 1].lineBreak) pending.pop(); prev.runs.push(...pending); pending = []; }
-            lines.push({ runs: [], box: { ...b } });
+            lines.push({ runs: [], box: { ...b }, main: b, size: run.size, based: Number.isFinite(b.baseline) });
             pending.push(prev ? { ...run, text: run.text.trimStart() } : run);
         } else {
             const box = lines[lines.length - 1].box;
             const right = Math.max(box.x + box.width, b.x + b.width), bottom = Math.max(box.y + box.height, b.y + b.height);
             box.x = Math.min(box.x, b.x); box.y = Math.min(box.y, b.y); box.width = right - box.x; box.height = bottom - box.y;
+            const line = lines[lines.length - 1];
+            if (b.height > line.main.height) { line.main = b; line.size = run.size; }
+            line.based &&= Number.isFinite(b.baseline);
             pending.push(run);
         }
         lines[lines.length - 1].runs.push(...pending);
@@ -208,6 +214,26 @@ function pitchOf(lines: { box: NodeBounds }[]): number | undefined {
     return pitch > 0 && Number.isFinite(pitch) ? Math.round(pitch * 100) / 100 : undefined;
 }
 
+/**
+ * Where a page paragraph's lines stand, where each line's tallest run has its baseline: the distance from
+ * baseline to baseline (its lines' own, else `single`, else a single line's 1.2 times its size), and its box's
+ * top and bottom. LibreOffice sets a line of a fixed spacing with its baseline that spacing, less a fifth of
+ * its font's size, below the line's top: its font-independent line spacing, as it reads PPTX and as ODP output
+ * asks for it (the font's own descent plays no part, so a font of other metrics stands where this one did).
+ * So the box's top is put the spacing above the first baseline, less that fifth: the first line stands where
+ * the page set it, and each line after it the spacing below. (Placed from the box's top, a line stood where
+ * the reader's font's ascent put it, up to 7 points from the page's.)
+ */
+function baselineSet(lines: PlacedLine[], single?: number): { lineSpacing: number; top: number; bottom: number } | undefined {
+    if (!lines.length || !lines.every(l => l.based)) return undefined;
+    const first = lines[0], last = lines[lines.length - 1];
+    // (A size the line does not give: its tallest run's height, from its ascent to its descent, about its size.)
+    const sizeOf = (l: PlacedLine) => l.size && l.size > 0 ? l.size : l.main.height;
+    const spacing = lines.length > 1 ? (last.main.baseline! - first.main.baseline!) / (lines.length - 1) : single ?? sizeOf(first) * 1.2;
+    if (!(spacing > 0) || !Number.isFinite(spacing)) return undefined;
+    return { lineSpacing: Math.round(spacing * 100) / 100, top: first.main.baseline! - spacing + sizeOf(first) / 5, bottom: Math.max(last.main.baseline! + sizeOf(last) / 5, last.main.y + last.main.height) };
+}
+
 /** A paragraph's sizes (indent, line spacing) scaled with its page. */
 const scaledParagraph = (p: DeckParagraph, scale: number): DeckParagraph => scale === 1 ? p
     : { ...p, ...(p.firstIndent ? { firstIndent: p.firstIndent * scale } : {}), ...(p.lineSpacing ? { lineSpacing: p.lineSpacing * scale } : {}) };
@@ -221,7 +247,7 @@ function placedGroups(node: OfficeContentNode, p: DeckParagraph): { paragraph: D
     if (p.bullet || (p.align && p.align !== 'left' && p.align !== 'justify')) return undefined;
     const lines = placedLines(node, p.runs);
     if (!lines || lines.length < 2) return undefined;
-    const pitch = pitchOf(lines);
+    const pitch = baselineSet(lines)?.lineSpacing ?? pitchOf(lines);
     const groups: { lines: typeof lines; left: number; first: number }[] = [];
     for (const [i, line] of lines.entries()) {
         const g = groups[groups.length - 1];
@@ -235,9 +261,12 @@ function placedGroups(node: OfficeContentNode, p: DeckParagraph): { paragraph: D
         let right = -Infinity, top = Infinity, bottom = -Infinity;
         for (const l of g.lines) { right = Math.max(right, l.box.x + l.box.width); top = Math.min(top, l.box.y); bottom = Math.max(bottom, l.box.y + l.box.height); }
         const indent = g.first - g.left;
-        const own = pitchOf(g.lines) ?? pitch;
-        const paragraph: DeckParagraph = { ...p, runs: joinLines(g.lines), ...(Math.abs(indent) > 3 ? { firstIndent: indent } : {}), ...(own ? { lineSpacing: own } : {}) };
-        return { paragraph, box: { x: Math.min(g.left, g.first), y: top, width: right - Math.min(g.left, g.first), height: bottom - top } };
+        // (On its baselines where they are known, a group of one line at the paragraph's spacing.)
+        const set = baselineSet(g.lines, pitch);
+        const own = set?.lineSpacing ?? pitchOf(g.lines) ?? pitch;
+        const [y0, y1] = set ? [set.top, set.bottom] : [top, bottom];
+        const paragraph: DeckParagraph = { ...p, runs: joinLines(g.lines), ...(Math.abs(indent) > 3 ? { firstIndent: indent } : {}), ...(own ? { lineSpacing: own } : {}), baselineBox: set ? { top: y0, bottom: y1 } : undefined };
+        return { paragraph, box: { x: Math.min(g.left, g.first), y: y0, width: right - Math.min(g.left, g.first), height: y1 - y0 } };
     });
 }
 
@@ -285,14 +314,16 @@ async function paragraphOf(node: OfficeContentNode, source: DeckSource, notes: N
     const read = typeof kept === 'string' ? [{ text: kept }] : own ?? await runsOf(node, source, notes);
     // A page's paragraph: its lines as the page broke them, as far apart as they were.
     const lines = asPlaced && typeof kept !== 'string' ? placedLines(node, read) : undefined;
-    const pitch = lines && pitchOf(lines);
+    // (On its baselines where they are known.)
+    const set = lines && baselineSet(lines);
+    const pitch = set ? set.lineSpacing : lines && pitchOf(lines);
     const meta = node.metadata as (ListMetadata & { alignment?: string }) | undefined;
     const align = meta?.alignment === 'center' || meta?.alignment === 'right' || meta?.alignment === 'justify' ? meta.alignment : undefined;
     const joined = lines ? joinLines(lines) : read;
     // Plain runs where the caller asked for no formatting: their text, links and breaks (and invisible text still
     // invisible, which is not a look: shown, a scan's recognised words stood over the scan a second time).
     const plain = source.includeFormatting ? joined : joined.map(r => ({ text: r.text, ...(r.link ? { link: r.link } : {}), ...(r.lineBreak ? { lineBreak: true } : {}), ...(r.invisible ? { invisible: true } : {}) }));
-    const p: DeckParagraph = { runs: plain, ...(align ? { align } : {}), ...(pitch ? { lineSpacing: pitch } : {}) };
+    const p: DeckParagraph = { runs: plain, ...(align ? { align } : {}), ...(pitch ? { lineSpacing: pitch } : {}), ...(set ? { baselineBox: { top: set.top, bottom: set.bottom } } : {}) };
     if (node.type === 'list') {
         const index = typeof meta?.itemIndex === 'number' && Number.isFinite(meta.itemIndex) ? Math.max(0, Math.trunc(meta.itemIndex)) : 0;
         p.bullet = { level: Math.max(0, Math.min(8, meta?.indentation ?? 0)), ...(meta?.listType === 'ordered'
@@ -478,14 +509,15 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
                 }
                 const p = await paragraphOf(block, source, notes, kept, true);
                 if (!p.runs.some(r => r.text.trim())) return;
-                const shown = boxOf(block.bounds, scale, dx, dy);
+                // (Level text on its baselines, where they are known: its box from the top they set.)
+                const shown = boxOf(p.baselineBox && !rotation && block.bounds ? { ...block.bounds, y: p.baselineBox.top, height: p.baselineBox.bottom - p.baselineBox.top } : block.bounds, scale, dx, dy);
                 // A turned box's frame is its box unturned, about its middle: a quarter turn's is the page's box swapped.
                 // (A deck's boxes are their frames already.)
                 const quarter = !isSlides && rotation !== undefined && ((rotation % 180) + 180) % 180 === 90;
                 const at = shown && quarter ? { x: shown.x + shown.w / 2 - shown.h / 2, y: shown.y + shown.h / 2 - shown.w / 2, w: shown.h, h: shown.w } : shown;
                 // A list item's text starts where the page set it: its box moved left by the indent its marker hangs in.
                 if (at && p.bullet) { const shift = Math.min(at.x, bulletMargin(p.bullet.level)); at.x -= shift; at.w += shift; }
-                if (at) slide.items.push({ kind: 'text', box: at, paragraphs: [scaledParagraph(p, scale)], exact: true, ...(rotation ? { rotation } : {}) });
+                if (at) slide.items.push({ kind: 'text', box: at, paragraphs: [scaledParagraph(rotation ? { ...p, baselineBox: undefined } : p, scale)], exact: true, ...(rotation ? { rotation } : {}) });
                 else slide.items.push({ kind: 'text', box: { ...BODY_BOX, x: width * 0.05, w: width * 0.9, y: height * 0.1 + slide.items.length * 24, h: 24 }, paragraphs: [p] });
             };
             // A table's cells' text placed block by block, where every block of text in it has its place.
@@ -630,7 +662,7 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
                 printed.add(n);
                 for (const [k, block] of blocks.entries()) {
                     const p = await paragraphOf(block, source, notes, true, true);
-                    const box = boxOf(block.bounds, scale, dx, dy);
+                    const box = boxOf(p.baselineBox && block.bounds ? { ...block.bounds, y: p.baselineBox.top, height: p.baselineBox.bottom - p.baselineBox.top } : block.bounds, scale, dx, dy);
                     if (box) slide.items.push({ kind: 'text', box, paragraphs: [k ? p : { ...p, runs: [{ text: String(n), superscript: true }, { text: ' ' }, ...p.runs] }], exact: true });
                 }
             }

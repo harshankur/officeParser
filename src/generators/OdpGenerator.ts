@@ -163,14 +163,18 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
         return ` svg:width="${pt(Math.max(1, box.w))}" svg:height="${pt(Math.max(1, box.h))}" draw:transform="rotate (${Math.round(r * 1e6) / 1e6}) translate (${pt(ox)} ${pt(oy)})"`;
     }
 
-    /** A shape's or frame's graphic style: its fill, outline, text anchor and insets. */
-    private graphicStyle(fill?: string, line?: { color?: string; width?: number }, anchor?: string, insets?: { top: number; right: number; bottom: number; left: number }, autoGrow = false, unwrapped = false): string {
+    /**
+     * A shape's or frame's graphic style: its fill, outline, text anchor and insets. A page's paragraph placed on its
+     * baselines (`onBaselines`) has its lines spaced independently of its font's metrics, as LibreOffice reads PPTX,
+     * so they stand on the baselines the deck placed them on (see baselineSet) whatever font a reader has for it.
+     */
+    private graphicStyle(fill?: string, line?: { color?: string; width?: number }, anchor?: string, insets?: { top: number; right: number; bottom: number; left: number }, autoGrow = false, unwrapped = false, onBaselines = false): string {
         const f = fill && hexColor(fill) ? ` draw:fill="solid" draw:fill-color="#${hexColor(fill)}"` : ' draw:fill="none"';
         const l = line && (line.color || line.width) ? ` draw:stroke="solid" svg:stroke-color="#${hexColor(line.color ?? '#000000') ?? '000000'}" svg:stroke-width="${pt(line.width ?? 0.75)}"` : ' draw:stroke="none"';
         const a = ` draw:textarea-vertical-align="${anchor === 'middle' ? 'middle' : anchor === 'bottom' ? 'bottom' : 'top'}"`;
         const i = insets ? ` fo:padding-top="${pt(insets.top)}" fo:padding-right="${pt(insets.right)}" fo:padding-bottom="${pt(insets.bottom)}" fo:padding-left="${pt(insets.left)}"` : '';
-        const key = `gr|${f}|${l}|${a}|${i}|${autoGrow}|${unwrapped}`;
-        return this.styleNamed(key, 'gr', name => `<style:style style:name="${name}" style:family="graphic" style:parent-style-name="standard"><style:graphic-properties${f}${l}${a}${i} draw:auto-grow-height="${autoGrow}" draw:auto-grow-width="${unwrapped}"${unwrapped ? ' fo:wrap-option="no-wrap" draw:textarea-horizontal-align="left"' : ''}/></style:style>`);
+        const key = `gr|${f}|${l}|${a}|${i}|${autoGrow}|${unwrapped}|${onBaselines}`;
+        return this.styleNamed(key, 'gr', name => `<style:style style:name="${name}" style:family="graphic" style:parent-style-name="standard"><style:graphic-properties${f}${l}${a}${i} draw:auto-grow-height="${autoGrow}" draw:auto-grow-width="${unwrapped}"${unwrapped ? ' fo:wrap-option="no-wrap" draw:textarea-horizontal-align="left"' : ''}/>${onBaselines ? '<style:paragraph-properties style:font-independent-line-spacing="true"/>' : ''}</style:style>`);
     }
 
     /** A shape's ODF name: its preset's own, else a rectangle, reported once a name. */
@@ -217,7 +221,7 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
             const kind = this.odfShape(s.geometry);
             return `<draw:custom-shape draw:style-name="${this.graphicStyle(s.fill, s.line, item.anchor, insets)}"${this.frameAttrs(item.box, item.rotation ?? s.rotation)}>${paragraphs}<draw:enhanced-geometry svg:viewBox="0 0 21600 21600" draw:type="${kind}"/></draw:custom-shape>`;
         }
-        return `<draw:frame draw:style-name="${this.graphicStyle(undefined, undefined, item.anchor, insets, !item.exact, item.exact)}"${this.frameAttrs(item.box, item.rotation)}><draw:text-box>${paragraphs}</draw:text-box></draw:frame>`;
+        return `<draw:frame draw:style-name="${this.graphicStyle(undefined, undefined, item.anchor, insets, !item.exact, item.exact, !!item.exact && item.paragraphs.some(p => p.baselineBox))}"${this.frameAttrs(item.box, item.rotation)}><draw:text-box>${paragraphs}</draw:text-box></draw:frame>`;
     }
 
     /** A table in a frame: its columns' widths, its cells (merges covering others), thin rules. */
