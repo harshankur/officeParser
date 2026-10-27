@@ -876,7 +876,7 @@ extracted (the matching `ignore*` flag is then a no-op).
 | ODS  | Y (cell notes) | – | – | – | Y | Y | grid |
 | ODP  | Y (page) | speaker notes | – | – (ODP masters not extracted) | Y | Y | Y |
 | ODG  | Y (page) | – | – | – | Y | – | Y |
-| PDF  | – | footnotes/endnotes (tagged) | Y (top/bottom bands) | – | Y | – | Y (spans: tagged, or drawn with ruling lines) |
+| PDF  | – | footnotes/endnotes (tagged) | Y (top/bottom bands) | – | Y | – | Y (spans: tagged, drawn with ruling lines, or a cell set between the rows it covers) |
 | RTF  | Y (annotations) | footnotes/endnotes | Y | – | Y | – | Y |
 | HTML | `<!-- -->` become `comment` nodes* (opt-in: `preserveComments`) | footnotes/endnotes | – | – | Y (`data:` only) | – | Y |
 | MD   | `<!-- -->` become `comment` nodes* | footnotes/endnotes | – | – | Y (`data:` only) | – | Y (HTML-table fallback) |
@@ -947,7 +947,7 @@ Table Node (type: 'table')
   16 per byte of the document parsed (spans count); one holding more than remain (a cell far from the rest) is laid out
   closer when written, with a `TABLE_GRID_LIMIT_EXCEEDED` warning: the rows and columns no cell starts or ends in are left
   out, and if that is not enough, each row's cells follow one another
-- `rowSpan` / `colSpan`: merged cells (DOCX, PPTX, XLSX merged ranges, ODF, HTML, Markdown HTML-tables, and PDF tables that are tagged or drawn with ruling lines)
+- `rowSpan` / `colSpan`: merged cells (DOCX, PPTX, XLSX merged ranges, ODF, HTML, Markdown HTML-tables, and PDF tables that are tagged or drawn with ruling lines, or whose merged cell is set between the rows it covers)
 - `backgroundColor`: the cell's shading, where the source sets one (a PDF table's cell takes the colour of the smallest filled rectangle under its middle, tagged or not)
 - Cells can contain nested tables
 

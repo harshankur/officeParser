@@ -744,7 +744,7 @@ OfficeParserAST
 │   ├── notes: [ OfficeContentNode ]     (footnotes/endnotes/slide notes attached to this node; see below)
 │   ├── comments: [ OfficeContentNode ] (inline comments attached to this node)
 │   ├── formatting: { bold, italic, underline, color, size, font, alignment, ... }
-│   ├── bounds?: { x, y, width, height }  (place on its page or slide: PDF, PPTX, ODP)
+│   ├── bounds?: { x, y, width, height, baseline? }  (place on its page or slide: PDF, PPTX, ODP; baseline: a PDF text run's)
 │   └── metadata: { level, listId, marker, row, col, rowSpan, colSpan, backgroundColor, spacing, style, ... }
 ├── auxiliary?: OfficeAuxiliaryContent   (out-of-band layout elements)
 │   ├── headers?: OfficeContentNode[]   ('header' nodes: DOCX parts, PDF top band, ODT master pages, LaTeX fancyhdr; metadata { type, section, hidden })
@@ -876,7 +876,7 @@ extracted (the matching `ignore*` flag is then a no-op).
 | ODS  | Y (cell notes) | – | – | – | Y | Y | grid |
 | ODP  | Y (page) | speaker notes | – | – (ODP masters not extracted) | Y | Y | Y |
 | ODG  | Y (page) | – | – | – | Y | – | Y |
-| PDF  | – | footnotes/endnotes (tagged) | Y (top/bottom bands) | – | Y | – | Y (spans: tagged, or drawn with ruling lines) |
+| PDF  | – | footnotes/endnotes (tagged) | Y (top/bottom bands) | – | Y | – | Y (spans: tagged, drawn with ruling lines, or a cell set between the rows it covers) |
 | RTF  | Y (annotations) | footnotes/endnotes | Y | – | Y | – | Y |
 | HTML | `<!-- -->` become `comment` nodes* (opt-in: `preserveComments`) | footnotes/endnotes | – | – | Y (`data:` only) | – | Y |
 | MD   | `<!-- -->` become `comment` nodes* | footnotes/endnotes | – | – | Y (`data:` only) | – | Y (HTML-table fallback) |
@@ -947,7 +947,7 @@ Table Node (type: 'table')
   16 per byte of the document parsed (spans count); one holding more than remain (a cell far from the rest) is laid out
   closer when written, with a `TABLE_GRID_LIMIT_EXCEEDED` warning: the rows and columns no cell starts or ends in are left
   out, and if that is not enough, each row's cells follow one another
-- `rowSpan` / `colSpan`: merged cells (DOCX, PPTX, XLSX merged ranges, ODF, HTML, Markdown HTML-tables, and PDF tables that are tagged or drawn with ruling lines)
+- `rowSpan` / `colSpan`: merged cells (DOCX, PPTX, XLSX merged ranges, ODF, HTML, Markdown HTML-tables, and PDF tables that are tagged or drawn with ruling lines, or whose merged cell is set between the rows it covers)
 - `backgroundColor`: the cell's shading, where the source sets one (a PDF table's cell takes the colour of the smallest filled rectangle under its middle, tagged or not)
 - Cells can contain nested tables
 
@@ -993,6 +993,7 @@ formatting: {
     subscript?: boolean
     superscript?: boolean
     alignment?: 'left' | 'center' | 'right' | 'justify'
+    invisible?: boolean     // drawn invisibly: a PDF's text in rendering mode 3 or 7 (a scan's recognised text)
 }
 ```
 
@@ -1019,7 +1020,8 @@ Break Node (type: 'break')
 
 > [!NOTE]
 > **Sections and columns.** A `'page'` break that starts a section (a Word section, a paragraph of an
-> ODT style naming another master page, an RTF `\sect`), and a `'section'` break, which starts a section
+> ODT style naming another master page, an RTF `\sect`, a PDF page of another size or turned, before its
+> `page` node), and a `'section'` break, which starts a section
 > on the same page (a Word continuous section, an ODF section set in columns of its own, an RTF section
 > of `\sbknone`), carry the new section's
 > `pageSetup` (under `ignorePageGeometry`, only its page numbering and first-page headers). Its `columns` are
@@ -1032,14 +1034,17 @@ Break Node (type: 'break')
 > page; DOCX output writes each section with its page, columns, header and footer, ODT a master page
 > for a section on a page of its own (with its header and footer) and a section of the columns, RTF
 > each section's page words, columns, header and footer, and LaTeX `multicols` (a long table between
-> the columns, across the page); other outputs write nothing for a `'section'` break.
+> the columns, across the page); other outputs write nothing for a `'section'` break. A PDF section's
+> `pageSetup` is its page's width and height alone, as `ast.metadata.pageSetup` is the first page's: a
+> PDF has no margins, so the writers' own are used. HTML writes no break for it (the page before ends
+> there already), and under `ignorePageGeometry` a PDF has no sections.
 
 > [!NOTE]
 > Break nodes have no `text` property, but `ast.to('text')` automatically converts them to the configured newline delimiter.
 
 > [!NOTE]
 > `includeBreakNodes` gates layout breaks in DOCX, ODF and LaTeX only (page and column breaks, otherwise invisible); a
-> section's start in a Word, RTF or ODT document is always a `break` node with `metadata.section`. A
+> section's start in a Word, RTF or ODT document, or at a PDF's page of another size, is always a `break` node with `metadata.section`. A
 > line break the author typed (DOCX `w:br`/`w:cr`, ODF `text:line-break`, LaTeX `\\`) is content, and is a `break` node whatever the flag says. **HTML and
 > Markdown always emit break nodes regardless of the flag**, because a break is explicit content there:
 > a `<br>`/hard line break becomes a `carriageReturn` break, and `<hr>`/`---` a `thematic` break (a
@@ -1475,7 +1480,7 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `includeRawContent` | `boolean` | `false` | Attach raw XML/RTF source to each node |
 | `serializeRawContent` | `boolean` | `true` | Re-serialize XML to clean strings (only if `includeRawContent: true`) |
 | `preserveXmlWhitespace` | `boolean` | `false` | Preserve original XML whitespace during serialization |
-| `includeBreakNodes` | `boolean` | `false` | Include layout break nodes: DOCX page, column and last-rendered-page breaks, ODF `fo:break-before`/`fo:break-after` and `text:soft-page-break`, LaTeX `\newpage`/`\clearpage`, and the breaks of an ODF section in columns of its own. The break that starts a Word, RTF or ODT section (with `metadata.section` and its `pageSetup`) is the document's structure and always a node. A line break the author typed (DOCX `w:br`/`w:cr`, ODF `text:line-break`, a LaTeX `\\` or `\newline`, HTML `<br>`) is always a `break` node inside its paragraph, and a DOCX tab is always a `\t` in the text |
+| `includeBreakNodes` | `boolean` | `false` | Include layout break nodes: DOCX page, column and last-rendered-page breaks, ODF `fo:break-before`/`fo:break-after` and `text:soft-page-break`, LaTeX `\newpage`/`\clearpage`. The break that starts a Word, RTF or ODT section, or a PDF's page of another size (with `metadata.section` and its `pageSetup`), and the `'section'` breaks around an ODF section in columns of its own, are the document's structure and always nodes. A line break the author typed (DOCX `w:br`/`w:cr`, ODF `text:line-break`, a LaTeX `\\` or `\newline`, HTML `<br>`) is always a `break` node inside its paragraph, and a DOCX tab is always a `\t` in the text |
 | `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal cross-references from AST (now honored for PDF too) |
 | `ignorePageGeometry` | `boolean` | `false` | Omit the geometric layout data: per-node bounding boxes (`node.bounds`: PDF pages, PPTX and ODP slides), page dimensions and page setups (`metadata.pageSetup`, a section's or sheet's `pageSetup`; a text document's keeps how each section numbers its pages and whether its first page has a header of its own), slides' `drawing` nodes and backgrounds, and a floating frame's place (`ShapeMetadata.float`: its text is read where it stands) |
 | `fileType` | `SupportedFileType \| FileTypeAlias \| null` | `null` | **Required for text-based binary data** (`'md'`, `'html'`, `'csv'`, `'tex'`) as these lack magic bytes. Also accepts the names the matching extensions route by (`FileTypeAlias`): `'latex'`/`'ltx'` for `tex`, the ODF template names `'ott'`/`'ots'`/`'otp'`/`'otg'`, and `'zip'` (parsed as whatever the archive holds). |
@@ -1822,14 +1827,14 @@ writeFileSync('data.ods', value); // value is a Uint8Array
 Pass as `pptxConfig` inside `GeneratorConfig`. The PPTX generator writes a PowerPoint presentation (`.pptx`) with zero extra dependencies, so it runs identically in Node and the browser and returns a `Uint8Array`. What the slides hold depends on the source:
 
 - **A presentation** (PPTX, ODP) is written slide for slide at its slide size: each text box, shape (its outline, fill, line, turn and mirroring, with the text in it), picture and table in its place (`bounds`), the slide's background colour, and its speaker notes on the slide's notes page. A chart is a table of its data in the chart's place.
-- **A PDF** becomes a slide for each page, at the pages' most common size (a page of another size is scaled into it, centred). Each paragraph is a text box where the page set it, its lines broken and spaced as on the page, in its runs' fonts, sizes and colours; a paragraph set beside a floating table or picture is a box for each group of its lines. Tables keep their measured row heights and their cells' shading, pictures their places, and footnotes and a page's notes are at the foot of their page.
+- **A PDF** becomes a slide for each page, at the pages' most common size (a page of another size is scaled into it, centred). Each paragraph is a text box where the page set it, its lines broken and spaced as on the page (each line on the baseline the page drew it on, where the runs' `bounds.baseline` give it), in its runs' fonts, sizes and colours; a paragraph set beside a floating table or picture is a box for each group of its lines. Tables keep their measured row heights and their cells' shading, pictures their places, and footnotes and a page's notes are at the foot of their page. A page's invisible text (a scan's recognised words laid over its picture, `TextFormatting.invisible`) is written fully transparent: not seen, still there to select and search.
 - **Any other document** flows onto 16:9 slides: a slide for each heading of the first two levels, titled by it, with the text under it as bullets (lower headings bold), carried on to more slides of the same title where it does not fit. Text before the first heading is under the document's title, from its metadata. Each table is on slides of its own, ten rows a slide with its header rows repeated, and each sheet of a workbook is a table under the sheet's name. Pictures (those in a table's cells too) are on slides of their own, charts are tables of their data, a presentation's speaker notes go with the slides its content made, and footnotes and endnotes, numbered where they are cited, are listed on slides at the end.
 
 A numbered list item carries its own number as the document shows it (`2.`, `1.1.`, `iv.`), and a picture its alternative text. A code block is set in a monospaced font, line for line; an embedded video or page is its link; a picture known only by its address is its alternative text, and reported; comments go into the speaker notes of the slide they are on. A PDF page shown turned (`/Rotate`) has its text and pictures turned with it. A presentation or PDF parsed with `ignorePageGeometry` has no places on its pages, so it flows as any other document. Pictures and charts need `extractAttachments: true` on the parse (`OfficeConverter.convert` sets it); PNG, JPEG, GIF and BMP pictures are written, and others are reported with `IMAGE_PROCESSING_FAILED`. Links to web, mail and phone addresses stay clickable. What a slide cannot hold (a chart without its data, a picture without a place on a page) is reported with `CONTENT_NOT_REPRESENTABLE`.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `backgrounds` | `(Uint8Array \| null \| undefined)[]` | `[]` | A picture (PNG or JPEG bytes) for each page of a PDF or slide of a presentation, in order, drawn as its slide's background under its text; `null` or `undefined` for one without. Give a PDF's pages drawn without their text, and the slides look as the pages did (shapes, gradients and charts included) with the text over them to edit; a page's tables are then their cells' text in place over the picture, which holds their rules. A flowing document's slides take them in order |
+| `backgrounds` | `(Uint8Array \| null \| undefined)[]` | `[]` | A picture (PNG or JPEG bytes) for each page of a PDF or slide of a presentation, in order, drawn as its slide's background under its text; `null` or `undefined` for one without. Give a PDF's pages drawn without their text, and the slides look as the pages did (shapes, gradients and charts included) with the text over them to edit; a page's tables are then their cells' text in place over the picture, which holds their rules. The page's pictures are placed over the background as objects of their own too, so a picture the background also holds is there twice and moving one uncovers its copy beneath. A flowing document's slides take them in order |
 
 ```typescript
 import { OfficeConverter } from 'officeparser';
@@ -1849,7 +1854,7 @@ Pass as `odpConfig` inside `GeneratorConfig`. The ODP generator writes an OpenDo
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `backgrounds` | `(Uint8Array \| null \| undefined)[]` | `[]` | A picture (PNG or JPEG bytes) for each page of a PDF or slide of a presentation (a flowing document's slides, in order), under its slide's text; `null` or `undefined` for one without |
+| `backgrounds` | `(Uint8Array \| null \| undefined)[]` | `[]` | A picture (PNG or JPEG bytes) for each page of a PDF or slide of a presentation (a flowing document's slides, in order), under its slide's text; `null` or `undefined` for one without. As PPTX's: the page's pictures are placed over it as objects of their own too |
 
 ```typescript
 import { OfficeConverter } from 'officeparser';
