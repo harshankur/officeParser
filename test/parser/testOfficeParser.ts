@@ -3814,6 +3814,84 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
         add('Encrypted parses via onPassword callback', false, 'SECRET CONTENT', e?.officeIssue?.code || e?.message);
     }
 
+    // --- tables as a browser and LibreOffice print them (scripts/generate-table-pdf-fixtures.mjs) ---
+    // Each table read as its grid: every row's cells in their columns ('' where none is, or a merged cell
+    // covers it), and the merged cells' spans as "row,col:colSpan x rowSpan".
+    {
+        const gridOf = (t: any) => {
+            const grid: string[][] = [], spans: string[] = [];
+            (t.children || []).forEach((row: any, r: number) => {
+                for (const c of row.children || []) {
+                    const m = c.metadata || {}, cs = m.colSpan || 1, rs = m.rowSpan || 1;
+                    for (let a = 0; a < rs; a++) for (let b = 0; b < cs; b++) (grid[r + a] ??= [])[m.col + b] = a || b ? '' : String(c.text || '').replace(/\s+/g, ' ').trim();
+                    if (cs > 1 || rs > 1) spans.push(`${r},${m.col}:${cs}x${rs}`);
+                }
+            });
+            const width = Math.max(0, ...grid.map(r => r.length));
+            return { rows: grid.map(r => Array.from({ length: width }, (_, k) => r[k] ?? '')), spans };
+        };
+        const tablesIn = async (file: string) => {
+            const ast = await OfficeParser.parseOffice(path.join(pdfDir, file), { ocr: false, pdfParserConfig: { separateProcess: false } } as any);
+            // (In the order they are read: a producer that does not break the page before each table, as LibreOffice
+            // opening HTML does not, sets two on a page.)
+            const found: any[] = [];
+            for (const p of ast.content) walk(p, (n: any) => { if (n.type === 'table') found.push(n); });
+            return found.map(gridOf);
+        };
+        const invoice = [['Date', 'Description', 'Quantity', 'Unit price', 'Amount'], ...Array.from({ length: 6 }, (_, i) => [`2026-10-0${i + 1}`, ['Consulting', 'Travel', 'Licence', 'Hosting'][i % 4], String(i % 5 + 1), (40 + i * 2.5).toFixed(2), ((i % 5 + 1) * (40 + i * 2.5)).toFixed(2)])];
+        const twoLine = [['Item code', 'Quantity ordered', 'Unit price (EUR)', 'Delivery date'], ['A-100', '12', '4.50', '2026-11-02'], ['B-220', '3', '19.99', '2026-11-05'], ['C-310', '40', '0.75', '2026-11-09']];
+        const labels = [['Name', 'Harriet Example'], ['Date of birth', '1984-03-12'], ['Address', '12 High Street, Springfield'], ['Phone', '+44 20 7946 0000'], ['Membership', 'Gold']];
+        const calendar = [['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], ...Array.from({ length: 5 }, (_, w) => Array.from({ length: 7 }, (_, d) => { const day = w * 7 + d - 2; return day >= 1 && day <= 31 ? String(day) : ''; }))];
+        const spans = [['Region', 'Sales', '', 'Cost', ''], ['', 'Q1', 'Q2', 'Q1', 'Q2'], ['North', '120', '130', '80', '85'], ['', '140', '150', '90', '95'], ['South', '95', '100', '70', '72']];
+        const allSpans = '0,0:1x2 0,1:2x1 0,3:2x1 2,0:1x2';
+        const expect = async (file: string, pages: { name: string; rows: string[][]; spans?: string }[]) => {
+            try {
+                const found = await tablesIn(file);
+                add(`${file}: a table each`, found.length === pages.length, `${pages.length} tables`, `${found.length} tables`);
+                pages.forEach((want, k) => {
+                    const got = found[k];
+                    const ok = !!got && JSON.stringify(got.rows) === JSON.stringify(want.rows) && (want.spans === undefined || got.spans.join(' ') === want.spans);
+                    add(`${file}: ${want.name}`, ok, `${JSON.stringify(want.rows).slice(0, 80)}${want.spans !== undefined ? `, spans ${want.spans || 'none'}` : ''}`,
+                        got ? `${JSON.stringify(got.rows).slice(0, 160)}, spans ${got.spans.join(' ') || 'none'}` : 'no table');
+                });
+            } catch (e: any) {
+                add(`${file} parse`, false, 'parsed', e?.message || String(e));
+            }
+        };
+        // Untagged, set by spacing alone: cells set closer than a wide gap (the invoice's header, the calendar's
+        // days) are cut where the table's columns are; a header over two lines is one row; labels and their values
+        // are a table of two columns. (A merged header's span says nothing of itself without rules or tags.)
+        await expect('tables_borderless_chrome.pdf', [
+            { name: 'cells set close are read apart', rows: invoice },
+            { name: 'a header over two lines is one row', rows: twoLine },
+            { name: 'labels and values are a two-column table', rows: labels },
+            { name: 'a calendar\'s days set close stand in their columns', rows: calendar },
+            { name: 'a header over sub-columns stands over them', rows: spans },
+        ]);
+        // Tagged: a row's cells left out of the tags (a calendar's empty days, the cells merged ones cover) stand in
+        // their columns, a ruled table's merged cells keep their spans from its rules, and labels and values a
+        // browser tags as no table are a table of two columns.
+        await expect('tables_tagged_chrome.pdf', [
+            { name: 'a tagged calendar\'s days stand in their columns', rows: calendar },
+            { name: 'a tagged ruled table keeps its merged cells', rows: spans, spans: allSpans },
+            { name: 'labels and values tagged as no table are a table', rows: labels },
+        ]);
+        await expect('tables_tagged_libreoffice.pdf', [{ name: 'a tagged ruled table keeps its merged cells', rows: spans, spans: allSpans }]);
+        // LibreOffice sets a merged cell's text in the middle of the rows it covers: it is a cell of them all.
+        await expect('tables_borderless_libreoffice.pdf', [
+            { name: 'a header over two lines is one row', rows: twoLine },
+            { name: 'a cell set midway between two rows spans them', rows: spans, spans: '0,0:1x2 2,0:1x2' },
+            { name: 'labels and values are a two-column table', rows: labels },
+        ]);
+        // Two lists side by side, code and its comments in a monospaced font, and a bulleted list are no tables.
+        try {
+            const found = await tablesIn('two_columns_not_tables_chrome.pdf');
+            add('Side-by-side lists, code and a list are not tables', found.length === 0, 'no table', `${found.length} table(s): ${JSON.stringify(found.map(t => t.rows)).slice(0, 160)}`);
+        } catch (e: any) {
+            add('two_columns_not_tables_chrome.pdf parse', false, 'parsed', e?.message || String(e));
+        }
+    }
+
     return results;
 }
 
