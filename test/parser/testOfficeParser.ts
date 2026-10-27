@@ -3713,6 +3713,19 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
         add('invisible_text parse', false, 'parsed', e?.message || String(e));
     }
 
+    // --- tesseract_text_layer fixture: Tesseract's text-only PDF of a page (its words in mode 3, in its
+    // GlyphLessFont), as a scan's recognised text is laid over it ---
+    try {
+        const ast = await OfficeParser.parseOffice(path.join(pdfDir, 'tesseract_text_layer.pdf'), { ocr: false });
+        const runs: any[] = [];
+        ast.content.forEach((p: any) => walk(p, n => { if (n.type === 'text' && (n.text || '').trim()) runs.push(n); }));
+        add('A text layer\'s words are invisible', runs.length > 50 && runs.every(r => r.formatting?.invisible === true), 'every word invisible', `${runs.filter(r => r.formatting?.invisible).length}/${runs.length}`);
+        add('GlyphLessFont is no typeface', runs.every(r => r.formatting?.font === undefined), 'no font', [...new Set(runs.map(r => r.formatting?.font))].join(', '));
+        add('A text layer is read as content', textOf(ast).includes('ACME Corporation') && textOf(ast).includes('Layout features'), 'read', textOf(ast).slice(0, 120));
+    } catch (e: any) {
+        add('tesseract_text_layer parse', false, 'parsed', e?.message || String(e));
+    }
+
     // --- mixed_size_line fixture: one line in three sizes; each run's baseline is the line's, its box its font's ---
     try {
         const runsOf = (ast: any) => { const out: any[] = []; ast.content.forEach((p: any) => walk(p, n => { if (n.type === 'text' && (n.text || '').trim()) out.push(n); })); return out; };

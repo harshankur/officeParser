@@ -280,14 +280,18 @@ function parsePageRange(spec: string | undefined, numPages: number): number[] {
     return pages.size ? [...pages].sort((a, b) => a - b) : all();
 }
 
+/** A font made only to carry an invisible text layer (Tesseract's and OCRmyPDF's), not a typeface. */
+const TEXT_LAYER_FONT = /^GlyphLessFont$/i;
+
 /**
  * Resolves a font id once per document into name/weight/style plus ascent/descent for geometry.
  *
  * The name is a typeface's, or none: a Type 3 font draws its glyphs itself and has no typeface (pdf.js names
  * one without a FontName "Type3"; a scan's invisible text layer is often in one), pdf.js's stand-in for a
  * font it could not read has a made-up name, and the family in the text content's styles is only ever a CSS
- * generic one (serif, sans-serif, monospace) pdf.js chose from the font's flags. Written as a typeface,
- * each put a font no system has into a slide (`<a:latin typeface="Type3"/>`).
+ * generic one (serif, sans-serif, monospace) pdf.js chose from the font's flags. A font made to carry an
+ * invisible text layer and nothing else (Tesseract's and OCRmyPDF's `GlyphLessFont`) is no typeface either.
+ * Written as a typeface, each put a font no system has into a slide (`<a:latin typeface="Type3"/>`).
  */
 async function resolveFont(fontKey: string, commonObjs: any, styles: Record<string, any>): Promise<ResolvedFont> {
     const style = styles[fontKey] || {};
@@ -305,7 +309,7 @@ async function resolveFont(fontKey: string, commonObjs: any, styles: Record<stri
             const rawName: string | undefined = typeof fontData?.name === 'string' ? fontData.name : undefined;
             if (rawName) {
                 const name = rawName.replace(/^[A-Z]{6}\+/, '');
-                if (name && !fontData.isType3Font && !fontData.isInvalidPDFjsFont) resolved.name = name;
+                if (name && !fontData.isType3Font && !fontData.isInvalidPDFjsFont && !TEXT_LAYER_FONT.test(name)) resolved.name = name;
                 const lower = rawName.toLowerCase();
                 resolved.bold = lower.includes('bold') || (typeof fontData.black === 'boolean' && fontData.black);
                 resolved.italic = lower.includes('italic') || lower.includes('oblique');
