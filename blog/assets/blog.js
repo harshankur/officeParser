@@ -1,7 +1,7 @@
 /**
  * What the blog's pages do once they are loaded: keep the reader's theme, filter the list by topic
- * and by the words searched for, bring a post's interactive figures to life, and place a revision's
- * note by its button. The pages themselves are built (scripts/build-blog.js) and
+ * and by the words searched for, bring a post's interactive figures to life, place a revision's
+ * note by its button, and show or put away a revised post's changes. The pages themselves are built (scripts/build-blog.js) and
  * are complete without this script: every post is in its page, and the list shows every post.
  * Views are counted by the viewcounter, whose consent prompt the layout loads.
  */
@@ -14,6 +14,11 @@
     const saved = storedTheme() || 'auto';
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     root.setAttribute('data-theme', saved === 'auto' ? (prefersDark ? 'dark' : 'light') : saved);
+
+    // ── A revised post's changes: shown unless the reader has put them away, which is kept for every post ──
+    const CHANGES_KEY = 'blog-changes';
+    const changesStored = () => { try { return localStorage.getItem(CHANGES_KEY); } catch { return null; } };
+    root.classList.toggle('changes-hidden', changesStored() === 'hidden');
 
     const wireThemeToggle = () => {
         const icon = document.getElementById('theme-icon');
@@ -503,8 +508,31 @@
         }
     };
 
+    /**
+     * The switch in a revised post's byline. Off, the post reads as it is now; the choice is kept for
+     * every post. A link to a change in the list of revisions shows the changes on this page first
+     * (without changing the choice), so it never lands where nothing is to be seen.
+     */
+    const wireRevisionToggle = () => {
+        const toggle = document.getElementById('revision-toggle');
+        if (!toggle) return;
+        const show = (shown, keep) => {
+            root.classList.toggle('changes-hidden', !shown);
+            toggle.setAttribute('aria-checked', String(shown));
+            if (!shown) for (const open of document.querySelectorAll('.revision-note:popover-open')) open.hidePopover();
+            if (keep) { try { localStorage.setItem(CHANGES_KEY, shown ? 'shown' : 'hidden'); } catch { /* the choice lasts for this page */ } }
+        };
+        show(!root.classList.contains('changes-hidden'), false);
+        toggle.hidden = false;
+        toggle.addEventListener('click', () => show(toggle.getAttribute('aria-checked') !== 'true', true));
+        for (const link of document.querySelectorAll('.article-revisions a[href^="#change-"]')) {
+            link.addEventListener('click', () => { if (root.classList.contains('changes-hidden')) show(true, false); });
+        }
+    };
+
     const start = () => {
         wireThemeToggle();
+        wireRevisionToggle();
         wireListFilter();
         wireDemos();
         wireRevisionNotes();

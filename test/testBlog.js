@@ -102,6 +102,10 @@ check('revisions: away from the page, a note is written out and its release link
     + ' <em>(Updated 27 Oct 2026 for <a href="https://site.example/#doc/changelog/840---2026-10-27">8.4.0</a>: Why shipped changed.)</em></p>');
 check('revisions: a note\'s words are text, not markup', marked('<p><del data-revision="x">a</del></p>', false, [{ ...fixed, id: 'x', anchor: 'change-x', note: '<b>&' }]).includes('</strong> &lt;b&gt;&amp; <a'));
 check('body: the text searched for is the post as it reads now', plainText(currentBody('<p>a <del datetime="d">old</del><ins datetime="d">new</ins></p>')) === 'a new');
+const removedWhole = marked('<ul><li><del data-revision="fixed">gone</del></li><li class="x">kept <del data-revision="fixed">part</del></li><li class="y"> <del data-revision="shipped">gone too</del> </li></ul>');
+check('revisions: a list item or paragraph taken out whole is marked so, to be put away with the changes, and one taken out in part is not',
+    removedWhole.startsWith('<ul><li class="revision-removed"><del ') && removedWhole.includes('<li class="x">kept <del ') && removedWhole.includes('<li class="y revision-removed"> <del '), removedWhole);
+check('revisions: away from the page, nothing is marked to be put away', !marked('<ul><li><del data-revision="fixed">gone</del><ins data-revision="shipped">x</ins></li></ul>', true).includes('revision-removed'));
 for (const [what, body, said, revisions] of [
     ['a mark that names no revision', '<p><del>old</del></p>', /names its revision, and nothing else/],
     ['a mark with another attribute', '<p><ins data-revision="fixed" class="x">new</ins></p>', /names its revision, and nothing else/],
@@ -300,6 +304,11 @@ try {
         revisedPage.includes(`<li><strong>Corrected</strong> <time datetime="${latestDay}">`) && revisedPage.includes(': A word was wrong. <a href="#change-word">See the change</a></li>')
         && revisedPage.includes(` for <a href="../#doc/changelog/${latestAnchor}">${latest}</a>: Something came with the release. <a href="#change-release">See the change</a></li>`)
         && revisedPage.indexOf('id="revisions"') > revisedPage.indexOf('id="change-release"') && revisedPage.indexOf('id="revisions"') < revisedPage.indexOf('article-nav-footer'), revisedPage.slice(0, 200));
+    check('revisions: a revised post has the switch that shows its changes, on and hidden until the script shows it, and no other post has one',
+        blog.posts.every(post => /<button type="button" class="revision-toggle" id="revision-toggle" role="switch" aria-checked="true" hidden>/.test(String(files.get(`${post.slug}.html`) ?? '')) === (post.revisions || []).length > 0));
+    const css = fs.readFileSync(path.join(SOURCE_DIR, 'assets', 'blog.css'), 'utf8');
+    const written = ['revision-mark', 'revision-note', 'revision-removed', 'revision-toggle', 'revision-toggle-track', 'article-revisions', 'changes-hidden'];
+    check('revisions: every class the build and the script give a revision has its look in the stylesheet', written.every(name => css.includes(`.${name}`)), written.filter(name => !css.includes(`.${name}`)).join(', '));
     check('revisions: a post lists revisions when it has some, and only then', blog.posts.every(post => String(files.get(`${post.slug}.html`) ?? '').includes('id="revisions"') === (post.revisions || []).length > 0));
     const revisedSearch = typeof withRevisions === 'string' ? [] : JSON.parse(String(withRevisions.get('search.json'))).posts;
     check('revisions: what a revision took out is not searched for, and what it put in is',

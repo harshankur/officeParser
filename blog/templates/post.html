@@ -10,6 +10,10 @@
                         <a href="https://harshankur.com" target="_blank" rel="noopener" class="author-name">Harsh
                             Ankur</a>
                         <div>Published <time datetime="{{published}}">{{dateLong}}</time>{{#updatedLong}}, updated <time datetime="{{updated}}">{{updatedLong}}</time>{{/updatedLong}} · {{minutes}} min read</div>
+{{#revisionList}}
+                        <button type="button" class="revision-toggle" id="revision-toggle" role="switch" aria-checked="true" hidden>
+                            <span class="revision-toggle-track" aria-hidden="true"></span>Show changes</button>
+{{/revisionList}}
                     </div>
                 </div>
             </div>

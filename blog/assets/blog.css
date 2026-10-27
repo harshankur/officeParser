@@ -730,6 +730,12 @@ a.author-name:hover,
     cursor: pointer;
 }
 
+/* A link to a change or to the list lands below the sticky header, with the line above it in view. */
+.revision-mark,
+.article-revisions {
+    scroll-margin-top: 6rem;
+}
+
 .revision-mark:hover,
 .revision-mark:focus-visible {
     color: var(--bg-surface);
@@ -758,6 +764,89 @@ a.author-name:hover,
 
 .revision-note strong {
     color: var(--text-primary);
+}
+
+/*
+   The switch in a revised post's byline, which the script shows: with it off, the post reads as it is
+   now (struck text, highlights and notes put away), and its list of revisions stays.
+*/
+.revision-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.45rem;
+    padding: 0;
+    font: inherit;
+    color: var(--text-secondary);
+    background: none;
+    border: none;
+    cursor: pointer;
+}
+
+.revision-toggle[hidden] {
+    display: none;
+}
+
+.revision-toggle-track {
+    position: relative;
+    flex-shrink: 0;
+    width: 2rem;
+    height: 1.15rem;
+    border-radius: 999px;
+    background-color: var(--border-color);
+    transition: background-color 0.15s ease;
+}
+
+.revision-toggle-track::after {
+    content: "";
+    position: absolute;
+    top: 0.15rem;
+    left: 0.15rem;
+    width: 0.85rem;
+    height: 0.85rem;
+    border-radius: 50%;
+    background-color: var(--bg-surface);
+    box-shadow: var(--shadow-sm);
+    transition: transform 0.15s ease;
+}
+
+.revision-toggle[aria-checked="true"] .revision-toggle-track {
+    background-color: var(--accent);
+}
+
+.revision-toggle[aria-checked="true"] .revision-toggle-track::after {
+    transform: translateX(0.85rem);
+}
+
+.revision-toggle:hover {
+    color: var(--text-primary);
+}
+
+.revision-toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 4px;
+}
+
+.changes-hidden .article-content del,
+.changes-hidden .revision-removed,
+.changes-hidden .revision-mark,
+.changes-hidden .revision-note {
+    display: none;
+}
+
+.changes-hidden .article-content ins {
+    background-color: transparent;
+    box-shadow: none;
+}
+
+.changes-hidden .article-content del + ins {
+    margin-left: 0;
+}
+
+.changes-hidden .article-content ins::before,
+.changes-hidden .article-content ins::after {
+    content: none;
 }
 
 .article-revisions {

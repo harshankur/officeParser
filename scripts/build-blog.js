@@ -372,7 +372,13 @@ function markRevisions(body, revisions, { name, standalone }) {
     });
     out += body.slice(last);
     if (/<\/?(?:del|ins)\b/.test(out.replace(/<(del|ins)\b[^>]*>[\s\S]*?<\/\1>/g, ''))) throw new Error(`${name}: a <del> or <ins> is not closed`);
-    return out;
+    if (standalone) return out;
+    // A paragraph or list item a revision took out whole is put away with the changes when a reader hides them, not left empty.
+    return out.replace(/<(p|li)((?:\s[^>]*)?)>(\s*<del\b[^>]*>[\s\S]*?<\/del>(?:<button type="button" class="revision-mark"[^>]*>[^<]*<\/button><span class="revision-note"[^>]*>[\s\S]*?<\/span>)?\s*)<\/\1>/g,
+        (_, tag, attributes, inner) => {
+            const classed = /\sclass="/.test(attributes) ? attributes.replace(/\sclass="([^"]*)"/, ' class="$1 revision-removed"') : `${attributes} class="revision-removed"`;
+            return `<${tag}${classed}>${inner}</${tag}>`;
+        });
 }
 
 /** A post's body as it reads now: what its revisions took out left out. */

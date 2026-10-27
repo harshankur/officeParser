@@ -80,6 +80,8 @@
                         <a href="https://harshankur.com" target="_blank" rel="noopener" class="author-name">Harsh
                             Ankur</a>
                         <div>Published <time datetime="2026-10-26">26 October 2026</time>, updated <time datetime="2026-10-27">27 October 2026</time> · 8 min read</div>
+                        <button type="button" class="revision-toggle" id="revision-toggle" role="switch" aria-checked="true" hidden>
+                            <span class="revision-toggle-track" aria-hidden="true"></span>Show changes</button>
                     </div>
                 </div>
             </div>
@@ -274,7 +276,7 @@ writeFileSync('report.pdf', pdf.value);</code></pre>
 <ul>
     <li>Viewers built on pdf.js build their text from the glyphs, not from <code>/ActualText</code>, so
         copying there can still put ि before its letter.</li>
-    <li><del datetime="2026-10-27" cite="../#doc/changelog/840---2026-10-27">officeParser's own reader can still lose the space <em>after</em> a conjunct when a Latin word
+    <li class="revision-removed"><del datetime="2026-10-27" cite="../#doc/changelog/840---2026-10-27">officeParser's own reader can still lose the space <em>after</em> a conjunct when a Latin word
         follows it: <code>क्ष end</code> reads back as <code>क्षend</code>. pdf.js gives the conjunct no
         width, so there is no gap left to find.</del><button type="button" class="revision-mark" id="change-space-after-conjunct" popovertarget="change-space-after-conjunct-note">Updated</button><span class="revision-note" id="change-space-after-conjunct-note" popover><strong>Updated 27 Oct 2026 for <a href="../#doc/changelog/840---2026-10-27">8.4.0</a>.</strong> The reader now keeps the space after a conjunct, so this is no longer a problem. <a href="#revisions">All revisions</a></span></li>
     <li>Arabic and Hebrew marks are drawn where pdf-lib draws them: right for the fonts I tested, but not
