@@ -4482,6 +4482,13 @@ async function fontFileTests() {
         cffOutcome = wrong < 0 ? 'each read' : `glyph ${wrong}: ${outlines.reads(wrong) ? 'read' : 'unread'}, ${outlines.draws(wrong) ? 'drawn' : 'empty'}`;
     });
     check('font: CFF glyphs of hints alone are empty, and the one calling subroutines drawn', cffOutcome === 'each read', cffOutcome);
+    // A stack as deep as FreeType and HarfBuzz hold (513 operands) is read, whatever the specification's
+    // limit: fontTools writes CFF2 glyphs that deep with no maxstack, and such a glyph was judged
+    // unreadable and drawn in another font. One deeper is not read.
+    const lineOf = (operands: number) => charString(10, 10, 'rmoveto', ...Array.from({ length: operands }, (_, i) => (i % 2 ? 5 : -5)), 'rlineto', 'endchar');
+    const deep = new CffOutlines(cffTable({ charStrings: [EMPTY, lineOf(298), lineOf(512), lineOf(514)] }));
+    check('font: a CFF glyph of up to 513 operands is read and drawn, and one of more is not read',
+        deep.reads(1) && deep.draws(1) && deep.reads(2) && deep.draws(2) && !deep.reads(3), [1, 2, 3].map(id => `${deep.reads(id)}/${deep.draws(id)}`).join(' '));
 }
 
 async function htmlReadingTests() {

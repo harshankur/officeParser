@@ -797,6 +797,8 @@ class PdfWorkBudget {
     cancelled = false;
     /** The operator budget ran out: no more operators are read, text still is. */
     operatorsSpent = false;
+    /** The page being read, which the time budget names when it runs out there; none between pages and after them. */
+    private pageBeingRead: number | undefined;
     constructor(private pdfDocument: any, private config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, fileBytes: number, private pdfProcess?: PdfProcess) {
         this.textLeft = pdfCfg.maxTextItems + fileBytes;
         this.operatorsLeft = pdfCfg.maxOperators + 4 * fileBytes;
@@ -824,7 +826,7 @@ class PdfWorkBudget {
     private checkTime(): void {
         if (this.spent || this.clockStart === undefined) return;
         const used = this.pdfProcess!.clock() - this.clockStart;
-        if (used >= this.timeLimit) { this.spend('maxTimeMs'); return; }
+        if (used >= this.timeLimit) { this.spend('maxTimeMs', this.pageBeingRead); return; }
         this.timer = setTimeout(() => this.checkTime(), Math.min(MAX_TIMER_MS, Math.max(20, this.timeLimit - used)));
     }
     /**
@@ -931,6 +933,10 @@ class PdfWorkBudget {
      * Closes the document once the text or time budget is spent, which stops pdf.js's tasks. A stream
      * being read is left unread rather than cancelled (see leaveUnread).
      */
+    /** Says which page is being read (none once the pages are read), for the time budget's warning. */
+    reading(pageNumber: number | undefined): void {
+        this.pageBeingRead = pageNumber;
+    }
     spend(limit: 'maxTextItems' | 'maxTimeMs', pageNumber?: number): void {
         if (this.spent) return;
         this.spent = true;
@@ -1720,6 +1726,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     for (const pageNum of pageNumbers) {
         checkAbortSignal(config.abortSignal);
         if (work.spent) break;
+        work.reading(pageNum);
         try {
             const extract = await collectPage(pdfjs, pdfDocument, pageNum, config, pdfCfg, fontCache, destCache, sectionLinks, work, markedContent);
             if (extract) extracts.push(extract);
@@ -1729,6 +1736,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             logWarning(OfficeWarningType.PAGE_LOAD_FAILED, config, pageNum, e, { page: pageNum });
         }
     }
+    work.reading(undefined);
     work.throwIfCancelled();
 
     const allRuns = extracts.flatMap(e => e.runs);
@@ -2122,7 +2130,7 @@ async function emitImage(
     } catch (e: any) {
         // A cancelled parse rejects; it is not a failed image.
         if (e?.name === 'AbortError') throw e;
-        logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, attachmentName, e);
+        logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, attachmentName, e, { page: pageNumber });
         return null;
     }
 }

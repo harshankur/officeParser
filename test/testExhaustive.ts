@@ -7930,6 +7930,16 @@ async function testPdfWarningPages(): Promise<void> {
     ]), { pdfParserConfig: { maxOperators: 0 } });
     const budget = colours.found.find(issue => issue.code === 'PDF_CONTENT_LIMIT_EXCEEDED');
     assert.strictEqual(budget?.page, 2, `the page the operator budget ran out on is named; got ${JSON.stringify(colours.found.map(i => [i.code, i.page]))}`);
+    // Page 2 draws a 1 MB string through a form two hundred times, past a 100 ms time budget.
+    const long = Buffer.concat([Buffer.from('BT /F1 10 Tf 0 50 Td ('), Buffer.alloc(1_000_000, 'a'), Buffer.from(') Tj ET')]);
+    const slow = await issues(pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>', blank,
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 6 0 R >> /XObject << /X 7 0 R >> >> /Contents 5 0 R >>',
+        flate(Buffer.from('q /X Do Q\n'.repeat(200))), '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+        flate(long, '/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << /Font << /F1 6 0 R >> >>'),
+    ]), { pdfParserConfig: { maxTimeMs: 100, separateProcess: true } });
+    const timed = slow.found.find(issue => issue.code === 'PDF_CONTENT_LIMIT_EXCEEDED');
+    assert.strictEqual(timed?.page, 2, `the page the time budget ran out on is named; got ${JSON.stringify(slow.found.map(i => [i.code, i.page]))}`);
     console.log('  PDF warning pages: All assertions passed ✓');
 }
 

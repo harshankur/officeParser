@@ -869,8 +869,13 @@ export class CffOutlines {
     private readonly cff2: boolean;
     private readonly topDict: Map<number, number[]>;
     private readonly charStrings: CffIndex;
-    /** The most operands a charstring's stack holds: 48 in CFF, a CFF2 font's maxstack (193 unless it says) in CFF2. */
-    private readonly maxStack: number;
+    /**
+     * The most operands a charstring's stack holds: 513, what FreeType and HarfBuzz hold, in CFF and
+     * CFF2 alike. The specifications' limits (48 in CFF, a CFF2 font's maxstack, 193 unless it says)
+     * are not what fonts keep to: fontTools builds CFF2 charstrings up to 513 and writes no maxstack,
+     * and a glyph a viewer draws is not to be judged unreadable here and drawn in another font.
+     */
+    private readonly maxStack = 513;
     private readonly drawing = new Map<number, CffDrawing>();
     /** A CFF2 font's, read when a glyph first blends: the regions of each of its variation store's data, and its font dictionaries. */
     private regionCounts?: number[];
@@ -887,13 +892,9 @@ export class CffOutlines {
             const top = new CffIndex(table, names.end, false).item(0);
             if (!top) throw new UnreadableFont(`${CFF_TABLE} has no Top DICT`);
             this.topDict = cffDict(table, top[0], top[1]);
-            this.maxStack = 48;
         } else if (major === 2) {
             this.cff2 = true;
             this.topDict = cffDict(table, headerSize, headerSize + header.u16());
-            // (A maxstack of no whole number, a real read as NaN, kept every stack check false and the cap with it.)
-            const maxStack = this.topDict.get(25)?.[0];
-            this.maxStack = typeof maxStack === 'number' && Number.isFinite(maxStack) ? Math.min(Math.max(Math.floor(maxStack), 0), 513) : 193;
         } else throw new UnreadableFont(`${CFF_TABLE} is of version ${major}`);
         const type = this.topDict.get(1206)?.[0] ?? 2;
         if (type !== 2) throw new UnreadableFont(`${CFF_TABLE}'s glyphs are charstrings of type ${type}, not 2`);
