@@ -5,7 +5,7 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { PRESET_TO_ODF } from '../utils/shapeNames.js';
 import { decodeBase64, encUrl, hexColor, odfUserDefinedXml, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
-import { buildDeck, bulletMargin, Box, DeckItem, DeckParagraph, DeckRun, DeckSlide } from './slides/deck.js';
+import { buildDeck, bulletMargin, Box, DeckItem, DeckParagraph, DeckRun, DeckSlide, unseenTable } from './slides/deck.js';
 
 
 /** The pictures ODP output holds, by their types' names (EMF, WMF, TIFF and SVG too, as LibreOffice shows them), and each kind's type. */
@@ -230,9 +230,11 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
         const total = item.widths.reduce((a, b) => a + b, 0) || cols;
         // A measured table's cells keep its text close to their rules, as its source set them; a shaded cell its colour.
         const pad = item.heights ? ` fo:padding-top="0pt" fo:padding-bottom="0pt" fo:padding-left="${pt(3)}" fo:padding-right="${pt(3)}"` : '';
+        // (No rules for a table whose text is all invisible: a scan's recognised table, its rules in the scan.)
+        const border = unseenTable(item) ? 'none' : '0.5pt solid #BFBFBF';
         const cellStyleOf = (fill?: string) => {
             const hex = fill && hexColor(fill);
-            return this.styleNamed(`cell|rule|${hex ?? ''}|${pad}`, 'ce', name => `<style:style style:name="${name}" style:family="table-cell"><style:graphic-properties ${hex ? `draw:fill="solid" draw:fill-color="#${hex}"` : 'draw:fill="none"'}${pad}/><style:paragraph-properties fo:border="0.5pt solid #BFBFBF"/></style:style>`);
+            return this.styleNamed(`cell|${border}|${hex ?? ''}|${pad}`, 'ce', name => `<style:style style:name="${name}" style:family="table-cell"><style:graphic-properties ${hex ? `draw:fill="solid" draw:fill-color="#${hex}"` : 'draw:fill="none"'}${pad}/><style:paragraph-properties fo:border="${border}"/></style:style>`);
         };
         const cellStyle = cellStyleOf();
         const hTotal = item.heights?.reduce((a, b) => a + b, 0);
@@ -281,8 +283,10 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
         // A number is written as the item shows it, as a bullet's character is (an invisible item's invisible with it).
         const shown = p.bullet ? (p.bullet.numbered ? p.bullet.text ?? '' : p.bullet.char ?? '') : '';
         const lead = p.runs.find(r => r.text && !r.lineBreak);
+        // (An item is invisible where all its text is: one of shown text after an invisible word keeps its marker.)
+        const unseen = p.runs.some(r => r.text.trim()) && p.runs.every(r => !r.text.trim() || r.invisible);
         const marker = !p.bullet || (p.bullet.numbered && !p.bullet.text) ? ''
-            : lead?.invisible ? this.spanXml({ text: `${shown}\t`, invisible: true, ...(lead.color ? { color: lead.color } : {}) }, defaultSize)
+            : unseen ? this.spanXml({ text: `${shown}\t`, invisible: true, ...(lead?.color ? { color: lead.color } : {}) }, defaultSize)
                 : `${xmlText(shown)}<text:tab/>`;
         return `<text:p${pStyle ? ` text:style-name="${pStyle}"` : ''}>${marker}${spans}</text:p>`;
     }

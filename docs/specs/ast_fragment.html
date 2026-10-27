@@ -204,7 +204,8 @@
         PDF's page of another size than the page before it, or turned (landscape among upright pages, a <code>/Rotate</code>
         page shown so), starts a section too: a <code>'page'</code> break before its <code>page</code> node, whose
         <code>pageSetup</code> is the page's size alone, as <code>metadata.pageSetup</code> is the first page's (a PDF has
-        no margins, so the writers' own are used), so DOCX, ODT, RTF and LaTeX output keep each page's size; HTML writes no
+        no margins, so the writers' own are used), so DOCX, ODT and RTF output keep each page's size, and LaTeX output its
+        orientation (a page of another size is set on the document's paper, with a <code>CONTENT_NOT_REPRESENTABLE</code> warning); HTML writes no
         break for it, the page before ending there already, and under <code>ignorePageGeometry</code> there is none. A section that starts on the same page (a Word
         continuous section, an ODF section set in columns of its own, an RTF section of <code>\sbknone</code>) is a <code>break</code> of type <code>'section'</code> with its
         <code>pageSetup</code>. A section's columns are <code>PageSetup.columns</code>:

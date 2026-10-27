@@ -5,7 +5,7 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { DRAWINGML_PRESETS } from '../utils/shapeNames.js';
 import { decodeBase64, encUrl, hexColor, ooxmlCustomPropertiesXml, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
-import { buildDeck, bulletMargin, Box, DeckItem, DeckParagraph, DeckRun, DeckSlide } from './slides/deck.js';
+import { buildDeck, bulletMargin, Box, DeckItem, DeckParagraph, DeckRun, DeckSlide, unseenTable } from './slides/deck.js';
 
 /** Escapes text content for an XML part after stripping XML-illegal characters. */
 /** A size in points as a text size PowerPoint takes (hundredths of a point, 1 to 4,000 points). */
@@ -292,7 +292,8 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
                 col += span;
             }
         });
-        const rule = '<a:solidFill><a:srgbClr val="BFBFBF"/></a:solidFill>';
+        // (None for a table whose text is all invisible: a scan's recognised table, its rules in the scan.)
+        const rule = unseenTable(item) ? '<a:noFill/>' : '<a:solidFill><a:srgbClr val="BFBFBF"/></a:solidFill>';
         const edges = ['lnL', 'lnR', 'lnT', 'lnB'].map(e => `<a:${e} w="9525">${rule}</a:${e}>`).join('');
         const empty = (attrs: string) => `<a:tc${attrs}><a:txBody><a:bodyPr/><a:lstStyle/><a:p/></a:txBody><a:tcPr${margins}>${edges}</a:tcPr></a:tc>`;
         const rowsXml = grid.map((row, r) => `<a:tr h="${rowH(r)}">${row.map(at => {
@@ -322,10 +323,12 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
         // character, and the rest was lost. So is an invisible item's, invisible with it: LibreOffice draws a bullet
         // without its colour's transparency.)
         const lead = p.runs.find(r => r.text && !r.lineBreak);
-        const long = !!b && !b.numbered && !!b.char && ([...b.char].length > 1 || !!lead?.invisible);
+        // (An item is invisible where all its text is: one of shown text after an invisible word keeps its marker.)
+        const unseen = p.runs.some(r => r.text.trim()) && p.runs.every(r => !r.text.trim() || r.invisible);
+        const long = !!b && !b.numbered && !!b.char && ([...b.char].length > 1 || unseen);
         const bullet = !b || b.numbered || long ? '<a:buNone/>' : b.char ? `<a:buFont typeface="Arial"/><a:buChar char="${xmlText(b.char)}"/>` : '<a:buNone/>';
         const shown = b?.numbered ? b.text : long ? b!.char : undefined;
-        const number: DeckRun[] = shown ? [{ text: `${shown}\t`, ...(lead?.size ? { size: lead.size } : {}), ...(lead?.font ? { font: lead.font } : {}), ...(lead?.color ? { color: lead.color } : {}), ...(lead?.invisible ? { invisible: true } : {}) }] : [];
+        const number: DeckRun[] = shown ? [{ text: `${shown}\t`, ...(lead?.size ? { size: lead.size } : {}), ...(lead?.font ? { font: lead.font } : {}), ...(lead?.color ? { color: lead.color } : {}), ...(unseen ? { invisible: true } : {}) }] : [];
         const runs = [...number, ...p.runs].map(r => this.runXml(r, rel, defaultSize, p.mono)).join('');
         const size = p.runs.find(r => r.size)?.size ?? defaultSize;
         // Lines as far apart as the source set them (spcPts holds at most 1,584 points).

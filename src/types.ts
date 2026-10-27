@@ -2869,8 +2869,9 @@ export interface TextFormatting {
     /**
      * The text is drawn invisibly, to be found and copied but not seen: a PDF's text in rendering mode
      * 3 or 7, as a scan's recognised text is laid over its picture. Slide output (PPTX, ODP) writes it
-     * fully transparent and the native PDF engine invisibly, so a scan's page still looks like the
-     * scan with its words there to find; other outputs write it as text. (Text an author hid is
+     * fully transparent and both PDF engines draw it unseen (the native engine in rendering mode 3, the
+     * 'html' engine transparent), a table of it without its rules, so a scan's page still looks like
+     * the scan with its words there to find; other outputs write it as text. (Text an author hid is
      * another thing, and is not marked so.)
      */
     invisible?: boolean;

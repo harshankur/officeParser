@@ -489,7 +489,7 @@ function invisibleTextPdf() {
         'BT /F1 12 Tf 1 0 0 1 72 720 Tm (Visible first line of the page.) Tj ET',
         `q BT 3 Tr /F2 12 Tf 1 0 0 1 72 700 Tm <${scanned.hex}> Tj ET Q`,
         'BT /F1 12 Tf 1 0 0 1 72 680 Tm (Visible again after the state is restored.) Tj ET',
-        'BT 7 Tr /F1 12 Tf 1 0 0 1 72 660 Tm (Clipped and unseen words.) Tj 0 Tr ET',
+        'q BT 7 Tr /F1 12 Tf 1 0 0 1 72 660 Tm (Clipped and unseen words.) Tj ET Q',
         'BT /F1 12 Tf 1 0 0 1 72 640 Tm (Seen words then ) Tj 3 Tr (unseen words.) Tj 0 Tr ET',
         'BT 3 Tr /F1 24 Tf 1 0 0 1 72 600 Tm (Large unseen line) Tj 0 Tr ET',
         'BT /F1 12 Tf 1 0 0 1 72 570 Tm (A visible body line of ordinary text.) Tj ET',

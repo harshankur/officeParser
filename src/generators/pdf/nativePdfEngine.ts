@@ -2980,6 +2980,9 @@ class NativeLayout {
             return wrapPlain(text, t => this.widthOf(t, face, size), Math.max(10, spanWidth(col, span) - 2 * pad), t => this.enc(t, face));
         };
 
+        // A table whose text is all invisible (a scan's recognised table) is drawn without its rules, as its text is unseen.
+        const unseen = grid.some(r => r.some(p => p.text.trim())) && grid.every(r => r.every(p => !p.text.trim() || p.invisible));
+        const ruled = unseen ? {} : { borderColor: border, borderWidth: 0.5 };
         this.y += 2;
         for (const placed of grid) {
             relayout();
@@ -3014,7 +3017,7 @@ class NativeLayout {
                 placed.forEach((p, i) => {
                     const x = xs[Math.min(p.col, cols)] + this.margin.left - tableLeft;
                     const room = spanWidth(p.col, p.span) - 2 * pad;
-                    this.page.drawRectangle({ x, y: topY - rowH, width: spanWidth(p.col, p.span), height: rowH, borderColor: border, borderWidth: 0.5, color: p.fill ? this.color(p.fill) : undefined });
+                    if (!unseen || p.fill) this.page.drawRectangle({ x, y: topY - rowH, width: spanWidth(p.col, p.span), height: rowH, ...ruled, color: p.fill ? this.color(p.fill) : undefined });
                     const face: FaceKey = p.header ? 'bold' : 'regular';
                     let ty = topY - pad - size;
                     for (const line of p.lines) {
@@ -3071,7 +3074,7 @@ class NativeLayout {
                 const topY = this.pageH - this.y;
                 for (const p of placed) {
                     const x = xs[Math.min(p.col, cols)] + this.margin.left - tableLeft;
-                    this.page.drawRectangle({ x, y: topY - bandH, width: spanWidth(p.col, p.span), height: bandH, borderColor: border, borderWidth: 0.5, color: p.fill ? this.color(p.fill) : undefined });
+                    if (!unseen || p.fill) this.page.drawRectangle({ x, y: topY - bandH, width: spanWidth(p.col, p.span), height: bandH, ...ruled, color: p.fill ? this.color(p.fill) : undefined });
                     const face: FaceKey = p.header ? 'bold' : 'regular';
                     const room = spanWidth(p.col, p.span) - 2 * pad;
                     let ty = topY - pad - size;

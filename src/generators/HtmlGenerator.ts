@@ -492,7 +492,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
         // The rule invisible text is drawn unseen by (see drawsInvisibleText): whatever the stylesheet, its colour,
         // its lines' and its background's, inside a link too.
-        const invisibleRule = this.invisibleTextDrawn ? '<style>.op-invisible-text, .op-invisible-text *, .op-invisible-text::marker { color: transparent !important; text-decoration-color: transparent !important; background: transparent !important; }</style>' : '';
+        const invisibleRule = this.invisibleTextDrawn ? '<style>.op-invisible-text, .op-invisible-text * { color: transparent !important; text-decoration-color: transparent !important; background: transparent !important; } .op-invisible-marker::marker { color: transparent !important; } .op-invisible-block, .op-invisible-block :is(table, tr, th, td) { border-color: transparent !important; box-shadow: none !important; background-color: transparent; }</style>' : '';
 
         const inj = this.config.htmlConfig.injections;
         const headInjectionsOn = sa.document && sa.headInjections;
@@ -1092,7 +1092,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             }
         }
         // A list item whose text is all invisible, in a printout: its marker unseen with it.
-        if (this.drawsInvisibleText && node.type === 'list' && this.allInvisible(node)) { this.invisibleTextDrawn = true; classes.push('op-invisible-text'); }
+        // (Its marker alone: the class's rule reached its nested items, which the item's <li> holds, and hid them.)
+        if (this.drawsInvisibleText && node.type === 'list' && this.allInvisible(node)) { this.invisibleTextDrawn = true; classes.push('op-invisible-marker'); }
+        // A table or heading whose text is all invisible (a scan's recognised table or title), in a printout: the rules
+        // the page's stylesheet draws around it (a table's grid, a heading's rule) unseen with it.
+        if (this.drawsInvisibleText && (node.type === 'table' || node.type === 'heading') && this.allInvisible(node, false)) { this.invisibleTextDrawn = true; classes.push('op-invisible-block'); }
         const className = classes.length > 0 ? ` class="${this.escape(classes.join(' '))}"` : '';
 
         // Handle ID and Anchors
@@ -1468,7 +1472,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                         : ` style="${marginStyle}"`;
                 }
                 const tableHtml = `<table${idAttr}${className}${mappedAttrs}${tableDataAttrs}${tableStyleAttr}>${finalChildren}</table>`;
-                const result = this.tableNestingLevel > 1 ? tableHtml : `<div class="table-container">${tableHtml}</div>`;
+                const result = this.tableNestingLevel > 1 ? tableHtml : `<div class="table-container${classes.includes('op-invisible-block') ? ' op-invisible-block' : ''}">${tableHtml}</div>`;
                 return `${extraAnchors}${result}`;
             }
 
@@ -1940,11 +1944,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
     }
 
     /** Whether a block's own text (not its nested lists') is there and all invisible. */
-    private allInvisible(node: OfficeContentNode): boolean {
+    private allInvisible(node: OfficeContentNode, ownTextOnly = true): boolean {
         let seen = false;
         const walk = (n: OfficeContentNode, depth: number): boolean => {
             for (const c of n.children || []) {
-                if (c.type === 'list') continue;
+                if (ownTextOnly && c.type === 'list') continue;
                 if (c.type === 'text' && (c.text || '').trim()) { if (!c.formatting?.invisible) return false; seen = true; }
                 else if (depth < 16 && !walk(c, depth + 1)) return false;
             }

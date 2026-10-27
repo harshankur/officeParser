@@ -158,7 +158,7 @@ async function runsOf(node: OfficeContentNode, source: DeckSource, notes: NoteSt
     return runs;
 }
 
-/** A page paragraph's line: its runs, its box, its tallest run's box (`main`) and size, and whether each of its runs has its baseline. */
+/** A page paragraph's line: its runs, its box, the box (`main`) and size of the run it stands on (see placedLines), and whether each of its runs has its baseline. */
 interface PlacedLine { runs: DeckRun[]; box: NodeBounds; main: NodeBounds; size?: number; based: boolean }
 
 /**
@@ -166,30 +166,42 @@ interface PlacedLine { runs: DeckRun[]; box: NodeBounds; main: NodeBounds; size?
  * its place; else none): a line starts where a run sits below the one before it.
  */
 function placedLines(node: OfficeContentNode, runs: DeckRun[]): PlacedLine[] | undefined {
-    const placed: NodeBounds[] = [];
-    const walk = (n: OfficeContentNode, d: number) => { for (const c of n.children ?? []) { if ((c.type === 'text' || c.type === 'code') && c.text) { if (c.bounds) placed.push(c.bounds); else placed.length = 0; } else if (d < 16) walk(c, d + 1); } };
-    walk(node, 0);
+    // Each run of text's box, its size and whether it is raised or lowered, from its node (as runsOf reads it: the
+    // runs given may be plain ones, without their looks).
+    const placed: { b: NodeBounds; size?: number; shifted: boolean }[] = [];
+    // (A box of numbers: a hand-made one's height of '12' made a frame 8,925 points tall.)
+    const walk = (n: OfficeContentNode, d: number, inherited: TextFormatting) => {
+        for (const c of n.children ?? []) {
+            const fmt: TextFormatting = { ...inherited, ...(c.formatting ?? {}) };
+            if ((c.type === 'text' || c.type === 'code') && c.text) { if (isBox(c.bounds)) placed.push({ b: c.bounds, size: sizeOf(fmt), shifted: !!(fmt.superscript || fmt.subscript) }); else placed.length = 0; }
+            else if (d < 16) walk(c, d + 1, fmt);
+        }
+    };
+    walk(node, 0, {});
     // (A note's number, which no text node gave, is no placed run.)
     const texts = runs.filter(r => !r.lineBreak && r.text && !(r.superscript && /^\d+$/.test(r.text)));
     if (!texts.length || placed.length !== texts.length) return undefined;
     const lines: PlacedLine[] = [];
-    let pending: DeckRun[] = [], at = 0, last: NodeBounds | undefined;
+    let pending: DeckRun[] = [], at = 0, last: NodeBounds | undefined, main = placed[0];
     for (const run of runs) {
         if (run !== texts[at]) { pending.push(run); continue; }
-        const b = placed[at++];
+        const here = placed[at++], b = here.b;
         if (!last || b.y > last.y + last.height * 0.6) {
             // The line before ends without its trailing space or break; this one starts without its leading space.
             const prev = lines[lines.length - 1];
             if (prev) { while (pending.length && pending[pending.length - 1].lineBreak) pending.pop(); prev.runs.push(...pending); pending = []; }
-            lines.push({ runs: [], box: { ...b }, main: b, size: run.size, based: Number.isFinite(b.baseline) });
+            lines.push({ runs: [], box: { ...b }, main: b, size: here.size, based: hasBaseline(b) });
+            main = here;
             pending.push(prev ? { ...run, text: run.text.trimStart() } : run);
         } else {
             const box = lines[lines.length - 1].box;
             const right = Math.max(box.x + box.width, b.x + b.width), bottom = Math.max(box.y + box.height, b.y + b.height);
             box.x = Math.min(box.x, b.x); box.y = Math.min(box.y, b.y); box.width = right - box.x; box.height = bottom - box.y;
             const line = lines[lines.length - 1];
-            if (b.height > line.main.height) { line.main = b; line.size = run.size; }
-            line.based &&= Number.isFinite(b.baseline);
+            // The line stands on its body's baseline: its largest run that is not raised or lowered (a superscript's
+            // box can be the tallest, and its baseline is above the line's), the first of them; a line of none, its largest.
+            if (main.shifted !== here.shifted ? main.shifted : (here.size ?? b.height) > (main.size ?? main.b.height)) { line.main = b; line.size = here.size; main = here; }
+            line.based &&= hasBaseline(b);
             pending.push(run);
         }
         lines[lines.length - 1].runs.push(...pending);
@@ -202,6 +214,35 @@ function placedLines(node: OfficeContentNode, runs: DeckRun[]): PlacedLine[] | u
         if (end >= 0 && !line.runs[end].lineBreak) line.runs[end] = { ...line.runs[end], text: line.runs[end].text.trimEnd() };
     }
     return lines;
+}
+
+/** Whether bounds are a box: its place and size numbers, finite, its size not negative. */
+const isBox = (b: NodeBounds | undefined): b is NodeBounds => !!b && [b.x, b.y, b.width, b.height].every(v => typeof v === 'number' && Number.isFinite(v)) && b.width >= 0 && b.height >= 0;
+/** Whether a run's box has its baseline: a number within the box (give or take a point, as both are rounded). */
+const hasBaseline = (b: NodeBounds): boolean => typeof b.baseline === 'number' && b.baseline >= b.y - 1 && b.baseline <= b.y + b.height + 1;
+
+/** Whether a node's text is there and all invisible (TextFormatting.invisible): a scan's recognised table. */
+function allInvisible(node: OfficeContentNode): boolean {
+    let seen = false;
+    const walk = (n: OfficeContentNode, d: number): boolean => {
+        for (const c of n.children ?? []) {
+            if ((c.type === 'text' || c.type === 'code') && (c.text || '').trim()) { if (!c.formatting?.invisible) return false; seen = true; }
+            else if (d < 16 && !walk(c, d + 1)) return false;
+        }
+        return true;
+    };
+    return walk(node, 0) && seen;
+}
+
+/** Whether a slide's table holds text and all of it invisible (a scan's recognised table): its rules are not drawn either. */
+export function unseenTable(item: Extract<DeckItem, { kind: 'table' }>): boolean {
+    let seen = false;
+    for (const row of item.rows) for (const cell of row.cells) for (const p of cell.paragraphs) for (const r of p.runs) {
+        if (!r.text.trim()) continue;
+        if (!r.invisible) return false;
+        seen = true;
+    }
+    return seen;
 }
 
 /** A page paragraph's lines joined with a break where each ended on the page. */
@@ -625,7 +666,8 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
                     // On a page drawn behind its slide, the table's rules are in the picture: its cells' text in
                     // their places over it, where every cell's text has a place.
                     // (A table on a turned page, which a slide's table cannot be, is its cells' text turned in place too.)
-                    if ((slide.picture || pageTurn) && !isSlides && await cellsPlaced(child)) continue;
+                    // (A table whose text is all invisible, a scan's recognised one, likewise: drawn, its rules stood over the scan.)
+                    if ((slide.picture || pageTurn || allInvisible(child)) && !isSlides && await cellsPlaced(child)) continue;
                     const t = await tableOf(child, source, notes);
                     if (box) slide.items.push({ kind: 'table', box, ...t });
                     // A slide's table holds no picture or chart: those in its cells are reported.

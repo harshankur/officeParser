@@ -7196,6 +7196,8 @@ async function testInvisibleTextWriters(): Promise<void> {
     for (const text of ['Invisibleword alpha', ' Invisiblegamma', 'Invisibleitem', 'Invisiblelink', 'Invisiblecell', '•\t']) assert.ok(/<a:solidFill><a:srgbClr val="000000"><a:alpha val="0"\/><\/a:srgbClr><\/a:solidFill>/.test(runOf(slide, text)), `PPTX: "${text}" is fully transparent; got ${runOf(slide, text)}`);
     assert.ok(!/alpha/.test(runOf(slide, 'Shownword')), 'PPTX: shown text keeps its colour');
     assert.ok(!/<a:buChar/.test(slide) && /hlinkClr[^>]*val="tx"/.test(runOf(slide, 'Invisiblelink')), 'PPTX: an invisible item has no bullet a reader draws in its own colour; an invisible link keeps its transparent colour');
+    // A scan's table, all of it invisible, is its cells' text in their places: no table, so no rules over the scan.
+    assert.ok(!/<a:tbl>/.test(slide), 'PPTX: a table of invisible text over a scan is no table of rules');
     const pptxBack = await readBack((await OfficeGenerator.generate(scan, 'pptx')).value as Uint8Array, 'pptx');
     assert.ok(words.every(w => pptxBack.includes(w)), 'PPTX: the invisible text reads back');
     // ODP: a transparent span, in the namespace LibreOffice reads it in.
@@ -7215,8 +7217,40 @@ async function testInvisibleTextWriters(): Promise<void> {
     // The 'html' engine's page: invisible text (and an invisible item's marker) transparent; HTML output shows it.
     const { HtmlGenerator } = await import('../src/generators/HtmlGenerator');
     const printed = (await new HtmlGenerator(scan, { htmlConfig: { standalone: true } } as any, { drawsInvisibleText: true }).generate()).value as string;
-    assert.ok(/<span class="op-invisible-text">(?:<span[^>]*>)?Invisibleword alpha</.test(printed) && /<li[^>]*class="op-invisible-text"/.test(printed) && /\.op-invisible-text::marker \{ color: transparent !important/.test(printed) && !/op-invisible-text">Shownword/.test(printed),
+    assert.ok(/<span class="op-invisible-text">(?:<span[^>]*>)?Invisibleword alpha</.test(printed) && /<li[^>]*class="op-invisible-marker"/.test(printed) && /\.op-invisible-marker::marker \{ color: transparent !important/.test(printed) && !/op-invisible-text">Shownword/.test(printed),
         `html engine: invisible text and an invisible item's marker are drawn transparent; got ${printed.match(/<style>\.op[^<]*<\/style>|<li[^>]*>.{0,80}|<p[^>]*>.{0,80}/g)}`);
+    // An invisible item's marker alone is unseen: its nested items, which its <li> holds, stay seen.
+    const item = (text: string, invisible: boolean, indentation: number, listType = 'unordered') => ({ type: 'list', text, metadata: { listType, indentation }, children: [{ type: 'text', text, formatting: invisible ? { invisible: true } : {} }] });
+    const nested = { type: 'pdf', metadata: {}, attachments: [], content: [item('Hiddenparent', true, 0), item('Seenchild', false, 1), item('Hiddennumber', true, 0, 'ordered'), item('Seennumbered', false, 1, 'ordered')] } as any;
+    const nestedPrinted = (await new HtmlGenerator(nested, { htmlConfig: { standalone: true } } as any, { drawsInvisibleText: true }).generate()).value as string;
+    const carriers = [...nestedPrinted.matchAll(/<(\w+)[^>]*class="[^"]*\bop-invisible-text\b/g)].map(m => m[1]);
+    assert.ok(carriers.length > 0 && carriers.every(t => t === 'span') && /<li>Seenchild/.test(nestedPrinted) && /<li>Seennumbered/.test(nestedPrinted) && !/op-invisible-text::marker/.test(nestedPrinted),
+        `html engine: an invisible item hides its own text and marker, not its nested items; got ${carriers} ${nestedPrinted.match(/<li[^>]*>[^<]*/g)}`);
+    // PPTX: an item of some invisible text and some shown keeps its bullet, whichever comes first.
+    for (const runs of [[['Hiddenlead', true], [' Shown rest', false]], [['Shownlead', false], [' hidden rest', true]]] as [string, boolean][][]) {
+        const mixed = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'list', metadata: { listType: 'unordered', indentation: 0 }, children: runs.map(([text, invisible]) => ({ type: 'text', text, formatting: invisible ? { invisible: true } : {} })) }] } as any;
+        const deck = parts((await OfficeGenerator.generate(mixed, 'pptx')).value as Uint8Array);
+        assert.ok(/<a:buChar/.test(deck), `PPTX: an item of shown and invisible text keeps its bullet (${runs[0][0]} first)`);
+    }
+    // A table whose text is all invisible draws no rules in any writer that draws them; one shown cell keeps them.
+    const tableOf = (shown: boolean) => ({ type: 'docx', metadata: {}, attachments: [], content: [
+        { type: 'heading', metadata: { level: 1 }, children: [{ type: 'text', text: 'Invisibletitle', formatting: { invisible: true } }] },
+        { type: 'table', children: [{ type: 'row', children: ['Cellone', 'Celltwo'].map((text, i) => ({ type: 'cell', children: [{ type: 'paragraph', children: [{ type: 'text', text, formatting: shown && i === 0 ? {} : { invisible: true } }] }] })) }] },
+    ] }) as any;
+    for (const shown of [false, true]) {
+        const pptxTable = parts((await OfficeGenerator.generate(tableOf(shown), 'pptx')).value as Uint8Array);
+        const odpTable = parts((await OfficeGenerator.generate(tableOf(shown), 'odp')).value as Uint8Array);
+        assert.strictEqual(/BFBFBF/.test(pptxTable), shown, `PPTX: a table's rules ${shown ? 'kept for a shown cell' : 'left out where all its text is invisible'}`);
+        if (!shown) assert.ok(/<a:lnL w="9525"><a:noFill\/>/.test(pptxTable) && /fo:border="none"/.test(odpTable) && !/BFBFBF/.test(odpTable), 'PPTX and ODP: an invisible table\'s rules are none');
+        else assert.ok(/BFBFBF/.test(odpTable), 'ODP: a table with a shown cell keeps its rules');
+        const nativeTable = await PDFDocument.load((await OfficeGenerator.generate(tableOf(shown), 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array);
+        let tableOps = '';
+        for (const [, obj] of nativeTable.context.enumerateIndirectObjects()) if (obj instanceof PDFRawStream) { try { tableOps += strFromU8(unzlibSync(obj.contents)); } catch { /* not Flate */ } }
+        assert.strictEqual(/ RG\b/.test(tableOps), shown, `native PDF: a table's rules ${shown ? 'drawn for a shown cell' : 'left out where all its text is invisible'}`);
+        const htmlTable = (await new HtmlGenerator(tableOf(shown), { htmlConfig: { standalone: true } } as any, { drawsInvisibleText: true }).generate()).value as string;
+        assert.strictEqual(/class="table-container op-invisible-block"/.test(htmlTable), !shown, `html engine: a table's rules ${shown ? 'kept' : 'unseen'}`);
+        if (!shown) assert.ok(/<h1[^>]*class="[^"]*op-invisible-block/.test(htmlTable), "html engine: an invisible heading's rule is unseen");
+    }
     // Every other writer: the invisible text is its content, written as text.
     for (const format of ['html', 'md', 'text', 'rtf', 'csv', 'chunks', 'epub', 'docx', 'odt', 'tex', 'xlsx', 'ods'] as const) {
         const value = (await OfficeGenerator.generate(scan, format)).value as unknown;
@@ -7254,6 +7288,24 @@ async function testSlideBaselines(): Promise<void> {
     assert.deepStrictEqual([...before.matchAll(/<a:off x="\d+" y="(\d+)"\/>/g)].slice(1).map(m => Math.round(Number(m[1]) / 127) / 100), [91.36, 282.72], 'PPTX: without baselines a paragraph is placed by its bounds');
     const odpBefore = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(page(false), 'odp')).value as Uint8Array))['content.xml']);
     assert.ok(!odpBefore.includes('font-independent-line-spacing') && /svg:y="91.36pt"/.test(odpBefore), 'ODP: without baselines a paragraph is placed by its bounds, its lines by its font');
+    // A line stands on its body's baseline, not a superscript's whose box is taller (another font's).
+    const body = (text: string, x: number) => ({ type: 'text', text, formatting: { size: '14pt' }, bounds: { x, y: 180.39, width: 60, height: 17.16, baseline: 192.91 } });
+    const raised = { type: 'text', text: '2 ', formatting: { size: '11.5pt', superscript: true }, bounds: { x: 140, y: 177.06, width: 9.63, height: 20.48, baseline: 187.5 } };
+    const supLine = { type: 'pdf', metadata: {}, attachments: [], content: [{ type: 'page', metadata: { pageWidth: 612, pageHeight: 792 }, children: [{ type: 'paragraph', bounds: { x: 72, y: 177.06, width: 140, height: 20.48 }, children: [body('Hello world', 72), raised, body('here', 150)] }] }] } as any;
+    for (const includeFormatting of [true, false]) {
+        const supPptx = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(supLine, 'pptx', { includeFormatting } as any)).value as Uint8Array))['ppt/slides/slide1.xml']);
+        const supOdp = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(supLine, 'odp', { includeFormatting } as any)).value as Uint8Array))['content.xml']);
+        const top = Math.round(Number(/<p:sp>[\s\S]*?<a:off x="\d+" y="(\d+)"/.exec(supPptx)?.[1]) / 127) / 100;
+        assert.ok(top === 178.91 && /draw:frame[^>]*svg:y="178.91pt"/.test(supOdp), `PPTX and ODP: a line with a superscript stands on its body's baseline (includeFormatting ${includeFormatting}); got ${top}, ${/draw:frame[^>]*svg:y="([^"]+)"/.exec(supOdp)?.[1]}`);
+    }
+    // A baseline outside its run's box, or a box that is no numbers, places the paragraph by its bounds.
+    const odd = (run: object) => ({ type: 'pdf', metadata: {}, attachments: [], content: [{ type: 'page', metadata: { pageWidth: 612, pageHeight: 792 }, children: [{ type: 'paragraph', bounds: { x: 72, y: 90, width: 300, height: 30 }, children: [{ type: 'text', text: 'Line one', ...run }] }] }] }) as any;
+    for (const [what, run] of [['a baseline far outside its box', { formatting: { size: '12pt' }, bounds: { x: 72, y: 90, width: 60, height: 12, baseline: 1e12 } }], ['a height that is text', { formatting: {}, bounds: { x: 72, y: 90, width: 60, height: '12', baseline: 99 } }]] as [string, object][]) {
+        const oddPptx = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(odd(run), 'pptx')).value as Uint8Array))['ppt/slides/slide1.xml']);
+        const oddOdp = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(odd(run), 'odp')).value as Uint8Array))['content.xml']);
+        const [, y, h] = /<p:sp>[\s\S]*?<a:off x="\d+" y="(\d+)"\/><a:ext cx="\d+" cy="(\d+)"/.exec(oddPptx) ?? [];
+        assert.ok(Number(y) / 12700 === 90 && Number(h) / 12700 === 30 && /svg:y="90pt" svg:width="[^"]+" svg:height="30pt"/.test(oddOdp), `PPTX and ODP: ${what} is placed by its paragraph's bounds; got ${Number(y) / 12700}, ${Number(h) / 12700}, ${/svg:y="[^"]+" svg:width="[^"]+" svg:height="[^"]+"/.exec(oddOdp)?.[0]}`);
+    }
 }
 
 /**
