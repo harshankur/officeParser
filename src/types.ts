@@ -2842,12 +2842,13 @@ export interface TextFormatting {
     alignment?: TextAlignment;
 
     /**
-     * The text is there but not shown: a PDF's invisible text (text rendering modes 3 and 7), as a
-     * scan's recognised text is laid over its picture so it can be searched and copied. Slide output
-     * (PPTX, ODP) writes it fully transparent and the native PDF engine invisibly, so a scan's page
-     * still looks like the scan with its words there to find; other outputs write it as text.
+     * The text is drawn invisibly, to be found and copied but not seen: a PDF's text in rendering mode
+     * 3 or 7, as a scan's recognised text is laid over its picture. Slide output (PPTX, ODP) writes it
+     * fully transparent and the native PDF engine invisibly, so a scan's page still looks like the
+     * scan with its words there to find; other outputs write it as text. (Text an author hid is
+     * another thing, and is not marked so.)
      */
-    hidden?: boolean;
+    invisible?: boolean;
 }
 
 /**
