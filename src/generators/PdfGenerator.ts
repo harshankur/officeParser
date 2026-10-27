@@ -53,7 +53,8 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
             // structured consumers and change the mermaid shape's rendered appearance, neither of
             // which belongs in a printed PDF.
             htmlConfig: { ...this.config.htmlConfig, standalone: true, sourceAttributes: false },
-        });
+        // Invisible text drawn unseen, as the native engine draws it (a scan's recognised words, there to search).
+        }, { drawsInvisibleText: true });
 
 
         const htmlResult = await htmlGenerator.generate();

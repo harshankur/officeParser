@@ -224,8 +224,17 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         return this._standaloneDoc;
     }
 
-    constructor(ast: OfficeParserAST, config?: GeneratorConfig<'html'>) {
+    /**
+     * Whether invisible text (TextFormatting.invisible) is drawn unseen, for a printout (PDF output's 'html' engine):
+     * transparent, in its place, there to select and search. HTML output itself shows it, as the content it is.
+     */
+    private readonly drawsInvisibleText: boolean;
+    /** Whether invisible text was drawn unseen, so the page needs the rule that hides it. */
+    private invisibleTextDrawn = false;
+
+    constructor(ast: OfficeParserAST, config?: GeneratorConfig<'html'>, options: { drawsInvisibleText?: boolean } = {}) {
         super('html', ast, config);
+        this.drawsInvisibleText = !!options.drawsInvisibleText;
     }
 
 
@@ -481,6 +490,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         const scopeOpen = sa.styles === 'scoped' ? '<div class="op-html-scope">' : '';
         const scopeClose = sa.styles === 'scoped' ? '</div>' : '';
 
+        // The rule invisible text is drawn unseen by (see drawsInvisibleText): whatever the stylesheet, its colour,
+        // its lines' and its background's, inside a link too.
+        const invisibleRule = this.invisibleTextDrawn ? '<style>.op-invisible-text, .op-invisible-text *, .op-invisible-text::marker { color: transparent !important; text-decoration-color: transparent !important; background: transparent !important; }</style>' : '';
+
         const inj = this.config.htmlConfig.injections;
         const headInjectionsOn = sa.document && sa.headInjections;
         // Chart.js is loaded only for a page that draws a chart: one without fetches and runs no script.
@@ -496,7 +509,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
     <title>${this.escape(title)}</title>
     ${metaTags}
     ${chartScriptTag}
-    ${styleBlock}
+    ${styleBlock}${invisibleRule}
     ${headInjectionsOn ? inj.headEnd : ''}
 </head>
 <body>
@@ -513,7 +526,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
     ${spreadsheetScriptOut}
     ${sa.bodyInjections ? inj.bodyEnd : ''}
 </body>
-</html>` : `${styleBlock}${sa.bodyInjections ? inj.bodyStart : ''}${scopeOpen}<div class="${containerClass}">${metadataBlock}${bodyContent}${spreadsheetTabs}</div>${scopeClose}${spreadsheetScriptOut}${sa.bodyInjections ? inj.bodyEnd : ''}`;
+</html>` : `${styleBlock}${invisibleRule}${sa.bodyInjections ? inj.bodyStart : ''}${scopeOpen}<div class="${containerClass}">${metadataBlock}${bodyContent}${spreadsheetTabs}</div>${scopeClose}${spreadsheetScriptOut}${sa.bodyInjections ? inj.bodyEnd : ''}`;
 
         return {
             value,
@@ -1078,6 +1091,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 if (!classes.includes(c)) classes.push(c);
             }
         }
+        // A list item whose text is all invisible, in a printout: its marker unseen with it.
+        if (this.drawsInvisibleText && node.type === 'list' && this.allInvisible(node)) { this.invisibleTextDrawn = true; classes.push('op-invisible-text'); }
         const className = classes.length > 0 ? ` class="${this.escape(classes.join(' '))}"` : '';
 
         // Handle ID and Anchors
@@ -1915,8 +1930,27 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // Default emission: a <cite> carrying the bare key, matching Pandoc's [@citekey].
                 : `<cite data-citation-key="${this.escape(meta.citationKey)}">[@${this.escape(meta.citationKey)}]</cite>`;
         }
+        // Invisible text in a printout: outside its link and highlight, so neither is seen either.
+        if (this.drawsInvisibleText && f?.invisible) {
+            this.invisibleTextDrawn = true;
+            result = `<span class="op-invisible-text">${result}</span>`;
+        }
 
         return result;
+    }
+
+    /** Whether a block's own text (not its nested lists') is there and all invisible. */
+    private allInvisible(node: OfficeContentNode): boolean {
+        let seen = false;
+        const walk = (n: OfficeContentNode, depth: number): boolean => {
+            for (const c of n.children || []) {
+                if (c.type === 'list') continue;
+                if (c.type === 'text' && (c.text || '').trim()) { if (!c.formatting?.invisible) return false; seen = true; }
+                else if (depth < 16 && !walk(c, depth + 1)) return false;
+            }
+            return true;
+        };
+        return walk(node, 0) && seen;
     }
 
     private getInlineStyles(node: OfficeContentNode, options: { skipFontSize?: boolean, skipBackgroundColor?: boolean } = {}): string {

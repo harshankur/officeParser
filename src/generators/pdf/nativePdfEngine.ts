@@ -363,7 +363,7 @@ function fontKind(family: string | undefined): 'mono' | 'serif' | 'sans' {
 }
 
 /** A single word ready to place, carrying the style/size/color it should be drawn with. */
-interface Piece { text: string; face: FaceKey; size: number; color: any; underline: boolean; link?: string; background?: string; rise?: number; note?: OfficeContentNode; picture?: { img: any; w: number; h: number }; }
+interface Piece { text: string; face: FaceKey; size: number; color: any; underline: boolean; link?: string; background?: string; rise?: number; note?: OfficeContentNode; picture?: { img: any; w: number; h: number }; /** Drawn invisibly (TextFormatting.invisible): in its place, there to select and search. */ invisible?: boolean; }
 
 /** A stretch of inline text in one formatting, and the target it links to, if any. */
 type Run = { text: string; fmt: TextFormatting; link?: string; note?: OfficeContentNode; picture?: { img: any; w: number; h: number } };
@@ -1584,19 +1584,27 @@ class NativeLayout {
         this.page.pushOperators(...ops);
     }
 
-    /** Draws drawable text with its left edge at `x`, each stretch in its font. A right-to-left word's stretches are drawn last first. */
-    private drawText(text: string, key: FaceKey, x: number, y: number, size: number, color: any): void {
+    /**
+     * Draws drawable text with its left edge at `x`, each stretch in its font. A right-to-left word's stretches are drawn last first.
+     * Invisible text (TextFormatting.invisible) is drawn invisibly, in text rendering mode 3: where it would stand, as wide, there to
+     * select and search, as a scan's recognised words lie over its picture.
+     */
+    private drawText(text: string, key: FaceKey, x: number, y: number, size: number, color: any, invisible = false): void {
         const segs = this.segments(text, key);
         if (segs.length > 1 && directionOf(text) === 'rtl') segs.reverse();
-        for (const seg of segs) {
-            const run = this.shapedRun(seg.face, seg.text);
-            if (run) this.drawShaped(seg.face, run, seg.text, x, y, size, color);
-            else {
-                this.useFont(seg.face.font);
-                this.page.drawText(seg.text, { x, y, size, color });
+        // (The mode is the graphics state's, set around the text and its fallback drawing alike.)
+        if (invisible) this.page.pushOperators(this.lib.pushGraphicsState(), this.lib.setTextRenderingMode(this.lib.TextRenderingMode.Invisible));
+        try {
+            for (const seg of segs) {
+                const run = this.shapedRun(seg.face, seg.text);
+                if (run) this.drawShaped(seg.face, run, seg.text, x, y, size, color);
+                else {
+                    this.useFont(seg.face.font);
+                    this.page.drawText(seg.text, { x, y, size, color });
+                }
+                x += this.segmentWidth(seg, size);
             }
-            x += this.segmentWidth(seg, size);
-        }
+        } finally { if (invisible) this.page.pushOperators(this.lib.popGraphicsState()); }
     }
 
     /** Each page's resource name for each font it draws in, made once. */
@@ -1621,14 +1629,14 @@ class NativeLayout {
      * Draws one line of drawable text (a table cell's line, a line of code) inside `[x, x + width]`,
      * its words in the order they are seen: a right-to-left line starts at the right edge.
      */
-    private drawLine(text: string, key: FaceKey, x: number, y: number, size: number, color: any, width: number): void {
+    private drawLine(text: string, key: FaceKey, x: number, y: number, size: number, color: any, width: number, invisible = false): void {
         const dir = directionOf(text);
-        if (dir !== 'rtl') { this.drawText(text, key, x, y, size, color); return; }
+        if (dir !== 'rtl') { this.drawText(text, key, x, y, size, color, invisible); return; }
         const baseRtl = startsRtl(text);
         const items = text.split(/(\s+)/).filter(t => t !== '').map(t => ({ text: t, w: this.widthOf(t, key, size), dir: /^\s+$/.test(t) ? 'neutral' as const : directionOf(t) }));
         let cx = baseRtl ? x + Math.max(0, width - items.reduce((s, it) => s + it.w, 0)) : x;
         for (const it of visualOrder(items, baseRtl)) {
-            if (it.text.trim()) this.drawText(it.text, key, cx, y, size, color);
+            if (it.text.trim()) this.drawText(it.text, key, cx, y, size, color, invisible);
             cx += it.w;
         }
     }
@@ -1873,9 +1881,11 @@ class NativeLayout {
             const size = shifted ? baseSize * 0.65 : baseSize;
             const rise = run.fmt.superscript ? baseSize * 0.35 : run.fmt.subscript ? -baseSize * 0.12 : 0;
             const color = run.link ? this.lib.rgb(0.1, 0.32, 0.72) : (this.color(run.fmt.color) ?? this.lib.rgb(0.12, 0.12, 0.12));
-            const underline = !!(run.fmt.underline || run.link);
+            // (Invisible text has no line under it and no background: it is not seen.)
+            const invisible = !!run.fmt.invisible;
+            const underline = !invisible && !!(run.fmt.underline || run.link);
             // A highlight or a run's own background, drawn behind its words.
-            const background = cssColorHex(run.fmt.backgroundColor) ?? undefined;
+            const background = invisible ? undefined : cssColorHex(run.fmt.backgroundColor) ?? undefined;
             // A picture in the line: as wide and tall as it is drawn, no wider than the line, no taller
             // than most of a page.
             if (run.picture) {
@@ -1893,7 +1903,7 @@ class NativeLayout {
                     // Split a word wider than the whole line at character boundaries so it wraps instead
                     // of running off the page (a long URL, a hash, a base64 token).
                     for (const chunk of splitToWidth(w, t => this.widthOf(t, face, size), width)) {
-                        pieces.push({ p: { text: chunk, face, size, color, underline, link: run.link, background, rise, note: run.note }, space: false });
+                        pieces.push({ p: { text: chunk, face, size, color, underline, link: run.link, background, rise, note: run.note, ...(invisible ? { invisible } : {}) }, space: false });
                     }
                 }
             });
@@ -2021,7 +2031,7 @@ class NativeLayout {
                     this.drawPicture(it.p.picture.img, { x, y: baseline, width: it.p.picture.w, height: it.p.picture.h });
                     if (it.p.link) this.addLinkBox(it.p.link, x, baseline, it.p.picture.w, it.p.picture.h);
                 } else if (it.p) {
-                    this.drawText(it.p.text, it.p.face, x, baseline + (it.p.rise || 0), it.p.size, it.p.color);
+                    this.drawText(it.p.text, it.p.face, x, baseline + (it.p.rise || 0), it.p.size, it.p.color, it.p.invisible);
                     if (it.p.underline) {
                         this.page.drawLine({ start: { x, y: baseline - 1.5 }, end: { x: x + it.w, y: baseline - 1.5 }, thickness: 0.5, color: it.p.color });
                     }
@@ -2465,9 +2475,10 @@ class NativeLayout {
         // drawRuns' first line stays on this page and draws at the same baseline as the marker.
         const markerX = this.margin.left + indent - 14;
         const baseline = this.pageH - this.y - size;
-        // In its text's colour (white bullets on a dark slide were drawn dark).
+        // In its text's colour (white bullets on a dark slide were drawn dark); an invisible item's invisibly, as its text is.
         const ink = this.color(bodyRuns.find(r => r.text.trim())?.fmt.color) ?? this.lib.rgb(0.12, 0.12, 0.12);
-        if (marker && !this.drawBulletShape(marker, markerX, baseline, size, ink)) this.drawText(this.enc(marker), 'regular', markerX, baseline, size, ink);
+        const invisibleItem = bodyRuns.some(r => r.text.trim()) && bodyRuns.every(r => !r.text.trim() || r.fmt.invisible);
+        if (marker && (invisibleItem || !this.drawBulletShape(marker, markerX, baseline, size, ink))) this.drawText(this.enc(marker), 'regular', markerX, baseline, size, ink, invisibleItem);
         // The body starts past a marker wider than the usual gap (`1.1.1.`, `(iii)`), as a tab stop
         // past it would set it.
         const markerWidth = marker ? this.widthOf(this.enc(marker, 'regular', false), 'regular', size) : 0;
@@ -2794,7 +2805,7 @@ class NativeLayout {
         const border = this.lib.rgb(0.6, 0.6, 0.6);
 
         // First the cells' texts and places, then the columns' widths from them, then the rows drawn.
-        type Placed = { col: number; span: number; rowSpan: number; text: string; header: boolean; lines: string[]; fill?: string; align?: TextAlignment; ink?: string; pictures?: { img: any; w: number; h: number }[]; notes?: OfficeContentNode[] };
+        type Placed = { col: number; span: number; rowSpan: number; text: string; header: boolean; lines: string[]; fill?: string; align?: TextAlignment; ink?: string; invisible?: boolean; pictures?: { img: any; w: number; h: number }[]; notes?: OfficeContentNode[] };
         const grid: Placed[][] = [];
         const chartsAfter: OfficeContentNode[] = [];
         const picturesAfter: { img: any; w: number; h: number }[] = [];
@@ -2806,7 +2817,7 @@ class NativeLayout {
          * cell style rides on its runs). Shading was not drawn, and every cell's text sat at its left in grey
          * (white text on a dark fill was unreadable once the fill was drawn).
          */
-        const cellLook = (cell: OfficeContentNode): { fill?: string; align?: TextAlignment; ink?: string } => {
+        const cellLook = (cell: OfficeContentNode): { fill?: string; align?: TextAlignment; ink?: string; invisible?: boolean } => {
             const meta = cell.metadata as { backgroundColor?: string; align?: TextAlignment } | undefined;
             const runs: OfficeContentNode[] = [];
             const gather = (n: OfficeContentNode, depth: number) => {
@@ -2824,7 +2835,9 @@ class NativeLayout {
             const blockAlign = blocks.length && blocks.every(b => (b.metadata as any)?.alignment === (blocks[0].metadata as any)?.alignment) ? (blocks[0].metadata as any)?.alignment : undefined;
             const align = meta?.align ?? blockAlign ?? shared(n => n.formatting?.alignment);
             const ink = cssColorHex(shared(n => n.formatting?.color)) ?? undefined;
-            return { ...(fill ? { fill } : {}), ...(align === 'center' || align === 'right' ? { align } : {}), ...(ink ? { ink } : {}) };
+            // A cell whose text is all invisible (a scan's recognised table over its picture) drawn invisibly.
+            const invisible = shared(n => n.formatting?.invisible ? 'invisible' : undefined) === 'invisible';
+            return { ...(fill ? { fill } : {}), ...(align === 'center' || align === 'right' ? { align } : {}), ...(ink ? { ink } : {}), ...(invisible ? { invisible } : {}) };
         };
         for (const row of rows) {
             const rowOverride = await this.onNodeValue(row);
@@ -2959,7 +2972,7 @@ class NativeLayout {
                         const width = this.widthOf(line, face, size);
                         const free = p.align ? Math.max(0, room - width) : 0;
                         // An aligned line is placed here: drawn in its own width, a right-to-left one is not set right again.
-                        this.drawLine(line, face, x + pad + (p.align === 'center' ? free / 2 : p.align === 'right' ? free : 0), ty, size, (p.ink && this.color(p.ink)) || this.lib.rgb(0.12, 0.12, 0.12), p.align ? width : room);
+                        this.drawLine(line, face, x + pad + (p.align === 'center' ? free / 2 : p.align === 'right' ? free : 0), ty, size, (p.ink && this.color(p.ink)) || this.lib.rgb(0.12, 0.12, 0.12), p.align ? width : room, p.invisible);
                         ty -= lineH;
                     }
                     let py = topY - pad - p.lines.length * lineH;
@@ -3017,7 +3030,7 @@ class NativeLayout {
                         const width = this.widthOf(p.lines[li], face, size);
                         const free = p.align ? Math.max(0, room - width) : 0;
                         const lx = x + pad + (p.align === 'center' ? free / 2 : p.align === 'right' ? free : 0);
-                        this.drawLine(p.lines[li], face, lx, ty, size, (p.ink && this.color(p.ink)) || this.lib.rgb(0.12, 0.12, 0.12), p.align ? width : room); ty -= lineH;
+                        this.drawLine(p.lines[li], face, lx, ty, size, (p.ink && this.color(p.ink)) || this.lib.rgb(0.12, 0.12, 0.12), p.align ? width : room, p.invisible); ty -= lineH;
                     }
                 }
                 this.y += bandH;
