@@ -7227,6 +7227,36 @@ async function testInvisibleTextWriters(): Promise<void> {
 }
 
 /**
+ * A PDF page's paragraph on slides, where its runs have their baselines (NodeBounds.baseline): its lines spaced
+ * from baseline to baseline, its box's top the spacing above its first baseline less a fifth of its size (where
+ * LibreOffice's font-independent spacing then sets that baseline), and an ODP frame asking for that spacing.
+ * Without baselines a paragraph's box is where its bounds put it, as before.
+ */
+async function testSlideBaselines(): Promise<void> {
+    const line = (text: string, baseline: number, size: number) => ({ type: 'text', text, formatting: { size: `${size}pt` }, bounds: { x: 72, y: baseline - 0.72 * size, width: text.length * size / 2, height: 0.93 * size, baseline } });
+    const page = (withBaselines: boolean) => ({ type: 'pdf', metadata: {}, attachments: [], content: [{ type: 'page', metadata: { pageWidth: 612, pageHeight: 792 }, children: [
+        { type: 'paragraph', bounds: { x: 72, y: 91.36, width: 300, height: 40 }, children: [line('First line of three', 100, 12), line(' second line', 114.4, 12), line(' third line', 128.8, 12)] },
+        { type: 'paragraph', bounds: { x: 72, y: 282.72, width: 300, height: 22.32 }, children: [line('A single line', 300, 24)] },
+    ].map(p => withBaselines ? p : { ...p, children: p.children.map(r => ({ ...r, bounds: { ...r.bounds, baseline: undefined } })) }) }] }) as any;
+    const pptx = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(page(true), 'pptx')).value as Uint8Array))['ppt/slides/slide1.xml']);
+    const boxes = pptx.split('<p:sp>').slice(1).map(sp => [Number(/<a:off x="\d+" y="(\d+)"\/>/.exec(sp)?.[1]) / 12700, Number(/<a:spcPts val="(\d+)"\/>/.exec(sp)?.[1]) / 100]);
+    // Three lines 14.4 apart: the top 14.4 above the first baseline, less 2.4; one line of 24pt at 1.2 times its size.
+    assert.deepStrictEqual(boxes.map(([y, s]) => [Math.round(y * 100) / 100, s]), [[100 - 14.4 + 2.4, 14.4], [300 - 28.8 + 4.8, 28.8]], `PPTX: a paragraph is placed on its baselines; got ${JSON.stringify(boxes)}`);
+    const odp = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(page(true), 'odp')).value as Uint8Array))['content.xml']);
+    const frames = [...odp.matchAll(/<draw:frame draw:style-name="(gr\d+)" svg:x="[^"]+" svg:y="([\d.]+)pt"[^>]*><draw:text-box><text:p text:style-name="(P\d+)"/g)];
+    assert.deepStrictEqual(frames.map(f => Number(f[2])), [88, 276], `ODP: a paragraph is placed on its baselines; got ${frames.map(f => f[2])}`);
+    for (const [, graphic, , paragraph] of frames) {
+        assert.ok(new RegExp(`<style:style style:name="${graphic}"[^>]*><style:graphic-properties[^>]*/><style:paragraph-properties style:font-independent-line-spacing="true"/>`).test(odp), 'ODP: its frame spaces its lines independently of the font\'s metrics');
+        assert.ok(new RegExp(`<style:style style:name="${paragraph}"[^>]*><style:paragraph-properties fo:line-height="(14.4|28.8)pt"`).test(odp), 'ODP: its lines are as far apart as the page set them');
+    }
+    // Without baselines: placed from its bounds, spaced as its lines' boxes are, its frame spaced by its font.
+    const before = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(page(false), 'pptx')).value as Uint8Array))['ppt/slides/slide1.xml']);
+    assert.deepStrictEqual([...before.matchAll(/<a:off x="\d+" y="(\d+)"\/>/g)].slice(1).map(m => Math.round(Number(m[1]) / 127) / 100), [91.36, 282.72], 'PPTX: without baselines a paragraph is placed by its bounds');
+    const odpBefore = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(page(false), 'odp')).value as Uint8Array))['content.xml']);
+    assert.ok(!odpBefore.includes('font-independent-line-spacing') && /svg:y="91.36pt"/.test(odpBefore), 'ODP: without baselines a paragraph is placed by its bounds, its lines by its font');
+}
+
+/**
  * PPTX and ODP output: a deck written as a deck (its slides, notes and charts, as tables of their data),
  * a PDF's pages as slides with their text where the page set it (lines kept, a paragraph beside a floating
  * table in two boxes, a shaded header cell's colour), a document flowed onto slides (a slide a section,
@@ -9480,6 +9510,7 @@ async function runTests(): Promise<void> {
         ['Spreadsheet writers', testSpreadsheetWriters],
         ['Presentation writers', testPresentationWriters],
         ['Invisible text in writers', testInvisibleTextWriters],
+        ['Slide text on its baselines', testSlideBaselines],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
         ['Cancellation', testCancellation],
