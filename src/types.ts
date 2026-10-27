@@ -1661,7 +1661,7 @@ export interface PdfGeneratorConfig {
      * `fonts`, text stays in the Standard-14 fonts (bold and italic included) and these draw only the
      * characters those lack.
      *
-     * A character is drawn by a font that has a glyph of outlines for it. The Standard-14 fonts have
+     * A character is drawn by the first font that has a glyph for it (in a color font, a glyph of outlines). The Standard-14 fonts have
      * neither the rupee sign `₹` (U+20B9) nor the ruble sign `₽` (U+20BD), nor any emoji; a font must
      * be given for them, and which characters a font has is that font's (of Fontsource's files, Noto
      * Sans has both signs in its `latin-ext` file and neither in its `latin` one, and Noto Sans

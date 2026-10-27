@@ -18,7 +18,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { strFromU8, unzipSync } from 'fflate';
+import { strFromU8, unzipSync, zlibSync } from 'fflate';
 import { OfficeGenerator } from '../../src/OfficeGenerator';
 import { OfficeParser } from '../../src/OfficeParser';
 import {
@@ -2292,6 +2292,20 @@ async function runNativePdfEngineTests(): Promise<GenFeatureTest[]> {
             problems.length === 0,
             'a WOFF2 font was subset by fontkit into glyphs viewers drew blank, and a WOFF or WOFF2 embedded whole was not a font at all'));
     }
+    // fontkit's decoder (browsers' route) gives what Brotli holds, and refuses data longer than declared:
+    // it does not stop at a length, and its longer output was cut to the declared one and accepted.
+    {
+        const zlib = await import('zlib');
+        const data = new Uint8Array(1 << 20).map((_, i) => (i * 7) & 0xFF);
+        const viaFontkit = fontkitUnbrotli(fontkit);
+        const same = Buffer.compare(Buffer.from(viaFontkit(zlib.brotliCompressSync(data), data.length)), Buffer.from(data)) === 0;
+        let longer = 'accepted';
+        try { viaFontkit(zlib.brotliCompressSync(data), 1000); } catch (e: any) { longer = String(e?.message); }
+        results.push(mk("fontkit's Brotli route gives the data, and refuses more than declared",
+            'the same bytes; refused: decompresses to 1048576 bytes, not the 1000', `${same ? 'the same' : 'other bytes'}; ${longer}`,
+            same && longer.includes('decompresses to 1048576 bytes, not the 1000'),
+            'data decompressing past the length a WOFF2 declares was cut to it and accepted'));
+    }
     /** The font programs a PDF embeds, decoded. */
     const embeddedFonts = async (pdfBytes: Uint8Array): Promise<Uint8Array[]> => {
         const doc = await pdfLib.PDFDocument.load(pdfBytes);
@@ -2361,10 +2375,39 @@ async function runNativePdfEngineTests(): Promise<GenFeatureTest[]> {
     }
     const damagedWoff2 = webFonts['WOFF2'].slice();
     for (let i = 200; i < 400; i++) damagedWoff2[i] ^= 0x5A;
+    // A WOFF of one table whose zlib data inflates to 16 MB, declaring one byte more than its compressed
+    // length (it was inflated whole, cut to its declared length and accepted).
+    const inflating = (() => {
+        const stored = zlibSync(new Uint8Array(16 << 20));
+        const view = new DataView(new ArrayBuffer(64 + stored.length));
+        view.setUint32(0, 0x774F4646); view.setUint32(4, 0x00010000); view.setUint32(8, 64 + stored.length);
+        view.setUint16(12, 1); view.setUint32(16, 12 + 16 + stored.length + 4);
+        [0x41, 0x41, 0x41, 0x41].forEach((c, i) => view.setUint8(44 + i, c));
+        view.setUint32(48, 64); view.setUint32(52, stored.length); view.setUint32(56, stored.length + 1);
+        const bytes = new Uint8Array(view.buffer);
+        bytes.set(stored, 64);
+        return bytes;
+    })();
+    // Liberation Sans as a WOFF, its second table named as its first, and, in another, its first compressed
+    // table declaring four bytes more than it inflates to.
+    const woffEntry = (bytes: Uint8Array, i: number) => 44 + i * 20;
+    const twoOfOne = webFonts['WOFF'].slice();
+    twoOfOne.copyWithin(woffEntry(twoOfOne, 1), woffEntry(twoOfOne, 0), woffEntry(twoOfOne, 0) + 4);
+    const longer = webFonts['WOFF'].slice();
+    {
+        const view = new DataView(longer.buffer);
+        for (let i = 0; i < view.getUint16(12); i++) {
+            const at = woffEntry(longer, i);
+            if (view.getUint32(at + 8) < view.getUint32(at + 12)) { view.setUint32(at + 12, view.getUint32(at + 12) + 4); break; }
+        }
+    }
     for (const [what, bytes, cause] of [
         ['a font whose outlines lie outside its glyf table', misplaced, 'lies outside its glyf table'],
         ['a WOFF2 font whose compressed data is damaged', damagedWoff2, 'do not decompress'],
         ['a WOFF2 font cut short', webFonts['WOFF2'].slice(0, 30_000), 'WOFF2 file ends before its data does'],
+        ['a WOFF table inflating past its declared length', inflating, 'inflates to more than'],
+        ['a WOFF font with two tables of one name', twoOfOne, 'two tables'],
+        ['a WOFF table inflating short of its declared length', longer, 'bytes, not the'],
     ] as [string, Uint8Array, string][]) {
         const failures = [await failureOf({ fonts: { regular: bytes }, subsetFonts: true }), await failureOf({ fonts: { regular: bytes }, subsetFonts: false })];
         results.push(mk(`${what} fails the conversion, subset or whole, naming the option`,
@@ -2385,26 +2428,49 @@ async function runNativePdfEngineTests(): Promise<GenFeatureTest[]> {
         }
         return font;
     };
-    // The glyph of Cyrillic П made empty (no contours), and, in another font, made of itself (a composite
-    // glyph whose one component is itself: fontkit, reading it, filled the heap and ended the process).
-    const emptied = withGlyphs([0x041F], (view, at) => view.setInt16(at, 0));
+    /** A font with its table `from` renamed `to` (a table named sbix makes a color font of it). */
+    const renamed = (font: Uint8Array, from: string, to: string): Uint8Array => {
+        const out = font.slice();
+        for (let i = 0; i < new DataView(out.buffer).getUint16(4); i++) {
+            const at = 12 + i * 16;
+            if (String.fromCharCode(...out.subarray(at, at + 4)) === from) out.set([...to].map(c => c.charCodeAt(0)), at);
+        }
+        return out;
+    };
+    // The glyph of Cyrillic П made empty as a font keeps one (no data: loca gives it its end as its start),
+    // and, in another font, made of itself (a composite glyph whose one component is itself: fontkit,
+    // reading it, filled the heap and ended the process).
+    const emptied = liberation.slice();
+    {
+        const view = new DataView(emptied.buffer), loca = tableAt(emptied, 'loca');
+        const long = view.getInt16(tableAt(emptied, 'head').offset + 50) === 1;
+        const id = reference.glyphForCodePoint(0x041F).id;
+        if (long) view.setUint32(loca.offset + id * 4, view.getUint32(loca.offset + (id + 1) * 4));
+        else view.setUint16(loca.offset + id * 2, view.getUint16(loca.offset + (id + 1) * 2));
+    }
     const selfMade = withGlyphs([0x041F], (view, at, id) => { view.setInt16(at, -1); view.setUint16(at + 10, 0); view.setUint16(at + 12, id); });
-    for (const [what, bytes] of [['empty', emptied], ['made of itself', selfMade]] as [string, Uint8Array][]) {
+    // An empty glyph is a font's own blank (Braille's blank cell, a font's empty marks), as viewers draw it.
+    const blankAlone = [await native(scriptsAst, { fallbackFonts: [emptied] }), await native(scriptsAst, { fallbackFonts: [emptied], subsetFonts: false })];
+    results.push(mk('a character whose glyph is empty is drawn by its font, blank',
+        'no loss with the font alone, subset or whole', blankAlone.map(out => JSON.stringify(lossOf(out.messages)?.details)).join(' | '),
+        blankAlone.every(out => !lossOf(out.messages) && out.text.includes('ривет') && out.text.includes('Καλημέρα')),
+        "a font's blank glyph (U+2800, Braille's blank cell) was drawn as ? and counted lost"));
+    // In a color font, an empty glyph is a color glyph's stand-in, and a glyph made of itself is in any font no glyph.
+    for (const [what, bytes, why] of [
+        ['empty in a color font', renamed(emptied, 'prep', 'sbix'), 'a color font drew a blank where its color glyph was, and viewers showed a gap'],
+        ['made of itself', selfMade, 'fontkit, reading a glyph made of itself, filled the heap and ended the process'],
+    ] as [string, Uint8Array, string][]) {
         const alone = [await native(scriptsAst, { fallbackFonts: [bytes] }), await native(scriptsAst, { fallbackFonts: [bytes], subsetFonts: false })];
         const backed = await native(scriptsAst, { fallbackFonts: [bytes, liberation] });
         results.push(mk(`a character whose glyph is ${what} is drawn by the next font, or counted lost`,
             'П counted lost with the font alone (subset or whole), the other words drawn; no loss with Liberation Sans after it',
             `${alone.map(out => JSON.stringify(lossOf(out.messages)?.details)).join(' | ')} | ${JSON.stringify(lossOf(backed.messages)?.details)}`,
             alone.every(out => lossOf(out.messages)?.details.sample === 'П' && out.text.includes('ривет') && out.text.includes('Καλημέρα')) && !lossOf(backed.messages) && scriptWords.every(w => backed.text.includes(w)),
-            'a character mapped to a glyph that draws nothing was counted as drawn, and viewers showed a gap'));
+            why));
     }
     // A color font: its glyphs drawn from a table a PDF does not hold (here every outline emptied, and a
     // table named sbix, as Apple Color Emoji's), so none of its characters is drawn.
-    const colorFont = withGlyphs(reference.characterSet, (view, at) => view.setInt16(at, 0));
-    for (let i = 0; i < new DataView(colorFont.buffer).getUint16(4); i++) {
-        const at = 12 + i * 16;
-        if (String.fromCharCode(...colorFont.subarray(at, at + 4)) === 'prep') colorFont.set([0x73, 0x62, 0x69, 0x78], at);
-    }
+    const colorFont = renamed(withGlyphs(reference.characterSet, (view, at) => view.setInt16(at, 0)), 'prep', 'sbix');
     const colored = await native(scriptsAst, { fallbackFonts: [colorFont] });
     const coloredOptions = colored.messages.filter((m: any) => m.code === OfficeWarningType.INVALID_CONFIG_VALUE).map((m: any) => String(m.message));
     results.push(mk('a color font is reported and not used, its characters counted lost',

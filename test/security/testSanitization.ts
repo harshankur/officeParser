@@ -30,6 +30,8 @@ import { OfficeErrorType } from '../../src/types';
 import { buildTaggedNodes } from '../../src/parsers/pdf/structTree';
 import { computeDocContext } from '../../src/parsers/pdf/textLayout';
 import { MarkedContent } from '../../src/parsers/pdf/actualText';
+import { nativeUnbrotli, sfntOf, TrueTypeOutlines } from '../../src/generators/pdf/fontFiles';
+import * as zlib from 'zlib';
 
 let passed = 0;
 let failed = 0;
@@ -4384,6 +4386,68 @@ async function pdfProcessTests(h: {
  * linear in the input, checked by timing two sizes four times apart (linear work takes about four
  * times as long, quadratic sixteen).
  */
+/**
+ * Fonts given to the native PDF engine are unpacked (WOFF, WOFF2) and their outlines checked in time
+ * linear in the file: fonts may come from untrusted hands.
+ */
+async function fontFileTests() {
+    console.log('\n=== Font files: unpacking and outlines in linear time ===');
+    const refused = (run: () => unknown): string => { try { run(); return 'accepted'; } catch (e: any) { return String(e?.message); } };
+    // A WOFF of many tables, each reading one zlib stream of 4 MB and declaring one byte more than its
+    // compressed length: each was inflated whole (gigabytes from kilobytes), cut short and accepted.
+    let woffOutcome = '';
+    await linear('font: a WOFF of many tables sharing one inflating stream is refused', () => {
+        const stored = zlibSync(new Uint8Array(4 << 20));
+        const count = n(1600), dataAt = 44 + count * 20;
+        const view = new DataView(new ArrayBuffer(dataAt + stored.length));
+        view.setUint32(0, 0x774F4646); view.setUint32(4, 0x00010000); view.setUint32(8, dataAt + stored.length); view.setUint16(12, count);
+        for (let i = 0; i < count; i++) {
+            const at = 44 + i * 20;
+            view.setUint32(at, 0x41000000 + i); view.setUint32(at + 4, dataAt); view.setUint32(at + 8, stored.length); view.setUint32(at + 12, stored.length + 1);
+        }
+        const bytes = new Uint8Array(view.buffer);
+        bytes.set(stored, dataAt);
+        woffOutcome = refused(() => sfntOf(bytes, () => { throw new Error('no Brotli for a WOFF'); }));
+    });
+    check('font: a WOFF table inflating past its declared length is refused', woffOutcome.includes('inflates to more than'), woffOutcome);
+    // A WOFF2 of many tables of their own tags: each tag was looked for among all the tables before it.
+    const unbrotli = nativeUnbrotli();
+    if (unbrotli) {
+        let woff2Outcome = '';
+        await linear('font: a WOFF2 of many tables is unpacked', () => {
+            const count = n(64000), entries: number[] = [];
+            for (let i = 0; i < count; i++) entries.push(0x3F, 0x41, (i >> 16) & 0xFF, (i >> 8) & 0xFF, i & 0xFF, 4);
+            const data = zlib.brotliCompressSync(new Uint8Array(count * 4));
+            const view = new DataView(new ArrayBuffer(48 + entries.length + data.length));
+            view.setUint32(0, 0x774F4632); view.setUint32(4, 0x00010000); view.setUint32(8, view.byteLength); view.setUint16(12, count);
+            view.setUint32(16, 12 + 16 * count + 4 * count); view.setUint32(20, data.length);
+            const bytes = new Uint8Array(view.buffer);
+            bytes.set(entries, 48); bytes.set(data, 48 + entries.length);
+            woff2Outcome = refused(() => sfntOf(bytes, () => unbrotli));
+        });
+        check('font: a WOFF2 of many tables unpacks', woff2Outcome === 'accepted', woff2Outcome);
+    }
+    // One glyph made of many components, that many glyphs are made of: it was read again for each.
+    await linear('font: glyphs made of one glyph of many components are checked', () => {
+        const components = n(30000), users = n(6000);
+        const glyphs: number[][] = [[]];
+        const composite = (parts: number[]) => {
+            const out = [0xFF, 0xFF, 0, 0, 0, 0, 0, 0, 0, 0];
+            parts.forEach((id, i) => out.push(0, i < parts.length - 1 ? 0x20 : 0, id >> 8, id & 0xFF, 0, 0));
+            return out;
+        };
+        glyphs.push(composite(new Array(components).fill(0)));
+        for (let i = 0; i < users; i++) glyphs.push(composite([1]));
+        const glyf = new Uint8Array(glyphs.reduce((sum, g) => sum + g.length, 0));
+        const loca = new DataView(new ArrayBuffer(4 * (glyphs.length + 1)));
+        let at = 0;
+        glyphs.forEach((g, i) => { loca.setUint32(4 * i, at); glyf.set(g, at); at += g.length; });
+        loca.setUint32(4 * glyphs.length, at);
+        const outlines = new TrueTypeOutlines(glyf, new Uint8Array(loca.buffer), true, undefined);
+        for (let id = 2; id < glyphs.length; id++) if (!outlines.reads(id)) throw new Error(`glyph ${id} could not be read`);
+    });
+}
+
 async function htmlReadingTests() {
     console.log('- HTML reading and EPUB writing (linear time)...');
     // (Each size's faster of two runs, so a pause in a busy machine is not read as the work growing.)
@@ -4479,6 +4543,7 @@ async function main() {
     await errorRoutingTests();
     await parserHardeningTests();
     await htmlReadingTests();
+    await fontFileTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);

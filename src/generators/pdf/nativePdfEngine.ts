@@ -69,7 +69,8 @@ function isInvisible(cp: number): boolean {
 /**
  * Characters a font draws nothing for by design: spaces, controls and format characters, and those Unicode
  * says are ignored where they are not supported (variation selectors, fillers). Any other character a
- * font maps to a glyph that draws nothing is not the font's to draw (see embedFonts).
+ * color font maps to a glyph that draws nothing is not the font's to draw (its glyph is drawn from color
+ * images or layers a PDF does not hold; see embedFonts); in another font an empty glyph is its blank.
  */
 const BLANK = /[\p{Z}\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}]/u;
 function isBlank(cp: number): boolean {
@@ -3357,7 +3358,10 @@ async function embedFonts(pdf: any, lib: any, pc: FullGeneratorConfig['pdfConfig
                 if (isBlank(cp)) return true;
                 let glyph: any;
                 try { glyph = fontkitFont.glyphForCodePoint(cp); } catch { return false; }
-                if (outlines) return outlines.draws(glyph?.id);
+                // (Only a color font's outlines stand in for what it draws: another font's empty glyph is
+                // the font's blank by design, as U+2800 BRAILLE PATTERN BLANK's. A glyph that cannot be read
+                // is no font's.)
+                if (outlines) return color.length ? outlines.draws(glyph?.id) : outlines.reads(glyph?.id);
                 if (!color.length) return true;
                 try { return glyph.path.commands.some((c: any) => c.command !== 'moveTo' && c.command !== 'closePath'); } catch { return false; }
             };

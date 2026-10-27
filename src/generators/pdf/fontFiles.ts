@@ -8,13 +8,13 @@
  * WOFF2 specification, section 5), which is rebuilt here. fontkit reads both formats, but neither its
  * subset of a WOFF2 font nor a WOFF or WOFF2 file embedded whole is a font viewers draw.
  *
- * The TrueType outlines of the glyphs drawn are checked before they are embedded, and a character whose
- * glyph draws nothing (a color font's) is not counted as one the font draws (see TrueTypeOutlines).
+ * The TrueType outlines of the glyphs drawn are checked before they are embedded, and a color font's
+ * character whose glyph draws nothing is not counted as one the font draws (see TrueTypeOutlines).
  *
  * @module generators/pdf/fontFiles
  */
 
-import { unzlibSync } from 'fflate';
+import { Unzlib } from 'fflate';
 
 /**
  * What is wrong with a font that cannot be unpacked or drawn. A class of its own (rather than
@@ -200,21 +200,43 @@ function unpackWoff(bytes: Uint8Array): Uint8Array {
         const tag = header.tag();
         const offset = header.u32(), compLength = header.u32(), origLength = header.u32();
         header.u32(); // origChecksum
+        if (tables.has(tag)) throw new UnreadableFont(`it has two tables '${tag}'`);
         total += origLength;
         if (total > MAX_UNPACKED_FONT) throw new UnreadableFont(`its tables come to more than ${MAX_UNPACKED_FONT / 1048576} MB`);
         const stored = new Reader(bytes, offset, bytes.length, `the WOFF table '${tag}'`).take(compLength);
         let data: Uint8Array;
         if (compLength === origLength) data = stored.slice();
-        else if (compLength < origLength) {
-            const out = new Uint8Array(origLength);
-            let inflated: Uint8Array;
-            try { inflated = unzlibSync(stored, { out }); } catch (e: any) { throw new UnreadableFont(`the WOFF table '${tag}' does not inflate (${e?.message || String(e)})`); }
-            if (inflated.length !== origLength) throw new UnreadableFont(`the WOFF table '${tag}' inflates to ${inflated.length} bytes, not the ${origLength} it declares`);
-            data = inflated;
-        } else throw new UnreadableFont(`the WOFF table '${tag}' is stored larger than it is`);
+        else if (compLength < origLength) data = inflateTable(stored, origLength, tag);
+        else throw new UnreadableFont(`the WOFF table '${tag}' is stored larger than it is`);
         tables.set(tag, data);
     }
     return writeSfnt(flavor, tables);
+}
+
+/**
+ * How much of a WOFF table's zlib data is inflated at a time. Data inflating past the length its table
+ * declares is refused at the step it does, after at most some 1,032 times this (deflate's largest ratio),
+ * 16 MB: inflated whole, a few kilobytes inflated to gigabytes before they were found too long.
+ */
+const INFLATE_STEP = 16 * 1024;
+
+/** A WOFF table's zlib data inflated, which must come to exactly `origLength` bytes. */
+function inflateTable(stored: Uint8Array, origLength: number, tag: string): Uint8Array {
+    const out = new Uint8Array(origLength);
+    let length = 0;
+    const inflater = new Unzlib((chunk: Uint8Array) => {
+        if (length + chunk.length > origLength) throw new UnreadableFont(`the WOFF table '${tag}' inflates to more than the ${origLength} bytes it declares`);
+        out.set(chunk, length);
+        length += chunk.length;
+    });
+    try {
+        for (let at = 0; at < stored.length; at += INFLATE_STEP) inflater.push(stored.subarray(at, at + INFLATE_STEP), at + INFLATE_STEP >= stored.length);
+    } catch (e: any) {
+        if (e instanceof UnreadableFont) throw e;
+        throw new UnreadableFont(`the WOFF table '${tag}' does not inflate (${e?.message || String(e)})`);
+    }
+    if (length !== origLength) throw new UnreadableFont(`the WOFF table '${tag}' inflates to ${length} bytes, not the ${origLength} it declares`);
+    return out;
 }
 
 /** One table of a WOFF2 file, as its directory gives it. */
@@ -233,6 +255,7 @@ function unpackWoff2(bytes: Uint8Array, unbrotli: Unbrotli): Uint8Array {
     if (flavor === 0x74746366) throw new UnreadableFont(COLLECTION);
     if (!numTables) throw new UnreadableFont('it has no tables');
     const directory: Woff2Table[] = [];
+    const tags = new Set<string>();
     let total = 0;
     for (let i = 0; i < numTables; i++) {
         const flags = header.u8();
@@ -244,7 +267,8 @@ function unpackWoff2(bytes: Uint8Array, unbrotli: Unbrotli): Uint8Array {
         if (outlines ? version === 1 || version === 2 : version !== 0 && !(tag === 'hmtx' && version === 1)) throw new UnreadableFont(`its table '${tag}' is in an unknown form (transform ${version})`);
         const transformed = outlines ? version === 0 : version !== 0;
         const transformLength = transformed ? header.base128() : undefined;
-        if (directory.some(t => t.tag === tag)) throw new UnreadableFont(`it has two tables '${tag}'`);
+        if (tags.has(tag)) throw new UnreadableFont(`it has two tables '${tag}'`);
+        tags.add(tag);
         directory.push({ tag, version, origLength, transformLength });
         total += transformLength ?? origLength;
         if (total > MAX_UNPACKED_FONT) throw new UnreadableFont(`its tables come to more than ${MAX_UNPACKED_FONT / 1048576} MB`);
@@ -350,6 +374,8 @@ function rebuildGlyf(table: Uint8Array): { glyf: Uint8Array; loca: Uint8Array; x
     const offsets = new Uint32Array(numGlyphs + 1);
     const xMins = new Int16Array(numGlyphs);
     for (let g = 0; g < numGlyphs; g++) {
+        // (Outlines rebuilt come to half as much again as their transformed bytes: the cap holds for them too.)
+        if (glyf.length > MAX_UNPACKED_FONT) throw new UnreadableFont(`its outlines come to more than ${MAX_UNPACKED_FONT / 1048576} MB`);
         offsets[g] = glyf.length;
         const contours = nContours.i16();
         const hasBbox = bitOf(bboxBitmap, g);
@@ -474,35 +500,52 @@ function rebuildHmtx(table: Uint8Array, xMins: Int16Array, numberOfHMetrics: num
 
 /**
  * The Brotli decoder fontkit carries (it reads WOFF2 with it), reached through what both its builds,
- * `@pdf-lib/fontkit` and `@cantoo/fontkit`, do in public: the compressed data is wrapped in a WOFF2
- * file of one table, the font program (`fpgm`), as long as the data decompresses to, and fontkit reads
- * that table's bytes, decompressing the data to do so.
+ * `@pdf-lib/fontkit` and `@cantoo/fontkit`, do: the compressed data is wrapped in a WOFF2 file of one
+ * table, as long as the data decompresses to, and fontkit decompresses it to read that table. The
+ * table is `maxp`, and the bytes are those fontkit decompressed into (its font's `stream`, which both
+ * builds replace with them), taken as they are; where a build does not, the table is the font
+ * program (`fpgm`) and the bytes its instructions, which cost some fifteen times their length (fontkit
+ * reads them into an array of numbers): 64 MB took a gigabyte.
  */
 export function fontkitUnbrotli(fontkit: any): Unbrotli {
     return (data, size) => {
-        // The table's entry: its tag by number (9, fpgm; not transformed), then its length (UIntBase128).
-        const entry: number[] = [];
-        let rest = size;
-        do { entry.unshift((rest & 0x7F) | (entry.length ? 0x80 : 0)); rest = Math.floor(rest / 128); } while (rest);
-        entry.unshift(9);
-        const file = new Writer();
-        file.u32(0x774F4632); // wOF2
-        file.u32(0x00010000);
-        file.u32(48 + entry.length + data.length);
-        file.u16(1); // numTables
-        file.u16(0);
-        file.u32(12 + 16 + ((size + 3) & ~3)); // totalSfntSize
-        file.u32(data.length); // totalCompressedSize
-        // (Its version, then its metadata's and private data's offsets and lengths: none.)
-        file.u16(0);
-        file.u16(0);
-        for (let i = 0; i < 5; i++) file.u32(0);
-        for (const byte of entry) file.u8(byte);
-        file.put(data);
-        const program = fontkit.create(file.done()).fpgm?.instructions;
+        const maxp = fontkit.create(woff2OfOneTable(4, data, size));
+        const before = maxp.stream;
+        try { void maxp.maxp; } catch { /* (the bytes are no maxp table: they are decompressed all the same) */ }
+        const out = maxp.stream !== before ? maxp.stream?.buffer : undefined;
+        if (out instanceof Uint8Array) {
+            // (Data decompressing to more than its table's length is no font's: fontkit's decoder does not stop there.)
+            if (out.length !== size) throw new UnreadableFont(`it decompresses to ${out.length} bytes, not the ${size} it declares`);
+            return out;
+        }
+        const program = fontkit.create(woff2OfOneTable(9, data, size)).fpgm?.instructions;
         if (!program || program.length !== size) throw new UnreadableFont('fontkit did not decompress it');
         return Uint8Array.from(program);
     };
+}
+
+/** A WOFF2 file of one table, given by its tag's number (4, maxp; 9, fpgm), not transformed, `size` bytes long, its data Brotli's `data`. */
+function woff2OfOneTable(tagNumber: number, data: Uint8Array, size: number): Uint8Array {
+    // The table's entry: its tag by number, then its length (UIntBase128).
+    const entry: number[] = [];
+    let rest = size;
+    do { entry.unshift((rest & 0x7F) | (entry.length ? 0x80 : 0)); rest = Math.floor(rest / 128); } while (rest);
+    entry.unshift(tagNumber);
+    const file = new Writer();
+    file.u32(0x774F4632); // wOF2
+    file.u32(0x00010000);
+    file.u32(48 + entry.length + data.length);
+    file.u16(1); // numTables
+    file.u16(0);
+    file.u32(12 + 16 + ((size + 3) & ~3)); // totalSfntSize
+    file.u32(data.length); // totalCompressedSize
+    // (Its version, then its metadata's and private data's offsets and lengths: none.)
+    file.u16(0);
+    file.u16(0);
+    for (let i = 0; i < 5; i++) file.u32(0);
+    for (const byte of entry) file.u8(byte);
+    file.put(data);
+    return file.done();
 }
 
 /**
@@ -565,6 +608,8 @@ export class TrueTypeOutlines {
     readonly numGlyphs: number;
     private readonly read = new Map<number, Outline>();
     private readonly drawing = new Map<number, boolean>();
+    /** The glyphs checked, each with how deep its components nest below it (0 for a glyph of none). */
+    private readonly checkedDepths = new Map<number, number>();
     constructor(private readonly glyf: Uint8Array, private readonly loca: Uint8Array, private readonly long: boolean, maxp: Uint8Array | undefined) {
         const entries = Math.floor(loca.length / (long ? 4 : 2));
         this.numGlyphs = Math.max(0, Math.min(maxp && maxp.length >= 6 ? (maxp[4] << 8) | maxp[5] : entries - 1, entries - 1));
@@ -636,18 +681,32 @@ export class TrueTypeOutlines {
      * fontkit, reading a glyph made of itself, filled the heap and ended the process.
      */
     check(glyphs: Iterable<number>): void {
-        const checked = new Set<number>(), open = new Set<number>();
-        const check = (id: number, depth: number): void => {
-            if (checked.has(id)) return;
+        const open = new Set<number>();
+        // (Each glyph is read once for the font: a glyph checked before is not read again, only how deep
+        // its components nest is added to where it is met. Checked anew for each glyph, one glyph of many
+        // components that many glyphs were made of was read again for each.)
+        const check = (id: number, depth: number): number => {
+            const below = this.checkedDepths.get(id);
+            if (below !== undefined) {
+                if (depth + below > MAX_COMPONENT_DEPTH) throw new UnreadableFont(`its glyph ${id} nests components more than ${MAX_COMPONENT_DEPTH} deep`);
+                return below;
+            }
             if (open.has(id)) throw new UnreadableFont(`its glyph ${id} is made of itself`);
             if (depth > MAX_COMPONENT_DEPTH) throw new UnreadableFont(`its glyph ${id} nests components more than ${MAX_COMPONENT_DEPTH} deep`);
             open.add(id);
             const outline = this.outline(id);
-            if ('components' in outline) for (const component of outline.components) check(component, depth + 1);
+            let deepest = 0;
+            if ('components' in outline) for (const component of outline.components) deepest = Math.max(deepest, 1 + check(component, depth + 1));
             open.delete(id);
-            checked.add(id);
+            this.checkedDepths.set(id, deepest);
+            return deepest;
         };
         for (const id of glyphs) check(id, 0);
+    }
+
+    /** Whether a glyph's outline, and its components', can be read as viewers read them (see check). */
+    reads(id: number): boolean {
+        try { this.check([id]); return true; } catch { return false; }
     }
 
     /**
