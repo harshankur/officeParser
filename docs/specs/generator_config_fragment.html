@@ -793,7 +793,7 @@ await ast.to('md', {
             group of its lines. Tables keep their measured row heights and their cells' shading, pictures their places,
             and footnotes and a page's notes are at the foot of their page. A page's invisible text (a scan's recognised
             words laid over its picture, <code>TextFormatting.invisible</code>) is written fully transparent: not seen,
-            still there to select and search. A table whose text is all invisible is its cells' text in their places, without rules.</li>
+            still there to select and search. A table whose text is all invisible is drawn without rules (its cells' text in their places where the page gave them).</li>
         <li><strong>Any other document</strong> flows onto 16:9 slides: a slide for each heading of the first two levels,
             titled by it, with the text under it as bullets (lower headings bold), carried on to more slides of the same
             title where it does not fit. Text before the first heading is under the document's title, from its metadata.
