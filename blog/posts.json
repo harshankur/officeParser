@@ -37,6 +37,7 @@
             "shortTitle": "Drawing Hindi in a PDF",
             "category": "architecture",
             "published": "2026-10-26",
+            "updated": "2026-10-27",
             "description": "Why a Hindi word came apart in officeParser's PDF writer, copied with its letters out of order, or drew the wrong glyphs, and the font and PDF details behind each failure.",
             "deck": "Hindi broke the native PDF engine in three ways at once. None of them was in the layout code: they were where text becomes glyphs, where glyphs become text again, and where a font is cut down to fit."
         },
@@ -83,6 +84,7 @@
             "shortTitle": "From String Scraping to AST",
             "category": "architecture",
             "published": "2026-10-04",
+            "updated": "2026-10-27",
             "description": "Why returning one flat string hit a ceiling, and how a typed AST made conversion between Office, Markdown, HTML, and LaTeX possible.",
             "deck": "For more than six years officeParser returned a string. Here is why that stopped being enough, what replaced it, and the rule that has governed every feature since."
         },
@@ -92,7 +94,7 @@
             "shortTitle": "Where officeParser is the Wrong Tool",
             "category": "comparisons",
             "published": "2026-10-04",
-            "updated": "2026-10-26",
+            "updated": "2026-10-27",
             "description": "The jobs officeParser does not do: PDFs that match Word exactly, formula recalculation, legacy .doc files, formulas and native charts in what it writes, macros, and TeX typesetting, and what to use instead.",
             "deck": "Most documentation reads like a sales pitch, with the drawbacks in the fine print. I would rather be plain: here are the problems officeParser does not solve, and the tools to use instead."
         },

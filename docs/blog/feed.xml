@@ -5,7 +5,7 @@
     <link>https://officeparser.harshankur.com/blog/</link>
     <description>How document formats work inside, how officeParser reads and writes them, where it falls short, and how to chunk documents for retrieval. Written by Harsh Ankur, author of officeParser.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 26 Oct 2026 00:00:00 GMT</lastBuildDate>
+    <lastBuildDate>Tue, 27 Oct 2026 00:00:00 GMT</lastBuildDate>
     <atom:link href="https://officeparser.harshankur.com/blog/feed.xml" rel="self" type="application/rss+xml"/>
     <item>
       <title>Laying Out a Page From Scratch: Text Around a Floating Frame</title>
@@ -370,7 +370,7 @@ const all = await ast.to('pdf', { pdfConfig: { engine: 'native', printHidden: tr
     it is written into the page now:
 </p>
 <pre><code>/Span &lt;&lt; /ActualText &lt;FEFF0939093F090209260940&gt; &gt;&gt; BDC
-1 0 0 1 48 765.89 Tm
+1 0 0 1 48 782.89 Tm
 [ &lt;0001&gt; &lt;0002&gt; &lt;0003&gt; &lt;0004&gt; &lt;0005&gt; ] TJ
 EMC</code></pre>
 <p>
@@ -460,6 +460,18 @@ EMC</code></pre>
     space before the word. The reader also composes an ActualText's marks with their letters when
     <code>pdfParserConfig.normalizeText</code> is on, as pdf.js does for the glyphs' text.
 </p>
+<p>
+    That was not the whole of it. pdf.js tells such a glyph by a regular expression,
+    <code>/^(\s)|(\p{Mn})|(\p{Cf})$/u</code>, whose middle part has no anchors, so any glyph whose text
+    holds a mark counts: a conjunct, and a syllable like <code>ते</code> too. It gives that glyph no
+    advance and does not move past it, so the gap it measures to the next glyph starts from the wrong
+    place. In a PDF that places each cluster on its own, as LibreOffice's do, that gap looked like a
+    space, and words read back split: <code>हिं दी</code> for <code>हिंदी</code>. Since 8.4.0 the reader
+    walks the page's drawing operators glyph by glyph, puts each piece of text where its glyphs are
+    really drawn, and keeps a space only where the page draws one or leaves a gap. Words now read whole
+    from LibreOffice's PDFs in the Indian languages and Thai I tested, and the space after a conjunct is
+    kept.
+</p>
 
 <h2>Using It</h2>
 <pre><code>import { readFileSync, writeFileSync } from 'node:fs';
@@ -474,18 +486,16 @@ const pdf = await ast.to('pdf', {
 });
 writeFileSync('report.pdf', pdf.value);</code></pre>
 <p>
-    Each character is drawn in the first font that has it, so one Latin font in
+    Each character is drawn in the first font whose glyph for it draws something, so one Latin font in
     <code>pdfConfig.fonts</code> and a font for each other script in <code>fallbackFonts</code> covers a document
-    that mixes them. The fonts need the optional peer dependency <code>@pdf-lib/fontkit</code>.
+    that mixes them. A font may be a TrueType or OpenType file, and since 8.4.0 a WOFF or WOFF2 file too.
+    The fonts need the optional peer dependency <code>@pdf-lib/fontkit</code>.
 </p>
 
 <h2>What is Still Not Right</h2>
 <ul>
     <li>Viewers built on pdf.js build their text from the glyphs, not from <code>/ActualText</code>, so
         copying there can still put ि before its letter.</li>
-    <li>officeParser's own reader can still lose the space <em>after</em> a conjunct when a Latin word
-        follows it: <code>क्ष end</code> reads back as <code>क्षend</code>. pdf.js gives the conjunct no
-        width, so there is no gap left to find.</li>
     <li>Arabic and Hebrew marks are drawn where pdf-lib draws them: right for the fonts I tested, but not
         placed by the font's positioning table.</li>
 </ul>
@@ -1701,15 +1711,15 @@ DOCX   HTML   PDF   Markdown   chunks</code></pre>
 </p>
 <p>
     Parsing is JavaScript all the way down. PDF reading uses pdf.js, and OCR uses Tesseract compiled to
-    WebAssembly. That is also why the same code runs in a browser, from a bundle of about 5.5 MB, so a
+    WebAssembly. That is also why the same code runs in a browser, from a bundle of about 6 MB, so a
     file can be parsed without leaving the user's machine.
 </p>
 <p>
     There is one place where I traded that purity for fidelity, and it is opt-out. The default PDF
     <em>output</em> engine renders through headless Chromium (Puppeteer, an optional peer dependency),
     because a browser's layout engine gives the most faithful page. If you do not want a browser, the
-    <code>native</code> engine writes PDF directly with <code>pdf-lib</code>, with simpler layout and
-    the standard PDF fonts.
+    <code>native</code> engine writes PDF directly with <code>pdf-lib</code>, with simpler layout, in
+    the standard PDF fonts or in fonts you give it.
 </p>
 
 <table role="table">
@@ -1830,8 +1840,8 @@ DOCX   HTML   PDF   Markdown   chunks</code></pre>
 <p>
     When it reads an <code>.xlsx</code> file, it reads the <strong>values</strong>: for a formula cell,
     the result Excel computed and saved the last time the file was written. It does not read the formula
-    text, it does not evaluate anything, and it cannot write an <code>.xlsx</code> back out (see
-    section 4).
+    text and it does not evaluate anything, so an <code>.xlsx</code> it writes back out holds the values,
+    not the formulas (see section 4).
 </p>
 
 <div class="callout">

@@ -23,6 +23,7 @@
     <meta property="og:url" content="https://officeparser.harshankur.com/blog/from-text-extraction-to-ast-and-round-trip.html">
     <meta property="og:site_name" content="officeParser">
     <meta property="article:published_time" content="2026-10-04">
+    <meta property="article:modified_time" content="2026-10-27">
 
     <!-- Fonts: the site's own copies (docs/fonts), shared with the home page. -->
     <link rel="stylesheet" href="../fonts/fonts.css">
@@ -78,7 +79,7 @@
                     <div>
                         <a href="https://harshankur.com" target="_blank" rel="noopener" class="author-name">Harsh
                             Ankur</a>
-                        <div>Published <time datetime="2026-10-04">4 October 2026</time> · 6 min read</div>
+                        <div>Published <time datetime="2026-10-04">4 October 2026</time>, updated <time datetime="2026-10-27">27 October 2026</time> · 6 min read</div>
                     </div>
                 </div>
             </div>
@@ -248,15 +249,15 @@ DOCX   HTML   PDF   Markdown   chunks</code></pre>
 </p>
 <p>
     Parsing is JavaScript all the way down. PDF reading uses pdf.js, and OCR uses Tesseract compiled to
-    WebAssembly. That is also why the same code runs in a browser, from a bundle of about 5.5 MB, so a
+    WebAssembly. That is also why the same code runs in a browser, from a bundle of about 6 MB, so a
     file can be parsed without leaving the user's machine.
 </p>
 <p>
     There is one place where I traded that purity for fidelity, and it is opt-out. The default PDF
     <em>output</em> engine renders through headless Chromium (Puppeteer, an optional peer dependency),
     because a browser's layout engine gives the most faithful page. If you do not want a browser, the
-    <code>native</code> engine writes PDF directly with <code>pdf-lib</code>, with simpler layout and
-    the standard PDF fonts.
+    <code>native</code> engine writes PDF directly with <code>pdf-lib</code>, with simpler layout, in
+    the standard PDF fonts or in fonts you give it.
 </p>
 
 <table role="table">
