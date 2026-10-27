@@ -744,7 +744,7 @@ OfficeParserAST
 │   ├── notes: [ OfficeContentNode ]     (footnotes/endnotes/slide notes attached to this node; see below)
 │   ├── comments: [ OfficeContentNode ] (inline comments attached to this node)
 │   ├── formatting: { bold, italic, underline, color, size, font, alignment, ... }
-│   ├── bounds?: { x, y, width, height }  (place on its page or slide: PDF, PPTX, ODP)
+│   ├── bounds?: { x, y, width, height, baseline? }  (place on its page or slide: PDF, PPTX, ODP; baseline: a PDF text run's)
 │   └── metadata: { level, listId, marker, row, col, rowSpan, colSpan, backgroundColor, spacing, style, ... }
 ├── auxiliary?: OfficeAuxiliaryContent   (out-of-band layout elements)
 │   ├── headers?: OfficeContentNode[]   ('header' nodes: DOCX parts, PDF top band, ODT master pages, LaTeX fancyhdr; metadata { type, section, hidden })
@@ -993,6 +993,7 @@ formatting: {
     subscript?: boolean
     superscript?: boolean
     alignment?: 'left' | 'center' | 'right' | 'justify'
+    invisible?: boolean     // drawn invisibly: a PDF's text in rendering mode 3 or 7 (a scan's recognised text)
 }
 ```
 

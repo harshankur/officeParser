@@ -128,7 +128,9 @@
                 <td><code>bounds</code></td>
                 <td><code>NodeBounds</code></td>
                 <td>Where the node is: its box on its PDF page, or on its PPTX or ODP slide (a shape's box, which the
-                    shape's paragraphs, pictures, tables and charts share). Present unless <code>ignorePageGeometry</code> is set.</td>
+                    shape's paragraphs, pictures, tables and charts share). On a PDF's level text run, <code>baseline</code> is the
+                    distance from the page's top to the run's baseline (its box runs from the font's ascent to its descent).
+                    Present unless <code>ignorePageGeometry</code> is set.</td>
             </tr>
             <tr>
                 <td><code>rawContent</code></td>
@@ -418,6 +420,7 @@
     size?: string;            // e.g., "12pt" or "14"
     font?: string;            // e.g., "Arial"
     alignment?: TextAlignment; // 'left' | 'center' | 'right' | 'justify'
+    invisible?: boolean;       // Drawn invisibly: a PDF's text in rendering mode 3 or 7 (a scan's recognised text)
 }</code></pre>
 
     <h2>OfficeMetadata Extensions</h2>
