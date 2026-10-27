@@ -4,7 +4,7 @@ All notable changes to `officeParser` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [8.4.0] - 2026-10-27
+## [8.4.0] - 2026-10-28
 
 ### Added
 - **A PDF's invisible text is marked.** Text a PDF draws invisibly (rendering modes 3 and 7: a scan's recognised words laid over its picture, as scanners, OCRmyPDF and Tesseract write them) is `TextFormatting.invisible`, never in one run with visible text. PPTX and ODP output write it fully transparent and both PDF engines draw it unseen, a table of it without its rules, so a scan's page still looks like the scan with its words there to select and search; every other output writes it as text.
