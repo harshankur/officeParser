@@ -3691,6 +3691,32 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
         add('tagged_lists parse', false, 'parsed', e?.message || String(e));
     }
 
+    // --- LibreOffice's PDFs of Indic and Thai text: each cluster placed on its own and wrapped in an
+    // ActualText, its glyphs given no advance by pdf.js; read word for word as pdftotext reads them ---
+    try {
+        const blockText = (ast: any) => { const out: string[] = []; ast.content.forEach((p: any) => walk(p, n => { if (['paragraph', 'heading', 'list', 'cell'].includes(n.type)) out.push(n.text || ''); })); return out.join('\n'); };
+        const indic = blockText(await OfficeParser.parseOffice(path.join(pdfDir, 'indic_words_libreoffice.pdf'), { ocr: false }));
+        const lines = [
+            'Hindi: नमस्ते दुनिया, यह हिंदी पाठ है। क्षत्रिय श्री कृष्ण न्याय विद्या।',
+            'Marathi: महाराष्ट्र राज्याची राजधानी मुंबई आहे.',
+            'Bengali: নমস্কার বিশ্ব, এটি বাংলা লেখা।',
+            'Gujarati: નમસ્તે દુનિયા, આ ગુજરાતી લખાણ છે.',
+            'Punjabi: ਸਤ ਸ੍ਰੀ ਅਕਾਲ ਦੁਨੀਆ, ਇਹ ਪੰਜਾਬੀ ਹੈ।',
+            'Tamil: வணக்கம் உலகம், இது தமிழ் உரை.',
+            'Telugu: నమస్కారం ప్రపంచం, ఇది తెలుగు పాఠ్యం.',
+            'Kannada: ನಮಸ್ಕಾರ ಜಗತ್ತು, ಇದು ಕನ್ನಡ ಪಠ್ಯ.',
+            'Malayalam: നമസ്കാരം ലോകം, ഇത് മലയാളം ആണ്.',
+            'Odia: ନମସ୍କାର ବିଶ୍ୱ, ଏହା ଓଡ଼ିଆ ଲେଖା।',
+            'Thai: สวัสดีชาวโลก นี่คือข้อความภาษาไทย',
+        ];
+        const missing = lines.filter(l => !indic.includes(l));
+        add('LibreOffice Indic and Thai words read whole', missing.length === 0, `${lines.length} lines word for word`, missing.length ? JSON.stringify(indic) : `${lines.length} lines`);
+        const hindi = blockText(await OfficeParser.parseOffice(path.join(pdfDir, 'hindi_tables_libreoffice.pdf'), { ocr: false }));
+        add('LibreOffice Hindi beside a table reads whole', hindi.includes('हिन्दी भाषा क्षत्रिय श्री कृष्ण न्याय विद्या शिक्षा'), 'हिन्दी भाषा क्षत्रिय श्री कृष्ण न्याय विद्या शिक्षा', hindi.split('\n')[0]);
+    } catch (e: any) {
+        add('LibreOffice Indic words', false, 'parsed', e?.message || String(e));
+    }
+
     // --- pdf.js in a separate process and in this one read the same AST, fixture by fixture ---
     try {
         const differ: string[] = [];

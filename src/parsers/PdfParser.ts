@@ -41,6 +41,7 @@ import { crc32, createAttachment } from '../utils/imageUtils.js';
 import { loadPdfJs } from '../utils/moduleLoader.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { collectColorMarks, ColorLookup, makeColorLookup } from './pdf/pdfColor.js';
+import { collectGlyphs, GlyphFont, PageGlyphs } from './pdf/textGlyphs.js';
 import { collectShapes, PdfShape, shapeBullets } from './pdf/pdfShapes.js';
 import { MarkedContent, readableItems } from './pdf/actualText.js';
 import { ruledFrames, ruledTables, shadeCells } from './pdf/rulings.js';
@@ -969,19 +970,27 @@ const MAX_PATHS_KEPT = 40_000;
 /** At most this many operators are kept on a page read for its shapes alone, past which it is left unread. */
 const MAX_SHAPE_OPERATORS = 200_000;
 
-/** The operators the shape reader uses: paths, their widths and colours, and the state that places them. */
+/**
+ * The operators that place a page's glyphs and say how they are drawn (see textGlyphs): read whatever else
+ * the page is read for, as where the text is and whether it is seen is always asked.
+ */
+const TEXT_OPERATORS = ['beginText', 'setTextMatrix', 'moveText', 'setLeadingMoveText', 'setLeading', 'nextLine', 'setTextRise',
+    'setTextRenderingMode', 'showText', 'setFont', 'setCharSpacing', 'setWordSpacing', 'setHScale'];
+
+/** The operators the shape reader uses: paths, their widths and colours, and the state that places them (and the text's, see TEXT_OPERATORS). */
 const shapeOperatorsCache = new WeakMap<object, Set<number>>();
 const shapeOperators = (OPS: any): Set<number> => {
     let kept = shapeOperatorsCache.get(OPS);
     if (!kept) {
         kept = new Set(['save', 'restore', 'transform', 'paintFormXObjectBegin', 'paintFormXObjectEnd', 'constructPath', 'setLineWidth',
-            'setFillRGBColor', 'setFillColorN', 'setFillTransparent', 'setStrokeRGBColor', 'setStrokeColorN', 'setStrokeTransparent'].map(name => OPS[name]).filter((op): op is number => typeof op === 'number'));
+            'setFillRGBColor', 'setFillColorN', 'setFillTransparent', 'setStrokeRGBColor', 'setStrokeColorN', 'setStrokeTransparent',
+            ...TEXT_OPERATORS].map(name => OPS[name]).filter((op): op is number => typeof op === 'number'));
         shapeOperatorsCache.set(OPS, kept);
     }
     return kept;
 };
 
-/** The operators the image, color and shape readers use (paths with their paint and width); the rest are not kept. */
+/** The operators the image, color, glyph and shape readers use (paths with their paint and width); the rest are not kept. */
 const keptOperatorsCache = new WeakMap<object, Set<number>>();
 const keptOperators = (OPS: any): Set<number> => {
     let kept = keptOperatorsCache.get(OPS);
@@ -989,8 +998,7 @@ const keptOperators = (OPS: any): Set<number> => {
         kept = new Set(['save', 'restore', 'transform', 'paintFormXObjectBegin', 'paintFormXObjectEnd', 'dependency',
             'paintImageXObject', 'paintImageXObjectRepeat', 'paintInlineImageXObject',
             'setFillRGBColor', 'setFillColorN', 'setFillTransparent', 'setStrokeRGBColor', 'setStrokeColorN', 'setStrokeTransparent',
-            'beginText', 'setTextMatrix', 'moveText', 'setLeadingMoveText', 'setLeading', 'nextLine', 'setTextRise',
-            'setTextRenderingMode', 'showText', 'constructPath', 'setLineWidth'].map(name => OPS[name]).filter((op): op is number => typeof op === 'number'));
+            ...TEXT_OPERATORS, 'constructPath', 'setLineWidth'].map(name => OPS[name]).filter((op): op is number => typeof op === 'number'));
         keptOperatorsCache.set(OPS, kept);
     }
     return kept;
@@ -1007,8 +1015,8 @@ const keptOperators = (OPS: any): Set<number> => {
  */
 async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep: 'none' | 'drawing' | 'shapes', fonts: readonly string[] = []): Promise<any | null> {
     if (work.spent || work.operatorsSpent) return null;
-    // ('shapes': the page's paths alone, for its bullets and tables: kept outside the budget, up to
-    // MAX_SHAPE_OPERATORS, and the rest left unread once the fonts are known.)
+    // ('shapes': the page's paths, for its bullets and tables, and its text's placing: kept outside the
+    // budget, up to MAX_SHAPE_OPERATORS, and the rest left unread once the fonts are known.)
     const kept = keep === 'drawing' ? keptOperators(pdfjs.OPS) : keep === 'shapes' ? shapeOperators(pdfjs.OPS) : null;
     let shapeOps = 0;
     const showText = pdfjs.OPS.showText;
@@ -1098,14 +1106,30 @@ async function collectPage(
     let ops: any = null;
     // Not `config.ocr`: page-image OCR runs over collected images, which require extractAttachments, so
     // ocr alone needs no operator list (and must not fetch one just to discard it).
-    // The page's drawing is read too: its shapes (a bullet drawn as a disc, a table's ruling lines) tell
-    // what its text alone does not.
+    // The page's drawing is read too: its shapes (a bullet drawn as a disc, a table's ruling lines) and its
+    // glyphs (where each is drawn, and whether it is seen) tell what its text alone does not.
     ops = await readOperatorList(pdfjs, page, work, config.extractAttachments || pdfCfg.extractTextColor ? 'drawing' : 'shapes', newFonts);
     for (const key of seen) if (!fontCache.has(key)) fontCache.set(key, await resolveFont(key, page.commonObjs, styles));
 
+    // The page's glyphs as it draws them: where each is, how far it advances, and whether it is seen (see
+    // textGlyphs). The fonts the list names are in `commonObjs` once it is read.
+    const glyphFonts = new Map<string, GlyphFont | undefined>();
+    const glyphFont = (id: string): GlyphFont | undefined => {
+        if (!glyphFonts.has(id)) {
+            let font: GlyphFont | undefined;
+            try {
+                const data = page.commonObjs?.has?.(id) ? page.commonObjs.get(id) : undefined;
+                if (data && typeof data === 'object') font = { fontMatrix: Array.isArray(data.fontMatrix) || ArrayBuffer.isView(data.fontMatrix) ? data.fontMatrix : undefined, vertical: !!data.vertical };
+            } catch { font = undefined; }
+            glyphFonts.set(id, font);
+        }
+        return glyphFonts.get(id);
+    };
+    const glyphs: PageGlyphs | undefined = ops ? collectGlyphs(ops, pdfjs.OPS, glyphFont) : undefined;
+
     // Per-run fill color (opt-in): recovered from the operator list, which is now fetched above.
-    const colorFor: ColorLookup | null = (pdfCfg.extractTextColor && ops)
-        ? makeColorLookup(collectColorMarks(ops, layoutViewport.transform, pdfjs.OPS))
+    const colorFor: ColorLookup | null = (pdfCfg.extractTextColor && glyphs)
+        ? makeColorLookup(collectColorMarks(glyphs.shows, layoutViewport.transform))
         : null;
 
     // Past the budget the document is closed: the page keeps the text read, without what pdf.js would read next.
@@ -1122,7 +1146,7 @@ async function collectPage(
     // The text a producer gave its glyph clusters (ActualText), where the glyphs map to none of it.
     // Read from the file only for a page whose text has marked content, and once its budget allows.
     const hasMarked = !work.spent && textContent.items.some((it: any) => it.type === 'beginMarkedContentProps' || it.type === 'beginMarkedContent');
-    for (const item of readableItems(textContent.items, hasMarked ? markedContent?.eventsOf(pageNumber - 1) : undefined, pdfCfg.normalizeText)) {
+    for (const item of readableItems(textContent.items, hasMarked ? markedContent?.eventsOf(pageNumber - 1) : undefined, pdfCfg.normalizeText, glyphs)) {
         if (!isTextItem(item)) {
             const type = (item as any).type as string | undefined;
             if (type === 'beginMarkedContent' || type === 'beginMarkedContentProps') {
@@ -1229,7 +1253,7 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
         if (!ops) return images;
         const fnArray = ops.fnArray;
         const argsArray = ops.argsArray;
-        // Graphics-state CTM, tracked exactly as `collectColorMarks` tracks it: an image fills the
+        // Graphics-state CTM, tracked exactly as `collectGlyphs` (textGlyphs) tracks it: an image fills the
         // unit square under the CTM in force when it is painted, and that CTM is built from the page
         // `cm`s, the surrounding `q`/`Q` brackets and any form XObject's `/Matrix`. Reading back only
         // the nearest preceding `transform` gets the image's own placement matrix but none of its

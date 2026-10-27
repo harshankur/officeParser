@@ -4,7 +4,7 @@
  * ruling lines and cell borders. pdf.js gives each path as one `constructPath` operator: its paint
  * operator (fill, stroke, both, or none), its data in the user space of the moment (`DrawOPS`: move,
  * line, cubic and quadratic curves, close), and its box. The current transformation is tracked as
- * `collectColorMarks` tracks it (`q`/`Q`, `cm`, form XObjects), so a shape lands in the same viewport
+ * `collectGlyphs` (textGlyphs) tracks it (`q`/`Q`, `cm`, form XObjects), so a shape lands in the same viewport
  * space as the text runs. Bounded: at most MAX_SHAPES shapes a page, and MAX_SEGMENTS straight edges.
  *
  * @module parsers/pdf/pdfShapes

@@ -17,6 +17,7 @@
  */
 
 import { Unzlib } from 'fflate';
+import { measureItems, PageGlyphs } from './textGlyphs.js';
 
 /** One marked-content event: a begin (with its ActualText, where it has one) or an end. */
 export type MarkedEvent = { begin: true; actualText?: string } | { begin: false };
@@ -578,8 +579,8 @@ export class MarkedContent {
     }
 }
 
-/** A pdf.js text content item, as far as reading it needs. */
-interface TextContentItem { type?: string; str?: string; transform?: number[]; width?: number }
+/** A pdf.js text content item, as far as reading it needs (`measured`: see measureItems). */
+interface TextContentItem { type?: string; str?: string; transform?: number[]; width?: number; measured?: boolean }
 
 /**
  * A page's text items as they read: each span with an ActualText (see readMarkedContent) as one item of
@@ -587,10 +588,11 @@ interface TextContentItem { type?: string; str?: string; transform?: number[]; w
  * font's lost mapping gives (U+0002, U+0005) taken out of every item. The events are used only where
  * they are as many as pdf.js's marked-content begins (else the page is as pdf.js reads it). With
  * `normalize` (pdfParserConfig.normalizeText), an ActualText's marks are composed with their letters, as
- * pdf.js composes the glyphs' text: "e" and a combining acute is "é".
+ * pdf.js composes the glyphs' text: "e" and a combining acute is "é". With the page's `glyphs` (see
+ * textGlyphs), the items are first placed where their glyphs are drawn (see measureItems).
  */
-export function readableItems<T extends TextContentItem>(items: T[], events: MarkedEvent[] | undefined, normalize = false): T[] {
-    return withoutCoveredSpaces(advanced(spans(items, events, normalize)));
+export function readableItems<T extends TextContentItem>(items: T[], events: MarkedEvent[] | undefined, normalize = false, glyphs?: PageGlyphs): T[] {
+    return withoutCoveredSpaces(advanced(spans(measureItems(items, glyphs), events, normalize)));
 }
 
 /**
@@ -644,7 +646,7 @@ const VIRAMA = /[\u094D\u09CD\u0A4D\u0ACD\u0B4D\u0BCD\u0C4D\u0CCD\u0D4D\u0DCA\u1
  * that much too far left, so read out of order) given one (nine tenths of an em a cluster), and the items after
  * them on their line moved by it, in the order they are drawn. A mark alone keeps none. The space
  * pdf.js puts before the text after such an item (the gap its lost width left) is no space: "क्ष त्रिय"
- * for "क्षत्रिय".
+ * for "क्षत्रिय". An item measured from its glyphs (see measureItems) is where it is drawn, and is left as it is.
  */
 function advanced<T extends TextContentItem>(items: T[]): T[] {
     // (The line's baseline: none before its first item, so the shift starts afresh on every line, the first too.)
@@ -653,7 +655,7 @@ function advanced<T extends TextContentItem>(items: T[]): T[] {
     let shift = 0, lineY: number | undefined, afterLost = false, lost: { x: number; width: number; em: number } | undefined;
     return items.map(item => {
         const t = item.transform;
-        if (typeof item.str !== 'string' || !t || t.length < 6 || !t.every(Number.isFinite) || Math.abs(t[1]) > 1e-6 || Math.abs(t[2]) > 1e-6) return item;
+        if (typeof item.str !== 'string' || !t || t.length < 6 || !t.every(Number.isFinite) || Math.abs(t[1]) > 1e-6 || Math.abs(t[2]) > 1e-6 || item.measured) return item;
         if (lineY === undefined || !(Math.abs(t[5] - lineY) <= 0.5)) { shift = 0; lineY = t[5]; afterLost = false; lost = undefined; }
         else if (lost && item.str.trim()) {
             // (A blank decides nothing: pdf.js puts one over the lost glyph, as wide as it and the word space after it.)
@@ -686,6 +688,8 @@ function spans<T extends TextContentItem>(items: T[], events: MarkedEvent[] | un
     const out: T[] = [];
     let at = 0, depth = 0, text = '';
     let target: T | undefined, minX = Infinity, maxX = -Infinity, level = true;
+    // Whether an item of the span was measured from its glyphs.
+    let measured = false;
     // The span's text with the space before it (where pdf.js put one among its items, before its glyphs):
     // its text, which way it reads, the first glyph's place, and whether it has that space yet.
     let said = '', rtl = false, glyphX: number | undefined, spaced = false;
@@ -695,6 +699,7 @@ function spans<T extends TextContentItem>(items: T[], events: MarkedEvent[] | un
             target.transform[4] = minX;
             target.width = maxX - minX;
         }
+        if (target && measured) target.measured = true;
         target = undefined;
     };
     for (const item of items) {
@@ -702,7 +707,10 @@ function spans<T extends TextContentItem>(items: T[], events: MarkedEvent[] | un
             const event = begins[at++];
             out.push(item);
             if (depth) depth++;
-            else if (event?.actualText !== undefined) { depth = 1; text = event.actualText; target = undefined; minX = Infinity; maxX = -Infinity; level = true; }
+            else if (event?.actualText !== undefined) {
+                depth = 1; text = event.actualText; target = undefined; minX = Infinity; maxX = -Infinity; level = true;
+                measured = false;
+            }
             continue;
         }
         if (item.type === 'endMarkedContent') {
@@ -723,6 +731,7 @@ function spans<T extends TextContentItem>(items: T[], events: MarkedEvent[] | un
             maxX = Math.max(maxX, t[4] + (item.width || 0));
         }
         const blank = !(item.str ?? '').trim();
+        if (item.measured) measured = true;
         if (!target) {
             // A space pdf.js put before the glyphs (a ligature's own width lost) stays on that side of the text:
             // before it, or after it for right-to-left text, which is read from the other side.
