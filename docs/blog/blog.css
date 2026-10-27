@@ -132,18 +132,16 @@ button:focus-visible {
 .logo-group {
     display: flex;
     align-items: center;
-    gap: 0.85rem;
+    gap: 0.5rem;
 }
 
+/* The name leads to the site's home page, the chip beside it to the blog's list. */
 .brand-logo {
     font-family: var(--font-heading);
     font-size: 1.35rem;
     font-weight: 700;
     letter-spacing: -0.02em;
     color: var(--text-primary);
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
 }
 
 .brand-badge {
@@ -156,6 +154,11 @@ button:focus-visible {
     padding: 0.2rem 0.55rem;
     border-radius: 999px;
     border: 1px solid var(--accent-subtle);
+    transition: border-color 0.15s ease;
+}
+
+.brand-badge:hover {
+    border-color: var(--accent);
 }
 
 .nav-actions {
@@ -180,21 +183,39 @@ button:focus-visible {
     color: var(--text-primary);
 }
 
-.theme-toggle-btn {
+/*
+   The header's buttons (GitHub, a revised post's changes, the theme): an icon and what it does, and on
+   a phone the icon alone, in a square. All are one height, whatever their icon.
+*/
+.header-btn {
     background: transparent;
     border: 1px solid var(--border-color);
     color: var(--text-secondary);
-    padding: 0.45rem 0.65rem;
+    height: 2.4rem;
+    padding: 0 0.7rem;
     border-radius: 8px;
     cursor: pointer;
-    font-size: 0.95rem;
+    font: inherit;
+    font-size: 0.875rem;
+    font-weight: 500;
+    white-space: nowrap;
     display: flex;
     align-items: center;
     justify-content: center;
+    gap: 0.45rem;
     transition: all 0.15s ease;
 }
 
-.theme-toggle-btn:hover {
+.header-btn-icon {
+    flex-shrink: 0;
+    width: 1.1rem;
+    height: 1.1rem;
+    font-size: 0.95rem;
+    line-height: 1.1rem;
+    text-align: center;
+}
+
+.header-btn:hover {
     background-color: var(--bg-subtle);
     color: var(--text-primary);
     border-color: var(--text-muted);
@@ -775,15 +796,6 @@ a.author-name:hover,
     display: none;
 }
 
-.revision-toggle {
-    align-self: stretch;
-}
-
-/* As wide as the theme's icon, so the two buttons are one size. */
-.revision-toggle svg {
-    width: 1.2rem;
-    height: 1.2rem;
-}
 
 .revision-toggle[aria-pressed="true"] {
     color: var(--accent);
@@ -797,7 +809,7 @@ a.author-name:hover,
     border-color: var(--accent-hover);
 }
 
-.theme-toggle-btn:focus-visible {
+.header-btn:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
 }
@@ -1064,6 +1076,31 @@ viewcounter-consent {
 }
 
 /*
+ * The header on narrower screens: below 960px a link shows its short label, and below 800px a button
+ * is its icon alone, in a square, its name still read out (its aria-label).
+ */
+@media (max-width: 960px) {
+    .nav-link .nav-long {
+        display: none;
+    }
+
+    .nav-link .nav-short {
+        display: inline;
+    }
+}
+
+@media (max-width: 800px) {
+    .header-btn {
+        width: 2.4rem;
+        padding: 0;
+    }
+
+    .header-btn-label {
+        display: none;
+    }
+}
+
+/*
  * Phone widths. Nothing here may scroll sideways: the header drops to short labels, a code block
  * wraps its lines, and a table is laid out as one card per row with each cell under its column name
  * (the `data-label` its markup carries).
@@ -1081,23 +1118,11 @@ viewcounter-consent {
         gap: 0.6rem;
     }
 
-    /* A revised post's header holds two buttons: they are narrower here, so it still fits a phone. */
-    .theme-toggle-btn {
-        padding: 0.4rem 0.5rem;
-    }
 
     .nav-link {
         font-size: 0.875rem;
     }
 
-    .nav-link .nav-long,
-    .nav-link.nav-secondary {
-        display: none;
-    }
-
-    .nav-link .nav-short {
-        display: inline;
-    }
 
     .hero-section,
     .articles-container,
@@ -1179,20 +1204,23 @@ viewcounter-consent {
 }
 
 /*
- * Narrow phones. The logo links where "Docs" does, so "Docs" gives way first; below 360px the logo is
- * set smaller, and below 340px the header's links and buttons stand closer: a revised post's header,
- * with its second button, fits without scrolling sideways.
+ * Narrow phones. The name links where "Docs" does and the chip where "Articles" does, so those links
+ * give way to the buttons; below 360px the name is set smaller, and below 340px the header's buttons
+ * stand closer: the header fits without scrolling sideways.
  */
-@media (max-width: 400px) {
-    .nav-link.nav-home {
+@media (max-width: 480px) {
+    .nav-link {
         display: none;
     }
 }
 
 @media (max-width: 360px) {
+    .logo-group {
+        gap: 0.35rem;
+    }
+
     .brand-logo {
         font-size: 1.05rem;
-        gap: 0.35rem;
     }
 
     .brand-badge {
@@ -1206,8 +1234,9 @@ viewcounter-consent {
         gap: 0.4rem;
     }
 
-    .theme-toggle-btn {
-        padding: 0.35rem 0.4rem;
+    .header-btn {
+        width: 2.2rem;
+        height: 2.2rem;
     }
 }
 

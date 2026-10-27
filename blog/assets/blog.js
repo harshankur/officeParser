@@ -21,10 +21,18 @@
     root.classList.toggle('changes-hidden', changesStored() === 'hidden');
 
     const wireThemeToggle = () => {
+        const button = document.getElementById('theme-toggle');
         const icon = document.getElementById('theme-icon');
-        const paint = () => { icon.textContent = root.getAttribute('data-theme') === 'dark' ? '☀️' : '🌙'; };
+        const label = document.getElementById('theme-label');
+        // The button says what it does: the mode it turns on.
+        const paint = () => {
+            const dark = root.getAttribute('data-theme') === 'dark';
+            icon.textContent = dark ? '☀️' : '🌙';
+            label.textContent = dark ? 'Light mode' : 'Dark mode';
+            button.setAttribute('aria-label', label.textContent);
+        };
         paint();
-        document.getElementById('theme-toggle').addEventListener('click', () => {
+        button.addEventListener('click', () => {
             const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
             root.setAttribute('data-theme', next);
             try { localStorage.setItem('theme', next); } catch { /* the choice lasts for this page */ }
@@ -524,6 +532,7 @@
             toggle.setAttribute('aria-pressed', String(shown));
             toggle.setAttribute('aria-label', label);
             toggle.title = label;
+            document.getElementById('revision-label').textContent = label;
             if (!shown) for (const open of document.querySelectorAll('.revision-note:popover-open')) open.hidePopover();
             if (keep) { try { localStorage.setItem(CHANGES_KEY, shown ? 'shown' : 'hidden'); } catch { /* the choice lasts for this page */ } }
         };

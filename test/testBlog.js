@@ -261,6 +261,16 @@ if (!buildError) {
     check('the list has the search field, hidden until the script shows it, and a place for each card\'s match', /<div class="post-search" id="post-search" role="search" hidden>/.test(listPage)
         && (listPage.match(/<p class="card-match" hidden><\/p>/g) || []).length === blog.posts.length
         && JSON.stringify([...listPage.matchAll(/data-slug="([^"]+)"/g)].map(match => match[1])) === JSON.stringify(slugs));
+    // Every page's header: the name leads to the site's home page and the chip beside it to the blog's
+    // list; each button has a name to read out, since a phone shows its icon alone.
+    const headerOf = page => (/<header class="blog-header">([\s\S]*?)<\/header>/.exec(page) || [])[1] || '';
+    const pages = [...files].filter(([name]) => name.endsWith('.html'));
+    check('header: the name leads to the home page and the chip to the blog\'s list, on every page', pages.every(([, page]) =>
+        /<a href="\.\.\/" class="brand-logo">officeParser<\/a>\s*<a href="\.\/" class="brand-badge" aria-label="Blog: all articles">Blog<\/a>/.test(headerOf(String(page)))));
+    check('header: every button has a name, its icon and its label', pages.every(([, page]) => {
+        const buttons = [...headerOf(String(page)).matchAll(/<(a|button)\b([^>]*\sclass="header-btn[\s"][^>]*)>([\s\S]*?)<\/\1>/g)];
+        return buttons.length >= 2 && buttons.every(([, , attributes, inner]) => /\saria-label="[^"]+"/.test(attributes) && inner.includes('class="header-btn-icon') && inner.includes('class="header-btn-label'));
+    }));
     check('the list links every post, in order', JSON.stringify([...listPage.matchAll(/class="article-card"[^>]*href="\.\/([^"]+)\.html"/g)].map(match => match[1])) === JSON.stringify(slugs));
 }
 
@@ -305,7 +315,7 @@ try {
         && revisedPage.includes(` for <a href="../#doc/changelog/${latestAnchor}">${latest}</a>: Something came with the release. <a href="#change-release">See the change</a></li>`)
         && revisedPage.indexOf('id="revisions"') > revisedPage.indexOf('id="change-release"') && revisedPage.indexOf('id="revisions"') < revisedPage.indexOf('article-nav-footer'), revisedPage.slice(0, 200));
     check('revisions: a revised post has the button in its header that shows its changes, pressed and hidden until the script shows it, and no other page has one',
-        blog.posts.every(post => /<header class="blog-header">[\s\S]*<button class="theme-toggle-btn revision-toggle" id="revision-toggle" type="button" aria-pressed="true"\s+aria-label="Hide changes" title="Hide changes" hidden>[\s\S]*<\/header>/.test(String(files.get(`${post.slug}.html`) ?? '')) === (post.revisions || []).length > 0)
+        blog.posts.every(post => /<header class="blog-header">[\s\S]*<button class="header-btn revision-toggle" id="revision-toggle" type="button" aria-pressed="true"\s+aria-label="Hide changes" title="Hide changes" hidden>[\s\S]*<\/header>/.test(String(files.get(`${post.slug}.html`) ?? '')) === (post.revisions || []).length > 0)
         && !String(files.get('index.html') ?? '').includes('revision-toggle'));
     check('revisions: a revised post\'s byline counts its changes, linked to their list', blog.posts.filter(post => (post.revisions || []).length).every(post =>
         String(files.get(`${post.slug}.html`) ?? '').includes(` · <a href="#revisions" class="byline-changes">${post.revisions.length} ${post.revisions.length === 1 ? 'change' : 'changes'}</a> · `)));
