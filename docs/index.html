@@ -3516,8 +3516,8 @@
                 { id: 'cfg_pdfKeepHeadersAndFootersInPages', label: 'PDF Headers and Footers in Pages', type: 'switch', default: false, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_ignorePageGeometry', label: 'Ignore Page Geometry', type: 'switch', default: false, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfWorkerSrc', label: 'PDF Worker URL', type: 'text', default: window.SITE_PDF_WORKER_SRC, replaces: /^https:\/\/cdn\.jsdelivr\.net\/npm\/pdfjs-dist@[^/]+\/build\/pdf\.worker\.min\.mjs$/, fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
-                { id: 'cfg_pdfCMapUrl', label: 'PDF CMaps Folder URL', type: 'text', default: '', placeholder: 'this site\'s copy of pdfjs-dist cmaps/', fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
-                { id: 'cfg_pdfDecoderUrl', label: 'PDF Image Decoders Folder URL', type: 'text', default: '', placeholder: 'this site\'s copy of pdfjs-dist wasm/', fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfCMapUrl', label: 'PDF CMaps Folder URL', type: 'text', default: window.SITE_PDF_CMAP_URL, fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfDecoderUrl', label: 'PDF Image Decoders Folder URL', type: 'text', default: window.SITE_PDF_DECODER_URL, fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfMaxImagePixels', label: 'PDF Max Image Pixels', type: 'number', default: 40000000, width: '95px', min: 0, formatGroup: 'pdf', formats: ['pdf'] },
 
                 // HTML / EPUB Options
@@ -6537,7 +6537,11 @@
 
             window.recordWarning = (group, issue) => {
                 console.warn(`officeParser warning (${group}):`, issue);
-                const message = (issue && issue.message) || String(issue);
+                // The page a PDF warning is on, and the reason a message that ends in a colon goes on to give.
+                const text = (issue && issue.message) || String(issue);
+                const details = issue && issue.details;
+                const reason = typeof details === 'string' ? details : details instanceof Error ? details.message : '';
+                const message = (issue && Number.isInteger(issue.page) ? `Page ${issue.page}: ` : '') + (reason && text.endsWith(':') ? `${text} ${reason}` : text);
                 const messages = warningGroups.get(group) || [];
                 if (messages.includes(message)) return;
                 messages.push(message);
