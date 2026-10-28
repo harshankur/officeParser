@@ -106,10 +106,6 @@
       },
       "permissions": "all"
     },
-    "customProperties": {
-      "Language": "en",
-      "IsLinearized": false
-    },
     "pageSetup": {
       "width": 612,
       "height": 792

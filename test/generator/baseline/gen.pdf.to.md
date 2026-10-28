@@ -4,8 +4,6 @@ author: "Kovid Goyal"
 created: 2025-11-29T07:48:48.000Z
 modified: 2025-11-29T07:48:48.000Z
 keywords: "calibre, docs, ebook, conversion"
-Language: "en"
-IsLinearized: false
 ---
 
 ---

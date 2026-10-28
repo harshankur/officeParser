@@ -8035,6 +8035,42 @@ async function testPdfPicturesLeftOut(): Promise<void> {
  * reports, in a separate process and in this one. A caller's own "Warning: " lines reach its console
  * while a PDF is read, and pdf.js's lines do not.
  */
+/**
+ * A PDF's metadata is what its author set, a form field's value is its widget's, and HTML output writes
+ * no file name as a caption and pads a table's shorter rows to its width.
+ */
+async function testPdfFormMetadataAndHtml(): Promise<void> {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([400, 400]);
+    doc.setTitle('Bescheinigung');
+    // A key of the Info dictionary beyond the standard ones is the document's own property.
+    (doc as any).getInfoDict().set(PDFName.of('Reviewer'), PDFHexString.fromText('Grace Hopper'));
+    const form = doc.getForm();
+    const name = form.createTextField('name');
+    name.setText('Mustermann');
+    name.addToPage(page, { x: 50, y: 300, width: 150, height: 20 });
+    const box = form.createCheckBox('agree');
+    box.addToPage(page, { x: 50, y: 250, width: 12, height: 12 });
+    box.check();
+    const ast = await OfficeParser.parseOffice(Buffer.from(await doc.save()), { fileType: 'pdf' } as any);
+    assert.deepStrictEqual(ast.metadata.customProperties, { Reviewer: 'Grace Hopper' }, 'PDF metadata: the Info dictionary\'s own keys, not pdf.js\'s structural flags (IsLinearized, IsAcroFormPresent, Language)');
+    const fields = ast.metadata.nativeProperties?.formFields as any;
+    assert.deepStrictEqual([fields?.name?.type, fields?.name?.value, fields?.agree?.type, fields?.agree?.value], ['text', 'Mustermann', 'checkbox', 'Yes'], `PDF metadata: a form field's type and value are its widget's (${JSON.stringify(fields)})`);
+    const markdown = String((await ast.to('md')).value);
+    assert.ok(!/IsLinearized|IsAcroFormPresent/.test(markdown), 'PDF metadata: no structural flag in the front matter');
+
+    // HTML: no caption of a picture's file name; a table's shorter rows padded to its width.
+    const pictured = await OfficeParser.parseOffice(Buffer.from('<p>x</p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" alt="">'), { fileType: 'html', extractAttachments: true } as any);
+    const pictureHtml = String((await pictured.to('html')).value);
+    assert.ok(pictureHtml.includes('<img') && !pictureHtml.includes('class="caption"'), 'HTML: a picture has no file name under it');
+    const table = await OfficeParser.parseOffice(Buffer.from('<table><tr><td>a</td><td>b</td><td>c</td><td>d</td></tr><tr><td>x</td><td>y</td></tr><tr><td colspan="2">w</td><td>z</td></tr></table>'), { fileType: 'html' } as any);
+    const rows = String((await table.to('html')).value).replace(/<\/?p>|\s+/g, '').match(/<tr>.*?<\/tr>/g) ?? [];
+    assert.deepStrictEqual(rows.map(r => (r.match(/<td/g) ?? []).length + [...r.matchAll(/colspan="(\d+)"/g)].reduce((n, m) => n + Number(m[1]) - 1, 0)), [4, 4, 4], `HTML: each row of a table reaches its width (${rows.join(' ')})`);
+    const spanned = await OfficeParser.parseOffice(Buffer.from('<table><tr><td>A</td><td>B</td><td>C</td></tr><tr><td rowspan="2">r</td><td>1</td></tr><tr><td>2</td><td>3</td></tr></table>'), { fileType: 'html' } as any);
+    const spannedRows = String((await spanned.to('html')).value).replace(/<\/?p>|\s+/g, '').match(/<tr>.*?<\/tr>/g) ?? [];
+    assert.deepStrictEqual(spannedRows.map(r => (r.match(/<t[dh]/g) ?? []).length), [3, 3, 2], `HTML: a row under a row span is padded to the width it does not reach (${spannedRows.join(' ')})`);
+}
+
 async function testPdfInProcessTurns(): Promise<void> {
     const { deflateSync } = await import('zlib');
     const pdfFrom = (objects: (string | Buffer)[]): Buffer => {
@@ -8295,7 +8331,9 @@ async function testConfigConsistency(): Promise<void> {
     assert.strictEqual((await OfficeParser.parseOffice(Buffer.from((await german.to('epub')).value as Uint8Array), { fileType: 'epub' } as any)).metadata.language, 'de', 'Language: the EPUB parser puts it in metadata.language');
     const overridden = String((await german.to('html', { metadataOverrides: { language: 'fr-CA' } } as any)).value);
     assert.ok(overridden.includes('<html lang="fr-CA">'), 'Language: metadataOverrides.language wins');
-    assert.ok(String((await md.to('html')).value).includes('<html lang="en">'), 'Language: English when the source states none');
+    // A document that states no language gets no lang, as DOCX, ODT and PDF output write none: "en" told a
+    // screen reader to read a German form as English.
+    assert.ok(String((await md.to('html')).value).includes('<html>'), 'Language: none when the source states none');
     // maxPasswordAttempts that is not a whole number of 0 or more is reported, by the parser and by templates.
     {
         const agile = path.join(__dirname, 'files', 'encrypted', 'agile.docx');
@@ -9851,6 +9889,7 @@ async function runTests(): Promise<void> {
         ['PDF warning pages', testPdfWarningPages],
         ['PDF pictures left out', testPdfPicturesLeftOut],
         ['PDF in-process turns', testPdfInProcessTurns],
+        ['PDF form metadata and HTML details', testPdfFormMetadataAndHtml],
         ['Cancellation', testCancellation],
     ];
 

@@ -7,6 +7,7 @@ import { isDefaultHighlight } from '../utils/colorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { clampInt } from '../utils/numberUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
+import { MAX_LAYOUT_COLUMNS } from '../utils/tableLayout.js';
 
 /** Node types written as block elements (a <div>, <table>, <ul>, <dl>, <section>...), which a <p> cannot hold. */
 const BLOCK_TYPES = new Set<string>(['paragraph', 'heading', 'list', 'table', 'sheet', 'row', 'cell', 'chart', 'embed', 'admonition',
@@ -500,8 +501,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         const chartScriptTag = (sa.scripts && this.config.includeCharts && this.chartsDrawn > 0) ? `<script src="${this.config.htmlConfig.chartJsSrc}"></script>` : '';
         const spreadsheetScriptOut = sa.scripts ? spreadsheetScript : '';
 
+        // The document's language where it has one; none where it is unknown, as DOCX, ODT and PDF output write
+        // it, rather than English for a document in any language.
+        const htmlLang = documentLanguage(this.effectiveMetadata, '');
         const value = sa.document ? `<!DOCTYPE html>
-<html lang="${documentLanguage(this.effectiveMetadata)}">
+<html${htmlLang ? ` lang="${htmlLang}"` : ''}>
 <head>
     ${headInjectionsOn ? inj.headStart : ''}
     <meta charset="UTF-8">
@@ -598,6 +602,33 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
      * Processes an array of nodes, handling list grouping and nesting.
      */
     /**
+     * The table's width, and the empty cells each shorter row ends with (rowPadding), for a table without
+     * row spans: each cell at its column (`col`, for a sparse row) or after the one before, as wide as it
+     * spans, the width capped at MAX_LAYOUT_COLUMNS.
+     */
+    private planRowPadding(table: OfficeContentNode): void {
+        const rows = (table.children || []).filter(r => r.type === 'row');
+        const extents = rows.map(row => {
+            let width = 0;
+            for (const cell of row.children || []) {
+                if (cell.type !== 'cell') continue;
+                const m = cell.metadata as CellMetadata | undefined;
+                const start = typeof m?.col === 'number' && m.col >= 0 ? Math.max(width, m.col) : width;
+                width = Math.min(MAX_LAYOUT_COLUMNS, start + clampInt(m?.colSpan, 1, MAX_LAYOUT_COLUMNS, 1));
+            }
+            return width;
+        });
+        const width = Math.max(0, ...extents);
+        rows.forEach((row, i) => { if (extents[i] > 0 && extents[i] < width) this.rowPadding.set(row, width - extents[i]); });
+    }
+
+    /** The empty cells (`<td></td>`, or `<th></th>` in a header row) a row ends with to reach its table's width. */
+    private rowPaddingCells(row: OfficeContentNode, tag: 'td' | 'th' = 'td'): string {
+        const missing = this.rowPadding.get(row);
+        return missing ? `<${tag}></${tag}>`.repeat(this.padWithinBudget(missing)) : '';
+    }
+
+    /**
      * Renders a table's rows with an HTML grid-occupancy model, so a cell's `rowSpan` reserves its
      * column in the rows below rather than letting the plain per-row gap-filler shift the cells that
      * sit under it. Returns one `<tr>…</tr>` string per row (row 0's `<td>`s are promoted to `<th>`
@@ -610,6 +641,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         let headerRowEmitted = false;
         // grid column -> number of rows it stays occupied by a rowspan started above this row.
         const carry = new Map<number, number>();
+        // Each row as written and the columns it reaches (its cells, and cells spanned into it from above),
+        // so a shorter row ends in empty cells at the table's width.
+        const built: { tr: string; reach: number; header: boolean; at: number }[] = [];
         for (let r = 0; r < rows.length; r++) {
             // This path builds each <tr> itself rather than recursing into the row node, so the row
             // has to be offered to `onNode` here or it would be the one node type the hook never saw
@@ -644,11 +678,19 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 col += cSpan;
                 ci++;
             }
+            let reach = col;
+            for (const c of carry.keys()) reach = Math.max(reach, c + 1);
             // Age existing carries by one row, then fold in rowspans this row started.
             for (const [c, v] of [...carry.entries()]) { if (v > 1) carry.set(c, v - 1); else carry.delete(c); }
             for (const [c, v] of newCarry) carry.set(c, v);
-            out.push(`<tr>${tr}</tr>`);
+            built.push({ tr, reach, header: headerFirst && r === 0, at: out.length });
+            out.push('');
             if (r === 0) headerRowEmitted = true;
+        }
+        const width = Math.min(MAX_LAYOUT_COLUMNS, Math.max(0, ...built.map(b => b.reach)));
+        for (const { tr, reach, header, at } of built) {
+            const tag = header ? 'th' : 'td';
+            out[at] = `<tr>${tr}${`<${tag}></${tag}>`.repeat(reach > 0 && reach < width ? this.padWithinBudget(width - reach) : 0)}</tr>`;
         }
         return { trs: out, headerRowEmitted };
     }
@@ -838,6 +880,13 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
      * Overridden to handle children using processNodeArray for list grouping.
      */
     private tableNestingLevel = 0;
+    /**
+     * The empty cells each row of a table without row spans ends with, to reach the table's width: a row
+     * shorter than the others (a form's row of two labels beside a row of four) left its table's columns
+     * out of line, where Markdown, CSV and LaTeX output pad it. Taken from the document's budget when
+     * written (see padWithinBudget).
+     */
+    private readonly rowPadding = new WeakMap<OfficeContentNode, number>();
     /** How many paragraphs or headings are being written: a picture in one is written inline. */
     private inlineDepth = 0;
     /** Whether the node being written comes right after a page (a PDF's), which breaks the page after it itself. */
@@ -891,6 +940,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
         const isTable = node.type === 'table' || node.type === 'sheet';
         if (isTable) this.tableNestingLevel++;
+        if (node.type === 'table' && !this.tableHasRowSpan(node)) this.planRowPadding(node);
 
         // A paragraph holding a block (a code block's <pre>, a display equation's <div>) is written as
         // its parts, since HTML cannot nest a block in a <p>: a DOM parser closes the paragraph at it,
@@ -1227,7 +1277,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // Among the blocks too its id is on the <img>, after the anchors of its other ids, as they
                 // are read back: on the wrapper it was read after them, and the order flipped each save.
                 const img = imgWithId(idAttr);
-                let content = this.config.includeFormatting ? `<div class="image-container">${img}<div class="caption">${this.escape(attachmentName || '')}</div></div>` : img;
+                // No caption under it: its file name is not one, and no other writer shows it.
+                let content = this.config.includeFormatting ? `<div class="image-container">${img}</div>` : img;
                 // image+ocr-text: the image, then its recognized text (a <pre> keeps the 2-D layout).
                 if (mode === 'image+ocr-text' && ocr) content += `<pre class="ocr-text">${this.escape(ocr)}</pre>`;
                 return `${extraAnchors}<div>${content}</div>`;
@@ -1450,7 +1501,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                                     cellHtml = cellHtml.replace(/<td/, '<th').replace(/<\/td>$/, '</th>');
                                     tr += cellHtml;
                                 }
-                                headInner = `<tr>${tr}</tr>`;
+                                headInner = `<tr>${tr}${this.rowPaddingCells(firstRow, 'th')}</tr>`;
                             }
                             const bodyOutput = await this.processNodeArray(rows.slice(1));
                             finalChildren = `<thead>${headInner}</thead><tbody>${bodyOutput}</tbody>`;
@@ -1496,10 +1547,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                             const colSpan = (cell.metadata as any)?.colSpan || 1;
                             lastCol = currentCol + colSpan - 1;
                         }
-                        return `<tr${idAttr}${className}${mappedAttrs}${styleAttr}>${sparseChildren}</tr>`;
+                        return `<tr${idAttr}${className}${mappedAttrs}${styleAttr}>${sparseChildren}${this.rowPaddingCells(node)}</tr>`;
                     }
                 }
-                return `<tr${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</tr>`;
+                return `<tr${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}${this.rowPaddingCells(node)}</tr>`;
             }
 
             case 'cell': {
@@ -2471,7 +2522,6 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             }
 
             .image-container { text-align: center; margin: 30px 0; }
-            .caption { font-size: 0.8em; color: #636e72; margin-top: 8px; font-style: italic; }
             .ocr-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85em; line-height: 1.4; white-space: pre; overflow-x: auto; margin: 8px 0; color: #2d3436; }
             
             body { margin: 0; padding: 0; }
