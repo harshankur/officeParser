@@ -1727,11 +1727,6 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     };
     if (typeof info?.Language === 'string') metadata.language = info.Language as string;
 
-    const standardPdfInfoKeys = new Set([
-        'Title', 'Author', 'Subject', 'Keywords', 'Creator', 'Producer',
-        'CreationDate', 'ModDate', 'Trapped', 'IsAcroFormPresent', 'IsXFAPresent',
-        'IsCollectionPresent', 'IsSignaturesPresent', 'PDFFormatVersion'
-    ]);
     if (info) {
         metadata.nativeProperties = {};
         for (const [key, val] of Object.entries(info)) {
@@ -1741,19 +1736,17 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
                 setOwn(metadata.nativeProperties, key, val);
             }
         }
+        // A document's own properties are the Info dictionary's keys beyond the standard ones, which
+        // pdf.js gives as `Custom`. The rest of what it gives is standard (Title, Producer, ...) or read
+        // from the file's structure (IsLinearized, IsAcroFormPresent, PDFFormatVersion, Language): no
+        // property its author set, and written out as one it put `IsLinearized: false` in every output.
         const customProperties: Record<string, string | number | boolean | Date> = {};
-        for (const key of Object.keys(info)) {
-            if (standardPdfInfoKeys.has(key)) continue;
-            const val = info[key];
-            if (val === null || val === undefined) continue;
-            if (key === 'Custom' && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Date)) {
-                for (const [ck, cv] of Object.entries(val)) {
-                    if (cv === null || cv === undefined) continue;
-                    if (typeof cv === 'string' || typeof cv === 'number' || typeof cv === 'boolean' || cv instanceof Date) setOwn(customProperties, ck, cv);
-                }
-                continue;
+        const custom = info.Custom;
+        if (custom && typeof custom === 'object' && !Array.isArray(custom) && !(custom instanceof Date)) {
+            for (const [ck, cv] of Object.entries(custom)) {
+                if (cv === null || cv === undefined) continue;
+                if (typeof cv === 'string' || typeof cv === 'number' || typeof cv === 'boolean' || cv instanceof Date) setOwn(customProperties, ck, cv);
             }
-            if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean' || val instanceof Date) setOwn(customProperties, key, val);
         }
         if (Object.keys(customProperties).length > 0) metadata.customProperties = customProperties;
     }
@@ -1793,7 +1786,9 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             const fields: Record<string, unknown> = {};
             for (const name of Object.keys(fieldObjects)) {
                 const arr = (fieldObjects as any)[name];
-                const f = Array.isArray(arr) ? arr[0] : arr;
+                // A field with widgets is listed as the field itself (no type, no value) then each of its
+                // widgets, which carry the type and value: the first entry with a type is the field's.
+                const f = Array.isArray(arr) ? (arr.find((e: any) => e && typeof e === 'object' && e.type) ?? arr[0]) : arr;
                 if (!f || typeof f !== 'object') continue;
                 const entry: Record<string, unknown> = { value: f.value, type: f.type };
                 if (f.defaultValue !== undefined && f.defaultValue !== null) entry.defaultValue = f.defaultValue;
