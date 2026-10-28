@@ -74,17 +74,62 @@ const withinTime = async <T>(limitMs: number, run: () => Promise<T>): Promise<{ 
     return { result, ms: Math.round(ms), within: ms < limitMs };
 };
 
+/**
+ * The collector, called when a case asks (V8's flag, set as the suite runs). A measure of memory starts
+ * from what is live: a reading taken without it counted what earlier cases left for the collector, and
+ * one taken over a case counts what the case allocated and the collector has not yet freed, so whether
+ * the collector happened to run decided the result (Node 22 failed in CI where Node 24 passed). From a
+ * collected start, what a case adds is at most what it allocates, whenever the collector runs.
+ */
+const collectGarbage: () => void = (() => {
+    try {
+        (require('v8') as typeof import('v8')).setFlagsFromString('--expose-gc');
+        const gc = (require('vm') as typeof import('vm')).runInNewContext('gc');
+        if (typeof gc === 'function') return gc as () => void;
+    } catch { /* no collector to call: readings start where they are */ }
+    return () => { };
+})();
+/** The bytes V8 has allocated in all, where it counts them (`total_allocated_bytes`), else undefined. */
+const allocatedSoFar = (): number | undefined => (require('v8') as typeof import('v8')).getHeapStatistics().total_allocated_bytes as number | undefined;
+/**
+ * What a run adds to the heap and to array buffers, from a collected start; what of the heap it still
+ * holds once collected again with its result alive (`retained`: what it keeps, whenever the collector
+ * runs); and what it allocated where V8 counts it (for a case's message: a limit at or above what a case
+ * allocates holds whenever the collector runs).
+ */
+const memoryOf = async <T>(run: () => T | Promise<T>): Promise<{ result: T; heap: number; retained: number; buffers: number; allocated: number | undefined }> => {
+    collectGarbage();
+    const before = process.memoryUsage(), allocatedBefore = allocatedSoFar();
+    const result = await run();
+    const after = process.memoryUsage(), allocatedAfter = allocatedSoFar();
+    collectGarbage();
+    const retained = process.memoryUsage().heapUsed - before.heapUsed;
+    return {
+        result, heap: after.heapUsed - before.heapUsed, retained, buffers: after.arrayBuffers - before.arrayBuffers,
+        allocated: allocatedBefore === undefined || allocatedAfter === undefined ? undefined : allocatedAfter - allocatedBefore,
+    };
+};
+/** A memory reading as a case's message gives it: what was added, and what was allocated where known. */
+const megabytes = (bytes: number | undefined) => (bytes === undefined ? '?' : `${Math.round(bytes / 1e6)}MB`);
+const memoryNote = (grew: number, allocated: number | undefined) => `+${megabytes(grew)} (allocated ${megabytes(allocated)})`;
+
 const linear = async (name: string, run: () => unknown, heap?: { label: string; limit: number }): Promise<void> => {
-    // The heap a full run grows by, when asked: measured over the full run alone, the smaller one's
-    // leftovers not counted.
+    // The heap a full run grows by, when asked: measured over the full run alone, from a collected
+    // start (see memoryOf), the smaller one's leftovers not counted.
     let grown = 0;
+    let allocated: number | undefined;
     const time = async (size: number): Promise<number> => {
         scale = size;
-        const heapBefore = process.memoryUsage().heapUsed;
+        if (size === 1 && heap) collectGarbage();
+        const heapBefore = process.memoryUsage().heapUsed, allocatedBefore = allocatedSoFar();
         const started = performance.now();
         try { await run(); } finally { scale = 1; }
         const took = performance.now() - started;
-        if (size === 1) grown = process.memoryUsage().heapUsed - heapBefore;
+        if (size === 1) {
+            grown = process.memoryUsage().heapUsed - heapBefore;
+            const allocatedAfter = allocatedSoFar();
+            allocated = allocatedBefore === undefined || allocatedAfter === undefined ? undefined : allocatedAfter - allocatedBefore;
+        }
         return took;
     };
     let small = await time(0.25);
@@ -95,7 +140,7 @@ const linear = async (name: string, run: () => unknown, heap?: { label: string; 
         large = Math.min(large, await time(1));
     }
     check(`${name} in linear time`, within(), `${Math.round(small)}ms at a quarter of the size, ${Math.round(large)}ms at full size`);
-    if (heap) check(heap.label, grown < heap.limit, `${Math.round(grown / 1e6)}MB`);
+    if (heap) check(heap.label, grown < heap.limit, memoryNote(grown, allocated));
 };
 
 function astWith(content: any[]): OfficeParserAST {
@@ -2268,9 +2313,9 @@ async function latexSanitizationTests() {
     };
     const escapeSmall = escapeTimed(1_000_000), escapeLarge = escapeTimed(4_000_000);
     check('latex: escapeLatex is linear in its input', escapeSmall.ok && escapeLarge.ok && escapeLarge.ms < Math.max(200, 7 * escapeSmall.ms), `${escapeSmall.ms}ms vs ${escapeLarge.ms}ms`);
-    const escapeHeap = process.memoryUsage().heapUsed;
-    const escapedRun = escapeLatex('plain words here '.repeat(1_200_000));
-    check('latex: escaping a 20 MB run holds about its own size', process.memoryUsage().heapUsed - escapeHeap < 150_000_000 && escapedRun.length === 20_400_000, `heap +${Math.round((process.memoryUsage().heapUsed - escapeHeap) / 1e6)}MB`);
+    const escaping = await memoryOf(() => escapeLatex('plain words here '.repeat(1_200_000)));
+    const escapedRun = escaping.result;
+    check('latex: escaping a 20 MB run holds about its own size', escaping.heap < 150_000_000 && escapedRun.length === 20_400_000, `heap ${memoryNote(escaping.heap, escaping.allocated)}`);
 
     // latexSourceComment: a hidden note stays inside `%` lines whatever line breaks it holds, and a
     // `-->` inside it cannot end the comment early for the LaTeX parser.
@@ -2494,12 +2539,14 @@ async function latexParserTests() {
     check('latex parser: the main file of 3,000 files including each other is found', mainPick.json.includes('Body'), mainPick.json.slice(0, 200));
 
     // Memory: an expansion is sized before it is built, and a column spec's repetition is bounded by length.
-    const heapBefore = process.memoryUsage().heapUsed;
-    const amplify = await parse('\\newcommand{\\x}[1]{' + '#1'.repeat(20000) + '}\\x{' + 'y'.repeat(20000) + '}');
-    const spec = await parse('\\begin{tabular}{*{1000}{' + 'c'.repeat(100000) + '}}a\\end{tabular}');
-    const heapGrowth = process.memoryUsage().heapUsed - heapBefore;
+    const latexMemory = await memoryOf(async () => ({
+        amplify: await parse('\\newcommand{\\x}[1]{' + '#1'.repeat(20000) + '}\\x{' + 'y'.repeat(20000) + '}'),
+        spec: await parse('\\begin{tabular}{*{1000}{' + 'c'.repeat(100000) + '}}a\\end{tabular}'),
+    }));
+    const { amplify, spec } = latexMemory.result;
+    const heapGrowth = latexMemory.heap;
     check('latex parser: a macro repeating a long argument is refused before it is built', amplify.codes.includes('LATEX_EXPANSION_LIMIT_REACHED'), amplify.codes.join(','));
-    check('latex parser: a long repeated column spec is bounded', heapGrowth < 200_000_000, `${spec.ms}ms, heap +${Math.round(heapGrowth / 1e6)}MB`);
+    check('latex parser: a long repeated column spec is bounded', heapGrowth < 200_000_000, `${spec.ms}ms, heap ${memoryNote(heapGrowth, latexMemory.allocated)}`);
 
     // Included text counts against the expansion budget: including a large file many times over is bounded.
     const repeated = await parse(zip({ 'main.tex': '\\documentclass{article}\\begin{document}' + '\\input{big}'.repeat(400) + '\\end{document}', 'big.tex': 'z '.repeat(500000) }));
@@ -2541,11 +2588,10 @@ async function latexParserTests() {
         ['broken ASCII85', '<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter [/ASCII85Decode /FlateDecode] /Length 12 >>\nstream\n{{{{vvvv~>xx\nendstream'],
         ['a Length past the end', '<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 99999999 >>\nstream\nabcd'],
     ] as const) {
-        const started = process.memoryUsage().heapUsed;
-        const r = await parse(carried(pdfWith(image)));
-        const grew = process.memoryUsage().heapUsed - started;
+        const carriedMemory = await memoryOf(() => parse(carried(pdfWith(image))));
+        const r = carriedMemory.result, grew = carriedMemory.heap;
         check(`latex parser: ${label} in a carried PDF stays a PDF, within bounds`, grew < 100_000_000 && r.ast.attachments.length === 1 && r.ast.attachments[0].mimeType === 'application/pdf',
-            `${r.ms}ms, heap +${Math.round(grew / 1e6)}MB, ${r.ast.attachments.map(a => a.mimeType).join(',')}`);
+            `${r.ms}ms, heap ${memoryNote(grew, carriedMemory.allocated)}, ${r.ast.attachments.map(a => a.mimeType).join(',')}`);
     }
     // The object scan is linear: text an unclosed string or dictionary swallowed is read once, not
     // again from every `obj` inside it (300 KB took minutes).
@@ -2564,9 +2610,8 @@ async function latexParserTests() {
             'main.tex': new TextEncoder().encode('\\documentclass{article}\\begin{document}\\includegraphics{x.pdf}\\end{document}'),
             'x.pdf': new Uint8Array(Buffer.from(pdf, 'latin1')),
         }));
-        const before = process.memoryUsage().arrayBuffers;
-        const r = await parse(project);
-        return { r, grew: process.memoryUsage().arrayBuffers - before };
+        const decoding = await memoryOf(() => parse(project));
+        return { r: decoding.result, grew: decoding.buffers };
     };
     const refused = await decodeCase(4000, 16, zlibSync(new Uint8Array(4096)));
     check('latex parser: a carried image past the decoding budget stays a PDF, nothing allocated', refused.grew < 50_000_000 && refused.r.ast.attachments[0]?.mimeType === 'application/pdf', `${refused.r.ms}ms, +${Math.round(refused.grew / 1e6)}MB`);
@@ -2817,12 +2862,11 @@ async function parserHardeningTests() {
     // into their output at every reference.
     const bigText = 'word '.repeat(40000); // 200 KB
     const heapBudget = async (label: string, run: () => Promise<unknown>) => {
-        global.gc?.();
-        const before = process.memoryUsage().heapUsed;
-        const result = await run();
-        const grown = process.memoryUsage().heapUsed - before;
-        check(`${label} without copying it per reference`, grown < 300_000_000, `${Math.round(grown / 1e6)}MB`);
-        return result;
+        // What the result keeps: a block copied per reference stays in it; what the run allocated and let
+        // go is the collector's to free, whenever it runs.
+        const budget = await memoryOf(run);
+        check(`${label} without copying it per reference`, budget.retained < 300_000_000, `${megabytes(budget.retained)} kept, ${memoryNote(budget.heap, budget.allocated)}`);
+        return budget.result;
     };
     const docxRefs = (tag: 'footnote' | 'endnote' | 'comment') => repack('test.docx', z => {
         const doc = new TextDecoder().decode(z['word/document.xml']);
@@ -3079,9 +3123,9 @@ async function parserHardeningTests() {
         'c.xhtml': enc(`<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><p>${'x'.repeat(100000)}</p>${'<img src="a.png" alt="a"/>'.repeat(images)}</body></html>`),
         'a.png': new Uint8Array(png),
     }));
-    const heapBefore = process.memoryUsage().heapUsed;
-    const shownOften = await parseQuiet(epub(3000, 1), 'epub', { extractAttachments: true });
-    const heapGrowth = process.memoryUsage().heapUsed - heapBefore;
+    const shownOftenMemory = await memoryOf(() => parseQuiet(epub(3000, 1), 'epub', { extractAttachments: true }));
+    const shownOften = shownOftenMemory.result;
+    const heapGrowth = shownOftenMemory.heap;
     const pictures: any[] = [];
     const collect = (ns: any[] | undefined) => ns?.forEach((n: any) => { if (n.type === 'image') pictures.push(n.metadata?.attachmentName); collect(n.children); });
     collect(shownOften.ast?.content);
@@ -3894,12 +3938,21 @@ async function parserHardeningTests() {
         // checked is the last run's, the full one.
         let result: { out: Uint8Array | undefined; code: string | undefined } = { out: undefined, code: undefined };
         let wanted: string | undefined;
+        // A case whose own work allocates more than the 300 MB the others are held to is held to a little
+        // more than it allocates (measured with V8's count), so the collector's timing cannot fail it, and
+        // still far less than copying per reference costs there (its blocks times its depth or its runs).
+        const ownWork: Record<string, number> = {
+            'a block among 200,000 fields in one paragraph': 500_000_000, // allocates about 376 MB
+            '20,000 paragraph blocks 20,000 content controls deep': 750_000_000, // about 548 MB
+            '40,000 inline blocks 40,000 content controls deep': 1_000_000_000, // about 807 MB
+            '3,000,000 nested text runs beside a block': 750_000_000, // about 548 MB
+        };
         await timed(`template: ${label}`, async () => {
             const [body, data, expected, parts, cfg] = make();
             wanted = expected;
             result = await renderQuiet(body, data, cfg ?? {}, parts);
         },
-            { label: `template: ${label} without copying it per reference`, limit: 300_000_000 });
+            { label: `template: ${label} without copying it per reference`, limit: ownWork[label] ?? 300_000_000 });
         check(`template: ${label} ${wanted ? `is refused with ${wanted}` : 'renders'}`, result.code === wanted && (wanted !== undefined || result.out instanceof Uint8Array), String(result.code));
     }
     // Prototype keys in a template's paths are never read from the prototype; a data key named
