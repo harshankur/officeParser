@@ -9,7 +9,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { strFromU8, unzipSync, unzlibSync, zipSync, zlibSync } from 'fflate';
+import { strFromU8, Unzlib, unzipSync, unzlibSync, zipSync, zlibSync } from 'fflate';
 import { PDFDocument, PDFName, PDFRawStream } from 'pdf-lib';
 import { OfficeGenerator } from '../../src/OfficeGenerator';
 import { OfficeParser } from '../../src/OfficeParser';
@@ -4255,10 +4255,24 @@ async function pdfProcessTests(h: {
     const quarterGigabyte = (require('zlib') as typeof import('zlib')).deflateSync(Buffer.alloc(256 * 1024 * 1024, 0x20), { level: 9 });
     const bombDoc = pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>', '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>',
         Buffer.concat([Buffer.from(`<< /Length ${quarterGigabyte.length} /Filter /FlateDecode >>\nstream\n`), quarterGigabyte, Buffer.from('\nendstream')])]);
-    const buffersBefore = process.memoryUsage().arrayBuffers, inflateStarted = performance.now();
-    new MarkedContent(new Uint8Array(bombDoc), 1).eventsOf(0);
-    const inflateMs = performance.now() - inflateStarted, inflateGrew = process.memoryUsage().arrayBuffers - buffersBefore;
-    check('pdf: a stream inflating to 256 MB is read no further than the inflate bound', inflateMs < 1500 && inflateGrew < 200e6, `${Math.round(inflateMs)}ms ${Math.round(inflateGrew / 1e6)}MB`);
+    // What the inflater is given and gives, counted as it runs: the memory a process reports includes what
+    // the collector has yet to free, so it measured the collector's timing (Node 22 failed, Node 24 passed).
+    const push = Unzlib.prototype.push;
+    let fedBytes = 0, largestFeed = 0, inflatedBytes = 0;
+    Unzlib.prototype.push = function (this: any, chunk: Uint8Array, final?: boolean) {
+        fedBytes += chunk.length;
+        largestFeed = Math.max(largestFeed, chunk.length);
+        const ondata = this.ondata;
+        this.ondata = (data: Uint8Array, last: boolean) => { inflatedBytes += data.length; ondata.call(this, data, last); };
+        try { return push.call(this, chunk, final); } finally { this.ondata = ondata; }
+    };
+    const inflateStarted = performance.now();
+    try { new MarkedContent(new Uint8Array(bombDoc), 1).eventsOf(0); } finally { Unzlib.prototype.push = push; }
+    const inflateMs = performance.now() - inflateStarted;
+    // The bound is 64 MB inflated for the document; a push of at most 8 KB gives at most about 8.5 MB more.
+    check('pdf: a stream inflating to 256 MB is read no further than the inflate bound, a small slice at a time',
+        inflateMs < 1500 && inflatedBytes <= 64 * 1024 * 1024 + 9e6 && largestFeed <= 8 * 1024 && fedBytes < quarterGigabyte.length / 2,
+        `${Math.round(inflateMs)}ms, ${Math.round(inflatedBytes / 1e6)} MB inflated, fed ${fedBytes} of ${quarterGigabyte.length} bytes, ${largestFeed} at most`);
     check('pdf: a plan of 3,000 symbols is read whole, its paths costing none of the operator budget', !planned.error && planned.pages === 21 && planned.text.includes('Note 20.50') && !planned.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED') && !planned.codes.includes('PDF_NO_TEXT_EXTRACTED'), `${planned.pages} pages ${planned.codes} ${planned.error}`);
     const operatorChecks = async (separateProcess: boolean) => {
         const where = separateProcess ? 'separate process' : 'in process';

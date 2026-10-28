@@ -29,8 +29,12 @@ const MAX_FORM_DEPTH = 8;
 /** At most this many events a page, and for the whole document. */
 const MAX_EVENTS = 500_000;
 const MAX_DOCUMENT_EVENTS = 10_000_000;
-/** Compressed data is inflated this much at a time. */
-const INFLATE_SLICE = 64 * 1024;
+/**
+ * Compressed data is inflated this much at a time. Deflate inflates to at most about a thousand times
+ * its size, and the inflater grows a buffer to hold all a push gives before handing it on, so a push
+ * of 8 KB holds at most some 16 MB: a 64 KB push of a run of spaces held 128 MB to give 64 MB.
+ */
+const INFLATE_SLICE = 8 * 1024;
 
 type PdfValue = number | string | boolean | null | PdfName | PdfRef | PdfValue[] | PdfDict | PdfStream | PdfString;
 class PdfName { constructor(readonly name: string) {} }
