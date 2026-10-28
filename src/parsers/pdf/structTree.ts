@@ -3,7 +3,9 @@
  *
  * pdf.js hands back a per-page tree of `{ role, children }` internal nodes and
  * `{ type: 'content', id }` leaves, where `id` is a marked-content id. Every text run collected in
- * the main pass already carries its `mcid`, so joining a leaf to its runs is a map lookup. Block
+ * the main pass already carries its `mcid`, so joining a leaf to its runs is a map lookup. A form
+ * field's widget is an `{ type: 'annotation', id }` leaf, its id the one its value's runs carry (see
+ * PdfParser's fieldRuns): read as content, its value is read at its /Form element. Block
  * text (P, Hn, list items, cells) is rebuilt with the same line/spacing/bounds logic as the
  * geometric path via {@link runsToParagraph}, so both paths produce identical run shapes.
  *
@@ -57,6 +59,8 @@ interface WalkCtx {
 
 const HEADING = /^H([1-6])$/;
 const role = (n: StructNode): string => n.role || n.type || '';
+/** A leaf naming content: marked content, or an annotation (a form field's widget, whose value is text). */
+const isLeaf = (n: StructNode): boolean => n.type === 'content' || n.type === 'annotation';
 
 /**
  * Resolves the heading level to force for a tagged heading node, honoring `headingDetection`:
@@ -115,7 +119,7 @@ function walkChildren(node: StructNode, ctx: WalkCtx, sectionDepth: number): Off
 }
 
 function walkNode(node: StructNode, ctx: WalkCtx, sectionDepth: number): OfficeContentNode[] {
-    if (node.type === 'content') {
+    if (isLeaf(node)) {
         const p = paragraphFrom(node, ctx, 0);
         return p ? [p] : [];
     }
@@ -166,7 +170,7 @@ const ALWAYS_SKIP = new Set(['Note', 'FENote']);
 function collectRuns(node: StructNode, ctx: WalkCtx, skip?: Set<string>): RawRun[] {
     const out: RawRun[] = [];
     const recurse = (n: StructNode) => {
-        if (n.type === 'content' && n.id) {
+        if (isLeaf(n) && n.id) {
             const runs = ctx.runsByMcid.get(n.id);
             if (runs) { appendAll(out, runs); ctx.covered.add(n.id); }
             return;
@@ -227,7 +231,7 @@ function findNotes(node: StructNode, skip?: Set<string>): StructNode[] {
 
 /** Marks every content leaf under a node as covered without emitting it (e.g. ignored notes). */
 function markCovered(node: StructNode, ctx: WalkCtx): void {
-    if (node.type === 'content' && node.id) ctx.covered.add(node.id);
+    if (isLeaf(node) && node.id) ctx.covered.add(node.id);
     for (const c of node.children || []) markCovered(c, ctx);
 }
 

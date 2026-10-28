@@ -52,6 +52,13 @@ export interface RawRun {
     formatting: TextFormatting;
     /** Hyperlink metadata resolved from annotations, if any. */
     link?: TextMetadata;
+    /**
+     * A form field's value, not the page's own text: a text or choice field's value, or the characters of
+     * a row of boxes drawn one to a character (a comb, see rulings), as 'text'; a check box's or radio
+     * button's state as 'box'. Its size does not count towards the page's sizes, it is never a heading,
+     * and it is read on the line of the label beside it (see textLayout).
+     */
+    formField?: 'text' | 'box';
 }
 
 /** A contiguous span of text on a single visual line, with its own box and formatting. */
@@ -81,6 +88,8 @@ export interface PdfLine {
     rtl?: boolean;
     /** The x of a column gutter the line was cut at, beside it (see textLayout's columnGutters). */
     gutter?: number;
+    /** True when the line's text is form field values alone (see RawRun.formField): it is never a heading. */
+    formField?: boolean;
 }
 
 /** An image placed on a page, in viewport space. */

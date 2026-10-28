@@ -35,6 +35,18 @@ export function toMatrix6(m: any): number[] | null {
     return [+m[0], +m[1], +m[2], +m[3], +m[4], +m[5]];
 }
 
+/**
+ * The matrix an annotation's appearance is drawn under, from `beginAnnotation`'s operands (its id, its
+ * rectangle, the matrix placing its appearance in that rectangle, and its rotation's): pdf.js draws it
+ * from the page's own space, whatever the page's content left in force. Read as the page's content,
+ * a widget's box and a stamp's picture were drawn at the page's corner.
+ */
+export function annotationMatrix(args: any): number[] {
+    let m = identityMatrix();
+    for (const part of [toMatrix6(args?.[2]), toMatrix6(args?.[3])]) if (part && part.every(Number.isFinite)) m = mulMatrix(m, part);
+    return m;
+}
+
 /** Rounds to 2 decimals, collapsing -0 to 0. */
 export function round2(n: number): number {
     const r = Math.round(n * 100) / 100;

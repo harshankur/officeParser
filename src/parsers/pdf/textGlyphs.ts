@@ -19,7 +19,7 @@
  * @module parsers/pdf/textGlyphs
  */
 
-import { identityMatrix, mulMatrix as mul, toMatrix6 as toMat6 } from './geometry.js';
+import { annotationMatrix, identityMatrix, mulMatrix as mul, toMatrix6 as toMat6 } from './geometry.js';
 
 /** What the walk needs to know of a font: its matrix (glyph space to text space) and its writing. */
 export interface GlyphFont {
@@ -142,6 +142,9 @@ export function collectGlyphs(ops: any, OPS: any, fontOf: (id: string) => GlyphF
                 break;
             }
             case OPS.paintFormXObjectEnd: { const r = stack.pop(); if (r) s = r; break; }
+            // An annotation's appearance, in its own place on the page (see annotationMatrix).
+            case OPS.beginAnnotation: stack.push({ ...s }); s = { ...s, ctm: annotationMatrix(a) }; break;
+            case OPS.endAnnotation: { const r = stack.pop(); if (r) s = r; break; }
 
             // Fill / stroke color: all spaces arrive pre-normalized to an *RGBColor hex string.
             case OPS.setFillRGBColor: s.fill = typeof a?.[0] === 'string' ? a[0] : undefined; break;

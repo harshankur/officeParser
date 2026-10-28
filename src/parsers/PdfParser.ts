@@ -45,7 +45,7 @@ import { collectGlyphs, GlyphFont, PageGlyphs } from './pdf/textGlyphs.js';
 import { collectShapes, PdfShape, shapeBullets } from './pdf/pdfShapes.js';
 import { MarkedContent, readableItems } from './pdf/actualText.js';
 import { RuledFrame, ruledFrames, ruledTables, shadeCells } from './pdf/rulings.js';
-import { computeRunBox, identityMatrix, mulMatrix, roundBounds, rotateBoundsToRendered, toMatrix6, unionAll } from './pdf/geometry.js';
+import { annotationMatrix, computeRunBox, identityMatrix, mulMatrix, roundBounds, rotateBoundsToRendered, toMatrix6, unionAll } from './pdf/geometry.js';
 import { PageExtract, PdfImage, PdfLayoutConfig, RawRun, ResolvedFont } from './pdf/pdfTypes.js';
 import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, emitBounds, indentLevels as indentLevelsOf, joinMarkerLines, leadingMarker, ListCarry, markerLefts, PageContext, lineDirections, recoverTaggedGrids, rightToLeftLean, relevelHeadings, runsToParagraph, segmentIntoBlocks } from './pdf/textLayout.js';
 import { buildTaggedNodes } from './pdf/structTree.js';
@@ -83,6 +83,75 @@ interface ResolvedHighlight {
     /** Rect in layout (rotation-0) viewport space: [minX, minY, maxX, maxY]. */
     rect: [number, number, number, number];
     color: string;
+}
+
+/**
+ * A form field's widget whose value is read as text (see fieldValueOf), placed at its box by fieldRuns.
+ * Its drawing is left out of the page's (see withoutFieldDrawings): the value is its text.
+ */
+interface ResolvedField {
+    /** pdf.js's id of the widget (its object's), as `beginAnnotation` and the tag tree name it. */
+    id: string;
+    /** Rect in layout (rotation-0) viewport space: [minX, minY, maxX, maxY]. */
+    rect: [number, number, number, number];
+    /** 'box' for a check box's or radio button's state, else 'text'. */
+    kind: 'text' | 'box';
+    text: string;
+    /** The size the field sets its value in (its /DA), 0 where it sizes it to its box. */
+    fontSize: number;
+    /** The colour it sets its value in (its /DA), as `#rrggbb`. */
+    color?: string;
+    /** A field of several lines, set from its box's top; else on its middle. */
+    multiLine: boolean;
+    /** A comb field's boxes (its /MaxLen), its characters one to a box; 0 for any other. */
+    combCells: number;
+    /** Its /Q: 0 at its box's left, 1 centred, 2 at its right. */
+    align: number;
+    /** How far its value is turned on the page (its /MK /R), in degrees clockwise. */
+    turn: number;
+}
+
+/** A ticked and an unticked check box or radio button, as a value of the text (U+2612, U+2610). */
+const TICKED_BOX = '\u2612';
+const UNTICKED_BOX = '\u2610';
+
+/**
+ * What a form field's widget shows, as text, or undefined where it shows nothing to read: a text field's
+ * value (a password field's as a bullet for each character, as the page shows it), a check box or radio
+ * button as ticked or not (U+2612, U+2610; ticked where the field's value is its widget's own state), a
+ * choice field's selected options as they are shown (their display text, several joined by commas). Not
+ * a hidden widget, a push button (a button's caption is its drawing) or a signature, nor a field of no value.
+ */
+function fieldValueOf(annot: any): { kind: 'text' | 'box'; text: string } | undefined {
+    if (annot?.subtype !== 'Widget' || annot.hidden || !annot.rect) return undefined;
+    if (annot.fieldType === 'Tx') {
+        const value = typeof annot.fieldValue === 'string' ? annot.fieldValue : '';
+        if (!value) return undefined;
+        if (!annot.password) return { kind: 'text', text: value };
+        let shown = 0;
+        for (const ch of value) if (ch !== '\n' && ch !== '\r') shown++;
+        return { kind: 'text', text: '\u2022'.repeat(shown) };
+    }
+    if (annot.fieldType === 'Btn') {
+        if (annot.pushButton) return undefined;
+        if (annot.checkBox) return { kind: 'box', text: annot.exportValue !== undefined && annot.fieldValue === annot.exportValue ? TICKED_BOX : UNTICKED_BOX };
+        if (annot.radioButton) return { kind: 'box', text: annot.buttonValue !== undefined && annot.fieldValue === annot.buttonValue ? TICKED_BOX : UNTICKED_BOX };
+        return undefined;
+    }
+    if (annot.fieldType === 'Ch') {
+        const values: unknown[] = Array.isArray(annot.fieldValue) ? annot.fieldValue : [annot.fieldValue];
+        // (Each option's display text by its value, the first of a value: looked up through the options for
+        // each value, a list of many of both took time in the square of the field.)
+        const display = new Map<string, string>();
+        for (const o of Array.isArray(annot.options) ? annot.options : []) {
+            if (o && typeof o.exportValue === 'string' && typeof o.displayValue === 'string' && o.displayValue && !display.has(o.exportValue)) display.set(o.exportValue, o.displayValue);
+        }
+        const shown: string[] = [];
+        for (const value of values) if (typeof value === 'string' && value) shown.push(display.get(value) ?? value);
+        const text = shown.join(', ');
+        return text ? { kind: 'text', text } : undefined;
+    }
+    return undefined;
 }
 
 /** An internal destination: the 0-based target page and its top y in PDF user space (y-up), if any. */
@@ -368,37 +437,60 @@ function highlightRects(viewport: any, annot: any): [number, number, number, num
     return annot.rect ? [toViewportRect(viewport, annot.rect)] : [];
 }
 
-/** The most distinct links, and highlight areas, read from one page (see resolveAnnotations). */
+/** The most distinct links, highlight areas, and form fields, read from one page (see resolveAnnotations). */
 const MAX_PAGE_ANNOTATIONS = 1000;
 
 /**
- * Resolves a page's Link and Highlight annotations. Links become geometry + hyperlink metadata
+ * Resolves a page's Link, Highlight and Widget annotations. Links become geometry + hyperlink metadata
  * (honoring config flags); highlights become per-quad viewport rects carrying their color, so a run
- * they cover gets a `backgroundColor`. Both come from the single `getAnnotations()` call.
+ * they cover gets a `backgroundColor`; a form field's widget becomes its value at its box (see
+ * fieldValueOf), read as the page's text. All come from the single `getAnnotations()` call.
  */
 async function resolveAnnotations(
     page: any, viewport: any, pdfDocument: any, config: FullOfficeParserConfig,
     destCache: Map<string, SectionTarget | null>, sectionLinks: SectionLinks, work: PdfWorkBudget,
-): Promise<{ links: ResolvedLink[]; highlights: ResolvedHighlight[] }> {
+): Promise<{ links: ResolvedLink[]; highlights: ResolvedHighlight[]; fields: ResolvedField[] }> {
     const links: ResolvedLink[] = [];
     const highlights: ResolvedHighlight[] = [];
-    if (!work.annotationsAllowed) return { links, highlights };
+    const fields: ResolvedField[] = [];
+    if (!work.annotationsAllowed) return { links, highlights, fields };
     let annots: any[];
     try {
         const read = await work.within(page.getAnnotations() as Promise<any[]>);
-        if (!read) return { links, highlights };
+        if (!read) return { links, highlights, fields };
         annots = read;
     } catch (e) {
         logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, config, page.pageNumber, e, { page: page.pageNumber });
-        return { links, highlights };
+        return { links, highlights, fields };
     }
     annots = annots.slice(0, work.takeAnnotations(annots.length, page.pageNumber));
-    // Each distinct highlight quad and link once, and at most MAX_PAGE_ANNOTATIONS of each: every run on
-    // the page is matched against them, so a page listing one annotation many times, or a highlight of
-    // a huge QuadPoints array, took time in the square of the page.
-    const seenHighlights = new Set<string>(), seenLinks = new Set<string>();
+    // Each distinct highlight quad, link and field once, and at most MAX_PAGE_ANNOTATIONS of each: every
+    // run on the page is matched against them, so a page listing one annotation many times, or a highlight
+    // of a huge QuadPoints array, took time in the square of the page.
+    const seenHighlights = new Set<string>(), seenLinks = new Set<string>(), seenFields = new Set<string>();
     let capped = false;
     for (const annot of annots) {
+        if (annot.subtype === 'Widget') {
+            const value = fieldValueOf(annot);
+            const id = typeof annot.id === 'string' ? annot.id : undefined;
+            if (!value || !id || seenFields.has(id)) continue;
+            if (fields.length >= MAX_PAGE_ANNOTATIONS) { capped = true; continue; }
+            seenFields.add(id);
+            const da = annot.defaultAppearanceData;
+            const size = Number(da?.fontSize);
+            const rotation = ((Math.round(Number(annot.rotation) / 90) * 90 % 360) + 360) % 360 || 0;
+            fields.push({
+                id, rect: toViewportRect(viewport, annot.rect), kind: value.kind, text: value.text,
+                fontSize: Number.isFinite(size) && size > 0 ? size : 0,
+                color: rgbArrayToHex(da?.fontColor),
+                multiLine: !!annot.multiLine,
+                combCells: annot.comb && Number.isInteger(annot.maxLen) && annot.maxLen > 0 ? annot.maxLen : 0,
+                align: annot.textAlignment === 1 || annot.textAlignment === 2 ? annot.textAlignment : 0,
+                // (Its /R turns it counter-clockwise.)
+                turn: (360 - rotation) % 360,
+            });
+            continue;
+        }
         if (annot.subtype === 'Highlight') {
             // A highlight with no /C renders yellow (pdf.js synthesizes that appearance), so mirror it.
             const color = rgbArrayToHex(annot.color) ?? '#ffff00';
@@ -432,8 +524,8 @@ async function resolveAnnotations(
             links.push({ rect, meta });
         }
     }
-    if (capped) logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, config, page.pageNumber, `the page has more than ${MAX_PAGE_ANNOTATIONS} distinct links or highlight areas; the rest were not read`, { page: page.pageNumber });
-    return { links, highlights };
+    if (capped) logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, config, page.pageNumber, `the page has more than ${MAX_PAGE_ANNOTATIONS} distinct links, highlight areas or form fields; the rest were not read`, { page: page.pageNumber });
+    return { links, highlights, fields };
 }
 
 /** Finds the highlight color covering a run: its vertical midpoint inside a quad with horizontal overlap. */
@@ -1006,7 +1098,7 @@ const shapeOperatorsCache = new WeakMap<object, Set<number>>();
 const shapeOperators = (OPS: any): Set<number> => {
     let kept = shapeOperatorsCache.get(OPS);
     if (!kept) {
-        kept = new Set(['save', 'restore', 'transform', 'paintFormXObjectBegin', 'paintFormXObjectEnd', 'constructPath', 'setLineWidth',
+        kept = new Set(['save', 'restore', 'transform', 'paintFormXObjectBegin', 'paintFormXObjectEnd', 'beginAnnotation', 'endAnnotation', 'constructPath', 'setLineWidth',
             'setFillRGBColor', 'setFillColorN', 'setFillTransparent', 'setStrokeRGBColor', 'setStrokeColorN', 'setStrokeTransparent',
             ...TEXT_OPERATORS].map(name => OPS[name]).filter((op): op is number => typeof op === 'number'));
         shapeOperatorsCache.set(OPS, kept);
@@ -1019,7 +1111,7 @@ const keptOperatorsCache = new WeakMap<object, Set<number>>();
 const keptOperators = (OPS: any): Set<number> => {
     let kept = keptOperatorsCache.get(OPS);
     if (!kept) {
-        kept = new Set(['save', 'restore', 'transform', 'paintFormXObjectBegin', 'paintFormXObjectEnd', 'dependency',
+        kept = new Set(['save', 'restore', 'transform', 'paintFormXObjectBegin', 'paintFormXObjectEnd', 'beginAnnotation', 'endAnnotation', 'dependency',
             'paintImageXObject', 'paintImageXObjectRepeat', 'paintInlineImageXObject',
             'setFillRGBColor', 'setFillColorN', 'setFillTransparent', 'setStrokeRGBColor', 'setStrokeColorN', 'setStrokeTransparent',
             ...TEXT_OPERATORS, 'constructPath', 'setLineWidth'].map(name => OPS[name]).filter((op): op is number => typeof op === 'number'));
@@ -1135,6 +1227,14 @@ async function collectPage(
     ops = await readOperatorList(pdfjs, page, work, config.extractAttachments || pdfCfg.extractTextColor ? 'drawing' : 'shapes', newFonts);
     for (const key of seen) if (!fontCache.has(key)) fontCache.set(key, await resolveFont(key, page.commonObjs, styles));
 
+    // Past the budget the document is closed: the page keeps the text read, without what pdf.js would read next.
+    const { links, highlights, fields } = work.spent
+        ? { links: [] as ResolvedLink[], highlights: [] as ResolvedHighlight[], fields: [] as ResolvedField[] }
+        : await resolveAnnotations(page, layoutViewport, pdfDocument, config, destCache, sectionLinks, work);
+    // A form field read as its value is not also read as its drawing: its box and a comb's dividers were
+    // ruling lines (a table of the box beside the label), and the value its appearance draws a colour.
+    if (ops && fields.length) ops = withoutFieldDrawings(ops, new Set(fields.map(f => f.id)), pdfjs.OPS);
+
     // The page's glyphs as it draws them: where each is, how far it advances, and whether it is seen (see
     // textGlyphs). The fonts the list names are in `commonObjs` once it is read.
     const glyphFonts = new Map<string, GlyphFont | undefined>();
@@ -1155,11 +1255,6 @@ async function collectPage(
     const colorFor: ColorLookup | null = (pdfCfg.extractTextColor && glyphs)
         ? makeColorLookup(collectColorMarks(glyphs.shows, layoutViewport.transform))
         : null;
-
-    // Past the budget the document is closed: the page keeps the text read, without what pdf.js would read next.
-    const { links, highlights } = work.spent
-        ? { links: [] as ResolvedLink[], highlights: [] as ResolvedHighlight[] }
-        : await resolveAnnotations(page, layoutViewport, pdfDocument, config, destCache, sectionLinks, work);
 
     // Walk items, tracking the marked-content stack for mcid / Artifact scope.
     // Each entry carries the nearest mcid and whether an Artifact encloses it, set when pushed, so a run
@@ -1252,6 +1347,9 @@ async function collectPage(
         }
     }
 
+    // The form's values, in their boxes among the page's text (see fieldRuns).
+    appendAll(runs, fieldRuns(fields, runs, pdfCfg, work, pageNumber));
+
     // OCR of page images is emitted through the attachment path (`emitImage` requires
     // extractAttachments), so collecting images for `ocr` alone would decode and then drop them.
     // Gate on extractAttachments only; `ocr` without it raised OCR_REQUIRES_ATTACHMENTS above.
@@ -1269,6 +1367,95 @@ async function collectPage(
     const shapes = ops ? collectShapes(ops, layoutViewport.transform, pdfjs.OPS) : [];
 
     return { pageNumber, width, height, authoredW, authoredH, authoredY1, rotation, runs, images, structTree, shapes };
+}
+
+/**
+ * An operator list without what is drawn for the widgets `ids` names (between their `beginAnnotation` and
+ * `endAnnotation`): the form fields read as their values (see fieldRuns).
+ */
+function withoutFieldDrawings(ops: any, ids: ReadonlySet<string>, OPS: any): any {
+    const fnArray: number[] = [], argsArray: unknown[] = [];
+    const from: number[] = ops?.fnArray ?? [], args: unknown[] = ops?.argsArray ?? [];
+    // (How deep inside a widget left out the list is: pdf.js does not nest them, a list may.)
+    let inside = 0;
+    for (let i = 0; i < from.length; i++) {
+        const fn = from[i];
+        if (inside) {
+            if (fn === OPS.beginAnnotation) inside++;
+            else if (fn === OPS.endAnnotation) inside--;
+            continue;
+        }
+        if (fn === OPS.beginAnnotation && ids.has(String((args[i] as unknown[] | undefined)?.[0]))) { inside = 1; continue; }
+        fnArray.push(fn);
+        argsArray.push(args[i]);
+    }
+    return { ...ops, fnArray, argsArray };
+}
+
+/** The share of a value's size its letters rise above its baseline, as a run's font's ascent is (see computeRunBox). */
+const FIELD_ASCENT = 0.8;
+
+/**
+ * A page's form field values (see fieldValueOf) as runs of its text, one for each line of a value, in its
+ * widget's box: a check box's state over its box, a comb field's characters across the boxes they fill, a
+ * line of text from its box's left (or centred, or at its right, as the field aligns it), on the box's
+ * middle (a field of several lines from its top, a line under another). Each is the field's own: its size
+ * (TextFormatting.size) is the field's, its colour the field's under `extractTextColor`, and its marked
+ * content its widget's, by which a tagged PDF's /Form element finds it. Laid out at the page's text size at
+ * most: a value set larger than the label beside it (a form generator sizes it to its box) took a line of
+ * its own, and a heading's place. Each line costs the text budget as a text item does.
+ */
+function fieldRuns(fields: readonly ResolvedField[], pageRuns: readonly RawRun[], pdfCfg: PdfLayoutConfig, work: PdfWorkBudget, pageNumber: number): RawRun[] {
+    const out: RawRun[] = [];
+    if (!fields.length) return out;
+    // The size most of the page's letters are set in, a half point apart.
+    const weight = new Map<number, number>();
+    for (const r of pageRuns) {
+        const n = r.angle === 0 ? r.text.trim().length : 0;
+        if (n) { const size = Math.round(r.fontSize * 2) / 2; weight.set(size, (weight.get(size) ?? 0) + n); }
+    }
+    let pageSize = 0, most = 0;
+    for (const [size, n] of weight) if (n > most) { most = n; pageSize = size; }
+    for (const f of fields) {
+        const [x0, y0, x1, y1] = f.rect;
+        const w = x1 - x0, h = y1 - y0;
+        const lines = f.kind === 'box' ? [f.text] : f.text.split(/\r\n|\r|\n/);
+        const allowed = work.takeText(lines.map(str => ({ str })));
+        // The box's height across its value's lines (its width, for a value turned a quarter).
+        const across = f.turn % 180 === 0 ? h : w;
+        // The size the field sets its value in, or one its box gives where it sets none: a mark most of the
+        // box's height, a line of text in a box of a line and a third, or 12 points in a box of several.
+        const auto = f.kind === 'box' ? 0.8 * across : f.multiLine ? Math.min(12, across / 1.35) : across / 1.35;
+        const shown = Math.min(f.fontSize > 0 ? f.fontSize : auto > 0 ? auto : 12, 10_000);
+        const size = Math.max(1, Math.min(shown, across > 0 ? across : shown, pageSize > 0 ? pageSize : shown));
+        const formatting: TextFormatting = { size: `${Math.round(shown * 2) / 2}pt` };
+        if (pdfCfg.extractTextColor && f.color && !isNearBlack(f.color)) formatting.color = f.color;
+        const stacked = f.multiLine || lines.length > 1;
+        const angle = (f.turn === 90 || f.turn === 180 || f.turn === 270 ? f.turn : 0) as RawRun['angle'];
+        for (let i = 0; i < allowed; i++) {
+            const text = lines[i];
+            if (!text) continue;
+            let x = x0, width = w, yTop = y0, height = h;
+            if (angle === 0) {
+                height = size;
+                yTop = stacked ? y0 + Math.min(2, Math.max(0, h - size)) + i * 1.15 * size : y0 + (h - size) / 2;
+                if (f.combCells) width = Math.min(w, (w / f.combCells) * [...text].length);
+                else if (f.kind === 'text') {
+                    width = Math.min(Math.max(0, w - 4), 0.5 * size * text.length);
+                    x = f.align === 1 ? x0 + (w - width) / 2 : f.align === 2 ? x1 - 2 - width : x0 + Math.min(2, w / 2);
+                }
+            }
+            const run: RawRun = {
+                text, x, yTop, yBaseline: yTop + FIELD_ASCENT * size, width, height, fontSize: size,
+                dir: 'ltr', angle, turn: f.turn, mcid: `pdfjs_internal_id_${f.id}`, inArtifact: false, formatting, formField: f.kind,
+            };
+            if (rightToLeftLean([run]) > 0) run.dir = 'rtl';
+            out.push(run);
+        }
+        // Past the text budget the document is closed (see readTextContent).
+        if (allowed < lines.length) { work.spend('maxTextItems', pageNumber); break; }
+    }
+    return out;
 }
 
 /** Extracts images from a page's operator list, positioned in layout-viewport space. */
@@ -1349,6 +1536,9 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
                 continue;
             }
             if (fn === pdfjs.OPS.paintFormXObjectEnd) { if (ctmStack.length) ctm = ctmStack.pop()!; continue; }
+            // An annotation's appearance (a stamp's picture), in its own place on the page (see annotationMatrix).
+            if (fn === pdfjs.OPS.beginAnnotation) { ctmStack.push(ctm); ctm = annotationMatrix(argsArray[j]); continue; }
+            if (fn === pdfjs.OPS.endAnnotation) { if (ctmStack.length) ctm = ctmStack.pop()!; continue; }
             if (fn === pdfjs.OPS.dependency) {
                 for (const dep of argsArray[j]) {
                     try {
@@ -1941,7 +2131,8 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             } catch { warnStruct('the tag tree could not be processed'); }
             // Coverage measures the tag tree against the page's *tagged* text, so artifact runs
             // (which by definition live outside the structure) never drag the trust signal down.
-            const textMcids = new Set(bodyRuns.filter(r => !r.inArtifact && r.text.trim() && r.mcid).map(r => r.mcid as string));
+            // (Nor do form field values, whose widgets a document need not tag: see fieldRuns.)
+            const textMcids = new Set(bodyRuns.filter(r => !r.inArtifact && !r.formField && r.text.trim() && r.mcid).map(r => r.mcid as string));
             let coveredText = 0;
             for (const m of textMcids) if (coveredMcids.has(m)) coveredText++;
             const coverage = textMcids.size ? coveredText / textMcids.size : 1;
@@ -1959,7 +2150,8 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
                     }
                     // Mid-page artifact text is expected to be outside the tag tree, so it is not
                     // evidence of a broken one: only untagged *body* text warrants the warning.
-                    if (leftover.some(r => !r.inArtifact)) warnStruct('some text on a page was outside the tag tree');
+                    // Nor is a form field's value, read from its widget, not the page's tagged content.
+                    if (leftover.some(r => !r.inArtifact && !r.formField)) warnStruct('some text on a page was outside the tag tree');
                 }
                 // Turned text the tags cover, which their lines (level text alone) leave out: after the
                 // page's text, with its angle, as the geometric path keeps it. A turned label on a slide,
@@ -2070,8 +2262,10 @@ function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext
         cfg: pdfCfg,
         content: cellRuns => blockToNodes(joinMarkerLines(buildLines(cellRuns, pdfCfg, pageCtx.rtl)), pageCtx, docCtx),
         bounds: box => emitBounds(box, pageCtx, pdfCfg),
-    }) : { tables: [], consumed: new Set<RawRun>() };
+    }) : { tables: [], consumed: new Set<RawRun>(), combs: [] as RawRun[] };
     if (ruled.consumed.size) runs = runs.filter(r => !ruled.consumed.has(r));
+    // A comb's characters, one run where its boxes are (see rulings' combRun), are read with the text.
+    if (ruled.combs.length) runs = [...runs, ...ruled.combs];
     // Tables are found before a list's markers are joined to their text: a table's first column of numbers
     // (`1.`, `2.`) joined to the cell beside it gave each row a cell fewer than its header.
     const built = buildLines(runs, pdfCfg, pageCtx.rtl);

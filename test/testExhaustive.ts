@@ -8071,6 +8071,187 @@ async function testPdfFormMetadataAndHtml(): Promise<void> {
     assert.deepStrictEqual(spannedRows.map(r => (r.match(/<t[dh]/g) ?? []).length), [3, 3, 2], `HTML: a row under a row span is padded to the width it does not reach (${spannedRows.join(' ')})`);
 }
 
+async function testPdfFormValuesAsText(): Promise<void> {
+    const inProcess = { pdfParserConfig: { separateProcess: false } };
+    const textOf = (ast: OfficeParserAST): string => ast.content.map(n => n.text).join('\n');
+    const all = (ast: OfficeParserAST): OfficeContentNode[] => { const out: OfficeContentNode[] = []; const stack = [...ast.content]; while (stack.length) { const n = stack.pop()!; out.push(n); stack.push(...(n.children ?? [])); } return out; };
+    const paragraphs = (ast: OfficeParserAST): string[] => all(ast).filter(n => n.type === 'paragraph' || n.type === 'heading').map(n => (n.text ?? '').trim()).reverse();
+
+    // A form of every kind of field, filled, beside its labels, the page asking its viewer to draw the fields.
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const page = doc.addPage([500, 700]);
+    const label = (t: string, x: number, y: number) => page.drawText(t, { x, y, size: 11, font });
+    const form = doc.getForm();
+    label('Nachname', 50, 640);
+    const name = form.createTextField('name');
+    name.setText('Mustermann');
+    // Set larger than its label (a form generator sizes a value to its box), in red.
+    name.addToPage(page, { x: 160, y: 632, width: 200, height: 26, textColor: rgb(1, 0, 0) });
+    name.setFontSize(20);
+    label('Geburtsdatum (TT MM JJJJ)', 50, 600);
+    const date = form.createTextField('date');
+    date.setMaxLength(8);
+    date.enableCombing();
+    date.setText('01052026');
+    date.addToPage(page, { x: 230, y: 594, width: 160, height: 21 });
+    const no = form.createCheckBox('no');
+    no.addToPage(page, { x: 50, y: 558, width: 12, height: 12 });
+    no.check();
+    label('Nein, trifft nicht zu.', 70, 560);
+    const yes = form.createCheckBox('yes');
+    yes.addToPage(page, { x: 50, y: 538, width: 12, height: 12 });
+    label('Ja, trifft zu.', 70, 540);
+    const choice = form.createRadioGroup('choice');
+    choice.addOptionToPage('a', page, { x: 50, y: 508, width: 12, height: 12 });
+    label('Option A', 70, 510);
+    choice.addOptionToPage('b', page, { x: 50, y: 488, width: 12, height: 12 });
+    label('Option B', 70, 490);
+    choice.select('b');
+    label('Stadt', 50, 460);
+    const city = form.createDropdown('city');
+    city.setOptions(['Berlin', 'Hamburg']);
+    city.addToPage(page, { x: 160, y: 454, width: 120, height: 20 });
+    // Its options' values other than the text they show: the value is shown as its option's text.
+    city.acroField.dict.set(PDFName.of('Opt'), doc.context.obj([[PDFHexString.fromText('B'), PDFHexString.fromText('Berlin')], [PDFHexString.fromText('HH'), PDFHexString.fromText('Hamburg')]]));
+    city.acroField.dict.set(PDFName.of('V'), PDFHexString.fromText('HH'));
+    label('Bemerkung', 50, 420);
+    const note = form.createTextField('note');
+    note.enableMultiline();
+    note.setText('Zeile eins\nZeile zwei');
+    note.addToPage(page, { x: 160, y: 380, width: 200, height: 50 });
+    label('Kennwort', 50, 340);
+    const secret = form.createTextField('secret');
+    secret.setText('geheim');
+    secret.enablePassword();
+    secret.addToPage(page, { x: 160, y: 334, width: 120, height: 20 });
+    label('Intern', 50, 300);
+    const hidden = form.createTextField('hidden');
+    hidden.setText('Verborgen');
+    hidden.addToPage(page, { x: 160, y: 294, width: 120, height: 20, hidden: true });
+    // Two fields side by side, their boxes meeting: their borders are no table.
+    label('Von', 50, 260);
+    const from = form.createTextField('from');
+    from.setText('Montag');
+    from.addToPage(page, { x: 160, y: 254, width: 100, height: 20 });
+    const to = form.createTextField('to');
+    to.setText('Freitag');
+    to.addToPage(page, { x: 260, y: 254, width: 100, height: 20 });
+    form.acroForm.dict.set(PDFName.of('NeedAppearances'), doc.context.obj(true));
+    const bytes = Buffer.from(await doc.save());
+
+    for (const config of [{ fileType: 'pdf' }, { fileType: 'pdf', extractAttachments: true, ...inProcess, pdfParserConfig: { separateProcess: false, extractTextColor: true } }]) {
+        const ast = await OfficeParser.parseOffice(bytes, config as any) as OfficeParserAST;
+        const read = paragraphs(ast);
+        const said = `(${JSON.stringify(read)})`;
+        assert.ok(read.includes('Nachname Mustermann'), `PDF form: a text field's value is read with its label ${said}`);
+        assert.ok(read.includes('Geburtsdatum (TT MM JJJJ) 01052026'), `PDF form: a comb field's value is read whole with its label ${said}`);
+        assert.ok(read.includes('☒ Nein, trifft nicht zu.') && read.includes('☐ Ja, trifft zu.'), `PDF form: a check box reads as ticked or not, before its label ${said}`);
+        assert.ok(read.includes('☐ Option A') && read.includes('☒ Option B'), `PDF form: a radio group's selected button reads as ticked ${said}`);
+        assert.ok(read.includes('Stadt Hamburg'), `PDF form: a choice field reads as the text of its selected option ${said}`);
+        const text = textOf(ast);
+        assert.ok(/Bemerkung Zeile eins\s+Zeile zwei/.test(text), `PDF form: a field of several lines reads line by line with its label ${said}`);
+        assert.ok(read.includes('Kennwort ••••••') && !text.includes('geheim'), `PDF form: a password field reads as the bullets the page shows ${said}`);
+        assert.ok(!text.includes('Verborgen'), `PDF form: a hidden field's value is not read ${said}`);
+        assert.ok(read.includes('Von Montag Freitag'), `PDF form: fields side by side read in order with their label ${said}`);
+        assert.strictEqual(text.split('Mustermann').length - 1, 1, `PDF form: a value is read once, not again from its drawing ${said}`);
+        assert.ok(!all(ast).some(n => n.type === 'heading' || n.type === 'table'), `PDF form: no value is a heading, and no field's border a table ${said}`);
+        const value = all(ast).find(n => n.type === 'text' && /Mustermann/.test(n.text ?? ''));
+        assert.strictEqual(value?.formatting?.size, '20pt', 'PDF form: a value keeps its field\'s size');
+        if ((config as any).pdfParserConfig?.extractTextColor) assert.strictEqual(value?.formatting?.color, '#ff0000', 'PDF form: a value keeps its field\'s colour under extractTextColor');
+        const markdown = String((await ast.to('md')).value);
+        assert.ok(markdown.includes('Nachname Mustermann') && markdown.includes('☒ Nein, trifft nicht zu.'), 'PDF form: the values reach Markdown');
+    }
+
+    // A comb the page draws itself: a date's digits one to a box, in boxes of a day, a month and a year, with
+    // what each group is under it. Beside it, what is no comb: a grid of two rows of letters, a row of words
+    // in like boxes, and a scale of numbers set apart with no boxes.
+    const drawn = await PDFDocument.create();
+    const dfont = await drawn.embedFont(StandardFonts.Helvetica);
+    const dpage = drawn.addPage([500, 500]);
+    const black = rgb(0, 0, 0);
+    const box = (x: number, y: number, w: number, h: number) => dpage.drawRectangle({ x, y, width: w, height: h, borderColor: black, borderWidth: 0.5 });
+    const put = (t: string, x: number, y: number, size = 11) => dpage.drawText(t, { x, y, size, font: dfont });
+    put('Geburtsdatum', 50, 446);
+    const groups = [{ at: 230, digits: '01' }, { at: 280, digits: '05' }, { at: 330, digits: '2026' }];
+    for (const g of groups) [...g.digits].forEach((d, k) => { box(g.at + 18 * k, 440, 18, 18); put(d, g.at + 18 * k + 5, 444, 14); });
+    put('Tag', 230, 430, 7); put('Monat', 280, 430, 7); put('Jahr', 330, 430, 7);
+    put('Raster', 50, 376);
+    for (const [row, letters] of [[0, 'ABCD'], [1, 'EFGH']] as [number, string][]) [...letters].forEach((c, k) => { box(230 + 18 * k, 380 - 18 * row, 18, 18); put(c, 235 + 18 * k, 384 - 18 * row); });
+    put('Antwort', 50, 306);
+    ['Ja', 'Nein', 'Vielleicht'].forEach((word, k) => { box(230 + 40 * k, 300, 40, 24); put(word, 233 + 40 * k, 308, 8); });
+    // A comb inside a table's cell, beside its label's cell: the cell's.
+    for (const y of [220, 200, 170]) dpage.drawLine({ start: { x: 50, y }, end: { x: 400, y }, thickness: 0.75, color: black });
+    for (const x of [50, 180, 400]) dpage.drawLine({ start: { x, y: 170 }, end: { x, y: 220 }, thickness: 0.75, color: black });
+    put('Name', 55, 206); put('Erika', 185, 206); put('Geboren', 55, 180);
+    [...'01052026'].forEach((d, k) => { box(190 + 18 * k, 175, 18, 18); put(d, 195 + 18 * k, 179, 14); });
+    put('Bewertung', 50, 250);
+    ['1', '2', '3', '4', '5'].forEach((n, k) => put(n, 130 + 14 * k, 250));
+    const drawnAst = await OfficeParser.parseOffice(Buffer.from(await drawn.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
+    const drawnRead = paragraphs(drawnAst);
+    const drawnSaid = `(${JSON.stringify(drawnRead)})`;
+    assert.ok(drawnRead.includes('Geburtsdatum 01 05 2026'), `PDF comb: a date drawn a digit to a box reads as its groups, with its label ${drawnSaid}`);
+    assert.ok(drawnRead.indexOf('Geburtsdatum 01 05 2026') < drawnRead.findIndex(t => /^Tag/.test(t)), `PDF comb: and before what is under it ${drawnSaid}`);
+    assert.ok(!all(drawnAst).some(n => n.type === 'heading'), `PDF comb: its digits are no heading ${drawnSaid}`);
+    const drawnTables = all(drawnAst).filter(n => n.type === 'table').reverse();
+    const cells = (t: OfficeContentNode) => t.children!.map(r => r.children!.map(c => c.text));
+    assert.deepStrictEqual(drawnTables.map(cells), [[['A', 'B', 'C', 'D'], ['E', 'F', 'G', 'H']], [['Ja', 'Nein', 'Vielleicht']], [['Name', 'Erika'], ['Geboren', '01052026']]], `PDF comb: a grid of two rows of letters, and a row of words in like boxes, are tables; a comb in a table's cell is the cell's (${JSON.stringify(drawnTables.map(cells))})`);
+    assert.ok(drawnRead.some(t => /(^| )1 2 3 4 5$/.test(t)) && !textOf(drawnAst).includes('12345'), `PDF comb: numbers set apart with no boxes stay apart ${drawnSaid}`);
+
+    // A tagged form: a field's widget tagged as a /Form element (its OBJR) reads its value there, and a
+    // field the tags leave out reads by its place, neither making the tags look unreliable.
+    const tagged = await PDFDocument.create();
+    const tfont = await tagged.embedFont(StandardFonts.Helvetica);
+    const tpage = tagged.addPage([400, 300]);
+    const ctx = tagged.context;
+    tpage.pushOperators(PDFOperator.of('BDC' as any, [PDFName.of('P'), ctx.obj({ MCID: 0 }) as any]));
+    tpage.drawText('Wohnort', { x: 50, y: 250, size: 11, font: tfont });
+    tpage.pushOperators(PDFOperator.of('EMC' as any));
+    tpage.pushOperators(PDFOperator.of('BDC' as any, [PDFName.of('P'), ctx.obj({ MCID: 1 }) as any]));
+    tpage.drawText('Postleitzahl', { x: 50, y: 200, size: 11, font: tfont });
+    tpage.pushOperators(PDFOperator.of('EMC' as any));
+    const tform = tagged.getForm();
+    const town = tform.createTextField('town');
+    town.setText('Leipzig');
+    town.addToPage(tpage, { x: 150, y: 244, width: 150, height: 20 });
+    const zip = tform.createTextField('zip');
+    zip.setText('04109');
+    zip.addToPage(tpage, { x: 150, y: 194, width: 150, height: 20 });
+    const pageRef = tpage.ref;
+    const townWidget = town.acroField.getWidgets()[0];
+    const townRef = ctx.getObjectRef(townWidget.dict)!;
+    townWidget.dict.set(PDFName.of('StructParent'), ctx.obj(1));
+    tpage.node.set(PDFName.of('StructParents'), ctx.obj(0));
+    const rootRef = ctx.nextRef(), docRef = ctx.nextRef(), p0 = ctx.nextRef(), p1 = ctx.nextRef(), formRef = ctx.nextRef();
+    ctx.assign(p0, ctx.obj({ Type: 'StructElem', S: 'P', P: docRef, Pg: pageRef, K: 0 }));
+    ctx.assign(formRef, ctx.obj({ Type: 'StructElem', S: 'Form', P: docRef, Pg: pageRef, K: ctx.obj({ Type: 'OBJR', Obj: townRef, Pg: pageRef }) }));
+    ctx.assign(p1, ctx.obj({ Type: 'StructElem', S: 'P', P: docRef, Pg: pageRef, K: 1 }));
+    ctx.assign(docRef, ctx.obj({ Type: 'StructElem', S: 'Document', P: rootRef, K: [p0, formRef, p1] }));
+    ctx.assign(rootRef, ctx.obj({ Type: 'StructTreeRoot', K: docRef, ParentTree: ctx.obj({ Nums: [0, ctx.obj([p0, p1]), 1, formRef] }), ParentTreeNextKey: 2 }));
+    tagged.catalog.set(PDFName.of('StructTreeRoot'), rootRef);
+    tagged.catalog.set(PDFName.of('MarkInfo'), ctx.obj({ Marked: true }));
+    const taggedWarnings: string[] = [];
+    const taggedAst = await OfficeParser.parseOffice(Buffer.from(await tagged.save()), { fileType: 'pdf', ...inProcess, onWarning: (w: any) => taggedWarnings.push(String(w?.code)) } as any) as OfficeParserAST;
+    const taggedRead = paragraphs(taggedAst);
+    const taggedText = textOf(taggedAst);
+    assert.ok(taggedRead.indexOf('Wohnort') >= 0 && taggedRead.indexOf('Wohnort') < taggedRead.indexOf('Leipzig') && taggedRead.indexOf('Leipzig') < taggedRead.findIndex(t => t.startsWith('Postleitzahl')), `PDF tagged form: a value is read at its /Form element (${JSON.stringify(taggedRead)})`);
+    assert.ok(taggedText.includes('04109') && taggedText.split('Leipzig').length === 2, `PDF tagged form: an untagged field's value is read too, and each once (${JSON.stringify(taggedRead)})`);
+    assert.ok(!taggedWarnings.includes('PDF_STRUCT_TREE_UNRELIABLE'), `PDF tagged form: field values do not make the tags look unreliable (${taggedWarnings.join(', ')})`);
+
+    // An annotation's appearance is drawn in its own place on the page: a stamp's picture is read where the
+    // stamp is, not at the page's corner.
+    const stamped = await PDFDocument.create();
+    const spage = stamped.addPage([400, 700]);
+    spage.drawText('Stamped page', { x: 50, y: 650, size: 11, font: await stamped.embedFont(StandardFonts.Helvetica) });
+    const picture = await stamped.embedPng(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
+    const sctx = stamped.context;
+    const appearance = sctx.register(sctx.flateStream('q 100 0 0 50 0 0 cm /Im0 Do Q', { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 100, 50], Resources: { XObject: { Im0: picture.ref } } }));
+    spage.node.set(PDFName.of('Annots'), sctx.obj([sctx.register(sctx.obj({ Type: 'Annot', Subtype: 'Stamp', Rect: [200, 500, 300, 550], AP: { N: appearance } }))]));
+    const stampedAst = await OfficeParser.parseOffice(Buffer.from(await stamped.save()), { fileType: 'pdf', extractAttachments: true, ...inProcess } as any) as OfficeParserAST;
+    const stampImage = all(stampedAst).find(n => n.type === 'image');
+    assert.deepStrictEqual(stampImage?.bounds && [stampImage.bounds.x, stampImage.bounds.y, stampImage.bounds.width, stampImage.bounds.height], [200, 150, 100, 50], `PDF annotation: a stamp's picture is where the stamp is (${JSON.stringify(stampImage?.bounds)})`);
+}
+
 async function testPdfInProcessTurns(): Promise<void> {
     const { deflateSync } = await import('zlib');
     const pdfFrom = (objects: (string | Buffer)[]): Buffer => {
@@ -9890,6 +10071,7 @@ async function runTests(): Promise<void> {
         ['PDF pictures left out', testPdfPicturesLeftOut],
         ['PDF in-process turns', testPdfInProcessTurns],
         ['PDF form metadata and HTML details', testPdfFormMetadataAndHtml],
+        ['PDF form values as text', testPdfFormValuesAsText],
         ['Cancellation', testCancellation],
     ];
 

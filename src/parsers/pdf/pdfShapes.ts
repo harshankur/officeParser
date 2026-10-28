@@ -10,7 +10,7 @@
  * @module parsers/pdf/pdfShapes
  */
 
-import { identityMatrix, mulMatrix as mul, toMatrix6 as toMat6 } from './geometry.js';
+import { annotationMatrix, identityMatrix, mulMatrix as mul, toMatrix6 as toMat6 } from './geometry.js';
 import type { RawRun } from './pdfTypes.js';
 
 /** At most this many shapes are kept on a page, and this many straight edges in all. */
@@ -65,6 +65,9 @@ export function collectShapes(ops: any, viewportTransform: number[], OPS: any): 
                 break;
             }
             case OPS.paintFormXObjectEnd: { const s = stack.pop(); if (s) ({ ctm, fill, stroke, lineWidth } = s); break; }
+            // An annotation's appearance, in its own place on the page (see annotationMatrix).
+            case OPS.beginAnnotation: stack.push({ ctm, fill, stroke, lineWidth }); ctm = annotationMatrix(a); break;
+            case OPS.endAnnotation: { const s = stack.pop(); if (s) ({ ctm, fill, stroke, lineWidth } = s); break; }
             case OPS.setFillRGBColor: fill = typeof a?.[0] === 'string' ? a[0] : undefined; break;
             case OPS.setFillColorN: case OPS.setFillTransparent: fill = undefined; break;
             case OPS.setStrokeRGBColor: stroke = typeof a?.[0] === 'string' ? a[0] : undefined; break;

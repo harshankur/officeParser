@@ -4280,6 +4280,40 @@ async function pdfProcessTests(h: {
         longWord = await read(markedPage(Buffer.from(`BT /F1 12 Tf 72 700 Td /P BMC (Long word page) Tj EMC ET\n${'7'.repeat(n(160_000))}x\n`)));
     });
     check('pdf: a page with a long digit word keeps its text', !longWord.error && longWord.text.includes('Long word page'), longWord.error || longWord.text.slice(0, 80));
+    // A form's values are read as the page's text (see PdfParser's fieldRuns): a page of many filled fields,
+    // a value of a megabyte and one of tens of thousands of lines are read in time in proportion, each line
+    // counted against the text budget as a text item is.
+    const formPdf = (fields: number, long: string, lines: number) => {
+        const perPage = 400, pages = Math.ceil(fields / perPage);
+        const objs: (string | Buffer)[] = ['', '', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', flate(Buffer.from('BT /F1 10 Tf 40 820 Td (Form page) Tj ET'))];
+        const widgets: number[] = [], kids: number[] = [];
+        for (let p = 0; p < pages; p++) {
+            const pageObj = objs.length + 1, annots: number[] = [];
+            objs.push('');
+            for (let i = p * perPage; i < Math.min(fields, (p + 1) * perPage); i++) {
+                const k = i - p * perPage, x = 40 + (k % 4) * 140, y = 800 - Math.floor(k / 4) * 8;
+                objs.push(`<< /Type /Annot /Subtype /Widget /FT /Tx /T (f${i}) /V (value ${i}) /Rect [${x} ${y - 7} ${x + 120} ${y}] /DA (/Helv 6 Tf 0 g) /P ${pageObj} 0 R >>`);
+                annots.push(objs.length);
+            }
+            if (p === 0) {
+                objs.push(`<< /Type /Annot /Subtype /Widget /FT /Tx /T (long) /V (${long}) /Rect [40 20 560 40] /DA (/Helv 10 Tf 0 g) /P ${pageObj} 0 R >>`);
+                annots.push(objs.length);
+                objs.push(`<< /Type /Annot /Subtype /Widget /FT /Tx /Ff 4096 /T (lines) /V (${'line\\n'.repeat(lines)}) /Rect [40 45 560 60] /DA (/Helv 10 Tf 0 g) /P ${pageObj} 0 R >>`);
+                annots.push(objs.length);
+            }
+            objs[pageObj - 1] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 4 0 R /Annots [${annots.map(a => `${a} 0 R`).join(' ')}] >>`;
+            kids.push(pageObj);
+            widgets.push(...annots);
+        }
+        objs[0] = `<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [${widgets.map(w => `${w} 0 R`).join(' ')}] /DR << /Font << /Helv 3 0 R >> >> >> >>`;
+        objs[1] = `<< /Type /Pages /Kids [${kids.map(k => `${k} 0 R`).join(' ')}] /Count ${kids.length} >>`;
+        return pdfFrom(objs);
+    };
+    let filled = { error: '', text: '' } as { error: string; text: string };
+    await linear('pdf: a form of 4,000 filled fields, a value of a megabyte and one of 20,000 lines is read', async () => {
+        filled = await read(formPdf(n(4_000), 'word '.repeat(n(200_000)), n(20_000)));
+    }, { label: 'pdf: a form of many filled fields holds the heap', limit: 400e6 });
+    check('pdf: a form\'s values are read', !filled.error && filled.text.includes('Form page') && filled.text.includes('value 3') && filled.text.includes('word word'), filled.error || filled.text.slice(0, 80));
     const zeros = Buffer.alloc(96 * 1024 * 1024, 0x20);
     zeros.write('BT /F1 10 Tf 40 800 Td (Past the zeros) Tj ET', zeros.length - 64);
     const bombRun = await withinTime(20_000, () => read(markedPage(zeros)));

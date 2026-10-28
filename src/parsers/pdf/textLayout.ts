@@ -24,10 +24,15 @@ function roundSize(n: number): number {
     return Math.round(n * 2) / 2;
 }
 
-/** Char-count-weighted mode of run font sizes (rounded to 0.5). */
+/**
+ * Char-count-weighted mode of run font sizes (rounded to 0.5). A form field's value (see RawRun.formField)
+ * counts only among runs that are all values: its size is the field's, set for its box, not the page's.
+ */
 function dominantFontSize(runs: RawRun[]): number {
     const weight = new Map<number, number>();
+    const own = runs.some(r => !r.formField);
     for (const r of runs) {
+        if (own && r.formField) continue;
         const s = roundSize(r.fontSize);
         weight.set(s, (weight.get(s) || 0) + Math.max(1, r.text.length));
     }
@@ -307,7 +312,12 @@ function segmentsOf(clusterRuns: RawRun[], cfg: PdfLayoutConfig, gutters: readon
         const coordGap = last ? r.x - (last.x + last.width) : 0;
         // (From the last run with text: a blank one pdf.js set over the gutter bridges it.)
         const atGutter = !!lastText && !isBlank && gutters.some(g => lastText!.x + lastText!.width <= g && g <= r.x);
-        if (cur.length && (wideBlank || coordGap >= wideGap || atGutter)) {
+        // A form field's value is read with the label before it, and a check box with the label after it,
+        // however far apart the page sets them, short of a column's gutter: cut there, the values were a
+        // column of their own, read after every label of the page.
+        const next: RawRun | undefined = isBlank ? runs[i + 1] : r;
+        const fieldJoin = !atGutter && !!lastText && (next?.formField !== undefined || lastText.formField === 'box');
+        if (cur.length && !fieldJoin && (wideBlank || coordGap >= wideGap || atGutter)) {
             segments.push(cur);
             cur = [];
         }
@@ -567,8 +577,10 @@ function clusterToLine(clusterRuns: RawRun[], cfg: PdfLayoutConfig, rtl = false)
     const visible = keptFragments.map(f => f.text).join('').trimEnd();
     const endsWithHyphen = /[-­]$/.test(visible);
 
+    // (A line of form field values alone, see RawRun.formField.)
+    const formField = runs.some(r => r.formField && r.text.trim()) && runs.every(r => r.formField || !r.text.trim());
     return {
-        fragments: keptFragments, dir, ...(rtl ? { rtl } : {}), baseline, fontSize: lineFontSize,
+        fragments: keptFragments, dir, ...(rtl ? { rtl } : {}), ...(formField ? { formField } : {}), baseline, fontSize: lineFontSize,
         bold: totalChars > 0 && boldChars * 2 > totalChars,
         endsWithHyphen,
         x: bounds.x, yTop: bounds.y, width: bounds.width, height: bounds.height,
@@ -701,7 +713,8 @@ export function emitBounds(box: NodeBounds, page: PageContext, cfg: PdfLayoutCon
 /**
  * Computes the document body font size and a size-to-heading-level ranking from all runs. Heading
  * levels are ranks of the distinct "large" sizes (descending), so headings resolve even when their
- * sizes cluster closely.
+ * sizes cluster closely. A form field's value (see RawRun.formField) is set at its field's size, not as
+ * the document's text: it counts towards neither.
  */
 export function computeDocContext(allRuns: RawRun[], cfg: PdfLayoutConfig, newlineDelimiter: string): DocContext {
     const bodyFontSize = dominantFontSize(allRuns) || 12;
@@ -711,7 +724,7 @@ export function computeDocContext(allRuns: RawRun[], cfg: PdfLayoutConfig, newli
     const headingSizes = new Set<number>();
     if (cfg.headingDetection !== 'off') {
         for (const r of allRuns) {
-            if (r.angle !== 0) continue;
+            if (r.angle !== 0 || r.formField) continue;
             const s = roundSize(r.fontSize);
             if (s >= bodyFontSize + 0.75 && !headingSizes.has(s) && r.text.trim().length >= 2) headingSizes.add(s);
         }
@@ -2140,7 +2153,8 @@ function headingLevel(group: ParaGroup, doc: DocContext, bodyFollows = false): n
     const size = group.fontSize, body = doc.bodyFontSize;
     const text = groupText(group);
     const chars = text.length;
-    if (group.lines.length > 3 || chars >= 200 || chars < 2 || /\.{4,}/.test(text)) return 0;
+    // (A form's values alone are what was typed into it, whatever size its field sets them in: no heading.)
+    if (group.lines.length > 3 || chars >= 200 || chars < 2 || /\.{4,}/.test(text) || group.lines.every(l => l.formField)) return 0;
     if (size >= 1.2 * body) return group.bold || size >= 1.35 * body ? doc.headingLevelForSize(size) || 1 : 0;
     const allBold = group.lines.every(l => l.bold);
     if (!allBold || chars > 150 || /[.,;]$/.test(text)) return 0;

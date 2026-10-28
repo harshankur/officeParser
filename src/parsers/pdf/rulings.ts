@@ -194,13 +194,64 @@ export interface CellLayout {
     bounds: (box: NodeBounds) => NodeBounds | undefined;
 }
 
+/** How far a comb's boxes' widths may be from their middle one's, as a share of it (see isComb). */
+const COMB_WIDTH_SPREAD = 0.15;
+
+/**
+ * Whether a frame is a comb: a row of like boxes (two at least, of widths within COMB_WIDTH_SPREAD of
+ * their middle one's, about square: no wider than two and a half times their height, no taller than four
+ * times their width) a form draws to be filled one character to a box, a date's digits or a tax number's.
+ * It is one where each box holds a character at most, or where its text is form field values (see
+ * RawRun.formField) alone. A row of words, or a grid of two rows, is a table.
+ */
+function isComb(f: RuledFrame, contents: readonly RawRun[][]): boolean {
+    if (f.ys.length !== 2 || f.cells.length < 2 || f.cells.some(c => c.colSpan !== 1 || c.rowSpan !== 1)) return false;
+    const height = f.ys[1] - f.ys[0];
+    const widths = f.cells.map(c => f.xs[c.col + 1] - f.xs[c.col]);
+    const middle = [...widths].sort((a, b) => a - b)[widths.length >> 1];
+    if (!(middle > 0 && height > 0) || middle > 2.5 * height || height > 4 * middle) return false;
+    if (widths.some(w => Math.abs(w - middle) > COMB_WIDTH_SPREAD * middle)) return false;
+    const texts = contents.flat().filter(r => r.text.trim());
+    if (texts.length && texts.every(r => r.formField)) return true;
+    return contents.every(runs => {
+        let chars = 0;
+        for (const r of runs) for (const ch of r.text) if (ch.trim() && ++chars > 1) return false;
+        return true;
+    });
+}
+
+/**
+ * A comb's characters (see isComb) as one run across its boxes: a box left empty between two filled ones
+ * is a space, those before the first and after the last are none. A form field's value, read where its
+ * boxes are, as its field's are (RawRun.formField).
+ */
+function combRun(f: RuledFrame, contents: readonly RawRun[][]): RawRun | undefined {
+    const order = f.cells.map((c, i) => i).sort((a, b) => f.cells[a].col - f.cells[b].col);
+    const chars = order.map(i => contents[i].filter(r => r.text.trim()).sort((a, b) => a.x - b.x).map(r => r.text.trim()).join(''));
+    const first = chars.findIndex(Boolean);
+    if (first < 0) return undefined;
+    let last = chars.length - 1;
+    while (!chars[last]) last--;
+    const runs = order.flatMap(i => contents[i]).filter(r => r.text.trim());
+    const like = runs[0];
+    const fontSize = runs.reduce((m, r) => Math.max(m, r.fontSize), 0) || like.fontSize;
+    return {
+        ...like, text: chars.slice(first, last + 1).map(c => c || ' ').join(''),
+        x: f.xs[0], width: f.xs[f.xs.length - 1] - f.xs[0], fontSize, link: undefined, formField: 'text',
+    };
+}
+
 /**
  * The tables a page's frames hold, with the runs they took: each run goes to the cell its middle is in,
  * a frame inside another's cell first (it is that cell's, among its paragraphs by its place). A frame
- * whose cells hold no text is no table.
+ * whose cells hold no text is no table. Nor is a comb (see isComb): its characters are one run (see
+ * combRun), its cell's where it is inside a table's, else one of `combs`, read with the page's text; or
+ * the form field values over it are read as they are. A
+ * field's value is not cut at a table's rules (it is one value), and goes to the cell its middle is in.
  */
-export function ruledTables(frames: RuledFrame[], runs: readonly RawRun[], layout: CellLayout): { tables: OfficeContentNode[]; consumed: Set<RawRun> } {
+export function ruledTables(frames: RuledFrame[], runs: readonly RawRun[], layout: CellLayout): { tables: OfficeContentNode[]; consumed: Set<RawRun>; combs: RawRun[] } {
     const consumed = new Set<RawRun>();
+    const combs: RawRun[] = [];
     const tables: OfficeContentNode[] = [];
     const inside = (a: NodeBounds, b: NodeBounds) => a !== b && a.x >= b.x - SNAP && a.y >= b.y - SNAP && a.x + a.width <= b.x + b.width + SNAP && a.y + a.height <= b.y + b.height + SNAP;
     // Smaller frames first, so a frame inside another's cell is read before it, as that cell's.
@@ -235,14 +286,15 @@ export function ruledTables(frames: RuledFrame[], runs: readonly RawRun[], layou
             }
             return out;
         };
-        for (const run of runs) {
+        // (A comb read before, inside this frame's cell, is that cell's: see combs below.)
+        for (const run of combs.length ? runs.concat(combs) : runs) {
             if (consumed.has(run) || run.angle !== 0) continue;
             // Only a run within the frame's rows is cut, and only at the borders of its own row's cells.
             const cy = run.yTop + run.height / 2;
             if (!(cy >= f.ys[0] && cy <= f.ys[f.ys.length - 1]) || run.x + run.width < f.xs[0] || run.x > f.xs[f.xs.length - 1]) continue;
             let row = 0;
             while (row < f.ys.length - 2 && cy > f.ys[row + 1]) row++;
-            const pieces = cutAtRules(run, rowBorders(row));
+            const pieces = run.formField ? [run] : cutAtRules(run, rowBorders(row));
             if (pieces.length > 1) for (const p of pieces) { pieceOf.set(p, run); place(p); }
             else place(run);
         }
@@ -258,6 +310,15 @@ export function ruledTables(frames: RuledFrame[], runs: readonly RawRun[], layou
             (innerOf.get(at) ?? innerOf.set(at, []).get(at)!).push(node);
         }
         if (!contents.some(c => c.some(r => r.text.trim())) && !innerOf.size) continue;
+        if (!innerOf.size && isComb(f, contents)) {
+            // (Values over it are read as they are, the frame's characters as one.)
+            const comb = contents.some(c => c.some(r => r.text.trim() && !r.formField)) ? combRun(f, contents) : undefined;
+            if (comb) {
+                for (const c of contents) for (const r of c) consumed.add(pieceOf.get(r) ?? r);
+                combs.push(comb);
+            }
+            continue;
+        }
         // A cell joined across a grid line its text does not cross, its text in one column (or row) and
         // another, is cells a producer drew no rule between (partial borders), not a merged one: the
         // frame is left to the alignment reader, which reads such tables from their text.
@@ -317,7 +378,8 @@ export function ruledTables(frames: RuledFrame[], runs: readonly RawRun[], layou
         built.set(fi, table);
     }
     for (const [fi, node] of built) if (!nestedIn.has(fi)) tables.push(node);
-    return { tables, consumed };
+    // A comb inside a table's cell is that cell's; the others are the page's text.
+    return { tables, consumed, combs: combs.filter(c => !consumed.has(c)) };
 }
 
 /**
