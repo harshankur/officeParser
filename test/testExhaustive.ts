@@ -8271,6 +8271,10 @@ async function testPdfFormValuesAsText(): Promise<void> {
         const read = paragraphs(plainAst);
         assert.ok(!all(plainAst).some(n => n.type === 'table') && rows.every(([label, value]) => read.includes(`${label} ${value}`)),
             `PDF form: a line over a form that is not its table's head leaves each value with its label (${shape}: ${JSON.stringify(read)})`);
+        // (And it is read first, where it is: the boxes the values are in, wider than the values, leave no
+        // gutter beside the line's right cell.)
+        assert.ok(read.indexOf(right) >= 0 && read.indexOf(right) < read.indexOf(`${rows[0][0]} ${rows[0][1]}`),
+            `PDF form: a line over a form is read before the form, its right cell too (${shape}: ${JSON.stringify(read)})`);
     }
 
     // A comb the page draws itself: a date's digits one to a box, in boxes of a day, a month and a year, with
