@@ -196,13 +196,20 @@ export interface CellLayout {
 
 /** How far a comb's boxes' widths may be from their middle one's, as a share of it (see isComb). */
 const COMB_WIDTH_SPREAD = 0.15;
+/**
+ * The widest a comb's boxes are, in ems of the characters in them (see isComb): a form's comb is set tight
+ * to its characters (a date's digits of 14 points in boxes of 18 or 20), a row of choices ruled apart is not
+ * (a scale's "1 2 3 4 5" of 11 points in boxes of 30).
+ */
+const COMB_EMS = 2;
 
 /**
  * Whether a frame is a comb: a row of like boxes (two at least, of widths within COMB_WIDTH_SPREAD of
  * their middle one's, about square: no wider than two and a half times their height, no taller than four
  * times their width) a form draws to be filled one character to a box, a date's digits or a tax number's.
- * It is one where each box holds a character at most, or where its text is form field values (see
- * RawRun.formField) alone. A row of words, or a grid of two rows, is a table.
+ * It is one where its text is form field values (see RawRun.formField) alone, or where each box holds a
+ * character at most and is no wider than COMB_EMS of them. A row of words, a row of characters ruled wide
+ * apart (a scale, a row of grades), or a grid of two rows, is a table.
  */
 function isComb(f: RuledFrame, contents: readonly RawRun[][]): boolean {
     if (f.ys.length !== 2 || f.cells.length < 2 || f.cells.some(c => c.colSpan !== 1 || c.rowSpan !== 1)) return false;
@@ -213,6 +220,8 @@ function isComb(f: RuledFrame, contents: readonly RawRun[][]): boolean {
     if (widths.some(w => Math.abs(w - middle) > COMB_WIDTH_SPREAD * middle)) return false;
     const texts = contents.flat().filter(r => r.text.trim());
     if (texts.length && texts.every(r => r.formField)) return true;
+    const size = texts.reduce((m, r) => Math.max(m, r.fontSize), 0);
+    if (size > 0 && middle > COMB_EMS * size) return false;
     return contents.every(runs => {
         let chars = 0;
         for (const r of runs) for (const ch of r.text) if (ch.trim() && ++chars > 1) return false;

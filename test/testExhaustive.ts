@@ -8221,6 +8221,9 @@ async function testPdfFormValuesAsText(): Promise<void> {
     [...'01052026'].forEach((d, k) => { box(190 + 18 * k, 175, 18, 18); put(d, 195 + 18 * k, 179, 14); });
     put('Bewertung', 50, 250);
     ['1', '2', '3', '4', '5'].forEach((n, k) => put(n, 130 + 14 * k, 250));
+    // A scale ruled into boxes wide apart for its numbers (boxes of 30 points, numbers of 11): a table.
+    put('Zufriedenheit', 50, 106);
+    ['1', '2', '3', '4', '5'].forEach((n, k) => { box(230 + 30 * k, 100, 30, 24); put(n, 242 + 30 * k, 108); });
     const drawnAst = await OfficeParser.parseOffice(Buffer.from(await drawn.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
     const drawnRead = paragraphs(drawnAst);
     const drawnSaid = `(${JSON.stringify(drawnRead)})`;
@@ -8229,7 +8232,7 @@ async function testPdfFormValuesAsText(): Promise<void> {
     assert.ok(!all(drawnAst).some(n => n.type === 'heading'), `PDF comb: its digits are no heading ${drawnSaid}`);
     const drawnTables = all(drawnAst).filter(n => n.type === 'table').reverse();
     const cells = (t: OfficeContentNode) => t.children!.map(r => r.children!.map(c => c.text));
-    assert.deepStrictEqual(drawnTables.map(cells), [[['A', 'B', 'C', 'D'], ['E', 'F', 'G', 'H']], [['Ja', 'Nein', 'Vielleicht']], [['Name', 'Erika'], ['Geboren', '01052026']]], `PDF comb: a grid of two rows of letters, and a row of words in like boxes, are tables; a comb in a table's cell is the cell's (${JSON.stringify(drawnTables.map(cells))})`);
+    assert.deepStrictEqual(drawnTables.map(cells), [[['A', 'B', 'C', 'D'], ['E', 'F', 'G', 'H']], [['Ja', 'Nein', 'Vielleicht']], [['Name', 'Erika'], ['Geboren', '01052026']], [['1', '2', '3', '4', '5']]], `PDF comb: a grid of two rows of letters, a row of words in like boxes, and a scale's numbers in boxes wide apart, are tables; a comb in a table's cell is the cell's (${JSON.stringify(drawnTables.map(cells))})`);
     assert.ok(drawnRead.some(t => /(^| )1 2 3 4 5$/.test(t)) && !textOf(drawnAst).includes('12345'), `PDF comb: numbers set apart with no boxes stay apart ${drawnSaid}`);
 
     // A tagged form: a field's widget tagged as a /Form element (its OBJR) reads its value there, and a
