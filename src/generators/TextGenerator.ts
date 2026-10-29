@@ -398,12 +398,15 @@ export class TextGenerator extends BaseGenerator<'text'> {
                 // The padding comes out of the document's layout budget (as a table's does); past it, a
                 // run is set off by one space.
                 const pad = col - line.length;
-                if (pad > 0 && this.takeLayoutPadding(pad)) {
+                // (A run that touches the one before it in the same cell is the same word or sentence: "example.com"
+                // and its "." are joined, however their columns round.)
+                const touching = line.length > 0 && prevRight != null && a.x - prevRight <= 0.25 * charW && (a.cell === undefined || a.cell === prevCell);
+                if (pad > 0 && !touching && this.takeLayoutPadding(pad)) {
                     line += ' '.repeat(pad);
-                } else if (pad > 0) {
+                } else if (pad > 0 && !touching) {
                     line += ' ';
                 } else if (line.length > 0) {
-                    // The column is at or before the current line end. Only insert a space when this
+                    // The column is at or before the current line end (or the run touches the one before). Only insert a space when this
                     // atom is separated from the previous one by a real horizontal gap; adjacent runs
                     // (a formatting/link boundary inside a word) must join with no space.
                     // Runs of two table cells are always set apart: a tight table's cells touch
