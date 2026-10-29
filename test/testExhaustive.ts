@@ -8467,6 +8467,100 @@ async function testPdfKeptJpegs(): Promise<void> {
     console.log('  PDF kept JPEG: All assertions passed ✓');
 }
 
+/**
+ * Text standing on a filled rectangle of its page keeps it as the run's `formatting.backgroundColor` (see
+ * rulings' shadeRuns): white text on a purple bar is read on the bar. The smallest rectangle holding the
+ * run's whole box is the one; text on the paper, a run only partly over a rectangle, a highlight's own
+ * colour and `extractTextColor: false` give none; a shaded table's cell shows its colour and its text
+ * carries none. Every writer that draws a background writes it, and plain text is unchanged.
+ */
+async function testPdfTextOnFills(): Promise<void> {
+    const inProcess = { pdfParserConfig: { separateProcess: false } };
+    const pdfFrom = (objects: (string | Buffer)[]): Buffer => {
+        const parts: Buffer[] = [Buffer.from('%PDF-1.7\n')];
+        const offsets: number[] = [];
+        let at = parts[0].length;
+        objects.forEach((o, i) => { const b = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), typeof o === 'string' ? Buffer.from(o, 'latin1') : o, Buffer.from('\nendobj\n')]); offsets.push(at); at += b.length; parts.push(b); });
+        parts.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+        return Buffer.concat(parts);
+    };
+    const pageOf = (content: string, extra = '', more: string[] = []) => {
+        const data = Buffer.from(content, 'latin1');
+        return pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+            `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 800] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R ${extra} >>`,
+            Buffer.concat([Buffer.from(`<< /Length ${data.length} >>\nstream\n`), data, Buffer.from('\nendstream')]), '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', ...more]);
+    };
+    const read = async (pdf: Buffer, pdfParserConfig: object = {}) => await OfficeParser.parseOffice(pdf, { fileType: 'pdf', pdfParserConfig: { ...inProcess.pdfParserConfig, ...pdfParserConfig } } as any) as OfficeParserAST;
+    const all = (ast: OfficeParserAST): OfficeContentNode[] => { const out: OfficeContentNode[] = []; const stack = [...ast.content]; while (stack.length) { const n = stack.pop()!; out.push(n); stack.push(...(n.children ?? [])); } return out; };
+    const backgrounds = (ast: OfficeParserAST): Record<string, string | undefined> => Object.fromEntries(all(ast).filter(n => n.type === 'text').map(n => [(n.text ?? '').trim(), n.formatting?.backgroundColor]));
+    const text = (ast: OfficeParserAST, word: string) => all(ast).find(n => n.type === 'text' && (n.text ?? '').includes(word));
+    const content = [
+        '0.2 0.4 0.6 rg 40 700 300 30 re f',
+        '1 1 1 rg BT /F1 14 Tf 50 710 Td (White on a bar) Tj ET',
+        '0 g BT /F1 12 Tf 50 650 Td (On white paper) Tj ET',
+        '0.2 0.4 0.6 rg 40 580 100 30 re f',
+        '0 g BT /F1 12 Tf 50 590 Td (Partly over a bar and then beyond it) Tj ET',
+        '0.8 0.8 0.8 rg 30 400 400 120 re f',
+        '0.2 0.4 0.6 rg 50 420 200 30 re f',
+        '1 1 1 rg BT /F1 12 Tf 60 430 Td (Inside the bar) Tj ET',
+        '0 g BT /F1 12 Tf 60 490 Td (On the panel only) Tj ET',
+        '0.2 0.4 0.6 rg 40 300 300 30 re f',
+        '1 1 1 rg BT /F1 14 Tf 50 310 Td (Highlighted on a bar) Tj ET',
+    ].join('\n');
+    const highlight = '<< /Type /Annot /Subtype /Highlight /Rect [48 306 200 328] /QuadPoints [48 328 200 328 48 306 200 306] /C [1 1 0] >>';
+    const standing = pageOf(content, '/Annots [6 0 R]', [highlight]);
+    for (const separateProcess of [true, false]) {
+        const ast = await read(standing, { separateProcess });
+        const found = backgrounds(ast);
+        const where = separateProcess ? 'separate process' : 'in process';
+        assert.strictEqual(found['White on a bar'], '#336699', `PDF text on fills: white text on a bar is on the bar (${where}; ${JSON.stringify(found)})`);
+        assert.strictEqual(text(ast, 'White on a bar')?.formatting?.color, '#ffffff', 'PDF text on fills: the white of the text is kept');
+        assert.strictEqual(found['On white paper'], undefined, 'PDF text on fills: text on the paper has no background');
+        assert.strictEqual(found['Partly over a bar and then beyond it'], undefined, 'PDF text on fills: a run only partly over a rectangle has none');
+        assert.strictEqual(found['Inside the bar'], '#336699', 'PDF text on fills: the smallest rectangle holding the run is the one');
+        assert.strictEqual(found['On the panel only'], '#cccccc', 'PDF text on fills: text on a larger panel alone has the panel');
+        assert.strictEqual(found['Highlighted on a bar'], '#ffff00', `PDF text on fills: a highlight's colour is left as it is (${JSON.stringify(found)})`);
+    }
+    const without = backgrounds(await read(standing, { extractTextColor: false }));
+    assert.deepStrictEqual(Object.entries(without).filter(([, bg]) => bg).map(([t]) => t), ['Highlighted on a bar'], `PDF text on fills: with extractTextColor off only the highlight has a background (${JSON.stringify(without)})`);
+
+    // A page turned a quarter: the bar and the text turn together.
+    const turned = pageOf(content, '/Rotate 90 /Annots [6 0 R]', [highlight]);
+    const turnedFound = backgrounds(await read(turned));
+    assert.ok(turnedFound['White on a bar'] === '#336699' && turnedFound['On white paper'] === undefined && turnedFound['Inside the bar'] === '#336699', `PDF text on fills: on a turned page too (${JSON.stringify(turnedFound)})`);
+
+    // A table ruled and shaded: its head cell shows the colour and its text carries none, a coloured bar inside a plain cell still does.
+    const table = pageOf([
+        '0.2 0.4 0.6 rg 100 170 80 20 re f',
+        '0 G 0.5 w 100 150 m 260 150 l S 100 170 m 260 170 l S 100 190 m 260 190 l S 100 150 m 100 190 l S 180 150 m 180 190 l S 260 150 m 260 190 l S',
+        '1 1 1 rg BT /F1 10 Tf 105 176 Td (Head) Tj ET',
+        '0 g BT /F1 10 Tf 185 176 Td (Plain) Tj ET BT /F1 10 Tf 105 156 Td (Left) Tj ET BT /F1 10 Tf 185 156 Td (Right) Tj ET',
+        '0.2 0.4 0.6 rg 40 100 300 20 re f 1 1 1 rg BT /F1 10 Tf 50 105 Td (Below the table) Tj ET',
+    ].join('\n'));
+    const tabled = await read(table);
+    const cells = all(tabled).filter(n => n.type === 'cell');
+    const head = cells.find(c => (c.text ?? '').includes('Head'));
+    assert.ok(cells.length === 4 && (head?.metadata as { backgroundColor?: string } | undefined)?.backgroundColor === '#336699', `PDF text on fills: a shaded ruled table's cell keeps its shading (${cells.map(c => JSON.stringify(c.metadata))})`);
+    assert.strictEqual(all({ content: head!.children ?? [] } as OfficeParserAST).filter(n => n.type === 'text').map(n => n.formatting?.backgroundColor).filter(Boolean).length, 0, 'PDF text on fills: and its text has no background of its own');
+    assert.strictEqual(backgrounds(tabled)['Below the table'], '#336699', 'PDF text on fills: text beside the table on a bar has it');
+    assert.strictEqual(backgrounds(tabled)['Plain'], undefined, 'PDF text on fills: an unshaded cell holds unshaded text');
+
+    // Writers: a background behind the white text; plain text unchanged.
+    const ast = await read(standing);
+    const html = String((await ast.to('html')).value);
+    assert.ok(/<mark[^>]*background-color: #336699[^>]*><span style="color: #ffffff[^"]*">White on a bar/.test(html), `PDF text on fills: HTML writes the background behind the white text (${html.match(/.{80}White on a bar/)?.[0]})`);
+    const docx = unzipSync(new Uint8Array((await ast.to('docx')).value as unknown as Uint8Array));
+    assert.ok(/<w:color w:val="FFFFFF"\/>[^]*?<w:shd [^>]*w:fill="336699"\/>[^]*?White on a bar/.test(strFromU8(docx['word/document.xml'])), 'PDF text on fills: DOCX shades the white run');
+    const odt = unzipSync(new Uint8Array((await ast.to('odt')).value as unknown as Uint8Array));
+    assert.ok(/fo:background-color="#336699"/.test(strFromU8(odt['content.xml'])), 'PDF text on fills: ODT gives the run its background');
+    const rtf = String((await ast.to('rtf')).value);
+    assert.ok(/\\highlight\d+[^]*?White on a bar/.test(rtf) && /\\red51\\green102\\blue153/.test(rtf), 'PDF text on fills: RTF highlights the run in the colour of the bar');
+    const plain = await read(standing, { extractTextColor: false });
+    assert.strictEqual(String((await ast.to('text')).value), String((await plain.to('text')).value), 'PDF text on fills: plain text is unchanged');
+    assert.strictEqual(String((await ast.to('md')).value).replace(/==/g, ''), String((await plain.to('md')).value).replace(/==/g, ''), 'PDF text on fills: Markdown differs by its highlight marks alone');
+    console.log('  PDF text on fills: All assertions passed ✓');
+}
+
 async function testPdfInProcessTurns(): Promise<void> {
     const { deflateSync } = await import('zlib');
     const pdfFrom = (objects: (string | Buffer)[]): Buffer => {
@@ -10289,6 +10383,7 @@ async function runTests(): Promise<void> {
         ['PDF form values as text', testPdfFormValuesAsText],
         ['PDF glyph names', testPdfGlyphNames],
         ['PDF kept JPEGs', testPdfKeptJpegs],
+        ['PDF text on fills', testPdfTextOnFills],
         ['Cancellation', testCancellation],
     ];
 

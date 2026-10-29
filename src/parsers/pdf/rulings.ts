@@ -383,15 +383,24 @@ export function ruledTables(frames: RuledFrame[], runs: readonly RawRun[], layou
 }
 
 /**
+ * The rectangles a page fills with a colour that something may stand on, the smallest first: filled, not
+ * white (the paper's own colour), straight, of at most five edges, thicker than a rule, and not the page's
+ * own background (nearly all of it in both directions).
+ */
+function backgroundFills(shapes: readonly PdfShape[] | undefined, pageW: number, pageH: number): PdfShape[] {
+    return (shapes ?? []).filter(s => s.filled && s.fill && s.fill.toLowerCase() !== '#ffffff' && !s.curved && s.segments.length <= 5
+        && s.width > MAX_THICKNESS && s.height > MAX_THICKNESS && !(s.width >= 0.9 * pageW && s.height >= 0.9 * pageH))
+        .sort((a, b) => a.width * a.height - b.width * b.height);
+}
+
+/**
  * Tables' cells shaded as their page shades them: each cell (read from the page, with no colour yet)
  * takes the colour of the smallest coloured rectangle under its middle, so a header row's white text is
  * read on the colour it was set on, not on none.
  */
 export function shadeCells(tables: readonly OfficeContentNode[], shapes: readonly PdfShape[] | undefined, pageW: number, pageH: number): void {
     if (!shapes?.length || !tables.length) return;
-    const fills = shapes.filter(s => s.filled && s.fill && s.fill.toLowerCase() !== '#ffffff' && !s.curved && s.segments.length <= 5
-        && s.width > MAX_THICKNESS && s.height > MAX_THICKNESS && !(s.width >= 0.9 * pageW && s.height >= 0.9 * pageH))
-        .sort((a, b) => a.width * a.height - b.width * b.height);
+    const fills = backgroundFills(shapes, pageW, pageH);
     if (!fills.length) return;
     let tests = 0;
     const visit = (node: OfficeContentNode) => {
@@ -403,10 +412,73 @@ export function shadeCells(tables: readonly OfficeContentNode[], shapes: readonl
                 const under = fills.find(f => cx >= f.x && cx <= f.x + f.width && cy >= f.y && cy <= f.y + f.height);
                 if (under) child.metadata = { ...(child.metadata as CellMetadata), backgroundColor: under.fill };
             }
+            // The cell shows its colour: its text is not also on that colour (see shadeRuns).
+            const shown = child.type === 'cell' ? (child.metadata as CellMetadata | undefined)?.backgroundColor : undefined;
+            if (shown) clearRunShading(child, shown);
             visit(child);
         }
     };
     for (const t of tables) visit(t);
+}
+
+/** The bands a page's height is cut into, to find the rectangles holding a place without testing them all. */
+const BANDS = 256;
+/** A rectangle taller than this many bands is kept in a list of its own, tested for every place. */
+const MAX_BANDS_A_RECTANGLE = 16;
+/** How far (in points) a run's box may reach past the rectangle it stands on and still be on it. */
+const REACH = 1.5;
+
+/**
+ * Text that stands on a colour keeps it: each run whose whole box is inside a filled, non-white rectangle
+ * of the page (the smallest such rectangle, see backgroundFills) takes its colour as the run's
+ * `backgroundColor`, as a word processor's paragraph shading reaches its runs. White text on a purple bar
+ * is then read on the bar, not as white text on none. A run only partly over a rectangle, one with a
+ * background already (a highlight) and invisible text are left as they are; a table's cells, shaded as the
+ * page shades them (see shadeCells), take their runs' background of the same colour back, the cell showing it.
+ * Bounded: the rectangles are looked up by the band of the page they touch, and the tests are no more than
+ * MAX_CROSSINGS in all, past which the page's other runs are left unshaded.
+ */
+export function shadeRuns(runs: readonly RawRun[], shapes: readonly PdfShape[] | undefined, pageW: number, pageH: number): void {
+    if (!shapes?.length || !runs.length) return;
+    const fills = backgroundFills(shapes, pageW, pageH);
+    if (!fills.length) return;
+    // The fills (smallest first) by the bands they touch: a run is looked for in the band its middle is in.
+    const size = Math.max(pageH, 1) / BANDS;
+    const band = (y: number) => Math.min(BANDS - 1, Math.max(0, Math.floor(y / size)));
+    const bands: number[][] = [];
+    const tall: number[] = [];
+    fills.forEach((f, i) => {
+        const lo = band(f.y), hi = band(f.y + f.height);
+        if (hi - lo + 1 > MAX_BANDS_A_RECTANGLE) { tall.push(i); return; }
+        for (let b = lo; b <= hi; b++) (bands[b] ??= []).push(i);
+    });
+    let tests = 0;
+    for (const run of runs) {
+        if (run.formatting.backgroundColor || run.formatting.invisible || !run.text.trim()) continue;
+        const inBand = bands[band(run.yTop + run.height / 2)] ?? [];
+        // The two lists are each in order of size: the smallest rectangle holding the run is the first of either.
+        let a = 0, b = 0;
+        while ((a < inBand.length || b < tall.length) && tests < MAX_CROSSINGS) {
+            tests++;
+            const f = fills[b >= tall.length || (a < inBand.length && inBand[a] < tall[b]) ? inBand[a++] : tall[b++]];
+            if (run.x >= f.x - REACH && run.x + run.width <= f.x + f.width + REACH && run.yTop >= f.y - REACH && run.yTop + run.height <= f.y + f.height + REACH) {
+                run.formatting = { ...run.formatting, backgroundColor: f.fill };
+                break;
+            }
+        }
+        if (tests >= MAX_CROSSINGS) return;
+    }
+}
+
+/** Takes the background `color` off the text under `node` (a shaded cell's own, which the cell shows). */
+function clearRunShading(node: OfficeContentNode, color: string): void {
+    for (const child of node.children ?? []) {
+        if (child.formatting?.backgroundColor?.toLowerCase() === color.toLowerCase()) {
+            const { backgroundColor: _shown, ...rest } = child.formatting;
+            child.formatting = rest;
+        }
+        clearRunShading(child, color);
+    }
 }
 
 /**

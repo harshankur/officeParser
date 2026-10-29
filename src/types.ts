@@ -725,8 +725,16 @@ export interface PdfParserConfig {
      * DOCX/RTF parsers report it. Runs painted with a pattern, shading or transparent fill are left
      * uncolored rather than guessed.
      *
+     * The colour a run stands on is read from the same drawing: a run whose whole box is inside a
+     * filled, non-white rectangle of the page (the smallest such one) carries its colour as
+     * `formatting.backgroundColor`, as a word processor's paragraph shading reaches its runs, so white
+     * text on a coloured bar keeps the bar. A run only partly over a rectangle, text on the paper, and
+     * text in a table's cell that is shaded as the page shades it (the cell's `backgroundColor` shows
+     * it) carry none. Set to `false`, none is read.
+     *
      * Highlight annotations are unaffected by this flag: they populate `formatting.backgroundColor`
-     * regardless, since they come from the annotation list that is already read for hyperlinks.
+     * regardless, since they come from the annotation list that is already read for hyperlinks, and a
+     * highlighted run keeps its highlight's colour.
      *
      * Default is true.
      */

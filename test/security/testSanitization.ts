@@ -32,6 +32,7 @@ import { computeDocContext } from '../../src/parsers/pdf/textLayout';
 import { MarkedContent } from '../../src/parsers/pdf/actualText';
 import { PdfFile } from '../../src/parsers/pdf/pdfFile';
 import { KeptJpegs } from '../../src/parsers/pdf/pdfJpeg';
+import { shadeRuns } from '../../src/parsers/pdf/rulings';
 import { CffOutlines, nativeUnbrotli, sfntOf, TrueTypeOutlines } from '../../src/generators/pdf/fontFiles';
 import { cffTable, charString, EMPTY } from '../helpers/cffFontWriter';
 import * as zlib from 'zlib';
@@ -4441,6 +4442,36 @@ async function pdfProcessTests(h: {
     const keptBytes = (often.ast?.attachments ?? []).filter(a => a.mimeType === 'image/jpeg').reduce((sum, a) => sum + Buffer.byteLength(a.data, 'base64'), 0);
     check('pdf: a JPEG drawn 300 times is kept within the document\'s bound, the rest PNGs', !often.error && keptBytes <= 128 * 1024 * 1024 + bigJpeg.length && (often.ast?.attachments ?? []).length === n(300), `${Math.round(keptBytes / 1e6)} MB kept of ${(often.ast?.attachments ?? []).length} pictures, ${often.error}`);
     check('pdf: a JPEG drawn 300 times holds the heap', oftenMemory.heap < 1.2e9, memoryNote(oftenMemory.heap, oftenMemory.allocated));
+    // Text on a filled rectangle takes its colour as its background (see rulings' shadeRuns): 15,000 rectangles,
+    // each with a run on it, spread over a page, and 15,000 overlapping in one band of it, each tested against the
+    // runs of that band, are looked up by band and within a budget of tests, in time in proportion.
+    const filledPage = (cells: number) => {
+        let body = '';
+        for (let i = 0; i < cells; i++) {
+            const x = 5 + (i % 100) * 5, y = 10 + Math.floor(i / 100) * 5;
+            body += `${0.2 + (i % 7) / 10} 0.3 0.5 rg ${x} ${y} 4 4 re f\n0 g BT /F1 3 Tf 1 0 0 1 ${x + 0.5} ${y + 0.5} Tm (a) Tj ET\n`;
+        }
+        return pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [5 0 R] /Count 1 >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', flate(Buffer.from(body)),
+            '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 4 0 R >>']);
+    };
+    const shadedRuns = (result: Awaited<ReturnType<typeof read>>) => {
+        let shaded = 0, plain = 0;
+        const stack: any[] = [...(result.ast?.content ?? [])];
+        while (stack.length) { const node = stack.pop(); if (node.type === 'text') { if (node.formatting?.backgroundColor) shaded++; else plain++; } stack.push(...(node.children ?? [])); }
+        return { shaded, plain };
+    };
+    let filledRead = { error: '', ast: undefined } as unknown as Awaited<ReturnType<typeof read>>;
+    await linear('pdf: a page of 15,000 filled rectangles with a run on each is read', async () => { filledRead = await read(filledPage(n(15_000))); },
+        { label: 'pdf: a page of 15,000 filled rectangles holds the heap', limit: 600e6 });
+    const counts = shadedRuns(filledRead);
+    check('pdf: runs on many filled rectangles are shaded', !filledRead.error && counts.shaded >= counts.plain && counts.shaded > 0, `${filledRead.error} ${counts.shaded} shaded, ${counts.plain} not`);
+    // The rectangles overlapping in one band, each run of the band wider than any of them and tested against all: within a budget of tests.
+    await linear('pdf: 15,000 runs over 15,000 overlapping filled rectangles of one band, none inside one, are tested', () => {
+        const count = n(15_000);
+        const shapes = Array.from({ length: count }, (_, i) => ({ x: (i % 400) * 1.2, y: 400, width: 4, height: 4 + (i % 3), filled: true, stroked: false, fill: '#336699', lineWidth: 1, curved: false, segments: [] as [number, number, number, number][] }));
+        const runs = Array.from({ length: count }, (_, i) => ({ text: 'a', x: (i % 400) * 1.2 + 0.5, yTop: 400.5, width: 50, height: 2, formatting: {} as any }));
+        shadeRuns(runs as any, shapes as any, 600, 842);
+    });
     check('pdf: a plan of 3,000 symbols is read whole, its paths costing none of the operator budget', !planned.error && planned.pages === 21 && planned.text.includes('Note 20.50') && !planned.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED') && !planned.codes.includes('PDF_NO_TEXT_EXTRACTED'), `${planned.pages} pages ${planned.codes} ${planned.error}`);
     const operatorChecks = async (separateProcess: boolean) => {
         const where = separateProcess ? 'separate process' : 'in process';

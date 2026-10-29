@@ -1057,7 +1057,8 @@
               "text": "You can do crazy things with paragraphs, if the urge strikes you. For instance this ",
               "formatting": {
                 "font": "Ubuntu-Regular",
-                "size": "12pt"
+                "size": "12pt",
+                "backgroundColor": "#dddddd"
               },
               "bounds": {
                 "x": 103.05,
@@ -1072,7 +1073,8 @@
               "text": "paragraph is right aligned and has a right border. It has also been given a light gray ",
               "formatting": {
                 "font": "Ubuntu-Regular",
-                "size": "12pt"
+                "size": "12pt",
+                "backgroundColor": "#dddddd"
               },
               "bounds": {
                 "x": 93.05,
@@ -1087,7 +1089,8 @@
               "text": "background.",
               "formatting": {
                 "font": "Ubuntu-Regular",
-                "size": "12pt"
+                "size": "12pt",
+                "backgroundColor": "#dddddd"
               },
               "bounds": {
                 "x": 472.7,

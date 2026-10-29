@@ -47,7 +47,7 @@ import { MarkedContent, readableItems } from './pdf/actualText.js';
 import { GlyphNames } from './pdf/glyphNames.js';
 import { PdfFile } from './pdf/pdfFile.js';
 import { KeptJpegs } from './pdf/pdfJpeg.js';
-import { RuledFrame, ruledFrames, ruledTables, shadeCells } from './pdf/rulings.js';
+import { RuledFrame, ruledFrames, ruledTables, shadeCells, shadeRuns } from './pdf/rulings.js';
 import { annotationMatrix, computeRunBox, identityMatrix, mulMatrix, roundBounds, rotateBoundsToRendered, toMatrix6, unionAll } from './pdf/geometry.js';
 import { PageExtract, PdfImage, PdfLayoutConfig, RawRun, ResolvedFont } from './pdf/pdfTypes.js';
 import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, emitBounds, indentLevels as indentLevelsOf, joinMarkerLines, leadingMarker, ListCarry, markerLefts, PageContext, lineDirections, recoverTaggedGrids, rightToLeftLean, relevelHeadings, runsToParagraph, segmentIntoBlocks } from './pdf/textLayout.js';
@@ -1375,6 +1375,9 @@ async function collectPage(
     if (typeof page.cleanup === 'function' && !work.spent) { try { page.cleanup(); } catch { /* best effort */ } }
 
     const shapes = ops ? collectShapes(ops, layoutViewport.transform, pdfjs.OPS) : [];
+    // Text standing on a filled rectangle keeps its colour (white text on a coloured bar); read from the
+    // drawing like the text's own colour, so asked for with it.
+    if (pdfCfg.extractTextColor) shadeRuns(runs, shapes, authoredW, authoredH);
 
     return { pageNumber, width, height, authoredW, authoredH, authoredY1, rotation, runs, images, structTree, shapes };
 }
