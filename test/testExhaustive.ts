@@ -8676,13 +8676,15 @@ async function testPdfTextOnFills(): Promise<void> {
 async function testPdfRunningHeadersFooters(): Promise<void> {
     // Pages of 500 x 800 points: the top and bottom bands, where a running header and footer are read, are
     // the 120 points at each edge.
-    const pdfOf = (pages: string[], catalog = ''): Buffer => {
+    // (The font's own entries, and objects after the pages', numbered from 4 + 2 * pages.)
+    const pdfOf = (pages: string[], catalog = '', fontEntries = '', extra: string[] = []): Buffer => {
         const objects: string[] = [`<< /Type /Catalog /Pages 2 0 R ${catalog} >>`, `<< /Type /Pages /Kids [${pages.map((_, i) => `${4 + 2 * i} 0 R`).join(' ')}] /Count ${pages.length} >>`,
-            '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+            `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica ${fontEntries} >>`];
         pages.forEach((content, i) => {
             objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 800] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + 2 * i} 0 R >>`);
             objects.push(`<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`);
         });
+        objects.push(...extra);
         const parts: Buffer[] = [Buffer.from('%PDF-1.7\n')];
         const offsets: number[] = [];
         let at = parts[0].length;
@@ -8761,6 +8763,9 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
     const roman = await read(pdfOf(['i', 'ii'].map((n, i) => [body(i + 1), line(245, 30, 10, n)].join('\n')), '/PageLabels << /Nums [0 << /S /r >>] >>'));
     const romanFields = (roman.auxiliary?.footers ?? []).flatMap(n => (n.children ?? []).map(c => `${c.text}:${(c.metadata as any)?.field}:${(c.metadata as any)?.fieldFormat}`));
     assert.deepStrictEqual(romanFields, ['i:page:lowerRoman', 'ii:page:lowerRoman'], `Running footers: roman page numbers the labels give are footers and fields (${JSON.stringify(texts(roman.auxiliary?.footers))})`);
+    // A page labelled "1", then one labelled "II" (a section numbered anew in roman numerals): each its label.
+    const relabelled = await read(pdfOf(['1', 'II'].map((n, i) => [body(i + 1), line(245, 30, 10, n)].join('\n')), '/PageLabels << /Nums [0 << /S /D >> 1 << /S /R /St 2 >>] >>'));
+    assert.deepStrictEqual(texts(relabelled.auxiliary?.footers), ['1:1', '2:II'], `Running footers: page numbers as their labels give them, digits then roman, are footers (${JSON.stringify(texts(relabelled.auxiliary?.footers))})`);
     assert.ok(/<w:fldSimple w:instr=" PAGE \\\* roman ">/.test(Object.entries(unzipSync((await roman.to('docx')).value as Uint8Array)).filter(([k]) => /footer/.test(k)).map(([, v]) => strFromU8(v)).join('')), 'Running footers: DOCX writes the field in roman numerals');
 
     // A form placed after another page (a scan before it): its "n/4" is a running footer, but not the page's
@@ -8792,11 +8797,28 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
     assert.ok(entries.auxiliary?.headers === undefined && entries.auxiliary?.footers === undefined, `Running headers: entries numbered down the pages are no header or footer (${JSON.stringify([texts(entries.auxiliary?.headers), texts(entries.auxiliary?.footers)])})`);
     // A question at the text's size at the top of each page, numbered as the pages are but no page number: each
     // is its page's, and stays in the text.
-    for (const word of ['Question', 'Day', 'Exhibit', 'Step']) {
+    for (const word of ['Question', 'Day', 'Exhibit', 'Step', 'Fig.']) {
         const numbered = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 12, `${word} ${p}`), body(p)].join('\n'))));
         const numberedMd = await md(numbered);
         assert.ok(numbered.auxiliary?.headers === undefined && [1, 2, 3, 4].every(p => numberedMd.includes(`${word} ${p}`)), `Running headers: "${word} N" at the top of each page is the page's (${JSON.stringify(texts(numbered.auxiliary?.headers))})`);
     }
+    // A header whose page number is printed in other ways than "Page 3": after a separator, before one, in
+    // brackets, after a page word other than "Page" or before "Page", as a journal numbers its pages, and as
+    // its page label in its text. (\320 in a PDF string is the font's emdash, in its StandardEncoding.)
+    const shapes: [string, (p: number) => string][] = [['bar', p => `Acme Corp Annual Report 2024 | ${p}`], ['lead', p => `${p} | Acme Corp Annual Report`],
+        ['after', p => `${p} | Page`], ['before', p => `Page | ${p}`], ['pg', p => `Pg. ${p}`], ['dash', p => `Report \\320 ${p}`], ['comma', p => `Report, ${p}`],
+        ['brackets', p => `[${p}]`], ['journal', p => `J. Appl. Things 12 \\(2024\\) ${p + 100}`]];
+    for (const [name, head] of shapes) {
+        const shaped = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, head(p)), body(p)].join('\n'))));
+        assert.strictEqual(texts(shaped.auxiliary?.headers).length, 4, `Running headers: a page number printed as "${head(3)}" (${name}) makes its line a header (${JSON.stringify(texts(shaped.auxiliary?.headers))})`);
+    }
+    const preface = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, `Preface ${formatListNumber(p, 'lowerRoman')}`), body(p)].join('\n')), '/PageLabels << /Nums [0 << /S /r >>] >>'));
+    assert.deepStrictEqual(texts(preface.auxiliary?.headers), ['1:Preface i', '2:Preface ii', '3:Preface iii', '4:Preface iv'], `Running headers: a page label in a header's text numbers it (${JSON.stringify(texts(preface.auxiliary?.headers))})`);
+    // A Chinese header, "第3页" (page 3), its characters drawn as X and Y the font's ToUnicode reads so.
+    const toUnicode = '/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /XY def /CMapType 2 def 1 begincodespacerange <00> <FF> endcodespacerange '
+        + '2 beginbfchar <58> <7B2C> <59> <9875> endbfchar 2 beginbfrange <20> <57> <0020> <5A> <7E> <005A> endbfrange endcmap CMapName currentdict /CMap defineresource pop end end';
+    const chinese = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, `Acme X${p}Y`), body(p)].join('\n')), '', '/ToUnicode 12 0 R', [`<< /Length ${toUnicode.length} >>\nstream\n${toUnicode}\nendstream`]));
+    assert.strictEqual(texts(chinese.auxiliary?.headers).length, 4, `Running headers: a Chinese page number makes its line a header (${JSON.stringify(texts(chinese.auxiliary?.headers))})`);
     // A chapter's head on each of its pages, the next chapter's on its: printed alike page after page, a header,
     // and so is a short chapter's on its one page among them.
     const chapters = await read(pdfOf([1, 2, 3, 4, 5, 6].map(p => [line(50, 760, 10, `Chapter ${p <= 3 ? 1 : p === 4 ? 2 : 3}`), body(p)].join('\n'))));
