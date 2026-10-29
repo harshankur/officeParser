@@ -215,3 +215,24 @@ export function fillPageNumber(texts: string[], value: number, format: PageNumbe
     if (!placed) out[out.length - 1] = (out[out.length - 1] ?? '') + written;
     return out;
 }
+
+/**
+ * A page field's instruction as Word and RTF write it (`PAGE`, `NUMPAGES \* roman`): the field, and the
+ * switch its format is written with where Word has one (a digit script's has none: the section's is used).
+ */
+export function pageFieldInstruction(field: 'page' | 'pages', format: PageNumberFormat | undefined): string {
+    const name = field === 'page' ? 'PAGE' : 'NUMPAGES';
+    switch (format) {
+        case 'lowerRoman': return `${name} \\* roman`;
+        case 'upperRoman': return `${name} \\* ROMAN`;
+        case 'lowerLetter': return `${name} \\* alphabetic`;
+        case 'upperLetter': return `${name} \\* ALPHABETIC`;
+        case 'decimal': return `${name} \\* Arabic`;
+        case 'decimalDash': return `${name} \\* ArabicDash`;
+        case 'ordinal': return `${name} \\* Ordinal`;
+        case 'cardinalText': return `${name} \\* CardText`;
+        case 'ordinalText': return `${name} \\* OrdText`;
+        case 'hex': return `${name} \\* Hex`;
+        default: return name;
+    }
+}

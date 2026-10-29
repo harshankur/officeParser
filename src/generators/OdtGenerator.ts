@@ -1,7 +1,7 @@
 import { zipSync, Zippable } from 'fflate';
 import { UniqueNames } from '../utils/uniqueNames.js';
 import { layoutTableRows } from '../utils/tableLayout.js';
-import { BreakMetadata, ConversionResult, GeneratorConfig, HeaderFooterMetadata, ImageMode, OdtGeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageNumberFormat, PageSetup, TextFormatting } from '../types.js';
+import { BreakMetadata, ConversionResult, GeneratorConfig, HeaderFooterMetadata, ImageMode, OdtGeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageNumberFormat, PageSetup, TextFormatting, TextMetadata } from '../types.js';
 import { odfNumFormatOf } from '../utils/pageNumbers.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
@@ -550,7 +550,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
 
     private async inlineContent(node: OfficeContentNode): Promise<string> {
         switch (node.type) {
-            case 'text': return this.span(node.text || '', node.formatting) + await this.notesFor(node) + await this.commentsFor(node);
+            case 'text': return this.pageField(node) + await this.notesFor(node) + await this.commentsFor(node);
             case 'code': return this.inlineCode(node);
             case 'image': return this.imageRun(node);
             case 'break': return this.inlineBreak(node);
@@ -559,6 +559,20 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             default:
                 return this.span(this.getNodeText(node), undefined);
         }
+    }
+
+    /**
+     * A text node's span; a page field (the page's number, the document's pages) as the field, its saved
+     * number its text, so each page shows its own.
+     */
+    private pageField(node: OfficeContentNode): string {
+        const meta = node.metadata as TextMetadata | undefined;
+        if (meta?.field !== 'page' && meta?.field !== 'pages') return this.span(node.text || '', node.formatting);
+        const tag = meta.field === 'page' ? 'text:page-number' : 'text:page-count';
+        const numFormat = meta.fieldFormat ? odfNumFormatOf(meta.fieldFormat) : undefined;
+        const field = `<${tag}${meta.field === 'page' ? ' text:select-page="current"' : ''}${numFormat ? ` style:num-format="${escapeXml(numFormat)}"` : ''}>${encodeOdfText(node.text || '')}</${tag}>`;
+        const props = this.textProps(node.formatting);
+        return props ? `<text:span text:style-name="${this.activeStyles.intern('text', 'T', props)}">${field}</text:span>` : field;
     }
 
     private span(text: string, fmt: TextFormatting | undefined): string {

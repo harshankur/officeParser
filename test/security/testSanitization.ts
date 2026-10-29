@@ -29,6 +29,7 @@ import { terminateOcr } from '../../src/utils/ocrUtils';
 import { OfficeErrorType } from '../../src/types';
 import { buildTaggedNodes } from '../../src/parsers/pdf/structTree';
 import { computeDocContext } from '../../src/parsers/pdf/textLayout';
+import { findRunningLines } from '../../src/parsers/pdf/runningLines';
 import { MarkedContent } from '../../src/parsers/pdf/actualText';
 import { PdfFile } from '../../src/parsers/pdf/pdfFile';
 import { KeptJpegs } from '../../src/parsers/pdf/pdfJpeg';
@@ -4266,6 +4267,44 @@ async function pdfProcessTests(h: {
     let tabled = { error: '', text: '' } as { error: string; text: string };
     await linear('pdf: a page of 2,000 small tables between lines of prose is read', async () => { tabled = await read(tablesPage(n(2000))); });
     check('pdf: a page of small tables keeps its text', !tabled.error && tabled.text.includes('c7') && tabled.text.includes('prose'), tabled.error || tabled.text.slice(0, 80));
+    // Running headers and footers, found by comparing the pages (see runningLines): in time in proportion to
+    // the lines in the pages' bands, however many pages there are and however many lines a band holds. Each
+    // page's bands full of lines, every one running, its header's taken and given back one by one (each close
+    // over the next); a row of many cells over another, each checked for the cells under it.
+    let bandNotes = 0;
+    const bandRuns = (lines: number, cells: number) => {
+        const runs: any[] = [];
+        const run = (text: string, x: number, y: number) => runs.push({ text, x, yTop: y, yBaseline: y + 1.6, width: 1.5 * text.length, height: 2, fontSize: 2, dir: 'ltr', angle: 0, turn: 0, mcid: null, inArtifact: false, formatting: {} });
+        // (Lines of letters alone, each its own: no two alike once their numbers are one.)
+        const letters = (k: number) => { let out = ''; do { out = String.fromCharCode(97 + (k % 26)) + out; k = Math.floor(k / 26); } while (k); return out; };
+        for (let l = 0; l < lines; l++) { run(`Head ${letters(l)}`, 10, 10 + l * 3); run(`Foot ${letters(l)}`, 10, 99_980 - l * 3); }
+        for (let c = 0; c < cells; c++) { run(`c${c}`, 10 + c * 20, 10 + lines * 3); run(`d${c}`, 10 + c * 20, 13 + lines * 3); }
+        run(`Note ${letters(bandNotes++)}`, 10, 16 + lines * 3);
+        runs.push({ text: 'Body', x: 10, yTop: 50_000, yBaseline: 50_010, width: 40, height: 12, fontSize: 12, dir: 'ltr', angle: 0, turn: 0, mcid: null, inArtifact: false, formatting: {} });
+        return runs;
+    };
+    const bandLayout: any = { useTags: false, detectColumns: true, mergeHyphenatedWords: true, lineToleranceFactor: 0.35, spaceToleranceFactor: 0.25, headingDetection: 'auto', normalizeText: true, extractTextColor: false, includeBounds: true };
+    const bandPages = (pages: number, lines: number, cells: number) => Array.from({ length: pages }, (_, i) => ({ pageNumber: i + 1, width: 200_000, height: 100_000, authoredW: 200_000, authoredH: 100_000, authoredY1: 100_000, rotation: 0, runs: bandRuns(lines, cells), images: [], structTree: null }));
+    let runningFound = 0;
+    const manyPages = bandPages(400, 20, 20), fewPages = bandPages(100, 20, 20);
+    await linear('pdf: 400 pages of 40 band lines are compared', () => { runningFound = findRunningLines(scale < 1 ? fewPages : manyPages, bandLayout, 12, null).size; });
+    check('pdf: every page of running lines has its running lines', runningFound === 400, `${runningFound}`);
+    const longBands = bandPages(4, 4000, 4000), shortBands = bandPages(4, 1000, 1000);
+    await linear('pdf: 4 pages of 8,000 band lines and rows of 4,000 cells are compared', () => { findRunningLines(scale < 1 ? shortBands : longBands, bandLayout, 12, null); });
+    const bandedDoc = (pages: number) => {
+        const objs: (string | Buffer)[] = ['<< /Type /Catalog /Pages 2 0 R >>', '', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+        const kids: number[] = [];
+        let head = 'BT /F1 2 Tf\n';
+        for (let l = 0; l < 30; l++) head += `1 0 0 1 40 ${830 - l * 3} Tm (Running head ${String.fromCharCode(97 + l)}) Tj 1 0 0 1 300 ${830 - l * 3} Tm (Page) Tj 1 0 0 1 40 ${20 + l * 3} Tm (Running foot ${l}) Tj\n`;
+        head += 'ET\nBT /F1 10 Tf 40 400 Td (Body of the page) Tj ET\n';
+        objs.push(flate(Buffer.from(head)));
+        for (let p = 0; p < pages; p++) { objs.push('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 4 0 R >>'); kids.push(objs.length); }
+        objs[1] = `<< /Type /Pages /Kids [${kids.map(k => `${k} 0 R`).join(' ')}] /Count ${kids.length} >>`;
+        return pdfFrom(objs);
+    };
+    let banded = { error: '', text: '' } as { error: string; text: string };
+    await linear('pdf: 200 pages of 90 running lines each are read', async () => { banded = await read(bandedDoc(n(200))); });
+    check('pdf: pages of running lines keep their body', !banded.error && banded.text.includes('Body of the page'), banded.error || banded.text.slice(0, 80));
     // A page's marked content is read for its ActualText (see actualText): in time in proportion to its
     // operators, and within its bound on what it inflates (a stream of zeros inflating far past it).
     const markedPage = (body: Buffer) => pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [5 0 R] /Count 1 >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', flate(body),
@@ -4316,7 +4355,9 @@ async function pdfProcessTests(h: {
     await linear('pdf: a form of 4,000 filled fields, a value of a megabyte and one of 20,000 lines is read', async () => {
         filled = await read(formPdf(n(4_000), 'word '.repeat(n(200_000)), n(20_000)));
     }, { label: 'pdf: a form of many filled fields holds the heap', limit: 400e6 });
-    check('pdf: a form\'s values are read', !filled.error && filled.text.includes('Form page') && filled.text.includes('value 3') && filled.text.includes('word word'), filled.error || filled.text.slice(0, 80));
+    // (Its pages' "Form page", the same at the top of each, is their running header.)
+    const formHeaders = ((filled as { ast?: OfficeParserAST }).ast?.auxiliary?.headers ?? []).map(h => h.text).join(' ');
+    check('pdf: a form\'s values are read', !filled.error && formHeaders.includes('Form page') && filled.text.includes('value 3') && filled.text.includes('word word'), filled.error || filled.text.slice(0, 80));
     const zeros = Buffer.alloc(96 * 1024 * 1024, 0x20);
     zeros.write('BT /F1 10 Tf 40 800 Td (Past the zeros) Tj ET', zeros.length - 64);
     const bombRun = await withinTime(20_000, () => read(markedPage(zeros)));

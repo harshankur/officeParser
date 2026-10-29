@@ -4905,7 +4905,8 @@ async function testDocxSectionsInPdf(): Promise<void> {
     const texts = pages.map(p => collectAllNodes({ content: [p] } as any).filter(n => n.type === 'text').map(n => n.text).join(' ') + ' ' + [...(back.auxiliary?.headers ?? []), ...(back.auxiliary?.footers ?? [])].filter(h => (h.metadata as any)?.pageNumber === (p.metadata as any).pageNumber).map(h => h.text).join(' '));
     const sizes = pages.map(p => [(p.metadata as any).pageWidth, (p.metadata as any).pageHeight]);
     assert.ok(sizes.length >= 3 && sizes.slice(0, -1).every(([w, h]) => w === 612 && h === 792) && sizes[sizes.length - 1][0] === 792, `Letter pages, then a landscape one; got ${JSON.stringify(sizes)}`);
-    const printed = String((await back.to('text')).value) + ' ' + collectAllNodes({ content: [...(back.auxiliary?.headers ?? []), ...(back.auxiliary?.footers ?? [])] } as any).filter(x => x.type === 'text').map(x => x.text).join(' ');
+    // (A header or footer read back is its node's text: a page number in one is a field of its own, cut from its words.)
+    const printed = String((await back.to('text')).value) + ' ' + [...(back.auxiliary?.headers ?? []), ...(back.auxiliary?.footers ?? [])].map(x => x.text).join(' ');
     const n = pages.length;
     assert.ok(printed.includes('Title page header') && printed.includes('Running header') && printed.includes('Landscape header') && !printed.includes('Even header not shown'), 'each page prints its section\'s header, its first page its own, and an unused part none');
     // (The title page has no first page's footer: none, as Word shows it.)
@@ -5471,7 +5472,8 @@ async function testWritersHoldUp(): Promise<void> {
     assert.ok(reflowSource.auxiliary?.headers?.length, 'the PDF\'s running headers are read');
     {
         const small = (await OfficeGenerator.generate(reflowSource, 'pdf', { pdfConfig: { engine: 'native', format: 'a6' } } as any)).value as Uint8Array;
-        const smallPages = (await OfficeParser.parseOffice(Buffer.from(small), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).content.filter(n => n.type === 'page');
+        // (Read back with its headers kept in their pages: repeated on each page, they are its running headers.)
+        const smallPages = (await OfficeParser.parseOffice(Buffer.from(small), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false, keepHeadersAndFootersInPages: true } } as any) as OfficeParserAST).content.filter(n => n.type === 'page');
         const titled = smallPages.map(p => /Running title/.test(JSON.stringify(p)) || false);
         assert.ok(smallPages.length > 4 && titled.every(Boolean), `each page a PDF's page is laid out on has its header; got ${titled}`);
     }
@@ -5848,7 +5850,8 @@ async function testPageNumberFormats(): Promise<void> {
     const footerNumbers = async (ast: OfficeParserAST) => {
         const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
         const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false, keepHeadersAndFootersInPages: true } } as any) as OfficeParserAST;
-        return back.content.filter(n => n.type === 'page').map(p => /Page (\S+)/.exec(collectAllNodes({ ...back, content: [p] } as OfficeParserAST).filter(n => n.type === 'text').map(n => n.text).join(' '))?.[1]);
+        // (A page number read back is a field of its own, its text a leaf apart from "Page ".)
+        return back.content.filter(n => n.type === 'page').map(p => /Page\s+(\S+)/.exec(collectAllNodes({ ...back, content: [p] } as OfficeParserAST).filter(n => n.type === 'text').map(n => n.text).join(' '))?.[1]);
     };
     // A front matter numbered i, ii, then a body in digits (Word's default, said by no w:pgNumType): each
     // page in its section's numbers, the body's footer its own or the front matter's carried on (saved
@@ -8561,6 +8564,137 @@ async function testPdfTextOnFills(): Promise<void> {
     console.log('  PDF text on fills: All assertions passed ✓');
 }
 
+async function testPdfRunningHeadersFooters(): Promise<void> {
+    // Pages of 500 x 800 points: the top and bottom bands, where a running header and footer are read, are
+    // the 120 points at each edge.
+    const pdfOf = (pages: string[], catalog = ''): Buffer => {
+        const objects: string[] = [`<< /Type /Catalog /Pages 2 0 R ${catalog} >>`, `<< /Type /Pages /Kids [${pages.map((_, i) => `${4 + 2 * i} 0 R`).join(' ')}] /Count ${pages.length} >>`,
+            '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+        pages.forEach((content, i) => {
+            objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 800] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + 2 * i} 0 R >>`);
+            objects.push(`<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`);
+        });
+        const parts: Buffer[] = [Buffer.from('%PDF-1.7\n')];
+        const offsets: number[] = [];
+        let at = parts[0].length;
+        objects.forEach((o, i) => { const b = Buffer.from(`${i + 1} 0 obj\n${o}\nendobj\n`, 'latin1'); offsets.push(at); at += b.length; parts.push(b); });
+        parts.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+        return Buffer.concat(parts);
+    };
+    const line = (x: number, y: number, size: number, text: string) => `BT /F1 ${size} Tf ${x} ${y} Td (${text}) Tj ET`;
+    /** A page's body: lines of 12 point text, from 640 down. */
+    const body = (page: number, lines = 20) => Array.from({ length: lines }, (_, i) => line(50, 640 - i * 20, 12, `Page ${page} body line ${i + 1} of the text.`)).join('\n');
+    const read = async (pdf: Buffer, pdfParserConfig: object = {}, extra: object = {}) => await OfficeParser.parseOffice(pdf, { fileType: 'pdf', ocr: false, ...extra, pdfParserConfig: { separateProcess: false, ...pdfParserConfig } } as any) as OfficeParserAST;
+    const md = async (ast: OfficeParserAST) => String((await ast.to('md')).value);
+    const texts = (nodes: OfficeContentNode[] | undefined) => (nodes ?? []).map(n => `${(n.metadata as { page?: number } | undefined)?.page}:${n.text}`);
+    const fieldsOf = (nodes: OfficeContentNode[] | undefined) => (nodes ?? []).flatMap(n => (n.children ?? []).filter(c => (c.metadata as any)?.field).map(c => `${(n.metadata as { page?: number } | undefined)?.page}:${(c.metadata as any).field}=${c.text}`));
+    const count = (s: string, part: string) => s.split(part).length - 1;
+
+    // A form of four pages, untagged: its footer, a line and "n/4", the same on every page; a heading
+    // larger than its text at the top of every page; and a line at the foot of the first page alone.
+    const form = pdfOf([1, 2, 3, 4].map(p => [
+        line(50, 740, 14, 'Angaben zum Elternteil'),
+        body(p),
+        p === 1 ? line(50, 52, 8, 'Nur auf der ersten Seite') : '',
+        line(50, 30, 8, 'Anlage Formular zu Antragsversion April 2025'),
+        line(440, 30, 8, `${p}/4`),
+    ].join('\n')));
+    const ast = await read(form);
+    assert.deepStrictEqual(texts(ast.auxiliary?.footers), ['1:Anlage Formular zu Antragsversion April 2025', '1:1/4', '2:Anlage Formular zu Antragsversion April 2025', '2:2/4', '3:Anlage Formular zu Antragsversion April 2025', '3:3/4', '4:Anlage Formular zu Antragsversion April 2025', '4:4/4'],
+        `Running footers: an untagged form's footer, the same on every page, is each page's footer (${JSON.stringify(texts(ast.auxiliary?.footers))})`);
+    assert.strictEqual(ast.auxiliary?.headers, undefined, 'Running footers: a heading larger than the text, repeated at the top of every page, is no header');
+    assert.deepStrictEqual(fieldsOf(ast.auxiliary?.footers), ['1:page=1', '1:pages=4', '2:page=2', '2:pages=4', '3:page=3', '3:pages=4', '4:page=4', '4:pages=4'],
+        `Running footers: "n/4" is the page's number and the document's pages (${JSON.stringify(fieldsOf(ast.auxiliary?.footers))})`);
+    const formMd = await md(ast);
+    assert.ok(!formMd.includes('Anlage') && !/\d\/4/.test(formMd), `Running footers: the footer leaves the Markdown, as a tagged PDF's does (${formMd.slice(-300)})`);
+    assert.strictEqual(count(formMd, 'Angaben zum Elternteil'), 4, 'Running footers: the repeated heading stays on every page');
+    assert.strictEqual(count(formMd, 'Nur auf der ersten Seite'), 1, 'Running footers: a line at the foot of the first page alone stays the page\'s');
+    assert.ok(!String((await ast.to('text')).value).includes('Anlage'), 'Running footers: and leaves the plain text');
+    // Writers that lay out pages write the page fields, so each page shows its own.
+    const docx = unzipSync((await ast.to('docx')).value as Uint8Array);
+    const footerXml = Object.keys(docx).filter(k => /^word\/footer\d*\.xml$/.test(k)).map(k => strFromU8(docx[k])).join('');
+    assert.ok(/<w:fldSimple w:instr=" PAGE "><w:r>[^]*?<w:t[^>]*>1<\/w:t><\/w:r><\/w:fldSimple>/.test(footerXml) && /<w:fldSimple w:instr=" NUMPAGES ">[^]*?>4<\/w:t>/.test(footerXml) && footerXml.includes('Anlage Formular'),
+        `Running footers: DOCX writes PAGE and NUMPAGES fields in the footer (${footerXml.slice(0, 600)})`);
+    assert.ok(/<w:p>(?:(?!<\/w:p>)[^])*PAGE(?:(?!<\/w:p>)[^])*>\/<(?:(?!<\/w:p>)[^])*NUMPAGES(?:(?!<\/w:p>)[^])*<\/w:p>/.test(footerXml), 'Running footers: "n/N" is one paragraph in DOCX');
+    const back = await OfficeParser.parseOffice(Buffer.from((await ast.to('docx')).value as Uint8Array), { fileType: 'docx' } as any) as OfficeParserAST;
+    assert.ok(['page', 'pages'].every(f => (back.auxiliary?.footers ?? []).some(n => JSON.stringify(n).includes(`"field":"${f}"`))), 'Running footers: and Word reads them back as page fields');
+    const odt = unzipSync((await ast.to('odt')).value as Uint8Array);
+    const odtStyles = strFromU8(odt['styles.xml']);
+    assert.ok(/<text:page-number text:select-page="current">1<\/text:page-number>/.test(odtStyles) && /<text:page-count>4<\/text:page-count>/.test(odtStyles), `Running footers: ODT writes the page number and count fields (${odtStyles.match(/<style:footer>.*?<\/style:footer>/s)?.[0]})`);
+    const rtf = String((await ast.to('rtf')).value);
+    assert.ok(/\{\\field\{\\\*\\fldinst PAGE\}\{\\fldrslt [^]*?1\}\}/.test(rtf) && /\\fldinst NUMPAGES\}/.test(rtf), 'Running footers: RTF writes PAGE and NUMPAGES fields');
+    assert.ok(/Antragsversion April 2025\}\\par/.test(rtf), 'Running footers: and RTF ends the footer\'s first line before its second');
+    // Kept in the pages, as they were read before.
+    const kept = await read(form, { keepHeadersAndFootersInPages: true });
+    const keptMd = await md(kept);
+    assert.ok(kept.auxiliary?.footers === undefined && count(keptMd, 'Anlage Formular') === 4 && ['1/4', '2/4', '3/4', '4/4'].every(t => keptMd.includes(t)), `Running footers: keepHeadersAndFootersInPages keeps them in their pages (${keptMd.slice(-200)})`);
+    assert.ok(collectAllNodes(kept).some(n => (n.metadata as any)?.field === 'pages' && n.text === '4'), 'Running footers: kept in the page, the page numbers are fields still');
+    const lastKept = kept.content[3].children ?? [];
+    assert.ok(lastKept[lastKept.length - 1]?.text === '4/4', 'Running footers: kept, the footer is last on its page');
+    const dropped = await read(form, {}, { ignoreHeadersAndFooters: true });
+    assert.ok(dropped.auxiliary?.footers === undefined && !(await md(dropped)).includes('Anlage'), 'Running footers: ignoreHeadersAndFooters drops them');
+
+    // Two pages numbered alone: a page's own number is running on two pages, however close under the line
+    // above it; that line, on both pages but not a page number, is not (two pages tell nothing more of it).
+    const two = await read(pdfOf([1, 2].map(p => [body(p), line(50, 42, 9, 'Vertraulich'), line(245, 30, 10, String(p))].join('\n'))));
+    assert.deepStrictEqual([texts(two.auxiliary?.footers), fieldsOf(two.auxiliary?.footers)], [['1:1', '2:2'], ['1:page=1', '2:page=2']], `Running footers: two pages' bare numbers are their footers (${JSON.stringify(texts(two.auxiliary?.footers))})`);
+    const twoMd = await md(two);
+    assert.ok(count(twoMd, 'Vertraulich') === 2 && !/^[12]$/m.test(twoMd), 'Running footers: the line above them stays');
+
+    // A front matter's pages numbered in roman numerals, as its page labels say: running on two pages, and
+    // the page's number in its numerals.
+    const roman = await read(pdfOf(['i', 'ii'].map((n, i) => [body(i + 1), line(245, 30, 10, n)].join('\n')), '/PageLabels << /Nums [0 << /S /r >>] >>'));
+    const romanFields = (roman.auxiliary?.footers ?? []).flatMap(n => (n.children ?? []).map(c => `${c.text}:${(c.metadata as any)?.field}:${(c.metadata as any)?.fieldFormat}`));
+    assert.deepStrictEqual(romanFields, ['i:page:lowerRoman', 'ii:page:lowerRoman'], `Running footers: roman page numbers the labels give are footers and fields (${JSON.stringify(texts(roman.auxiliary?.footers))})`);
+    assert.ok(/<w:fldSimple w:instr=" PAGE \\\* roman ">/.test(Object.entries(unzipSync((await roman.to('docx')).value as Uint8Array)).filter(([k]) => /footer/.test(k)).map(([, v]) => strFromU8(v)).join('')), 'Running footers: DOCX writes the field in roman numerals');
+
+    // A form placed after another page (a scan before it): its "n/4" is a running footer, but not the page's
+    // number, so it is no field.
+    const stitched = await read(pdfOf([body(1), ...[1, 2, 3, 4].map(p => [body(p + 1), line(440, 30, 8, `${p}/4`)].join('\n'))]));
+    assert.ok(texts(stitched.auxiliary?.footers).join() === '2:1/4,3:2/4,4:3/4,5:4/4' && fieldsOf(stitched.auxiliary?.footers).length === 0,
+        `Running footers: another document's page numbers are its footer, but not this one's page fields (${JSON.stringify([texts(stitched.auxiliary?.footers), fieldsOf(stitched.auxiliary?.footers)])})`);
+
+    // A table going on over four pages, its head row repeated at the top of each, at the text's size: the
+    // head reads with the rows under it, close under it or far.
+    for (const [what, pitch] of [['close', 16], ['far apart', 40]] as const) {
+        let item = 0;
+        const pages = [1, 2, 3, 4].map(() => {
+            const rows = [line(50, 740, 12, 'Item'), line(200, 740, 12, 'Quantity'), line(350, 740, 12, 'Price')];
+            for (let y = 740 - pitch; y > 40; y -= pitch, item++) rows.push(line(50, y, 12, `Item ${item}`), line(200, y, 12, String(item * 3)), line(350, y, 12, `${item}.00 EUR`));
+            return rows.join('\n');
+        });
+        const tabled = await read(pdfOf(pages));
+        assert.ok(tabled.auxiliary?.headers === undefined && tabled.auxiliary?.footers === undefined, `Running footers: a table's head row repeated on each page, its rows ${what}, is the table's (${JSON.stringify([texts(tabled.auxiliary?.headers), texts(tabled.auxiliary?.footers)])})`);
+        assert.strictEqual(count(await md(tabled), 'Quantity'), 4, `Running footers: and stays on each page (${what})`);
+    }
+    // A table of one column, its head close over its rows: the head is the table's.
+    const names = ['Alice', 'Bruno', 'Chen', 'Dara', 'Emil', 'Farah', 'Goran', 'Hana', 'Ivo', 'Jana'];
+    const column = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 740, 12, 'Name'), ...names.map((name, i) => line(50, 724 - i * 16, 12, `${name} ${String.fromCharCode(64 + p)}`)), body(p)].join('\n'))));
+    assert.strictEqual(column.auxiliary?.headers, undefined, `Running headers: a one-column table's head, close over its rows, is the table's (${JSON.stringify(texts(column.auxiliary?.headers))})`);
+    // Entries numbered down each page, far apart: an entry is not a header for being like the one under it.
+    let entry = 0;
+    const entries = await read(pdfOf([1, 2, 3, 4].map(() => Array.from({ length: 24 }, () => line(50, 760 - (entry % 24) * 30, 12, `Entry ${++entry}`)).join('\n'))));
+    assert.ok(entries.auxiliary?.headers === undefined && entries.auxiliary?.footers === undefined, `Running headers: entries numbered down the pages are no header or footer (${JSON.stringify([texts(entries.auxiliary?.headers), texts(entries.auxiliary?.footers)])})`);
+
+    // A book's heads, one on the left of even pages and another on the right of odd ones, its first page
+    // without: three odd pages of eight are too few of all the pages, enough of the odd ones.
+    const book = await read(pdfOf([1, 2, 3, 4, 5, 6, 7, 8].map(p => [
+        p === 1 ? line(150, 500, 20, 'A Book of Examples') : p % 2 ? line(330, 760, 10, 'Chapter One: Beginnings') : line(50, 760, 10, 'A Book of Examples'),
+        body(p),
+        p === 1 ? '' : line(p % 2 ? 440 : 50, 30, 10, String(p)),
+    ].join('\n'))));
+    assert.deepStrictEqual(texts(book.auxiliary?.headers), ['2:A Book of Examples', '3:Chapter One: Beginnings', '4:A Book of Examples', '5:Chapter One: Beginnings', '6:A Book of Examples', '7:Chapter One: Beginnings', '8:A Book of Examples'],
+        `Running headers: a book's even and odd pages' heads (${JSON.stringify(texts(book.auxiliary?.headers))})`);
+    assert.deepStrictEqual(fieldsOf(book.auxiliary?.footers), ['2:page=2', '3:page=3', '4:page=4', '5:page=5', '6:page=6', '7:page=7', '8:page=8'], 'Running headers: and its page numbers, left and right');
+    const bookMd = await md(book);
+    assert.ok(!bookMd.includes('Chapter One') && count(bookMd, 'A Book of Examples') === 1, 'Running headers: the heads leave the Markdown, the title page\'s title stays');
+
+    // A tagged PDF's page numbers, in its pagination artifacts, are page fields too.
+    const tagged = await read(pdfOf([1, 2, 3].map(p => [body(p), `/Artifact << /Type /Pagination >> BDC ${line(200, 30, 9, `Page ${p} of 3`)} EMC`].join('\n')), '/MarkInfo << /Marked true >>'));
+    assert.deepStrictEqual(fieldsOf(tagged.auxiliary?.footers), ['1:page=1', '1:pages=3', '2:page=2', '2:pages=3', '3:page=3', '3:pages=3'], `Running footers: a tagged footer's page numbers are fields (${JSON.stringify(texts(tagged.auxiliary?.footers))})`);
+    console.log('  PDF running headers and footers: All assertions passed ✓');
+}
+
 async function testPdfInProcessTurns(): Promise<void> {
     const { deflateSync } = await import('zlib');
     const pdfFrom = (objects: (string | Buffer)[]): Buffer => {
@@ -10384,6 +10518,7 @@ async function runTests(): Promise<void> {
         ['PDF glyph names', testPdfGlyphNames],
         ['PDF kept JPEGs', testPdfKeptJpegs],
         ['PDF text on fills', testPdfTextOnFills],
+        ['PDF running headers and footers', testPdfRunningHeadersFooters],
         ['Cancellation', testCancellation],
     ];
 

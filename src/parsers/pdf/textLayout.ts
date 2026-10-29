@@ -1074,6 +1074,10 @@ function cellFromLine(lines: PdfLine[], row: number, col: number, page: PageCont
 
 /** Each line's runs as buildLines gathered them, for cutting a line where a table's columns are (see cutAtColumnEdges). */
 const LINE_RUNS = new WeakMap<PdfLine, RawRun[]>();
+/** A line's runs, as buildLines gathered them. */
+export function lineRuns(line: PdfLine): readonly RawRun[] {
+    return LINE_RUNS.get(line) ?? [];
+}
 /** Each run's place in the order its page draws its runs (buildLines' runs), for twoColumnTable. */
 const RUN_ORDER = new WeakMap<RawRun, number>();
 

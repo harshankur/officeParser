@@ -52,6 +52,7 @@ import { annotationMatrix, computeRunBox, identityMatrix, mulMatrix, roundBounds
 import { PageExtract, PdfImage, PdfLayoutConfig, RawRun, ResolvedFont } from './pdf/pdfTypes.js';
 import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, emitBounds, indentLevels as indentLevelsOf, joinMarkerLines, leadingMarker, ListCarry, markerLefts, PageContext, lineDirections, recoverTaggedGrids, rightToLeftLean, relevelHeadings, runsToParagraph, segmentIntoBlocks } from './pdf/textLayout.js';
 import { buildTaggedNodes } from './pdf/structTree.js';
+import { FURNITURE_BAND, findRunningLines, markPageFields, PageFurniture, RunningRuns } from './pdf/runningLines.js';
 import { setOwn } from '../utils/lookupUtils.js';
 import { acquirePdfProcess, PdfProcess } from './pdf/pdfProcess.js';
 import { captureConsoleWarnings, openWarningWorker, PdfAssetSession, pdfjsWorkerFile, resolvePdfAssetFolders, WarningWorker } from './pdf/pdfAssets.js';
@@ -2112,6 +2113,12 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
 
     const auxHeaders: OfficeContentNode[] = [];
     const auxFooters: OfficeContentNode[] = [];
+    // Each page's header and footer nodes, for their page numbers (see markPageFields).
+    const furniture: PageFurniture[] = [];
+    // A document whose tags are not read for its structure does not mark its running headers and footers
+    // either (untagged, or tagged but not trusted, or its tags not asked for): the lines repeated at the top
+    // and the bottom of its pages are found by comparing them (see findRunningLines).
+    const running = pdfCfg.useTags && docTrusted ? new Map<PageExtract, RunningRuns>() : findRunningLines(extracts, layoutCfg, docCtx.bodyFontSize, pageLabels);
 
     const taggedListCounter = { n: 0 };
     let imageCounter = 0;
@@ -2132,9 +2139,19 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         // headers/footers. Everything else an Artifact scope covers (watermarks, figure labels,
         // decorative headings, whatever an InDesign or Acrobat export marked as artifact) is real
         // page text and joins the body flow instead of being dropped on the floor.
-        const { header: headerRuns, footer: footerRuns, body: midArtifacts } = splitArtifacts(extract);
+        const { header: artifactHeader, footer: artifactFooter, body: midArtifacts } = splitArtifacts(extract);
         const midSet = new Set(midArtifacts);
-        const bodyRuns = extract.runs.filter(r => !r.inArtifact || midSet.has(r));
+        // And the lines found running on an untagged page, read as a tagged page's artifacts are.
+        const runningRuns = running.get(extract);
+        // (In the page's order, as the artifacts' are: the order runs are drawn in is how a line's are joined.)
+        const withRunning = (artifacts: RawRun[], found: Set<RawRun> | undefined) => {
+            if (!found?.size) return artifacts;
+            const own = new Set(artifacts);
+            return extract.runs.filter(r => found.has(r) || own.has(r));
+        };
+        const headerRuns = withRunning(artifactHeader, runningRuns?.header);
+        const footerRuns = withRunning(artifactFooter, runningRuns?.footer);
+        const bodyRuns = extract.runs.filter(r => (!r.inArtifact || midSet.has(r)) && !runningRuns?.header.has(r) && !runningRuns?.footer.has(r));
 
         let pageContent: OfficeContentNode[] | null = null;
         let fromTags = false;
@@ -2203,8 +2220,11 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
 
         // A running header and footer kept in the page: before its content and after it, as an untagged
         // PDF's read, and before its images are placed (a logo beside the header stays with it).
+        const headerNodes = config.ignoreHeadersAndFooters ? [] : geometricNodes(headerRuns, layoutCtx, docCtx, layoutCfg, false);
+        const footerNodes = config.ignoreHeadersAndFooters ? [] : geometricNodes(footerRuns, layoutCtx, docCtx, layoutCfg, false);
         if (!config.ignoreHeadersAndFooters && pdfCfg.keepHeadersAndFootersInPages) {
-            pageContent = [...geometricNodes(headerRuns, layoutCtx, docCtx, layoutCfg, false), ...pageContent, ...geometricNodes(footerRuns, layoutCtx, docCtx, layoutCfg, false)];
+            pageContent = [...headerNodes, ...pageContent, ...footerNodes];
+            furniture.push({ pageNumber: extract.pageNumber, kind: 'header', nodes: headerNodes, rotation: extract.rotation }, { pageNumber: extract.pageNumber, kind: 'footer', nodes: footerNodes, rotation: extract.rotation });
         }
 
         // Images: emit as attachments/OCR, then splice each into the flow before the first text node
@@ -2222,10 +2242,11 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         if (!config.ignoreHeadersAndFooters && !pdfCfg.keepHeadersAndFootersInPages) {
             const pageHeaders: OfficeContentNode[] = [];
             const pageFooters: OfficeContentNode[] = [];
-            for (const node of geometricNodes(headerRuns, layoutCtx, docCtx, layoutCfg, false)) pageHeaders.push(retypeAsHeaderFooter(node, 'header', extract.pageNumber));
-            for (const node of geometricNodes(footerRuns, layoutCtx, docCtx, layoutCfg, false)) pageFooters.push(retypeAsHeaderFooter(node, 'footer', extract.pageNumber));
+            for (const node of headerNodes) pageHeaders.push(retypeAsHeaderFooter(node, 'header', extract.pageNumber));
+            for (const node of footerNodes) pageFooters.push(retypeAsHeaderFooter(node, 'footer', extract.pageNumber));
             finalizeBounds(pageHeaders, pageCtx, pdfCfg.includeBounds);
             finalizeBounds(pageFooters, pageCtx, pdfCfg.includeBounds);
+            furniture.push({ pageNumber: extract.pageNumber, kind: 'header', nodes: pageHeaders, rotation: extract.rotation }, { pageNumber: extract.pageNumber, kind: 'footer', nodes: pageFooters, rotation: extract.rotation });
             appendAll(auxHeaders, pageHeaders);
             appendAll(auxFooters, pageFooters);
         }
@@ -2262,6 +2283,10 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         }
         content.push(pageNode);
     }
+
+    // The page numbers in the pages' headers and footers, marked as the page fields they print, now that
+    // every page's are read (a number is marked only where each page's of that text is its own).
+    markPageFields(furniture, numPages);
 
     // Now that every page's headings and their positions are known, point each internal link at the
     // nearest heading on its target page (falling back to the page itself), rather than a page jump.
@@ -2395,8 +2420,8 @@ function splitArtifacts(extract: PageExtract): { header: RawRun[]; footer: RawRu
         if (!r.inArtifact || !r.text.trim()) continue;
         const box = { x: r.x, y: r.yTop, width: r.width, height: r.height };
         const y = rotateBoundsToRendered(box, extract.rotation, extract.authoredW, extract.authoredH).y;
-        if (y < 0.15 * renderedH) header.push(r);
-        else if (y > 0.85 * renderedH) footer.push(r);
+        if (y < FURNITURE_BAND * renderedH) header.push(r);
+        else if (y > (1 - FURNITURE_BAND) * renderedH) footer.push(r);
         else body.push(r);
     }
     return { header, footer, body };

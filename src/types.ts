@@ -743,12 +743,16 @@ export interface PdfParserConfig {
      * Keep each page's running header and footer in that page's content, where they stand on the
      * page (the header first, the footer last), instead of in `auxiliary.headers` and
      * `auxiliary.footers`. A tagged PDF marks its running headers and footers as artifacts, outside its
-     * structure: they are read into `auxiliary`, as a word processor's header is, so a writer that lays
-     * out pages (Word, ODT, RTF, LaTeX, PDF) repeats the first page's on every page and one that does
-     * not (text, Markdown, HTML, EPUB, PowerPoint) leaves them out. Turn this on for a writer that
-     * shows each page as it was, a slide per page, so a page keeps its own header and footer text (a
-     * page number, a chapter title) in its place. An untagged PDF's headers and footers are page text
-     * already. `ignoreHeadersAndFooters` still drops them.
+     * structure; an untagged PDF's (or one whose tags are not trusted) are found by comparing its
+     * pages: lines repeated in one place at the top or the bottom of at least two in five of the pages
+     * (and three), with their numbers as one ("1/4", "2/4"), no larger than the text and standing apart
+     * from it, or the page's own number on two pages. Either is read into `auxiliary`, as a word
+     * processor's header is, so a writer that lays out pages (Word, ODT, RTF, LaTeX, PDF) repeats the
+     * first page's on every page and one that does not (text, Markdown, HTML, EPUB, PowerPoint) leaves
+     * them out. A page number in one is marked as the page field it prints (TextMetadata.field), so
+     * Word, ODT, RTF and PDF output number each page its own. Turn this on for a writer that shows each
+     * page as it was, a slide per page, so a page keeps its own header and footer text (a page number, a
+     * chapter title) in its place. `ignoreHeadersAndFooters` still drops them.
      *
      * Default is false.
      */

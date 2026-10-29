@@ -1,12 +1,12 @@
 import { zipSync, Zippable } from 'fflate';
 import { UniqueNames } from '../utils/uniqueNames.js';
 import { layoutTableRows } from '../utils/tableLayout.js';
-import { BreakMetadata, ConversionResult, DocxGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting } from '../types.js';
+import { BreakMetadata, ConversionResult, DocxGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting, TextMetadata } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { heldColumns } from '../utils/columnUtils.js';
 import { onDocumentPage } from '../utils/pageLimits.js';
-import { wordFmtOf } from '../utils/pageNumbers.js';
+import { pageFieldInstruction, wordFmtOf } from '../utils/pageNumbers.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, ooxmlCustomPropertiesXml, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
 import { markerPattern, MarkerPattern } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
@@ -271,7 +271,10 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
             case 'embed': return this.embed(node);
             case 'definitionTerm': return this.paragraph(node, 'DefinitionTerm');
             case 'definitionDescription': return this.paragraphIndented(node, 720);
-            case 'header': case 'footer': return this.renderBlocks(node.children); // inline page furniture
+            case 'header': case 'footer':
+                // Page furniture of runs alone (a PDF's header is a line's runs) is one paragraph, not one a run.
+                if (node.children?.length && node.children.every(c => c.type === 'text' || c.type === 'break')) return this.wrapP(await this.renderInline(node.children));
+                return this.renderBlocks(node.children); // inline page furniture
             case 'sheet': return this.sheet(node);
             case 'row': case 'cell': case 'text': // stray inline/table-part at block level: wrap
                 return this.wrapP(await this.renderInline([node]));
@@ -457,6 +460,12 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     }
 
     private textRuns(node: OfficeContentNode): string {
+        // A page field (the page's number, the document's pages) as the field, its saved number its result:
+        // Word shows each page its own.
+        const meta = node.metadata as TextMetadata | undefined;
+        if (meta?.field === 'page' || meta?.field === 'pages') {
+            return `<w:fldSimple w:instr=" ${escapeXml(pageFieldInstruction(meta.field, meta.fieldFormat))} ">${this.run(node.text || '', node.formatting)}</w:fldSimple>`;
+        }
         return this.run(node.text || '', node.formatting);
     }
 

@@ -1,5 +1,6 @@
 import { BreakMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, IndentationMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageNumberFormat, PageSetup, ParagraphMetadata, TextMetadata } from '../types.js';
 import { hasPageSize, MAX_PAGE_PT, onDocumentPage, type SizedPageSetup } from '../utils/pageLimits.js';
+import { pageFieldInstruction } from '../utils/pageNumbers.js';
 import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
@@ -281,6 +282,12 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                         text = `{\\f0 ${prefix}${text}${suffix}}`;
                     }
 
+                    // A page field (the page's number, the document's pages) as the field, its saved number its
+                    // result, so each page shows its own.
+                    if (meta?.field === 'page' || meta?.field === 'pages') {
+                        return `{\\field{\\*\\fldinst ${pageFieldInstruction(meta.field, meta.fieldFormat).replace(/\\/g, '\\\\')}}{\\fldrslt ${text}}}`;
+                    }
+
                     if (meta?.link) {
                         const isInternal = meta.linkType !== 'external';
                         if (!this.config.ignoreInternalLinks || !isInternal) {
@@ -492,9 +499,13 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                 case 'slide':
                 case 'note':
                 case 'sheet':
-                case 'page':
                 case 'header':
                 case 'footer':
+                    // Page furniture of runs alone (a PDF's header is a line's runs) is a paragraph: two of them
+                    // ran into one line ("Anlage ... 20251/4").
+                    if (node.children?.length && node.children.every(c => c.type === 'text' || c.type === 'break')) return `${this.pard()}\\sa0 ${childrenOutput}\\par\n`;
+                    return childrenOutput;
+                case 'page':
                 case 'slideMaster':
                 case 'admonition':
                 case 'definitionList':
