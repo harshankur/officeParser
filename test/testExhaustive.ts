@@ -5462,9 +5462,9 @@ async function testWritersHoldUp(): Promise<void> {
     const helvetica = await source.embedFont(StandardFonts.Helvetica);
     for (let p = 0; p < 2; p++) {
         const sheet = source.addPage([612, 792]);
-        // Marked as an artifact, as a running header is.
+        // Marked as an artifact, as a running header is, the same on every page.
         sheet.pushOperators(PDFOperator.of('BMC' as any, [PDFName.of('Artifact')]));
-        sheet.drawText(`Running title ${p + 1}`, { x: 72, y: 750, size: 10, font: helvetica });
+        sheet.drawText('Running title', { x: 72, y: 750, size: 10, font: helvetica });
         sheet.pushOperators(PDFOperator.of('EMC' as any));
         for (let i = 0; i < 30; i++) sheet.drawText(`Body line ${p * 30 + i} of the report, long enough to wrap on a small page.`, { x: 72, y: 680 - i * 18, size: 11, font: helvetica });
     }
@@ -6488,6 +6488,11 @@ async function testPdfRuledTables(): Promise<void> {
     const supRuns = collectAllNodes(await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'superscripts_chrome.pdf')), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST)
         .filter(n => n.type === 'text' && (n as any).formatting?.superscript).map(n => (n.text || '').trim());
     assert.ok(supRuns.includes('1') && supRuns.includes('2'), `a superscript set at five sixths of its line's size is marked; got ${JSON.stringify(supRuns)}`);
+    // Laid out as the page is, a right-to-left run's space, drawn at its left edge, still sets it apart from the
+    // run it touches there.
+    const laidOut = async (file: string) => String((await (await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', file)), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).to('text')).value);
+    const edgesLaid = await laidOut('bidi_edges_chrome.pdf'), supLaid = await laidOut('superscripts_chrome.pdf');
+    assert.ok(edgesLaid.includes('Microsoft הוא') && edgesLaid.includes('Android פרסמה') && supLaid.includes('בעמוד הבא הערה'), `laid-out text keeps the space at a right-to-left run's edge; got ${JSON.stringify([edgesLaid.slice(0, 300), supLaid.slice(0, 300)])}`);
 
 }
 
@@ -9113,6 +9118,19 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
     assert.deepStrictEqual(indicFormat, ['decimalArabicIndic', 'decimalArabicIndic'], `Running footers: Arabic-Indic page numbers are fields in their digits (${JSON.stringify(indicFormat)})`);
     const indicOdt = strFromU8(unzipSync((await indicTwo.to('odt')).value as Uint8Array)['styles.xml']);
     assert.ok(indicOdt.includes('style:num-format="\u0661"'), 'Running footers: ODT writes them in Arabic-Indic digits');
+    // A header the PDF marks as its artifact that changes from page to page stays in its pages too, and so does
+    // one found beside it: Word printed the first page's on every page.
+    const artifactHead = (p: number) => `/Artifact << /Type /Pagination >> BDC ${line(50, 760, 10, p <= 3 ? 'Acme Annual Report' : 'Appendix: Raw Tables')} EMC`;
+    const marked = await read(pdfOf([1, 2, 3, 4, 5, 6].map(p => [artifactHead(p), body(p)].join('\n'))));
+    const markedDocx = strFromU8(unzipSync((await marked.to('docx')).value as Uint8Array)['word/document.xml']);
+    assert.ok(marked.auxiliary?.headers === undefined && markedDocx.includes('Appendix: Raw Tables') && markedDocx.includes('Acme Annual Report'), `Running headers: an artifact header that changes stays in its pages (${JSON.stringify(texts(marked.auxiliary?.headers))})`);
+    const half = await read(pdfOf([1, 2, 3, 4, 5, 6].map(p => [p <= 3 ? artifactHead(p) : line(50, 760, 10, 'Appendix: Raw Tables'), body(p)].join('\n'))));
+    assert.ok(half.auxiliary?.headers === undefined && /Appendix: Raw Tables/.test(await md(half)), `Running headers: an artifact header and a found one that differ stay in their pages (${JSON.stringify(texts(half.auxiliary?.headers))})`);
+    // Put back in its page, a header stands where it is: after a logo drawn above it.
+    const logo = 'q 40 0 0 40 50 745 cm BI /W 2 /H 2 /CS /G /BPC 8 ID \xff\x00\x00\xff EI Q';
+    const withLogo = await read(pdfOf([1, 2, 3, 4].map(p => [logo, line(200, 760, 9, `Chapter ${p <= 2 ? 1 : 2}`), body(p)].join('\n'))), {}, { extractAttachments: true });
+    const firstPage = withLogo.content.find(n => n.type === 'page')?.children ?? [];
+    assert.ok(firstPage[0]?.type === 'image' && firstPage[1]?.text === 'Chapter 1', `Running headers: a header put back stands after the logo above it (${JSON.stringify(firstPage.slice(0, 3).map(n => `${n.type}:${n.text}`))})`);
     console.log('  PDF running headers and footers: All assertions passed ✓');
 }
 

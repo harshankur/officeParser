@@ -2149,11 +2149,10 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     const auxFooters: OfficeContentNode[] = [];
     // Each page's header and footer nodes, for their page numbers (see markPageFields).
     const furniture: PageFurniture[] = [];
-    // Each page whose header or footer was found by comparing the pages and went to the auxiliary: its nodes as
-    // read and as they went there, so a kind whose text changes from page to page is put back in its pages (see
-    // furnitureChanging). A header the PDF marks as its artifact is its header, as it says.
-    const routed: { page: OfficeContentNode; header: [OfficeContentNode, OfficeContentNode][]; footer: [OfficeContentNode, OfficeContentNode][] }[] = [];
-    const foundFurniture: PageFurniture[] = [];
+    // Each page whose header and footer went to the auxiliary: its nodes as read and as they went there, and the
+    // pictures above its header and below its footer, so a kind whose text changes from page to page is put back
+    // in its pages where it stands (see furnitureChanging).
+    const routed: { page: OfficeContentNode; header: [OfficeContentNode, OfficeContentNode][]; footer: [OfficeContentNode, OfficeContentNode][]; above: number; below: number }[] = [];
     // A document whose tags are not read for its structure does not mark its running headers and footers
     // either (untagged, or tagged but not trusted, or its tags not asked for): the lines repeated at the top
     // and the bottom of its pages are found by comparing them (see findRunningLines).
@@ -2277,12 +2276,19 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             if (at < 0) pageContent.push(node); else pageContent.splice(at, 0, node);
         }
 
-        let pageRouted: { header: [OfficeContentNode, OfficeContentNode][]; footer: [OfficeContentNode, OfficeContentNode][] } | undefined;
+        let pageRouted: { header: [OfficeContentNode, OfficeContentNode][]; footer: [OfficeContentNode, OfficeContentNode][]; above: number; below: number } | undefined;
         // Running headers/footers route to auxiliary unless the caller asked for them to be dropped,
         // or kept in the page (see above).
         if (!config.ignoreHeadersAndFooters && !pdfCfg.keepHeadersAndFootersInPages) {
             const pageHeaders: OfficeContentNode[] = [];
             const pageFooters: OfficeContentNode[] = [];
+            // (The pictures placed before the page's text that stand above its header, and after it below its
+            // footer, as the page's boxes are now: where a header kept in the page stands among them.)
+            const headerTop = headerNodes[0]?.bounds?.y ?? Infinity;
+            const footerEnd = footerNodes.length ? footerNodes[footerNodes.length - 1].bounds?.y ?? -Infinity : -Infinity;
+            let above = 0, below = 0;
+            while (above < pageContent.length && pageContent[above].type === 'image' && (pageContent[above].bounds?.y ?? Infinity) < headerTop) above++;
+            while (below < pageContent.length - above && pageContent[pageContent.length - 1 - below].type === 'image' && (pageContent[pageContent.length - 1 - below].bounds?.y ?? -Infinity) > footerEnd) below++;
             for (const node of headerNodes) pageHeaders.push(retypeAsHeaderFooter(node, 'header', extract.pageNumber));
             for (const node of footerNodes) pageFooters.push(retypeAsHeaderFooter(node, 'footer', extract.pageNumber));
             finalizeBounds(pageHeaders, pageCtx, pdfCfg.includeBounds);
@@ -2293,10 +2299,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             furniture.push(header, footer);
             appendAll(auxHeaders, pageHeaders);
             appendAll(auxFooters, pageFooters);
-            const foundHeader = !!runningRuns?.header.size, foundFooter = !!runningRuns?.footer.size;
-            if (foundHeader) foundFurniture.push(header);
-            if (foundFooter) foundFurniture.push(footer);
-            pageRouted = { header: foundHeader ? headerNodes.map((n, k) => [n, pageHeaders[k]]) : [], footer: foundFooter ? footerNodes.map((n, k) => [n, pageFooters[k]]) : [] };
+            pageRouted = { header: headerNodes.map((n, k) => [n, pageHeaders[k]]), footer: footerNodes.map((n, k) => [n, pageFooters[k]]), above, below };
         }
 
         finalizeBounds(pageContent, pageCtx, pdfCfg.includeBounds);
@@ -2344,7 +2347,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     // A header or footer whose text is not the same on every page it is on, once its page fields are its
     // fields (a chapter's head, a journal's pages numbered from 147), stays in its pages: a writer prints one
     // header on every page, the first page's, which lost the other pages' text.
-    const changing = furnitureChanging(foundFurniture);
+    const changing = furnitureChanging(furniture);
     for (const kind of changing) {
         const aux = kind === 'header' ? auxHeaders : auxFooters;
         const moved = new Set<OfficeContentNode>();
@@ -2359,7 +2362,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
                 unmarkPageFields(node);
                 return node;
             });
-            if (kind === 'header') children.unshift(...back); else children.push(...back);
+            if (kind === 'header') children.splice(page.above, 0, ...back); else children.splice(children.length - page.below, 0, ...back);
             page.page.text = children.map(n => n.text).join(config.newlineDelimiter);
         }
         const kept = aux.filter(n => !moved.has(n));

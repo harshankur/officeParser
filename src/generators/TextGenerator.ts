@@ -5,6 +5,9 @@ import { clampRepeat, median } from '../utils/numberUtils.js';
 import { base64ByteLength } from '../utils/officeGenUtils.js';
 import { trimRepeated } from '../utils/textUtils.js';
 
+/** A letter of a right-to-left script (Hebrew, Arabic, Syriac, Thaana, N'Ko and their presentation forms). */
+const RTL_LETTER = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
+
 /**
  * Separator between table/sheet cells on the paths that don't render an aligned grid (a `table`
  * with `preserveLayout` off, and `sheet`/`row`/`cell`, which never go through `renderTable`).
@@ -391,6 +394,7 @@ export class TextGenerator extends BaseGenerator<'text'> {
             let line = '';
             let prevRight: number | null = null; // right edge (x) of the last placed atom
             let prevCell: number | undefined;
+            let prevText = '';
             for (const a of row) {
                 let col = Math.round((a.x - marginX) / charW);
                 if (col < 0) col = 0;
@@ -399,8 +403,11 @@ export class TextGenerator extends BaseGenerator<'text'> {
                 // run is set off by one space.
                 const pad = col - line.length;
                 // (A run that touches the one before it in the same cell is the same word or sentence: "example.com"
-                // and its "." are joined, however their columns round.)
-                const touching = line.length > 0 && prevRight != null && a.x - prevRight <= 0.25 * charW && (a.cell === undefined || a.cell === prevCell);
+                // and its "." are joined, however their columns round. A right-to-left run's space at the end of
+                // its text is drawn at its left edge, and at the start of its text at its right: the runs it
+                // touches there are a word apart.)
+                const spaceBetween = (/\s$/.test(a.text) && RTL_LETTER.test(a.text)) || (/^\s/.test(prevText) && RTL_LETTER.test(prevText));
+                const touching = line.length > 0 && prevRight != null && a.x - prevRight <= 0.25 * charW && (a.cell === undefined || a.cell === prevCell) && !spaceBetween;
                 if (pad > 0 && !touching && this.takeLayoutPadding(pad)) {
                     line += ' '.repeat(pad);
                 } else if (pad > 0 && !touching) {
@@ -417,6 +424,7 @@ export class TextGenerator extends BaseGenerator<'text'> {
                 line += a.text;
                 prevRight = a.x + a.w;
                 prevCell = a.cell;
+                prevText = a.text;
             }
             return line.trimEnd();
         });
