@@ -8341,7 +8341,9 @@ async function testPdfFormValuesAsText(): Promise<void> {
     assert.ok(drawnRead.some(t => /(^| )1 2 3 4 5$/.test(t)) && !textOf(drawnAst).includes('12345'), `PDF comb: numbers set apart with no boxes stay apart ${drawnSaid}`);
     // Rows of letters and of numbers in boxes wider than tall (30 by 18, characters of 11 points): a week's
     // days, a yes and a no, odd numbers to pick from, each a table. A scale's numbers and letters of 14 points
-    // in square boxes of 18, as tight as a comb's, are a value's characters, one value.
+    // in square boxes of 18, as tight as a comb's, are tables too: a row of characters that count one after
+    // another may as well be a scale's choices, and as a table keeps every character, each in its cell. A
+    // date's digits in boxes a little wider than tall (20 by 15, 16 by 12) are a comb, one value.
     const ruled = await PDFDocument.create();
     const rfont = await ruled.embedFont(StandardFonts.Helvetica);
     const rpage = ruled.addPage([500, 500]);
@@ -8354,11 +8356,13 @@ async function testPdfFormValuesAsText(): Promise<void> {
     };
     rrow('Days', 'MTWTFSS', 440, 30, 18, 11); rrow('Answer', 'YN', 400, 30, 18, 11); rrow('Pick', '13579', 360, 30, 18, 11);
     rrow('Code', '12345', 300, 18, 18, 14); rrow('Letters', 'ABCDE', 260, 18, 18, 14); rrow('Short', '123', 220, 18, 18, 14);
+    rrow('Born', '15041985', 180, 20, 15, 11); rrow('Signed', '01052026', 140, 16, 12, 9);
     const ruledAst = await OfficeParser.parseOffice(Buffer.from(await ruled.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
     const ruledRead = paragraphs(ruledAst);
     const ruledTables = all(ruledAst).filter(n => n.type === 'table').reverse().map(cells);
-    assert.deepStrictEqual(ruledTables, [[[...'MTWTFSS']], [['Y', 'N']], [[...'13579']]], `PDF comb: letters and numbers in boxes wider than tall are tables (${JSON.stringify([ruledTables, ruledRead])})`);
-    assert.ok(['Code 12345', 'Letters ABCDE', 'Short 123'].every(t => ruledRead.includes(t)), `PDF comb: a scale's characters in boxes as tight as a comb's are one value (${JSON.stringify(ruledRead)})`);
+    assert.deepStrictEqual(ruledTables, [[[...'MTWTFSS']], [['Y', 'N']], [[...'13579']], [[...'12345']], [[...'ABCDE']], [[...'123']]],
+        `PDF comb: letters and numbers in boxes wider than tall are tables, and a scale's characters in boxes as tight as a comb's (${JSON.stringify([ruledTables, ruledRead])})`);
+    assert.ok(['Born 15041985', 'Signed 01052026'].every(t => ruledRead.includes(t)), `PDF comb: a date's digits in boxes a little wider than tall are one value (${JSON.stringify(ruledRead)})`);
 
     // A tagged form: a field's widget tagged as a /Form element (its OBJR) reads its value there, and a
     // field the tags leave out reads by its place, neither making the tags look unreliable.
