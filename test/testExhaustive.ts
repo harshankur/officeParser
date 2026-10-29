@@ -8874,6 +8874,32 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
         const numberedMd = await md(numbered);
         assert.ok(numbered.auxiliary?.headers === undefined && [1, 2, 3, 4].every(p => numberedMd.includes(`${word} ${p}`)), `Running headers: "${word} N" at the top of each page is the page's (${JSON.stringify(texts(numbered.auxiliary?.headers))})`);
     }
+    // A line at the top of each page whose number climbs one a page but names its own, not the page: a log's
+    // dates, a ticket's or an invoice's number, a section, an exercise, a question's label, an entry's time,
+    // a list's or a bibliography's numbers. Each stays its page's text. (\247 is the font's section sign.)
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const ownNumbers: [string, (p: number) => string][] = [['date', p => `2024-03-${pad(p + 3)}`], ['dotted date', p => `Date: ${pad(p + 4)}.03.2024`],
+        ['ticket', p => `Ticket #${4000 + p}`], ['section', p => `\\247 ${p + 2}`], ['exercise', p => `Exercise 3.${p}`], ['dotted section', p => `Section 2.${p} Overview`],
+        ['invoice', p => `Invoice INV-${1000 + p}`], ['question sign', p => `Question #${p}`], ['label', p => `Question: ${p}`], ['time', p => `Entry 2024/03/${pad(p)} 09:00`],
+        ['list', p => `\\(${p}\\) Widget`], ['bibliography', p => `[${p + 10}] Smith, J. A study.`], ['day of', p => `Day ${p} of 30`], ['question of', p => `Question ${p} of 10`],
+        ['slide', p => `Slide ${p}`], ['sheet word', p => `List ${p}`]];
+    for (const [name, head] of ownNumbers) {
+        const own = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, head(p)), body(p)].join('\n'))));
+        const ownText = String((await own.to('text')).value);
+        assert.ok(own.auxiliary?.headers === undefined && [1, 2, 3, 4].every(p => ownText.includes(head(p).replace(/\\247/, '\u00a7').replace(/\\/g, ''))),
+            `Running headers: "${head(3)}" (${name}) at the top of each page is the page's text (${JSON.stringify(texts(own.auxiliary?.headers))})`);
+    }
+    // A run of letters merged from one template: the company's name on the left, the invoice's number, one up
+    // a letter, on the right of the same row. Both stay each letter's.
+    const letters = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, 'ACME Supplies Ltd'), line(380, 760, 10, `Invoice #${1040 + p}`), body(p)].join('\n'))));
+    const lettersText = String((await letters.to('text')).value);
+    assert.ok(letters.auxiliary?.headers === undefined && count(lettersText, 'ACME Supplies Ltd') === 4 && [1, 2, 3, 4].every(p => lettersText.includes(`Invoice #${1040 + p}`)),
+        `Running headers: a merged letter's number beside its company's name is the letter's (${JSON.stringify(texts(letters.auxiliary?.headers))})`);
+    // A sheet's or a slide's number with the pages' after it is the page's ("Sheet 3 of 4", "Hoja 3 de 4").
+    for (const head of [(p: number) => `Sheet ${p} of 4`, (p: number) => `Slide ${p} of 4`, (p: number) => `Hoja ${p} de 4`, (p: number) => `Feuille ${p}/4`]) {
+        const sheets = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, head(p)), body(p)].join('\n'))));
+        assert.strictEqual(texts(sheets.auxiliary?.headers).length, 4, `Running headers: "${head(3)}" makes its line a header (${JSON.stringify(texts(sheets.auxiliary?.headers))})`);
+    }
     // A header whose page number is printed in other ways than "Page 3": after a separator, before one, in
     // brackets, after a page word other than "Page" or before "Page", as a journal numbers its pages, and as
     // its page label in its text. (\320 in a PDF string is the font's emdash, in its StandardEncoding.)
@@ -8891,6 +8917,12 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
         + '2 beginbfchar <58> <7B2C> <59> <9875> endbfchar 2 beginbfrange <20> <57> <0020> <5A> <7E> <005A> endbfrange endcmap CMapName currentdict /CMap defineresource pop end end';
     const chinese = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, `Acme X${p}Y`), body(p)].join('\n')), '', '/ToUnicode 12 0 R', [`<< /Length ${toUnicode.length} >>\nstream\n${toUnicode}\nendstream`]));
     assert.strictEqual(texts(chinese.auxiliary?.headers).length, 4, `Running headers: a Chinese page number makes its line a header (${JSON.stringify(texts(chinese.auxiliary?.headers))})`);
+    // "第3条" (article 3) at the top of each page, Z drawn as 条: 第 before a number is the page's only with the
+    // page's word after it, so this is each page's text.
+    const articleMap = toUnicode.replace('2 beginbfchar <58> <7B2C> <59> <9875> endbfchar', '3 beginbfchar <58> <7B2C> <59> <9875> <5A> <6761> endbfchar').replace('<5A> <7E> <005A>', '<5B> <7E> <005B>');
+    const articles = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, `Acme X${p}Z`), body(p)].join('\n')), '', '/ToUnicode 12 0 R', [`<< /Length ${articleMap.length} >>\nstream\n${articleMap}\nendstream`]));
+    const articlesText = String((await articles.to('text')).value);
+    assert.ok(articles.auxiliary?.headers === undefined && [1, 2, 3, 4].every(p => articlesText.includes(`Acme \u7B2C${p}\u6761`)), `Running headers: a Chinese article's number is its page's text (${JSON.stringify(texts(articles.auxiliary?.headers))})`);
     // A chapter's head on each of its pages, the next chapter's on its: printed alike page after page, a header,
     // and so is a short chapter's on its one page among them.
     const chapters = await read(pdfOf([1, 2, 3, 4, 5, 6].map(p => [line(50, 760, 10, `Chapter ${p <= 3 ? 1 : p === 4 ? 2 : 3}`), body(p)].join('\n'))));

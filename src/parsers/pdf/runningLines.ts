@@ -46,18 +46,26 @@ const NUMBERED_TEXT = 200;
 
 /** The words a page number is printed with ("Page 3", "Seite 3 von 4"), lower case. */
 const PAGE_WORD = String.raw`(?:page|seite|pagina|página|pág\.?|pag\.?|pg\.?|pp\.?|p\.|s\.|blatt|side|sida|sivu|strona|str\.|strana|oldal|sayfa|halaman|trang|σελίδα|σελ\.|стр\.?|страница|صفحة|עמוד)`;
+/**
+ * The words a sheet or a slide is numbered with ("Sheet 3 of 6", "Hoja 3 de 6", "Feuille 3/6"): a page's
+ * number only with the pages' after it, as a word that is no page's alone ("Slide 3", "List 3") names its own.
+ */
+const SHEET_WORD = String.raw`(?:sheet|slide|folio|hoja|feuille|folha|foglio|list|ark)`;
 /** A word that is a page's, alone: the word before a number that makes it the page's ("Pg. 3"). */
 const PAGE_WORD_ALONE = new RegExp(String.raw`^${PAGE_WORD}$`, 'iu');
-/** Where the page's word is written after its number ("3页", "3ページ"), or before it as "第3页" is. */
+const SHEET_WORD_ALONE = new RegExp(String.raw`^${SHEET_WORD}$`, 'iu');
+/** Where the page's word is written after its number ("3页", "3ページ", "第3页"). */
 const PAGE_AFTER = /\s*(?:页|頁|ページ|쪽|페이지)/uy;
-const PAGE_BEFORE = '第';
 /** The most of a line's numbers that are each compared as its page's number (see pageNumbers). */
 const NUMBERS_COMPARED = 16;
 const OF_WORD = String.raw`(?:/|of|von|de|sur|di|van|af|av|z|из)`;
 /** Dashes around a page number ("- 3 -"). */
 const DASH = String.raw`[-\u2010-\u2015\u2212]`;
-/** A line that is a page number and nothing else: "3", "- 3 -", "3/4", "Page 3 of 4", "Seite 3 von 4", "iii". */
-const PAGE_LINE = new RegExp(String.raw`^${DASH}?\s*(?:${PAGE_WORD}\s*)?(\d+|[ivxlcdm]+)(?:\s*${OF_WORD}\s*(\d+))?\s*${DASH}?$`, 'iu');
+/**
+ * A line that is a page number and nothing else: "3", "- 3 -", "3/4", "Page 3 of 4", "Seite 3 von 4", "iii",
+ * "Sheet 3 of 6".
+ */
+const PAGE_LINE = new RegExp(String.raw`^${DASH}?\s*(?:(?:${PAGE_WORD}\s*)?(\d+|[ivxlcdm]+)(?:\s*${OF_WORD}\s*(\d+))?|${SHEET_WORD}\s*(\d+)\s*${OF_WORD}\s*(\d+))\s*${DASH}?$`, 'iu');
 /** In a header's or footer's text: "3/4", "3 of 4", "Seite 3 von 4" (the page's number, then the pages'). */
 const NUMBER_OF = new RegExp(String.raw`(?<![\p{L}\p{N}])(\d+)\s*${OF_WORD}\s*(\d+)(?![\p{L}\p{N}])`, 'giu');
 /** "Page 3", "Seite 3", "Page iii". */
@@ -80,9 +88,9 @@ function romanOf(token: string, pageNumber: number): PageNumberFormat | undefine
 function ownNumberKey(text: string, pageNumber: number, label: string | null | undefined): string | null {
     const m = PAGE_LINE.exec(text);
     if (!m) return null;
-    const n = m[1];
+    const n = m[1] ?? m[3], of = m[2] ?? m[4];
     if (!(/^\d+$/.test(n) && Number(n) === pageNumber) && !(label && n.toLowerCase() === label.toLowerCase())) return null;
-    const at = m[0].lastIndexOf(n, m[2] === undefined ? undefined : m[0].length - m[2].length - 1);
+    const at = m[0].lastIndexOf(n, of === undefined ? undefined : m[0].length - of.length - 1);
     return `${text.slice(0, at)}#${text.slice(at + n.length)}`.replace(/\p{Nd}+/gu, '#');
 }
 
@@ -91,42 +99,82 @@ function keyOf(text: string): string {
     return text.length > KEY_TEXT ? `${text.slice(0, KEY_TEXT)}|${text.length}` : text;
 }
 
+/** Separators a page number is set apart from a header's words by: "Annual Report | 3", "3 · Annual Report". */
+const SEPARATOR = /[|¦‖•·]/u;
 /**
- * Whether the number at [start, end) of a line's text names something of its own rather than the page: it
- * follows a word directly ("Question 3", "Chapter 3", "Fig. 3", "Q3") or a word follows it directly ("3rd"),
- * where that word is not the page's ("Page 3", "Pg. 3", "第3页", "3ページ"). A number at the line's start, or
- * set apart from the words around it by anything else (a separator, a bracket, another number: "Annual Report
- * | 3", "Report, 3", "[3]", "(2024) 103", "3 | Page"), may be the page's.
+ * What may follow a page number to the line's end: the pages' ("3 of 6", "3/6"), and a dash or a bracket that
+ * closes it ("- 3 -", "[3]").
  */
-function namesItsWord(text: string, start: number, end: number): boolean {
-    // The word before it: back over spaces, then over its letters and an abbreviation's points.
+const NUMBER_TAIL = new RegExp(String.raw`(?:\s*${OF_WORD}\s*(\p{Nd}+))?\s*(?:${DASH}|[)\]])?\s*$`, 'iuy');
+/**
+ * What may follow a page number at the line's start, before the line's words: a separator ("3 | Annual
+ * Report", "3 - Annual Report") where no number follows it ("3 - 5" is a range), or a space and a word ("12
+ * Journal of Things").
+ */
+const NUMBER_LEAD = new RegExp(String.raw`\s*(?:[|¦‖•·]|${DASH}\s)\s*(?![\p{Nd}\s])|\s+(?=\p{L})`, 'uy');
+/** A dash, and what may open a number that is a line of its own ("- 3 -", "[3]", "(3)"). */
+const DASH_ALONE = new RegExp(String.raw`^${DASH}$`, 'u');
+const OPENING = new RegExp(String.raw`^(?:${DASH}|[(\[])$`, 'u');
+
+/**
+ * Whether the number at [start, end) of a line's text is set apart as a page's number is: standing on its own
+ * at the line's end, after a separator (a bar, a comma, a dash with a space beside it: "Annual Report | 3",
+ * "Report, 3", "Report - 3") or a bracket's close ("(2024) 103"), or as the whole line ("3", "- 3 -", "[3]",
+ * "3 of 6"); at its start, before a separator or a space and the line's words ("3 | Annual Report", "12
+ * Journal of Things"); or anywhere after a page's word ("Page 3", "Pg. 3", "Page: 3") or before one ("3页",
+ * "第3页", "3ページ"). After a sheet's or a slide's word, only with the pages' after it ("Sheet 3 of 6").
+ *
+ * What a number names of its own is none: a number after any other word ("Question 3", "Chapter 3", "Q3") or
+ * its label's colon ("Question: 3"), after a number sign ("Ticket #4001", "§ 3", "№ 3"), joined to another
+ * number ("2024-03-04", "05.03.2024", "3.1", "09:00", "1,041") or to a word by a hyphen ("INV-1001"), a word
+ * written on to it ("3rd", "第3条"), a number in brackets before the line's words ("[11] Smith", "(3) Widget"),
+ * and a page's "of" count that is more than its pages ("31/12"). A line whose number climbs one a page in any
+ * of those shapes is a log's dates, a run of invoices or questions, and stays the page's text.
+ */
+function pageNumberAt(text: string, start: number, end: number): boolean {
+    PAGE_AFTER.lastIndex = end;
+    if (PAGE_AFTER.test(text)) return true;
     let at = start;
     while (at > 0 && /\s/u.test(text[at - 1])) at--;
-    const touching = at === start;
-    let from = at;
+    const spaced = at < start;
+    // The word before it, with an abbreviation's points, past a colon after it ("Page: 3").
+    let wordEnd = at;
+    if (wordEnd > 0 && text[wordEnd - 1] === ':') wordEnd--;
+    let from = wordEnd;
     while (from > 0 && /[\p{L}.]/u.test(text[from - 1])) from--;
-    // (A point alone after a number, "1.5", is no word.)
-    const before = text.slice(from, at);
-    PAGE_AFTER.lastIndex = end;
-    const pageAfter = PAGE_AFTER.test(text);
-    if (/\p{L}/u.test(before)) {
-        if (touching && text[start - 1] === PAGE_BEFORE) return false;
-        if (PAGE_WORD_ALONE.test(before)) return false;
-        return !pageAfter;
+    const word = text.slice(from, wordEnd);
+    if (PAGE_WORD_ALONE.test(word)) return true;
+    NUMBER_TAIL.lastIndex = end;
+    const tail = NUMBER_TAIL.exec(text);
+    // (A page's count of pages is no less than its number: "31/12" is a date.)
+    if (tail && tail[1] !== undefined && Number(tail[1].normalize('NFKC')) < Number(text.slice(start, end).normalize('NFKC'))) return false;
+    if (SHEET_WORD_ALONE.test(word)) return !!tail && tail[1] !== undefined;
+    if (/\p{L}/u.test(word)) return false;
+    const before = at > 0 ? text[at - 1] : '';
+    if (!before) {
+        if (tail) return true;
+        NUMBER_LEAD.lastIndex = end;
+        return NUMBER_LEAD.test(text);
     }
-    // The word after it, written on to it ("3rd", "3a").
-    return !pageAfter && end < text.length && /\p{L}/u.test(text[end]);
+    if (!tail) return false;
+    // (Only the opening alone before it: "[3]", "- 3 -", "(3)".)
+    if (at === 1 && OPENING.test(before)) return true;
+    if (SEPARATOR.test(before)) return true;
+    if (before === ',') return spaced;
+    // (A dash with a space beside it: "INV-1001" and "2024-03-04" join theirs.)
+    if (DASH_ALONE.test(before)) return spaced || (at > 1 && /\s/u.test(text[at - 2]));
+    return spaced && (before === ')' || before === ']');
 }
 
 /**
  * The ways a line's text may print the page's number, each as how the entry's lines that number the pages
- * alike are one however their numbers run: a number of the line's (by its place among the line's numbers,
- * as its key has them) and how far it is from the page's own, a document's own numbering or one from elsewhere
- * (a form placed after a scan, an article numbered as in its journal, from 147); or its page label, written
- * in it: as a word of its own ("Preface iii") where the label is not digits, else as one of those numbers (a
- * page labelled "1" before one labelled "II" numbers its pages as its labels do). A number that names its word
- * ("Question 3", see namesItsWord) is none: a page of questions, one a page, numbers its questions as its
- * pages run.
+ * alike are one however their numbers run: a number of the line's set apart as a page's is (by its place among
+ * the line's numbers, as its key has them, see pageNumberAt) and how far it is from the page's own, a
+ * document's own numbering or one from elsewhere (a form placed after a scan, an article numbered as in its
+ * journal, from 147); or its page label, written in it: as a word of its own ("Preface iii") where the label is
+ * not digits, else as one of those numbers (a page labelled "1" before one labelled "II" numbers its pages as
+ * its labels do). A number that names its own ("Question 3", "2024-03-04", see pageNumberAt) is none: a page of
+ * questions, one a page, numbers its questions as its pages run, and a log's pages their days.
  */
 function pageNumbers(text: string, pageNumber: number, label: string | null | undefined): string[] {
     if (text.length > NUMBERED_TEXT) return [];
@@ -138,7 +186,7 @@ function pageNumbers(text: string, pageNumber: number, label: string | null | un
         k++;
         if (out.length >= NUMBERS_COMPARED) break;
         const value = Number(m[0].normalize('NFKC'));
-        if (!Number.isSafeInteger(value) || namesItsWord(text, m.index!, m.index! + m[0].length)) continue;
+        if (!Number.isSafeInteger(value) || !pageNumberAt(text, m.index!, m.index! + m[0].length)) continue;
         out.push(`${k}|${value - pageNumber}`);
         if (digits && m[0] === label && !out.includes('label')) out.push('label');
     }
