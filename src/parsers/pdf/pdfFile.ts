@@ -14,6 +14,8 @@ import { Unzlib } from 'fflate';
 /** At most this many bytes inflated for the whole document, objects read, and forms deep. */
 const MAX_INFLATED = 64 * 1024 * 1024;
 const MAX_OBJECTS = 200_000;
+/** What the search for `endstream` of streams with a length that lies may read beyond twice the file's size. */
+const MAX_SEARCH_SLACK = 1024 * 1024;
 export const MAX_FORM_DEPTH = 8;
 /**
  * Compressed data is inflated this much at a time. Deflate inflates to at most about a thousand times
@@ -195,6 +197,8 @@ export class PdfReader {
     private reading = new Set<number>();
     private objStreams = new Map<number, { nums: number[]; offs: number[]; data: Uint8Array; first: number } | null>();
     private inflated = 0;
+    /** The bytes searched for an `endstream` so far (see objectAt). */
+    private searched = 0;
     trailer: PdfDict = new Map();
 
     constructor(readonly src: Uint8Array) {}
@@ -286,8 +290,12 @@ export class PdfReader {
         if (this.src[start] === 0x0a) start++;
         let length = this.resolve(value.get('Length'));
         if (typeof length !== 'number' || length < 0 || start + length > this.src.length) {
-            // A length that cannot be read: the data up to `endstream`.
+            // A length that cannot be read: the data up to `endstream`. The search is paid for from a budget
+            // of the file's own size and a little more, so a file of many streams with a length that lies
+            // and no `endstream` after them is not searched to its end once for each.
+            if (this.searched > 2 * this.src.length + MAX_SEARCH_SLACK) return { dict: value, start, length: 0, src: this.src };
             const end = indexOf(this.src, 'endstream', start);
+            this.searched += (end < 0 ? this.src.length : end) - start;
             length = end < 0 ? 0 : end - start;
         }
         return { dict: value, start, length, src: this.src };
@@ -480,18 +488,32 @@ export class PdfFile {
      * are spent.
      */
     page(index: number): { reader: PdfReader; page: { dict: PdfDict; resources: PdfDict | undefined } } | undefined {
-        if (!this.opened) {
-            this.opened = true;
-            try {
-                const reader = new PdfReader(this.bytes);
-                if (reader.open()) {
-                    const pages = reader.pages(this.pageCount);
-                    if (pages.length === this.pageCount) { this.reader = reader; this.pageList = pages; }
-                }
-            } catch { /* not read here */ }
-        }
+        this.open();
         const page = this.pageList?.[index];
         return this.reader && page && this.tokensLeft > 0 ? { reader: this.reader, page } : undefined;
+    }
+
+    /**
+     * The file's reader, for a reader that wants an object by its number (a picture's stream, see
+     * pdfJpeg) and not a page's content; undefined for a file whose structure cannot be read here
+     * (encrypted, damaged, its pages not as many as pdf.js counts).
+     */
+    objects(): PdfReader | undefined {
+        this.open();
+        return this.reader;
+    }
+
+    /** Opens the file once, on the first ask. */
+    private open(): void {
+        if (this.opened) return;
+        this.opened = true;
+        try {
+            const reader = new PdfReader(this.bytes);
+            if (reader.open()) {
+                const pages = reader.pages(this.pageCount);
+                if (pages.length === this.pageCount) { this.reader = reader; this.pageList = pages; }
+            }
+        } catch { /* not read here */ }
     }
 
     /** Takes up to `wanted` of the document's tokens, for a reader reading a stream of its own (a CMap); how many it may read. */

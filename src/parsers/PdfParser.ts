@@ -46,6 +46,7 @@ import { collectShapes, PdfShape, shapeBullets } from './pdf/pdfShapes.js';
 import { MarkedContent, readableItems } from './pdf/actualText.js';
 import { GlyphNames } from './pdf/glyphNames.js';
 import { PdfFile } from './pdf/pdfFile.js';
+import { KeptJpegs } from './pdf/pdfJpeg.js';
 import { RuledFrame, ruledFrames, ruledTables, shadeCells } from './pdf/rulings.js';
 import { annotationMatrix, computeRunBox, identityMatrix, mulMatrix, roundBounds, rotateBoundsToRendered, toMatrix6, unionAll } from './pdf/geometry.js';
 import { PageExtract, PdfImage, PdfLayoutConfig, RawRun, ResolvedFont } from './pdf/pdfTypes.js';
@@ -1196,7 +1197,7 @@ async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep
 async function collectPage(
     pdfjs: any, pdfDocument: any, pageNumber: number, config: FullOfficeParserConfig,
     pdfCfg: PdfLayoutConfig, fontCache: Map<string, ResolvedFont>, destCache: Map<string, SectionTarget | null>,
-    sectionLinks: SectionLinks, work: PdfWorkBudget, assets: PdfAssetSession, markedContent?: MarkedContent, glyphNames?: GlyphNames,
+    sectionLinks: SectionLinks, work: PdfWorkBudget, assets: PdfAssetSession, markedContent?: MarkedContent, glyphNames?: GlyphNames, jpegs?: KeptJpegs,
 ): Promise<PageExtract | undefined> {
     const page = await work.within(pdfDocument.getPage(pageNumber) as Promise<any>);
     if (!page) return undefined;
@@ -1363,7 +1364,7 @@ async function collectPage(
     // extractAttachments), so collecting images for `ocr` alone would decode and then drop them.
     // Gate on extractAttachments only; `ocr` without it raised OCR_REQUIRES_ATTACHMENTS above.
     const images = config.extractAttachments && !work.spent
-        ? await collectImages(pdfjs, page, layoutViewport, config, pdfCfg, pageNumber, work, assets, ops)
+        ? await collectImages(pdfjs, page, layoutViewport, config, pdfCfg, pageNumber, work, assets, ops, jpegs)
         : [];
 
     let structTree: unknown | null = null;
@@ -1468,7 +1469,7 @@ function fieldRuns(fields: readonly ResolvedField[], pageRuns: readonly RawRun[]
 }
 
 /** Extracts images from a page's operator list, positioned in layout-viewport space. */
-async function collectImages(pdfjs: any, page: any, viewport: any, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, pageNumber: number, work: PdfWorkBudget, assets: PdfAssetSession, prefetchedOps?: any): Promise<PdfImage[]> {
+async function collectImages(pdfjs: any, page: any, viewport: any, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, pageNumber: number, work: PdfWorkBudget, assets: PdfAssetSession, prefetchedOps?: any, jpegs?: KeptJpegs): Promise<PdfImage[]> {
     const images: PdfImage[] = [];
     try {
         const ops = prefetchedOps || await readOperatorList(pdfjs, page, work, 'drawing');
@@ -1525,9 +1526,16 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
             // page goes out of scope instead of being retained until the emit pass.
             const bounds = imageBounds(viewport, placement);
             try {
+                // A picture the PDF stores as a JPEG that shows as its pixels do stays that JPEG, not a PNG
+                // of its pixels many times its size (see pdfJpeg); any other is encoded.
+                const jpeg = jpegs?.keep(imgObj.ref, imgObj.width, imgObj.height);
+                if (jpeg) {
+                    images.push({ name: imgName, bounds, data: jpeg, format: 'jpeg', pixelWidth: imgObj.width, pixelHeight: imgObj.height });
+                    return;
+                }
                 const rgba = convertToRgbaBuffer(imgObj.data, imgObj.width, imgObj.height, imgObj.kind);
                 const png = encodePng(imgObj.width, imgObj.height, new Uint8Array(rgba));
-                images.push({ name: imgName, bounds, png, pixelWidth: imgObj.width, pixelHeight: imgObj.height });
+                images.push({ name: imgName, bounds, data: png, format: 'png', pixelWidth: imgObj.width, pixelHeight: imgObj.height });
             } catch (e) {
                 logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `on page ${pageNumber}`, e, { page: pageNumber });
             }
@@ -2026,12 +2034,14 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     const pdfFile = new PdfFile(buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer), numPages);
     const markedContent = new MarkedContent(pdfFile);
     const glyphNames = new GlyphNames(pdfFile);
+    // The JPEGs the file stores, kept as they are where they show what pdf.js's pixels do (see pdfJpeg).
+    const keptJpegs = new KeptJpegs(pdfFile);
     for (const pageNum of pageNumbers) {
         checkAbortSignal(config.abortSignal);
         if (work.spent) break;
         work.reading(pageNum);
         try {
-            const extract = await collectPage(pdfjs, pdfDocument, pageNum, config, pdfCfg, fontCache, destCache, sectionLinks, work, assets, markedContent, glyphNames);
+            const extract = await collectPage(pdfjs, pdfDocument, pageNum, config, pdfCfg, fontCache, destCache, sectionLinks, work, assets, markedContent, glyphNames, keptJpegs);
             if (extract) extracts.push(extract);
         } catch (e: any) {
             // A page failing because its parse has ended (its process ended with it) is not reported.
@@ -2425,14 +2435,15 @@ async function emitImage(
     attachments: OfficeAttachment[],
 ): Promise<OfficeContentNode | null> {
     if (!config.extractAttachments) return null;
-    const attachmentName = `pdf_image_p${pageNumber}_${index}.png`;
+    const jpeg = img.format === 'jpeg';
+    const attachmentName = `pdf_image_p${pageNumber}_${index}.${jpeg ? 'jpg' : 'png'}`;
+    const mimeType = jpeg ? 'image/jpeg' : 'image/png';
     try {
-        // Pixels were PNG-encoded at collection time; here we only name, attach and optionally OCR them.
-        const png = img.png;
-        const attachment = createAttachment(attachmentName, png);
-        attachment.mimeType = 'image/png';
+        // The picture's file was made at collection time; here we only name, attach and optionally OCR it.
+        const attachment = createAttachment(attachmentName, img.data);
+        attachment.mimeType = mimeType;
         if (config.ocr && img.pixelWidth >= 10 && img.pixelHeight >= 10) {
-            const ocrText = await ocrDuringParse(png, config, attachmentName, 'image/png');
+            const ocrText = await ocrDuringParse(img.data, config, attachmentName, mimeType);
             if (ocrText !== undefined) attachment.ocrText = ocrText;
         }
         attachments.push(attachment);

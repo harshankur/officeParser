@@ -147,7 +147,7 @@ Continued Lists 8
     Centered images like this are useful for large pictures that should be a focus of
 attention.
 
-    [Image: pdf_image_p7_1.png]
+    [Image: pdf_image_p7_1.jpg]
 
     There is no analogous technology in ebooks, so the conversion will usually end up
 placing the image either centered or floating close to the point in the text where it

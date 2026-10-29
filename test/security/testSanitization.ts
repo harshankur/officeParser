@@ -31,6 +31,7 @@ import { buildTaggedNodes } from '../../src/parsers/pdf/structTree';
 import { computeDocContext } from '../../src/parsers/pdf/textLayout';
 import { MarkedContent } from '../../src/parsers/pdf/actualText';
 import { PdfFile } from '../../src/parsers/pdf/pdfFile';
+import { KeptJpegs } from '../../src/parsers/pdf/pdfJpeg';
 import { CffOutlines, nativeUnbrotli, sfntOf, TrueTypeOutlines } from '../../src/generators/pdf/fontFiles';
 import { cffTable, charString, EMPTY } from '../helpers/cffFontWriter';
 import * as zlib from 'zlib';
@@ -4397,6 +4398,49 @@ async function pdfProcessTests(h: {
         manyFonts = await read(glyphNamed(n(1_000), '33 /c.sc', lacking33, 'ni!ht'));
     }, { label: 'pdf: a page of 1,000 fonts read by their glyph names holds the heap', limit: 400e6 });
     check('pdf: every font of a page of 1,000 reads its names', !manyFonts.error && (manyFonts.text.match(/nicht/g) ?? []).length === 1_000 && !manyFonts.text.includes('ni!ht'), manyFonts.error || manyFonts.text.slice(0, 80));
+    // A picture the file stores as a JPEG is kept as it is (see pdfJpeg), found by the object number pdf.js gives
+    // it. Its sizes are the file's to claim: a header of 65,535 x 65,535 over a dictionary of 16 x 16, a /Length of
+    // a terabyte on thousands of pictures (with an `endstream` to find, and with none, the file not searched to its
+    // end for each), and one JPEG of half a megabyte drawn hundreds of times, are each read in bounded time and
+    // memory, the JPEGs kept within the document's bound (the rest the PNGs of their pixels).
+    const jpegPixels = Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikxMC4pLSwzOko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//wAALCAAQABABAREA/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/9oACAEBAAA/AOYtdO6fLWva6d0+Wte107p8tbFrp3T5a//Z', 'base64');
+    const imageDict = `/Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode`;
+    /** A page drawing pictures (object 5 on) by index, each stream's length as written (`lies`: a terabyte), its `endstream` kept or not. */
+    const jpegPage = (pictures: Buffer[], draws: number[], lies = false, endstream = true) => pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 842] /Resources << /XObject << ${pictures.map((_, i) => `/I${i} ${5 + i} 0 R`).join(' ')} >> >> /Contents 4 0 R >>`,
+        flate(Buffer.from(draws.map((d, k) => `q 8 0 0 8 ${10 + (k % 70) * 8} ${10 + Math.floor(k / 70) * 8} cm /I${d} Do Q\n`).join(''))),
+        ...pictures.map(p => Buffer.concat([Buffer.from(`<< /Length ${lies ? 99999999999 : p.length} ${imageDict} >>\nstream\n`), p, Buffer.from(endstream ? '\nendstream' : '')])),
+    ]);
+    const lyingFrame = Buffer.from(jpegPixels);
+    lyingFrame.writeUInt16BE(65535, lyingFrame.indexOf(Buffer.from([0xff, 0xc0])) + 5);
+    lyingFrame.writeUInt16BE(65535, lyingFrame.indexOf(Buffer.from([0xff, 0xc0])) + 7);
+    const liedAbout = await read(jpegPage([lyingFrame], [0]), { extractAttachments: true });
+    check('pdf: a JPEG whose header claims 65,535 x 65,535 pixels is no JPEG kept', !liedAbout.error && (liedAbout.ast?.attachments ?? []).every(a => a.mimeType !== 'image/jpeg'), liedAbout.error || String(liedAbout.ast?.attachments.map(a => a.mimeType)));
+    let lengths = { error: '', ast: undefined } as unknown as Awaited<ReturnType<typeof read>>;
+    await linear('pdf: 3,000 pictures with a length of a terabyte are read, each kept as a JPEG', async () => {
+        const count = n(3_000);
+        lengths = await read(jpegPage(Array.from({ length: count }, () => jpegPixels), Array.from({ length: count }, (_, i) => i), true), { extractAttachments: true });
+    }, { label: 'pdf: 3,000 pictures with a length of a terabyte hold the heap', limit: 600e6 });
+    check('pdf: pictures whose length lies are read to their end', !lengths.error && (lengths.ast?.attachments ?? []).length === n(3_000) && lengths.ast!.attachments.every(a => Buffer.from(a.data, 'base64').equals(jpegPixels)), lengths.error || String(lengths.ast?.attachments.length));
+    // With no `endstream` after them, the search for one is paid for from a budget of the file's size: pdf.js
+    // itself searches each stream's end on its own (in time in the square of the pictures), so this is the
+    // library's reader alone, asked for every picture.
+    let found = 0;
+    await linear('pdf: 3,000 pictures with a length of a terabyte and no end of stream are looked for', () => {
+        const count = n(3_000), bytes = new Uint8Array(jpegPage(Array.from({ length: count }, () => jpegPixels), [0], true, false));
+        const kept = new KeptJpegs(new PdfFile(bytes, 1));
+        found = 0;
+        for (let i = 0; i < count; i++) if (kept.keep(`${5 + i}R`, 16, 16)) found++;
+    });
+    check('pdf: pictures with no end of stream are not all found', found < n(3_000), `${found} found`);
+    const comment = Buffer.concat([Buffer.from([0xff, 0xfe, 0xff, 0xff]), Buffer.alloc(0xffff - 2, 0x41)]);
+    const bigJpeg = Buffer.concat([jpegPixels.subarray(0, 2), ...Array.from({ length: 9 }, () => comment), jpegPixels.subarray(2)]);
+    let often = { error: '', ast: undefined } as unknown as Awaited<ReturnType<typeof read>>;
+    const oftenMemory = await memoryOf(async () => { often = await read(jpegPage([bigJpeg], Array.from({ length: n(300) }, () => 0)), { extractAttachments: true }); });
+    const keptBytes = (often.ast?.attachments ?? []).filter(a => a.mimeType === 'image/jpeg').reduce((sum, a) => sum + Buffer.byteLength(a.data, 'base64'), 0);
+    check('pdf: a JPEG drawn 300 times is kept within the document\'s bound, the rest PNGs', !often.error && keptBytes <= 128 * 1024 * 1024 + bigJpeg.length && (often.ast?.attachments ?? []).length === n(300), `${Math.round(keptBytes / 1e6)} MB kept of ${(often.ast?.attachments ?? []).length} pictures, ${often.error}`);
+    check('pdf: a JPEG drawn 300 times holds the heap', oftenMemory.heap < 1.2e9, memoryNote(oftenMemory.heap, oftenMemory.allocated));
     check('pdf: a plan of 3,000 symbols is read whole, its paths costing none of the operator budget', !planned.error && planned.pages === 21 && planned.text.includes('Note 20.50') && !planned.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED') && !planned.codes.includes('PDF_NO_TEXT_EXTRACTED'), `${planned.pages} pages ${planned.codes} ${planned.error}`);
     const operatorChecks = async (separateProcess: boolean) => {
         const where = separateProcess ? 'separate process' : 'in process';

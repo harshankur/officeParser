@@ -23,6 +23,8 @@ import { parseXmlString } from '../src/utils/xmlUtils';
 import { decodeWindows1252, textDecoder } from '../src/utils/encodingUtils';
 import { ocrTestHooks, performOcr, terminateOcr } from '../src/utils/ocrUtils';
 import { imageFromPdf, imageToTextPdf, newDecodeBudget } from '../src/utils/textPdf';
+import { PdfFile } from '../src/parsers/pdf/pdfFile';
+import { KeptJpegs } from '../src/parsers/pdf/pdfJpeg';
 import { decodeBase64, hexColor, isHeaderRow, lengthToPt, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toBookmarkNameRaw } from '../src/utils/officeGenUtils';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -8328,6 +8330,143 @@ async function testPdfGlyphNames(): Promise<void> {
     console.log('  PDF glyph names: All assertions passed ✓');
 }
 
+/**
+ * A picture the PDF stores as a JPEG (DCTDecode) is kept as that JPEG, byte for byte, named `.jpg` and
+ * typed `image/jpeg`, where its bytes show what pdf.js's pixels do (see pdfJpeg): 8-bit gray or RGB (or
+ * ICCBased of one or three components), no `/Decode`, mask or soft mask, no colour transform of its own,
+ * a header that says what the dictionary says, no EXIF orientation. Any other stays the PNG of its pixels,
+ * as does an inline picture. Every writer carries the JPEG, OCR reads it, and `maxImagePixels` holds.
+ */
+async function testPdfKeptJpegs(): Promise<void> {
+    const { deflateSync } = await import('zlib');
+    // 16 x 16 pictures made by Pillow: RGB, gray, CMYK (an Adobe marker), and RGB with EXIF orientation 6.
+    const jpeg = {
+        rgb: Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikxMC4pLSwzOko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//2wBDAQ4ODhMREyYVFSZPNS01T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0//wAARCAAQABADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDmLXTuny1r2undPlrXtdO6fLWxa6d0+Wqr47zDKsx21P/Z', 'base64'),
+        gray: Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikxMC4pLSwzOko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//wAALCAAQABABAREA/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/9oACAEBAAA/AOYtdO6fLWva6d0+Wte107p8tbFrp3T5a//Z', 'base64'),
+        cmyk: Buffer.from('/9j/7gAOQWRvYmUAZAAAAAAA/9sAQwANCQoLCggNCwoLDg4NDxMgFRMSEhMnHB4XIC4pMTAuKS0sMzpKPjM2RjcsLUBXQUZMTlJTUjI+WmFaUGBKUVJP/8AAFAgAEAAQBEMRAE0RAFkRAEsRAP/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/aAA4EQwBNAFkASwAAPwDk/D/8Ncn/AGF/sUV6dXp3h/8Aho/sL/YoorzHw/8Aw16d/YX+xRRXp3h/+Gj+wv8AYoor/9k=', 'base64'),
+        rot6: Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/4QAiRXhpZgAATU0AKgAAAAgAAQESAAMAAAABAAYAAAAAAAD/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikxMC4pLSwzOko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//2wBDAQ4ODhMREyYVFSZPNS01T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0//wAARCAAQABADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDmLXTuny1r2undPlrXtdO6fLWxa6d0+Wqr47zDKsx21P/Z', 'base64'),
+    };
+    const inProcess = { pdfParserConfig: { separateProcess: false } };
+    const pdfFrom = (objects: (string | Buffer)[]): Buffer => {
+        const parts: Buffer[] = [Buffer.from('%PDF-1.7\n')];
+        const offsets: number[] = [];
+        let at = parts[0].length;
+        objects.forEach((o, i) => { const b = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), typeof o === 'string' ? Buffer.from(o, 'latin1') : o, Buffer.from('\nendobj\n')]); offsets.push(at); at += b.length; parts.push(b); });
+        parts.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+        return Buffer.concat(parts);
+    };
+    const stream = (content: Buffer, dict = '') => Buffer.concat([Buffer.from(`<< /Length ${content.length} ${dict} >>\nstream\n`), content, Buffer.from('\nendstream')]);
+    const dct = '/Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode';
+    /** A page drawing the picture of object 5 (object 6 a gray soft mask, object 7 an ICC profile) `draws` times, with `inline` beside them. */
+    const pictured = (data: Buffer, dict = dct, draws = 1, inline?: Buffer) => pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>',
+        stream(Buffer.concat([Buffer.from(Array.from({ length: draws }, (_, i) => `q 100 0 0 100 ${20 + i * 10} ${20 + i * 10} cm /Im1 Do Q\n`).join('') + (inline ? 'q 50 0 0 50 200 200 cm BI /W 16 /H 16 /BPC 8 /CS /RGB /F /DCT ID ' : ''), 'latin1'), inline ?? Buffer.alloc(0), Buffer.from(inline ? ' EI Q' : '', 'latin1')])),
+        stream(data, dict),
+        stream(deflateSync(Buffer.alloc(256, 0x80)), '/Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode'),
+        stream(Buffer.alloc(0), '/N 3 /Alternate /DeviceRGB'),
+    ]);
+    const read = async (pdf: Buffer, config: object = {}) => await OfficeParser.parseOffice(pdf, { fileType: 'pdf', extractAttachments: true, ...inProcess, ...config } as any) as OfficeParserAST;
+    const isJpeg = (a: { mimeType?: string; name?: string; data: string }, bytes: Buffer) => a.mimeType === 'image/jpeg' && /^pdf_image_p1_\d+\.jpg$/.test(a.name!) && Buffer.from(a.data, 'base64').equals(bytes);
+    const isPng = (a: { mimeType?: string; name?: string; data: string }) => a.mimeType === 'image/png' && /^pdf_image_p1_\d+\.png$/.test(a.name!) && Buffer.from(a.data, 'base64').subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+    // pdf-lib's embedJpg, a page of one picture: the file's bytes, whatever the process that reads them.
+    for (const [kind, bytes] of [['RGB', jpeg.rgb], ['gray', jpeg.gray]] as const) {
+        const doc = await PDFDocument.create();
+        const embedded = await doc.embedJpg(new Uint8Array(bytes));
+        doc.addPage([300, 300]).drawImage(embedded, { x: 20, y: 20, width: 100, height: 100 });
+        const saved = Buffer.from(await doc.save());
+        for (const separateProcess of [true, false]) {
+            const ast = await read(saved, { pdfParserConfig: { separateProcess } });
+            const node = ast.content.flatMap(n => n.children ?? []).concat(ast.content).find(n => n.type === 'image');
+            assert.ok(ast.attachments.length === 1 && isJpeg(ast.attachments[0], bytes), `PDF kept JPEG: a ${kind} JPEG page keeps its bytes as ${ast.attachments[0]?.name} ${ast.attachments[0]?.mimeType} (${separateProcess ? 'separate process' : 'in process'})`);
+            assert.ok(ast.attachments[0].extension === 'jpg' && (node?.metadata as ImageMetadata | undefined)?.attachmentName === ast.attachments[0].name, 'PDF kept JPEG: the image node names the JPEG attachment');
+        }
+    }
+
+    // The same picture drawn twice, a JPEG each time; an ICCBased space of three components; a JPEG with an
+    // end of line before `endstream` and a length the file gets wrong (the picture is up to its end marker).
+    const twice = await read(pictured(jpeg.rgb, dct, 2));
+    assert.ok(twice.attachments.length === 2 && twice.attachments.every(a => isJpeg(a, jpeg.rgb)), `PDF kept JPEG: a picture drawn twice is two JPEGs (${twice.attachments.map(a => a.name)})`);
+    const icc = await read(pictured(jpeg.rgb, dct.replace('/DeviceRGB', '[/ICCBased 7 0 R]')));
+    assert.ok(icc.attachments.length === 1 && isJpeg(icc.attachments[0], jpeg.rgb), `PDF kept JPEG: an ICCBased picture of three components is kept (${icc.attachments.map(a => a.mimeType)})`);
+    const lying = pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>', stream(Buffer.from('q 100 0 0 100 20 20 cm /Im1 Do Q\n')),
+        Buffer.concat([Buffer.from(`<< /Length 99999999999 ${dct} >>\nstream\n`), jpeg.rgb, Buffer.from('\nendstream')])]);
+    const lied = await read(lying);
+    assert.ok(lied.attachments.length === 1 && isJpeg(lied.attachments[0], jpeg.rgb), `PDF kept JPEG: a length that lies is read to the end of the picture (${lied.attachments.map(a => [a.mimeType, a.data.length])})`);
+
+    // What stays a PNG: the picture the pixels of pdf.js are, not the JPEG's bytes.
+    const stays: [string, Buffer][] = [
+        ['a CMYK JPEG', pictured(jpeg.cmyk, dct.replace('/DeviceRGB', '/DeviceCMYK') + ' /Decode [1 0 1 0 1 0 1 0]')],
+        ['a CMYK JPEG with no /Decode', pictured(jpeg.cmyk, dct.replace('/DeviceRGB', '/DeviceCMYK'))],
+        ['a /Decode', pictured(jpeg.rgb, dct + ' /Decode [1 0 1 0 1 0]')],
+        ['a soft mask', pictured(jpeg.rgb, dct + ' /SMask 6 0 R')],
+        ['a colour-key mask', pictured(jpeg.rgb, dct + ' /Mask [0 10 0 10 0 10]')],
+        ['EXIF orientation 6', pictured(jpeg.rot6)],
+        ['a colour transform of its own', pictured(jpeg.rgb, dct + ' /DecodeParms << /ColorTransform 0 >>')],
+        ['another filter before it', pictured(deflateSync(jpeg.rgb), dct.replace('/Filter /DCTDecode', '/Filter [/FlateDecode /DCTDecode]'))],
+        ['a header of components the colour space does not have', pictured(jpeg.gray, dct)],
+        ['a width the header does not say', pictured(jpeg.rgb, dct.replace('/Width 16', '/Width 15'))],
+        ['a JPEG cut short', pictured(jpeg.rgb.subarray(0, jpeg.rgb.length - 40))],
+        ['bytes that are not a JPEG', pictured(Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(100, 0x41), Buffer.from([0xff, 0xd9])]))],
+    ];
+    for (const [label, pdf] of stays) {
+        const ast = await read(pdf);
+        assert.ok(ast.attachments.every(a => a.mimeType !== 'image/jpeg' && !a.name!.endsWith('.jpg') && isPng(a)), `PDF kept JPEG: ${label} is not kept as a JPEG (${ast.attachments.map(a => [a.name, a.mimeType])})`);
+    }
+    // For those pdf.js reads, a PNG is there (not nothing).
+    for (const [label, pdf] of stays.slice(0, 8)) {
+        assert.strictEqual((await read(pdf)).attachments.length, 1, `PDF kept JPEG: ${label} is still extracted, as a PNG`);
+    }
+    // An inline picture has no object to read: a PNG. A file whose streams cannot be read here (encrypted): no JPEG either.
+    const inlined = await read(pictured(jpeg.rgb, dct, 1, jpeg.rgb));
+    assert.ok(inlined.attachments.length === 2 && inlined.attachments.filter(a => isJpeg(a, jpeg.rgb)).length === 1 && inlined.attachments.filter(isPng).length === 1, `PDF kept JPEG: an inline JPEG is a PNG, beside the XObject's JPEG (${inlined.attachments.map(a => [a.name, a.mimeType])})`);
+    const encryptedBytes = fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'encrypted.pdf'));
+    assert.strictEqual(new PdfFile(new Uint8Array(encryptedBytes), 1).objects(), undefined, 'PDF kept JPEG: the streams of an encrypted file are not read');
+    const readable = new PdfFile(new Uint8Array(pictured(jpeg.rgb)), 1);
+    assert.ok(readable.objects() !== undefined && new KeptJpegs(readable).keep('5R', 16, 16)?.equals(jpeg.rgb) && !new KeptJpegs(readable).keep('5R', 16, 17) && !new KeptJpegs(readable).keep(undefined, 16, 16) && !new KeptJpegs(readable).keep('x5R', 16, 16), 'PDF kept JPEG: a picture is found by its reference, and only with the size pdf.js decoded');
+
+    // The picture limit holds for a JPEG: with maxImagePixels below its pixels, it is left out, with the warning.
+    const warned: string[] = [];
+    const limited = await read(pictured(jpeg.rgb), { pdfParserConfig: { separateProcess: false, maxImagePixels: 100 }, onWarning: (w: any) => warned.push(String(w.code)) });
+    assert.ok(limited.attachments.length === 0 && warned.includes('IMAGE_EXTRACTION_FAILED'), `PDF kept JPEG: maxImagePixels holds for a JPEG (${limited.attachments.length}, ${warned})`);
+    assert.strictEqual((await read(pictured(jpeg.rgb), { extractAttachments: false })).attachments.length, 0, 'PDF kept JPEG: no attachments are made when none are asked for');
+
+    // OCR is given the JPEG.
+    const recognized: Buffer[] = [];
+    ocrTestHooks.createWorker = async () => ({
+        recognize: async (image: any) => { recognized.push(Buffer.from(image)); return { data: { text: 'READ' } }; },
+        reinitialize: async () => { },
+        terminate: async () => { },
+    });
+    try {
+        const ocred = await read(pictured(jpeg.rgb), { ocr: true });
+        assert.ok(recognized.length === 1 && recognized[0].equals(jpeg.rgb) && ocred.attachments[0].ocrText === 'READ' && isJpeg(ocred.attachments[0], jpeg.rgb), `PDF kept JPEG: OCR reads the JPEG (${recognized.map(r => r.length)})`);
+    } finally {
+        ocrTestHooks.createWorker = undefined;
+        await terminateOcr();
+    }
+
+    // Every writer carries the JPEG as it is.
+    const ast = await read(pictured(jpeg.rgb));
+    const within = (files: Record<string, Uint8Array>) => Object.entries(files).filter(([, v]) => Buffer.from(v).equals(jpeg.rgb)).map(([k]) => k);
+    for (const format of ['docx', 'odt', 'epub', 'pptx', 'odp'] as const) {
+        const out = (await ast.to(format as any)).value as unknown as Uint8Array;
+        const carried = within(unzipSync(new Uint8Array(out)));
+        assert.ok(carried.length === 1 && /\.jpe?g$/.test(carried[0]), `PDF kept JPEG: ${format} carries the JPEG as a .jpg/.jpeg file (${carried})`);
+    }
+    const html = String((await ast.to('html')).value);
+    assert.ok(html.includes(`data:image/jpeg;base64,${jpeg.rgb.toString('base64')}`) && !html.includes('data:image/png'), 'PDF kept JPEG: HTML carries the JPEG');
+    const markdown = String((await ast.to('md')).value);
+    assert.ok(markdown.includes('image/jpeg;base64,') || markdown.includes('.jpg'), 'PDF kept JPEG: Markdown names or carries the JPEG');
+    const rtf = String((await ast.to('rtf')).value);
+    assert.ok(rtf.includes('\\jpegblip') && !rtf.includes('\\pngblip') && rtf.replace(/\s/g, '').includes(jpeg.rgb.toString('hex')), 'PDF kept JPEG: RTF carries the JPEG as jpegblip');
+    const nativePdf = Buffer.from((await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array);
+    assert.ok(nativePdf.includes(jpeg.rgb), 'PDF kept JPEG: the native PDF writer embeds the JPEG as it is');
+    console.log('  PDF kept JPEG: All assertions passed ✓');
+}
+
 async function testPdfInProcessTurns(): Promise<void> {
     const { deflateSync } = await import('zlib');
     const pdfFrom = (objects: (string | Buffer)[]): Buffer => {
@@ -10149,6 +10288,7 @@ async function runTests(): Promise<void> {
         ['PDF form metadata and HTML details', testPdfFormMetadataAndHtml],
         ['PDF form values as text', testPdfFormValuesAsText],
         ['PDF glyph names', testPdfGlyphNames],
+        ['PDF kept JPEGs', testPdfKeptJpegs],
         ['Cancellation', testCancellation],
     ];
 

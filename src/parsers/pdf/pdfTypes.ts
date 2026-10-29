@@ -97,11 +97,13 @@ export interface PdfImage {
     name: string;
     bounds: NodeBounds;
     /**
-     * PNG-encoded pixels. Encoded at collection time (not at emit) so the raw uncompressed RGBA
-     * buffer, which is many times larger, is released as soon as its page is done rather than being
-     * held for every page at once until the emit pass.
+     * The picture's file: PNG-encoded pixels, or the JPEG the PDF stores where that shows what the pixels
+     * do (see pdfJpeg). Made at collection time (not at emit) so the raw uncompressed RGBA buffer, which
+     * is many times larger, is released as soon as its page is done rather than being held for every
+     * page at once until the emit pass.
      */
-    png: Buffer;
+    data: Buffer;
+    format: 'png' | 'jpeg';
     pixelWidth: number;
     pixelHeight: number;
 }
