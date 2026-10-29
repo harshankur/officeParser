@@ -201,6 +201,18 @@ const COMB_WIDTH_SPREAD = 0.15;
  * be a value's.
  */
 const SCALE_BOXES = 3;
+/**
+ * How a row of boxes the page draws, a character to a box, is a comb (see isComb): its boxes about square or
+ * taller than wide (no wider than COMB_SHAPE times their height) and tight to their characters (no wider than
+ * COMB_EMS of them), and, where its characters are a scale's choices (see isScale), tighter still (no wider
+ * than SCALE_EMS). A comb is set tight: a date's digits of 14 points in square boxes of 20 (1.4 ems), of 8 in
+ * boxes of 18 (2.25 ems); its choices of 14 points in boxes of 18 (1.3 ems) are a value's characters. A row of
+ * choices is ruled apart: weekdays' letters in boxes of 30 by 18, wider than tall, a scale's numbers of 11
+ * points in boxes of 30 by 24 (2.7 ems), grades of 11 points in boxes of 18 (1.6 ems).
+ */
+const COMB_SHAPE = 1.3;
+const COMB_EMS = 2.5;
+const SCALE_EMS = 1.5;
 /** The characters a scale's choices count through, one after another, and a school's grades (no E). */
 const SCALE_RUNS = ['0123456789', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'];
 const GRADES = ['ABCDF', 'abcdf'];
@@ -209,8 +221,8 @@ const GRADES = ['ABCDF', 'abcdf'];
  * Whether a row of boxes, one character to a box, prints a scale's choices rather than holds a value: every
  * box filled, with characters that count up or down one at a time ("1 2 3 4 5", "0 1 2 ... 9", "A B C D E",
  * "5 4 3 2 1") or a school's grades ("A B C D F"), three at least. A value's characters (a date's "15041985",
- * a name's) do not count so; one that does, a comb filled with "12345", is read as the row of choices it looks
- * like, its characters still in order, each in its cell.
+ * a name's) do not count so; one that does, a comb filled with "12345" in boxes not as tight as SCALE_EMS, is
+ * read as the row of choices it looks like, its characters still in order, each in its cell.
  */
 function isScale(chars: readonly string[]): boolean {
     if (chars.length < SCALE_BOXES || chars.some(c => [...c].length !== 1)) return false;
@@ -223,8 +235,10 @@ function isScale(chars: readonly string[]): boolean {
  * their middle one's, about square: no wider than two and a half times their height, no taller than four
  * times their width) a form draws to be filled one character to a box, a date's digits or a tax number's.
  * It is one where its text is form field values (see RawRun.formField) alone, or where each box holds a
- * character at most and its characters are no scale's choices (see isScale). A row of words, a row of a
- * scale's numbers or of grades, or a grid of two rows, is a table.
+ * character at most, in boxes of a comb's shape and tight to them (see COMB_SHAPE, COMB_EMS), tighter still
+ * where they are a scale's choices (see isScale, SCALE_EMS). A row of words, a row of letters or of a scale's
+ * numbers or grades ruled apart, or a grid of two rows, is a table: where it is unsure, a row stays a table,
+ * each character in its cell.
  */
 function isComb(f: RuledFrame, contents: readonly RawRun[][]): boolean {
     if (f.ys.length !== 2 || f.cells.length < 2 || f.cells.some(c => c.colSpan !== 1 || c.rowSpan !== 1)) return false;
@@ -235,6 +249,8 @@ function isComb(f: RuledFrame, contents: readonly RawRun[][]): boolean {
     if (widths.some(w => Math.abs(w - middle) > COMB_WIDTH_SPREAD * middle)) return false;
     const texts = contents.flat().filter(r => r.text.trim());
     if (texts.length && texts.every(r => r.formField)) return true;
+    const size = texts.reduce((m, r) => Math.max(m, r.fontSize), 0);
+    if (middle > COMB_SHAPE * height || (size > 0 && middle > COMB_EMS * size)) return false;
     const chars: string[] = [];
     for (const runs of contents) {
         let box = '', count = 0;
@@ -243,7 +259,7 @@ function isComb(f: RuledFrame, contents: readonly RawRun[][]): boolean {
     }
     // (In the boxes' order across the row.)
     const order = f.cells.map((c, i) => i).sort((a, b) => f.cells[a].col - f.cells[b].col);
-    return !isScale(order.map(i => chars[i]));
+    return !isScale(order.map(i => chars[i])) || (size > 0 && middle <= SCALE_EMS * size);
 }
 
 /**

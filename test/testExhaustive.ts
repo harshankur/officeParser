@@ -8317,6 +8317,26 @@ async function testPdfFormValuesAsText(): Promise<void> {
     assert.deepStrictEqual(drawnTables.map(cells), [[['A', 'B', 'C', 'D'], ['E', 'F', 'G', 'H']], [['Ja', 'Nein', 'Vielleicht']], [['Name', 'Erika'], ['Geboren', '01052026']], [['1', '2', '3', '4', '5']], [['A', 'B', 'C', 'D', 'F']]], `PDF comb: a grid of two rows of letters, a row of words in like boxes, a scale's numbers and grades in boxes, are tables; a comb in a table's cell is the cell's (${JSON.stringify(drawnTables.map(cells))})`);
     assert.ok(drawnRead.includes('Geburtstag 15041985'), `PDF comb: a comb of small digits is one value ${drawnSaid}`);
     assert.ok(drawnRead.some(t => /(^| )1 2 3 4 5$/.test(t)) && !textOf(drawnAst).includes('12345'), `PDF comb: numbers set apart with no boxes stay apart ${drawnSaid}`);
+    // Rows of letters and of numbers in boxes wider than tall (30 by 18, characters of 11 points): a week's
+    // days, a yes and a no, odd numbers to pick from, each a table. A scale's numbers and letters of 14 points
+    // in square boxes of 18, as tight as a comb's, are a value's characters, one value.
+    const ruled = await PDFDocument.create();
+    const rfont = await ruled.embedFont(StandardFonts.Helvetica);
+    const rpage = ruled.addPage([500, 500]);
+    const rrow = (label: string, chars: string, y: number, w: number, h: number, size: number) => {
+        rpage.drawText(label, { x: 50, y: y + 4, size: 11, font: rfont });
+        [...chars].forEach((c, k) => {
+            rpage.drawRectangle({ x: 200 + w * k, y, width: w, height: h, borderColor: black, borderWidth: 0.5 });
+            rpage.drawText(c, { x: 200 + w * k + (w - rfont.widthOfTextAtSize(c, size)) / 2, y: y + (h - size) / 2 + 1, size, font: rfont });
+        });
+    };
+    rrow('Days', 'MTWTFSS', 440, 30, 18, 11); rrow('Answer', 'YN', 400, 30, 18, 11); rrow('Pick', '13579', 360, 30, 18, 11);
+    rrow('Code', '12345', 300, 18, 18, 14); rrow('Letters', 'ABCDE', 260, 18, 18, 14); rrow('Short', '123', 220, 18, 18, 14);
+    const ruledAst = await OfficeParser.parseOffice(Buffer.from(await ruled.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
+    const ruledRead = paragraphs(ruledAst);
+    const ruledTables = all(ruledAst).filter(n => n.type === 'table').reverse().map(cells);
+    assert.deepStrictEqual(ruledTables, [[[...'MTWTFSS']], [['Y', 'N']], [[...'13579']]], `PDF comb: letters and numbers in boxes wider than tall are tables (${JSON.stringify([ruledTables, ruledRead])})`);
+    assert.ok(['Code 12345', 'Letters ABCDE', 'Short 123'].every(t => ruledRead.includes(t)), `PDF comb: a scale's characters in boxes as tight as a comb's are one value (${JSON.stringify(ruledRead)})`);
 
     // A tagged form: a field's widget tagged as a /Form element (its OBJR) reads its value there, and a
     // field the tags leave out reads by its place, neither making the tags look unreliable.
