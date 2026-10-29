@@ -14,7 +14,7 @@ import { guardShaping } from '../src/generators/pdf/nativePdfEngine';
 import { OfficeTemplate } from '../src/OfficeTemplate';
 import { OfficeConverter } from '../src/OfficeConverter';
 import { zipSync, strToU8, unzipSync, unzlibSync, strFromU8 } from 'fflate';
-import { PDFDocument, PDFHexString, PDFName, PDFOperator, PDFRawStream, StandardFonts, degrees, rgb } from 'pdf-lib';
+import { PDFDocument, PDFHexString, PDFName, PDFOperator, PDFRawStream, StandardFonts, TextAlignment, degrees, rgb } from 'pdf-lib';
 import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -8218,6 +8218,34 @@ async function testPdfFormValuesAsText(): Promise<void> {
     const orderTables = all(orderAst).filter(n => n.type === 'table').map(t => t.children!.map(r => r.children!.map(c => (c.text ?? '').trim())));
     assert.deepStrictEqual(orderTables, [[['Item', 'Quantity', 'Price', 'Gift'], ['Apples', '2', '1.25', '☐'], ['Bananas', '3', '2.5', '☒'], ['Cherries', '4', '3.75', '☐']]],
         `PDF form: values under a table's heads are its cells (${JSON.stringify([orderTables, paragraphs(orderAst)])})`);
+    // The same form's quantities centred in their boxes and its amounts set right, under heads set from the
+    // left: each box's left edge is under its head's, so they are its cells still.
+    for (const set of ['centred', 'right', 'both'] as const) {
+        const aligned = await PDFDocument.create();
+        const afont = await aligned.embedFont(StandardFonts.Helvetica);
+        const apage = aligned.addPage([612, 792]);
+        const aform = aligned.getForm();
+        const aput = (t: string, x: number, y: number) => apage.drawText(t, { x, y, size: 11, font: afont });
+        aput('Item', 72, 700); aput('Qty', 300, 700); aput('Amount', 420, 700);
+        [['Widget', '5', '12.00'], ['Gadget', '10', '7.50'], ['Doohickey', '2', '99.95']].forEach(([item, quantity, amount], i) => {
+            const y = 670 - i * 26;
+            aput(item, 72, y);
+            const q = aform.createTextField(`qty${i}`);
+            q.setText(quantity);
+            if (set !== 'right') q.setAlignment(TextAlignment.Center);
+            q.addToPage(apage, { x: 300, y: y - 5, width: 60, height: 18, font: afont });
+            const a = aform.createTextField(`amount${i}`);
+            a.setText(amount);
+            if (set !== 'centred') a.setAlignment(TextAlignment.Right);
+            a.addToPage(apage, { x: 420, y: y - 5, width: 100, height: 18, font: afont });
+        });
+        aput('Thank you for your order.', 72, 560);
+        aform.updateFieldAppearances(afont);
+        const alignedAst = await OfficeParser.parseOffice(Buffer.from(await aligned.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
+        const alignedTables = all(alignedAst).filter(n => n.type === 'table').map(t => t.children!.map(r => r.children!.map(c => (c.text ?? '').trim())));
+        assert.deepStrictEqual(alignedTables, [[['Item', 'Qty', 'Amount'], ['Widget', '5', '12.00'], ['Gadget', '10', '7.50'], ['Doohickey', '2', '99.95']]],
+            `PDF form: values ${set} in their boxes under heads set from the left are the table's cells (${JSON.stringify([alignedTables, paragraphs(alignedAst)])})`);
+    }
     // A form of labels and values under a line of two cells that is no table's head: a title on the left and
     // one set right at the margin the boxes end at, then the same form with a form's number and its revision
     // over it and a line between them and the form. Each value is read with its label.

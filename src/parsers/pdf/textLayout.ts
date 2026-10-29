@@ -302,9 +302,9 @@ const HEAD_TOLERANCE = 4;
  * The form field values (see RawRun.formField) that stand in a table's column, under its head: a line of the
  * page's own text, of cells (two at least) and of no values, with every line from it down to the value's a row
  * of it. A row of it is a line each of whose cells stands under one of its cells: a cell of text with its left
- * edge, its middle or its right edge where a head cell's is, and a value with its field's box's edge on the
- * side the value is set to in it (the left for a value set from the left, the right for one set to the right,
- * any for a box it fills) or its box's middle where a head cell's is. An order form's quantities under
+ * edge, its middle or its right edge where a head cell's is, and a value with its field's box's left edge or
+ * middle where a head cell's is, however the value is set in it, or its right edge where the value is set to
+ * the right or fills it. An order form's quantities under
  * "Quantity" are its table's cells, as they are printed; a value beside its label, where nothing heads it, is
  * read with the label (see segmentsOf). A line above a form is not its head where the form's lines are not its
  * rows: a title over the labels and a date set right at the margin the boxes end at, or a line with another
@@ -341,10 +341,13 @@ function headedValues(clusters: readonly Cluster[], cfg: PdfLayoutConfig): Set<R
             // (Where its value is set in the box, from the run's place in it.)
             const fromLeft = r.x - box.x, fromRight = right - (r.x + r.width);
             const fills = fromLeft <= HEAD_TOLERANCE && fromRight <= HEAD_TOLERANCE;
-            if (under(1, box.x + box.width / 2)) return true;
-            if (fills) return under(0, box.x) || under(2, right);
-            if (Math.abs(fromLeft - fromRight) <= HEAD_TOLERANCE) return false;
-            return fromLeft < fromRight ? under(0, box.x) : under(2, right);
+            // (A box's left edge under a head's is its column's, however its value is set in it, centred
+            // or set right under a head set from the left: "Qty" over a quantity centred in its box. Its right
+            // edge only where its value is set right or fills it: a date set right at the margin the boxes end
+            // at is no head of values set from their boxes' left.)
+            if (under(0, box.x) || under(1, box.x + box.width / 2)) return true;
+            if (fills) return under(2, right);
+            return fromLeft > fromRight + HEAD_TOLERANCE && under(2, right);
         });
         if (isRow) {
             for (const cell of cells) if (cell.value) out.add(cell.value);
