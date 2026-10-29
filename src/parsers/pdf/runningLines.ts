@@ -99,6 +99,33 @@ function keyOf(text: string): string {
     return text.length > KEY_TEXT ? `${text.slice(0, KEY_TEXT)}|${text.length}` : text;
 }
 
+/** The first code point of each script's run of digits a digit is in (its zero), found as digits are read. */
+const DIGIT_ZERO = new Map<number, number>();
+
+/**
+ * The value of a run of decimal digits of any script ("12", "١٢", "１２"), or NaN past a safe integer. Each
+ * script's digits are a run of ten from its zero, and runs of them are next to one another only whole (no
+ * more than five), so a digit's value is how far it is from the first of the digits before it, by tens.
+ */
+function digitsValue(run: string): number {
+    let value = 0;
+    for (const ch of run) {
+        const cp = ch.codePointAt(0)!;
+        let digit = cp - 48;
+        if (digit < 0 || digit > 9) {
+            let zero = DIGIT_ZERO.get(cp);
+            if (zero === undefined) {
+                zero = cp;
+                while (zero > 0 && cp - zero < 50 && /\p{Nd}/u.test(String.fromCodePoint(zero - 1))) zero--;
+                DIGIT_ZERO.set(cp, zero);
+            }
+            digit = (cp - zero) % 10;
+        }
+        value = value * 10 + digit;
+    }
+    return Number.isSafeInteger(value) ? value : NaN;
+}
+
 /** Separators a page number is set apart from a header's words by: "Annual Report | 3", "3 · Annual Report". */
 const SEPARATOR = /[|¦‖•·]/u;
 /**
@@ -147,7 +174,7 @@ function pageNumberAt(text: string, start: number, end: number): boolean {
     NUMBER_TAIL.lastIndex = end;
     const tail = NUMBER_TAIL.exec(text);
     // (A page's count of pages is no less than its number: "31/12" is a date.)
-    if (tail && tail[1] !== undefined && Number(tail[1].normalize('NFKC')) < Number(text.slice(start, end).normalize('NFKC'))) return false;
+    if (tail && tail[1] !== undefined && digitsValue(tail[1]) < digitsValue(text.slice(start, end))) return false;
     if (SHEET_WORD_ALONE.test(word)) return !!tail && tail[1] !== undefined;
     if (/\p{L}/u.test(word)) return false;
     const before = at > 0 ? text[at - 1] : '';
@@ -185,8 +212,8 @@ function pageNumbers(text: string, pageNumber: number, label: string | null | un
     for (const m of text.matchAll(/\p{Nd}+/gu)) {
         k++;
         if (out.length >= NUMBERS_COMPARED) break;
-        const value = Number(m[0].normalize('NFKC'));
-        if (!Number.isSafeInteger(value) || !pageNumberAt(text, m.index!, m.index! + m[0].length)) continue;
+        const value = digitsValue(m[0]);
+        if (Number.isNaN(value) || !pageNumberAt(text, m.index!, m.index! + m[0].length)) continue;
         out.push(`${k}|${value - pageNumber}`);
         if (digits && m[0] === label && !out.includes('label')) out.push('label');
     }

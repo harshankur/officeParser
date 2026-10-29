@@ -8923,6 +8923,11 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
     const articles = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, `Acme X${p}Z`), body(p)].join('\n')), '', '/ToUnicode 12 0 R', [`<< /Length ${articleMap.length} >>\nstream\n${articleMap}\nendstream`]));
     const articlesText = String((await articles.to('text')).value);
     assert.ok(articles.auxiliary?.headers === undefined && [1, 2, 3, 4].every(p => articlesText.includes(`Acme \u7B2C${p}\u6761`)), `Running headers: a Chinese article's number is its page's text (${JSON.stringify(texts(articles.auxiliary?.headers))})`);
+    // A header whose page number is in Arabic-Indic digits, the font's digits read so: its number counts as
+    // ASCII digits do.
+    const indicMap = toUnicode.replace('2 beginbfrange <20> <57> <0020> <5A> <7E> <005A> endbfrange', '3 beginbfrange <20> <2F> <0020> <30> <39> <0660> <3A> <7E> <003A> endbfrange');
+    const indic = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, `Acme Corp | ${p}`), body(p)].join('\n')), '', '/ToUnicode 12 0 R', [`<< /Length ${indicMap.length} >>\nstream\n${indicMap}\nendstream`]));
+    assert.strictEqual(texts(indic.auxiliary?.headers).length, 4, `Running headers: a page number in Arabic-Indic digits makes its line a header (${JSON.stringify(texts(indic.auxiliary?.headers))})`);
     // A chapter's head on each of its pages, the next chapter's on its: printed alike page after page, a header,
     // and so is a short chapter's on its one page among them.
     const chapters = await read(pdfOf([1, 2, 3, 4, 5, 6].map(p => [line(50, 760, 10, `Chapter ${p <= 3 ? 1 : p === 4 ? 2 : 3}`), body(p)].join('\n'))));
