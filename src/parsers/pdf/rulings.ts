@@ -203,13 +203,14 @@ const COMB_WIDTH_SPREAD = 0.15;
 const SCALE_BOXES = 3;
 /**
  * How a row of boxes the page draws, a character to a box, is a comb (see isComb): its boxes about square,
- * taller than wide or a little wider (no wider than COMB_SHAPE times their height: a date's in boxes of 20 by
- * 15 or 16 by 12) and tight to their characters (no wider than COMB_EMS of them): a date's digits of 14 points
- * in square boxes of 20 (1.4 ems), of 8 in boxes of 18 (2.25 ems). A row of choices is ruled apart: weekdays'
- * letters in boxes of 30 by 18 (1.67 times as wide as tall), a scale's numbers of 11 points in boxes of 30 by
- * 24 (2.7 ems).
+ * taller than wide or a little wider (no wider than COMB_SHAPE times their height; a row of digits alone up to
+ * COMB_DIGITS_SHAPE, a date's in boxes of 20 by 15 or 16 by 12) and tight to their characters (no wider than
+ * COMB_EMS of them): a date's digits of 14 points in square boxes of 20 (1.4 ems), of 8 in boxes of 18 (2.25
+ * ems). A row of choices is ruled apart: weekdays' letters in boxes of 26 by 18 or 30 by 18 (1.44 and 1.67
+ * times as wide as tall), a scale's numbers of 11 points in boxes of 30 by 24 (2.7 ems).
  */
-const COMB_SHAPE = 1.5;
+const COMB_SHAPE = 1.3;
+const COMB_DIGITS_SHAPE = 1.5;
 const COMB_EMS = 2.5;
 /** The characters a scale's choices count through, one after another, and a school's grades (no E). */
 const SCALE_RUNS = ['0123456789', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'];
@@ -218,14 +219,19 @@ const GRADES = ['ABCDF', 'abcdf'];
 /**
  * Whether a row of boxes, one character to a box, prints a scale's choices rather than holds a value: every
  * box filled, with characters that count up or down one at a time ("1 2 3 4 5", "0 1 2 ... 9", "A B C D E",
- * "5 4 3 2 1") or a school's grades ("A B C D F"), three at least. A value's characters (a date's "15041985",
- * a name's) do not count so; one that does, a comb filled with "12345" however tight its boxes, is read as the
- * row of choices it looks like, its characters still in order, each in its cell.
+ * "5 4 3 2 1"), digits counting by another step ("1 3 5 7 9") or a school's grades ("A B C D F"), three at
+ * least. A value's characters (a date's "15041985", a name's) do not count so; one that does, a comb filled
+ * with "12345" however tight its boxes, is read as the row of choices it looks like, its characters still in
+ * order, each in its cell.
  */
 function isScale(chars: readonly string[]): boolean {
     if (chars.length < SCALE_BOXES || chars.some(c => [...c].length !== 1)) return false;
     const text = chars.join(''), back = [...chars].reverse().join('');
-    return SCALE_RUNS.some(run => run.includes(text) || run.includes(back)) || GRADES.includes(text) || GRADES.includes(back);
+    if (SCALE_RUNS.some(run => run.includes(text) || run.includes(back)) || GRADES.includes(text) || GRADES.includes(back)) return true;
+    // (Digits counting by a step of their own, the odd or even choices: "1 3 5 7 9", "2 4 6", "10 ... 0" by twos.)
+    if (!chars.every(c => /^[0-9]$/.test(c))) return false;
+    const step = Number(chars[1]) - Number(chars[0]);
+    return step !== 0 && chars.every((c, i) => i === 0 || Number(c) - Number(chars[i - 1]) === step);
 }
 
 /**
@@ -248,13 +254,17 @@ function isComb(f: RuledFrame, contents: readonly RawRun[][]): boolean {
     const texts = contents.flat().filter(r => r.text.trim());
     if (texts.length && texts.every(r => r.formField)) return true;
     const size = texts.reduce((m, r) => Math.max(m, r.fontSize), 0);
-    if (middle > COMB_SHAPE * height || (size > 0 && middle > COMB_EMS * size)) return false;
+    if (size > 0 && middle > COMB_EMS * size) return false;
     const chars: string[] = [];
     for (const runs of contents) {
         let box = '', count = 0;
         for (const r of runs) for (const ch of r.text) if (ch.trim()) { if (++count > 1) return false; box = ch; }
         chars.push(box);
     }
+    // (Wider boxes hold a comb's characters only where they are all digits: "Y N" or "M T W T F S S" in boxes
+    // a half again as wide as tall are choices.)
+    const digits = chars.every(c => !c || /^\p{Nd}$/u.test(c));
+    if (middle > (digits ? COMB_DIGITS_SHAPE : COMB_SHAPE) * height) return false;
     // (In the boxes' order across the row.)
     const order = f.cells.map((c, i) => i).sort((a, b) => f.cells[a].col - f.cells[b].col);
     return !isScale(order.map(i => chars[i]));

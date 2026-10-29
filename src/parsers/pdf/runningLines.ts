@@ -162,10 +162,19 @@ const NUMBER_LEAD = new RegExp(String.raw`\s*(?:[|¦‖•·]|${DASH}\s)\s*(?![\
 /**
  * A line that is a page's number within its chapter or its appendix and nothing else, with or without a
  * page's word: "2-5", "2.5", "2:5", "2–5" (an en dash), "A-5", "Page 2-5". Its last number is the page's.
- * Two parts only, so a date's three ("2024-03-04") stay out.
+ * Two parts only, so a date's three ("2024-03-04") stay out; a chapter's number of two digits at most and a
+ * page's of three, neither written with a leading zero, so a serial's "2024-153" or "0042-101" and a day's
+ * "03-05" stay out too.
  */
 const CHAPTER_WORD = new RegExp(String.raw`^${PAGE_WORD}\s*`, 'iu');
-const CHAPTER_NUMBER = /^(?:\p{Nd}+|[A-Z])\s?[-.:\u2013]\s?\p{Nd}+$/u;
+const CHAPTER_NUMBER = /^(\p{Nd}{1,2}|[A-Z])\s?[-.:\u2011\u2013\u2014]\s?(\p{Nd}{1,3})$/u;
+
+/** Whether a line (past any page's word) is a chapter's page, "2-5" or "A-5" (see CHAPTER_NUMBER). */
+function chapterPage(text: string): boolean {
+    const m = CHAPTER_NUMBER.exec(text);
+    // (Not written with a leading zero: a digit of any script whose value is none.)
+    return !!m && !(/^\p{Nd}/u.test(m[1]) && digitsValue([...m[1]][0]) === 0) && digitsValue([...m[2]][0]) !== 0;
+}
 /**
  * The ornaments a page number is framed by, a space either side of it, each with the one that closes the
  * frame: "| 3 |", "~ 3 ~", "< 3 >", "· 3 ·", "• 3 •".
@@ -198,7 +207,7 @@ function pageNumberAt(text: string, start: number, end: number): boolean {
     // (A chapter's page, "2-5" or "Page 2-5", the line's last number.)
     if (end === text.length) {
         const word = CHAPTER_WORD.exec(text);
-        if (CHAPTER_NUMBER.test(text) || (word && CHAPTER_NUMBER.test(text.slice(word[0].length)))) return true;
+        if (chapterPage(text) || (word && chapterPage(text.slice(word[0].length)))) return true;
     }
     PAGE_AFTER.lastIndex = end;
     if (PAGE_AFTER.test(text)) return true;
@@ -569,7 +578,18 @@ function fieldsIn(text: string, pageNumber: number, numPages: number, allPages: 
         const format = romanOf(token, pageNumber);
         if (format) return [{ start, end: start + token.length, field: 'page', format }];
     }
-    return null;
+    // Any other shape a running line's page number is found in ("Annual Report | 3", "| 3 |", "• 3 •", a
+    // chapter's "2-3", digits of another script): the last number set apart as a page's (see pageNumberAt) that
+    // is the page's own. Without it such a footer, taken out of the page, printed the first page's number on
+    // every page.
+    let own: FieldSpan | null = null;
+    if (text.length <= NUMBERED_TEXT) {
+        for (const m of text.matchAll(/\p{Nd}+/gu)) {
+            const start = m.index!, end = start + m[0].length;
+            if (digitsValue(m[0]) === pageNumber && pageNumberAt(text, start, end)) own = { start, end, field: 'page' };
+        }
+    }
+    return own ? [own] : null;
 }
 
 /**
@@ -593,7 +613,7 @@ export function markPageFields(furniture: readonly PageFurniture[], numPages: nu
             const leaves = textLeaves(node);
             if (!leaves.length) continue;
             const text = leaves.map(l => l.leaf.text ?? '').join('');
-            if (!/[\divxlcdm]/i.test(text) || text.length > 200) continue;
+            if (!/[\p{Nd}ivxlcdm]/iu.test(text) || text.length > 200) continue;
             const key = `${page.kind}|${text.replace(/\p{Nd}+/gu, '#').trim()}`;
             const spans = fieldsIn(text, page.pageNumber, numPages, allPages);
             let group = groups.get(key);

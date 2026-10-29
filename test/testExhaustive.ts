@@ -8357,12 +8357,15 @@ async function testPdfFormValuesAsText(): Promise<void> {
     rrow('Days', 'MTWTFSS', 440, 30, 18, 11); rrow('Answer', 'YN', 400, 30, 18, 11); rrow('Pick', '13579', 360, 30, 18, 11);
     rrow('Code', '12345', 300, 18, 18, 14); rrow('Letters', 'ABCDE', 260, 18, 18, 14); rrow('Short', '123', 220, 18, 18, 14);
     rrow('Born', '15041985', 180, 20, 15, 11); rrow('Signed', '01052026', 140, 16, 12, 9);
+    // (Boxes half again as wide as tall, 26 or 27 by 18: a date's digits are a comb; a week's letters, and odd
+    // numbers that count by twos, are choices.)
+    rrow('Weekdays', 'MTWTFSS', 100, 26, 18, 11); rrow('Odd', '13579', 60, 26, 18, 11); rrow('Due', '15041985', 20, 27, 18, 11);
     const ruledAst = await OfficeParser.parseOffice(Buffer.from(await ruled.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
     const ruledRead = paragraphs(ruledAst);
     const ruledTables = all(ruledAst).filter(n => n.type === 'table').reverse().map(cells);
-    assert.deepStrictEqual(ruledTables, [[[...'MTWTFSS']], [['Y', 'N']], [[...'13579']], [[...'12345']], [[...'ABCDE']], [[...'123']]],
+    assert.deepStrictEqual(ruledTables, [[[...'MTWTFSS']], [['Y', 'N']], [[...'13579']], [[...'12345']], [[...'ABCDE']], [[...'123']], [[...'MTWTFSS']], [[...'13579']]],
         `PDF comb: letters and numbers in boxes wider than tall are tables, and a scale's characters in boxes as tight as a comb's (${JSON.stringify([ruledTables, ruledRead])})`);
-    assert.ok(['Born 15041985', 'Signed 01052026'].every(t => ruledRead.includes(t)), `PDF comb: a date's digits in boxes a little wider than tall are one value (${JSON.stringify(ruledRead)})`);
+    assert.ok(['Born 15041985', 'Signed 01052026', 'Due 15041985'].every(t => ruledRead.includes(t)), `PDF comb: a date's digits in boxes a little wider than tall are one value (${JSON.stringify(ruledRead)})`);
 
     // A tagged form: a field's widget tagged as a /Form element (its OBJR) reads its value there, and a
     // field the tags leave out reads by its place, neither making the tags look unreliable.
@@ -8957,6 +8960,8 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
         ['invoice', p => `Invoice INV-${1000 + p}`], ['question sign', p => `Question #${p}`], ['label', p => `Question: ${p}`], ['time', p => `Entry 2024/03/${pad(p)} 09:00`],
         ['list', p => `\\(${p}\\) Widget`], ['bibliography', p => `[${p + 10}] Smith, J. A study.`], ['day of', p => `Day ${p} of 30`], ['question of', p => `Question ${p} of 10`],
         ['slide', p => `Slide ${p}`], ['sheet word', p => `List ${p}`],
+        // (A serial's number, a day's month and day, a padded ticket's: no chapter's page "2-5" is written so.)
+        ['serial', p => `2024-${152 + p}`], ['month and day', p => `03-${pad(p)}`], ['padded ticket', p => `0042-${100 + p}`],
         // (A number at the line's start before its words, with no separator between, is a date's or a count's:
         // "4 May 2024", "5 mars 2024", "1 apples left". So is a journal's page printed so, "147 Journal of
         // Things": its head stays each page's text, which repeats it, rather than a date's leaving the text.)
@@ -9002,6 +9007,13 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
     // A footer framed by bullets keeps them both: read as a list's item, it was its text after the first.
     const bullets = await read(pdfOf([1, 2, 3, 4].map(p => [body(p), line(240, 30, 10, `\\267 ${p} \\267`)].join('\n'))));
     assert.deepStrictEqual(texts(bullets.auxiliary?.footers), [1, 2, 3, 4].map(p => `${p}:\u2022 ${p} \u2022`), `Running footers: a footer framed by bullets keeps its text (${JSON.stringify(texts(bullets.auxiliary?.footers))})`);
+    // Its number is the page's field, as "- 3 -"'s is: taken out of the page as text, Word, ODT and RTF printed
+    // the first page's number on every page. So is a footer's after a separator, and a chapter's page's.
+    assert.deepStrictEqual(fieldsOf(bullets.auxiliary?.footers), [1, 2, 3, 4].map(p => `${p}:page=${p}`), `Running footers: a framed page number is a page field (${JSON.stringify(fieldsOf(bullets.auxiliary?.footers))})`);
+    for (const foot of [(p: number) => `Annual Report | ${p}`, (p: number) => `2-${p}`, (p: number) => `Acme Corp \\264 ${p} \\264 Confidential`]) {
+        const fielded = await read(pdfOf([1, 2, 3, 4].map(p => [body(p), line(240, 30, 10, foot(p))].join('\n'))));
+        assert.deepStrictEqual(fieldsOf(fielded.auxiliary?.footers), [1, 2, 3, 4].map(p => `${p}:page=${p}`), `Running footers: "${foot(3)}" has its page number as a field (${JSON.stringify(fieldsOf(fielded.auxiliary?.footers))})`);
+    }
     // A manual's footer: its number on the left, the page's within its chapter on the right of the same row.
     const manual = await read(pdfOf([1, 2, 3, 4].map(p => [body(p), line(50, 30, 10, 'FM 3-21.8'), line(430, 30, 10, `2-${p}`)].join('\n'))));
     assert.deepStrictEqual(texts(manual.auxiliary?.footers), ['1:FM 3-21.8', '1:2-1', '2:FM 3-21.8', '2:2-2', '3:FM 3-21.8', '3:2-3', '4:FM 3-21.8', '4:2-4'],
