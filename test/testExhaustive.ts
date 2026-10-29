@@ -9147,6 +9147,9 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
     const sheetDocx = unzipSync((await sheetName.to('docx')).value as Uint8Array);
     assert.ok(sheetName.auxiliary?.headers === undefined && !Object.keys(sheetDocx).some(k => /header\d*\.xml$/.test(k) && strFromU8(sheetDocx[k]).includes('>Text<')) && /^Text$/m.test(await md(sheetName)),
         `Running headers: a header on some pages alone stays on them (${JSON.stringify(texts(sheetName.auxiliary?.headers))})`);
+    // Two pages, the header on the second alone: no cover, so it stays on its page (Word printed it on both).
+    const secondOnly = await read(pdfOf([1, 2].map(p => [p === 2 ? `/Artifact << /Type /Pagination >> BDC ${line(50, 760, 10, 'Acme Annual Report')} EMC` : '', body(p)].join('\n'))));
+    assert.ok(secondOnly.auxiliary?.headers === undefined && count(await md(secondOnly), 'Acme Annual Report') === 1, `Running headers: a second page's alone of two stays on it (${JSON.stringify(texts(secondOnly.auxiliary?.headers))})`);
     // A header larger than the text, the same on every page, is a paragraph of the header, not a heading: it took
     // the body's heading's anchor in DOCX.
     const bigSame = await read(pdfOf([1, 2, 3].map(p => [`/Artifact << /Type /Pagination >> BDC ${line(50, 760, 20, 'Acme Report')} EMC`, body(p)].join('\n'))));

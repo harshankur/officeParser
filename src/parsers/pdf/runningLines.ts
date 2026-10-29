@@ -692,7 +692,7 @@ function cutField(hit: { parent: OfficeContentNode; leaf: OfficeContentNode; at:
 /**
  * The kinds (header, footer) whose text is not the same on every page that has one, its page fields read as
  * the fields they are (in their formats: "1" on one page and "II" on the next are two), or that some page read
- * after the first has none of (a sheet's name on the pages of that sheet): what a writer that prints one header
+ * after the first has none of (a sheet's name on the pages of that sheet), or the first of two pages: what a writer that prints one header
  * on every page would lose, or print where the page had none. Each with the page that alone differs, where the first page
  * read is the one that does and every other page read has one, all the same (two at least: a cover's, a title
  * page's), and not merely in a page field's format ("i" on a cover numbered so is that page's field), else
@@ -713,9 +713,10 @@ export function furnitureChanging(furniture: readonly PageFurniture[], pagesRead
     }
     const out = new Map<'header' | 'footer', number | null>();
     for (const [kind, list] of pages) {
-        // (A first page with none, a cover's, has the document's in the output as a word processor's does.)
+        // (A first page with none, a cover's before two pages at least, has the document's in the output as a
+        // word processor's does.)
         const on = new Set(list.map(p => p.pageNumber));
-        const everyPage = pagesRead.every((n, i) => i === 0 || on.has(n));
+        const everyPage = pagesRead.every((n, i) => (i === 0 && pagesRead.length >= 3) || on.has(n));
         if (list.every(p => p.text === list[0].text)) {
             if (!everyPage) out.set(kind, null);
             continue;

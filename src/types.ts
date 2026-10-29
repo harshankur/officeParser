@@ -752,8 +752,8 @@ export interface PdfParserConfig {
      * the top of the next are the pages' own. A page number in one is marked as the page field it prints
      * (TextMetadata.field), where the pages read are the document's from its first (a `pageRange` from a
      * later page marks none), and its pages' count only where all are read. Either is read into
-     * `auxiliary`, as a word processor's header is, where it is the same on every page read (the first may
-     * have none, a cover's) once its page numbers are fields: a writer that lays out pages (Word, ODT, RTF, LaTeX, the PDF writer's
+     * `auxiliary`, as a word processor's header is, where it is the same on every page read (the first of
+     * three or more may have none, a cover's) once its page numbers are fields: a writer that lays out pages (Word, ODT, RTF, LaTeX, the PDF writer's
      * native engine) writes it on every page, each page numbered its own, and one that does not (text,
      * Markdown, HTML and the PDF writer's default HTML engine, EPUB, PowerPoint) leaves it out. A header or
      * footer whose text changes from page to page (a chapter's head, pages numbered from 147), or that some

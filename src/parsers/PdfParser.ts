@@ -2345,9 +2345,11 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     const fromFirst = extracts.every((e, i) => e.pageNumber === i + 1);
     if (fromFirst) markPageFields(furniture, numPages, extracts.length === numPages);
     // A header or footer whose text is not the same on every page it is on, once its page fields are its
-    // fields (a chapter's head, a journal's pages numbered from 147), stays in its pages: a writer prints one
-    // header on every page, the first page's, which lost the other pages' text. Where the first page's alone
-    // differs (a cover's), that one stays in its page and the others' is the document's.
+    // fields (a chapter's head, a journal's pages numbered from 147), or that only some pages have (a sheet's
+    // name), stays in its pages: a writer prints one header on every page, the first page's, which lost the
+    // other pages' text or printed it where a page had none. Where the first page's alone differs or is
+    // missing (a cover's, before two pages at least), that one stays in its page and the others' is the
+    // document's.
     const changing = furnitureChanging(furniture, extracts.map(e => e.pageNumber));
     for (const [kind, only] of changing) {
         const aux = kind === 'header' ? auxHeaders : auxFooters;
