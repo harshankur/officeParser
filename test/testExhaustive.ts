@@ -8541,6 +8541,14 @@ async function testPdfTextOnFills(): Promise<void> {
         '0 g BT /F1 12 Tf 60 490 Td (On the panel only) Tj ET',
         '0.2 0.4 0.6 rg 40 300 300 30 re f',
         '1 1 1 rg BT /F1 14 Tf 50 310 Td (Highlighted on a bar) Tj ET',
+        // A white card on a grey panel; a bar under a larger rectangle drawn after it, which covers it.
+        '0.9 0.9 0.9 rg 30 150 400 120 re f',
+        '1 1 1 rg 50 200 200 50 re f',
+        '0 g BT /F1 12 Tf 60 220 Td (On the white card) Tj ET',
+        '0 g BT /F1 12 Tf 60 170 Td (Beside the card) Tj ET',
+        '0.2 0.4 0.6 rg 300 160 60 30 re f',
+        '1 1 0 rg 290 155 120 40 re f',
+        '0 g BT /F1 10 Tf 305 170 Td (Covered) Tj ET',
     ].join('\n');
     const highlight = '<< /Type /Annot /Subtype /Highlight /Rect [48 306 200 328] /QuadPoints [48 328 200 328 48 306 200 306] /C [1 1 0] >>';
     const standing = pageOf(content, '/Annots [6 0 R]', [highlight]);
@@ -8552,9 +8560,12 @@ async function testPdfTextOnFills(): Promise<void> {
         assert.strictEqual(text(ast, 'White on a bar')?.formatting?.color, '#ffffff', 'PDF text on fills: the white of the text is kept');
         assert.strictEqual(found['On white paper'], undefined, 'PDF text on fills: text on the paper has no background');
         assert.strictEqual(found['Partly over a bar and then beyond it'], undefined, 'PDF text on fills: a run only partly over a rectangle has none');
-        assert.strictEqual(found['Inside the bar'], '#336699', 'PDF text on fills: the smallest rectangle holding the run is the one');
+        assert.strictEqual(found['Inside the bar'], '#336699', 'PDF text on fills: the rectangle drawn last holding the run is the one');
         assert.strictEqual(found['On the panel only'], '#cccccc', 'PDF text on fills: text on a larger panel alone has the panel');
         assert.strictEqual(found['Highlighted on a bar'], '#ffff00', `PDF text on fills: a highlight's colour is left as it is (${JSON.stringify(found)})`);
+        assert.strictEqual(found['On the white card'], undefined, `PDF text on fills: text on a white card inside a grey panel is on white (${JSON.stringify(found)})`);
+        assert.strictEqual(found['Beside the card'], '#e6e6e6', 'PDF text on fills: text beside the card is on the panel');
+        assert.strictEqual(found['Covered'], '#ffff00', 'PDF text on fills: a rectangle drawn after another covers it');
     }
     const without = backgrounds(await read(standing, { extractTextColor: false }));
     assert.deepStrictEqual(Object.entries(without).filter(([, bg]) => bg).map(([t]) => t), ['Highlighted on a bar'], `PDF text on fills: with extractTextColor off only the highlight has a background (${JSON.stringify(without)})`);
@@ -8565,7 +8576,10 @@ async function testPdfTextOnFills(): Promise<void> {
     assert.ok(turnedFound['White on a bar'] === '#336699' && turnedFound['On white paper'] === undefined && turnedFound['Inside the bar'] === '#336699', `PDF text on fills: on a turned page too (${JSON.stringify(turnedFound)})`);
 
     // A table ruled and shaded: its head cell shows the colour and its text carries none, a coloured bar inside a plain cell still does.
+    // Over a grey panel, one cell of it a white card.
     const table = pageOf([
+        '0.9 0.9 0.9 rg 90 140 180 60 re f',
+        '1 1 1 rg 180 170 80 20 re f',
         '0.2 0.4 0.6 rg 100 170 80 20 re f',
         '0 G 0.5 w 100 150 m 260 150 l S 100 170 m 260 170 l S 100 190 m 260 190 l S 100 150 m 100 190 l S 180 150 m 180 190 l S 260 150 m 260 190 l S',
         '1 1 1 rg BT /F1 10 Tf 105 176 Td (Head) Tj ET',
@@ -8579,6 +8593,8 @@ async function testPdfTextOnFills(): Promise<void> {
     assert.strictEqual(all({ content: head!.children ?? [] } as OfficeParserAST).filter(n => n.type === 'text').map(n => n.formatting?.backgroundColor).filter(Boolean).length, 0, 'PDF text on fills: and its text has no background of its own');
     assert.strictEqual(backgrounds(tabled)['Below the table'], '#336699', 'PDF text on fills: text beside the table on a bar has it');
     assert.strictEqual(backgrounds(tabled)['Plain'], undefined, 'PDF text on fills: an unshaded cell holds unshaded text');
+    const shadeOf = (word: string) => (cells.find(c => (c.text ?? '').includes(word))?.metadata as { backgroundColor?: string } | undefined)?.backgroundColor;
+    assert.deepStrictEqual([shadeOf('Plain'), shadeOf('Left'), shadeOf('Right')], [undefined, '#e6e6e6', '#e6e6e6'], `PDF text on fills: a cell on a white card has no shading, those on the panel the panel's (${cells.map(c => JSON.stringify(c.metadata))})`);
 
     // Writers: a background behind the white text; plain text unchanged.
     const ast = await read(standing);

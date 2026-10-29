@@ -392,20 +392,25 @@ export function ruledTables(frames: RuledFrame[], runs: readonly RawRun[], layou
 }
 
 /**
- * The rectangles a page fills with a colour that something may stand on, the smallest first: filled, not
- * white (the paper's own colour), straight, of at most five edges, thicker than a rule, and not the page's
- * own background (nearly all of it in both directions).
+ * The rectangles a page fills with a colour that something may stand on, in the order the page draws them
+ * (one drawn later covers those before it): filled with a colour, straight, of at most five edges, thicker
+ * than a rule, and not the page's own background (nearly all of it in both directions). White ones too: a
+ * white card on a grey panel is what the text on it stands on (see colourOf).
  */
 function backgroundFills(shapes: readonly PdfShape[] | undefined, pageW: number, pageH: number): PdfShape[] {
-    return (shapes ?? []).filter(s => s.filled && s.fill && s.fill.toLowerCase() !== '#ffffff' && !s.curved && s.segments.length <= 5
-        && s.width > MAX_THICKNESS && s.height > MAX_THICKNESS && !(s.width >= 0.9 * pageW && s.height >= 0.9 * pageH))
-        .sort((a, b) => a.width * a.height - b.width * b.height);
+    return (shapes ?? []).filter(s => s.filled && s.fill && !s.curved && s.segments.length <= 5
+        && s.width > MAX_THICKNESS && s.height > MAX_THICKNESS && !(s.width >= 0.9 * pageW && s.height >= 0.9 * pageH));
+}
+
+/** The colour a fill gives what stands on it: none for white, the paper's own colour. */
+function colourOf(fill: PdfShape): string | undefined {
+    return fill.fill && fill.fill.toLowerCase() !== '#ffffff' ? fill.fill : undefined;
 }
 
 /**
  * Tables' cells shaded as their page shades them: each cell (read from the page, with no colour yet)
- * takes the colour of the smallest coloured rectangle under its middle, so a header row's white text is
- * read on the colour it was set on, not on none.
+ * takes the colour of the rectangle the page draws last under its middle (none where it is white), so a
+ * header row's white text is read on the colour it was set on, not on none.
  */
 export function shadeCells(tables: readonly OfficeContentNode[], shapes: readonly PdfShape[] | undefined, pageW: number, pageH: number): void {
     if (!shapes?.length || !tables.length) return;
@@ -417,9 +422,15 @@ export function shadeCells(tables: readonly OfficeContentNode[], shapes: readonl
             const box = child.type === 'cell' ? CELL_PAGE_BOX.get(child) : undefined;
             if (box && !(child.metadata as CellMetadata | undefined)?.backgroundColor && tests < MAX_CROSSINGS) {
                 const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
-                tests += fills.length;
-                const under = fills.find(f => cx >= f.x && cx <= f.x + f.width && cy >= f.y && cy <= f.y + f.height);
-                if (under) child.metadata = { ...(child.metadata as CellMetadata), backgroundColor: under.fill };
+                // (From the last drawn: the first under it is the one on top.)
+                let under: PdfShape | undefined;
+                for (let i = fills.length - 1; i >= 0 && tests < MAX_CROSSINGS; i--) {
+                    tests++;
+                    const f = fills[i];
+                    if (cx >= f.x && cx <= f.x + f.width && cy >= f.y && cy <= f.y + f.height) { under = f; break; }
+                }
+                const colour = under && colourOf(under);
+                if (colour) child.metadata = { ...(child.metadata as CellMetadata), backgroundColor: colour };
             }
             // The cell shows its colour: its text is not also on that colour (see shadeRuns).
             const shown = child.type === 'cell' ? (child.metadata as CellMetadata | undefined)?.backgroundColor : undefined;
@@ -438,20 +449,21 @@ const MAX_BANDS_A_RECTANGLE = 16;
 const REACH = 1.5;
 
 /**
- * Text that stands on a colour keeps it: each run whose whole box is inside a filled, non-white rectangle
- * of the page (the smallest such rectangle, see backgroundFills) takes its colour as the run's
- * `backgroundColor`, as a word processor's paragraph shading reaches its runs. White text on a purple bar
- * is then read on the bar, not as white text on none. A run only partly over a rectangle, one with a
- * background already (a highlight) and invisible text are left as they are; a table's cells, shaded as the
- * page shades them (see shadeCells), take their runs' background of the same colour back, the cell showing it.
+ * Text that stands on a colour keeps it: each run whose whole box is inside a filled rectangle of the page
+ * takes the colour of the one the page draws last (see backgroundFills) as the run's `backgroundColor`, as a
+ * word processor's paragraph shading reaches its runs: none where that one is white, as text on a white card
+ * inside a grey panel is on white. White text on a purple bar is then read on the bar, not as white text on
+ * none. A run only partly over a rectangle, one with a background already (a highlight) and invisible text
+ * are left as they are; a table's cells, shaded as the page shades them (see shadeCells), take their runs'
+ * background of the same colour back, the cell showing it.
  * Bounded: the rectangles are looked up by the band of the page they touch, and the tests are no more than
  * MAX_CROSSINGS in all, past which the page's other runs are left unshaded.
  */
 export function shadeRuns(runs: readonly RawRun[], shapes: readonly PdfShape[] | undefined, pageW: number, pageH: number): void {
     if (!shapes?.length || !runs.length) return;
     const fills = backgroundFills(shapes, pageW, pageH);
-    if (!fills.length) return;
-    // The fills (smallest first) by the bands they touch: a run is looked for in the band its middle is in.
+    if (!fills.some(colourOf)) return;
+    // The fills (in the order drawn) by the bands they touch: a run is looked for in the band its middle is in.
     const size = Math.max(pageH, 1) / BANDS;
     const band = (y: number) => Math.min(BANDS - 1, Math.max(0, Math.floor(y / size)));
     const bands: number[][] = [];
@@ -465,13 +477,14 @@ export function shadeRuns(runs: readonly RawRun[], shapes: readonly PdfShape[] |
     for (const run of runs) {
         if (run.formatting.backgroundColor || run.formatting.invisible || !run.text.trim()) continue;
         const inBand = bands[band(run.yTop + run.height / 2)] ?? [];
-        // The two lists are each in order of size: the smallest rectangle holding the run is the first of either.
-        let a = 0, b = 0;
-        while ((a < inBand.length || b < tall.length) && tests < MAX_CROSSINGS) {
+        // The two lists are each in the order drawn: the rectangle on top holding the run is the last of either.
+        let a = inBand.length - 1, b = tall.length - 1;
+        while ((a >= 0 || b >= 0) && tests < MAX_CROSSINGS) {
             tests++;
-            const f = fills[b >= tall.length || (a < inBand.length && inBand[a] < tall[b]) ? inBand[a++] : tall[b++]];
+            const f = fills[b < 0 || (a >= 0 && inBand[a] > tall[b]) ? inBand[a--] : tall[b--]];
             if (run.x >= f.x - REACH && run.x + run.width <= f.x + f.width + REACH && run.yTop >= f.y - REACH && run.yTop + run.height <= f.y + f.height + REACH) {
-                run.formatting = { ...run.formatting, backgroundColor: f.fill };
+                const colour = colourOf(f);
+                if (colour) run.formatting = { ...run.formatting, backgroundColor: colour };
                 break;
             }
         }
