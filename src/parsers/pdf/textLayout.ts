@@ -657,12 +657,8 @@ function clusterToLine(clusterRuns: RawRun[], cfg: PdfLayoutConfig, rtl = false)
 
     // (A line of form field values alone, see RawRun.formField.)
     const formField = runs.some(r => r.formField && r.text.trim()) && runs.every(r => r.formField || !r.text.trim());
-    // (Its values' boxes, where they reach past its text.)
-    let from = bounds.x, to = bounds.x + bounds.width;
-    for (const r of runs) if (r.fieldBox && r.text.trim()) { from = Math.min(from, r.fieldBox.x); to = Math.max(to, r.fieldBox.x + r.fieldBox.width); }
-    const reach = from < bounds.x || to > bounds.x + bounds.width ? { reach: { from, to } } : {};
     return {
-        fragments: keptFragments, dir, ...(rtl ? { rtl } : {}), ...(formField ? { formField } : {}), ...reach, baseline, fontSize: lineFontSize,
+        fragments: keptFragments, dir, ...(rtl ? { rtl } : {}), ...(formField ? { formField } : {}), baseline, fontSize: lineFontSize,
         bold: totalChars > 0 && boldChars * 2 > totalChars,
         endsWithHyphen,
         x: bounds.x, yTop: bounds.y, width: bounds.width, height: bounds.height,
@@ -707,8 +703,8 @@ function xyCut(lines: PdfLine[], medianH: number, gutterUnit: number, out: PdfLi
         if (top.length && bottom.length) { xyCut(top, medianH, gutterUnit, out, depth + 1); xyCut(bottom, medianH, gutterUnit, out, depth + 1); return; }
     }
     if (vOk) {
-        const left = lines.filter(l => reachOf(l).to <= v!.at + 0.1);
-        const right = lines.filter(l => reachOf(l).to > v!.at + 0.1);
+        const left = lines.filter(l => l.x + l.width <= v!.at + 0.1);
+        const right = lines.filter(l => l.x + l.width > v!.at + 0.1);
         if (left.length && right.length) {
             const rtl = lines.filter(l => l.dir === 'rtl').length * 2 > lines.length;
             const first = rtl ? right : left;
@@ -719,11 +715,6 @@ function xyCut(lines: PdfLine[], medianH: number, gutterUnit: number, out: PdfLi
         }
     }
     out.push(lines);
-}
-
-/** Where a line is across the page: its text, with its form field values' boxes (see PdfLine.reach). */
-function reachOf(l: PdfLine): { from: number; to: number } {
-    return l.reach ?? { from: l.x, to: l.x + l.width };
 }
 
 /** Largest empty horizontal band; `at` is the y at which to split (bottom edge of the upper part). */
@@ -747,7 +738,7 @@ function bestHorizontalGap(lines: PdfLine[]): { gap: number; at: number } | null
  * of 2 KB with one line of 32,000 spaced words took minutes.)
  */
 function bestVerticalGutter(lines: PdfLine[]): { gap: number; at: number } | null {
-    const intervals = lines.map(l => { const r = reachOf(l); return [r.from, r.to] as const; }).sort((a, b) => a[0] - b[0]);
+    const intervals = lines.map(l => [l.x, l.x + l.width] as const).sort((a, b) => a[0] - b[0]);
     let maxRight = intervals[0][1];
     let best: { gap: number; at: number } | null = null;
     for (let i = 1; i < intervals.length; i++) {

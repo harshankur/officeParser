@@ -8271,10 +8271,28 @@ async function testPdfFormValuesAsText(): Promise<void> {
         const read = paragraphs(plainAst);
         assert.ok(!all(plainAst).some(n => n.type === 'table') && rows.every(([label, value]) => read.includes(`${label} ${value}`)),
             `PDF form: a line over a form that is not its table's head leaves each value with its label (${shape}: ${JSON.stringify(read)})`);
-        // (And it is read first, where it is: the boxes the values are in, wider than the values, leave no
-        // gutter beside the line's right cell.)
-        assert.ok(read.indexOf(right) >= 0 && read.indexOf(right) < read.indexOf(`${rows[0][0]} ${rows[0][1]}`),
-            `PDF form: a line over a form is read before the form, its right cell too (${shape}: ${JSON.stringify(read)})`);
+    }
+    // A page of two columns with a field in the left one whose box reaches across the gutter, and one over
+    // both columns: the columns are read one after the other, each value with its label, however far its box
+    // reaches. (A box is no text: a line reaching as far as its values' boxes ran through the gutter and read
+    // the columns row by row.)
+    for (const [where, row, x, width] of [['across the gutter', 10, 140, 170], ['over both columns', 0, 72, 468]] as const) {
+        const cols = await PDFDocument.create();
+        const cfont = await cols.embedFont(StandardFonts.Helvetica);
+        const cpage = cols.addPage([612, 792]);
+        for (let k = 0; k < 20; k++) {
+            cpage.drawText(k === row ? `L${k} Answer:` : `L${k} left column words of text here`, { x: 72, y: 700 - k * 14, size: 10, font: cfont });
+            cpage.drawText(`R${k} right column words of text here`, { x: 322, y: 700 - k * 14, size: 10, font: cfont });
+        }
+        const field = cols.getForm().createTextField('answer');
+        field.setText('Yes');
+        field.addToPage(cpage, { x, y: 700 - row * 14 - 3, width, height: 13, font: cfont, borderWidth: 0 });
+        cols.getForm().updateFieldAppearances(cfont);
+        const colsAst = await OfficeParser.parseOffice(Buffer.from(await cols.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
+        const order = textOf(colsAst).match(/\b[LR]\d+\b/g) ?? [];
+        const columns = [...Array.from({ length: 20 }, (_, k) => `L${k}`), ...Array.from({ length: 20 }, (_, k) => `R${k}`)];
+        assert.deepStrictEqual(order, columns, `PDF form: a field's box ${where} leaves a page's columns one after the other (${JSON.stringify(order)})`);
+        assert.ok(/Answer: ?Yes/.test(textOf(colsAst)), `PDF form: and its value with its label (${where})`);
     }
 
     // A comb the page draws itself: a date's digits one to a box, in boxes of a day, a month and a year, with

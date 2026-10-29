@@ -92,11 +92,6 @@ export interface PdfLine {
     gutter?: number;
     /** True when the line's text is form field values alone (see RawRun.formField): it is never a heading. */
     formField?: boolean;
-    /**
-     * Across the page, the line's text with the boxes of its form field values (see RawRun.fieldBox), where
-     * they reach past it: a value's box is on the page as its text is, so no column's gutter runs through it.
-     */
-    reach?: { from: number; to: number };
 }
 
 /** An image placed on a page, in viewport space. */
