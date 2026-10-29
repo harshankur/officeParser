@@ -299,49 +299,66 @@ function wideGapOf(fs: number, cfg: PdfLayoutConfig): number {
 const HEAD_TOLERANCE = 4;
 
 /**
- * The form field values (see RawRun.formField) that stand in a table's column: a cell of the page's own
- * text above them, on a line of cells (two at least) and of no values, heads their field's box, its left edge, its middle or its right
- * edge where the box's is. An order form's quantities under "Quantity" are its table's cells, as they are
- * printed; a value beside its label, where nothing heads it, is read with the label (see segmentsOf).
+ * The form field values (see RawRun.formField) that stand in a table's column, under its head: a line of the
+ * page's own text, of cells (two at least) and of no values, with every line from it down to the value's a row
+ * of it. A row of it is a line each of whose cells stands under one of its cells: a cell of text with its left
+ * edge, its middle or its right edge where a head cell's is, and a value with its field's box's edge on the
+ * side the value is set to in it (the left for a value set from the left, the right for one set to the right,
+ * any for a box it fills) or its box's middle where a head cell's is. An order form's quantities under
+ * "Quantity" are its table's cells, as they are printed; a value beside its label, where nothing heads it, is
+ * read with the label (see segmentsOf). A line above a form is not its head where the form's lines are not its
+ * rows: a title over the labels and a date set right at the margin the boxes end at, or a line with another
+ * between it and the form.
  *
- * A pass over the lines' runs: the head cells' edges in maps of a tolerance's width, each holding the
- * highest cell's baseline, then a look up for each value.
+ * One pass down the lines: each line's cells looked up in the head's edges, held in maps of a tolerance's
+ * width.
  */
 function headedValues(clusters: readonly Cluster[], cfg: PdfLayoutConfig): Set<RawRun> {
     const out = new Set<RawRun>();
-    const values: RawRun[] = [];
-    for (const c of clusters) for (const r of c.runs) if (r.formField && r.text.trim()) values.push(r);
-    if (!values.length) return out;
-    // Left edges, middles and right edges of the cells, by place, to the highest baseline of a cell there.
-    const heads = [new Map<number, number>(), new Map<number, number>(), new Map<number, number>()];
-    const note = (edge: number, at: number, baseline: number) => {
-        const k = Math.round(at / HEAD_TOLERANCE), top = heads[edge].get(k);
-        if (top === undefined || baseline < top) heads[edge].set(k, baseline);
+    if (!clusters.some(c => c.runs.some(r => r.formField && r.text.trim()))) return out;
+    // The head's cells' left edges, middles and right edges, by place.
+    let head: Set<number>[] | null = null;
+    const under = (edge: number, at: number) => {
+        const k = Math.round(at / HEAD_TOLERANCE);
+        return !!head && (head[edge].has(k - 1) || head[edge].has(k) || head[edge].has(k + 1));
     };
     for (const c of clusters) {
-        if (c.runs.some(r => r.formField && r.text.trim())) continue;
         const runs = c.runs.filter(r => r.text.trim()).sort((a, b) => a.x - b.x);
         if (!runs.length) continue;
-        // The line's cells: its runs apart by less than a wide gap are one. A line of one is no table's head
-        // (a paragraph's lines end where a field's box does, at the page's margin).
+        // The line's cells: its runs of text apart by less than a wide gap are one, and each value is one.
         const wideGap = wideGapOf(dominantFontSize(runs), cfg);
-        const cells: [number, number][] = [[runs[0].x, runs[0].x + runs[0].width]];
-        for (let i = 1; i < runs.length; i++) {
-            const r = runs[i], last = cells[cells.length - 1];
-            if (r.x - last[1] >= wideGap) cells.push([r.x, r.x + r.width]);
-            else last[1] = Math.max(last[1], r.x + r.width);
+        const cells: { from: number; to: number; value?: RawRun }[] = [];
+        for (const r of runs) {
+            const last = cells[cells.length - 1];
+            if (r.formField) cells.push({ from: r.x, to: r.x + r.width, value: r });
+            else if (last && !last.value && r.x - last.to < wideGap) last.to = Math.max(last.to, r.x + r.width);
+            else cells.push({ from: r.x, to: r.x + r.width });
         }
-        if (cells.length < 2) continue;
-        for (const [from, to] of cells) { note(0, from, c.baseline); note(1, (from + to) / 2, c.baseline); note(2, to, c.baseline); }
-    }
-    const above = (edge: number, at: number, top: number) => {
-        const k = Math.round(at / HEAD_TOLERANCE);
-        for (const d of [-1, 0, 1]) { const b = heads[edge].get(k + d); if (b !== undefined && b < top) return true; }
-        return false;
-    };
-    for (const r of values) {
-        const box = r.fieldBox ?? { x: r.x, width: r.width };
-        if (above(0, box.x, r.yTop) || above(1, box.x + box.width / 2, r.yTop) || above(2, box.x + box.width, r.yTop)) out.add(r);
+        const isRow = !!head && cells.every(cell => {
+            if (!cell.value) return under(0, cell.from) || under(1, (cell.from + cell.to) / 2) || under(2, cell.to);
+            const r = cell.value, box = r.fieldBox ?? { x: r.x, width: r.width };
+            const right = box.x + box.width;
+            // (Where its value is set in the box, from the run's place in it.)
+            const fromLeft = r.x - box.x, fromRight = right - (r.x + r.width);
+            const fills = fromLeft <= HEAD_TOLERANCE && fromRight <= HEAD_TOLERANCE;
+            if (under(1, box.x + box.width / 2)) return true;
+            if (fills) return under(0, box.x) || under(2, right);
+            if (Math.abs(fromLeft - fromRight) <= HEAD_TOLERANCE) return false;
+            return fromLeft < fromRight ? under(0, box.x) : under(2, right);
+        });
+        if (isRow) {
+            for (const cell of cells) if (cell.value) out.add(cell.value);
+            continue;
+        }
+        // A line of cells and of no values heads the lines under it; any other ends the head before it.
+        head = null;
+        if (cells.length < 2 || cells.some(cell => cell.value)) continue;
+        head = [new Set(), new Set(), new Set()];
+        for (const { from, to } of cells) {
+            head[0].add(Math.round(from / HEAD_TOLERANCE));
+            head[1].add(Math.round((from + to) / 2 / HEAD_TOLERANCE));
+            head[2].add(Math.round(to / HEAD_TOLERANCE));
+        }
     }
     return out;
 }

@@ -8218,6 +8218,32 @@ async function testPdfFormValuesAsText(): Promise<void> {
     const orderTables = all(orderAst).filter(n => n.type === 'table').map(t => t.children!.map(r => r.children!.map(c => (c.text ?? '').trim())));
     assert.deepStrictEqual(orderTables, [[['Item', 'Quantity', 'Price', 'Gift'], ['Apples', '2', '1.25', '☐'], ['Bananas', '3', '2.5', '☒'], ['Cherries', '4', '3.75', '☐']]],
         `PDF form: values under a table's heads are its cells (${JSON.stringify([orderTables, paragraphs(orderAst)])})`);
+    // A form of labels and values under a line of two cells that is no table's head: a title on the left and
+    // one set right at the margin the boxes end at, then the same form with a form's number and its revision
+    // over it and a line between them and the form. Each value is read with its label.
+    for (const shape of ['title', 'revision'] as const) {
+        const plain = await PDFDocument.create();
+        const pfont = await plain.embedFont(StandardFonts.Helvetica);
+        const ppage = plain.addPage([612, 792]);
+        const pform = plain.getForm();
+        const pput = (t: string, x: number, y: number) => ppage.drawText(t, { x, y, size: 11, font: pfont });
+        const [left, right] = shape === 'title' ? ['ACME Insurance', 'Claim Form'] : ['Form W-123', 'Rev. 01/2026'];
+        pput(left, 72, 740); pput(right, 540 - pfont.widthOfTextAtSize(right, 11), 740);
+        if (shape === 'revision') pput('Part I. Applicant', 72, 712);
+        const rows = [['Name:', 'John Smith'], ['Address:', '1 Main Street'], ['Policy number:', 'PN-12345']];
+        rows.forEach(([label, value], i) => {
+            const y = 680 - i * 30;
+            pput(label, 72, y);
+            const field = pform.createTextField(`field${i}`);
+            field.setText(value);
+            field.addToPage(ppage, { x: 200, y: y - 5, width: 340, height: 18, font: pfont });
+        });
+        pform.updateFieldAppearances(pfont);
+        const plainAst = await OfficeParser.parseOffice(Buffer.from(await plain.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
+        const read = paragraphs(plainAst);
+        assert.ok(!all(plainAst).some(n => n.type === 'table') && rows.every(([label, value]) => read.includes(`${label} ${value}`)),
+            `PDF form: a line over a form that is not its table's head leaves each value with its label (${shape}: ${JSON.stringify(read)})`);
+    }
 
     // A comb the page draws itself: a date's digits one to a box, in boxes of a day, a month and a year, with
     // what each group is under it. Beside it, what is no comb: a grid of two rows of letters, a row of words
