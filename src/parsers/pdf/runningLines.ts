@@ -692,27 +692,31 @@ function cutField(hit: { parent: OfficeContentNode; leaf: OfficeContentNode; at:
 /**
  * The kinds (header, footer) whose text is not the same on every page that has one, its page fields read as
  * the fields they are (in their formats: "1" on one page and "II" on the next are two): what a writer that
- * prints one header on every page would lose. Each with the page that alone differs, where the first page's
- * is the one that does and every other page's (two at least) is the same (a cover's, a title page's), else
+ * prints one header on every page would lose. Each with the page that alone differs, where the first page
+ * read is the one that does and every other page read has one, all the same (two at least: a cover's, a title
+ * page's), and not merely in a page field's format ("i" on a cover numbered so is that page's field), else
  * null: every page's.
  */
-export function furnitureChanging(furniture: readonly PageFurniture[]): Map<'header' | 'footer', number | null> {
-    const pages = new Map<'header' | 'footer', { pageNumber: number; text: string }[]>();
+export function furnitureChanging(furniture: readonly PageFurniture[], pagesRead: readonly number[]): Map<'header' | 'footer', number | null> {
+    const pages = new Map<'header' | 'footer', { pageNumber: number; text: string; unformatted: string }[]>();
     for (const page of furniture) {
-        const text = page.nodes.map(node => textLeaves(node).map(({ leaf }) => {
+        const field = (format: boolean) => page.nodes.map(node => textLeaves(node).map(({ leaf }) => {
             const meta = leaf.metadata as TextMetadata | undefined;
-            return meta?.field ? `\u0000${meta.field}:${meta.fieldFormat ?? ''}\u0000` : leaf.text ?? '';
+            return meta?.field ? `\u0000${meta.field}:${format ? meta.fieldFormat ?? '' : ''}\u0000` : leaf.text ?? '';
         }).join('')).join('\n').replace(/[^\S\n]+/g, ' ').trim();
+        const text = field(true);
         if (!text) continue;
         let list = pages.get(page.kind);
         if (!list) pages.set(page.kind, list = []);
-        list.push({ pageNumber: page.pageNumber, text });
+        list.push({ pageNumber: page.pageNumber, text, unformatted: field(false) });
     }
     const out = new Map<'header' | 'footer', number | null>();
     for (const [kind, list] of pages) {
         if (list.every(p => p.text === list[0].text)) continue;
-        const rest = list.slice(1);
-        out.set(kind, rest.length >= 2 && rest.every(p => p.text === rest[0].text) ? list[0].pageNumber : null);
+        const [first, ...rest] = list;
+        const cover = first.pageNumber === pagesRead[0] && list.length === pagesRead.length && rest.length >= 2
+            && rest.every(p => p.text === rest[0].text) && first.unformatted !== rest[0].unformatted;
+        out.set(kind, cover ? first.pageNumber : null);
     }
     return out;
 }

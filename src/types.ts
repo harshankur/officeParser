@@ -757,8 +757,9 @@ export interface PdfParserConfig {
      * native engine) writes it on every page, each page numbered its own, and one that does not (text,
      * Markdown, HTML and the PDF writer's default HTML engine, EPUB, PowerPoint) leaves it out. A header or
      * footer whose text changes from page to page (a chapter's head, pages numbered from 147) stays in its
-     * pages, where it is, as no such writer could print it; where only the first page's differs (a cover's),
-     * that one stays on its page and the others' is the document's. Turn this on for a writer that shows each page
+     * pages, where it is, as no such writer could print it; where only the first page's differs (a cover's,
+     * every other page having the same one), that one stays on its page and the others' is the document's.
+     * A header's line larger than the text is a paragraph of it, not a heading. Turn this on for a writer that shows each page
      * as it was, a slide per page, so every page keeps its own header and footer in its place.
      * `ignoreHeadersAndFooters` still drops them.
      *

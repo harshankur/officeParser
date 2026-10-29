@@ -9132,6 +9132,20 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
     const coveredMd = await md(covered);
     assert.ok(texts(covered.auxiliary?.headers).join() === '2:Acme Annual Report,3:Acme Annual Report,4:Acme Annual Report,5:Acme Annual Report' && count(coveredMd, 'Confidential') === 1 && !coveredMd.includes('Acme Annual Report'),
         `Running headers: a cover's own header stays on the cover (${JSON.stringify([texts(covered.auxiliary?.headers), coveredMd.slice(0, 120)])})`);
+    // Only the first page read, every other page having the same header: a sheet's name first found on page 2
+    // is no cover's, so every page keeps its own.
+    const laterCover = await read(pdfOf([1, 2, 3, 4, 5].map(p => [p === 1 ? '' : `/Artifact << /Type /Pagination >> BDC ${line(50, 760, 10, p === 2 ? 'Cover' : 'Acme Annual Report')} EMC`, body(p)].join('\n'))));
+    assert.ok(laterCover.auxiliary?.headers === undefined && count(await md(laterCover), 'Acme Annual Report') === 3, `Running headers: a differing header on a later first page is no cover's (${JSON.stringify(texts(laterCover.auxiliary?.headers))})`);
+    // A cover numbered "i" before pages numbered 2, 3, 4: its footer differs only in its number's format, which
+    // one footer could not print, so every page keeps its own number.
+    const romanCover = await read(pdfOf([1, 2, 3, 4].map(p => [body(p), line(245, 30, 10, p === 1 ? 'i' : String(p))].join('\n')), '/PageLabels << /Nums [0 << /S /r >> 1 << /S /D /St 2 >>] >>'));
+    const romanCoverMd = await md(romanCover);
+    assert.ok(romanCover.auxiliary?.footers === undefined && /^i$/m.test(romanCoverMd) && /^4$/m.test(romanCoverMd), `Running footers: a cover numbered in another format keeps every page's number (${JSON.stringify(texts(romanCover.auxiliary?.footers))})`);
+    // A header larger than the text, the same on every page, is a paragraph of the header, not a heading: it took
+    // the body's heading's anchor in DOCX.
+    const bigSame = await read(pdfOf([1, 2, 3].map(p => [`/Artifact << /Type /Pagination >> BDC ${line(50, 760, 20, 'Acme Report')} EMC`, body(p)].join('\n'))));
+    const bigHeader = strFromU8(unzipSync((await bigSame.to('docx')).value as Uint8Array)['word/header1.xml']);
+    assert.ok((bigSame.auxiliary?.headers ?? []).every(n => n.children?.[0]?.type === 'paragraph') && !bigHeader.includes('Heading1') && bigHeader.includes('Acme Report'), `Running headers: a large header is a paragraph of it (${bigHeader.slice(0, 300)})`);
     // A header larger than the text, put back in its pages, is a line of its page, not a heading of its own.
     const bigHead = await read(pdfOf([1, 2, 3, 4].map(p => [`/Artifact << /Type /Pagination >> BDC ${line(50, 760, 20, p <= 2 ? 'Chapter One' : 'Chapter Two')} EMC`, body(p)].join('\n'))));
     const bigMd = await md(bigHead);

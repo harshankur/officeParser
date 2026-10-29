@@ -2348,7 +2348,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     // fields (a chapter's head, a journal's pages numbered from 147), stays in its pages: a writer prints one
     // header on every page, the first page's, which lost the other pages' text. Where the first page's alone
     // differs (a cover's), that one stays in its page and the others' is the document's.
-    const changing = furnitureChanging(furniture);
+    const changing = furnitureChanging(furniture, extracts.map(e => e.pageNumber));
     for (const [kind, only] of changing) {
         const aux = kind === 'header' ? auxHeaders : auxFooters;
         const moved = new Set<OfficeContentNode>();
@@ -2553,8 +2553,14 @@ function retypeAsHeaderFooter(node: OfficeContentNode, type: 'header' | 'footer'
             text = `${marker} ${text ?? ''}`;
         }
     }
-    // (Its line a paragraph in it, as a header read from any other document holds its paragraphs.)
-    const line: OfficeContentNode = node.type === 'list' ? { type: 'paragraph', text, children, bounds: node.bounds } : node;
+    // (Its line a paragraph in it, as a header read from any other document holds its paragraphs: a line larger
+    // than the text is no heading of the document's.)
+    let line: OfficeContentNode = node;
+    if (node.type === 'list') line = { type: 'paragraph', text, children, bounds: node.bounds };
+    else if (node.type === 'heading') {
+        const { level: _level, levelSource: _source, ...rest } = (node.metadata ?? {}) as HeadingMetadata;
+        line = { ...node, type: 'paragraph', metadata: rest } as OfficeContentNode;
+    }
     return { type, text, children: [line], bounds: node.bounds, metadata: { type: 'default', page } };
 }
 
