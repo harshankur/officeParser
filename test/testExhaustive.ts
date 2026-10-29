@@ -8272,6 +8272,12 @@ async function testPdfFormValuesAsText(): Promise<void> {
     // A scale ruled into boxes wide apart for its numbers (boxes of 30 points, numbers of 11): a table.
     put('Zufriedenheit', 50, 106);
     ['1', '2', '3', '4', '5'].forEach((n, k) => { box(230 + 30 * k, 100, 30, 24); put(n, 242 + 30 * k, 108); });
+    // A comb of small digits (8 points in boxes of 18), a date: one value. Grades in boxes as tight (11 points
+    // in boxes of 18): a scale's choices, a table.
+    put('Geburtstag', 50, 66);
+    [...'15041985'].forEach((d, k) => { box(230 + 18 * k, 60, 18, 18); put(d, 237 + 18 * k, 65, 8); });
+    put('Note', 50, 26);
+    ['A', 'B', 'C', 'D', 'F'].forEach((g, k) => { box(230 + 18 * k, 20, 18, 18); put(g, 235 + 18 * k, 24); });
     const drawnAst = await OfficeParser.parseOffice(Buffer.from(await drawn.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
     const drawnRead = paragraphs(drawnAst);
     const drawnSaid = `(${JSON.stringify(drawnRead)})`;
@@ -8280,7 +8286,8 @@ async function testPdfFormValuesAsText(): Promise<void> {
     assert.ok(!all(drawnAst).some(n => n.type === 'heading'), `PDF comb: its digits are no heading ${drawnSaid}`);
     const drawnTables = all(drawnAst).filter(n => n.type === 'table').reverse();
     const cells = (t: OfficeContentNode) => t.children!.map(r => r.children!.map(c => c.text));
-    assert.deepStrictEqual(drawnTables.map(cells), [[['A', 'B', 'C', 'D'], ['E', 'F', 'G', 'H']], [['Ja', 'Nein', 'Vielleicht']], [['Name', 'Erika'], ['Geboren', '01052026']], [['1', '2', '3', '4', '5']]], `PDF comb: a grid of two rows of letters, a row of words in like boxes, and a scale's numbers in boxes wide apart, are tables; a comb in a table's cell is the cell's (${JSON.stringify(drawnTables.map(cells))})`);
+    assert.deepStrictEqual(drawnTables.map(cells), [[['A', 'B', 'C', 'D'], ['E', 'F', 'G', 'H']], [['Ja', 'Nein', 'Vielleicht']], [['Name', 'Erika'], ['Geboren', '01052026']], [['1', '2', '3', '4', '5']], [['A', 'B', 'C', 'D', 'F']]], `PDF comb: a grid of two rows of letters, a row of words in like boxes, a scale's numbers and grades in boxes, are tables; a comb in a table's cell is the cell's (${JSON.stringify(drawnTables.map(cells))})`);
+    assert.ok(drawnRead.includes('Geburtstag 15041985'), `PDF comb: a comb of small digits is one value ${drawnSaid}`);
     assert.ok(drawnRead.some(t => /(^| )1 2 3 4 5$/.test(t)) && !textOf(drawnAst).includes('12345'), `PDF comb: numbers set apart with no boxes stay apart ${drawnSaid}`);
 
     // A tagged form: a field's widget tagged as a /Form element (its OBJR) reads its value there, and a

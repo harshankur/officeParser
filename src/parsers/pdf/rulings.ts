@@ -197,19 +197,34 @@ export interface CellLayout {
 /** How far a comb's boxes' widths may be from their middle one's, as a share of it (see isComb). */
 const COMB_WIDTH_SPREAD = 0.15;
 /**
- * The widest a comb's boxes are, in ems of the characters in them (see isComb): a form's comb is set tight
- * to its characters (a date's digits of 14 points in boxes of 18 or 20), a row of choices ruled apart is not
- * (a scale's "1 2 3 4 5" of 11 points in boxes of 30).
+ * The fewest boxes a row of choices fills (see isScale): two characters in two boxes ("1 2", "A B") may as well
+ * be a value's.
  */
-const COMB_EMS = 2;
+const SCALE_BOXES = 3;
+/** The characters a scale's choices count through, one after another, and a school's grades (no E). */
+const SCALE_RUNS = ['0123456789', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'];
+const GRADES = ['ABCDF', 'abcdf'];
+
+/**
+ * Whether a row of boxes, one character to a box, prints a scale's choices rather than holds a value: every
+ * box filled, with characters that count up or down one at a time ("1 2 3 4 5", "0 1 2 ... 9", "A B C D E",
+ * "5 4 3 2 1") or a school's grades ("A B C D F"), three at least. A value's characters (a date's "15041985",
+ * a name's) do not count so; one that does, a comb filled with "12345", is read as the row of choices it looks
+ * like, its characters still in order, each in its cell.
+ */
+function isScale(chars: readonly string[]): boolean {
+    if (chars.length < SCALE_BOXES || chars.some(c => [...c].length !== 1)) return false;
+    const text = chars.join(''), back = [...chars].reverse().join('');
+    return SCALE_RUNS.some(run => run.includes(text) || run.includes(back)) || GRADES.includes(text) || GRADES.includes(back);
+}
 
 /**
  * Whether a frame is a comb: a row of like boxes (two at least, of widths within COMB_WIDTH_SPREAD of
  * their middle one's, about square: no wider than two and a half times their height, no taller than four
  * times their width) a form draws to be filled one character to a box, a date's digits or a tax number's.
  * It is one where its text is form field values (see RawRun.formField) alone, or where each box holds a
- * character at most and is no wider than COMB_EMS of them. A row of words, a row of characters ruled wide
- * apart (a scale, a row of grades), or a grid of two rows, is a table.
+ * character at most and its characters are no scale's choices (see isScale). A row of words, a row of a
+ * scale's numbers or of grades, or a grid of two rows, is a table.
  */
 function isComb(f: RuledFrame, contents: readonly RawRun[][]): boolean {
     if (f.ys.length !== 2 || f.cells.length < 2 || f.cells.some(c => c.colSpan !== 1 || c.rowSpan !== 1)) return false;
@@ -220,13 +235,15 @@ function isComb(f: RuledFrame, contents: readonly RawRun[][]): boolean {
     if (widths.some(w => Math.abs(w - middle) > COMB_WIDTH_SPREAD * middle)) return false;
     const texts = contents.flat().filter(r => r.text.trim());
     if (texts.length && texts.every(r => r.formField)) return true;
-    const size = texts.reduce((m, r) => Math.max(m, r.fontSize), 0);
-    if (size > 0 && middle > COMB_EMS * size) return false;
-    return contents.every(runs => {
-        let chars = 0;
-        for (const r of runs) for (const ch of r.text) if (ch.trim() && ++chars > 1) return false;
-        return true;
-    });
+    const chars: string[] = [];
+    for (const runs of contents) {
+        let box = '', count = 0;
+        for (const r of runs) for (const ch of r.text) if (ch.trim()) { if (++count > 1) return false; box = ch; }
+        chars.push(box);
+    }
+    // (In the boxes' order across the row.)
+    const order = f.cells.map((c, i) => i).sort((a, b) => f.cells[a].col - f.cells[b].col);
+    return !isScale(order.map(i => chars[i]));
 }
 
 /**
