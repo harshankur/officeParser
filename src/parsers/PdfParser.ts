@@ -1104,8 +1104,13 @@ async function readTextContent(page: any, params: object, work: PdfWorkBudget): 
     return { items, styles };
 }
 
-/** At most this many path operators are kept on a page, for its shapes (see readOperatorList). */
+/**
+ * At most this many paths are kept on a page, for its shapes (see readOperatorList), and this many of the
+ * operators that set how they are painted (their widths, clips and opacity): a page that clips each thing it
+ * draws (as Skia does) sets a clip for most of its paths, which as paths left fewer of its own kept.
+ */
 const MAX_PATHS_KEPT = 40_000;
+const MAX_PATH_STATES_KEPT = 2 * MAX_PATHS_KEPT;
 /** At most this many operators are kept on a page read for its shapes alone, past which it is left unread. */
 const MAX_SHAPE_OPERATORS = 200_000;
 
@@ -1161,8 +1166,9 @@ async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep
     const showText = pdfjs.OPS.showText;
     // Paths (and their widths, clips and opacity) are kept for the page's shapes, a bounded number of them, costing
     // none of the budget, as when they were not kept: a plan stamping one symbol thousands of times stays whole.
-    const pathOps = new Set([pdfjs.OPS.constructPath, pdfjs.OPS.setLineWidth, pdfjs.OPS.clip, pdfjs.OPS.eoClip, pdfjs.OPS.setGState]);
-    let pathsKept = 0;
+    // (The paths and what paints them each to their own bound, and that only while paths are kept.)
+    const stateOps = new Set([pdfjs.OPS.setLineWidth, pdfjs.OPS.clip, pdfjs.OPS.eoClip, pdfjs.OPS.setGState]);
+    let pathsKept = 0, statesKept = 0;
     let stopped!: (partial: any) => void;
     const stop = new Promise<any>(resolve => { stopped = resolve; });
     let done = false;
@@ -1187,7 +1193,8 @@ async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep
                 for (let i = 0; i < chunk.length; i++) {
                     const fn = chunk.fnArray[i];
                     if (!kept.has(fn)) continue;
-                    if (pathOps.has(fn)) { if (pathsKept >= MAX_PATHS_KEPT) continue; pathsKept++; free++; }
+                    if (fn === pdfjs.OPS.constructPath) { if (pathsKept >= MAX_PATHS_KEPT) continue; pathsKept++; free++; }
+                    else if (stateOps.has(fn)) { if (pathsKept >= MAX_PATHS_KEPT || statesKept >= MAX_PATH_STATES_KEPT) continue; statesKept++; free++; }
                     const args = chunk.argsArray[i];
                     fnArray.push(fn);
                     argsArray.push(args);

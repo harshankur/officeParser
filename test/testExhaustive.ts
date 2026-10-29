@@ -8697,6 +8697,17 @@ async function testPdfTextOnFills(): Promise<void> {
             `PDF text on fills: a form paints only inside its box${group ? ', a transparency group\'s too' : ''} (${JSON.stringify(boxedFound)})`);
     }
 
+    // A page that clips each small thing it draws to itself, as Skia does, fifteen thousand of them (thirty
+    // thousand paths, fewer than a page keeps), then a bar with white text on it: the clips take none of the
+    // paths' room, so the bar is still read.
+    const clipped = Array.from({ length: 15_000 }, (_, i) => { const x = 20 + (i % 100) * 5, y = 700 + Math.floor(i / 100) % 60; return `q ${x} ${y} 2 1 re W n 0.9 0.9 0.9 rg ${x} ${y} 2 1 re f Q`; });
+    const clippedPage = pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+        streamOf('', [...clipped, '0.2 0.4 0.6 rg 40 300 300 30 re f 1 1 1 rg BT /F1 14 Tf 50 310 Td (White on a bar) Tj ET'].join('\n')),
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>']);
+    const clippedFound = backgrounds(await read(clippedPage));
+    assert.strictEqual(clippedFound['White on a bar'], '#336699', `PDF text on fills: a page's clips leave room for its paths (${JSON.stringify(clippedFound)})`);
+
     // A table ruled and shaded: its head cell shows the colour and its text carries none, a coloured bar inside a plain cell still does.
     // Over a grey panel, one cell of it a white card.
     const table = pageOf([
