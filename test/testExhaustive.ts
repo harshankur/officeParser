@@ -8675,6 +8675,20 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
     let entry = 0;
     const entries = await read(pdfOf([1, 2, 3, 4].map(() => Array.from({ length: 24 }, () => line(50, 760 - (entry % 24) * 30, 12, `Entry ${++entry}`)).join('\n'))));
     assert.ok(entries.auxiliary?.headers === undefined && entries.auxiliary?.footers === undefined, `Running headers: entries numbered down the pages are no header or footer (${JSON.stringify([texts(entries.auxiliary?.headers), texts(entries.auxiliary?.footers)])})`);
+    // A question at the text's size at the top of each page, numbered as the pages are but no page number: each
+    // is its page's, and stays in the text.
+    for (const word of ['Question', 'Day', 'Exhibit', 'Step']) {
+        const numbered = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 12, `${word} ${p}`), body(p)].join('\n'))));
+        const numberedMd = await md(numbered);
+        assert.ok(numbered.auxiliary?.headers === undefined && [1, 2, 3, 4].every(p => numberedMd.includes(`${word} ${p}`)), `Running headers: "${word} N" at the top of each page is the page's (${JSON.stringify(texts(numbered.auxiliary?.headers))})`);
+    }
+    // A chapter's head on each of its pages, the next chapter's on its: printed alike page after page, a header.
+    const chapters = await read(pdfOf([1, 2, 3, 4, 5, 6].map(p => [line(50, 760, 10, `Chapter ${p <= 3 ? 1 : 2}`), body(p)].join('\n'))));
+    assert.deepStrictEqual(texts(chapters.auxiliary?.headers), ['1:Chapter 1', '2:Chapter 1', '3:Chapter 1', '4:Chapter 2', '5:Chapter 2', '6:Chapter 2'], `Running headers: a chapter's head on its pages is their header (${JSON.stringify(texts(chapters.auxiliary?.headers))})`);
+    // An article numbered as in its journal, from 147: its numbers run with the pages, a footer, but no field.
+    const article = await read(pdfOf([1, 2, 3, 4].map(p => [body(p), line(245, 30, 10, String(146 + p))].join('\n'))));
+    assert.ok(texts(article.auxiliary?.footers).join() === '1:147,2:148,3:149,4:150' && fieldsOf(article.auxiliary?.footers).length === 0,
+        `Running footers: numbers that run with the pages from elsewhere are the footer (${JSON.stringify([texts(article.auxiliary?.footers), fieldsOf(article.auxiliary?.footers)])})`);
 
     // A book's heads, one on the left of even pages and another on the right of odd ones, its first page
     // without: three odd pages of eight are too few of all the pages, enough of the odd ones.

@@ -34,6 +34,14 @@ const SIZE_SLACK = 0.5;
 const GAP_HEIGHTS = 1;
 /** As much of a line's text as is compared (with its length): a line of a megabyte is not kept twice. */
 const KEY_TEXT = 120;
+/**
+ * A line whose numbers are not the page's (a heading's "Question 3", a chapter's "Chapter 3") is running only
+ * where its text, as printed, is on at least this many of the pages of its key: a chapter's head repeated on
+ * its pages is, a question numbered once on each page is not.
+ */
+const SAME_TEXT_PAGES = 2;
+/** The longest line a page number is looked for in (characters). */
+const NUMBERED_TEXT = 200;
 
 /** The words a page number is printed with ("Page 3", "Seite 3 von 4"), lower case. */
 const PAGE_WORD = String.raw`(?:page|seite|pagina|página|pág\.?|pag\.?|p\.|s\.|blatt|side|sida|sivu|strona|str\.|стр\.?|страница)`;
@@ -70,6 +78,41 @@ function ownNumberKey(text: string, pageNumber: number, label: string | null | u
     return `${text.slice(0, at)}#${text.slice(at + n.length)}`.replace(/\p{Nd}+/gu, '#');
 }
 
+/** As much of a text as a key holds: its start and its length, past KEY_TEXT. */
+function keyOf(text: string): string {
+    return text.length > KEY_TEXT ? `${text.slice(0, KEY_TEXT)}|${text.length}` : text;
+}
+
+/**
+ * A line's text with the number it prints as a page number ("3", "- 3 -", "3/4", "Page 3 of 4", "Seite 3 von
+ * 4", "iii") as '#' and how far it is from the page's own: lines that number the pages the same way, a
+ * document's own or one numbered from elsewhere (a form placed after a scan, an article numbered as in its
+ * journal), are one text however their numbers run. Its other numbers are as printed. Null where the line
+ * prints no page number.
+ */
+function pageNumbered(text: string, pageNumber: number, label: string | null | undefined): string | null {
+    if (text.length > NUMBERED_TEXT) return null;
+    // The line alone, then a number of the pages' ("3 of 4") in it, then a page's word and its number.
+    const line = PAGE_LINE.exec(text);
+    let at = -1, token = '';
+    if (line) {
+        token = line[1];
+        at = line[0].lastIndexOf(token, line[2] === undefined ? undefined : line[0].length - line[2].length - 1);
+    } else {
+        const of = text.matchAll(NUMBER_OF).next().value;
+        const word = of ? undefined : text.matchAll(WORD_NUMBER).next().value;
+        const m = of ?? word;
+        if (!m) return null;
+        token = m[1];
+        at = m.index! + (of ? m[0].indexOf(token) : m[0].lastIndexOf(token));
+    }
+    const own = !!label && token.toLowerCase() === label.toLowerCase();
+    // (A roman numeral is a page's number where its page label says so: "Part II" is no page's number.)
+    if (!own && !/^\d+$/.test(token)) return null;
+    const from = own ? 'label' : String(Number(token) - pageNumber);
+    return `${text.slice(0, at)}#${from}#${text.slice(at + token.length)}`;
+}
+
 /** One line in a page's header or footer band, and what it is compared by. */
 interface BandLine {
     runs: readonly RawRun[];
@@ -81,6 +124,9 @@ interface BandLine {
     height: number;
     fontSize: number;
     entry: KeyEntry;
+    /** Its text as printed, and as its page number numbers the pages (see pageNumbered), as the entry counts them. */
+    printed: string;
+    numberedAs: string | null;
     ownNumber: boolean;
     /** Whether the page has another line of its text (its numbers as one) at its left edge: a table's column. */
     repeated: boolean;
@@ -95,6 +141,11 @@ interface KeyEntry {
     numbered: number;
     /** The last page counted (a page counts once). */
     last: number;
+    /**
+     * The pages of each of its texts as printed, and as a page number numbers the pages: its key holds its
+     * numbers as one, which a line's text is only where they are the pages' own or the line is printed alike.
+     */
+    texts: Map<string, { pages: number; last: number }>;
 }
 
 /** The runs of each page that are its running header and its running footer. */
@@ -109,7 +160,10 @@ export interface RunningRuns {
  *
  * A line in a page's top or bottom band (FURNITURE_BAND, as the page is shown, so a turned page's too) is
  * compared with the other pages' by its band, its distance from the page's edge, its left edge, and its
- * text with its numbers as one (so "1/4" and "2/4" are one line). It is running when it is on at least two
+ * text with its numbers as one (so "1/4" and "2/4" are one line), where its numbers are the page's (they number
+ * the pages alike, see pageNumbered) or it is printed alike on another page of them: "Question 3" at the top of
+ * one page and "Question 4" at the top of the next are two lines, a chapter's head on each of its pages is one.
+ * It is running when it is on at least two
  * in five of the pages read, and three of them; or two in five of the odd or of the even pages (and three),
  * so a book's heads, one on the left of even pages and another on the right of odd ones, are found when its
  * first page or a chapter's opening page has none; or, as the page's own number ("3", "3/4", "Seite 3 von
@@ -139,7 +193,7 @@ export function findRunningLines(extracts: readonly PageExtract[], cfg: PdfLayou
             const found = places.get(`${e + de}|${x + dx}`);
             if (found) return found;
         }
-        const entry: KeyEntry = { pages: 0, odd: 0, even: 0, numbered: 0, last: -1 };
+        const entry: KeyEntry = { pages: 0, odd: 0, even: 0, numbered: 0, last: -1, texts: new Map() };
         places.set(`${e}|${x}`, entry);
         return entry;
     };
@@ -173,8 +227,7 @@ export function findRunningLines(extracts: readonly PageExtract[], cfg: PdfLayou
             if (!text) continue;
             const numbered = text.length <= 40 ? ownNumberKey(text, extract.pageNumber, label) : null;
             const ownNumber = numbered !== null;
-            const masked = numbered ?? text.replace(/\p{Nd}+/gu, '#');
-            const keyText = masked.length > KEY_TEXT ? `${masked.slice(0, KEY_TEXT)}|${masked.length}` : masked;
+            const keyText = keyOf(numbered ?? text.replace(/\p{Nd}+/gu, '#'));
             const edge = band === 'header' ? box.y : shownH - (box.y + box.height);
             const entry = entryFor(band, keyText, edge, box.x);
             if (entry.last !== extract.pageNumber) {
@@ -183,10 +236,16 @@ export function findRunningLines(extracts: readonly PageExtract[], cfg: PdfLayou
                 if (odd) entry.odd++; else entry.even++;
                 if (ownNumber) entry.numbered++;
             }
+            const printed = keyOf(text), numberedAs = pageNumbered(text, extract.pageNumber, label);
+            for (const t of numberedAs === null ? [printed] : [printed, keyOf(numberedAs)]) {
+                let seen = entry.texts.get(t);
+                if (!seen) entry.texts.set(t, seen = { pages: 0, last: -1 });
+                if (seen.last !== extract.pageNumber) { seen.last = extract.pageNumber; seen.pages++; }
+            }
             const left = `${band}|${keyText}|`, x = Math.floor(box.x / LEFT_TOLERANCE);
             atLeft.set(left + x, (atLeft.get(left + x) ?? 0) + 1);
             lefts.push({ left, x });
-            lines.push({ runs: lineRuns(line), band, edge, left: box.x, height: box.height, fontSize: line.fontSize, entry, ownNumber, repeated: false });
+            lines.push({ runs: lineRuns(line), band, edge, left: box.x, height: box.height, fontSize: line.fontSize, entry, printed, numberedAs: numberedAs === null ? null : keyOf(numberedAs), ownNumber, repeated: false });
         }
         // (At its own left edge, and a tolerance either side.)
         lines.forEach((l, k) => {
@@ -200,7 +259,12 @@ export function findRunningLines(extracts: readonly PageExtract[], cfg: PdfLayou
     const needAll = need(extracts.length), needOdd = need(oddPages), needEven = need(evenPages);
     // (A line whose text the page repeats down its band at its left edge is a table's column or a list's, not
     // furniture: "Item 46" over "Item 47" at the top of each page a table goes on to.)
-    const running = (l: BandLine) => !l.repeated && (l.entry.pages >= needAll || l.entry.odd >= needOdd || l.entry.even >= needEven
+    // (Its numbers are as one in its key, so "Page 3" is "Page 4"; but a line whose numbers are not the page's
+    // is running only where it is printed alike on other pages: "Question 3", at the top of a page as
+    // "Question 4" is on the next, is the page's.)
+    const sameText = (l: BandLine) => (l.entry.texts.get(l.printed)?.pages ?? 0) >= SAME_TEXT_PAGES
+        || (l.numberedAs !== null && (l.entry.texts.get(l.numberedAs)?.pages ?? 0) >= SAME_TEXT_PAGES);
+    const running = (l: BandLine) => !l.repeated && sameText(l) && (l.entry.pages >= needAll || l.entry.odd >= needOdd || l.entry.even >= needEven
         || (l.ownNumber && l.entry.numbered >= PAGE_NUMBER_PAGES));
     const small = (l: BandLine) => l.fontSize <= bodyFontSize + SIZE_SLACK;
 
