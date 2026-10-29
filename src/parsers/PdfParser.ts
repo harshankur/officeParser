@@ -2365,7 +2365,9 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
                 // found by comparing the pages is.)
                 if (node.type !== 'heading') return node;
                 const { level: _level, levelSource: _source, ...rest } = (node.metadata ?? {}) as HeadingMetadata;
-                return { ...node, type: 'paragraph', metadata: rest } as OfficeContentNode;
+                const back = { ...node, type: 'paragraph' } as OfficeContentNode;
+                if (Object.keys(rest).length) back.metadata = rest; else delete back.metadata;
+                return back;
             });
             if (kind === 'header') children.splice(page.above, 0, ...back); else children.splice(children.length - page.below, 0, ...back);
             page.page.text = children.map(n => n.text).join(config.newlineDelimiter);
@@ -2559,7 +2561,8 @@ function retypeAsHeaderFooter(node: OfficeContentNode, type: 'header' | 'footer'
     if (node.type === 'list') line = { type: 'paragraph', text, children, bounds: node.bounds };
     else if (node.type === 'heading') {
         const { level: _level, levelSource: _source, ...rest } = (node.metadata ?? {}) as HeadingMetadata;
-        line = { ...node, type: 'paragraph', metadata: rest } as OfficeContentNode;
+        line = { ...node, type: 'paragraph' } as OfficeContentNode;
+        if (Object.keys(rest).length) line.metadata = rest; else delete line.metadata;
     }
     return { type, text, children: [line], bounds: node.bounds, metadata: { type: 'default', page } };
 }

@@ -752,15 +752,16 @@ export interface PdfParserConfig {
      * the top of the next are the pages' own. A page number in one is marked as the page field it prints
      * (TextMetadata.field), where the pages read are the document's from its first (a `pageRange` from a
      * later page marks none), and its pages' count only where all are read. Either is read into
-     * `auxiliary`, as a word processor's header is, where it is the same on every page that has one once
-     * its page numbers are fields: a writer that lays out pages (Word, ODT, RTF, LaTeX, the PDF writer's
+     * `auxiliary`, as a word processor's header is, where it is the same on every page read (the first may
+     * have none, a cover's) once its page numbers are fields: a writer that lays out pages (Word, ODT, RTF, LaTeX, the PDF writer's
      * native engine) writes it on every page, each page numbered its own, and one that does not (text,
      * Markdown, HTML and the PDF writer's default HTML engine, EPUB, PowerPoint) leaves it out. A header or
-     * footer whose text changes from page to page (a chapter's head, pages numbered from 147) stays in its
-     * pages, where it is, as no such writer could print it; where only the first page's differs (a cover's,
-     * every other page having the same one), that one stays on its page and the others' is the document's.
-     * A header's line larger than the text is a paragraph of it, not a heading. Turn this on for a writer that shows each page
-     * as it was, a slide per page, so every page keeps its own header and footer in its place.
+     * footer whose text changes from page to page (a chapter's head, pages numbered from 147), or that some
+     * pages have and others not (a sheet's name on its sheet's pages), stays in its pages, where it is, as no
+     * such writer could print it; where only the first page read differs (a cover's, every other page, two at
+     * least, having the same one), that one stays on its page and the others' is the document's. A header's
+     * line larger than the text is a paragraph of it, not a heading. Turn this on for a writer that shows each
+     * page as it was, a slide per page, so every page keeps its own header and footer in its place.
      * `ignoreHeadersAndFooters` still drops them.
      *
      * Default is false.

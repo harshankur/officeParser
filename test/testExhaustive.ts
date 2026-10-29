@@ -9141,6 +9141,12 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
     const romanCover = await read(pdfOf([1, 2, 3, 4].map(p => [body(p), line(245, 30, 10, p === 1 ? 'i' : String(p))].join('\n')), '/PageLabels << /Nums [0 << /S /r >> 1 << /S /D /St 2 >>] >>'));
     const romanCoverMd = await md(romanCover);
     assert.ok(romanCover.auxiliary?.footers === undefined && /^i$/m.test(romanCoverMd) && /^4$/m.test(romanCoverMd), `Running footers: a cover numbered in another format keeps every page's number (${JSON.stringify(texts(romanCover.auxiliary?.footers))})`);
+    // A sheet's name at the top of its sheet's pages alone, 3 to 6 of 8: a header Word would print on every page,
+    // so it stays on its pages.
+    const sheetName = await read(pdfOf([1, 2, 3, 4, 5, 6, 7, 8].map(p => [p >= 3 && p <= 6 ? line(50, 760, 10, 'Text') : '', body(p)].join('\n'))));
+    const sheetDocx = unzipSync((await sheetName.to('docx')).value as Uint8Array);
+    assert.ok(sheetName.auxiliary?.headers === undefined && !Object.keys(sheetDocx).some(k => /header\d*\.xml$/.test(k) && strFromU8(sheetDocx[k]).includes('>Text<')) && /^Text$/m.test(await md(sheetName)),
+        `Running headers: a header on some pages alone stays on them (${JSON.stringify(texts(sheetName.auxiliary?.headers))})`);
     // A header larger than the text, the same on every page, is a paragraph of the header, not a heading: it took
     // the body's heading's anchor in DOCX.
     const bigSame = await read(pdfOf([1, 2, 3].map(p => [`/Artifact << /Type /Pagination >> BDC ${line(50, 760, 20, 'Acme Report')} EMC`, body(p)].join('\n'))));
