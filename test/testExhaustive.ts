@@ -8522,7 +8522,7 @@ async function testPdfTextOnFills(): Promise<void> {
     const pageOf = (content: string, extra = '', more: string[] = []) => {
         const data = Buffer.from(content, 'latin1');
         return pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-            `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 800] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R ${extra} >>`,
+            `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 800] /Resources << /Font << /F1 5 0 R >> /ExtGState << /Faint << /ca 0.1 >> >> >> /Contents 4 0 R ${extra} >>`,
             Buffer.concat([Buffer.from(`<< /Length ${data.length} >>\nstream\n`), data, Buffer.from('\nendstream')]), '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', ...more]);
     };
     const read = async (pdf: Buffer, pdfParserConfig: object = {}) => await OfficeParser.parseOffice(pdf, { fileType: 'pdf', pdfParserConfig: { ...inProcess.pdfParserConfig, ...pdfParserConfig } } as any) as OfficeParserAST;
@@ -8549,6 +8549,13 @@ async function testPdfTextOnFills(): Promise<void> {
         '0.2 0.4 0.6 rg 300 160 60 30 re f',
         '1 1 0 rg 290 155 120 40 re f',
         '0 g BT /F1 10 Tf 305 170 Td (Covered) Tj ET',
+        // A grey card whose left border a browser draws by filling the whole card in the border's colour,
+        // clipped to the border's strip; and text over a faint shadow alone.
+        '0.9 0.9 0.9 rg 30 60 300 60 re f',
+        'q 30 60 4 60 re W n 0.2 0.4 0.6 rg 30 60 300 60 re f Q',
+        '0 g BT /F1 12 Tf 45 85 Td (On the bordered card) Tj ET',
+        'q /Faint gs 0 0 0 rg 340 20 150 40 re f Q',
+        '0 g BT /F1 12 Tf 350 35 Td (Over a shadow) Tj ET',
     ].join('\n');
     const highlight = '<< /Type /Annot /Subtype /Highlight /Rect [48 306 200 328] /QuadPoints [48 328 200 328 48 306 200 306] /C [1 1 0] >>';
     const standing = pageOf(content, '/Annots [6 0 R]', [highlight]);
@@ -8566,6 +8573,8 @@ async function testPdfTextOnFills(): Promise<void> {
         assert.strictEqual(found['On the white card'], undefined, `PDF text on fills: text on a white card inside a grey panel is on white (${JSON.stringify(found)})`);
         assert.strictEqual(found['Beside the card'], '#e6e6e6', 'PDF text on fills: text beside the card is on the panel');
         assert.strictEqual(found['Covered'], '#ffff00', 'PDF text on fills: a rectangle drawn after another covers it');
+        assert.strictEqual(found['On the bordered card'], '#e6e6e6', `PDF text on fills: a fill clipped to a border's strip covers only the strip (${JSON.stringify(found)})`);
+        assert.strictEqual(found['Over a shadow'], undefined, 'PDF text on fills: a see-through fill is no background');
     }
     const without = backgrounds(await read(standing, { extractTextColor: false }));
     assert.deepStrictEqual(Object.entries(without).filter(([, bg]) => bg).map(([t]) => t), ['Highlighted on a bar'], `PDF text on fills: with extractTextColor off only the highlight has a background (${JSON.stringify(without)})`);

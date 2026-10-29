@@ -38,6 +38,24 @@ export interface PdfShape {
     curved: boolean;
     /** Its straight edges, [x1, y1, x2, y2], at most MAX_SHAPE_SEGMENTS. */
     segments: [number, number, number, number][];
+    /**
+     * The box of the clipping path it was painted through, where the page clipped it (the boxes of the
+     * paths it set as clips, and of the forms it was drawn in, met): what it paints is inside it. A browser
+     * draws a box's left border by clipping to the border's strip and filling the whole box.
+     */
+    clip?: { x: number; y: number; width: number; height: number };
+    /** Filled see-through: at a fill opacity under one (`ca`), or through a soft mask (a browser's shadow). */
+    seeThrough?: boolean;
+}
+
+/** A clipping box, [minX, minY, maxX, maxY] in viewport space, or none (the whole page). */
+type ClipBox = [number, number, number, number] | undefined;
+
+/** Where two clipping boxes meet (an empty box where they do not). */
+function meet(a: ClipBox, b: [number, number, number, number]): [number, number, number, number] {
+    if (!a) return b;
+    const minX = Math.max(a[0], b[0]), minY = Math.max(a[1], b[1]);
+    return [minX, minY, Math.max(minX, Math.min(a[2], b[2])), Math.max(minY, Math.min(a[3], b[3]))];
 }
 
 /** Walks an operator list fetched with drawing operators kept, and returns the shapes it paints. */
@@ -48,26 +66,46 @@ export function collectShapes(ops: any, viewportTransform: number[], OPS: any): 
     if (!fnArray || !argsArray || OPS.constructPath === undefined) return shapes;
     let ctm = identityMatrix();
     let fill: string | undefined, stroke: string | undefined, lineWidth = 1;
-    const stack: { ctm: number[]; fill?: string; stroke?: string; lineWidth: number }[] = [];
+    // The clipping box, and whether the next path sets a clip (as `W` before its `n` or its paint); and
+    // whether a fill is see-through (its opacity, a soft mask).
+    let clip: ClipBox, clipNext = false, alpha = 1, masked = false;
+    const stack: { ctm: number[]; fill?: string; stroke?: string; lineWidth: number; clip: ClipBox; alpha: number; masked: boolean }[] = [];
     let segmentsLeft = MAX_SEGMENTS;
     const fills = new Set([OPS.fill, OPS.eoFill, OPS.fillStroke, OPS.eoFillStroke, OPS.closeFillStroke, OPS.closeEOFillStroke]);
     const strokes = new Set([OPS.stroke, OPS.closeStroke, OPS.fillStroke, OPS.eoFillStroke, OPS.closeFillStroke, OPS.closeEOFillStroke]);
     for (let i = 0; i < fnArray.length && shapes.length < MAX_SHAPES; i++) {
         const a = argsArray[i];
         switch (fnArray[i]) {
-            case OPS.save: stack.push({ ctm, fill, stroke, lineWidth }); break;
-            case OPS.restore: { const s = stack.pop(); if (s) ({ ctm, fill, stroke, lineWidth } = s); break; }
+            case OPS.save: stack.push({ ctm, fill, stroke, lineWidth, clip, alpha, masked }); break;
+            case OPS.restore: { const s = stack.pop(); if (s) ({ ctm, fill, stroke, lineWidth, clip, alpha, masked } = s); break; }
             case OPS.transform: { const cm = toMat6(a); if (cm) ctm = mul(ctm, cm); break; }
             case OPS.paintFormXObjectBegin: {
-                stack.push({ ctm, fill, stroke, lineWidth });
+                stack.push({ ctm, fill, stroke, lineWidth, clip, alpha, masked });
                 const fm = toMat6(a?.[0]);
                 if (fm) ctm = mul(ctm, fm);
+                // (A form is clipped to its box.)
+                const bbox = a?.[1];
+                if (bbox && bbox.length === 4 && [0, 1, 2, 3].every(k => Number.isFinite(+bbox[k]))) {
+                    const m = mul(viewportTransform, ctm);
+                    const xs: number[] = [], ys: number[] = [];
+                    for (const [x, y] of [[+bbox[0], +bbox[1]], [+bbox[2], +bbox[1]], [+bbox[0], +bbox[3]], [+bbox[2], +bbox[3]]]) { xs.push(m[0] * x + m[2] * y + m[4]); ys.push(m[1] * x + m[3] * y + m[5]); }
+                    clip = meet(clip, [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
+                }
                 break;
             }
-            case OPS.paintFormXObjectEnd: { const s = stack.pop(); if (s) ({ ctm, fill, stroke, lineWidth } = s); break; }
+            case OPS.paintFormXObjectEnd: { const s = stack.pop(); if (s) ({ ctm, fill, stroke, lineWidth, clip, alpha, masked } = s); break; }
             // An annotation's appearance, in its own place on the page (see annotationMatrix).
-            case OPS.beginAnnotation: stack.push({ ctm, fill, stroke, lineWidth }); ctm = annotationMatrix(a); break;
-            case OPS.endAnnotation: { const s = stack.pop(); if (s) ({ ctm, fill, stroke, lineWidth } = s); break; }
+            case OPS.beginAnnotation: stack.push({ ctm, fill, stroke, lineWidth, clip, alpha, masked }); ctm = annotationMatrix(a); break;
+            case OPS.endAnnotation: { const s = stack.pop(); if (s) ({ ctm, fill, stroke, lineWidth, clip, alpha, masked } = s); break; }
+            case OPS.clip: case OPS.eoClip: clipNext = true; break;
+            case OPS.setGState: {
+                for (const entry of Array.isArray(a?.[0]) ? a[0] : []) {
+                    if (!Array.isArray(entry)) continue;
+                    if (entry[0] === 'ca' && Number.isFinite(+entry[1])) alpha = +entry[1];
+                    else if (entry[0] === 'SMask') masked = !!entry[1];
+                }
+                break;
+            }
             case OPS.setFillRGBColor: fill = typeof a?.[0] === 'string' ? a[0] : undefined; break;
             case OPS.setFillColorN: case OPS.setFillTransparent: fill = undefined; break;
             case OPS.setStrokeRGBColor: stroke = typeof a?.[0] === 'string' ? a[0] : undefined; break;
@@ -76,7 +114,9 @@ export function collectShapes(ops: any, viewportTransform: number[], OPS: any): 
             case OPS.constructPath: {
                 const paint = a?.[0];
                 const filled = fills.has(paint), stroked = strokes.has(paint);
-                if (!filled && !stroked) break;
+                const clips = clipNext;
+                clipNext = false;
+                if (!filled && !stroked && !clips) break;
                 const data = a?.[1]?.[0];
                 if (!data || typeof data.length !== 'number') break;
                 // The path's points in viewport space: user space, then the CTM, then the viewport.
@@ -87,7 +127,8 @@ export function collectShapes(ops: any, viewportTransform: number[], OPS: any): 
                 const segments: [number, number, number, number][] = [];
                 let curved = false, cx = 0, cy = 0, sx = 0, sy = 0;
                 const line = (x: number, y: number) => {
-                    if (segments.length < MAX_SHAPE_SEGMENTS && segmentsLeft > 0) { segments.push([cx, cy, x, y]); segmentsLeft--; }
+                    // (A clipping path's edges are not kept: its box is.)
+                    if ((filled || stroked) && segments.length < MAX_SHAPE_SEGMENTS && segmentsLeft > 0) { segments.push([cx, cy, x, y]); segmentsLeft--; }
                     cx = x; cy = y; take(x, y);
                 };
                 for (let k = 0; k < data.length;) {
@@ -106,13 +147,19 @@ export function collectShapes(ops: any, viewportTransform: number[], OPS: any): 
                     else break;
                 }
                 if (!Number.isFinite(minX) || !Number.isFinite(minY)) break;
-                // A stroke's width in viewport space, scaled as the CTM scales (its mean).
-                const scale = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) || 1;
-                shapes.push({
-                    x: minX, y: minY, width: maxX - minX, height: maxY - minY, filled, stroked,
-                    ...(filled && fill ? { fill } : {}), ...(stroked && stroke ? { stroke } : {}),
-                    lineWidth: lineWidth * scale, curved, segments,
-                });
+                if (filled || stroked) {
+                    // A stroke's width in viewport space, scaled as the CTM scales (its mean).
+                    const scale = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) || 1;
+                    shapes.push({
+                        x: minX, y: minY, width: maxX - minX, height: maxY - minY, filled, stroked,
+                        ...(filled && fill ? { fill } : {}), ...(stroked && stroke ? { stroke } : {}),
+                        lineWidth: lineWidth * scale, curved, segments,
+                        ...(clip ? { clip: { x: clip[0], y: clip[1], width: clip[2] - clip[0], height: clip[3] - clip[1] } } : {}),
+                        ...(filled && (alpha < 1 || masked) ? { seeThrough: true } : {}),
+                    });
+                }
+                // (The path clips what is painted after it, not itself.)
+                if (clips) clip = meet(clip, [minX, minY, maxX, maxY]);
                 break;
             }
         }

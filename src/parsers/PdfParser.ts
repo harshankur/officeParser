@@ -1097,12 +1097,12 @@ const MAX_SHAPE_OPERATORS = 200_000;
 const TEXT_OPERATORS = ['beginText', 'setTextMatrix', 'moveText', 'setLeadingMoveText', 'setLeading', 'nextLine', 'setTextRise',
     'setTextRenderingMode', 'showText', 'setFont', 'setCharSpacing', 'setWordSpacing', 'setHScale'];
 
-/** The operators the shape reader uses: paths, their widths and colours, and the state that places them (and the text's, see TEXT_OPERATORS). */
+/** The operators the shape reader uses: paths, their widths, colours and clips, and the state that places them (and the text's, see TEXT_OPERATORS). */
 const shapeOperatorsCache = new WeakMap<object, Set<number>>();
 const shapeOperators = (OPS: any): Set<number> => {
     let kept = shapeOperatorsCache.get(OPS);
     if (!kept) {
-        kept = new Set(['save', 'restore', 'transform', 'paintFormXObjectBegin', 'paintFormXObjectEnd', 'beginAnnotation', 'endAnnotation', 'constructPath', 'setLineWidth',
+        kept = new Set(['save', 'restore', 'transform', 'paintFormXObjectBegin', 'paintFormXObjectEnd', 'beginAnnotation', 'endAnnotation', 'constructPath', 'setLineWidth', 'clip', 'eoClip', 'setGState',
             'setFillRGBColor', 'setFillColorN', 'setFillTransparent', 'setStrokeRGBColor', 'setStrokeColorN', 'setStrokeTransparent',
             ...TEXT_OPERATORS].map(name => OPS[name]).filter((op): op is number => typeof op === 'number'));
         shapeOperatorsCache.set(OPS, kept);
@@ -1118,7 +1118,7 @@ const keptOperators = (OPS: any): Set<number> => {
         kept = new Set(['save', 'restore', 'transform', 'paintFormXObjectBegin', 'paintFormXObjectEnd', 'beginAnnotation', 'endAnnotation', 'dependency',
             'paintImageXObject', 'paintImageXObjectRepeat', 'paintInlineImageXObject',
             'setFillRGBColor', 'setFillColorN', 'setFillTransparent', 'setStrokeRGBColor', 'setStrokeColorN', 'setStrokeTransparent',
-            ...TEXT_OPERATORS, 'constructPath', 'setLineWidth'].map(name => OPS[name]).filter((op): op is number => typeof op === 'number'));
+            ...TEXT_OPERATORS, 'constructPath', 'setLineWidth', 'clip', 'eoClip', 'setGState'].map(name => OPS[name]).filter((op): op is number => typeof op === 'number'));
         keptOperatorsCache.set(OPS, kept);
     }
     return kept;
@@ -1140,9 +1140,9 @@ async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep
     const kept = keep === 'drawing' ? keptOperators(pdfjs.OPS) : keep === 'shapes' ? shapeOperators(pdfjs.OPS) : null;
     let shapeOps = 0;
     const showText = pdfjs.OPS.showText;
-    // Paths (and their widths) are kept for the page's shapes, a bounded number of them, costing none of
-    // the budget, as when they were not kept: a plan stamping one symbol thousands of times stays whole.
-    const pathOps = new Set([pdfjs.OPS.constructPath, pdfjs.OPS.setLineWidth]);
+    // Paths (and their widths, clips and opacity) are kept for the page's shapes, a bounded number of them, costing
+    // none of the budget, as when they were not kept: a plan stamping one symbol thousands of times stays whole.
+    const pathOps = new Set([pdfjs.OPS.constructPath, pdfjs.OPS.setLineWidth, pdfjs.OPS.clip, pdfjs.OPS.eoClip, pdfjs.OPS.setGState]);
     let pathsKept = 0;
     let stopped!: (partial: any) => void;
     const stop = new Promise<any>(resolve => { stopped = resolve; });

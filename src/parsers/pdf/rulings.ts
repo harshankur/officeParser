@@ -391,20 +391,35 @@ export function ruledTables(frames: RuledFrame[], runs: readonly RawRun[], layou
     return { tables, consumed, combs: combs.filter(c => !consumed.has(c)) };
 }
 
+/** A filled rectangle where it paints (see backgroundFills), and its colour. */
+interface Fill { x: number; y: number; width: number; height: number; fill: string }
+
 /**
  * The rectangles a page fills with a colour that something may stand on, in the order the page draws them
- * (one drawn later covers those before it): filled with a colour, straight, of at most five edges, thicker
- * than a rule, and not the page's own background (nearly all of it in both directions). White ones too: a
- * white card on a grey panel is what the text on it stands on (see colourOf).
+ * (one drawn later covers those before it), each where it paints: its box within the clip it was painted
+ * through (see PdfShape.clip), as a browser fills a whole box clipped to its left border's strip. Filled
+ * with a colour and not see-through (a shadow under a box is no background), straight, of at most five
+ * edges, thicker than a rule, and not the page's own background (nearly all of it in both directions). White ones too: a white card on a grey panel is what the text on
+ * it stands on (see colourOf).
  */
-function backgroundFills(shapes: readonly PdfShape[] | undefined, pageW: number, pageH: number): PdfShape[] {
-    return (shapes ?? []).filter(s => s.filled && s.fill && !s.curved && s.segments.length <= 5
-        && s.width > MAX_THICKNESS && s.height > MAX_THICKNESS && !(s.width >= 0.9 * pageW && s.height >= 0.9 * pageH));
+function backgroundFills(shapes: readonly PdfShape[] | undefined, pageW: number, pageH: number): Fill[] {
+    const out: Fill[] = [];
+    for (const s of shapes ?? []) {
+        if (!s.filled || !s.fill || s.seeThrough || s.curved || s.segments.length > 5) continue;
+        let { x, y, width, height } = s;
+        if (s.clip) {
+            const x1 = Math.min(x + width, s.clip.x + s.clip.width), y1 = Math.min(y + height, s.clip.y + s.clip.height);
+            x = Math.max(x, s.clip.x); y = Math.max(y, s.clip.y);
+            width = x1 - x; height = y1 - y;
+        }
+        if (width > MAX_THICKNESS && height > MAX_THICKNESS && !(width >= 0.9 * pageW && height >= 0.9 * pageH)) out.push({ x, y, width, height, fill: s.fill });
+    }
+    return out;
 }
 
 /** The colour a fill gives what stands on it: none for white, the paper's own colour. */
-function colourOf(fill: PdfShape): string | undefined {
-    return fill.fill && fill.fill.toLowerCase() !== '#ffffff' ? fill.fill : undefined;
+function colourOf(fill: Fill): string | undefined {
+    return fill.fill.toLowerCase() !== '#ffffff' ? fill.fill : undefined;
 }
 
 /**
@@ -423,7 +438,7 @@ export function shadeCells(tables: readonly OfficeContentNode[], shapes: readonl
             if (box && !(child.metadata as CellMetadata | undefined)?.backgroundColor && tests < MAX_CROSSINGS) {
                 const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
                 // (From the last drawn: the first under it is the one on top.)
-                let under: PdfShape | undefined;
+                let under: Fill | undefined;
                 for (let i = fills.length - 1; i >= 0 && tests < MAX_CROSSINGS; i--) {
                     tests++;
                     const f = fills[i];
