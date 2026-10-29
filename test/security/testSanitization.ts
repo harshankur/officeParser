@@ -4291,6 +4291,17 @@ async function pdfProcessTests(h: {
     check('pdf: every page of running lines has its running lines', runningFound === 400, `${runningFound}`);
     const longBands = bandPages(4, 4000, 4000), shortBands = bandPages(4, 1000, 1000);
     await linear('pdf: 4 pages of 8,000 band lines and rows of 4,000 cells are compared', () => { findRunningLines(scale < 1 ? shortBands : longBands, bandLayout, 12, null); });
+    // Each page labelled with 400,000 characters (a /PageLabels prefix as long), of letters and of digits, and
+    // 4,000 lines in its bands: a label longer than any line a page number is looked for in is in none, so it
+    // is never read, and each page's lines take no longer for it.
+    for (const [kind, digit] of [['letters', 'A'], ['digits', '1']] as const) {
+        const labelled = (lines: number) => ({ pages: bandPages(4, lines, 0), labels: Array.from({ length: 4 }, () => digit.repeat(lines * 200)) });
+        const fullLabels = labelled(2000), quarterLabels = labelled(500);
+        await linear(`pdf: 4 pages of 4,000 band lines labelled with 400,000 ${kind} are compared`, () => {
+            const { pages, labels } = scale < 1 ? quarterLabels : fullLabels;
+            findRunningLines(pages, bandLayout, 12, labels);
+        });
+    }
     const bandedDoc = (pages: number) => {
         const objs: (string | Buffer)[] = ['<< /Type /Catalog /Pages 2 0 R >>', '', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
         const kids: number[] = [];

@@ -85,11 +85,11 @@ function romanOf(token: string, pageNumber: number): PageNumberFormat | undefine
  * in its key, so "- iii -" and "- iv -" are one line): its number in digits, or as its printed label says it
  * (a front matter's "iii", where the document's page labels number the page so). Null where it is not.
  */
-function ownNumberKey(text: string, pageNumber: number, label: string | null | undefined): string | null {
+function ownNumberKey(text: string, pageNumber: number, label: PageLabel | null): string | null {
     const m = PAGE_LINE.exec(text);
     if (!m) return null;
     const n = m[1] ?? m[3], of = m[2] ?? m[4];
-    if (!(/^\d+$/.test(n) && Number(n) === pageNumber) && !(label && n.toLowerCase() === label.toLowerCase())) return null;
+    if (!(/^\d+$/.test(n) && Number(n) === pageNumber) && !(label && n.toLowerCase() === label.lower)) return null;
     const at = m[0].lastIndexOf(n, of === undefined ? undefined : m[0].length - of.length - 1);
     return `${text.slice(0, at)}#${text.slice(at + n.length)}`.replace(/\p{Nd}+/gu, '#');
 }
@@ -97,6 +97,26 @@ function ownNumberKey(text: string, pageNumber: number, label: string | null | u
 /** As much of a text as a key holds: its start and its length, past KEY_TEXT. */
 function keyOf(text: string): string {
     return text.length > KEY_TEXT ? `${text.slice(0, KEY_TEXT)}|${text.length}` : text;
+}
+
+/** A page's printed label, as a line's text is compared with it: found once for the page (see pageLabelOf). */
+interface PageLabel {
+    text: string;
+    lower: string;
+    /** Whether it is digits ("12"), compared as a line's numbers are, or a word of its own ("iii", "A-1"). */
+    digits: boolean;
+}
+
+/**
+ * A page's label as its lines are compared with it, or null where none of them can print it: a label longer
+ * than the longest line a page number is looked for in (NUMBERED_TEXT), which is then never read (a label of a
+ * megabyte costs its page nothing), or one whose lower case is not as long (its places are not its text's).
+ */
+function pageLabelOf(label: string | null | undefined): PageLabel | null {
+    if (!label || label.length > NUMBERED_TEXT) return null;
+    const lower = label.toLowerCase();
+    if (lower.length !== label.length) return null;
+    return { text: label, lower, digits: /^\p{Nd}+$/u.test(label) };
 }
 
 /** The first code point of each script's run of digits a digit is in (its zero), found as digits are read. */
@@ -203,11 +223,10 @@ function pageNumberAt(text: string, start: number, end: number): boolean {
  * its labels do). A number that names its own ("Question 3", "2024-03-04", see pageNumberAt) is none: a page of
  * questions, one a page, numbers its questions as its pages run, and a log's pages their days.
  */
-function pageNumbers(text: string, pageNumber: number, label: string | null | undefined): string[] {
+function pageNumbers(text: string, pageNumber: number, label: PageLabel | null): string[] {
     if (text.length > NUMBERED_TEXT) return [];
     const out: string[] = [];
-    const digits = !!label && /^\p{Nd}+$/u.test(label);
-    if (label && !digits && labelAt(text, label) >= 0) out.push('label');
+    if (label && !label.digits && labelAt(text, label) >= 0) out.push('label');
     let k = -1;
     for (const m of text.matchAll(/\p{Nd}+/gu)) {
         k++;
@@ -215,16 +234,16 @@ function pageNumbers(text: string, pageNumber: number, label: string | null | un
         const value = digitsValue(m[0]);
         if (Number.isNaN(value) || !pageNumberAt(text, m.index!, m.index! + m[0].length)) continue;
         out.push(`${k}|${value - pageNumber}`);
-        if (digits && m[0] === label && !out.includes('label')) out.push('label');
+        if (label?.digits && m[0] === label.text && !out.includes('label')) out.push('label');
     }
     return out;
 }
 
 /** Where a page label that is not digits is written in a line's text as a word of its own, or -1. */
-function labelAt(text: string, label: string): number {
-    const lower = text.toLowerCase(), want = label.toLowerCase();
+function labelAt(text: string, label: PageLabel): number {
+    const lower = text.toLowerCase(), want = label.lower;
     // (Where lower case changes a text's length, its places are not the text's.)
-    if (lower.length !== text.length || want.length !== label.length) return -1;
+    if (lower.length !== text.length) return -1;
     for (let at = lower.indexOf(want); at >= 0; at = lower.indexOf(want, at + 1)) {
         const end = at + want.length;
         if ((at === 0 || !/[\p{L}\p{N}]/u.test(lower[at - 1])) && (end === lower.length || !/[\p{L}\p{N}]/u.test(lower[end]))) return at;
@@ -339,7 +358,7 @@ export function findRunningLines(extracts: readonly PageExtract[], cfg: PdfLayou
             return y < FURNITURE_BAND * shownH || y > (1 - FURNITURE_BAND) * shownH;
         });
         const lines: BandLine[] = [];
-        const label = pageLabels?.[extract.pageNumber - 1];
+        const label = pageLabelOf(pageLabels?.[extract.pageNumber - 1]);
         // The page's lines of each text at each left edge, for a line's text repeated down the band.
         const atLeft = new Map<string, number>();
         const lefts: { left: string; x: number }[] = [];
@@ -352,8 +371,8 @@ export function findRunningLines(extracts: readonly PageExtract[], cfg: PdfLayou
             const numbered = text.length <= 40 ? ownNumberKey(text, extract.pageNumber, label) : null;
             const ownNumber = numbered !== null;
             // (A page label written in the line, "Preface iii", is as one in its key as its numbers are.)
-            const labelled = numbered === null && label && !/^\p{Nd}+$/u.test(label) && text.length <= NUMBERED_TEXT ? labelAt(text, label) : -1;
-            const unlabelled = labelled >= 0 ? `${text.slice(0, labelled)}#${text.slice(labelled + label!.length)}` : text;
+            const labelled = numbered === null && label && !label.digits && text.length <= NUMBERED_TEXT ? labelAt(text, label) : -1;
+            const unlabelled = labelled >= 0 ? `${text.slice(0, labelled)}#${text.slice(labelled + label!.text.length)}` : text;
             const keyText = keyOf(numbered ?? unlabelled.replace(/\p{Nd}+/gu, '#'));
             const edge = band === 'header' ? box.y : shownH - (box.y + box.height);
             const entry = entryFor(band, keyText, edge, box.x);
