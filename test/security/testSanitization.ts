@@ -30,6 +30,7 @@ import { OfficeErrorType } from '../../src/types';
 import { buildTaggedNodes } from '../../src/parsers/pdf/structTree';
 import { computeDocContext } from '../../src/parsers/pdf/textLayout';
 import { MarkedContent } from '../../src/parsers/pdf/actualText';
+import { PdfFile } from '../../src/parsers/pdf/pdfFile';
 import { CffOutlines, nativeUnbrotli, sfntOf, TrueTypeOutlines } from '../../src/generators/pdf/fontFiles';
 import { cffTable, charString, EMPTY } from '../helpers/cffFontWriter';
 import * as zlib from 'zlib';
@@ -4329,11 +4330,11 @@ async function pdfProcessTests(h: {
         flate(Buffer.from('/A BMC EMC\n'.repeat(marks)), '/Type /XObject /Subtype /Form /BBox [0 0 10 10]'),
         ...Array.from({ length: pages }, () => '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 842] /Resources << /Font << /F1 3 0 R >> /XObject << /X0 5 0 R >> >> /Contents 4 0 R >>')]);
     await linear('pdf: a form of 20,000 marked-content spans drawn by 400 pages is read page by page', () => {
-        const pages = n(400), mc = new MarkedContent(new Uint8Array(formPages(pages, 20_000)), pages);
+        const pages = n(400), mc = new MarkedContent(new PdfFile(new Uint8Array(formPages(pages, 20_000)), pages));
         for (let i = 0; i < pages; i++) mc.eventsOf(i);
     }, { label: 'pdf: a form drawn by 400 pages holds the heap', limit: 400e6 });
     const ofThousand = formPages(1000, 250_000);
-    const allPages = new MarkedContent(new Uint8Array(ofThousand), 1000);
+    const allPages = new MarkedContent(new PdfFile(new Uint8Array(ofThousand), 1000));
     let documentEvents = 0;
     for (let i = 0; i < 1000; i++) documentEvents += allPages.eventsOf(i)?.length ?? 0;
     check('pdf: a document\'s marked-content events are bounded', documentEvents <= 10_500_000, `${documentEvents}`);
@@ -4354,12 +4355,48 @@ async function pdfProcessTests(h: {
         try { return push.call(this, chunk, final); } finally { this.ondata = ondata; }
     };
     const inflateStarted = performance.now();
-    try { new MarkedContent(new Uint8Array(bombDoc), 1).eventsOf(0); } finally { Unzlib.prototype.push = push; }
+    try { new MarkedContent(new PdfFile(new Uint8Array(bombDoc), 1)).eventsOf(0); } finally { Unzlib.prototype.push = push; }
     const inflateMs = performance.now() - inflateStarted;
     // The bound is 64 MB inflated for the document; a push of at most 8 KB gives at most about 8.5 MB more.
     check('pdf: a stream inflating to 256 MB is read no further than the inflate bound, a small slice at a time',
         inflateMs < 1500 && inflatedBytes <= 64 * 1024 * 1024 + 9e6 && largestFeed <= 8 * 1024 && fedBytes < quarterGigabyte.length / 2,
         `${Math.round(inflateMs)}ms, ${Math.round(inflatedBytes / 1e6)} MB inflated, fed ${fedBytes} of ${quarterGigabyte.length} bytes, ${largestFeed} at most`);
+    // A simple font's codes are read by their glyphs' names where pdf.js reads them as their own characters
+    // (see glyphNames): a /Differences of a million entries, a /ToUnicode CMap of 100,000 ranges over every
+    // code but the one it lacks, and a page setting 1,000 such fonts are each read in time in proportion,
+    // each font's CMap read once, and the text read by the names.
+    const glyphNamed = (fonts: number, differences: string, cmap: string, shown: string) => {
+        const objs: (string | Buffer)[] = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>', '',
+            `<< /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [${differences}] >>`,
+            flate(Buffer.from(`/CIDInit /ProcSet findresource begin 12 dict begin begincmap 1 begincodespacerange <00> <FF> endcodespacerange\n${cmap}\nendcmap end end`)), ''];
+        const names: string[] = [];
+        let body = '';
+        for (let i = 0; i < fonts; i++) {
+            objs.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding 4 0 R /ToUnicode 5 0 R >>');
+            names.push(`/F${i} ${objs.length} 0 R`);
+            body += `BT /F${i} 6 Tf ${30 + (i % 10) * 55} ${820 - Math.floor(i / 10) * 8} Td (${shown}) Tj ET\n`;
+        }
+        objs[2] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 842] /Resources << /Font << ${names.join(' ')} >> >> /Contents 6 0 R >>`;
+        objs[5] = flate(Buffer.from(body));
+        return pdfFrom(objs);
+    };
+    const printable = Array.from({ length: 95 }, (_, i) => 32 + i).filter(c => c !== 33);
+    const lacking33 = `${printable.length} beginbfchar\n${printable.map(c => `<${c.toString(16)}> <00${c.toString(16)}>`).join('\n')}\nendbfchar`;
+    let longDifferences = { error: '', text: '' } as { error: string; text: string };
+    await linear('pdf: a font of a /Differences of a million entries is read by its glyph names', async () => {
+        longDifferences = await read(glyphNamed(1, `33 /c.sc ${'/a '.repeat(n(1_000_000))}`, lacking33, 'ni!ht'));
+    });
+    check('pdf: a font of a million /Differences entries reads its names', !longDifferences.error && longDifferences.text.includes('nicht'), longDifferences.error || longDifferences.text.slice(0, 80));
+    let ranges = { error: '', text: '' } as { error: string; text: string };
+    await linear('pdf: a /ToUnicode CMap of 100,000 ranges over every code is read in time in proportion', async () => {
+        ranges = await read(glyphNamed(1, '255 /c.sc', `${n(100_000)} beginbfrange\n${'<00> <FE> <0000>\n'.repeat(n(100_000))}endbfrange`, 'ni\\377ht'));
+    });
+    check('pdf: a code a CMap of many ranges lacks reads its name', !ranges.error && ranges.text.includes('nicht'), ranges.error || ranges.text.slice(0, 80));
+    let manyFonts = { error: '', text: '' } as { error: string; text: string };
+    await linear('pdf: a page setting 1,000 fonts read by their glyph names is read', async () => {
+        manyFonts = await read(glyphNamed(n(1_000), '33 /c.sc', lacking33, 'ni!ht'));
+    }, { label: 'pdf: a page of 1,000 fonts read by their glyph names holds the heap', limit: 400e6 });
+    check('pdf: every font of a page of 1,000 reads its names', !manyFonts.error && (manyFonts.text.match(/nicht/g) ?? []).length === 1_000 && !manyFonts.text.includes('ni!ht'), manyFonts.error || manyFonts.text.slice(0, 80));
     check('pdf: a plan of 3,000 symbols is read whole, its paths costing none of the operator budget', !planned.error && planned.pages === 21 && planned.text.includes('Note 20.50') && !planned.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED') && !planned.codes.includes('PDF_NO_TEXT_EXTRACTED'), `${planned.pages} pages ${planned.codes} ${planned.error}`);
     const operatorChecks = async (separateProcess: boolean) => {
         const where = separateProcess ? 'separate process' : 'in process';

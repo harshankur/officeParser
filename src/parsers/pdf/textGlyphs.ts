@@ -25,6 +25,11 @@ import { annotationMatrix, identityMatrix, mulMatrix as mul, toMatrix6 as toMat6
 export interface GlyphFont {
     fontMatrix?: ArrayLike<number>;
     vertical?: boolean;
+    /**
+     * Its codes read by their glyphs' names (see glyphNames), as the page's text items are normalized: a
+     * glyph of such a code that pdf.js read as the code's own character is read so.
+     */
+    codeTexts?: ReadonlyMap<number, string>;
 }
 
 /** One show of text: its start point in user space, the rendering mode and the colour it paints in. */
@@ -63,6 +68,8 @@ export interface PageGlyphs {
     flags: number[];
     /** The text pdf.js's extraction reads of the glyph: none for one it reads as a blank or skips. */
     text: string[];
+    /** The glyphs read by their names (see GlyphFont's codeTexts), by their index, with that text. */
+    named: Map<number, string>;
     /** Every show, for the colour of the text (see pdfColor). */
     shows: TextShow[];
 }
@@ -109,7 +116,7 @@ function translate(m: number[], x: number, y: number): number[] {
  *   its glyphs are then placed with the usual matrix of a thousand units an em.
  */
 export function collectGlyphs(ops: any, OPS: any, fontOf: (id: string) => GlyphFont | undefined): PageGlyphs {
-    const out: PageGlyphs = { count: 0, px: [], py: [], x0: [], y0: [], x1: [], y1: [], em: [], flags: [], text: [], shows: [] };
+    const out: PageGlyphs = { count: 0, px: [], py: [], x0: [], y0: [], x1: [], y1: [], em: [], flags: [], text: [], named: new Map(), shows: [] };
     const fnArray: number[] | undefined = ops?.fnArray;
     const argsArray: any[] | undefined = ops?.argsArray;
     if (!fnArray || !argsArray) return out;
@@ -211,6 +218,9 @@ export function collectGlyphs(ops: any, OPS: any, fontOf: (id: string) => GlyphF
                         out.em.push(em);
                         out.flags.push((blank ? SPACE : 0) | (special?.[2] || special?.[3] ? LOST : 0) | (invisible ? INVISIBLE : 0));
                         out.text.push(special?.[1] || special?.[3] ? '' : unicode);
+                        const code = glyph.originalCharCode;
+                        const named = typeof code === 'number' ? s.font?.codeTexts?.get(code) : undefined;
+                        if (named !== undefined && unicode === String.fromCharCode(code as number)) out.named.set(out.count, named);
                         out.count++;
                     }
                     tm = translate(tm, (width + spacing) * h, 0);
@@ -251,6 +261,8 @@ const NEAR = 0.05;
  *   theirs (a glyph in it pdf.js gave no advance, or one before it in its show): marked `measured`, as
  *   every item matched is, so no later guess at a lost width moves it;
  * - an item whose glyphs are all drawn invisibly is marked `invisible`;
+ * - an item with a glyph read by its name (see GlyphFont's codeTexts) reads that glyph so, where its text
+ *   is its glyphs' in order (see named): "ni!ht" is "nicht";
  * - a blank item pdf.js put before a glyph, for the gap it measured to it, is left out where the gap is
  *   none (the glyph drawn before it ends within a tenth of an em of it, and no space glyph is between):
  *   the gap was measured from where pdf.js lost the widths of the glyphs between. Kept, it is placed over
@@ -261,7 +273,8 @@ const NEAR = 0.05;
  */
 export function measureItems<T extends MeasuredItem>(items: T[], glyphs: PageGlyphs | undefined): T[] {
     if (!glyphs || !glyphs.count) return items;
-    const { px, py, x0, y0, x1, em, flags, text } = glyphs;
+    const { px, py, x0, y0, x1, em, flags } = glyphs;
+    let text = glyphs.text;
     const key = (x: number, y: number) => `${Math.round(x / NEAR)}:${Math.round(y / NEAR)}`;
     const at = new Map<string, number[]>();
     for (let k = 0; k < glyphs.count; k++) {
@@ -312,6 +325,18 @@ export function measureItems<T extends MeasuredItem>(items: T[], glyphs: PageGly
         if (!inOrder[i]) { ends[i] = first[i] + 1; continue; }
         ends[i] = after;
         after = first[i];
+    }
+
+    // The glyphs read by their names, in the items' text (and in what each glyph reads, for the spacing below).
+    if (glyphs.named.size) {
+        text = text.slice();
+        items = items.map((it, i) => {
+            if (first[i] < 0) return it;
+            const read = named(it, first[i], ends[i]);
+            if (!read) return it;
+            for (const k of read.glyphs) text[k] = glyphs.named.get(k)!;
+            return { ...it, str: read.str };
+        });
     }
 
     const level = (t: number[]) => t[0] > 0 && Math.abs(t[1]) <= 1e-6 * t[0] && Math.abs(t[2]) <= 1e-6 * t[0];
@@ -368,6 +393,35 @@ export function measureItems<T extends MeasuredItem>(items: T[], glyphs: PageGly
         out.push(item);
     });
     return out;
+
+    /**
+     * An item's text with its glyphs read by their names (see GlyphFont's codeTexts): its glyphs from `g`
+     * (before `end`) walked along its text, each glyph's text found where the text is at (as pdf.js reads it,
+     * or normalized as pdf.js normalizes an item's), its blanks kept, and a glyph read by its name read so.
+     * Undefined where none is, or its text is not its glyphs' in order (read right to left, composed by
+     * normalizing, or another glyph's than the walk meets): the item is left as pdf.js reads it.
+     */
+    function named(it: T, g: number, end: number): { str: string; glyphs: number[] } | undefined {
+        const str = it.str!;
+        if (it.dir === 'rtl' || RTL.test(str)) return undefined;
+        let out = '', p = 0;
+        const read: number[] = [];
+        for (let k = g; k < end && p < str.length; k++) {
+            const own = text[k].replace(/\s/g, '');
+            if (!own) continue;
+            while (p < str.length && /\s/.test(str[p])) out += str[p++];
+            if (p >= str.length) break;
+            let found = str.startsWith(own, p) ? own : undefined;
+            if (found === undefined) { const normal = own.normalize('NFKC'); if (normal && str.startsWith(normal, p)) found = normal; }
+            if (found === undefined) return undefined;
+            const name = glyphs!.named.get(k);
+            if (name !== undefined) read.push(k);
+            out += name ?? found;
+            p += found.length;
+        }
+        if (!read.length || str.slice(p).trim()) return undefined;
+        return { str: out + str.slice(p), glyphs: read };
+    }
 
     /** The glyph drawn before glyph `g` on its line, past any space glyph (-1 for none), and whether one was passed. */
     function before(g: number): { p: number; spaced: boolean } {

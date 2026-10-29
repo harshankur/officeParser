@@ -8252,6 +8252,82 @@ async function testPdfFormValuesAsText(): Promise<void> {
     assert.deepStrictEqual(stampImage?.bounds && [stampImage.bounds.x, stampImage.bounds.y, stampImage.bounds.width, stampImage.bounds.height], [200, 150, 100, 50], `PDF annotation: a stamp's picture is where the stamp is (${JSON.stringify(stampImage?.bounds)})`);
 }
 
+/**
+ * A simple font's code whose `/Differences` name pdf.js cannot read ("c.sc", a small capital), and whose
+ * `/ToUnicode` CMap has no entry for it, is read by its glyph's name (see glyphNames): pdf.js read it as the
+ * code's own character, "ni!ht" for "nicht", as a government form's subset font has it. A code the CMap
+ * maps, a font with no such name at the code, and a composite font are read as pdf.js reads them.
+ */
+async function testPdfGlyphNames(): Promise<void> {
+    const pdfFrom = (objects: (string | Buffer)[]): Buffer => {
+        const parts: Buffer[] = [Buffer.from('%PDF-1.7\n')];
+        const offsets: number[] = [];
+        let at = parts[0].length;
+        objects.forEach((o, i) => { const b = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), typeof o === 'string' ? Buffer.from(o, 'latin1') : o, Buffer.from('\nendobj\n')]); offsets.push(at); at += b.length; parts.push(b); });
+        parts.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+        return Buffer.concat(parts);
+    };
+    const stream = (content: string, dict = '') => { const data = Buffer.from(content, 'latin1'); return Buffer.concat([Buffer.from(`<< /Length ${data.length} ${dict} >>\nstream\n`), data, Buffer.from('\nendstream')]); };
+    const cmap = (entries: string) => stream(`/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Sub def 1 begincodespacerange <00> <FF> endcodespacerange\n${entries}\nendcmap CMapName currentdict /CMap defineresource pop end end`);
+    /** A ToUnicode CMap mapping the printable ASCII codes to themselves, but those in `lacking`. */
+    const identity = (lacking: number[]) => {
+        const codes = Array.from({ length: 95 }, (_, i) => 32 + i).filter(c => !lacking.includes(c));
+        return cmap(`${codes.length} beginbfchar\n${codes.map(c => `<${c.toString(16)}> <00${c.toString(16)}>`).join('\n')}\nendbfchar`);
+    };
+    const differences = '/Differences [33 /c.sc 34 /Euro 35 /f_l 36 /f_i]';
+    const subsetFont = (encoding: string, toUnicode: boolean) => `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Type /Encoding /BaseEncoding /WinAnsiEncoding ${encoding} >>${toUnicode ? ' /ToUnicode 6 0 R' : ''} >>`;
+    /**
+     * A page of a plain Helvetica (F1, its "!" a real one) and a font of the same name with names in its
+     * encoding (F2, object 5, its CMap object 6), and `more` objects from 8 on (F3 is object 8).
+     */
+    const page = (font: string, toUnicode: Buffer | string, content: string, more: (string | Buffer)[] = []) => pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 7 0 R /F2 5 0 R /F3 8 0 R >> /XObject << /X 8 0 R >> >> /Contents 4 0 R >>',
+        stream(`BT /F1 11 Tf 50 760 Td (Plain Helvetica!) Tj ET\n${content}`), font, toUnicode,
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>', ...more]);
+    const read = async (pdf: Buffer, pdfParserConfig: object = {}) => String((await (await OfficeParser.parseOffice(pdf, { fileType: 'pdf', pdfParserConfig } as any)).to('text')).value);
+    const words = 'BT /F2 11 Tf 50 710 Td (Trifft ni!ht zu, au#erdem $nden) Tj ET';
+
+    // The form's font: its CMap lacks code 33 alone, and maps 35 and 36 to "#" and "$", which stand.
+    const form = page(subsetFont(differences, true), identity([33]), words);
+    for (const config of [{ separateProcess: false }, { separateProcess: true }, { separateProcess: false, normalizeText: false }]) {
+        const text = await read(form, config);
+        assert.ok(text.includes('Trifft nicht zu, au#erdem $nden'), `PDF glyph names: a code its CMap lacks is read by its name, a code it maps as mapped (${JSON.stringify(config)}: ${JSON.stringify(text)})`);
+        assert.ok(text.includes('Plain Helvetica!'), `PDF glyph names: a real "!" of another font of the same name stands (${JSON.stringify(config)}: ${JSON.stringify(text)})`);
+    }
+    // Its CMap mapping code 33 to "!": the "!" stands.
+    const mapped = await read(page(subsetFont(differences, true), identity([]), words));
+    assert.ok(mapped.includes('Trifft ni!ht zu'), `PDF glyph names: a code the CMap maps is read as it maps it (${JSON.stringify(mapped)})`);
+    // No name at the code: the "!" stands.
+    const unnamed = await read(page(subsetFont('', true), identity([33]), words));
+    assert.ok(unnamed.includes('Trifft ni!ht zu'), `PDF glyph names: a code with no name in the encoding is read as pdf.js reads it (${JSON.stringify(unnamed)})`);
+    // No CMap at all: pdf.js reads "f_l" and "f_i" by its own list, and code 33 as "!"; read by its name here.
+    const noCmap = await read(page(subsetFont(differences, false), '<< >>', words));
+    assert.ok(noCmap.includes('Trifft nicht zu, auflerdem finden'), `PDF glyph names: with no CMap, a name pdf.js cannot read is read here, those it can as it reads them (${JSON.stringify(noCmap)})`);
+    // The ligatures' codes lacking from the CMap: read as their components.
+    const ligatures = await read(page(subsetFont(differences, true), identity([33, 35, 36]), words));
+    assert.ok(ligatures.includes('Trifft nicht zu, auflerdem finden'), `PDF glyph names: "f_l" and "f_i" are read as "fl" and "fi" (${JSON.stringify(ligatures)})`);
+    // Names pdf.js cannot read, by the Adobe Glyph List's rules: a suffix left out, an underscore's components
+    // joined, `uniXXXX` read; a control code (pdf.js's own character for it is taken out of the text) too.
+    const rules = await read(page(subsetFont('/Differences [1 /c.sc 37 /f_k 38 /uni00E9.sc 39 /one.osf 40 /T_h.alt]', false), '<< >>',
+        'BT /F2 11 Tf 50 710 Td (ni\\001ht Au\\045 caf\\046 Zimmer \\047 \\050e end) Tj ET'));
+    assert.ok(rules.includes('nicht Aufk café Zimmer 1 The end'), `PDF glyph names: suffixes, ligatures, uniXXXX and control codes are read by their names (${JSON.stringify(rules)})`);
+    // A form drawn with `Do` sets the font in its own resources: its glyphs are read by their names too.
+    const drawn = await read(page(subsetFont(differences, true), identity([33]), 'q /X Do Q', [
+        stream('BT /G 11 Tf 50 710 Td (Formular: ni!ht) Tj ET', '/Type /XObject /Subtype /Form /BBox [0 0 595 842] /Resources << /Font << /G 5 0 R >> >>')]));
+    assert.ok(drawn.includes('Formular: nicht'), `PDF glyph names: a font a form sets is read by its names (${JSON.stringify(drawn)})`);
+    // A composite font is read as pdf.js reads it, whatever the simple fonts beside it are read as.
+    const cid = (simple: string) => page(simple, identity([33]), 'BT /F2 11 Tf 50 710 Td (ni!ht) Tj ET BT /F3 11 Tf 50 690 Td <0048002100690021> Tj ET', [
+        '<< /Type /Font /Subtype /Type0 /BaseFont /Helvetica /Encoding /Identity-H /DescendantFonts [9 0 R] /ToUnicode 10 0 R >>',
+        '<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Helvetica /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 600 >>',
+        cmap('2 beginbfchar\n<0048> <0048>\n<0069> <0069>\nendbfchar')]);
+    const cidRead = (await read(cid(subsetFont(differences, true)))).split('\n');
+    const cidAsRead = (await read(cid(subsetFont('', true)))).split('\n');
+    assert.ok(cidRead.includes('nicht') && cidAsRead.includes('ni!ht'), `PDF glyph names: the simple font beside a composite one is read by its names (${JSON.stringify(cidRead)})`);
+    assert.strictEqual(cidRead[cidRead.length - 1], cidAsRead[cidAsRead.length - 1], `PDF glyph names: a composite font's text is pdf.js's (${JSON.stringify(cidRead)} ${JSON.stringify(cidAsRead)})`);
+    console.log('  PDF glyph names: All assertions passed ✓');
+}
+
 async function testPdfInProcessTurns(): Promise<void> {
     const { deflateSync } = await import('zlib');
     const pdfFrom = (objects: (string | Buffer)[]): Buffer => {
@@ -10072,6 +10148,7 @@ async function runTests(): Promise<void> {
         ['PDF in-process turns', testPdfInProcessTurns],
         ['PDF form metadata and HTML details', testPdfFormMetadataAndHtml],
         ['PDF form values as text', testPdfFormValuesAsText],
+        ['PDF glyph names', testPdfGlyphNames],
         ['Cancellation', testCancellation],
     ];
 

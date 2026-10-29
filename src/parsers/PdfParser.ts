@@ -44,6 +44,8 @@ import { collectColorMarks, ColorLookup, makeColorLookup } from './pdf/pdfColor.
 import { collectGlyphs, GlyphFont, PageGlyphs } from './pdf/textGlyphs.js';
 import { collectShapes, PdfShape, shapeBullets } from './pdf/pdfShapes.js';
 import { MarkedContent, readableItems } from './pdf/actualText.js';
+import { GlyphNames } from './pdf/glyphNames.js';
+import { PdfFile } from './pdf/pdfFile.js';
 import { RuledFrame, ruledFrames, ruledTables, shadeCells } from './pdf/rulings.js';
 import { annotationMatrix, computeRunBox, identityMatrix, mulMatrix, roundBounds, rotateBoundsToRendered, toMatrix6, unionAll } from './pdf/geometry.js';
 import { PageExtract, PdfImage, PdfLayoutConfig, RawRun, ResolvedFont } from './pdf/pdfTypes.js';
@@ -1194,7 +1196,7 @@ async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep
 async function collectPage(
     pdfjs: any, pdfDocument: any, pageNumber: number, config: FullOfficeParserConfig,
     pdfCfg: PdfLayoutConfig, fontCache: Map<string, ResolvedFont>, destCache: Map<string, SectionTarget | null>,
-    sectionLinks: SectionLinks, work: PdfWorkBudget, assets: PdfAssetSession, markedContent?: MarkedContent,
+    sectionLinks: SectionLinks, work: PdfWorkBudget, assets: PdfAssetSession, markedContent?: MarkedContent, glyphNames?: GlyphNames,
 ): Promise<PageExtract | undefined> {
     const page = await work.within(pdfDocument.getPage(pageNumber) as Promise<any>);
     if (!page) return undefined;
@@ -1235,6 +1237,11 @@ async function collectPage(
     // ruling lines (a table of the box beside the label), and the value its appearance draws a colour.
     if (ops && fields.length) ops = withoutFieldDrawings(ops, new Set(fields.map(f => f.id)), pdfjs.OPS);
 
+    // The codes of the page's fonts read by their glyphs' names, where pdf.js reads them as their own
+    // characters ("ni!ht" for "nicht", see glyphNames), normalized as the page's text items are.
+    const codeTexts = ops && !work.spent ? glyphNames?.codeTextsOf(pageNumber - 1, ops, pdfjs.OPS) : undefined;
+    const normalized = (text: string): string => pdfCfg.normalizeText && typeof pdfjs.normalizeUnicode === 'function' ? pdfjs.normalizeUnicode(text) : text;
+
     // The page's glyphs as it draws them: where each is, how far it advances, and whether it is seen (see
     // textGlyphs). The fonts the list names are in `commonObjs` once it is read.
     const glyphFonts = new Map<string, GlyphFont | undefined>();
@@ -1245,6 +1252,8 @@ async function collectPage(
                 const data = page.commonObjs?.has?.(id) ? page.commonObjs.get(id) : undefined;
                 if (data && typeof data === 'object') font = { fontMatrix: Array.isArray(data.fontMatrix) || ArrayBuffer.isView(data.fontMatrix) ? data.fontMatrix : undefined, vertical: !!data.vertical };
             } catch { font = undefined; }
+            const texts = codeTexts?.get(id);
+            if (texts) font = { ...font, codeTexts: new Map([...texts].map(([code, text]) => [code, normalized(text)])) };
             glyphFonts.set(id, font);
         }
         return glyphFonts.get(id);
@@ -2012,14 +2021,17 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     const sectionLinks = new SectionLinks();
     const extracts: PageExtract[] = [];
     // Each page's marked content, read from the file for the ActualText pdf.js leaves out (see actualText),
-    // as each page read asks for it.
-    const markedContent = new MarkedContent(buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer), numPages);
+    // and its fonts' glyph names, for the codes pdf.js reads as their own characters (see glyphNames), as
+    // each page read asks for them.
+    const pdfFile = new PdfFile(buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer), numPages);
+    const markedContent = new MarkedContent(pdfFile);
+    const glyphNames = new GlyphNames(pdfFile);
     for (const pageNum of pageNumbers) {
         checkAbortSignal(config.abortSignal);
         if (work.spent) break;
         work.reading(pageNum);
         try {
-            const extract = await collectPage(pdfjs, pdfDocument, pageNum, config, pdfCfg, fontCache, destCache, sectionLinks, work, assets, markedContent);
+            const extract = await collectPage(pdfjs, pdfDocument, pageNum, config, pdfCfg, fontCache, destCache, sectionLinks, work, assets, markedContent, glyphNames);
             if (extract) extracts.push(extract);
         } catch (e: any) {
             // A page failing because its parse has ended (its process ended with it) is not reported.
