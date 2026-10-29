@@ -8312,8 +8312,10 @@ ${sectioning.filter(Boolean).join('\n')}
             // visitor's browser asks no one else for them. `week` is the last week's downloads and `total`
             // every download since the package was first published; either may be missing.
             async function updateDownloadStats() {
+                // Rounded down, as the "+" says: a million to two decimals (1.26M+, as npm's 1,263,321 a week),
+                // a thousand whole (845k+).
                 const formatNumber = (num) => {
-                    if (num >= 1000000) return (Math.floor(num / 100000) / 10) + 'M+';
+                    if (num >= 1000000) return (Math.floor(num / 10000) / 100) + 'M+';
                     if (num >= 1000) return Math.floor(num / 1000) + 'k+';
                     return num;
                 };
