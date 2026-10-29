@@ -1,0 +1,191 @@
+<p>
+    Fill in a PDF form, save it, and extract its text. You get every label and none of the answers:
+    "Name", "Date of birth", "Country", and nothing after them. The form looks filled on screen, but the
+    values are not where text extraction looks.
+</p>
+<p>
+    Until 8.4.1 that was what officeParser gave you too. This post is about where a filled form keeps its
+    values, how 8.4.1 puts each one back beside its label, and two cases that are not form fields at all
+    but break the same way: a date written one digit to a printed box, and a font that makes "nicht" read
+    as "ni!ht".
+</p>
+
+<h2>Where the Values Are</h2>
+<p>
+    A PDF page has a content stream: the operators that draw its text, lines and pictures. Text extraction
+    reads that stream. A form field is not in it. It is an annotation, a <em>widget</em>, laid over the
+    page at a rectangle of its own, and its value lives in the field's dictionary:
+</p>
+<pre><code>&lt;&lt; /Type /Annot /Subtype /Widget /FT /Tx /T (name)
+   /Rect [160 304 360 324]
+   /V (Ada Lovelace)
+   /AP &lt;&lt; /N 12 0 R &gt;&gt; &gt;&gt;</code></pre>
+<p>
+    <code>/V</code> is the value, and <code>/Rect</code> is where the widget stands: its corners, in points.
+    Here the field and its widget are one dictionary. They can also be two, as pdf-lib writes them: the
+    field holding its name, type and value, the widget its rectangle and appearance. <code>/AP</code> is its appearance: a small drawing of its own, with the
+    box and the text in it, which a viewer paints over the page. A check box has no text value at all.
+    Its <code>/V</code> is a name: its "on" state, often <code>/Yes</code>, or <code>/Off</code>. Its appearance
+    has one drawing for each state. A radio group's value names the button that is on. A drop-down's value is one of its
+    options, which may be a code (<code>HH</code>) shown as something else (<code>Hamburg</code>).
+</p>
+<p>
+    So a reader that takes the page's text gets the labels, which the page draws, and not the values,
+    which the widgets draw. I built a small membership form with
+    <a href="https://pdf-lib.js.org/">pdf-lib</a>, filled it in, and read it with officeParser 8.4.0:
+</p>
+<pre><code>Membership application
+Name
+Date of birth
+Plan                    Basic          Premium
+Country
+   Send me the newsletter
+   Call me about events</code></pre>
+<p>
+    8.4.0 did list the form's fields, by name, in <code>metadata.nativeProperties.formFields</code>. But
+    pdf.js lists a field whose widget is a dictionary of its own twice: first an entry for the field, with
+    no type or value, then one for each widget, which carry both. 8.4.0 took the first. So in a form like
+    mine, made with pdf-lib, every entry came out as <code>{ value: undefined, type: '' }</code>, and a
+    filled form converted to Markdown or Word came out with its questions and none of its answers. In 8.4.1 <code>formFields</code> gives each field's type and value
+    (<code>name: { value: 'Ada Lovelace', type: 'text', defaultValue: '' }</code>), and the values are in the
+    text as well.
+</p>
+
+<h2>A Value Is Text at Its Field</h2>
+<p>
+    In 8.4.1 each widget's value becomes a run of text on its page, at the widget's rectangle, before the
+    page is laid out. From there it is text like any other. It joins the line its label is on, it is read
+    in reading order, and in a table it lands in its cell. The same form now reads:
+</p>
+<pre><code>import { parseOffice } from 'officeparser';
+
+const ast = await parseOffice('application.pdf');
+console.log((await ast.to('text')).value);</code></pre>
+<pre><code>Membership application
+Name                  Ada Lovelace
+Date of birth         10121815
+Plan                  ☐  Basic       ☒  Premium
+Country               United Kingdom
+☒    Send me the newsletter
+☐    Call me about events</code></pre>
+<p>
+    Each kind of field has its own rule for what it shows:
+</p>
+<table>
+    <thead>
+        <tr><th>Field</th><th>Read as</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>Text</td><td>Its value, line by line for a field of several lines</td></tr>
+        <tr><td>Password</td><td>A bullet for each character, as the page shows it, never the password</td></tr>
+        <tr><td>Check box, radio button</td><td>☒ where the field's value is this widget's own "on" state, else ☐</td></tr>
+        <tr><td>Drop-down, list</td><td>The text of the selected options, not their codes</td></tr>
+        <tr><td>Push button, signature</td><td>Nothing: a button's caption is its drawing, and a signature is not text</td></tr>
+    </tbody>
+</table>
+<p>
+    ☒ and ☐ are the characters U+2612 and U+2610, so a checked box survives into a plain text file, a CSV
+    cell or a chunk for retrieval, where a styled check mark would not. The "on" state matters for radio
+    buttons. Each button in a group has its own name for "on" (say <code>/basic</code> and <code>/premium</code>),
+    and the group's value is one of those names, so each button is ticked only where the value is its own.
+</p>
+<p>
+    The text never shows a password, but <code>formFields</code> holds every value as the file stores it,
+    a password field's included, so treat it as you would the file itself.
+</p>
+<p>
+    One thing to get right was the value's size. Form tools often size the value to its box, so a name can
+    be set in 20 points beside an 11-point label. Laid out at 20 points, it would be taller than the rest of
+    the line, take a line of its own and read as a heading. So a value is laid out no larger than the page's
+    text, and stays on its label's line, but it keeps its own size (<code>formatting.size</code>) for the
+    writers that show it.
+</p>
+
+<h2>What It Leaves Out</h2>
+<p>
+    A form carries more than a person sees. Some fields are hidden on purpose, with the hidden flag set.
+    Calculation forms often hold working values in fields of no size, at <code>[0 0 0 0]</code>. And a
+    field can stand outside the page as it is shown: off the page, or outside its crop box. A viewer shows
+    none of these, so officeParser does not read them as the page's text. Their values are still in
+    <code>formFields</code> for anyone who wants them.
+</p>
+<p>
+    A widget's appearance is a drawing, and officeParser reads the lines and pictures annotations draw: a
+    stamp's picture, for one, which 8.4.1 also stopped placing at the page's corner. For a field read as its
+    value, that drawing is left out, so the border around a field is not taken for a table, and a comb
+    field's dividers do not cut its value into cells.
+</p>
+
+<h2>A Date One Digit to a Box</h2>
+<p>
+    Forms like to ask for dates and reference numbers one character per box. A real form field can do this.
+    A <em>comb</em> field has a fixed number of characters (<code>/MaxLen</code>) and spreads them out one per
+    box. That one is easy: it is a single field with a single value, and 8.4.1 reads it whole.
+</p>
+<p>
+    The hard case is a printed form. The boxes are lines drawn on the page, and the digits are text that
+    a program set inside them. Nothing says the eight digits are one date. To a layout engine, a row of
+    ruled boxes with something in each looks like a table, and that is what 8.4.0 made of it:
+</p>
+<pre><code>Date of birth        1  0  1  2  1  8  1  5</code></pre>
+<p>
+    That is a table of one row and eight cells, each holding one digit, and in the document's order it came
+    before its own label. 8.4.1 looks for this shape, a <em>comb</em> drawn on the page. It is a row of
+    boxes that are alike, about square, and fit closely around their characters, with one character at most
+    in each.
+    It reads that row as one value where the boxes are, so it joins its label:
+</p>
+<pre><code>Date of birth 10121815</code></pre>
+<p>
+    The rule has to be careful, because the same shape is also a real table. A feedback form's "How did
+    we do?" over boxes of 1 to 5 is five choices, not the number 12345. So a row stays a table when its
+    characters count like a scale (1 2 3 4 5, 1 3 5 7 9, the grades A B C D F), when its letters sit in
+    wide boxes, when the boxes make a grid of two rows, or when the boxes hold words. Characters spaced
+    apart with no boxes around them are read as before. In my test page the scale came through as five
+    cells, as it should. It still comes before its question in the document's order, though, which is a
+    reading-order problem I have not solved yet.
+</p>
+
+<h2>"ni!ht"</h2>
+<p>
+    The last fix has nothing to do with fields, but it turned up in a form, where every "nicht" read as
+    "ni!ht". The form's font was a subset, cut down to the characters the file uses, and its encoding gave
+    some codes glyph names of their own:
+</p>
+<pre><code>/Encoding &lt;&lt; /BaseEncoding /WinAnsiEncoding
+             /Differences [33 /c.sc] &gt;&gt;</code></pre>
+<p>
+    Code 33 draws the glyph <code>c.sc</code>, a small capital c. A PDF tells a reader which character a
+    code means through its <code>/ToUnicode</code> CMap, and this one had no entry for code 33. pdf.js,
+    which officeParser reads PDFs with, does not know the name <code>c.sc</code> either, so it fell back to
+    the code itself: character 33, which is "!".
+</p>
+<p>
+    The name was the answer all along. The Adobe Glyph List's specification has rules for reading a
+    glyph's name: what
+    comes after a period is a variant's suffix, an underscore joins the parts of a ligature, and
+    <code>uniXXXX</code> names a code point. So <code>c.sc</code> is "c", <code>T_h.alt</code> is "Th", and
+    <code>uni00E9.sc</code> is "é". Poppler reads names this way. pdf.js does not keep a font's encoding where
+    the text is read, so officeParser now reads the encoding from the file itself, for simple fonts only: those of one byte
+    to a character. It
+    uses the name only for a code that pdf.js read as the code's own character. A code the CMap does map is
+    read as mapped, and a composite font, as CJK text uses, is read as before. It cannot do this in an encrypted file, whose
+    streams it does not decrypt, so there the text still reads as pdf.js reads it. Beyond <code>uniXXXX</code>
+    and <code>uXXXX</code> names, the names it knows cover Latin, Greek and the common marks and ligatures, not the whole Adobe
+    Glyph List.
+</p>
+
+<h2>What Is Still Hard</h2>
+<p>
+    A form is a set of values and a page that shows them. 8.4.1 reads both as one document, but some of it is
+    still a guess. Placing a value beside its label depends on where the label is drawn, and a form with
+    the label under its field, or far to its left across a gap, may join them in an order a person would
+    not. The comb rule depends on the boxes' shape and the characters in them, so a comb with an odd shape,
+    or one whose characters happen to count like a scale (a reference "12345"), is read as a table. Neither
+    loses the value: it is still in the text, and a form field's value is also in <code>formFields</code>
+    under its field's name.
+</p>
+<p>
+    The test I care about is the one I started with. Fill in a form, extract its text, and get the answers
+    as well as the questions.
+</p>

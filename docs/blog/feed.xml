@@ -5,8 +5,400 @@
     <link>https://officeparser.harshankur.com/blog/</link>
     <description>How document formats work inside, how officeParser reads and writes them, where it falls short, and how to chunk documents for retrieval. Written by Harsh Ankur, author of officeParser.</description>
     <language>en</language>
-    <lastBuildDate>Wed, 28 Oct 2026 00:00:00 GMT</lastBuildDate>
+    <lastBuildDate>Thu, 29 Oct 2026 00:00:00 GMT</lastBuildDate>
     <atom:link href="https://officeparser.harshankur.com/blog/feed.xml" rel="self" type="application/rss+xml"/>
+    <item>
+      <title>Reading a Filled PDF Form: The Values Are Not in the Page</title>
+      <link>https://officeparser.harshankur.com/blog/reading-a-filled-pdf-form.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/reading-a-filled-pdf-form.html</guid>
+      <pubDate>Thu, 29 Oct 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Format Deep Dives</category>
+      <description>Where a filled PDF form keeps its values, how officeParser 8.4.1 reads each one beside its label, and two cases that break the same way: a date one digit to a printed box, and a font that reads &quot;nicht&quot; as &quot;ni!ht&quot;.</description>
+      <content:encoded><![CDATA[<p>
+    Fill in a PDF form, save it, and extract its text. You get every label and none of the answers:
+    "Name", "Date of birth", "Country", and nothing after them. The form looks filled on screen, but the
+    values are not where text extraction looks.
+</p>
+<p>
+    Until 8.4.1 that was what officeParser gave you too. This post is about where a filled form keeps its
+    values, how 8.4.1 puts each one back beside its label, and two cases that are not form fields at all
+    but break the same way: a date written one digit to a printed box, and a font that makes "nicht" read
+    as "ni!ht".
+</p>
+
+<h2>Where the Values Are</h2>
+<p>
+    A PDF page has a content stream: the operators that draw its text, lines and pictures. Text extraction
+    reads that stream. A form field is not in it. It is an annotation, a <em>widget</em>, laid over the
+    page at a rectangle of its own, and its value lives in the field's dictionary:
+</p>
+<pre><code>&lt;&lt; /Type /Annot /Subtype /Widget /FT /Tx /T (name)
+   /Rect [160 304 360 324]
+   /V (Ada Lovelace)
+   /AP &lt;&lt; /N 12 0 R &gt;&gt; &gt;&gt;</code></pre>
+<p>
+    <code>/V</code> is the value, and <code>/Rect</code> is where the widget stands: its corners, in points.
+    Here the field and its widget are one dictionary. They can also be two, as pdf-lib writes them: the
+    field holding its name, type and value, the widget its rectangle and appearance. <code>/AP</code> is its appearance: a small drawing of its own, with the
+    box and the text in it, which a viewer paints over the page. A check box has no text value at all.
+    Its <code>/V</code> is a name: its "on" state, often <code>/Yes</code>, or <code>/Off</code>. Its appearance
+    has one drawing for each state. A radio group's value names the button that is on. A drop-down's value is one of its
+    options, which may be a code (<code>HH</code>) shown as something else (<code>Hamburg</code>).
+</p>
+<p>
+    So a reader that takes the page's text gets the labels, which the page draws, and not the values,
+    which the widgets draw. I built a small membership form with
+    <a href="https://pdf-lib.js.org/">pdf-lib</a>, filled it in, and read it with officeParser 8.4.0:
+</p>
+<pre><code>Membership application
+Name
+Date of birth
+Plan                    Basic          Premium
+Country
+   Send me the newsletter
+   Call me about events</code></pre>
+<p>
+    8.4.0 did list the form's fields, by name, in <code>metadata.nativeProperties.formFields</code>. But
+    pdf.js lists a field whose widget is a dictionary of its own twice: first an entry for the field, with
+    no type or value, then one for each widget, which carry both. 8.4.0 took the first. So in a form like
+    mine, made with pdf-lib, every entry came out as <code>{ value: undefined, type: '' }</code>, and a
+    filled form converted to Markdown or Word came out with its questions and none of its answers. In 8.4.1 <code>formFields</code> gives each field's type and value
+    (<code>name: { value: 'Ada Lovelace', type: 'text', defaultValue: '' }</code>), and the values are in the
+    text as well.
+</p>
+
+<h2>A Value Is Text at Its Field</h2>
+<p>
+    In 8.4.1 each widget's value becomes a run of text on its page, at the widget's rectangle, before the
+    page is laid out. From there it is text like any other. It joins the line its label is on, it is read
+    in reading order, and in a table it lands in its cell. The same form now reads:
+</p>
+<pre><code>import { parseOffice } from 'officeparser';
+
+const ast = await parseOffice('application.pdf');
+console.log((await ast.to('text')).value);</code></pre>
+<pre><code>Membership application
+Name                  Ada Lovelace
+Date of birth         10121815
+Plan                  ☐  Basic       ☒  Premium
+Country               United Kingdom
+☒    Send me the newsletter
+☐    Call me about events</code></pre>
+<p>
+    Each kind of field has its own rule for what it shows:
+</p>
+<table role="table">
+    <thead role="rowgroup">
+        <tr role="row"><th role="columnheader">Field</th><th role="columnheader">Read as</th></tr>
+    </thead>
+    <tbody role="rowgroup">
+        <tr role="row"><td role="cell">Text</td><td role="cell" data-label="Read as">Its value, line by line for a field of several lines</td></tr>
+        <tr role="row"><td role="cell">Password</td><td role="cell" data-label="Read as">A bullet for each character, as the page shows it, never the password</td></tr>
+        <tr role="row"><td role="cell">Check box, radio button</td><td role="cell" data-label="Read as">☒ where the field's value is this widget's own "on" state, else ☐</td></tr>
+        <tr role="row"><td role="cell">Drop-down, list</td><td role="cell" data-label="Read as">The text of the selected options, not their codes</td></tr>
+        <tr role="row"><td role="cell">Push button, signature</td><td role="cell" data-label="Read as">Nothing: a button's caption is its drawing, and a signature is not text</td></tr>
+    </tbody>
+</table>
+<p>
+    ☒ and ☐ are the characters U+2612 and U+2610, so a checked box survives into a plain text file, a CSV
+    cell or a chunk for retrieval, where a styled check mark would not. The "on" state matters for radio
+    buttons. Each button in a group has its own name for "on" (say <code>/basic</code> and <code>/premium</code>),
+    and the group's value is one of those names, so each button is ticked only where the value is its own.
+</p>
+<p>
+    The text never shows a password, but <code>formFields</code> holds every value as the file stores it,
+    a password field's included, so treat it as you would the file itself.
+</p>
+<p>
+    One thing to get right was the value's size. Form tools often size the value to its box, so a name can
+    be set in 20 points beside an 11-point label. Laid out at 20 points, it would be taller than the rest of
+    the line, take a line of its own and read as a heading. So a value is laid out no larger than the page's
+    text, and stays on its label's line, but it keeps its own size (<code>formatting.size</code>) for the
+    writers that show it.
+</p>
+
+<h2>What It Leaves Out</h2>
+<p>
+    A form carries more than a person sees. Some fields are hidden on purpose, with the hidden flag set.
+    Calculation forms often hold working values in fields of no size, at <code>[0 0 0 0]</code>. And a
+    field can stand outside the page as it is shown: off the page, or outside its crop box. A viewer shows
+    none of these, so officeParser does not read them as the page's text. Their values are still in
+    <code>formFields</code> for anyone who wants them.
+</p>
+<p>
+    A widget's appearance is a drawing, and officeParser reads the lines and pictures annotations draw: a
+    stamp's picture, for one, which 8.4.1 also stopped placing at the page's corner. For a field read as its
+    value, that drawing is left out, so the border around a field is not taken for a table, and a comb
+    field's dividers do not cut its value into cells.
+</p>
+
+<h2>A Date One Digit to a Box</h2>
+<p>
+    Forms like to ask for dates and reference numbers one character per box. A real form field can do this.
+    A <em>comb</em> field has a fixed number of characters (<code>/MaxLen</code>) and spreads them out one per
+    box. That one is easy: it is a single field with a single value, and 8.4.1 reads it whole.
+</p>
+<p>
+    The hard case is a printed form. The boxes are lines drawn on the page, and the digits are text that
+    a program set inside them. Nothing says the eight digits are one date. To a layout engine, a row of
+    ruled boxes with something in each looks like a table, and that is what 8.4.0 made of it:
+</p>
+<pre><code>Date of birth        1  0  1  2  1  8  1  5</code></pre>
+<p>
+    That is a table of one row and eight cells, each holding one digit, and in the document's order it came
+    before its own label. 8.4.1 looks for this shape, a <em>comb</em> drawn on the page. It is a row of
+    boxes that are alike, about square, and fit closely around their characters, with one character at most
+    in each.
+    It reads that row as one value where the boxes are, so it joins its label:
+</p>
+<pre><code>Date of birth 10121815</code></pre>
+<p>
+    The rule has to be careful, because the same shape is also a real table. A feedback form's "How did
+    we do?" over boxes of 1 to 5 is five choices, not the number 12345. So a row stays a table when its
+    characters count like a scale (1 2 3 4 5, 1 3 5 7 9, the grades A B C D F), when its letters sit in
+    wide boxes, when the boxes make a grid of two rows, or when the boxes hold words. Characters spaced
+    apart with no boxes around them are read as before. In my test page the scale came through as five
+    cells, as it should. It still comes before its question in the document's order, though, which is a
+    reading-order problem I have not solved yet.
+</p>
+
+<h2>"ni!ht"</h2>
+<p>
+    The last fix has nothing to do with fields, but it turned up in a form, where every "nicht" read as
+    "ni!ht". The form's font was a subset, cut down to the characters the file uses, and its encoding gave
+    some codes glyph names of their own:
+</p>
+<pre><code>/Encoding &lt;&lt; /BaseEncoding /WinAnsiEncoding
+             /Differences [33 /c.sc] &gt;&gt;</code></pre>
+<p>
+    Code 33 draws the glyph <code>c.sc</code>, a small capital c. A PDF tells a reader which character a
+    code means through its <code>/ToUnicode</code> CMap, and this one had no entry for code 33. pdf.js,
+    which officeParser reads PDFs with, does not know the name <code>c.sc</code> either, so it fell back to
+    the code itself: character 33, which is "!".
+</p>
+<p>
+    The name was the answer all along. The Adobe Glyph List's specification has rules for reading a
+    glyph's name: what
+    comes after a period is a variant's suffix, an underscore joins the parts of a ligature, and
+    <code>uniXXXX</code> names a code point. So <code>c.sc</code> is "c", <code>T_h.alt</code> is "Th", and
+    <code>uni00E9.sc</code> is "é". Poppler reads names this way. pdf.js does not keep a font's encoding where
+    the text is read, so officeParser now reads the encoding from the file itself, for simple fonts only: those of one byte
+    to a character. It
+    uses the name only for a code that pdf.js read as the code's own character. A code the CMap does map is
+    read as mapped, and a composite font, as CJK text uses, is read as before. It cannot do this in an encrypted file, whose
+    streams it does not decrypt, so there the text still reads as pdf.js reads it. Beyond <code>uniXXXX</code>
+    and <code>uXXXX</code> names, the names it knows cover Latin, Greek and the common marks and ligatures, not the whole Adobe
+    Glyph List.
+</p>
+
+<h2>What Is Still Hard</h2>
+<p>
+    A form is a set of values and a page that shows them. 8.4.1 reads both as one document, but some of it is
+    still a guess. Placing a value beside its label depends on where the label is drawn, and a form with
+    the label under its field, or far to its left across a gap, may join them in an order a person would
+    not. The comb rule depends on the boxes' shape and the characters in them, so a comb with an odd shape,
+    or one whose characters happen to count like a scale (a reference "12345"), is read as a table. Neither
+    loses the value: it is still in the text, and a form field's value is also in <code>formFields</code>
+    under its field's name.
+</p>
+<p>
+    The test I care about is the one I started with. Fill in a form, extract its text, and get the answers
+    as well as the questions.
+</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>Headers and Footers a PDF Never Marked</title>
+      <link>https://officeparser.harshankur.com/blog/headers-and-footers-a-pdf-never-marked.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/headers-and-footers-a-pdf-never-marked.html</guid>
+      <pubDate>Thu, 29 Oct 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Format Deep Dives</category>
+      <description>How officeParser 8.4.1 finds an untagged PDF&#39;s running headers and footers by comparing its pages, turns a printed page number back into a field, and leaves a header in its pages when no single header could hold it.</description>
+      <content:encoded><![CDATA[<p>
+    Convert a forty-page report from PDF to text and count how often you read its "Page N of 40" line and
+    the report's title. In a Word document that is never a question: the header is a part of its own,
+    written once, and the page number in it is a field that Word fills in on each page. A PDF has no such
+    part. Its header is just text drawn near the top of every page, forty times over.
+</p>
+<p>
+    Until 8.4.1 officeParser read it that way, as body text, on every page. This post is about how 8.4.1
+    finds a PDF's running headers and footers when nothing marks them, how it turns a printed "3" back into
+    a page number field, and why it leaves some headers where they are.
+</p>
+
+<h2>When the PDF Says So</h2>
+<p>
+    A <em>tagged</em> PDF does mark them. Its text is in a structure tree of headings, paragraphs and
+    tables, and content outside the structure is wrapped as an <em>artifact</em>:
+</p>
+<pre><code>/Artifact &lt;&lt; /Type /Pagination /Subtype /Footer &gt;&gt; BDC
+  BT /F1 9 Tf 175 30 Td (Page 3 of 4) Tj ET
+EMC</code></pre>
+<p>
+    officeParser already read a tagged PDF's artifacts in the top and bottom 15% of a page into
+    <code>auxiliary.headers</code> and <code>auxiliary.footers</code>, where it puts a Word document's
+    header. Many PDFs are not tagged, though. One from an older word processor or a reporting tool is
+    often just text at positions. Here is a small one I made with pdf-lib: four
+    pages of garden notes, each with a header, a heading, a line of text and a footer. officeParser 8.4.0
+    read it like this:
+</p>
+<pre><code>Field Notes, Spring 2026
+Planting
+The beds went in on the first dry week of March.
+
+                            Page 1 of 4
+
+Field Notes, Spring 2026
+Watering
+Rain did most of the work until the middle of April.
+
+                             Page 2 of 4
+…</code></pre>
+
+<h2>Comparing the Pages</h2>
+<p>
+    Nothing on one page marks its header, so 8.4.1 looks across the pages. It takes each line in a page's
+    top or bottom 15% and compares it with the lines in the same band on the other pages. Two lines match
+    when they sit the same distance from the page's edge (within 2 points), start at the same left edge
+    (within 4), and say the same thing. A line is a running line when it is on at least two in five of the
+    pages read, and on three of them at least.
+</p>
+<p>
+    "Say the same thing" is the hard part, because a footer's whole point is that it changes: "Page 1 of
+    4", "Page 2 of 4". So before lines are compared, the numbers in them that are the page's own are set
+    aside, and "Page 1 of 4" on page 1 and "Page 2 of 4" on page 2 become the same line. A number is set
+    aside when it counts up one a page ("3" on page 3 and "4" on page 4, or "149" and "150" in an article
+    printed from 147) and it is set apart as a page number is: alone on the line ("3", "- 3 -"), after a
+    word like "Page", as "3 of 4", or at the end after a bar ("Annual Report | 3"). A number after any
+    other word names something of its own. Only a number that is the page's own, a "3" on page 3, later
+    becomes a page field. A line that is the page's number and nothing more ("3", "- 3 -", "Page 3 of 4")
+    counts on two pages, so a two-page letter's numbers are found.
+</p>
+<p>
+    Then there are the lines that look like headers and are not. Each of these stays in the page's text:
+</p>
+<ul>
+    <li><strong>A number that names something else.</strong> "Question 3" at the top of page 3 and
+        "Question 4" at the top of page 4 are two questions, not one header, even though their numbers
+        match the pages'.</li>
+    <li><strong>A date, or a serial or ticket number</strong>, which changes in ways no page count
+        explains.</li>
+    <li><strong>A heading.</strong> A line larger than the body's text is the page's, and so is everything
+        between it and the page's text, even when it is repeated on every page.</li>
+    <li><strong>A table's repeated head row.</strong> It is repeated at the top of each page the table runs
+        on, but it stands close to the rows under it, so it reads with them. A running header stands apart from
+        the text below it by at least its own height.</li>
+</ul>
+<p>
+    On the garden notes, the header and the footer are each the same on all four pages once the numbers are
+    blanked, and both are smaller than the text and stand well apart from it. They go to
+    <code>auxiliary</code>, and the text is the notes alone:
+</p>
+<pre><code>Planting
+The beds went in on the first dry week of March.
+
+Watering
+Rain did most of the work until the middle of April.
+…</code></pre>
+
+<h2>A Printed "3" Becomes a Field</h2>
+<p>
+    Taking the footer out of the text is half the job. A writer that lays out pages, such as Word, ODT, RTF
+    or LaTeX, puts it back as a real footer, and the footer it writes has to number its own pages. If
+    officeParser kept "Page 1 of 4" as text, every page of the Word file would say "Page 1 of 4". In
+    8.4.1 the numbers that matched the page become page fields in the AST. The page's own number is
+    marked <code>metadata.field: 'page'</code> and the page count <code>'pages'</code>. Each writer then
+    writes the field its format has:
+</p>
+<pre><code>&lt;w:t&gt;Page &lt;/w:t&gt;&lt;w:fldSimple w:instr=" PAGE "&gt;…1…&lt;/w:fldSimple&gt;
+&lt;w:t&gt; of &lt;/w:t&gt;&lt;w:fldSimple w:instr=" NUMPAGES "&gt;…4…&lt;/w:fldSimple&gt;</code></pre>
+<p>
+    That is the footer of <code>ast.to('docx')</code>, shortened. In LaTeX output the same footer is
+    <code>\thepage{}</code> and <code>\pageref*{LastPage}</code>, with the <code>lastpage</code> package for
+    the count. Before 8.4.1 the LaTeX writer printed the number that was saved, the same on every page, and
+    did that for a Word or ODT document's page fields too. The page number keeps its style: where the
+    PDF's page labels number its pages in roman numerals, the field is in roman numerals too.
+</p>
+<p>
+    There is one exception. When you read only part of a PDF, with a <code>pageRange</code> that starts
+    after page 1, a field would number the output's first page 1 where the PDF printed 5. So the numbers
+    are not made fields, and since the footer then reads differently on each page, it stays in each page's
+    text as it was printed. A range from page 1 that stops early does get a page field, but its count of
+    pages stays as printed, since a field would count only the pages read.
+</p>
+
+<h2>Headers That Stay in Their Pages</h2>
+<p>
+    Finding running lines is per line. Moving them to <code>auxiliary</code> is a choice for the whole
+    document, made for the header and the footer apart, and it has to answer to the writers. A writer that
+    lays out pages prints a header from <code>auxiliary</code> on every page. So a header goes there only if it is the same on every
+    page read, its page numbers aside. I ran five small documents of six pages each through 8.4.1 to show
+    where the line falls:
+</p>
+<table role="table">
+    <thead role="rowgroup">
+        <tr role="row"><th role="columnheader">The header is</th><th role="columnheader">Where it goes</th></tr>
+    </thead>
+    <tbody role="rowgroup">
+        <tr role="row"><td role="cell">The same on every page</td><td role="cell" data-label="Where it goes"><code>auxiliary.headers</code></td></tr>
+        <tr role="row"><td role="cell">A chapter's head, "Chapter 1" on two pages, then "Chapter 2"</td><td role="cell" data-label="Where it goes">Stays in each page's text</td></tr>
+        <tr role="row"><td role="cell">On some pages only</td><td role="cell" data-label="Where it goes">Stays in each page's text</td></tr>
+        <tr role="row"><td role="cell">On every page but the first, a cover</td><td role="cell" data-label="Where it goes"><code>auxiliary.headers</code></td></tr>
+        <tr role="row"><td role="cell">One on the cover, another on every later page</td><td role="cell" data-label="Where it goes">The cover's stays on the cover, the other goes to <code>auxiliary.headers</code></td></tr>
+    </tbody>
+</table>
+<p>
+    A chapter's head is a running line, but no single header could print it, so moving it would lose the
+    second chapter's. The same goes for a header that only some pages have. A cover is the one case I
+    allowed. The first page of three or more may have no header at all (in an untagged PDF the others must
+    still be three, so the header is found at all). If it has a header of its own while
+    every later page agrees on another, the cover's stays on the cover and the rest go to
+    <code>auxiliary</code>. These rules for what stays in the pages apply to a tagged PDF's artifacts
+    too. Before 8.4.1 a tagged PDF's chapter
+    heads went to <code>auxiliary</code> whatever they said, so Word output printed the first chapter's
+    head on every page and lost the rest.
+</p>
+<p>
+    The rule also puts a header that stays back where it was drawn: the header before the page's text, and
+    the footer after it. And a header's line is a paragraph, never a heading, even where a tagged PDF set
+    it larger than the text, so a document's outline does not fill up with its running titles.
+</p>
+
+<h2>Choosing for Yourself</h2>
+<p>
+    Two settings change all of this:
+</p>
+<pre><code>// Every page keeps its own header and footer, where they stand.
+await parseOffice('notes.pdf', { pdfParserConfig: { keepHeadersAndFootersInPages: true } });
+
+// No headers or footers at all.
+await parseOffice('notes.pdf', { ignoreHeadersAndFooters: true });</code></pre>
+<p>
+    The first is for output that shows each page as it was, such as a slide per page, or for when you want
+    the running title in the text. The page numbers stay fields there too. The second drops every line
+    found to repeat at the top or bottom of the pages, including the ones the default keeps in their pages,
+    such as a chapter's running head.
+</p>
+
+<h2>What It Does Not Do Yet</h2>
+<p>
+    A few limits are worth knowing. A book often prints one head on even pages and another on odd ones: the
+    book's title on the left, the chapter's on the right. officeParser finds these lines, but it does not yet
+    write even- and odd-page headers, so they stay in their pages. And when a cover has no header, the
+    other pages' header goes to <code>auxiliary</code>, but officeParser's writers do not yet give a PDF's
+    cover a first-page header of its own, so the cover gets that header too. Roman page numbers are read as
+    page numbers only where the PDF's page labels say so: without labels, "i, ii, iii" stay in the text. Front matter numbered i to iii before a body numbered in
+    digits has a footer that changes its style partway, so it stays in its pages as printed. And an article
+    cut from a journal, its pages printed from 147, keeps its page numbers in its text, because they are not
+    the pages' own numbers.
+</p>
+<p>
+    None of these loses text. That was the rule I held the whole feature to. When officeParser is not
+    sure a line is a header that one header part could hold, it leaves the line on its page. A repeated
+    title in your text is a nuisance, but a chapter heading that disappears is a bug.
+</p>]]></content:encoded>
+    </item>
     <item>
       <title>Laying Out a Page From Scratch: Text Around a Floating Frame</title>
       <link>https://officeparser.harshankur.com/blog/laying-out-a-page-around-a-floating-frame.html</link>

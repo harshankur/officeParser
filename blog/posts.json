@@ -14,6 +14,24 @@
     ],
     "posts": [
         {
+            "slug": "reading-a-filled-pdf-form",
+            "title": "Reading a Filled PDF Form: The Values Are Not in the Page",
+            "shortTitle": "Reading a Filled PDF Form",
+            "category": "deep-dive",
+            "published": "2026-10-29",
+            "description": "Where a filled PDF form keeps its values, how officeParser 8.4.1 reads each one beside its label, and two cases that break the same way: a date one digit to a printed box, and a font that reads \"nicht\" as \"ni!ht\".",
+            "deck": "Extract the text of a filled PDF form and you get the questions without the answers. The values live in widgets laid over the page, not in the page itself, and putting them back beside their labels takes more than reading them."
+        },
+        {
+            "slug": "headers-and-footers-a-pdf-never-marked",
+            "title": "Headers and Footers a PDF Never Marked",
+            "shortTitle": "Running Headers in a PDF",
+            "category": "deep-dive",
+            "published": "2026-10-29",
+            "description": "How officeParser 8.4.1 finds an untagged PDF's running headers and footers by comparing its pages, turns a printed page number back into a field, and leaves a header in its pages when no single header could hold it.",
+            "deck": "A Word document's header is a part of its own, with a page number field in it. A PDF's is text drawn again on every page. Getting the header back means comparing the pages, and knowing when not to."
+        },
+        {
             "slug": "laying-out-a-page-around-a-floating-frame",
             "title": "Laying Out a Page From Scratch: Text Around a Floating Frame",
             "shortTitle": "Text Around a Floating Frame",
