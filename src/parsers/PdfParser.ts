@@ -32,7 +32,7 @@
 import { zlibSync } from 'fflate';
 import { passwordAttemptLimit } from '../crypto/decryptContainer.js';
 import { DEFAULT_OFFICE_PARSER_CONFIG, DEFAULT_PDF_WORKER_SRC } from '../defaults.js';
-import { FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { FullOfficeParserConfig, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { parseOfficeDate } from '../utils/dateUtils.js';
 import { assertNode, isBrowser } from '../utils/envUtils.js';
@@ -2488,9 +2488,24 @@ function finalizeBounds(nodes: OfficeContentNode[], page: PageContext, includeBo
     }
 }
 
-/** Wraps a paragraph produced from margin artifacts as a header/footer node. */
+/**
+ * Wraps a paragraph produced from margin artifacts as a header/footer node. A line read as a list's item
+ * keeps its marker as printed, before its text: a footer's "• 3 •" is no list, and was "3 •".
+ */
 function retypeAsHeaderFooter(node: OfficeContentNode, type: 'header' | 'footer', page: number): OfficeContentNode {
-    return { type, text: node.text, children: node.children, bounds: node.bounds, metadata: { type: 'default', page } };
+    let { text, children } = node;
+    if (node.type === 'list') {
+        const meta = node.metadata as ListMetadata;
+        // (A number and a dot, or a round bullet, is the marker its metadata leaves out: see ListMetadata.marker.)
+        const marker = meta.marker ?? (meta.listType === 'ordered' ? `${meta.itemIndex + 1}.` : '•');
+        if (marker) {
+            const first = children?.[0];
+            const lead: OfficeContentNode = { type: 'text', text: `${marker} `, ...(first?.formatting ? { formatting: { ...first.formatting } } : {}) };
+            children = [lead, ...(children ?? [])];
+            text = `${marker} ${text ?? ''}`;
+        }
+    }
+    return { type, text, children, bounds: node.bounds, metadata: { type: 'default', page } };
 }
 
 /**

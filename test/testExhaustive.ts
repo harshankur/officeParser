@@ -8957,7 +8957,9 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
         // "4 May 2024", "5 mars 2024", "1 apples left". So is a journal's page printed so, "147 Journal of
         // Things": its head stays each page's text, which repeats it, rather than a date's leaving the text.)
         ['day first', p => `${p + 3} May 2024 Board meeting minutes`], ['day first, French', p => `${p} mars 2024`], ['count', p => `${p} apples left in the basket`],
-        ['journal page first', p => `${p + 146} Journal of Things`]];
+        ['journal page first', p => `${p + 146} Journal of Things`],
+        // (A number after a slash or in brackets after the line's words, or before a point, is no page's either.)
+        ['slash', p => `Annual Report / ${p}`], ['in brackets', p => `Annual Report \\(${p}\\)`], ['point', p => `${p}.`]];
     for (const [name, head] of ownNumbers) {
         const own = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, head(p)), body(p)].join('\n'))));
         const ownText = String((await own.to('text')).value);
@@ -8983,11 +8985,18 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
         ['brackets', p => `[${p}]`], ['journal', p => `J. Appl. Things 12 \\(2024\\) ${p + 100}`],
         // (A page numbered within its chapter or appendix, the line its number alone: \261 is the font's en dash.)
         ['chapter', p => `2-${p}`], ['chapter point', p => `2.${p}`], ['chapter colon', p => `2:${p}`], ['chapter en dash', p => `2\\261${p}`],
-        ['appendix', p => `A-${p}`], ['chapter page', p => `Page 2-${p}`]];
+        ['appendix', p => `A-${p}`], ['chapter page', p => `Page 2-${p}`],
+        // (Framed by an ornament a space either side, the whole line, at its end or between its parts: \264 is
+        // the font's middle dot, \267 its bullet.)
+        ['framed by bars', p => `| ${p} |`], ['framed by tildes', p => `~ ${p} ~`], ['framed by angles', p => `< ${p} >`],
+        ['framed by bullets', p => `\\267 ${p} \\267`], ['framed at the end', p => `Annual Report | ${p} |`], ['framed between', p => `Acme Corp \\264 ${p} \\264 Confidential`]];
     for (const [name, head] of shapes) {
         const shaped = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, head(p)), body(p)].join('\n'))));
         assert.strictEqual(texts(shaped.auxiliary?.headers).length, 4, `Running headers: a page number printed as "${head(3)}" (${name}) makes its line a header (${JSON.stringify(texts(shaped.auxiliary?.headers))})`);
     }
+    // A footer framed by bullets keeps them both: read as a list's item, it was its text after the first.
+    const bullets = await read(pdfOf([1, 2, 3, 4].map(p => [body(p), line(240, 30, 10, `\\267 ${p} \\267`)].join('\n'))));
+    assert.deepStrictEqual(texts(bullets.auxiliary?.footers), [1, 2, 3, 4].map(p => `${p}:\u2022 ${p} \u2022`), `Running footers: a footer framed by bullets keeps its text (${JSON.stringify(texts(bullets.auxiliary?.footers))})`);
     // A manual's footer: its number on the left, the page's within its chapter on the right of the same row.
     const manual = await read(pdfOf([1, 2, 3, 4].map(p => [body(p), line(50, 30, 10, 'FM 3-21.8'), line(430, 30, 10, `2-${p}`)].join('\n'))));
     assert.deepStrictEqual(texts(manual.auxiliary?.footers), ['1:FM 3-21.8', '1:2-1', '2:FM 3-21.8', '2:2-2', '3:FM 3-21.8', '3:2-3', '4:FM 3-21.8', '4:2-4'],

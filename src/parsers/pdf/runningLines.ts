@@ -165,6 +165,11 @@ const NUMBER_LEAD = new RegExp(String.raw`\s*(?:[|¦‖•·]|${DASH}\s)\s*(?![\
  */
 const CHAPTER_WORD = new RegExp(String.raw`^${PAGE_WORD}\s*`, 'iu');
 const CHAPTER_NUMBER = /^(?:\p{Nd}+|[A-Z])\s?[-.:\u2013]\s?\p{Nd}+$/u;
+/**
+ * The ornaments a page number is framed by, a space either side of it, each with the one that closes the
+ * frame: "| 3 |", "~ 3 ~", "< 3 >", "· 3 ·", "• 3 •".
+ */
+const FRAME_CLOSE = new Map([['|', '|'], ['¦', '¦'], ['‖', '‖'], ['•', '•'], ['·', '·'], ['~', '~'], ['<', '>']]);
 /** A dash, and what may open a number that is a line of its own ("- 3 -", "[3]", "(3)"). */
 const DASH_ALONE = new RegExp(String.raw`^${DASH}$`, 'u');
 const OPENING = new RegExp(String.raw`^(?:${DASH}|[(\[])$`, 'u');
@@ -173,9 +178,11 @@ const OPENING = new RegExp(String.raw`^(?:${DASH}|[(\[])$`, 'u');
  * Whether the number at [start, end) of a line's text is set apart as a page's number is: standing on its own
  * at the line's end, after a separator (a bar, a comma, a dash with a space beside it: "Annual Report | 3",
  * "Report, 3", "Report - 3") or a bracket's close ("(2024) 103"), or as the whole line ("3", "- 3 -", "[3]",
- * "3 of 6"); at its start, before a separator ("3 | Annual Report"); or anywhere after a page's word ("Page
- * 3", "Pg. 3", "Page: 3") or before one ("3页", "第3页", "3ページ"). After a sheet's or a slide's word, only
- * with the pages' after it ("Sheet 3 of 6").
+ * "3 of 6", a chapter's "2-3", "Page 2-3"); at its start, before a separator ("3 | Annual Report"); framed by
+ * an ornament a space either side, the whole line, at its end or between its parts ("| 3 |", "~ 3 ~", "Acme
+ * Corp · 3 · Confidential"); or anywhere after a page's word ("Page 3", "Pg. 3", "Page: 3") or before
+ * one ("3页", "第3页", "3ページ"). After a sheet's or a slide's word, only with the pages' after it ("Sheet 3 of
+ * 6").
  *
  * What a number names of its own is none: a number after any other word ("Question 3", "Chapter 3", "Q3") or
  * its label's colon ("Question: 3"), after a number sign ("Ticket #4001", "§ 3", "№ 3"), joined to another
@@ -211,6 +218,14 @@ function pageNumberAt(text: string, start: number, end: number): boolean {
     if (SHEET_WORD_ALONE.test(word)) return !!tail && tail[1] !== undefined;
     if (/\p{L}/u.test(word)) return false;
     const before = at > 0 ? text[at - 1] : '';
+    // (Framed, the ornaments standing apart: "| 3 |", the line's end "Annual Report | 3 |", or between its
+    // parts, "Acme Corp · 3 · Confidential".)
+    const close = spaced ? FRAME_CLOSE.get(before) : undefined;
+    if (close && (at === 1 || /\s/u.test(text[at - 2]))) {
+        let after = end;
+        while (after < text.length && /\s/u.test(text[after])) after++;
+        if (after > end && text[after] === close && (after + 1 === text.length || /\s/u.test(text[after + 1]))) return true;
+    }
     if (!before) {
         if (tail) return true;
         NUMBER_LEAD.lastIndex = end;
