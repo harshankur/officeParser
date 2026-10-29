@@ -8730,9 +8730,10 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
         const numberedMd = await md(numbered);
         assert.ok(numbered.auxiliary?.headers === undefined && [1, 2, 3, 4].every(p => numberedMd.includes(`${word} ${p}`)), `Running headers: "${word} N" at the top of each page is the page's (${JSON.stringify(texts(numbered.auxiliary?.headers))})`);
     }
-    // A chapter's head on each of its pages, the next chapter's on its: printed alike page after page, a header.
-    const chapters = await read(pdfOf([1, 2, 3, 4, 5, 6].map(p => [line(50, 760, 10, `Chapter ${p <= 3 ? 1 : 2}`), body(p)].join('\n'))));
-    assert.deepStrictEqual(texts(chapters.auxiliary?.headers), ['1:Chapter 1', '2:Chapter 1', '3:Chapter 1', '4:Chapter 2', '5:Chapter 2', '6:Chapter 2'], `Running headers: a chapter's head on its pages is their header (${JSON.stringify(texts(chapters.auxiliary?.headers))})`);
+    // A chapter's head on each of its pages, the next chapter's on its: printed alike page after page, a header,
+    // and so is a short chapter's on its one page among them.
+    const chapters = await read(pdfOf([1, 2, 3, 4, 5, 6].map(p => [line(50, 760, 10, `Chapter ${p <= 3 ? 1 : p === 4 ? 2 : 3}`), body(p)].join('\n'))));
+    assert.deepStrictEqual(texts(chapters.auxiliary?.headers), ['1:Chapter 1', '2:Chapter 1', '3:Chapter 1', '4:Chapter 2', '5:Chapter 3', '6:Chapter 3'], `Running headers: a chapter's head on its pages is their header (${JSON.stringify(texts(chapters.auxiliary?.headers))})`);
     // An article numbered as in its journal, from 147: its numbers run with the pages, a footer, but no field.
     const article = await read(pdfOf([1, 2, 3, 4].map(p => [body(p), line(245, 30, 10, String(146 + p))].join('\n'))));
     assert.ok(texts(article.auxiliary?.footers).join() === '1:147,2:148,3:149,4:150' && fieldsOf(article.auxiliary?.footers).length === 0,

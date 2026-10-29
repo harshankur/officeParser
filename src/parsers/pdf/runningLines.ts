@@ -36,8 +36,9 @@ const GAP_HEIGHTS = 1;
 const KEY_TEXT = 120;
 /**
  * A line whose numbers are not the page's (a heading's "Question 3", a chapter's "Chapter 3") is running only
- * where its text, as printed, is on at least this many of the pages of its key: a chapter's head repeated on
- * its pages is, a question numbered once on each page is not.
+ * where its text, as printed, is on at least this many of the pages of its key, or where most of its key's
+ * pages are so: a chapter's head repeated on its pages is, and a short chapter's on its one page among them;
+ * a question numbered once on each page is not.
  */
 const SAME_TEXT_PAGES = 2;
 /** The longest line a page number is looked for in (characters). */
@@ -146,6 +147,9 @@ interface KeyEntry {
      * numbers as one, which a line's text is only where they are the pages' own or the line is printed alike.
      */
     texts: Map<string, { pages: number; last: number }>;
+    /** Of its pages, those on which it is printed alike on another (see SAME_TEXT_PAGES), and the last counted. */
+    alike: number;
+    alikeLast: number;
 }
 
 /** The runs of each page that are its running header and its running footer. */
@@ -193,7 +197,7 @@ export function findRunningLines(extracts: readonly PageExtract[], cfg: PdfLayou
             const found = places.get(`${e + de}|${x + dx}`);
             if (found) return found;
         }
-        const entry: KeyEntry = { pages: 0, odd: 0, even: 0, numbered: 0, last: -1, texts: new Map() };
+        const entry: KeyEntry = { pages: 0, odd: 0, even: 0, numbered: 0, last: -1, texts: new Map(), alike: 0, alikeLast: -1 };
         places.set(`${e}|${x}`, entry);
         return entry;
     };
@@ -264,7 +268,15 @@ export function findRunningLines(extracts: readonly PageExtract[], cfg: PdfLayou
     // "Question 4" is on the next, is the page's.)
     const sameText = (l: BandLine) => (l.entry.texts.get(l.printed)?.pages ?? 0) >= SAME_TEXT_PAGES
         || (l.numberedAs !== null && (l.entry.texts.get(l.numberedAs)?.pages ?? 0) >= SAME_TEXT_PAGES);
-    const running = (l: BandLine) => !l.repeated && sameText(l) && (l.entry.pages >= needAll || l.entry.odd >= needOdd || l.entry.even >= needEven
+    extracts.forEach((extract, i) => {
+        for (const l of pagesLines[i]) {
+            if (l.entry.alikeLast === extract.pageNumber || !sameText(l)) continue;
+            l.entry.alikeLast = extract.pageNumber;
+            l.entry.alike++;
+        }
+    });
+    const alike = (l: BandLine) => sameText(l) || 2 * l.entry.alike > l.entry.pages;
+    const running = (l: BandLine) => !l.repeated && alike(l) && (l.entry.pages >= needAll || l.entry.odd >= needOdd || l.entry.even >= needEven
         || (l.ownNumber && l.entry.numbered >= PAGE_NUMBER_PAGES));
     const small = (l: BandLine) => l.fontSize <= bodyFontSize + SIZE_SLACK;
 
