@@ -1121,7 +1121,7 @@ const shapeOperatorsCache = new WeakMap<object, Set<number>>();
 const shapeOperators = (OPS: any): Set<number> => {
     let kept = shapeOperatorsCache.get(OPS);
     if (!kept) {
-        kept = new Set(['save', 'restore', 'transform', 'paintFormXObjectBegin', 'paintFormXObjectEnd', 'beginAnnotation', 'endAnnotation', 'constructPath', 'setLineWidth', 'clip', 'eoClip', 'setGState',
+        kept = new Set(['save', 'restore', 'transform', 'paintFormXObjectBegin', 'paintFormXObjectEnd', 'beginGroup', 'endGroup', 'beginAnnotation', 'endAnnotation', 'constructPath', 'setLineWidth', 'clip', 'eoClip', 'setGState',
             'setFillRGBColor', 'setFillColorN', 'setFillTransparent', 'setStrokeRGBColor', 'setStrokeColorN', 'setStrokeTransparent',
             ...TEXT_OPERATORS].map(name => OPS[name]).filter((op): op is number => typeof op === 'number'));
         shapeOperatorsCache.set(OPS, kept);
@@ -1134,7 +1134,7 @@ const keptOperatorsCache = new WeakMap<object, Set<number>>();
 const keptOperators = (OPS: any): Set<number> => {
     let kept = keptOperatorsCache.get(OPS);
     if (!kept) {
-        kept = new Set(['save', 'restore', 'transform', 'paintFormXObjectBegin', 'paintFormXObjectEnd', 'beginAnnotation', 'endAnnotation', 'dependency',
+        kept = new Set(['save', 'restore', 'transform', 'paintFormXObjectBegin', 'paintFormXObjectEnd', 'beginGroup', 'endGroup', 'beginAnnotation', 'endAnnotation', 'dependency',
             'paintImageXObject', 'paintImageXObjectRepeat', 'paintInlineImageXObject',
             'setFillRGBColor', 'setFillColorN', 'setFillTransparent', 'setStrokeRGBColor', 'setStrokeColorN', 'setStrokeTransparent',
             ...TEXT_OPERATORS, 'constructPath', 'setLineWidth', 'clip', 'eoClip', 'setGState'].map(name => OPS[name]).filter((op): op is number => typeof op === 'number'));
@@ -1508,6 +1508,10 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
         // every image mirrored, and an image inside a form got the form-local box.
         let ctm = identityMatrix();
         const ctmStack: number[][] = [];
+        // Whether what is drawn is a soft mask's own contents (its group form, `/G`): a picture there shapes
+        // what is painted through the mask and is not shown.
+        let inMask = false;
+        const maskStack: boolean[] = [];
         let inlineSeq = 0;
         let missingReported = false;
         // A picture pdf.js could not decode (its data damaged, in a format it cannot read, or needing a
@@ -1577,6 +1581,8 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
                 continue;
             }
             if (fn === pdfjs.OPS.paintFormXObjectEnd) { if (ctmStack.length) ctm = ctmStack.pop()!; continue; }
+            if (fn === pdfjs.OPS.beginGroup) { maskStack.push(inMask); if (argsArray[j]?.[0]?.smask) inMask = true; continue; }
+            if (fn === pdfjs.OPS.endGroup) { inMask = maskStack.pop() ?? false; continue; }
             // An annotation's appearance (a stamp's picture), in its own place on the page (see annotationMatrix).
             if (fn === pdfjs.OPS.beginAnnotation) { ctmStack.push(ctm); ctm = annotationMatrix(argsArray[j]); continue; }
             if (fn === pdfjs.OPS.endAnnotation) { if (ctmStack.length) ctm = ctmStack.pop()!; continue; }
@@ -1607,6 +1613,7 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
             // The repeat positions do not change the pixels, so collect the bitmap once at the current
             // placement. (`paintImageMaskXObject` is deliberately not collected: a stencil mask is painted
             // in the current fill colour, which this pass does not track, so it has no faithful bitmap.)
+            if (inMask && (fn === pdfjs.OPS.paintImageXObject || fn === pdfjs.OPS.paintImageXObjectRepeat || fn === pdfjs.OPS.paintInlineImageXObject)) continue;
             if (fn === pdfjs.OPS.paintImageXObject || fn === pdfjs.OPS.paintImageXObjectRepeat) {
                 const imgName = argsArray[j][0];
                 // A repeated (tiled) image is placed at each `[scaleX,0,0,scaleY, x,y]` from the args,

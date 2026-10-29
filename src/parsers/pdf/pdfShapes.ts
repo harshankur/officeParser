@@ -66,21 +66,22 @@ export function collectShapes(ops: any, viewportTransform: number[], OPS: any): 
     if (!fnArray || !argsArray || OPS.constructPath === undefined) return shapes;
     let ctm = identityMatrix();
     let fill: string | undefined, stroke: string | undefined, lineWidth = 1;
-    // The clipping box, and whether the next path sets a clip (as `W` before its `n` or its paint); and
-    // whether a fill is see-through (its opacity, a soft mask).
-    let clip: ClipBox, clipNext = false, alpha = 1, masked = false;
-    const stack: { ctm: number[]; fill?: string; stroke?: string; lineWidth: number; clip: ClipBox; alpha: number; masked: boolean }[] = [];
+    // The clipping box, and whether the next path sets a clip (as `W` before its `n` or its paint); whether
+    // a fill is see-through (its opacity, a soft mask); and whether what is drawn is a soft mask's own
+    // contents (its group form, `/G`), which shape what is painted through the mask and paint nothing.
+    let clip: ClipBox, clipNext = false, alpha = 1, masked = false, inMask = false;
+    const stack: { ctm: number[]; fill?: string; stroke?: string; lineWidth: number; clip: ClipBox; alpha: number; masked: boolean; inMask: boolean }[] = [];
     let segmentsLeft = MAX_SEGMENTS;
     const fills = new Set([OPS.fill, OPS.eoFill, OPS.fillStroke, OPS.eoFillStroke, OPS.closeFillStroke, OPS.closeEOFillStroke]);
     const strokes = new Set([OPS.stroke, OPS.closeStroke, OPS.fillStroke, OPS.eoFillStroke, OPS.closeFillStroke, OPS.closeEOFillStroke]);
     for (let i = 0; i < fnArray.length && shapes.length < MAX_SHAPES; i++) {
         const a = argsArray[i];
         switch (fnArray[i]) {
-            case OPS.save: stack.push({ ctm, fill, stroke, lineWidth, clip, alpha, masked }); break;
-            case OPS.restore: { const s = stack.pop(); if (s) ({ ctm, fill, stroke, lineWidth, clip, alpha, masked } = s); break; }
+            case OPS.save: stack.push({ ctm, fill, stroke, lineWidth, clip, alpha, masked, inMask }); break;
+            case OPS.restore: { const s = stack.pop(); if (s) ({ ctm, fill, stroke, lineWidth, clip, alpha, masked, inMask } = s); break; }
             case OPS.transform: { const cm = toMat6(a); if (cm) ctm = mul(ctm, cm); break; }
             case OPS.paintFormXObjectBegin: {
-                stack.push({ ctm, fill, stroke, lineWidth, clip, alpha, masked });
+                stack.push({ ctm, fill, stroke, lineWidth, clip, alpha, masked, inMask });
                 const fm = toMat6(a?.[0]);
                 if (fm) ctm = mul(ctm, fm);
                 // (A form is clipped to its box.)
@@ -93,10 +94,17 @@ export function collectShapes(ops: any, viewportTransform: number[], OPS: any): 
                 }
                 break;
             }
-            case OPS.paintFormXObjectEnd: { const s = stack.pop(); if (s) ({ ctm, fill, stroke, lineWidth, clip, alpha, masked } = s); break; }
+            // A transparency group's form, and a soft mask's group its mask.
+            case OPS.beginGroup: {
+                stack.push({ ctm, fill, stroke, lineWidth, clip, alpha, masked, inMask });
+                if (a?.[0]?.smask) inMask = true;
+                break;
+            }
+            case OPS.endGroup: { const s = stack.pop(); if (s) ({ ctm, fill, stroke, lineWidth, clip, alpha, masked, inMask } = s); break; }
+            case OPS.paintFormXObjectEnd: { const s = stack.pop(); if (s) ({ ctm, fill, stroke, lineWidth, clip, alpha, masked, inMask } = s); break; }
             // An annotation's appearance, in its own place on the page (see annotationMatrix).
-            case OPS.beginAnnotation: stack.push({ ctm, fill, stroke, lineWidth, clip, alpha, masked }); ctm = annotationMatrix(a); break;
-            case OPS.endAnnotation: { const s = stack.pop(); if (s) ({ ctm, fill, stroke, lineWidth, clip, alpha, masked } = s); break; }
+            case OPS.beginAnnotation: stack.push({ ctm, fill, stroke, lineWidth, clip, alpha, masked, inMask }); ctm = annotationMatrix(a); break;
+            case OPS.endAnnotation: { const s = stack.pop(); if (s) ({ ctm, fill, stroke, lineWidth, clip, alpha, masked, inMask } = s); break; }
             case OPS.clip: case OPS.eoClip: clipNext = true; break;
             case OPS.setGState: {
                 for (const entry of Array.isArray(a?.[0]) ? a[0] : []) {
@@ -147,7 +155,7 @@ export function collectShapes(ops: any, viewportTransform: number[], OPS: any): 
                     else break;
                 }
                 if (!Number.isFinite(minX) || !Number.isFinite(minY)) break;
-                if (filled || stroked) {
+                if ((filled || stroked) && !inMask) {
                     // A stroke's width in viewport space, scaled as the CTM scales (its mean).
                     const scale = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) || 1;
                     shapes.push({

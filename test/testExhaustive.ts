@@ -8662,6 +8662,21 @@ async function testPdfTextOnFills(): Promise<void> {
     const turnedFound = backgrounds(await read(turned));
     assert.ok(turnedFound['White on a bar'] === '#336699' && turnedFound['On white paper'] === undefined && turnedFound['Inside the bar'] === '#336699', `PDF text on fills: on a turned page too (${JSON.stringify(turnedFound)})`);
 
+    // A logo painted through a soft mask on a panel, the mask's group form black around a white square and
+    // holding a picture: the mask shapes the logo and paints nothing, so the text stays on the panel and
+    // the mask's picture is none of the page's.
+    const streamOf = (dict: string, body: string) => `<< ${dict} /Length ${Buffer.byteLength(body, 'latin1')} >>\nstream\n${body}\nendstream`;
+    const maskedLogo = pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> /ExtGState << /GS1 << /SMask << /S /Luminosity /G 6 0 R >> >> >> >> /Contents 4 0 R >>',
+        streamOf('', '0.2 0.4 0.6 rg 60 560 400 150 re f 1 1 1 rg BT /F1 14 Tf 90 640 Td (White on the panel) Tj ET q /GS1 gs 0.9 0.5 0.1 rg 380 580 60 60 re f Q'),
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+        streamOf('/Type /XObject /Subtype /Form /BBox [40 540 480 730] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << /XObject << /Im 7 0 R >> >>',
+            '0 0 0 rg 40 540 440 190 re f q 60 0 0 60 380 580 cm /Im Do Q 1 1 1 rg 380 580 60 60 re f'),
+        streamOf('/Type /XObject /Subtype /Image /Width 64 /Height 64 /ColorSpace /DeviceRGB /BitsPerComponent 8', Buffer.alloc(64 * 64 * 3, 0x80).toString('latin1'))]);
+    const maskedAst = await OfficeParser.parseOffice(maskedLogo, { fileType: 'pdf', extractAttachments: true, ...inProcess } as any) as OfficeParserAST;
+    assert.ok(backgrounds(maskedAst)['White on the panel'] === '#336699' && !all(maskedAst).some(n => n.type === 'image') && !maskedAst.attachments?.length,
+        `PDF text on fills: a soft mask's contents paint nothing (${JSON.stringify([backgrounds(maskedAst), all(maskedAst).filter(n => n.type === 'image').length])})`);
+
     // A table ruled and shaded: its head cell shows the colour and its text carries none, a coloured bar inside a plain cell still does.
     // Over a grey panel, one cell of it a white card.
     const table = pageOf([
