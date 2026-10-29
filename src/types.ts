@@ -726,11 +726,12 @@ export interface PdfParserConfig {
      * uncolored rather than guessed.
      *
      * The colour a run stands on is read from the same drawing: a run whose whole box is inside a
-     * filled, non-white rectangle of the page (the smallest such one) carries its colour as
-     * `formatting.backgroundColor`, as a word processor's paragraph shading reaches its runs, so white
-     * text on a coloured bar keeps the bar. A run only partly over a rectangle, text on the paper, and
-     * text in a table's cell that is shaded as the page shades it (the cell's `backgroundColor` shows
-     * it) carry none. Set to `false`, none is read.
+     * filled rectangle of the page carries the colour of the one drawn last (where it paints, within
+     * its clip, and not see-through) as `formatting.backgroundColor`, as a word processor's paragraph
+     * shading reaches its runs, so white text on a coloured bar keeps the bar. A run only partly over a
+     * rectangle, text on the paper or on a white rectangle (a white card on a grey panel), and text in a
+     * table's cell that is shaded as the page shades it (the cell's `backgroundColor` shows it) carry
+     * none. Set to `false`, none is read.
      *
      * Highlight annotations are unaffected by this flag: they populate `formatting.backgroundColor`
      * regardless, since they come from the annotation list that is already read for hyperlinks, and a
@@ -745,12 +746,15 @@ export interface PdfParserConfig {
      * `auxiliary.footers`. A tagged PDF marks its running headers and footers as artifacts, outside its
      * structure; an untagged PDF's (or one whose tags are not trusted) are found by comparing its
      * pages: lines repeated in one place at the top or the bottom of at least two in five of the pages
-     * (and three), with their numbers as one ("1/4", "2/4"), no larger than the text and standing apart
-     * from it, or the page's own number on two pages. Either is read into `auxiliary`, as a word
-     * processor's header is, so a writer that lays out pages (Word, ODT, RTF, LaTeX, PDF) repeats the
-     * first page's on every page and one that does not (text, Markdown, HTML, EPUB, PowerPoint) leaves
-     * them out. A page number in one is marked as the page field it prints (TextMetadata.field), so
-     * Word, ODT, RTF and PDF output number each page its own. Turn this on for a writer that shows each
+     * (and three), with their numbers as one where they number the pages ("1/4", "2/4") or the line is
+     * printed alike on other pages (a chapter's head), no larger than the text and standing apart from
+     * it, or the page's own number on two pages. "Question 3" at the top of one page and "Question 4" at
+     * the top of the next are the pages' own. Either is read into `auxiliary`, as a word processor's
+     * header is, so a writer that lays out pages (Word, ODT, RTF, LaTeX, PDF) repeats the first page's on
+     * every page and one that does not (text, Markdown, HTML, EPUB, PowerPoint) leaves them out. A page
+     * number in one is marked as the page field it prints (TextMetadata.field), so Word, ODT, RTF and
+     * PDF output number each page its own: where the pages read are the document's from its first (a
+     * `pageRange` from a later page marks none), and its pages' count only where all are read. Turn this on for a writer that shows each
      * page as it was, a slide per page, so a page keeps its own header and footer text (a page number, a
      * chapter title) in its place. `ignoreHeadersAndFooters` still drops them.
      *

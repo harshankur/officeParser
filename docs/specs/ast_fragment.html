@@ -175,7 +175,7 @@
         <li><strong><code>cell</code></strong>: A container for other content (paragraphs, images, or even nested
             tables). Use <code>metadata</code> for <code>rowSpan</code>, <code>colSpan</code>, and
             <code>backgroundColor</code> (populated from DOCX <code>w:shd</code> fills, and for a PDF table's cell
-            from the smallest filled rectangle under its middle, tagged or not). Spans are also read from HTML
+            from the filled rectangle drawn last under its middle, none where that one is white, tagged or not). Spans are also read from HTML
             <code>colspan</code>/<code>rowspan</code> attributes so merged cells survive an HTML round-trip, from
             XLSX merged ranges, from PPTX <code>gridSpan</code>/<code>rowSpan</code> (the positions a merged cell
             covers are no cells of their own), and from PDF tables that are tagged or drawn with ruling lines. A spreadsheet cell can also carry <code>shownText</code> (what its number format
