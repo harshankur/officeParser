@@ -8453,8 +8453,38 @@ async function testPdfKeptJpegs(): Promise<void> {
     const lied = await read(lying);
     assert.ok(lied.attachments.length === 1 && isJpeg(lied.attachments[0], jpeg.rgb), `PDF kept JPEG: a length that lies is read to the end of the picture (${lied.attachments.map(a => [a.mimeType, a.data.length])})`);
 
+    // The RGB picture with its markers changed: its JFIF marker taken out, an Adobe marker with its colour
+    // transform put in, its components named otherwise (in its frame and its scan).
+    const remarked = (bytes: Buffer, { jfif = true, adobe, ids }: { jfif?: boolean; adobe?: number; ids?: number[] }): Buffer => {
+        const parts: Buffer[] = [bytes.subarray(0, 2)];
+        if (adobe !== undefined) parts.push(Buffer.concat([Buffer.from([0xff, 0xee, 0x00, 0x0e]), Buffer.from('Adobe', 'latin1'), Buffer.from([0x00, 0x64, 0, 0, 0, 0, adobe])]));
+        let at = 2;
+        while (at + 4 <= bytes.length) {
+            const marker = bytes[at + 1], segment = Buffer.from(bytes.subarray(at, at + 2 + bytes.readUInt16BE(at + 2)));
+            // (A component's identifier: from the frame's tenth byte, three apart; from the scan's fifth, two apart.)
+            if (ids && (marker === 0xc0 || marker === 0xda)) ids.forEach((id, i) => { segment[marker === 0xc0 ? 10 + 3 * i : 5 + 2 * i] = id; });
+            if (marker !== 0xe0 || jfif) parts.push(segment);
+            at += segment.length;
+            if (marker === 0xda) break;
+        }
+        parts.push(bytes.subarray(at));
+        return Buffer.concat(parts);
+    };
+    const RGB_IDS = [0x52, 0x47, 0x42];
+    // Markers that pdf.js and a browser (libjpeg) read the colours of alike: kept.
+    for (const [label, bytes] of [['an Adobe transform 0 and no JFIF marker', remarked(jpeg.rgb, { jfif: false, adobe: 0 })],
+        ['components "R", "G", "B" and no JFIF marker', remarked(jpeg.rgb, { jfif: false, ids: RGB_IDS })],
+        ['a JFIF marker and an Adobe transform 1', remarked(jpeg.rgb, { adobe: 1 })]] as const) {
+        const ast = await read(pictured(bytes));
+        assert.ok(ast.attachments.length === 1 && isJpeg(ast.attachments[0], bytes), `PDF kept JPEG: ${label} is kept (${ast.attachments.map(a => [a.name, a.mimeType])})`);
+    }
+
     // What stays a PNG: the picture the pixels of pdf.js are, not the JPEG's bytes.
     const stays: [string, Buffer][] = [
+        // RGB to pdf.js, YCbCr to a browser: the JFIF marker comes first in libjpeg, the Adobe marker or the
+        // components' names in pdf.js.
+        ['a JFIF marker and an Adobe transform 0', pictured(remarked(jpeg.rgb, { adobe: 0 }))],
+        ['a JFIF marker and components "R", "G", "B"', pictured(remarked(jpeg.rgb, { ids: RGB_IDS }))],
         ['a CMYK JPEG', pictured(jpeg.cmyk, dct.replace('/DeviceRGB', '/DeviceCMYK') + ' /Decode [1 0 1 0 1 0 1 0]')],
         ['a CMYK JPEG with no /Decode', pictured(jpeg.cmyk, dct.replace('/DeviceRGB', '/DeviceCMYK'))],
         ['a /Decode', pictured(jpeg.rgb, dct + ' /Decode [1 0 1 0 1 0]')],
@@ -8473,7 +8503,7 @@ async function testPdfKeptJpegs(): Promise<void> {
         assert.ok(ast.attachments.every(a => a.mimeType !== 'image/jpeg' && !a.name!.endsWith('.jpg') && isPng(a)), `PDF kept JPEG: ${label} is not kept as a JPEG (${ast.attachments.map(a => [a.name, a.mimeType])})`);
     }
     // For those pdf.js reads, a PNG is there (not nothing).
-    for (const [label, pdf] of stays.slice(0, 8)) {
+    for (const [label, pdf] of stays.slice(0, 10)) {
         assert.strictEqual((await read(pdf)).attachments.length, 1, `PDF kept JPEG: ${label} is still extracted, as a PNG`);
     }
     // An inline picture has no object to read: a PNG. A file whose streams cannot be read here (encrypted): no JPEG either.

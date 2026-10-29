@@ -4,8 +4,9 @@
  * size. Where the JPEG needs no decoding to show (the viewer-independent cases: an 8-bit gray or RGB
  * picture with no mask, no `/Decode` and no colour transform to apply), the stream's own bytes are the
  * picture. Read from the file by the picture's object number (see pdfFile); whatever is not certain to
- * show the same as pdf.js's pixels (another filter, CMYK, an EXIF orientation a viewer applies, a header
- * that does not say what the dictionary says) is left to the PNG pdf.js's pixels make.
+ * show the same as pdf.js's pixels (another filter, CMYK, an EXIF orientation a viewer applies, markers
+ * pdf.js reads its colours by otherwise than a browser does, a header that does not say what the
+ * dictionary says) is left to the PNG pdf.js's pixels make.
  *
  * @module parsers/pdf/pdfJpeg
  */
@@ -21,8 +22,20 @@ export interface JpegHeader {
     precision: number;
     /** The EXIF orientation (1 to 8) of the first EXIF segment that has one; undefined where there is none. */
     orientation?: number;
-    /** An Adobe APP14 marker's colour transform (0 none, 1 YCbCr, 2 YCCK); undefined where there is no marker. */
+    /**
+     * The colour transform of the last Adobe APP14 marker of its full length (0 none, 1 YCbCr, 2 YCCK), as a
+     * JPEG decoder reads it (libjpeg, and so browsers and word processors); undefined where there is none.
+     */
     adobeTransform?: number;
+    /**
+     * The last Adobe APP14 marker's colour transform as pdf.js reads it, of any length: null for one too short
+     * to hold one (pdf.js then transforms nothing); undefined where there is no marker.
+     */
+    pdfjsAdobeTransform?: number | null;
+    /** Whether it has a JFIF APP0 marker of its full length, as a JPEG decoder (libjpeg) reads one. */
+    jfif?: boolean;
+    /** Its first three components' identifiers (82, 71, 66 are "R", "G", "B"). */
+    componentIds: number[];
 }
 
 /** The most JPEG bytes kept for a whole document: past it, a picture is the PNG pdf.js's pixels make. */
@@ -41,7 +54,7 @@ export function readJpegHeader(bytes: Uint8Array): JpegHeader | undefined {
     if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return undefined;
     const u16 = (at: number): number => (bytes[at] << 8) | bytes[at + 1];
     let header: JpegHeader | undefined;
-    let orientation: number | undefined, adobeTransform: number | undefined;
+    let orientation: number | undefined, adobeTransform: number | undefined, pdfjsAdobeTransform: number | null | undefined, jfif = false;
     let at = 2, scan = false;
     while (at + 2 <= bytes.length) {
         // Any number of 0xff fill bytes may come before a marker.
@@ -61,21 +74,49 @@ export function readJpegHeader(bytes: Uint8Array): JpegHeader | undefined {
             if (header || length < 8) return undefined;
             const components = bytes[body + 5];
             if (components < 1 || length < 8 + 3 * components) return undefined;
-            header = { precision: bytes[body], height: u16(body + 1), width: u16(body + 3), components };
+            const componentIds: number[] = [];
+            for (let i = 0; i < Math.min(components, 3); i++) componentIds.push(bytes[body + 6 + 3 * i]);
+            header = { precision: bytes[body], height: u16(body + 1), width: u16(body + 3), components, componentIds };
         } else if (marker >= 0xc3 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
             // Lossless, hierarchical or arithmetic-coded: not a picture a browser shows.
             return undefined;
         } else if (marker === 0xe1 && orientation === undefined) {
             orientation = exifOrientation(bytes, body, end);
-        } else if (marker === 0xee && adobeTransform === undefined && end - body >= 12 && bytes[body] === 0x41 && bytes[body + 1] === 0x64 && bytes[body + 2] === 0x6f && bytes[body + 3] === 0x62 && bytes[body + 4] === 0x65) {
-            adobeTransform = bytes[body + 11];
+        } else if (marker === 0xee && end - body >= 5 && bytes[body] === 0x41 && bytes[body + 1] === 0x64 && bytes[body + 2] === 0x6f && bytes[body + 3] === 0x62 && bytes[body + 4] === 0x65) {
+            // "Adobe": each one read over the one before, as both pdf.js and libjpeg read them; libjpeg reads
+            // one of its full twelve bytes only, pdf.js any.
+            pdfjsAdobeTransform = end - body >= 12 ? bytes[body + 11] : null;
+            if (end - body >= 12) adobeTransform = bytes[body + 11];
+        } else if (marker === 0xe0 && end - body >= 14 && bytes[body] === 0x4a && bytes[body + 1] === 0x46 && bytes[body + 2] === 0x49 && bytes[body + 3] === 0x46 && bytes[body + 4] === 0) {
+            jfif = true;
         }
         at = end;
     }
     if (!header || !scan) return undefined;
     if (orientation !== undefined) header.orientation = orientation;
     if (adobeTransform !== undefined) header.adobeTransform = adobeTransform;
+    if (pdfjsAdobeTransform !== undefined) header.pdfjsAdobeTransform = pdfjsAdobeTransform;
+    if (jfif) header.jfif = true;
     return header;
+}
+
+/**
+ * Whether a JPEG of three components shows the same colours in pdf.js as in a browser or a word processor:
+ * whether each reads its samples as YCbCr (and turns them to RGB) or as RGB already.
+ *
+ * pdf.js (its jpg.js) goes by an Adobe APP14 marker where there is one (transform 0 is RGB, any other is
+ * YCbCr), then by the components' identifiers ("R", "G", "B" is RGB), and reads YCbCr otherwise. libjpeg
+ * (jdapimin.c, default_decompress_parms), which browsers and word processors decode with, goes by a JFIF
+ * marker first (YCbCr), then an Adobe marker (transform 0 RGB, any other YCbCr), then the identifiers
+ * ("R", "G", "B" RGB), and reads YCbCr otherwise. So a JPEG with a JFIF marker and an Adobe transform 0, or
+ * a JFIF marker and components "R", "G", "B", is RGB to pdf.js and YCbCr to the others: its colours differ.
+ */
+export function sameColoursEverywhere(header: JpegHeader): boolean {
+    if (header.components !== 3) return true;
+    const rgbIds = header.componentIds[0] === 0x52 && header.componentIds[1] === 0x47 && header.componentIds[2] === 0x42;
+    const pdfjsRgb = header.pdfjsAdobeTransform !== undefined ? !header.pdfjsAdobeTransform : rgbIds;
+    const libjpegRgb = header.jfif ? false : header.adobeTransform !== undefined ? header.adobeTransform === 0 : rgbIds;
+    return pdfjsRgb === libjpegRgb;
 }
 
 /** The orientation an EXIF segment (the bytes from `from` to `end`) holds in its first directory; undefined where it has none. */
@@ -135,7 +176,9 @@ export class KeptJpegs {
             const header = readJpegHeader(bytes);
             if (!header || header.precision !== 8 || header.width !== width || header.height !== height || header.components !== found.components) return undefined;
             if (header.orientation !== undefined && header.orientation !== 1) return undefined;
-            if (header.adobeTransform === 2) return undefined;
+            if (header.adobeTransform === 2 || header.pdfjsAdobeTransform === 2) return undefined;
+            // (Shown in other colours by pdf.js than by a browser or a word processor: as pdf.js shows it.)
+            if (!sameColoursEverywhere(header)) return undefined;
             this.left -= bytes.length;
             return Buffer.from(bytes);
         } catch {
