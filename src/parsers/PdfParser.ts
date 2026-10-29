@@ -410,6 +410,20 @@ function toViewportRect(viewport: any, rect: number[]): [number, number, number,
     return [Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by)];
 }
 
+/**
+ * A widget's box (viewport space) no larger than this (points) across or high shows nothing: pdf.js gives a
+ * box of no size ([0 0 0 0]) as one point square about its corner.
+ */
+const MIN_WIDGET_SIZE = 1;
+
+/** Whether a widget's box (viewport space) is one a viewer shows: of a size, and on the page as it is shown. */
+function shownWidget(rect: readonly number[], width: number, height: number): boolean {
+    const [x0, y0, x1, y1] = rect;
+    if (![x0, y0, x1, y1].every(Number.isFinite)) return false;
+    if (x1 - x0 <= MIN_WIDGET_SIZE || y1 - y0 <= MIN_WIDGET_SIZE) return false;
+    return x1 > 0 && y1 > 0 && x0 < width && y0 < height;
+}
+
 /** True for a color at or extremely close to black (the default text fill), so it is not reported. */
 function isNearBlack(hex: string): boolean {
     const h = hex.replace(/^#/, '');
@@ -478,13 +492,18 @@ async function resolveAnnotations(
             const value = fieldValueOf(annot);
             const id = typeof annot.id === 'string' ? annot.id : undefined;
             if (!value || !id || seenFields.has(id)) continue;
+            // A widget no viewer shows is not read: one of no size (a form's hidden calculation field, at
+            // [0 0 0 0]), or one off the page as it is shown (its crop box). Its value stays in the form's
+            // fields (metadata.nativeProperties.formFields).
+            const rect = toViewportRect(viewport, annot.rect);
+            if (!shownWidget(rect, viewport.width, viewport.height)) continue;
             if (fields.length >= MAX_PAGE_ANNOTATIONS) { capped = true; continue; }
             seenFields.add(id);
             const da = annot.defaultAppearanceData;
             const size = Number(da?.fontSize);
             const rotation = ((Math.round(Number(annot.rotation) / 90) * 90 % 360) + 360) % 360 || 0;
             fields.push({
-                id, rect: toViewportRect(viewport, annot.rect), kind: value.kind, text: value.text,
+                id, rect, kind: value.kind, text: value.text,
                 fontSize: Number.isFinite(size) && size > 0 ? size : 0,
                 color: rgbArrayToHex(da?.fontColor),
                 multiLine: !!annot.multiLine,

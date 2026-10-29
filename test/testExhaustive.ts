@@ -8168,6 +8168,28 @@ async function testPdfFormValuesAsText(): Promise<void> {
         assert.ok(markdown.includes('Nachname Mustermann') && markdown.includes('☒ Nein, trifft nicht zu.'), 'PDF form: the values reach Markdown');
     }
 
+    // Widgets no viewer shows: a calculation field of no size ([0 0 0 0]), one off the page, and one on the
+    // page's media but outside its crop box. Not read as the page's text; their values stay in the form's
+    // fields.
+    const unseen = await PDFDocument.create();
+    const ufont = await unseen.embedFont(StandardFonts.Helvetica);
+    const upage = unseen.addPage([400, 400]);
+    upage.setCropBox(0, 100, 400, 200);
+    upage.drawText('Shown on the page', { x: 50, y: 200, size: 11, font: ufont });
+    const uform = unseen.getForm();
+    for (const [name, value, at] of [['calc', 'NO-SIZE-VALUE', { x: 0, y: 0, width: 0, height: 0 }], ['away', 'OFF-PAGE-VALUE', { x: 500, y: 600, width: 100, height: 20 }],
+        ['cropped', 'CROPPED-VALUE', { x: 50, y: 330, width: 100, height: 20 }], ['seen', 'SEEN-VALUE', { x: 200, y: 194, width: 100, height: 20 }]] as const) {
+        const field = uform.createTextField(name);
+        field.setText(value);
+        field.addToPage(upage, { ...at, font: ufont });
+    }
+    uform.updateFieldAppearances(ufont);
+    const unseenAst = await OfficeParser.parseOffice(Buffer.from(await unseen.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
+    const unseenText = textOf(unseenAst);
+    assert.ok(unseenText.includes('SEEN-VALUE') && !/NO-SIZE|OFF-PAGE|CROPPED/.test(unseenText), `PDF form: a widget of no size, or off the page as shown, is not read (${JSON.stringify(unseenText)})`);
+    const formFields = (unseenAst.metadata as any)?.nativeProperties?.formFields ?? {};
+    assert.deepStrictEqual(['calc', 'away', 'cropped'].map(n => formFields[n]?.value), ['NO-SIZE-VALUE', 'OFF-PAGE-VALUE', 'CROPPED-VALUE'], `PDF form: their values stay in the form's fields (${JSON.stringify(formFields)})`);
+
     // An order form laid out as a table, its quantities and prices fields under the columns' heads, a check
     // box under another: read as the table it is when printed, its values its cells, not joined to the item
     // before them.
