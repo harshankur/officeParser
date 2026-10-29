@@ -65,7 +65,7 @@ const DASH = String.raw`[-\u2010-\u2015\u2212]`;
  * A line that is a page number and nothing else: "3", "- 3 -", "3/4", "Page 3 of 4", "Seite 3 von 4", "iii",
  * "Sheet 3 of 6".
  */
-const PAGE_LINE = new RegExp(String.raw`^${DASH}?\s*(?:(?:${PAGE_WORD}\s*)?(\d+|[ivxlcdm]+)(?:\s*${OF_WORD}\s*(\d+))?|${SHEET_WORD}\s*(\d+)\s*${OF_WORD}\s*(\d+))\s*${DASH}?$`, 'iu');
+const PAGE_LINE = new RegExp(String.raw`^${DASH}?\s*(?:(?:${PAGE_WORD}\s*)?(\p{Nd}+|[ivxlcdm]+)(?:\s*${OF_WORD}\s*(\p{Nd}+))?|${SHEET_WORD}\s*(\p{Nd}+)\s*${OF_WORD}\s*(\p{Nd}+))\s*${DASH}?$`, 'iu');
 /** In a header's or footer's text: "3/4", "3 of 4", "Seite 3 von 4" (the page's number, then the pages'). */
 const NUMBER_OF = new RegExp(String.raw`(?<![\p{L}\p{N}])(\d+)\s*${OF_WORD}\s*(\d+)(?![\p{L}\p{N}])`, 'giu');
 /** "Page 3", "Seite 3", "Page iii". */
@@ -82,14 +82,15 @@ function romanOf(token: string, pageNumber: number): PageNumberFormat | undefine
 
 /**
  * Where a line is the page's own number and nothing else, the line with its number as '#' (as its digits are
- * in its key, so "- iii -" and "- iv -" are one line): its number in digits, or as its printed label says it
- * (a front matter's "iii", where the document's page labels number the page so). Null where it is not.
+ * in its key, so "- iii -" and "- iv -" are one line): its number in digits of any script, or as its printed
+ * label says it (a front matter's "iii", where the document's page labels number the page so). Null where it
+ * is not.
  */
 function ownNumberKey(text: string, pageNumber: number, label: PageLabel | null): string | null {
     const m = PAGE_LINE.exec(text);
     if (!m) return null;
     const n = m[1] ?? m[3], of = m[2] ?? m[4];
-    if (!(/^\d+$/.test(n) && Number(n) === pageNumber) && !(label && n.toLowerCase() === label.lower)) return null;
+    if (!(/^\p{Nd}+$/u.test(n) && digitsValue(n) === pageNumber) && !(label && n.toLowerCase() === label.lower)) return null;
     const at = m[0].lastIndexOf(n, of === undefined ? undefined : m[0].length - of.length - 1);
     return `${text.slice(0, at)}#${text.slice(at + n.length)}`.replace(/\p{Nd}+/gu, '#');
 }
@@ -176,7 +177,7 @@ const OPENING = new RegExp(String.raw`^(?:${DASH}|[(\[])$`, 'u');
 
 /**
  * Whether the number at [start, end) of a line's text is set apart as a page's number is: standing on its own
- * at the line's end, after a separator (a bar, a comma, a dash with a space beside it: "Annual Report | 3",
+ * at the line's end, after a separator (a bar, a comma, a dash with a space either side: "Annual Report | 3",
  * "Report, 3", "Report - 3") or a bracket's close ("(2024) 103"), or as the whole line ("3", "- 3 -", "[3]",
  * "3 of 6", a chapter's "2-3", "Page 2-3"); at its start, before a separator ("3 | Annual Report"); framed by
  * an ornament a space either side, the whole line, at its end or between its parts ("| 3 |", "~ 3 ~", "Acme
@@ -236,8 +237,8 @@ function pageNumberAt(text: string, start: number, end: number): boolean {
     if (at === 1 && OPENING.test(before)) return true;
     if (SEPARATOR.test(before)) return true;
     if (before === ',') return spaced;
-    // (A dash with a space beside it: "INV-1001" and "2024-03-04" join theirs.)
-    if (DASH_ALONE.test(before)) return spaced || (at > 1 && /\s/u.test(text[at - 2]));
+    // (A dash with a space either side: "INV-1001", "2024-03-04" and "Report -5" join theirs.)
+    if (DASH_ALONE.test(before)) return spaced && at > 1 && /\s/u.test(text[at - 2]);
     return spaced && (before === ')' || before === ']');
 }
 

@@ -8963,7 +8963,8 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
         ['day first', p => `${p + 3} May 2024 Board meeting minutes`], ['day first, French', p => `${p} mars 2024`], ['count', p => `${p} apples left in the basket`],
         ['journal page first', p => `${p + 146} Journal of Things`],
         // (A number after a slash or in brackets after the line's words, or before a point, is no page's either.)
-        ['slash', p => `Annual Report / ${p}`], ['in brackets', p => `Annual Report \\(${p}\\)`], ['point', p => `${p}.`]];
+        // (Nor is one after a dash joined to it, "Report -5", as "INV-1001" is to its letters.)
+        ['dash joined', p => `Report -${p}`], ['slash', p => `Annual Report / ${p}`], ['in brackets', p => `Annual Report \\(${p}\\)`], ['point', p => `${p}.`]];
     for (const [name, head] of ownNumbers) {
         const own = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, head(p)), body(p)].join('\n'))));
         const ownText = String((await own.to('text')).value);
@@ -9023,6 +9024,10 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
     const indicMap = toUnicode.replace('2 beginbfrange <20> <57> <0020> <5A> <7E> <005A> endbfrange', '3 beginbfrange <20> <2F> <0020> <30> <39> <0660> <3A> <7E> <003A> endbfrange');
     const indic = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, `Acme Corp | ${p}`), body(p)].join('\n')), '', '/ToUnicode 12 0 R', [`<< /Length ${indicMap.length} >>\nstream\n${indicMap}\nendstream`]));
     assert.strictEqual(texts(indic.auxiliary?.headers).length, 4, `Running headers: a page number in Arabic-Indic digits makes its line a header (${JSON.stringify(texts(indic.auxiliary?.headers))})`);
+    // And two pages numbered alone in them: each the page's own number, running on two pages as ASCII digits are.
+    // (The map is the object after two pages', the 8th.)
+    const indicTwo = await read(pdfOf([1, 2].map(p => [body(p), line(245, 30, 10, String(p))].join('\n')), '', '/ToUnicode 8 0 R', [`<< /Length ${indicMap.length} >>\nstream\n${indicMap}\nendstream`]));
+    assert.deepStrictEqual(texts(indicTwo.auxiliary?.footers), ['1:\u0661', '2:\u0662'], `Running footers: two pages' numbers alone in Arabic-Indic digits are their footers (${JSON.stringify(texts(indicTwo.auxiliary?.footers))})`);
     // A chapter's head on each of its pages, the next chapter's on its: printed alike page after page, a header,
     // and so is a short chapter's on its one page among them.
     const chapters = await read(pdfOf([1, 2, 3, 4, 5, 6].map(p => [line(50, 760, 10, `Chapter ${p <= 3 ? 1 : p === 4 ? 2 : 3}`), body(p)].join('\n'))));
