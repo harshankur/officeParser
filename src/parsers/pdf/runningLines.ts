@@ -371,13 +371,17 @@ function textLeaves(node: OfficeContentNode): { parent: OfficeContentNode; leaf:
     return out;
 }
 
-/** The page fields in a header's or footer's text, where its numbers are the page's and the document's pages'. */
-function fieldsIn(text: string, pageNumber: number, numPages: number): FieldSpan[] | null {
+/**
+ * The page fields in a header's or footer's text, where its numbers are the page's and the document's pages'
+ * (the pages' only where `allPages`: the output holds all of them).
+ */
+function fieldsIn(text: string, pageNumber: number, numPages: number, allPages: boolean): FieldSpan[] | null {
     for (const m of text.matchAll(NUMBER_OF)) {
         if (Number(m[1]) !== pageNumber || Number(m[2]) !== numPages) continue;
         const start = m.index!, own = start + m[0].indexOf(m[1]);
         const total = start + m[0].lastIndexOf(m[2]);
-        return [{ start: own, end: own + m[1].length, field: 'page' }, { start: total, end: total + m[2].length, field: 'pages' }];
+        const page: FieldSpan = { start: own, end: own + m[1].length, field: 'page' };
+        return allPages ? [page, { start: total, end: total + m[2].length, field: 'pages' }] : [page];
     }
     for (const m of text.matchAll(WORD_NUMBER)) {
         const format = /^\d+$/.test(m[1]) ? undefined : romanOf(m[1], pageNumber);
@@ -404,8 +408,12 @@ function fieldsIn(text: string, pageNumber: number, numPages: number): FieldSpan
  * written) and, in "3/4", "3 of 4", "Seite 3 von 4", where the pages' is the document's. A header or footer
  * is marked only where every page's of the same text (its numbers as one) is: "1/4" printed on every page
  * of a form is the form's number, not the first page's.
+ *
+ * The furniture is of the document's pages from its first, one after another (a writer numbers its own pages
+ * from one); `allPages` where it is of all of them, else the pages' count ("of 4") is left as its text, no
+ * longer the output's.
  */
-export function markPageFields(furniture: readonly PageFurniture[], numPages: number): void {
+export function markPageFields(furniture: readonly PageFurniture[], numPages: number, allPages = true): void {
     const groups = new Map<string, { node: OfficeContentNode; leaves: ReturnType<typeof textLeaves>; spans: FieldSpan[] | null; rotation: number }[]>();
     for (const page of furniture) {
         for (const node of page.nodes) {
@@ -414,7 +422,7 @@ export function markPageFields(furniture: readonly PageFurniture[], numPages: nu
             const text = leaves.map(l => l.leaf.text ?? '').join('');
             if (!/[\divxlcdm]/i.test(text) || text.length > 200) continue;
             const key = `${page.kind}|${text.replace(/\p{Nd}+/gu, '#').trim()}`;
-            const spans = fieldsIn(text, page.pageNumber, numPages);
+            const spans = fieldsIn(text, page.pageNumber, numPages, allPages);
             let group = groups.get(key);
             if (!group) groups.set(key, group = []);
             group.push({ node, leaves, spans, rotation: page.rotation });

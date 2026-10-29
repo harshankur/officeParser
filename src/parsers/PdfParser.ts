@@ -2305,8 +2305,13 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     }
 
     // The page numbers in the pages' headers and footers, marked as the page fields they print, now that
-    // every page's are read (a number is marked only where each page's of that text is its own).
-    markPageFields(furniture, numPages);
+    // every page's are read (a number is marked only where each page's of that text is its own). Only what
+    // stays true of the pages read: a writer numbers its own pages from one, so a page's number is its field
+    // only where the pages read are the document's from its first, one after another, and the pages' count
+    // only where they are all of them. A range from a later page (pageRange '2-4') marks none: "Page 2 of 4"
+    // printed on its first page is no number of the output's.
+    const fromFirst = extracts.every((e, i) => e.pageNumber === i + 1);
+    if (fromFirst) markPageFields(furniture, numPages, extracts.length === numPages);
 
     // Now that every page's headings and their positions are known, point each internal link at the
     // nearest heading on its target page (falling back to the page itself), rather than a page jump.

@@ -8710,6 +8710,12 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
     assert.ok(collectAllNodes(kept).some(n => (n.metadata as any)?.field === 'pages' && n.text === '4'), 'Running footers: kept in the page, the page numbers are fields still');
     const lastKept = kept.content[3].children ?? [];
     assert.ok(lastKept[lastKept.length - 1]?.text === '4/4', 'Running footers: kept, the footer is last on its page');
+    // A range of the pages: the output numbers its own pages from one. From a later page, "2/4" on its first
+    // page is no field; from the first, a page's number is still its field, but "of 4" is not the output's count.
+    const later = await read(form, { pageRange: '2-4' });
+    assert.ok(texts(later.auxiliary?.footers).includes('2:2/4') && fieldsOf(later.auxiliary?.footers).length === 0, `Running footers: a range from a later page marks no page fields (${JSON.stringify(fieldsOf(later.auxiliary?.footers))})`);
+    const first = await read(form, { pageRange: '1-3' });
+    assert.deepStrictEqual(fieldsOf(first.auxiliary?.footers), ['1:page=1', '2:page=2', '3:page=3'], `Running footers: a range from the first page marks its pages' numbers, not the document's count (${JSON.stringify(fieldsOf(first.auxiliary?.footers))})`);
     const dropped = await read(form, {}, { ignoreHeadersAndFooters: true });
     assert.ok(dropped.auxiliary?.footers === undefined && !(await md(dropped)).includes('Anlage'), 'Running footers: ignoreHeadersAndFooters drops them');
 
