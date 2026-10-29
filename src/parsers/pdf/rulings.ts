@@ -16,6 +16,7 @@
 import { CellMetadata, NodeBounds, OfficeContentNode } from '../../types.js';
 import type { PdfShape } from './pdfShapes.js';
 import type { PdfLayoutConfig, RawRun } from './pdfTypes.js';
+import { digitsValue } from './runningLines.js';
 import { CELL_PAGE_BOX } from './textLayout.js';
 
 /** At most this many rules a page, this many crossing tests, and this many grid cells a frame. */
@@ -201,6 +202,8 @@ const COMB_WIDTH_SPREAD = 0.15;
  * be a value's.
  */
 const SCALE_BOXES = 3;
+/** The boxes a scale counting by more than one has at least (see isScale). */
+const SCALE_STEP_BOXES = 5;
 /**
  * How a row of boxes the page draws, a character to a box, is a comb (see isComb): its boxes about square,
  * taller than wide or a little wider (no wider than COMB_SHAPE times their height; a row of digits alone up to
@@ -219,8 +222,8 @@ const GRADES = ['ABCDF', 'abcdf'];
 /**
  * Whether a row of boxes, one character to a box, prints a scale's choices rather than holds a value: every
  * box filled, with characters that count up or down one at a time ("1 2 3 4 5", "0 1 2 ... 9", "A B C D E",
- * "5 4 3 2 1"), digits counting by another step ("1 3 5 7 9") or a school's grades ("A B C D F"), three at
- * least. A value's characters (a date's "15041985", a name's) do not count so; one that does, a comb filled
+ * "5 4 3 2 1"), in digits of any script too, five digits and more counting by another step ("1 3 5 7 9"), or
+ * a school's grades ("A B C D F"), three at least. A value's characters (a date's "15041985", a name's) do not count so; one that does, a comb filled
  * with "12345" however tight its boxes, is read as the row of choices it looks like, its characters still in
  * order, each in its cell.
  */
@@ -228,10 +231,12 @@ function isScale(chars: readonly string[]): boolean {
     if (chars.length < SCALE_BOXES || chars.some(c => [...c].length !== 1)) return false;
     const text = chars.join(''), back = [...chars].reverse().join('');
     if (SCALE_RUNS.some(run => run.includes(text) || run.includes(back)) || GRADES.includes(text) || GRADES.includes(back)) return true;
-    // (Digits counting by a step of their own, the odd or even choices: "1 3 5 7 9", "2 4 6", "10 ... 0" by twos.)
-    if (!chars.every(c => /^[0-9]$/.test(c))) return false;
-    const step = Number(chars[1]) - Number(chars[0]);
-    return step !== 0 && chars.every((c, i) => i === 0 || Number(c) - Number(chars[i - 1]) === step);
+    // Digits of any script counting by one, or (five boxes and more: "2 4 6" in boxes is as likely a value) by
+    // a step of their own, the odd or even choices ("1 3 5 7 9", "0 2 4 6 8").
+    if (!chars.every(c => /^\p{Nd}$/u.test(c))) return false;
+    const values = chars.map(digitsValue);
+    const step = values[1] - values[0];
+    return (Math.abs(step) === 1 || (step !== 0 && chars.length >= SCALE_STEP_BOXES)) && values.every((v, i) => i === 0 || v - values[i - 1] === step);
 }
 
 /**

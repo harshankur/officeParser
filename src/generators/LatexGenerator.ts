@@ -169,7 +169,7 @@ type TableSlot =
 interface PackageUse {
     math: boolean; amssymb: boolean; graphics: boolean; tables: boolean; longtable: boolean; multirow: boolean;
     ulem: boolean; xcolor: boolean; colortbl: boolean; listings: boolean; endnotes: boolean; paragraphFix: boolean; captionof: boolean;
-    multicol: boolean; landscape: boolean;
+    multicol: boolean; landscape: boolean; lastpage: boolean;
 }
 
 /**
@@ -287,7 +287,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
 
     private readonly uses: PackageUse = {
         math: false, amssymb: false, graphics: false, tables: false, longtable: false, multirow: false,
-        ulem: false, xcolor: false, colortbl: false, listings: false, endnotes: false, paragraphFix: false, captionof: false, multicol: false, landscape: false,
+        ulem: false, xcolor: false, colortbl: false, listings: false, endnotes: false, paragraphFix: false, captionof: false, multicol: false, landscape: false, lastpage: false,
     };
     /** Whether a `landscape` environment (a section turned from the document's pages) is open in the body. */
     private openLandscape = false;
@@ -928,6 +928,12 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                 continue;
             }
             const meta = node.metadata as TextMetadata | undefined;
+            if (node.type === 'text' && (meta?.field === 'page' || meta?.field === 'pages') && !this.ctx.moving) {
+                flushRuns();
+                await flushGroup();
+                write(this.pageField(node));
+                continue;
+            }
             if (node.type === 'text' && !meta?.citationKey) {
                 if (meta?.link) {
                     flushRuns();
@@ -996,6 +1002,26 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         if (t === 'lastRenderedPage' || t === 'section') return '';
         if (t === 'column' || t === 'thematic') return ' ';
         return LINE_BREAK;
+    }
+
+    /**
+     * A page field (TextMetadata.field) as the number LaTeX prints on the page it is set on: the page's
+     * (`\\thepage`, or in the field's own format where LaTeX has one), or the document's last page's
+     * (`lastpage`), in the field's text's formatting. In a moving argument (a title's bookmark) its text.
+     */
+    private pageField(node: OfficeContentNode): string {
+        const meta = node.metadata as TextMetadata;
+        const raw = node.text || '';
+        let command: string;
+        if (meta.field === 'pages') {
+            this.uses.lastpage = true;
+            // (Starred, as no link: hyperref is loaded.)
+            command = '\\pageref*{LastPage}';
+        } else {
+            const format = meta.fieldFormat;
+            command = format === 'lowerRoman' ? '\\roman{page}' : format === 'upperRoman' ? '\\Roman{page}' : format === 'decimal' ? '\\arabic{page}' : '\\thepage{}';
+        }
+        return this.formatRun(command, raw.trim() ? raw : '0', node.formatting);
     }
 
     private textRun(node: OfficeContentNode): string {
@@ -2225,7 +2251,21 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             for (const c of n.children || []) await collect(c);
         };
         await this.withCtx({ sections: false, verbatim: false, longtable: false, display: false, notes: 'omit', labels: false, imageMaxHeight: IMAGE_MAX_HEIGHT_HEADER },
-            async () => { for (const c of node.children || []) await collect(c); });
+            async () => {
+                // (Text set straight in the part, not in a paragraph, is one line: a line's runs are its words.)
+                let inline: OfficeContentNode[] = [];
+                const flush = async () => {
+                    const t = inline.length ? (await this.renderInline(inline)).trim() : '';
+                    if (t) lines.push(t);
+                    inline = [];
+                };
+                for (const c of node.children || []) {
+                    if (c.type === 'text') { inline.push(c); continue; }
+                    await flush();
+                    await collect(c);
+                }
+                await flush();
+            });
         return { text: lines.join(' \\\\ '), lines: Math.max(1, lines.length), position: position ?? 'L' };
     }
 
@@ -2491,6 +2531,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         if (u.captionof) lines.push('\\usepackage{capt-of}');
         if (u.multicol) lines.push('\\usepackage{multicol}');
         if (u.landscape) lines.push('\\usepackage{pdflscape}');
+        if (u.lastpage) lines.push('\\usepackage{lastpage}');
         return lines;
     }
 

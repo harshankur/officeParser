@@ -52,7 +52,7 @@ import { annotationMatrix, computeRunBox, identityMatrix, mulMatrix, roundBounds
 import { PageExtract, PdfImage, PdfLayoutConfig, RawRun, ResolvedFont } from './pdf/pdfTypes.js';
 import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, emitBounds, indentLevels as indentLevelsOf, joinMarkerLines, leadingMarker, ListCarry, markerLefts, PageContext, lineDirections, recoverTaggedGrids, rightToLeftLean, relevelHeadings, runsToParagraph, segmentIntoBlocks } from './pdf/textLayout.js';
 import { buildTaggedNodes } from './pdf/structTree.js';
-import { FURNITURE_BAND, findRunningLines, markPageFields, PageFurniture, RunningRuns } from './pdf/runningLines.js';
+import { FURNITURE_BAND, findRunningLines, furnitureChanging, markPageFields, PageFurniture, RunningRuns, unmarkPageFields } from './pdf/runningLines.js';
 import { setOwn } from '../utils/lookupUtils.js';
 import { acquirePdfProcess, PdfProcess } from './pdf/pdfProcess.js';
 import { captureConsoleWarnings, openWarningWorker, PdfAssetSession, pdfjsWorkerFile, resolvePdfAssetFolders, WarningWorker } from './pdf/pdfAssets.js';
@@ -2149,6 +2149,11 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     const auxFooters: OfficeContentNode[] = [];
     // Each page's header and footer nodes, for their page numbers (see markPageFields).
     const furniture: PageFurniture[] = [];
+    // Each page whose header or footer was found by comparing the pages and went to the auxiliary: its nodes as
+    // read and as they went there, so a kind whose text changes from page to page is put back in its pages (see
+    // furnitureChanging). A header the PDF marks as its artifact is its header, as it says.
+    const routed: { page: OfficeContentNode; header: [OfficeContentNode, OfficeContentNode][]; footer: [OfficeContentNode, OfficeContentNode][] }[] = [];
+    const foundFurniture: PageFurniture[] = [];
     // A document whose tags are not read for its structure does not mark its running headers and footers
     // either (untagged, or tagged but not trusted, or its tags not asked for): the lines repeated at the top
     // and the bottom of its pages are found by comparing them (see findRunningLines).
@@ -2258,7 +2263,8 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         const footerNodes = config.ignoreHeadersAndFooters ? [] : geometricNodes(footerRuns, layoutCtx, docCtx, layoutCfg, false);
         if (!config.ignoreHeadersAndFooters && pdfCfg.keepHeadersAndFootersInPages) {
             pageContent = [...headerNodes, ...pageContent, ...footerNodes];
-            furniture.push({ pageNumber: extract.pageNumber, kind: 'header', nodes: headerNodes, rotation: extract.rotation }, { pageNumber: extract.pageNumber, kind: 'footer', nodes: footerNodes, rotation: extract.rotation });
+            const label = pageLabels?.[extract.pageNumber - 1];
+            furniture.push({ pageNumber: extract.pageNumber, kind: 'header', nodes: headerNodes, rotation: extract.rotation, label }, { pageNumber: extract.pageNumber, kind: 'footer', nodes: footerNodes, rotation: extract.rotation, label });
         }
 
         // Images: emit as attachments/OCR, then splice each into the flow before the first text node
@@ -2271,6 +2277,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             if (at < 0) pageContent.push(node); else pageContent.splice(at, 0, node);
         }
 
+        let pageRouted: { header: [OfficeContentNode, OfficeContentNode][]; footer: [OfficeContentNode, OfficeContentNode][] } | undefined;
         // Running headers/footers route to auxiliary unless the caller asked for them to be dropped,
         // or kept in the page (see above).
         if (!config.ignoreHeadersAndFooters && !pdfCfg.keepHeadersAndFootersInPages) {
@@ -2280,9 +2287,16 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             for (const node of footerNodes) pageFooters.push(retypeAsHeaderFooter(node, 'footer', extract.pageNumber));
             finalizeBounds(pageHeaders, pageCtx, pdfCfg.includeBounds);
             finalizeBounds(pageFooters, pageCtx, pdfCfg.includeBounds);
-            furniture.push({ pageNumber: extract.pageNumber, kind: 'header', nodes: pageHeaders, rotation: extract.rotation }, { pageNumber: extract.pageNumber, kind: 'footer', nodes: pageFooters, rotation: extract.rotation });
+            const label = pageLabels?.[extract.pageNumber - 1];
+            const header: PageFurniture = { pageNumber: extract.pageNumber, kind: 'header', nodes: pageHeaders, rotation: extract.rotation, label };
+            const footer: PageFurniture = { pageNumber: extract.pageNumber, kind: 'footer', nodes: pageFooters, rotation: extract.rotation, label };
+            furniture.push(header, footer);
             appendAll(auxHeaders, pageHeaders);
             appendAll(auxFooters, pageFooters);
+            const foundHeader = !!runningRuns?.header.size, foundFooter = !!runningRuns?.footer.size;
+            if (foundHeader) foundFurniture.push(header);
+            if (foundFooter) foundFurniture.push(footer);
+            pageRouted = { header: foundHeader ? headerNodes.map((n, k) => [n, pageHeaders[k]]) : [], footer: foundFooter ? footerNodes.map((n, k) => [n, pageFooters[k]]) : [] };
         }
 
         finalizeBounds(pageContent, pageCtx, pdfCfg.includeBounds);
@@ -2316,6 +2330,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             if (label && label !== String(extract.pageNumber)) pageNode.metadata.pageLabel = label;
         }
         content.push(pageNode);
+        if (pageRouted) routed.push({ page: pageNode, ...pageRouted });
     }
 
     // The page numbers in the pages' headers and footers, marked as the page fields they print, now that
@@ -2326,6 +2341,31 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     // printed on its first page is no number of the output's.
     const fromFirst = extracts.every((e, i) => e.pageNumber === i + 1);
     if (fromFirst) markPageFields(furniture, numPages, extracts.length === numPages);
+    // A header or footer whose text is not the same on every page it is on, once its page fields are its
+    // fields (a chapter's head, a journal's pages numbered from 147), stays in its pages: a writer prints one
+    // header on every page, the first page's, which lost the other pages' text.
+    const changing = furnitureChanging(foundFurniture);
+    for (const kind of changing) {
+        const aux = kind === 'header' ? auxHeaders : auxFooters;
+        const moved = new Set<OfficeContentNode>();
+        for (const page of routed) {
+            if (!page[kind].length) continue;
+            const children = page.page.children!;
+            const back = page[kind].map(([read, went]) => {
+                moved.add(went);
+                // (Its box as finalized with the page's header; the fields cut in it are its text again.)
+                const node = read === went.children?.[0] ? read : { ...read, ...(went.children?.[0]?.bounds ? { bounds: went.children[0].bounds } : {}) };
+                if (node !== read && !went.children?.[0]?.bounds) delete node.bounds;
+                unmarkPageFields(node);
+                return node;
+            });
+            if (kind === 'header') children.unshift(...back); else children.push(...back);
+            page.page.text = children.map(n => n.text).join(config.newlineDelimiter);
+        }
+        const kept = aux.filter(n => !moved.has(n));
+        aux.length = 0;
+        appendAll(aux, kept);
+    }
 
     // Now that every page's headings and their positions are known, point each internal link at the
     // nearest heading on its target page (falling back to the page itself), rather than a page jump.
@@ -2505,7 +2545,9 @@ function retypeAsHeaderFooter(node: OfficeContentNode, type: 'header' | 'footer'
             text = `${marker} ${text ?? ''}`;
         }
     }
-    return { type, text, children, bounds: node.bounds, metadata: { type: 'default', page } };
+    // (Its line a paragraph in it, as a header read from any other document holds its paragraphs.)
+    const line: OfficeContentNode = node.type === 'list' ? { type: 'paragraph', text, children, bounds: node.bounds } : node;
+    return { type, text, children: [line], bounds: node.bounds, metadata: { type: 'default', page } };
 }
 
 /**

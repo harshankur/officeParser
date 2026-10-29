@@ -8366,6 +8366,17 @@ async function testPdfFormValuesAsText(): Promise<void> {
     assert.deepStrictEqual(ruledTables, [[[...'MTWTFSS']], [['Y', 'N']], [[...'13579']], [[...'12345']], [[...'ABCDE']], [[...'123']], [[...'MTWTFSS']], [[...'13579']]],
         `PDF comb: letters and numbers in boxes wider than tall are tables, and a scale's characters in boxes as tight as a comb's (${JSON.stringify([ruledTables, ruledRead])})`);
     assert.ok(['Born 15041985', 'Signed 01052026', 'Due 15041985'].every(t => ruledRead.includes(t)), `PDF comb: a date's digits in boxes a little wider than tall are one value (${JSON.stringify(ruledRead)})`);
+    // Fewer than five digits counting by more than one, in square boxes, are a value: a PIN's "2468".
+    const pin = await PDFDocument.create();
+    const pinFont = await pin.embedFont(StandardFonts.Helvetica);
+    const pinPage = pin.addPage([500, 200]);
+    pinPage.drawText('PIN', { x: 50, y: 104, size: 11, font: pinFont });
+    [...'2468'].forEach((c, k) => {
+        pinPage.drawRectangle({ x: 200 + 18 * k, y: 100, width: 18, height: 18, borderColor: black, borderWidth: 0.5 });
+        pinPage.drawText(c, { x: 200 + 18 * k + (18 - pinFont.widthOfTextAtSize(c, 14)) / 2, y: 103, size: 14, font: pinFont });
+    });
+    const pinAst = await OfficeParser.parseOffice(Buffer.from(await pin.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
+    assert.ok(paragraphs(pinAst).includes('PIN 2468') && !all(pinAst).some(n => n.type === 'table'), `PDF comb: four even digits in square boxes are a value (${JSON.stringify(paragraphs(pinAst))})`);
 
     // A tagged form: a field's widget tagged as a /Form element (its OBJR) reads its value there, and a
     // field the tags leave out reads by its place, neither making the tags look unreliable.
@@ -8847,7 +8858,8 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
     const read = async (pdf: Buffer, pdfParserConfig: object = {}, extra: object = {}) => await OfficeParser.parseOffice(pdf, { fileType: 'pdf', ocr: false, ...extra, pdfParserConfig: { separateProcess: false, ...pdfParserConfig } } as any) as OfficeParserAST;
     const md = async (ast: OfficeParserAST) => String((await ast.to('md')).value);
     const texts = (nodes: OfficeContentNode[] | undefined) => (nodes ?? []).map(n => `${(n.metadata as { page?: number } | undefined)?.page}:${n.text}`);
-    const fieldsOf = (nodes: OfficeContentNode[] | undefined) => (nodes ?? []).flatMap(n => (n.children ?? []).filter(c => (c.metadata as any)?.field).map(c => `${(n.metadata as { page?: number } | undefined)?.page}:${(c.metadata as any).field}=${c.text}`));
+    // (A header's line is a paragraph in it, its runs in that.)
+    const fieldsOf = (nodes: OfficeContentNode[] | undefined) => (nodes ?? []).flatMap(n => (n.children ?? []).flatMap(c => [c, ...(c.children ?? [])]).filter(c => (c.metadata as any)?.field).map(c => `${(n.metadata as { page?: number } | undefined)?.page}:${(c.metadata as any).field}=${c.text}`));
     const count = (s: string, part: string) => s.split(part).length - 1;
 
     // A form of four pages, untagged: its footer, a line and "n/4", the same on every page; a heading
@@ -8892,9 +8904,11 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
     const lastKept = kept.content[3].children ?? [];
     assert.ok(lastKept[lastKept.length - 1]?.text === '4/4', 'Running footers: kept, the footer is last on its page');
     // A range of the pages: the output numbers its own pages from one. From a later page, "2/4" on its first
-    // page is no field; from the first, a page's number is still its field, but "of 4" is not the output's count.
+    // page is no field, so the footer, no longer the same on every page, stays in its pages; from the first, a
+    // page's number is still its field, but "of 4" is not the output's count.
     const later = await read(form, { pageRange: '2-4' });
-    assert.ok(texts(later.auxiliary?.footers).includes('2:2/4') && fieldsOf(later.auxiliary?.footers).length === 0, `Running footers: a range from a later page marks no page fields (${JSON.stringify(fieldsOf(later.auxiliary?.footers))})`);
+    const laterMd = await md(later);
+    assert.ok(later.auxiliary?.footers === undefined && ['2/4', '3/4', '4/4'].every(t => laterMd.includes(t)), `Running footers: a range from a later page marks no page fields, and keeps its footers in its pages (${JSON.stringify(texts(later.auxiliary?.footers))})`);
     const first = await read(form, { pageRange: '1-3' });
     assert.deepStrictEqual(fieldsOf(first.auxiliary?.footers), ['1:page=1', '2:page=2', '3:page=3'], `Running footers: a range from the first page marks its pages' numbers, not the document's count (${JSON.stringify(fieldsOf(first.auxiliary?.footers))})`);
     const dropped = await read(form, {}, { ignoreHeadersAndFooters: true });
@@ -8910,18 +8924,21 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
     // A front matter's pages numbered in roman numerals, as its page labels say: running on two pages, and
     // the page's number in its numerals.
     const roman = await read(pdfOf(['i', 'ii'].map((n, i) => [body(i + 1), line(245, 30, 10, n)].join('\n')), '/PageLabels << /Nums [0 << /S /r >>] >>'));
-    const romanFields = (roman.auxiliary?.footers ?? []).flatMap(n => (n.children ?? []).map(c => `${c.text}:${(c.metadata as any)?.field}:${(c.metadata as any)?.fieldFormat}`));
+    const romanFields = (roman.auxiliary?.footers ?? []).flatMap(n => (n.children ?? []).flatMap(c => c.children ?? []).map(c => `${c.text}:${(c.metadata as any)?.field}:${(c.metadata as any)?.fieldFormat}`));
     assert.deepStrictEqual(romanFields, ['i:page:lowerRoman', 'ii:page:lowerRoman'], `Running footers: roman page numbers the labels give are footers and fields (${JSON.stringify(texts(roman.auxiliary?.footers))})`);
     // A page labelled "1", then one labelled "II" (a section numbered anew in roman numerals): each its label.
     const relabelled = await read(pdfOf(['1', 'II'].map((n, i) => [body(i + 1), line(245, 30, 10, n)].join('\n')), '/PageLabels << /Nums [0 << /S /D >> 1 << /S /R /St 2 >>] >>'));
-    assert.deepStrictEqual(texts(relabelled.auxiliary?.footers), ['1:1', '2:II'], `Running footers: page numbers as their labels give them, digits then roman, are footers (${JSON.stringify(texts(relabelled.auxiliary?.footers))})`);
+    // (Fields of two formats, which one footer could not print, so they stay in their pages.)
+    const relabelledMd = await md(relabelled);
+    assert.ok(relabelled.auxiliary?.footers === undefined && /^1$/m.test(relabelledMd) && /^II$/m.test(relabelledMd), `Running footers: page numbers as their labels give them, digits then roman, stay in their pages (${JSON.stringify(texts(relabelled.auxiliary?.footers))})`);
     assert.ok(/<w:fldSimple w:instr=" PAGE \\\* roman ">/.test(Object.entries(unzipSync((await roman.to('docx')).value as Uint8Array)).filter(([k]) => /footer/.test(k)).map(([, v]) => strFromU8(v)).join('')), 'Running footers: DOCX writes the field in roman numerals');
 
-    // A form placed after another page (a scan before it): its "n/4" is a running footer, but not the page's
-    // number, so it is no field.
+    // A form placed after another page (a scan before it): its "n/4" runs, but is not the page's number, so it
+    // is no field, and stays in its pages.
     const stitched = await read(pdfOf([body(1), ...[1, 2, 3, 4].map(p => [body(p + 1), line(440, 30, 8, `${p}/4`)].join('\n'))]));
-    assert.ok(texts(stitched.auxiliary?.footers).join() === '2:1/4,3:2/4,4:3/4,5:4/4' && fieldsOf(stitched.auxiliary?.footers).length === 0,
-        `Running footers: another document's page numbers are its footer, but not this one's page fields (${JSON.stringify([texts(stitched.auxiliary?.footers), fieldsOf(stitched.auxiliary?.footers)])})`);
+    const stitchedMd = await md(stitched);
+    assert.ok(stitched.auxiliary?.footers === undefined && ['1/4', '2/4', '3/4', '4/4'].every(t => stitchedMd.includes(t)),
+        `Running footers: another document's page numbers stay in their pages (${JSON.stringify([texts(stitched.auxiliary?.footers), fieldsOf(stitched.auxiliary?.footers)])})`);
 
     // A table going on over four pages, its head row repeated at the top of each, at the text's size: the
     // head reads with the rows under it, close under it or far.
@@ -8992,7 +9009,7 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
     // its page label in its text. (\320 in a PDF string is the font's emdash, in its StandardEncoding.)
     const shapes: [string, (p: number) => string][] = [['bar', p => `Acme Corp Annual Report 2024 | ${p}`], ['lead', p => `${p} | Acme Corp Annual Report`],
         ['after', p => `${p} | Page`], ['before', p => `Page | ${p}`], ['pg', p => `Pg. ${p}`], ['dash', p => `Report \\320 ${p}`], ['comma', p => `Report, ${p}`],
-        ['brackets', p => `[${p}]`], ['journal', p => `J. Appl. Things 12 \\(2024\\) ${p + 100}`],
+        ['brackets', p => `[${p}]`],
         // (A page numbered within its chapter or appendix, the line its number alone: \261 is the font's en dash.)
         ['chapter', p => `2-${p}`], ['chapter point', p => `2.${p}`], ['chapter colon', p => `2:${p}`], ['chapter en dash', p => `2\\261${p}`],
         ['appendix', p => `A-${p}`], ['chapter page', p => `Page 2-${p}`],
@@ -9004,6 +9021,11 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
         const shaped = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, head(p)), body(p)].join('\n'))));
         assert.strictEqual(texts(shaped.auxiliary?.headers).length, 4, `Running headers: a page number printed as "${head(3)}" (${name}) makes its line a header (${JSON.stringify(texts(shaped.auxiliary?.headers))})`);
     }
+    // A journal's numbering of its pages, from 101: running, but no page field of the PDF's own, so the line
+    // stays on each page, its own number in it.
+    const journal = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, `J. Appl. Things 12 \\(2024\\) ${p + 100}`), body(p)].join('\n'))));
+    const journalText = String((await journal.to('text')).value);
+    assert.ok(journal.auxiliary?.headers === undefined && [101, 102, 103, 104].every(n => journalText.includes(`J. Appl. Things 12 (2024) ${n}`)), `Running headers: a journal's page numbers stay on their pages (${JSON.stringify(texts(journal.auxiliary?.headers))})`);
     // A footer framed by bullets keeps them both: read as a list's item, it was its text after the first.
     const bullets = await read(pdfOf([1, 2, 3, 4].map(p => [body(p), line(240, 30, 10, `\\267 ${p} \\267`)].join('\n'))));
     assert.deepStrictEqual(texts(bullets.auxiliary?.footers), [1, 2, 3, 4].map(p => `${p}:\u2022 ${p} \u2022`), `Running footers: a footer framed by bullets keeps its text (${JSON.stringify(texts(bullets.auxiliary?.footers))})`);
@@ -9020,6 +9042,7 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
         `Running footers: a manual's number beside the page's within its chapter (${JSON.stringify(texts(manual.auxiliary?.footers))})`);
     const preface = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, `Preface ${formatListNumber(p, 'lowerRoman')}`), body(p)].join('\n')), '/PageLabels << /Nums [0 << /S /r >>] >>'));
     assert.deepStrictEqual(texts(preface.auxiliary?.headers), ['1:Preface i', '2:Preface ii', '3:Preface iii', '4:Preface iv'], `Running headers: a page label in a header's text numbers it (${JSON.stringify(texts(preface.auxiliary?.headers))})`);
+    assert.deepStrictEqual(fieldsOf(preface.auxiliary?.headers), ['1:page=i', '2:page=ii', '3:page=iii', '4:page=iv'], 'Running headers: and the label is the page\'s field');
     // A Chinese header, "第3页" (page 3), its characters drawn as X and Y the font's ToUnicode reads so.
     const toUnicode = '/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /XY def /CMapType 2 def 1 begincodespacerange <00> <FF> endcodespacerange '
         + '2 beginbfchar <58> <7B2C> <59> <9875> endbfchar 2 beginbfrange <20> <57> <0020> <5A> <7E> <005A> endbfrange endcmap CMapName currentdict /CMap defineresource pop end end';
@@ -9040,14 +9063,20 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
     // (The map is the object after two pages', the 8th.)
     const indicTwo = await read(pdfOf([1, 2].map(p => [body(p), line(245, 30, 10, String(p))].join('\n')), '', '/ToUnicode 8 0 R', [`<< /Length ${indicMap.length} >>\nstream\n${indicMap}\nendstream`]));
     assert.deepStrictEqual(texts(indicTwo.auxiliary?.footers), ['1:\u0661', '2:\u0662'], `Running footers: two pages' numbers alone in Arabic-Indic digits are their footers (${JSON.stringify(texts(indicTwo.auxiliary?.footers))})`);
-    // A chapter's head on each of its pages, the next chapter's on its: printed alike page after page, a header,
-    // and so is a short chapter's on its one page among them.
+    // A chapter's head on each of its pages, the next chapter's on its: running, but not the same on every page,
+    // so no writer of one header could print it; it stays in its pages, each its own.
     const chapters = await read(pdfOf([1, 2, 3, 4, 5, 6].map(p => [line(50, 760, 10, `Chapter ${p <= 3 ? 1 : p === 4 ? 2 : 3}`), body(p)].join('\n'))));
-    assert.deepStrictEqual(texts(chapters.auxiliary?.headers), ['1:Chapter 1', '2:Chapter 1', '3:Chapter 1', '4:Chapter 2', '5:Chapter 3', '6:Chapter 3'], `Running headers: a chapter's head on its pages is their header (${JSON.stringify(texts(chapters.auxiliary?.headers))})`);
-    // An article numbered as in its journal, from 147: its numbers run with the pages, a footer, but no field.
+    const chaptersMd = await md(chapters);
+    assert.ok(chapters.auxiliary?.headers === undefined && count(chaptersMd, 'Chapter 1') === 3 && count(chaptersMd, 'Chapter 2') === 1 && count(chaptersMd, 'Chapter 3') === 2,
+        `Running headers: a chapter's head that changes stays in its pages (${JSON.stringify([texts(chapters.auxiliary?.headers), chaptersMd.slice(0, 200)])})`);
+    const chaptersDocx = strFromU8(unzipSync((await chapters.to('docx')).value as Uint8Array)['word/document.xml']);
+    assert.ok(['Chapter 1', 'Chapter 2', 'Chapter 3'].every(t => chaptersDocx.includes(t)), 'Running headers: and every chapter\'s head is in the DOCX');
+    // An article numbered as in its journal, from 147: its numbers run with the pages but are no page field, so
+    // the footer stays on its pages, each its own number.
     const article = await read(pdfOf([1, 2, 3, 4].map(p => [body(p), line(245, 30, 10, String(146 + p))].join('\n'))));
-    assert.ok(texts(article.auxiliary?.footers).join() === '1:147,2:148,3:149,4:150' && fieldsOf(article.auxiliary?.footers).length === 0,
-        `Running footers: numbers that run with the pages from elsewhere are the footer (${JSON.stringify([texts(article.auxiliary?.footers), fieldsOf(article.auxiliary?.footers)])})`);
+    const articleMd = await md(article);
+    assert.ok(article.auxiliary?.footers === undefined && ['147', '148', '149', '150'].every(n => articleMd.includes(n)),
+        `Running footers: numbers that run with the pages from elsewhere stay on their pages (${JSON.stringify([texts(article.auxiliary?.footers), articleMd.slice(-200)])})`);
 
     // A book's heads, one on the left of even pages and another on the right of odd ones, its first page
     // without: three odd pages of eight are too few of all the pages, enough of the odd ones.
@@ -9056,15 +9085,34 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
         body(p),
         p === 1 ? '' : line(p % 2 ? 440 : 50, 30, 10, String(p)),
     ].join('\n'))));
-    assert.deepStrictEqual(texts(book.auxiliary?.headers), ['2:A Book of Examples', '3:Chapter One: Beginnings', '4:A Book of Examples', '5:Chapter One: Beginnings', '6:A Book of Examples', '7:Chapter One: Beginnings', '8:A Book of Examples'],
-        `Running headers: a book's even and odd pages' heads (${JSON.stringify(texts(book.auxiliary?.headers))})`);
-    assert.deepStrictEqual(fieldsOf(book.auxiliary?.footers), ['2:page=2', '3:page=3', '4:page=4', '5:page=5', '6:page=6', '7:page=7', '8:page=8'], 'Running headers: and its page numbers, left and right');
+    // (Its heads differ from page to page, so they stay in their pages; its page numbers, the same field on
+    // every page, are its footer.)
     const bookMd = await md(book);
-    assert.ok(!bookMd.includes('Chapter One') && count(bookMd, 'A Book of Examples') === 1, 'Running headers: the heads leave the Markdown, the title page\'s title stays');
+    assert.ok(book.auxiliary?.headers === undefined && count(bookMd, 'Chapter One') === 3 && count(bookMd, 'A Book of Examples') === 5,
+        `Running headers: a book's even and odd pages' heads stay in their pages (${JSON.stringify(texts(book.auxiliary?.headers))})`);
+    assert.deepStrictEqual(fieldsOf(book.auxiliary?.footers), ['2:page=2', '3:page=3', '4:page=4', '5:page=5', '6:page=6', '7:page=7', '8:page=8'], 'Running headers: and its page numbers, left and right, are its footer');
 
     // A tagged PDF's page numbers, in its pagination artifacts, are page fields too.
     const tagged = await read(pdfOf([1, 2, 3].map(p => [body(p), `/Artifact << /Type /Pagination >> BDC ${line(200, 30, 9, `Page ${p} of 3`)} EMC`].join('\n')), '/MarkInfo << /Marked true >>'));
     assert.deepStrictEqual(fieldsOf(tagged.auxiliary?.footers), ['1:page=1', '1:pages=3', '2:page=2', '2:pages=3', '3:page=3', '3:pages=3'], `Running footers: a tagged footer's page numbers are fields (${JSON.stringify(texts(tagged.auxiliary?.footers))})`);
+
+    // LaTeX writes the page fields as the page's number and the last page's, a footer's line on one line.
+    const tex = String((await ast.to('tex')).value);
+    const texFooter = tex.match(/\\fancyfoot\[[LCR]\]\{.*\}/)?.[0] ?? '';
+    const between = texFooter.slice(texFooter.indexOf('\\thepage{}'), texFooter.indexOf('\\pageref*{LastPage}'));
+    assert.ok(texFooter.includes('\\thepage{}') && texFooter.includes('\\pageref*{LastPage}') && between.includes('/') && !between.includes('\\\\') && tex.includes('\\usepackage{lastpage}'),
+        `Running footers: LaTeX writes \\thepage and the last page's number, on one line (${texFooter})`);
+    // A front matter's roman numbers after its title ("Preface | i"), as the page labels number its pages, are
+    // page fields in roman numerals.
+    const prefaceBar = await read(pdfOf([1, 2, 3, 4].map(p => [body(p), line(200, 30, 10, `Preface | ${['i', 'ii', 'iii', 'iv'][p - 1]}`)].join('\n')), '/PageLabels << /Nums [0 << /S /r >>] >>'));
+    const formats = (prefaceBar.auxiliary?.footers ?? []).flatMap(n => (n.children ?? []).flatMap(c => c.children ?? [])).filter(c => (c.metadata as any)?.field).map(c => `${c.text}:${(c.metadata as any).fieldFormat}`);
+    assert.deepStrictEqual(formats, ['i:lowerRoman', 'ii:lowerRoman', 'iii:lowerRoman', 'iv:lowerRoman'], `Running footers: "Preface | i" is a page field in roman numerals (${JSON.stringify([texts(prefaceBar.auxiliary?.footers), formats])})`);
+    assert.ok(String((await prefaceBar.to('tex')).value).includes('\\roman{page}'), 'Running footers: which LaTeX writes in roman numerals');
+    // Arabic-Indic page numbers are fields in their digits, which ODT writes them in.
+    const indicFormat = (indicTwo.auxiliary?.footers ?? []).flatMap(n => (n.children ?? []).flatMap(c => [c, ...(c.children ?? [])])).map(c => (c.metadata as any)?.fieldFormat).filter(Boolean);
+    assert.deepStrictEqual(indicFormat, ['decimalArabicIndic', 'decimalArabicIndic'], `Running footers: Arabic-Indic page numbers are fields in their digits (${JSON.stringify(indicFormat)})`);
+    const indicOdt = strFromU8(unzipSync((await indicTwo.to('odt')).value as Uint8Array)['styles.xml']);
+    assert.ok(indicOdt.includes('style:num-format="\u0661"'), 'Running footers: ODT writes them in Arabic-Indic digits');
     console.log('  PDF running headers and footers: All assertions passed ✓');
 }
 

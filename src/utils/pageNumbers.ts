@@ -30,7 +30,7 @@ const SCRIPT_ZEROS: Partial<Record<PageNumberFormat, number>> = {
 };
 
 /** The digit-script format whose zero this is, where it is one of PageNumberFormat's. */
-function scriptOfZero(zero: number): PageNumberFormat | undefined {
+export function scriptOfZero(zero: number): PageNumberFormat | undefined {
     for (const [format, z] of Object.entries(SCRIPT_ZEROS)) if (z === zero) return format as PageNumberFormat;
     return undefined;
 }

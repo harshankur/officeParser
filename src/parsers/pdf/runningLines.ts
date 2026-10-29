@@ -6,6 +6,7 @@
  */
 import type { OfficeContentNode, PageNumberFormat, TextMetadata } from '../../types.js';
 import { formatListNumber } from '../../utils/listMarkers.js';
+import { scriptOfZero } from '../../utils/pageNumbers.js';
 import { rotateBoundsToRendered } from './geometry.js';
 import type { PageExtract, PdfLayoutConfig, RawRun } from './pdfTypes.js';
 import { buildLines, lineRuns } from './textLayout.js';
@@ -67,11 +68,11 @@ const DASH = String.raw`[-\u2010-\u2015\u2212]`;
  */
 const PAGE_LINE = new RegExp(String.raw`^${DASH}?\s*(?:(?:${PAGE_WORD}\s*)?(\p{Nd}+|[ivxlcdm]+)(?:\s*${OF_WORD}\s*(\p{Nd}+))?|${SHEET_WORD}\s*(\p{Nd}+)\s*${OF_WORD}\s*(\p{Nd}+))\s*${DASH}?$`, 'iu');
 /** In a header's or footer's text: "3/4", "3 of 4", "Seite 3 von 4" (the page's number, then the pages'). */
-const NUMBER_OF = new RegExp(String.raw`(?<![\p{L}\p{N}])(\d+)\s*${OF_WORD}\s*(\d+)(?![\p{L}\p{N}])`, 'giu');
+const NUMBER_OF = new RegExp(String.raw`(?<![\p{L}\p{N}])(\p{Nd}+)\s*${OF_WORD}\s*(\p{Nd}+)(?![\p{L}\p{N}])`, 'giu');
 /** "Page 3", "Seite 3", "Page iii". */
-const WORD_NUMBER = new RegExp(String.raw`(?<![\p{L}\p{N}])${PAGE_WORD}\s*(\d+|[ivxlcdm]+)(?![\p{L}\p{N}])`, 'giu');
+const WORD_NUMBER = new RegExp(String.raw`(?<![\p{L}\p{N}])${PAGE_WORD}\s*(\p{Nd}+|[ivxlcdm]+)(?![\p{L}\p{N}])`, 'giu');
 /** A header or footer that is its number alone: "3", "- 3 -", "iii". */
-const BARE_NUMBER = new RegExp(String.raw`^\s*${DASH}?\s*(\d+|[ivxlcdm]+)\s*${DASH}?\s*$`, 'iu');
+const BARE_NUMBER = new RegExp(String.raw`^\s*${DASH}?\s*(\p{Nd}+|[ivxlcdm]+)\s*${DASH}?\s*$`, 'iu');
 
 /** The page's number as a roman numeral, in the case `token` is written in, where that is what it is. */
 function romanOf(token: string, pageNumber: number): PageNumberFormat | undefined {
@@ -128,7 +129,7 @@ const DIGIT_ZERO = new Map<number, number>();
  * script's digits are a run of ten from its zero, and runs of them are next to one another only whole (no
  * more than five), so a digit's value is how far it is from the first of the digits before it, by tens.
  */
-function digitsValue(run: string): number {
+export function digitsValue(run: string): number {
     let value = 0;
     for (const ch of run) {
         const cp = ch.codePointAt(0)!;
@@ -145,6 +146,17 @@ function digitsValue(run: string): number {
         value = value * 10 + digit;
     }
     return Number.isSafeInteger(value) ? value : NaN;
+}
+
+/** A page field's format as its digits are written: theirs where they are another script's than ASCII's. */
+function digitsFormat(run: string): { format?: PageNumberFormat } {
+    const cp = run.codePointAt(0)!;
+    if (cp < 128) return {};
+    // (Its zero, as reading it finds it.)
+    digitsValue(String.fromCodePoint(cp));
+    const zero = DIGIT_ZERO.get(cp);
+    const format = zero === undefined ? undefined : scriptOfZero(zero);
+    return format ? { format } : {};
 }
 
 /** Separators a page number is set apart from a header's words by: "Annual Report | 3", "3 · Annual Report". */
@@ -168,6 +180,9 @@ const NUMBER_LEAD = new RegExp(String.raw`\s*(?:[|¦‖•·]|${DASH}\s)\s*(?![\
  */
 const CHAPTER_WORD = new RegExp(String.raw`^${PAGE_WORD}\s*`, 'iu');
 const CHAPTER_NUMBER = /^(\p{Nd}{1,2}|[A-Z])\s?[-.:\u2011\u2013\u2014]\s?(\p{Nd}{1,3})$/u;
+
+/** What follows a chapter's number before its page's: "-3" of "2-3". */
+const CHAPTER_AFTER = /^\s?[-.:\u2011\u2013\u2014]\s?\p{Nd}/u;
 
 /** Whether a line (past any page's word) is a chapter's page, "2-5" or "A-5" (see CHAPTER_NUMBER). */
 function chapterPage(text: string): boolean {
@@ -532,6 +547,8 @@ export interface PageFurniture {
     nodes: OfficeContentNode[];
     /** The page's rotation: a number's box is cut from its text's along the line only on an upright page. */
     rotation: number;
+    /** The page's printed label, where the document labels its pages (see findRunningLines). */
+    label?: string | null;
 }
 
 /** A page field found in a node's text: where its number is, and which field it is. */
@@ -557,36 +574,42 @@ function textLeaves(node: OfficeContentNode): { parent: OfficeContentNode; leaf:
  * The page fields in a header's or footer's text, where its numbers are the page's and the document's pages'
  * (the pages' only where `allPages`: the output holds all of them).
  */
-function fieldsIn(text: string, pageNumber: number, numPages: number, allPages: boolean): FieldSpan[] | null {
+function fieldsIn(text: string, pageNumber: number, numPages: number, allPages: boolean, label: PageLabel | null): FieldSpan[] | null {
     for (const m of text.matchAll(NUMBER_OF)) {
-        if (Number(m[1]) !== pageNumber || Number(m[2]) !== numPages) continue;
+        if (digitsValue(m[1]) !== pageNumber || digitsValue(m[2]) !== numPages) continue;
         const start = m.index!, own = start + m[0].indexOf(m[1]);
         const total = start + m[0].lastIndexOf(m[2]);
-        const page: FieldSpan = { start: own, end: own + m[1].length, field: 'page' };
-        return allPages ? [page, { start: total, end: total + m[2].length, field: 'pages' }] : [page];
+        const page: FieldSpan = { start: own, end: own + m[1].length, field: 'page', ...digitsFormat(m[1]) };
+        return allPages ? [page, { start: total, end: total + m[2].length, field: 'pages', ...digitsFormat(m[2]) }] : [page];
     }
     for (const m of text.matchAll(WORD_NUMBER)) {
-        const format = /^\d+$/.test(m[1]) ? undefined : romanOf(m[1], pageNumber);
-        if (/^\d+$/.test(m[1]) ? Number(m[1]) !== pageNumber : !format) continue;
+        // (A chapter's number after a page's word is not the page's: "Page 2-2" is chapter 2's page 2.)
+        if (CHAPTER_AFTER.test(text.slice(m.index! + m[0].length))) continue;
+        const digits = /^\p{Nd}+$/u.test(m[1]);
+        const format = digits ? digitsFormat(m[1]).format : romanOf(m[1], pageNumber);
+        if (digits ? digitsValue(m[1]) !== pageNumber : !format) continue;
         const own = m.index! + m[0].lastIndexOf(m[1]);
         return [{ start: own, end: own + m[1].length, field: 'page', ...(format ? { format } : {}) }];
     }
     const bare = BARE_NUMBER.exec(text);
     if (bare) {
         const token = bare[1], start = bare.index + bare[0].indexOf(token);
-        if (/^\d+$/.test(token)) return Number(token) === pageNumber ? [{ start, end: start + token.length, field: 'page' }] : null;
+        if (/^\p{Nd}+$/u.test(token)) return digitsValue(token) === pageNumber ? [{ start, end: start + token.length, field: 'page', ...digitsFormat(token) }] : null;
         const format = romanOf(token, pageNumber);
         if (format) return [{ start, end: start + token.length, field: 'page', format }];
     }
     // Any other shape a running line's page number is found in ("Annual Report | 3", "| 3 |", "• 3 •", a
-    // chapter's "2-3", digits of another script): the last number set apart as a page's (see pageNumberAt) that
-    // is the page's own. Without it such a footer, taken out of the page, printed the first page's number on
-    // every page.
+    // chapter's "2-3", digits of another script, "Preface | iii"): the last number set apart as a page's (see
+    // pageNumberAt), or written as the page's label is ("Preface iii"), that is the page's own. Without it such
+    // a footer, taken out of the page, printed the first page's number on every page.
     let own: FieldSpan | null = null;
     if (text.length <= NUMBERED_TEXT) {
-        for (const m of text.matchAll(/\p{Nd}+/gu)) {
+        for (const m of text.matchAll(/\p{Nd}+|(?<![\p{L}\p{N}])[ivxlcdm]+(?![\p{L}\p{N}])/giu)) {
             const start = m.index!, end = start + m[0].length;
-            if (digitsValue(m[0]) === pageNumber && pageNumberAt(text, start, end)) own = { start, end, field: 'page' };
+            const digits = /^\p{Nd}/u.test(m[0]);
+            const format = digits ? digitsFormat(m[0]).format : romanOf(m[0], pageNumber);
+            const labelled = !digits && !!label && !label.digits && m[0].toLowerCase() === label.lower;
+            if ((digits ? digitsValue(m[0]) === pageNumber : !!format) && (labelled || pageNumberAt(text, start, end))) own = { start, end, field: 'page', ...(format ? { format } : {}) };
         }
     }
     return own ? [own] : null;
@@ -615,7 +638,7 @@ export function markPageFields(furniture: readonly PageFurniture[], numPages: nu
             const text = leaves.map(l => l.leaf.text ?? '').join('');
             if (!/[\p{Nd}ivxlcdm]/iu.test(text) || text.length > 200) continue;
             const key = `${page.kind}|${text.replace(/\p{Nd}+/gu, '#').trim()}`;
-            const spans = fieldsIn(text, page.pageNumber, numPages, allPages);
+            const spans = fieldsIn(text, page.pageNumber, numPages, allPages, pageLabelOf(page.label));
             let group = groups.get(key);
             if (!group) groups.set(key, group = []);
             group.push({ node, leaves, spans, rotation: page.rotation });
@@ -664,4 +687,37 @@ function cutField(hit: { parent: OfficeContentNode; leaf: OfficeContentNode; at:
     children.splice(index, 1, ...pieces);
     // The later spans of this leaf (an earlier number in the text) now find the piece before.
     if (from > 0) { hit.leaf = pieces[0]; }
+}
+
+/**
+ * The kinds (header, footer) whose text is not the same on every page that has one, its page fields read as
+ * the fields they are (in their formats: "1" on one page and "II" on the next are two): what a writer that
+ * prints one header on every page would lose.
+ */
+export function furnitureChanging(furniture: readonly PageFurniture[]): Set<'header' | 'footer'> {
+    const first = new Map<'header' | 'footer', string>();
+    const out = new Set<'header' | 'footer'>();
+    for (const page of furniture) {
+        if (out.has(page.kind)) continue;
+        const text = page.nodes.map(node => textLeaves(node).map(({ leaf }) => {
+            const meta = leaf.metadata as TextMetadata | undefined;
+            return meta?.field ? `\u0000${meta.field}:${meta.fieldFormat ?? ''}\u0000` : leaf.text ?? '';
+        }).join('')).join('\n').replace(/[^\S\n]+/g, ' ').trim();
+        if (!text) continue;
+        const was = first.get(page.kind);
+        if (was === undefined) first.set(page.kind, text);
+        else if (was !== text) out.add(page.kind);
+    }
+    return out;
+}
+
+/** A node's page fields (see markPageFields) as the text they were read as. */
+export function unmarkPageFields(node: OfficeContentNode): void {
+    for (const { leaf } of textLeaves(node)) {
+        const meta = leaf.metadata as TextMetadata | undefined;
+        if (!meta?.field) continue;
+        delete meta.field;
+        delete meta.fieldFormat;
+        if (!Object.keys(meta).length) delete leaf.metadata;
+    }
 }

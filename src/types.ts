@@ -749,14 +749,17 @@ export interface PdfParserConfig {
      * (and three), with their numbers as one where they number the pages ("1/4", "2/4") or the line is
      * printed alike on other pages (a chapter's head), no larger than the text and standing apart from
      * it, or the page's own number on two pages. "Question 3" at the top of one page and "Question 4" at
-     * the top of the next are the pages' own. Either is read into `auxiliary`, as a word processor's
-     * header is, so a writer that lays out pages (Word, ODT, RTF, LaTeX, PDF) repeats the first page's on
-     * every page and one that does not (text, Markdown, HTML, EPUB, PowerPoint) leaves them out. A page
-     * number in one is marked as the page field it prints (TextMetadata.field), so Word, ODT, RTF and
-     * PDF output number each page its own: where the pages read are the document's from its first (a
-     * `pageRange` from a later page marks none), and its pages' count only where all are read. Turn this on for a writer that shows each
-     * page as it was, a slide per page, so a page keeps its own header and footer text (a page number, a
-     * chapter title) in its place. `ignoreHeadersAndFooters` still drops them.
+     * the top of the next are the pages' own. A page number in one is marked as the page field it prints
+     * (TextMetadata.field), where the pages read are the document's from its first (a `pageRange` from a
+     * later page marks none), and its pages' count only where all are read. Either is read into
+     * `auxiliary`, as a word processor's header is, where it is the same on every page that has one once
+     * its page numbers are fields: a writer that lays out pages (Word, ODT, RTF, LaTeX, the PDF writer's
+     * native engine) writes it on every page, each page numbered its own, and one that does not (text,
+     * Markdown, HTML and the PDF writer's default HTML engine, EPUB, PowerPoint) leaves it out. A header or
+     * footer whose text changes from page to page (a chapter's head, pages numbered from 147) stays in its
+     * pages, where it is, as no such writer could print it. Turn this on for a writer that shows each page
+     * as it was, a slide per page, so every page keeps its own header and footer in its place.
+     * `ignoreHeadersAndFooters` still drops them.
      *
      * Default is false.
      */
