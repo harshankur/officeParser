@@ -158,6 +158,13 @@ const NUMBER_TAIL = new RegExp(String.raw`(?:\s*${OF_WORD}\s*(\p{Nd}+))?\s*(?:${
  * Report", "3 - Annual Report") where no number follows it ("3 - 5" is a range).
  */
 const NUMBER_LEAD = new RegExp(String.raw`\s*(?:[|¦‖•·]|${DASH}\s)\s*(?![\p{Nd}\s])`, 'uy');
+/**
+ * A line that is a page's number within its chapter or its appendix and nothing else, with or without a
+ * page's word: "2-5", "2.5", "2:5", "2–5" (an en dash), "A-5", "Page 2-5". Its last number is the page's.
+ * Two parts only, so a date's three ("2024-03-04") stay out.
+ */
+const CHAPTER_WORD = new RegExp(String.raw`^${PAGE_WORD}\s*`, 'iu');
+const CHAPTER_NUMBER = /^(?:\p{Nd}+|[A-Z])\s?[-.:\u2013]\s?\p{Nd}+$/u;
 /** A dash, and what may open a number that is a line of its own ("- 3 -", "[3]", "(3)"). */
 const DASH_ALONE = new RegExp(String.raw`^${DASH}$`, 'u');
 const OPENING = new RegExp(String.raw`^(?:${DASH}|[(\[])$`, 'u');
@@ -180,6 +187,11 @@ const OPENING = new RegExp(String.raw`^(?:${DASH}|[(\[])$`, 'u');
  * questions, and stays the page's text.
  */
 function pageNumberAt(text: string, start: number, end: number): boolean {
+    // (A chapter's page, "2-5" or "Page 2-5", the line's last number.)
+    if (end === text.length) {
+        const word = CHAPTER_WORD.exec(text);
+        if (CHAPTER_NUMBER.test(text) || (word && CHAPTER_NUMBER.test(text.slice(word[0].length)))) return true;
+    }
     PAGE_AFTER.lastIndex = end;
     if (PAGE_AFTER.test(text)) return true;
     let at = start;

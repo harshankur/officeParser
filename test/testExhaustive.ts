@@ -8980,11 +8980,18 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
     // its page label in its text. (\320 in a PDF string is the font's emdash, in its StandardEncoding.)
     const shapes: [string, (p: number) => string][] = [['bar', p => `Acme Corp Annual Report 2024 | ${p}`], ['lead', p => `${p} | Acme Corp Annual Report`],
         ['after', p => `${p} | Page`], ['before', p => `Page | ${p}`], ['pg', p => `Pg. ${p}`], ['dash', p => `Report \\320 ${p}`], ['comma', p => `Report, ${p}`],
-        ['brackets', p => `[${p}]`], ['journal', p => `J. Appl. Things 12 \\(2024\\) ${p + 100}`]];
+        ['brackets', p => `[${p}]`], ['journal', p => `J. Appl. Things 12 \\(2024\\) ${p + 100}`],
+        // (A page numbered within its chapter or appendix, the line its number alone: \261 is the font's en dash.)
+        ['chapter', p => `2-${p}`], ['chapter point', p => `2.${p}`], ['chapter colon', p => `2:${p}`], ['chapter en dash', p => `2\\261${p}`],
+        ['appendix', p => `A-${p}`], ['chapter page', p => `Page 2-${p}`]];
     for (const [name, head] of shapes) {
         const shaped = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, head(p)), body(p)].join('\n'))));
         assert.strictEqual(texts(shaped.auxiliary?.headers).length, 4, `Running headers: a page number printed as "${head(3)}" (${name}) makes its line a header (${JSON.stringify(texts(shaped.auxiliary?.headers))})`);
     }
+    // A manual's footer: its number on the left, the page's within its chapter on the right of the same row.
+    const manual = await read(pdfOf([1, 2, 3, 4].map(p => [body(p), line(50, 30, 10, 'FM 3-21.8'), line(430, 30, 10, `2-${p}`)].join('\n'))));
+    assert.deepStrictEqual(texts(manual.auxiliary?.footers), ['1:FM 3-21.8', '1:2-1', '2:FM 3-21.8', '2:2-2', '3:FM 3-21.8', '3:2-3', '4:FM 3-21.8', '4:2-4'],
+        `Running footers: a manual's number beside the page's within its chapter (${JSON.stringify(texts(manual.auxiliary?.footers))})`);
     const preface = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, `Preface ${formatListNumber(p, 'lowerRoman')}`), body(p)].join('\n')), '/PageLabels << /Nums [0 << /S /r >>] >>'));
     assert.deepStrictEqual(texts(preface.auxiliary?.headers), ['1:Preface i', '2:Preface ii', '3:Preface iii', '4:Preface iv'], `Running headers: a page label in a header's text numbers it (${JSON.stringify(texts(preface.auxiliary?.headers))})`);
     // A Chinese header, "第3页" (page 3), its characters drawn as X and Y the font's ToUnicode reads so.
