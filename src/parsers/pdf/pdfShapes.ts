@@ -58,6 +58,13 @@ function meet(a: ClipBox, b: [number, number, number, number]): [number, number,
     return [minX, minY, Math.max(minX, Math.min(a[2], b[2])), Math.max(minY, Math.min(a[3], b[3]))];
 }
 
+/** A form's box ([x0, y0, x1, y1] in its space) in viewport space, through `m`: the box around its corners. */
+function boxOf(m: number[], bbox: ArrayLike<number>): [number, number, number, number] {
+    const xs: number[] = [], ys: number[] = [];
+    for (const [x, y] of [[+bbox[0], +bbox[1]], [+bbox[2], +bbox[1]], [+bbox[0], +bbox[3]], [+bbox[2], +bbox[3]]]) { xs.push(m[0] * x + m[2] * y + m[4]); ys.push(m[1] * x + m[3] * y + m[5]); }
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+}
+
 /** Walks an operator list fetched with drawing operators kept, and returns the shapes it paints. */
 export function collectShapes(ops: any, viewportTransform: number[], OPS: any): PdfShape[] {
     const shapes: PdfShape[] = [];
@@ -86,18 +93,18 @@ export function collectShapes(ops: any, viewportTransform: number[], OPS: any): 
                 if (fm) ctm = mul(ctm, fm);
                 // (A form is clipped to its box.)
                 const bbox = a?.[1];
-                if (bbox && bbox.length === 4 && [0, 1, 2, 3].every(k => Number.isFinite(+bbox[k]))) {
-                    const m = mul(viewportTransform, ctm);
-                    const xs: number[] = [], ys: number[] = [];
-                    for (const [x, y] of [[+bbox[0], +bbox[1]], [+bbox[2], +bbox[1]], [+bbox[0], +bbox[3]], [+bbox[2], +bbox[3]]]) { xs.push(m[0] * x + m[2] * y + m[4]); ys.push(m[1] * x + m[3] * y + m[5]); }
-                    clip = meet(clip, [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
-                }
+                if (bbox && bbox.length === 4 && [0, 1, 2, 3].every(k => Number.isFinite(+bbox[k]))) clip = meet(clip, boxOf(mul(viewportTransform, ctm), bbox));
                 break;
             }
-            // A transparency group's form, and a soft mask's group its mask.
+            // A transparency group's form: pdf.js gives its box here, not with the form's matrix (which it
+            // gives as the form's, next), and a soft mask's group its mask.
             case OPS.beginGroup: {
                 stack.push({ ctm, fill, stroke, lineWidth, clip, alpha, masked, inMask });
-                if (a?.[0]?.smask) inMask = true;
+                const group = a?.[0];
+                if (group?.smask) inMask = true;
+                const gm = toMat6(group?.matrix);
+                const bbox = group?.bbox;
+                if (bbox && bbox.length === 4 && [0, 1, 2, 3].every(k => Number.isFinite(+bbox[k]))) clip = meet(clip, boxOf(mul(viewportTransform, gm ? mul(ctm, gm) : ctm), bbox));
                 break;
             }
             case OPS.endGroup: { const s = stack.pop(); if (s) ({ ctm, fill, stroke, lineWidth, clip, alpha, masked, inMask } = s); break; }

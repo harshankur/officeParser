@@ -8677,6 +8677,19 @@ async function testPdfTextOnFills(): Promise<void> {
     assert.ok(backgrounds(maskedAst)['White on the panel'] === '#336699' && !all(maskedAst).some(n => n.type === 'image') && !maskedAst.attachments?.length,
         `PDF text on fills: a soft mask's contents paint nothing (${JSON.stringify([backgrounds(maskedAst), all(maskedAst).filter(n => n.type === 'image').length])})`);
 
+    // A transparency group's form whose box is the top half of the panel its contents fill: only that half
+    // shows, so text in the lower half is on the paper, as it is under a form of no group.
+    for (const group of ['', '/Group << /S /Transparency /CS /DeviceRGB >>']) {
+        const boxed = pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+            '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> /XObject << /Fm 6 0 R >> >> /Contents 4 0 R >>',
+            streamOf('', '/Fm Do 0 g BT /F1 14 Tf 90 580 Td (Below the form box) Tj ET BT /F1 14 Tf 90 680 Td (Inside the form box) Tj ET'),
+            '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+            streamOf(`/Type /XObject /Subtype /Form /BBox [60 640 460 720] ${group}`, '0.8 0.9 1 rg 60 560 400 160 re f')]);
+        const boxedFound = backgrounds(await read(boxed));
+        assert.ok(boxedFound['Inside the form box'] === '#cce6ff' && boxedFound['Below the form box'] === undefined,
+            `PDF text on fills: a form paints only inside its box${group ? ', a transparency group\'s too' : ''} (${JSON.stringify(boxedFound)})`);
+    }
+
     // A table ruled and shaded: its head cell shows the colour and its text carries none, a coloured bar inside a plain cell still does.
     // Over a grey panel, one cell of it a white card.
     const table = pageOf([
