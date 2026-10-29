@@ -6492,7 +6492,8 @@ async function testPdfRuledTables(): Promise<void> {
     // run it touches there.
     const laidOut = async (file: string) => String((await (await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', file)), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).to('text')).value);
     const edgesLaid = await laidOut('bidi_edges_chrome.pdf'), supLaid = await laidOut('superscripts_chrome.pdf');
-    assert.ok(edgesLaid.includes('Microsoft הוא') && edgesLaid.includes('Android פרסמה') && supLaid.includes('בעמוד הבא הערה'), `laid-out text keeps the space at a right-to-left run's edge; got ${JSON.stringify([edgesLaid.slice(0, 300), supLaid.slice(0, 300)])}`);
+    const columnsLaid = await laidOut('hebrew_columns_libreoffice.pdf');
+    assert.ok(edgesLaid.includes('Microsoft הוא') && edgesLaid.includes('Android פרסמה') && supLaid.includes('בעמוד הבא הערה') && !columnsLaid.includes('לכמהGoogle'), `laid-out text keeps the space at a right-to-left run's edge; got ${JSON.stringify([edgesLaid.slice(0, 300), supLaid.slice(0, 300)])}`);
 
 }
 
@@ -9126,6 +9127,15 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
     assert.ok(marked.auxiliary?.headers === undefined && markedDocx.includes('Appendix: Raw Tables') && markedDocx.includes('Acme Annual Report'), `Running headers: an artifact header that changes stays in its pages (${JSON.stringify(texts(marked.auxiliary?.headers))})`);
     const half = await read(pdfOf([1, 2, 3, 4, 5, 6].map(p => [p <= 3 ? artifactHead(p) : line(50, 760, 10, 'Appendix: Raw Tables'), body(p)].join('\n'))));
     assert.ok(half.auxiliary?.headers === undefined && /Appendix: Raw Tables/.test(await md(half)), `Running headers: an artifact header and a found one that differ stay in their pages (${JSON.stringify(texts(half.auxiliary?.headers))})`);
+    // A cover's own header, the first page's alone that differs, stays on the cover; the others' is the document's.
+    const covered = await read(pdfOf([1, 2, 3, 4, 5].map(p => [`/Artifact << /Type /Pagination >> BDC ${line(50, 760, 10, p === 1 ? 'Confidential' : 'Acme Annual Report')} EMC`, body(p)].join('\n'))));
+    const coveredMd = await md(covered);
+    assert.ok(texts(covered.auxiliary?.headers).join() === '2:Acme Annual Report,3:Acme Annual Report,4:Acme Annual Report,5:Acme Annual Report' && count(coveredMd, 'Confidential') === 1 && !coveredMd.includes('Acme Annual Report'),
+        `Running headers: a cover's own header stays on the cover (${JSON.stringify([texts(covered.auxiliary?.headers), coveredMd.slice(0, 120)])})`);
+    // A header larger than the text, put back in its pages, is a line of its page, not a heading of its own.
+    const bigHead = await read(pdfOf([1, 2, 3, 4].map(p => [`/Artifact << /Type /Pagination >> BDC ${line(50, 760, 20, p <= 2 ? 'Chapter One' : 'Chapter Two')} EMC`, body(p)].join('\n'))));
+    const bigMd = await md(bigHead);
+    assert.ok(!/^#+ Chapter/m.test(bigMd) && count(bigMd, 'Chapter One') === 2, `Running headers: a large header put back is no heading (${JSON.stringify(bigMd.slice(0, 200))})`);
     // Put back in its page, a header stands where it is: after a logo drawn above it.
     const logo = 'q 40 0 0 40 50 745 cm BI /W 2 /H 2 /CS /G /BPC 8 ID \xff\x00\x00\xff EI Q';
     const withLogo = await read(pdfOf([1, 2, 3, 4].map(p => [logo, line(200, 760, 9, `Chapter ${p <= 2 ? 1 : 2}`), body(p)].join('\n'))), {}, { extractAttachments: true });

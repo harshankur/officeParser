@@ -32,7 +32,7 @@
 import { zlibSync } from 'fflate';
 import { passwordAttemptLimit } from '../crypto/decryptContainer.js';
 import { DEFAULT_OFFICE_PARSER_CONFIG, DEFAULT_PDF_WORKER_SRC } from '../defaults.js';
-import { FullOfficeParserConfig, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { parseOfficeDate } from '../utils/dateUtils.js';
 import { assertNode, isBrowser } from '../utils/envUtils.js';
@@ -2346,13 +2346,14 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     if (fromFirst) markPageFields(furniture, numPages, extracts.length === numPages);
     // A header or footer whose text is not the same on every page it is on, once its page fields are its
     // fields (a chapter's head, a journal's pages numbered from 147), stays in its pages: a writer prints one
-    // header on every page, the first page's, which lost the other pages' text.
+    // header on every page, the first page's, which lost the other pages' text. Where the first page's alone
+    // differs (a cover's), that one stays in its page and the others' is the document's.
     const changing = furnitureChanging(furniture);
-    for (const kind of changing) {
+    for (const [kind, only] of changing) {
         const aux = kind === 'header' ? auxHeaders : auxFooters;
         const moved = new Set<OfficeContentNode>();
         for (const page of routed) {
-            if (!page[kind].length) continue;
+            if (!page[kind].length || (only !== null && (page.page.metadata as { pageNumber?: number } | undefined)?.pageNumber !== only)) continue;
             const children = page.page.children!;
             const back = page[kind].map(([read, went]) => {
                 moved.add(went);
@@ -2360,7 +2361,11 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
                 const node = read === went.children?.[0] ? read : { ...read, ...(went.children?.[0]?.bounds ? { bounds: went.children[0].bounds } : {}) };
                 if (node !== read && !went.children?.[0]?.bounds) delete node.bounds;
                 unmarkPageFields(node);
-                return node;
+                // (A line of a header, larger than the text, is no heading of the page's: a paragraph, as one
+                // found by comparing the pages is.)
+                if (node.type !== 'heading') return node;
+                const { level: _level, levelSource: _source, ...rest } = (node.metadata ?? {}) as HeadingMetadata;
+                return { ...node, type: 'paragraph', metadata: rest } as OfficeContentNode;
             });
             if (kind === 'header') children.splice(page.above, 0, ...back); else children.splice(children.length - page.below, 0, ...back);
             page.page.text = children.map(n => n.text).join(config.newlineDelimiter);

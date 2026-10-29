@@ -692,21 +692,27 @@ function cutField(hit: { parent: OfficeContentNode; leaf: OfficeContentNode; at:
 /**
  * The kinds (header, footer) whose text is not the same on every page that has one, its page fields read as
  * the fields they are (in their formats: "1" on one page and "II" on the next are two): what a writer that
- * prints one header on every page would lose.
+ * prints one header on every page would lose. Each with the page that alone differs, where the first page's
+ * is the one that does and every other page's (two at least) is the same (a cover's, a title page's), else
+ * null: every page's.
  */
-export function furnitureChanging(furniture: readonly PageFurniture[]): Set<'header' | 'footer'> {
-    const first = new Map<'header' | 'footer', string>();
-    const out = new Set<'header' | 'footer'>();
+export function furnitureChanging(furniture: readonly PageFurniture[]): Map<'header' | 'footer', number | null> {
+    const pages = new Map<'header' | 'footer', { pageNumber: number; text: string }[]>();
     for (const page of furniture) {
-        if (out.has(page.kind)) continue;
         const text = page.nodes.map(node => textLeaves(node).map(({ leaf }) => {
             const meta = leaf.metadata as TextMetadata | undefined;
             return meta?.field ? `\u0000${meta.field}:${meta.fieldFormat ?? ''}\u0000` : leaf.text ?? '';
         }).join('')).join('\n').replace(/[^\S\n]+/g, ' ').trim();
         if (!text) continue;
-        const was = first.get(page.kind);
-        if (was === undefined) first.set(page.kind, text);
-        else if (was !== text) out.add(page.kind);
+        let list = pages.get(page.kind);
+        if (!list) pages.set(page.kind, list = []);
+        list.push({ pageNumber: page.pageNumber, text });
+    }
+    const out = new Map<'header' | 'footer', number | null>();
+    for (const [kind, list] of pages) {
+        if (list.every(p => p.text === list[0].text)) continue;
+        const rest = list.slice(1);
+        out.set(kind, rest.length >= 2 && rest.every(p => p.text === rest[0].text) ? list[0].pageNumber : null);
     }
     return out;
 }

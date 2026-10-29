@@ -318,8 +318,8 @@
                     <code>keepHeadersAndFootersInPages</code> (default <code>false</code>: a PDF's running headers and footers, marked as
                     artifacts in a tagged PDF and found as the lines repeated at the top and bottom of its pages in an untagged one,
                     are read into <code>auxiliary</code>, their page numbers as page fields, where they are the same on every page (one whose text changes
-                    from page to page, a chapter's head, stays in its pages); on, each page keeps its own in its content, the header first and the
-                    footer last, for a page-faithful result such as a slide per page; <code>ignoreHeadersAndFooters</code> still drops them),
+                    from page to page, a chapter's head, stays in its pages); on, each page keeps its own in its content, the header before the page's text and the
+                    footer after it, for a page-faithful result such as a slide per page; <code>ignoreHeadersAndFooters</code> still drops them),
                     <code>maxTextItems</code> (default <code>20000</code>; an item counts once more per 64 characters), <code>maxOperators</code>
                     (default <code>250000</code>; only the operators kept count, not paths) and <code>maxTimeMs</code> (default <code>5000</code>): the bases of
                     the text items, drawing operators and CPU time of the separate pdf.js process one PDF may take, each plus an allowance for the file's

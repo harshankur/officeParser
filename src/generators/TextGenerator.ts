@@ -403,11 +403,11 @@ export class TextGenerator extends BaseGenerator<'text'> {
                 // run is set off by one space.
                 const pad = col - line.length;
                 // (A run that touches the one before it in the same cell is the same word or sentence: "example.com"
-                // and its "." are joined, however their columns round. A right-to-left run's space at the end of
-                // its text is drawn at its left edge, and at the start of its text at its right: the runs it
-                // touches there are a word apart.)
-                const spaceBetween = (/\s$/.test(a.text) && RTL_LETTER.test(a.text)) || (/^\s/.test(prevText) && RTL_LETTER.test(prevText));
-                const touching = line.length > 0 && prevRight != null && a.x - prevRight <= 0.25 * charW && (a.cell === undefined || a.cell === prevCell) && !spaceBetween;
+                // and its "." are joined, however their columns round. Not where either is right-to-left: such a
+                // run's spaces are drawn at the other edge from where its text holds them, so the runs it touches
+                // may be a word apart, set by their columns as before.)
+                const touching = line.length > 0 && prevRight != null && a.x - prevRight <= 0.25 * charW && (a.cell === undefined || a.cell === prevCell)
+                    && !RTL_LETTER.test(a.text) && !RTL_LETTER.test(prevText);
                 if (pad > 0 && !touching && this.takeLayoutPadding(pad)) {
                     line += ' '.repeat(pad);
                 } else if (pad > 0 && !touching) {
