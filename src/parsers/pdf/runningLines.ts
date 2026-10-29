@@ -155,10 +155,9 @@ const SEPARATOR = /[|¦‖•·]/u;
 const NUMBER_TAIL = new RegExp(String.raw`(?:\s*${OF_WORD}\s*(\p{Nd}+))?\s*(?:${DASH}|[)\]])?\s*$`, 'iuy');
 /**
  * What may follow a page number at the line's start, before the line's words: a separator ("3 | Annual
- * Report", "3 - Annual Report") where no number follows it ("3 - 5" is a range), or a space and a word ("12
- * Journal of Things").
+ * Report", "3 - Annual Report") where no number follows it ("3 - 5" is a range).
  */
-const NUMBER_LEAD = new RegExp(String.raw`\s*(?:[|¦‖•·]|${DASH}\s)\s*(?![\p{Nd}\s])|\s+(?=\p{L})`, 'uy');
+const NUMBER_LEAD = new RegExp(String.raw`\s*(?:[|¦‖•·]|${DASH}\s)\s*(?![\p{Nd}\s])`, 'uy');
 /** A dash, and what may open a number that is a line of its own ("- 3 -", "[3]", "(3)"). */
 const DASH_ALONE = new RegExp(String.raw`^${DASH}$`, 'u');
 const OPENING = new RegExp(String.raw`^(?:${DASH}|[(\[])$`, 'u');
@@ -167,16 +166,18 @@ const OPENING = new RegExp(String.raw`^(?:${DASH}|[(\[])$`, 'u');
  * Whether the number at [start, end) of a line's text is set apart as a page's number is: standing on its own
  * at the line's end, after a separator (a bar, a comma, a dash with a space beside it: "Annual Report | 3",
  * "Report, 3", "Report - 3") or a bracket's close ("(2024) 103"), or as the whole line ("3", "- 3 -", "[3]",
- * "3 of 6"); at its start, before a separator or a space and the line's words ("3 | Annual Report", "12
- * Journal of Things"); or anywhere after a page's word ("Page 3", "Pg. 3", "Page: 3") or before one ("3页",
- * "第3页", "3ページ"). After a sheet's or a slide's word, only with the pages' after it ("Sheet 3 of 6").
+ * "3 of 6"); at its start, before a separator ("3 | Annual Report"); or anywhere after a page's word ("Page
+ * 3", "Pg. 3", "Page: 3") or before one ("3页", "第3页", "3ページ"). After a sheet's or a slide's word, only
+ * with the pages' after it ("Sheet 3 of 6").
  *
  * What a number names of its own is none: a number after any other word ("Question 3", "Chapter 3", "Q3") or
  * its label's colon ("Question: 3"), after a number sign ("Ticket #4001", "§ 3", "№ 3"), joined to another
  * number ("2024-03-04", "05.03.2024", "3.1", "09:00", "1,041") or to a word by a hyphen ("INV-1001"), a word
- * written on to it ("3rd", "第3条"), a number in brackets before the line's words ("[11] Smith", "(3) Widget"),
- * and a page's "of" count that is more than its pages ("31/12"). A line whose number climbs one a page in any
- * of those shapes is a log's dates, a run of invoices or questions, and stays the page's text.
+ * written on to it ("3rd", "第3条"), a number at the line's start before its words with no separator between
+ * ("4 May 2024", "5 mars 2024", "12 apples left", "147 Journal of Things"), a number in brackets before the
+ * line's words ("[11] Smith", "(3) Widget"), and a page's "of" count that is more than its pages ("31/12"). A
+ * line whose number climbs one a page in any of those shapes is a log's dates, a run of invoices or
+ * questions, and stays the page's text.
  */
 function pageNumberAt(text: string, start: number, end: number): boolean {
     PAGE_AFTER.lastIndex = end;

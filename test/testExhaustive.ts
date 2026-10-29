@@ -8952,7 +8952,12 @@ async function testPdfRunningHeadersFooters(): Promise<void> {
         ['ticket', p => `Ticket #${4000 + p}`], ['section', p => `\\247 ${p + 2}`], ['exercise', p => `Exercise 3.${p}`], ['dotted section', p => `Section 2.${p} Overview`],
         ['invoice', p => `Invoice INV-${1000 + p}`], ['question sign', p => `Question #${p}`], ['label', p => `Question: ${p}`], ['time', p => `Entry 2024/03/${pad(p)} 09:00`],
         ['list', p => `\\(${p}\\) Widget`], ['bibliography', p => `[${p + 10}] Smith, J. A study.`], ['day of', p => `Day ${p} of 30`], ['question of', p => `Question ${p} of 10`],
-        ['slide', p => `Slide ${p}`], ['sheet word', p => `List ${p}`]];
+        ['slide', p => `Slide ${p}`], ['sheet word', p => `List ${p}`],
+        // (A number at the line's start before its words, with no separator between, is a date's or a count's:
+        // "4 May 2024", "5 mars 2024", "1 apples left". So is a journal's page printed so, "147 Journal of
+        // Things": its head stays each page's text, which repeats it, rather than a date's leaving the text.)
+        ['day first', p => `${p + 3} May 2024 Board meeting minutes`], ['day first, French', p => `${p} mars 2024`], ['count', p => `${p} apples left in the basket`],
+        ['journal page first', p => `${p + 146} Journal of Things`]];
     for (const [name, head] of ownNumbers) {
         const own = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, head(p)), body(p)].join('\n'))));
         const ownText = String((await own.to('text')).value);
