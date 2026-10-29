@@ -8168,6 +8168,35 @@ async function testPdfFormValuesAsText(): Promise<void> {
         assert.ok(markdown.includes('Nachname Mustermann') && markdown.includes('☒ Nein, trifft nicht zu.'), 'PDF form: the values reach Markdown');
     }
 
+    // An order form laid out as a table, its quantities and prices fields under the columns' heads, a check
+    // box under another: read as the table it is when printed, its values its cells, not joined to the item
+    // before them.
+    const order = await PDFDocument.create();
+    const ofont = await order.embedFont(StandardFonts.Helvetica);
+    const opage = order.addPage([612, 792]);
+    const oform = order.getForm();
+    const oput = (t: string, x: number, y: number) => opage.drawText(t, { x, y, size: 11, font: ofont });
+    oput('Item', 72, 700); oput('Quantity', 260, 700); oput('Price', 380, 700); oput('Gift', 494, 700);
+    ['Apples', 'Bananas', 'Cherries'].forEach((item, i) => {
+        const y = 676 - i * 24;
+        oput(item, 72, y);
+        const quantity = oform.createTextField(`quantity${i}`);
+        quantity.setText(String(i + 2));
+        quantity.addToPage(opage, { x: 260, y: y - 5, width: 80, height: 18, font: ofont });
+        const price = oform.createTextField(`price${i}`);
+        price.setText(`${(i + 1) * 1.25}`);
+        price.addToPage(opage, { x: 380, y: y - 5, width: 80, height: 18, font: ofont });
+        const gift = oform.createCheckBox(`gift${i}`);
+        gift.addToPage(opage, { x: 494, y: y - 2, width: 12, height: 12 });
+        if (i === 1) gift.check();
+    });
+    oput('Thank you for your order.', 72, 580);
+    oform.updateFieldAppearances(ofont);
+    const orderAst = await OfficeParser.parseOffice(Buffer.from(await order.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
+    const orderTables = all(orderAst).filter(n => n.type === 'table').map(t => t.children!.map(r => r.children!.map(c => (c.text ?? '').trim())));
+    assert.deepStrictEqual(orderTables, [[['Item', 'Quantity', 'Price', 'Gift'], ['Apples', '2', '1.25', '☐'], ['Bananas', '3', '2.5', '☒'], ['Cherries', '4', '3.75', '☐']]],
+        `PDF form: values under a table's heads are its cells (${JSON.stringify([orderTables, paragraphs(orderAst)])})`);
+
     // A comb the page draws itself: a date's digits one to a box, in boxes of a day, a month and a year, with
     // what each group is under it. Beside it, what is no comb: a grid of two rows of letters, a row of words
     // in like boxes, and a scale of numbers set apart with no boxes.

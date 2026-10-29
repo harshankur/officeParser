@@ -59,6 +59,8 @@ export interface RawRun {
      * and it is read on the line of the label beside it (see textLayout).
      */
     formField?: 'text' | 'box';
+    /** A form field's value's box across the page (its widget's), where it is not the run's own (see textLayout's headedValues). */
+    fieldBox?: { x: number; width: number };
 }
 
 /** A contiguous span of text on a single visual line, with its own box and formatting. */

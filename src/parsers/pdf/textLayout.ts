@@ -157,8 +157,9 @@ function linePieces(runs: RawRun[], cfg: PdfLayoutConfig): Cluster[] {
     clusters = mergeSuperSubClusters(clusters, maxFontSize);
 
     const gutters = columnGutters(clusters);
+    const headed = headedValues(clusters, cfg);
     return clusters.flatMap(c => {
-        const pieces: Cluster[] = segmentsOf(c.runs, cfg, gutters).map(runs => {
+        const pieces: Cluster[] = segmentsOf(c.runs, cfg, gutters, headed).map(runs => {
             let minX = Infinity, maxX = -Infinity;
             for (const r of runs) { minX = Math.min(minX, r.x); maxX = Math.max(maxX, r.x + r.width); }
             return { runs, baseline: c.baseline, weight: c.weight, fontSize: c.fontSize, minX, maxX };
@@ -289,16 +290,72 @@ function columnGutters(clusters: Cluster[]): number[] {
     return gutters;
 }
 
+/** The gap between runs of a line (of text of size `fs`) that cuts it: a column's or a table cell's boundary. */
+function wideGapOf(fs: number, cfg: PdfLayoutConfig): number {
+    return Math.max(18, 4 * cfg.spaceToleranceFactor * fs, 1.5 * fs);
+}
+
+/** How far apart (points) a table's head cell and its column's field may have their edges. */
+const HEAD_TOLERANCE = 4;
+
+/**
+ * The form field values (see RawRun.formField) that stand in a table's column: a cell of the page's own
+ * text above them, on a line of cells (two at least) and of no values, heads their field's box, its left edge, its middle or its right
+ * edge where the box's is. An order form's quantities under "Quantity" are its table's cells, as they are
+ * printed; a value beside its label, where nothing heads it, is read with the label (see segmentsOf).
+ *
+ * A pass over the lines' runs: the head cells' edges in maps of a tolerance's width, each holding the
+ * highest cell's baseline, then a look up for each value.
+ */
+function headedValues(clusters: readonly Cluster[], cfg: PdfLayoutConfig): Set<RawRun> {
+    const out = new Set<RawRun>();
+    const values: RawRun[] = [];
+    for (const c of clusters) for (const r of c.runs) if (r.formField && r.text.trim()) values.push(r);
+    if (!values.length) return out;
+    // Left edges, middles and right edges of the cells, by place, to the highest baseline of a cell there.
+    const heads = [new Map<number, number>(), new Map<number, number>(), new Map<number, number>()];
+    const note = (edge: number, at: number, baseline: number) => {
+        const k = Math.round(at / HEAD_TOLERANCE), top = heads[edge].get(k);
+        if (top === undefined || baseline < top) heads[edge].set(k, baseline);
+    };
+    for (const c of clusters) {
+        if (c.runs.some(r => r.formField && r.text.trim())) continue;
+        const runs = c.runs.filter(r => r.text.trim()).sort((a, b) => a.x - b.x);
+        if (!runs.length) continue;
+        // The line's cells: its runs apart by less than a wide gap are one. A line of one is no table's head
+        // (a paragraph's lines end where a field's box does, at the page's margin).
+        const wideGap = wideGapOf(dominantFontSize(runs), cfg);
+        const cells: [number, number][] = [[runs[0].x, runs[0].x + runs[0].width]];
+        for (let i = 1; i < runs.length; i++) {
+            const r = runs[i], last = cells[cells.length - 1];
+            if (r.x - last[1] >= wideGap) cells.push([r.x, r.x + r.width]);
+            else last[1] = Math.max(last[1], r.x + r.width);
+        }
+        if (cells.length < 2) continue;
+        for (const [from, to] of cells) { note(0, from, c.baseline); note(1, (from + to) / 2, c.baseline); note(2, to, c.baseline); }
+    }
+    const above = (edge: number, at: number, top: number) => {
+        const k = Math.round(at / HEAD_TOLERANCE);
+        for (const d of [-1, 0, 1]) { const b = heads[edge].get(k + d); if (b !== undefined && b < top) return true; }
+        return false;
+    };
+    for (const r of values) {
+        const box = r.fieldBox ?? { x: r.x, width: r.width };
+        if (above(0, box.x, r.yTop) || above(1, box.x + box.width / 2, r.yTop) || above(2, box.x + box.width, r.yTop)) out.add(r);
+    }
+    return out;
+}
+
 /**
  * Splits one baseline cluster's runs into visual sub-lines at wide horizontal gaps (and at the page's column
  * gutters, see columnGutters). A wide gap (much
  * larger than a space) marks a column or table-cell boundary, so the pieces become separate atoms the
  * block segmenter can place independently.
  */
-function segmentsOf(clusterRuns: RawRun[], cfg: PdfLayoutConfig, gutters: readonly number[] = []): RawRun[][] {
+function segmentsOf(clusterRuns: RawRun[], cfg: PdfLayoutConfig, gutters: readonly number[] = [], headed: ReadonlySet<RawRun> = new Set()): RawRun[][] {
     const runs = [...clusterRuns].sort((a, b) => a.x - b.x);
     const fs = dominantFontSize(runs);
-    const wideGap = Math.max(18, 4 * cfg.spaceToleranceFactor * fs, 1.5 * fs);
+    const wideGap = wideGapOf(fs, cfg);
     const segments: RawRun[][] = [];
     let cur: RawRun[] = [];
     let last: RawRun | undefined, lastText: RawRun | undefined;
@@ -314,9 +371,10 @@ function segmentsOf(clusterRuns: RawRun[], cfg: PdfLayoutConfig, gutters: readon
         const atGutter = !!lastText && !isBlank && gutters.some(g => lastText!.x + lastText!.width <= g && g <= r.x);
         // A form field's value is read with the label before it, and a check box with the label after it,
         // however far apart the page sets them, short of a column's gutter: cut there, the values were a
-        // column of their own, read after every label of the page.
+        // column of their own, read after every label of the page. Not a value in a table's column (see
+        // headedValues): it is its cell, as it is printed.
         const next: RawRun | undefined = isBlank ? runs[i + 1] : r;
-        const fieldJoin = !atGutter && !!lastText && (next?.formField !== undefined || lastText.formField === 'box');
+        const fieldJoin = !atGutter && !!lastText && ((next?.formField !== undefined && !headed.has(next)) || (lastText.formField === 'box' && !headed.has(lastText)));
         if (cur.length && !fieldJoin && (wideBlank || coordGap >= wideGap || atGutter)) {
             segments.push(cur);
             cur = [];

@@ -1462,6 +1462,7 @@ function fieldRuns(fields: readonly ResolvedField[], pageRuns: readonly RawRun[]
             const run: RawRun = {
                 text, x, yTop, yBaseline: yTop + FIELD_ASCENT * size, width, height, fontSize: size,
                 dir: 'ltr', angle, turn: f.turn, mcid: `pdfjs_internal_id_${f.id}`, inArtifact: false, formatting, formField: f.kind,
+                fieldBox: { x: x0, width: w },
             };
             if (rightToLeftLean([run]) > 0) run.dir = 'rtl';
             out.push(run);
