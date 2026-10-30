@@ -2468,7 +2468,8 @@ export interface FixedSizeChunkingConfig extends BaseChunkingConfig {
 
     /**
      * Maximum size of the chunk, measured by `lengthFunction`.
-     * Default is 1000 characters.
+     * Default is 1000 characters. UTF-16 surrogate pairs stay whole; a hard cut
+     * may exceed the limit when one code point alone does not fit.
      */
     chunkSize?: number;
 
@@ -2476,7 +2477,8 @@ export interface FixedSizeChunkingConfig extends BaseChunkingConfig {
      * Number of characters/tokens to overlap between consecutive chunks
      * to avoid losing context at boundaries.
      * Rule of thumb: ~10–20% of `chunkSize`.
-     * Default is 200.
+     * Default is 200. A boundary inside a UTF-16 surrogate pair expands the
+     * overlap to include the whole code point.
      */
     chunkOverlap?: number;
 

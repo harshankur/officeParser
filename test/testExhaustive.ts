@@ -5,6 +5,7 @@
  */
 
 import { OfficeParser } from '../src/OfficeParser';
+import { testUnicodeChunks } from './generator/unicodeChunks';
 import { OfficeGenerator } from '../src/OfficeGenerator';
 import { bulletCharacter, formatListNumber } from '../src/utils/listMarkers';
 import { decodeBmp, decodeGif } from '../src/utils/rasterUtils';
@@ -10991,6 +10992,7 @@ async function runTests(): Promise<void> {
         ['PDF kept JPEGs', testPdfKeptJpegs],
         ['PDF text on fills', testPdfTextOnFills],
         ['PDF running headers and footers', testPdfRunningHeadersFooters],
+        ['Unicode chunk boundaries', testUnicodeChunks],
         ['Cancellation', testCancellation],
     ];
 
