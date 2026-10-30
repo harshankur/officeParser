@@ -9,7 +9,7 @@ import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXml
 import { heldColumns } from '../utils/columnUtils.js';
 import { onDocumentPage } from '../utils/pageLimits.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, odfUserDefinedXml, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
-import { markerPattern, MarkerPattern, numberingBreaks, odfNumFormat, samePattern } from '../utils/listMarkers.js';
+import { markerPattern, MarkerPattern, odfNumFormat } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 
@@ -143,8 +143,7 @@ class StyleRegistry {
 }
 
 interface MediaPart { name: string; bytes: Uint8Array; ext: string; contentType: string; }
-interface ListDef { name: string; registry: StyleRegistry; levels: Map<number, MarkerPattern>; startAt: Map<number, number>;
-    next: Map<number, number>; }
+interface ListDef { name: string; registry: StyleRegistry; levels: Map<number, MarkerPattern>; startAt: Map<number, number>; }
 
 /**
  * Generates an OpenDocument Text (`.odt`) document from any AST, as a `Uint8Array`.
@@ -320,8 +319,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             const waiting = node.type === 'break' ? undefined : this.takeBreak();
             const block = await this.renderBlockNode(node);
             // Paragraphs and headings write their own bookmarks; every other block's go in its first paragraph.
-            // (A blank page holds a paragraph: with none, it and the break that makes it were the next page's.)
-            out += this.carryBreak(!block && node.type === 'page' ? '<text:p/>' : OWN_BOOKMARKS.has(node.type) ? block : this.withBookmarks(block, node), waiting);
+            out += this.carryBreak(OWN_BOOKMARKS.has(node.type) ? block : this.withBookmarks(block, node), waiting);
             prevPaginated = (node.type === 'page' || node.type === 'slide') ? node.type : null;
         }
         // (A break that ends the blocks: a paragraph of its own carries it.)
@@ -715,24 +713,17 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
 
     // ── lists ─────────────────────────────────────────────────────────────────────
 
-    private newListDef(listId: string): ListDef {
-        const def: ListDef = { name: `L${++this.listCounter}`, registry: this.activeStyles, levels: new Map(), startAt: new Map(), next: new Map() };
-        // (A def replaced is kept under a name of its own: its style is written with the rest.)
-        const before = this.listDefs.get(listId);
-        if (before) this.listDefs.set(`${listId}\u0000${before.name}`, before);
-        this.listDefs.set(listId, def);
-        return def;
-    }
-
     private ensureListStyle(listId: string): string {
         let def = this.listDefs.get(listId);
         if (!def) {
-            def = this.newListDef(listId);
+            def = { name: `L${++this.listCounter}`, registry: this.activeStyles, levels: new Map(), startAt: new Map() };
+            this.listDefs.set(listId, def);
         }
         return def.name;
     }
 
-    private registerListLevel(def: ListDef, lvl: number, meta: any): void {
+    private registerListLevel(listId: string, lvl: number, meta: any): void {
+        const def = this.listDefs.get(listId)!;
         if (!def.levels.has(lvl)) {
             // The level numbers or bullets as its first item's marker does (`a)`, `1.1.`, `▪`).
             def.levels.set(lvl, markerPattern(meta, lvl));
@@ -742,58 +733,31 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
 
     private async renderListRun(items: OfficeContentNode[]): Promise<string> {
         const listId = String((items[0].metadata as any)?.listId ?? 'odt-list');
-        this.ensureListStyle(listId);
+        const styleName = this.ensureListStyle(listId);
+        const firstIdx = (items[0].metadata as any)?.itemIndex;
+        const continueAttr = (typeof firstIdx === 'number' && firstIdx > 0) ? ' text:continue-numbering="true"' : '';
         let out = '';
         let depth = -1;
-        // The list style each open level is in, and what ends the item open in it: a level gone past is held
-        // by a list header, which counts for no number, as an item for it alone did in the level above.
-        const owners: ListDef[] = [];
-        const closers: string[] = [];
-        const closeLevel = () => { out += `${closers.pop()}</text:list>`; owners.pop(); depth--; };
         for (const item of items) {
             const override = await this.handleOnNode(item);
             if (override === false) continue; // omit this item; the list continues
             const meta = item.metadata as any;
             const lvl = Math.max(0, Math.min(9, meta?.indentation | 0));
-            while (depth > lvl) closeLevel();
-            let owner = depth >= 0 ? owners[depth] : this.listDefs.get(listId)!;
-            // An item its list's numbering would print otherwise, see numberingBreaks: the item's own number
-            // where only the number differs, else a list of its own from it.
-            const known = owner.levels.get(lvl);
-            let startAttr = '';
-            // (A level's first item after items under it: their numbers were written with their parents' as
-            // text, which this level's own would change, so a list of its own.)
-            if (!known && [...owner.levels.keys()].some(l => l > lvl)) {
-                if (depth === lvl) closeLevel();
-                owner = this.newListDef(listId);
-                numberingBreaks(owner.levels, owner.startAt, owner.next, meta, lvl);
-            } else if (numberingBreaks(owner.levels, owner.startAt, owner.next, meta, lvl)) {
-                const number = meta?.listType === 'ordered' && typeof meta.itemIndex === 'number' ? clampInt(meta.itemIndex, 0, 2_147_483_646, 0) + 1 : null;
-                if (number !== null && known && samePattern(known, markerPattern(meta, lvl))) {
-                    startAttr = ` text:start-value="${number}"`;
-                    owner.next.set(lvl, number + 1);
-                    for (const l of owner.levels.keys()) if (l > lvl) owner.next.set(l, owner.startAt.get(l) ?? 1);
-                } else {
-                    if (depth === lvl) closeLevel();
-                    owner = this.newListDef(listId);
-                    numberingBreaks(owner.levels, owner.startAt, owner.next, meta, lvl);
-                }
-            }
-            this.registerListLevel(owner, lvl, meta);
-            if (depth === lvl) {
-                out += `${closers[depth]}<text:list-item${startAttr}>`;
-                closers[depth] = '</text:list-item>';
+            this.registerListLevel(listId, lvl, meta);
+            if (depth < 0) {
+                out += `<text:list text:style-name="${styleName}"${continueAttr}><text:list-item>`;
+                for (let d = 1; d <= lvl; d++) out += '<text:list><text:list-item>';
+                depth = lvl;
+            } else if (lvl > depth) {
+                for (let d = depth + 1; d <= lvl; d++) out += '<text:list><text:list-item>';
+                depth = lvl;
+            } else if (lvl === depth) {
+                out += '</text:list-item><text:list-item>';
             } else {
-                for (let d = depth + 1; d <= lvl; d++) {
-                    const rooted = owners.length === 0 || d === lvl && owners[owners.length - 1] !== owner;
-                    const continues = rooted && typeof meta?.itemIndex === 'number' && meta.itemIndex > 0;
-                    out += `<text:list${rooted ? ` text:style-name="${owner.name}"` : ''}${continues ? ' text:continue-numbering="true"' : ''}>`;
-                    out += d === lvl ? `<text:list-item${startAttr}>` : '<text:list-header>';
-                    owners.push(owner);
-                    closers.push(d === lvl ? '</text:list-item>' : '</text:list-header>');
-                }
+                for (let d = depth; d > lvl; d--) out += '</text:list-item></text:list>';
+                out += '</text:list-item><text:list-item>';
+                depth = lvl;
             }
-            depth = lvl;
             if (typeof override === 'string') { out += `<text:p>${override}</text:p>`; continue; }
             let prefix = '';
             if (meta?.isTask) prefix = this.span(meta.checked ? '☑ ' : '☐ ', undefined);
@@ -801,7 +765,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             const inner = await this.renderInline(item.children || [{ type: 'text', text: item.text || '' } as OfficeContentNode]);
             out += `<text:p>${this.bookmarksFor(item)}${prefix}${blockRefs}${inner}</text:p>`;
         }
-        while (depth >= 0) closeLevel();
+        for (let d = depth; d >= 0; d--) out += '</text:list-item></text:list>';
         return out;
     }
 
@@ -820,12 +784,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
                 const shown = type.withParents && parentsNumbered ? ` text:display-levels="${l + 1}"` : '';
                 levels += `<text:list-level-style-number text:level="${l + 1}"${prefix} style:num-format="${odfNumFormat(type.format)}" style:num-suffix="${xmlText(type.suffix)}"${shown} text:start-value="${start}">${props}</text:list-level-style-number>`;
             } else {
-                // ODF's bullet is one character: a label of more is a number level of none, in its prefix.
-                if ([...type.bullet].length > 1) {
-                    levels += `<text:list-level-style-number text:level="${l + 1}" style:num-prefix="${xmlText(type.bullet)}" style:num-format="" style:num-suffix="">${props}</text:list-level-style-number>`;
-                    continue;
-                }
-                // A bullet of none is a space.
+                // A bullet of none is a space: ODF's bullet is one character.
                 levels += `<text:list-level-style-bullet text:level="${l + 1}" text:bullet-char="${xmlText([...type.bullet][0] ?? ' ')}">${props}</text:list-level-style-bullet>`;
             }
         }

@@ -43,10 +43,9 @@ export interface MarkerWord {
 }
 
 /**
- * The word of a marker (`l`, `IV`, `aa`, the `l` of `(l)`) as what it can stand for: a letter, a letter
- * repeated (as `formatListNumber` letters) or two letters counted on from `z` (`ab` after `aa`, as legal
- * lists run), or a numeral written as `formatListNumber` writes it. In one case only and written so, or it
- * is neither: `Ill` and `Mix` are words, not numerals.
+ * The word of a marker (`l`, `IV`, `aa`, the `l` of `(l)`) as what it can stand for: a letter or a letter
+ * repeated (as `formatListNumber` letters), or a numeral written as `formatListNumber` writes it. In one
+ * case only and written so, or it is neither: `Ill` and `Mix` are words, not numerals.
  */
 export function markerWord(word: string): MarkerWord | null {
     const lower = word.toLowerCase();
@@ -54,8 +53,7 @@ export function markerWord(word: string): MarkerWord | null {
     if (!upper && word !== lower) return null;
     if (!/^[a-z]{1,10}$/.test(lower)) return null;
     const same = [...lower].every(ch => ch === lower[0]);
-    const letter = same ? (lower.charCodeAt(0) - 96) + 26 * (lower.length - 1)
-        : lower.length === 2 ? 26 * (lower.charCodeAt(0) - 96) + (lower.charCodeAt(1) - 96) : null;
+    const letter = same ? (lower.charCodeAt(0) - 96) + 26 * (lower.length - 1) : null;
     let roman: number | null = null;
     if (/^[ivxlcdm]+$/.test(lower)) {
         const values: Record<string, number> = { i: 1, v: 5, x: 10, l: 50, c: 100, d: 500, m: 1000 };
@@ -115,10 +113,9 @@ export function markerLabelWord(label: string): string | null {
 
 /**
  * The numbers of a list's labels in order (null where a label has no letter or numeral word), each kind
- * (its brackets and case) read as its own run, from `readMarkerWord`. Runs given, under `runKey`, go on from
- * the list before (a list parted in two by a paragraph: `(v)` after `(iv)` is a numeral).
+ * (its brackets and case) read as its own run, from `readMarkerWord`.
  */
-export function readMarkerLabels(labels: string[], runs: Map<string, MarkerRun> = new Map(), runKey = ''): (number | null)[] {
+export function readMarkerLabels(labels: string[]): (number | null)[] {
     const words = labels.map(label => { const w = markerLabelWord(label); return w ? markerWord(w) : null; });
     const kinds = labels.map((label, i) => words[i] ? `${label.trim().replace(/[a-zA-Z]+/, '')}|${words[i]!.upper}` : '');
     const nexts = new Array<MarkerWord | null>(labels.length).fill(null);
@@ -128,11 +125,11 @@ export function readMarkerLabels(labels: string[], runs: Map<string, MarkerRun> 
         nexts[i] = seen.get(kinds[i]) ?? null;
         seen.set(kinds[i], words[i]!);
     }
+    const runs = new Map<string, MarkerRun>();
     return labels.map((_, i) => {
         if (!words[i]) return null;
-        const key = `${runKey}${kinds[i]}`;
-        let run = runs.get(key);
-        if (!run) runs.set(key, run = { letter: 0, roman: 0, last: null });
+        let run = runs.get(kinds[i]);
+        if (!run) runs.set(kinds[i], run = { letter: 0, roman: 0, last: null });
         return readMarkerWord(words[i]!, run, nexts[i]);
     });
 }
@@ -187,23 +184,11 @@ export function cssListStyle(type: string): { format: NumberFormat } | { bullet:
 }
 
 /**
- * A marker's label where the item says more than a glyph does: an ordered item's marker, or a bullet's that
- * has a letter or digit in it (`Note:`, `a`, a circle's `o` being a bullet). Null for none, or a plain bullet.
- */
-export function printedListLabel(meta: { listType?: string; marker?: unknown } | undefined): string | null {
-    if (typeof meta?.marker !== 'string') return null;
-    const label = meta.marker.replace(/\s+/g, ' ').trim();
-    if (!label) return null;
-    if (meta.listType === 'ordered') return label;
-    return label !== 'o' && /[\p{L}\p{N}]/u.test(label) ? label : null;
-}
-
-/**
  * A marker as CSS `list-style-type`: a string in which anything other than a letter, a digit or a space is
  * escaped, so nothing in it can end the string or an attribute around it.
  */
 export function cssListMarker(marker: string): string {
-    const escaped = [...marker].map(ch => /^[\p{L}\p{N} ]$/u.test(ch) ? ch : `\\${ch.codePointAt(0)!.toString(16)} `).join('');
+    const escaped = [...marker].slice(0, 32).map(ch => /^[\p{L}\p{N} ]$/u.test(ch) ? ch : `\\${ch.codePointAt(0)!.toString(16)} `).join('');
     return `'${escaped}${marker ? ' ' : ''}'`;
 }
 
@@ -252,12 +237,12 @@ const PATTERN_FORMATS: NumberFormat[] = ['decimal', 'decimalZero', 'lowerRoman',
  * A list level's pattern from one item's marker (ListMetadata.marker), its number (`itemIndex` + 1) and
  * its level: the format whose writing of the number stands in the marker as a word of its own, with the
  * text around it. An item without a marker numbers as `1.` or bullets as `•`; a marker in which the
- * number cannot be found is written as it is, with no number.
+ * number cannot be found numbers as `1.`.
  */
 export function markerPattern(meta: { listType?: string; itemIndex?: number; marker?: unknown } | undefined, level: number): MarkerPattern {
     const ordered = meta?.listType === 'ordered';
     const plain: MarkerPattern = { kind: ordered ? 'ordered' : 'unordered', format: 'decimal', prefix: '', suffix: '.', withParents: false, bullet: '•' };
-    const marker = typeof meta?.marker === 'string' ? meta.marker.slice(0, 255) : undefined;
+    const marker = typeof meta?.marker === 'string' ? meta.marker.slice(0, 64) : undefined;
     if (marker === undefined) return plain;
     if (!ordered) return { ...plain, bullet: marker };
     if (marker === '') return { ...plain, format: 'none', suffix: '' };
@@ -272,30 +257,7 @@ export function markerPattern(meta: { listType?: string; itemIndex?: number; mar
         const withParents = level > 0 && new RegExp(`^(?:\\d+\\.){${level}}$`).test(prefix);
         return { kind: 'ordered', format, prefix: withParents ? '' : prefix, suffix, withParents, ...(withParents ? { parentText: prefix } : {}), bullet: '' };
     }
-    return { ...plain, format: 'none', prefix: marker, suffix: '' };
-}
-
-/** Whether two levels write their numbers alike (their parents' numbers apart). */
-export function samePattern(a: MarkerPattern, b: MarkerPattern): boolean {
-    return a.kind === b.kind && a.format === b.format && a.prefix === b.prefix && a.suffix === b.suffix && a.withParents === b.withParents && a.bullet === b.bullet;
-}
-
-/**
- * Whether an item cannot go on the numbering a word processor keeps for its list: its number is not the
- * one that numbering reaches, or its marker not in the level's pattern (`(h)` `(i)` `(ii)` `(j)`, or
- * 1, 2, 5, 7). `next` is where each level has reached, kept by this: a level below restarts at its start
- * as a word processor restarts it. A new numbering, which starts at the item, is what the writer makes then.
- */
-export function numberingBreaks(levels: Map<number, MarkerPattern>, startAt: Map<number, number>, next: Map<number, number>, meta: { listType?: string; itemIndex?: number; marker?: unknown } | undefined, level: number): boolean {
-    const known = levels.get(level);
-    const number = meta?.listType === 'ordered' && typeof meta.itemIndex === 'number' && Number.isFinite(meta.itemIndex) ? Math.trunc(meta.itemIndex) + 1 : null;
-    if (known) {
-        const pattern = markerPattern(meta, level);
-        if (!samePattern(known, pattern) || (number !== null && number !== next.get(level))) return true;
-    }
-    if (number !== null) next.set(level, number + 1);
-    for (const l of levels.keys()) if (l > level) next.set(l, startAt.get(l) ?? 1);
-    return false;
+    return plain;
 }
 
 /** A NumberFormat as ODF's `style:num-format` (ODF has no zero-padded decimal: it is written plain). */

@@ -9,7 +9,7 @@ import { onDocumentPage } from '../utils/pageLimits.js';
 import { pageFieldInstruction, wordFmtOf } from '../utils/pageNumbers.js';
 import { clampInt } from '../utils/numberUtils.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, ooxmlCustomPropertiesXml, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
-import { markerPattern, numberingBreaks, MarkerPattern } from '../utils/listMarkers.js';
+import { markerPattern, MarkerPattern } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 
@@ -82,7 +82,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     private endnotes: NoteEntry[] = [];
     private comments: CommentEntry[] = [];
     private commentCounter = 0;
-    private numbering: { listId: string; numId: number; levels: Map<number, MarkerPattern>; startAt: Map<number, number>; next: Map<number, number> }[] = [];
+    private numbering: { listId: string; numId: number; levels: Map<number, MarkerPattern>; startAt: Map<number, number> }[] = [];
     private numByListId = new Map<string, number>();
     private needsNumbering = false;
     private syntheticListRun = 0; // per-run id counter for lists that carry no listId
@@ -657,24 +657,24 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     private ensureNumbering(meta: any, bareListId?: string): number {
         const listId = String(meta?.listId ?? bareListId ?? 'pdf-list');
         let numId = this.numByListId.get(listId);
-        const lvl = Math.max(0, Math.min(8, meta?.indentation | 0));
-        // numId is the entry's place in `numbering` plus one: a scan per item took items x lists.
-        let entry = numId === undefined ? undefined : this.numbering[numId - 1];
-        // (An item its list's numbering would print otherwise, see numberingBreaks: a numbering of its own from it.)
-        if (!entry || numberingBreaks(entry.levels, entry.startAt, entry.next, meta, lvl)) {
+        let entry: { listId: string; numId: number; levels: Map<number, MarkerPattern>; startAt: Map<number, number> };
+        if (numId === undefined) {
             numId = this.numbering.length + 1;
-            entry = { listId, numId, levels: new Map(), startAt: new Map(), next: new Map() };
+            entry = { listId, numId, levels: new Map(), startAt: new Map() };
             this.numbering.push(entry);
             this.numByListId.set(listId, numId);
             this.needsNumbering = true;
-            numberingBreaks(entry.levels, entry.startAt, entry.next, meta, lvl);
+        } else {
+            // numId is the entry's place in `numbering` plus one: a scan per item took items x lists.
+            entry = this.numbering[numId - 1];
         }
+        const lvl = Math.max(0, Math.min(8, meta?.indentation | 0));
         if (!entry.levels.has(lvl)) {
             // The level numbers or bullets as its first item's marker does (`a)`, `1.1.`, `▪`).
             entry.levels.set(lvl, markerPattern(meta, lvl));
             if (typeof meta?.itemIndex === 'number') entry.startAt.set(lvl, meta.itemIndex + 1);
         }
-        return numId!;
+        return numId;
     }
 
     private async listItem(node: OfficeContentNode, bareListId?: string): Promise<string> {

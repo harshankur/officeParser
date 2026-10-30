@@ -40,7 +40,6 @@
  * @see https://latex2rtf.sourceforge.net/RTF-Spec-1.2.pdf RTF 1.2 Specification
  */
 
-import { markerLabelWord, MarkerRun, readMarkerLabels } from '../utils/listMarkers.js';
 import { BreakMetadata, CellMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, ShapeMetadata, PageNumberFormat, IndentationMetadata, ListMetadata, ParagraphSpacing, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, PageSetup, TextFormatting } from '../types.js';
 import { MAX_PAGE_PT } from '../utils/pageLimits.js';
 import { titlePagesTakeHiddenFirsts } from '../utils/officeGenUtils.js';
@@ -815,10 +814,6 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         return Object.keys(out).length ? { spacing: out } : {};
     };
     let isListItem = false;
-    // The item's marker from its listtext or pntext group; and from RtfGenerator's own group, which says
-    // what the item's first words are, for any other reader to show.
-    let groupLabel: string | undefined;
-    let writtenLabel: string | undefined;
     let listType: 'ordered' | 'unordered' | undefined;
     let headingLevel: number | undefined;
     let currentListId: string | undefined;
@@ -913,9 +908,6 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     let currentListOverrideLs: number | undefined;
     const listOverrideMap: { [lsId: number]: number } = {}; // Maps \ls ID to \listid
 
-    // Where the letter and numeral markers written as an item's first words have reached.
-    const writtenMarkerRuns = new Map<string, MarkerRun>();
-    let unlistedRun = 0;
     // List counters for itemIndex tracking
     // Map: listId -> indentation level -> count
     const listCounters: { [key: string]: { [key: number]: number } } = {};
@@ -1007,8 +999,6 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         paragraphIndent = 0;
         paragraphAlignment = 'left';
         isListItem = false;
-        groupLabel = undefined;
-        writtenLabel = undefined;
         listType = undefined;
         headingLevel = undefined;
         currentListId = undefined;
@@ -1132,7 +1122,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
         const hasContent = currentParagraphTextChunks.length > 0 || currentParagraphChildren.length > 0;
         if (hasContent) {
-            let currentParagraphText = currentParagraphTextChunks.join('');
+            const currentParagraphText = currentParagraphTextChunks.join('');
             let nodeType: string = 'paragraph';
             let metadata: any = undefined;
 
@@ -1183,52 +1173,28 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
                 // Calculate itemIndex
                 let itemIndex = 0;
-                // (Items of no list table: a run of them, up to the next paragraph, is a list.)
-                const counterId = effectiveListId || `\u0000${unlistedRun}`;
-                {
-                    if (!listCounters[counterId]) {
-                        listCounters[counterId] = {};
+                if (effectiveListId) {
+                    if (!listCounters[effectiveListId]) {
+                        listCounters[effectiveListId] = {};
                     }
 
                     // Reset all sub-level counters when returning to a shallower level
                     // This ensures that if we go from level 2 to level 0 and back to level 2,
                     // the new level 2 sequence starts from 0.
-                    const levels = Object.keys(listCounters[counterId]).map(l => parseInt(l));
+                    const levels = Object.keys(listCounters[effectiveListId]).map(l => parseInt(l));
                     for (const level of levels) {
                         if (level > paragraphIndent) {
-                            delete listCounters[counterId][level];
+                            delete listCounters[effectiveListId][level];
                         }
                     }
 
-                    if (listCounters[counterId][paragraphIndent] === undefined) {
-                        listCounters[counterId][paragraphIndent] = 0;
+                    if (listCounters[effectiveListId][paragraphIndent] === undefined) {
+                        listCounters[effectiveListId][paragraphIndent] = 0;
                     } else {
-                        listCounters[counterId][paragraphIndent]++;
+                        listCounters[effectiveListId][paragraphIndent]++;
                     }
-                    itemIndex = listCounters[counterId][paragraphIndent];
+                    itemIndex = listCounters[effectiveListId][paragraphIndent];
                 }
-
-                // The item's number and label as its marker says them. Where they are its first words (see
-                // writtenLabel), they are not its text.
-                const written = writtenLabel && (currentParagraphText === writtenLabel || currentParagraphText.startsWith(`${writtenLabel} `)) ? writtenLabel : undefined;
-                const firstRun = currentParagraphChildren[0];
-                if (written && firstRun?.type === 'text' && firstRun.text?.startsWith(written)) {
-                    const cut = currentParagraphText === written ? written.length : written.length + 1;
-                    firstRun.text = firstRun.text.slice(cut);
-                    if (!firstRun.text) currentParagraphChildren.shift();
-                    currentParagraphText = currentParagraphText.slice(cut);
-                }
-                const shownLabel = written ?? groupLabel;
-                let label: string | undefined;
-                if (shownLabel && effectiveListType === 'ordered') {
-                    const digits = /(\d+)\D*$/.exec(shownLabel);
-                    const number = digits ? parseInt(digits[1], 10) : markerLabelWord(shownLabel) ? readMarkerLabels([shownLabel], writtenMarkerRuns, `${counterId}|${paragraphIndent}|`)[0] : null;
-                    if (number !== null && number >= 1) {
-                        itemIndex = number - 1;
-                        listCounters[counterId][paragraphIndent] = itemIndex;
-                    }
-                    if (shownLabel !== `${itemIndex + 1}.`) label = shownLabel;
-                } else if (written && written !== '\u2022') label = written;
 
                 metadata = {
                     listType: effectiveListType,
@@ -1236,7 +1202,6 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     listId: effectiveListId || '',
                     itemIndex: itemIndex,
                     alignment: paragraphAlignment,
-                    ...(label !== undefined ? { marker: label } : {}),
                 } as ListMetadata;
 
                 // Save for next listtext detection
@@ -1248,9 +1213,6 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 }
             } else if (Object.keys(layout).length) {
                 metadata = layout;
-                unlistedRun++;
-            } else {
-                unlistedRun++;
             }
 
             const node: OfficeContentNode = {
@@ -1646,10 +1608,6 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // Recursive function to traverse the RTF tree
     const traverse = (node: RtfNode, formatting: TextFormatting, depth: number = 0) => {
         if (node.type === 'group') {
-            if (node.destination === 'oplistlabel') {
-                writtenLabel = extractTextFromGroup(node).trim();
-                return;
-            }
             const ignoreList = [
                 'fonttbl', 'colortbl', 'stylesheet', 'info', 'macpict',
                 'pmmetafile', 'wmetafile', 'dibitmap', 'bitmap', 'object',
@@ -1801,7 +1759,6 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 const markerText = extractTextFromGroup(node);
                 if (markerText) {
                     const trimmed = markerText.trim();
-                    groupLabel = trimmed;
                     // Check for common bullet characters
                     const bulletChars = ['·', '•', 'o', '§', '■', '□', '●', '○', '◆', '◇', '►', '▸', '\u00b7', '\u2022', '\u25cf', '\u25cb'];
                     const isBullet = bulletChars.some(b => trimmed.includes(b)) ||
@@ -2217,8 +2174,6 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 paragraphIndentation = {};
                 paragraphSpacing = {};
                 paragraphAlignment = 'left';
-                groupLabel = undefined;
-                writtenLabel = undefined;
                 isListItem = false;
                 listType = undefined;
                 headingLevel = undefined;

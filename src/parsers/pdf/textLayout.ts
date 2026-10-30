@@ -1046,8 +1046,7 @@ function escapeRe(s: string): string { return s.replace(/[.*+?^${}()|[\]\\]/g, '
 function orderedMarker(core: string, raw: string, text: string): ListMarker | null {
     if (/^[0-9]+$/.test(core)) return { type: 'ordered', raw, number: parseInt(core, 10), strongBullet: false, text };
     const word = markerWord(core);
-    // (Two letters counted on from `z` only in brackets, around a list that says so: `an.` is a word.)
-    if (!word || (word.letter !== null && core.length === 2 && core[0].toLowerCase() !== core[1].toLowerCase() && word.roman === null && !text.startsWith('('))) return null;
+    if (!word) return null;
     return { type: 'ordered', raw, number: readMarkerWord(word, { letter: 0, roman: 0, last: null }, null), strongBullet: false, text, word };
 }
 
@@ -2025,8 +2024,6 @@ export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContex
             if (!bucket) continue;
             for (const j of bucket) {
                 if (j === i || dropped[j] || attached[j]) continue;
-                // (Another marker is no item's text: a marker on it left its own lost, once it took one too.)
-                if (STANDALONE_MARKER_RE.test(groupText(groups[j]))) continue;
                 if (Math.abs(baseOf(groups[j]) - yb) > 0.6 * fs) continue;
                 const dx = leftOf(groups[j]) - xr;
                 if (dx <= 0) continue; // the text must be to the marker's right
@@ -2054,17 +2051,15 @@ export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContex
     });
 
     // A separate marker on a group that is no item after all (no neighbour to read it as a number, a numbered
-    // heading, a line of a contents page) is text, which it goes back to the front of.
+    // heading, a line of a contents page) is text, which it goes back to the front of (the end, where the line
+    // is read from the other side).
     for (let i = 0; i < N; i++) {
         if (!attached[i] || isItem[i]) continue;
         const atom = groups[atomOf[i]].lines, first = groups[i].lines[0];
         const fragments = atom.flatMap(l => l.fragments);
         const last = fragments[fragments.length - 1];
         if (last && !/\s$/.test(last.text)) fragments[fragments.length - 1] = { ...last, text: `${last.text} ` };
-        // (A right-to-left line is read from the other side, where a marker to its left comes last.)
-        groups[i].lines[0] = first.rtl
-            ? { ...first, fragments: [...first.fragments, ...(first.fragments.length ? fragments : [])], x: Math.min(first.x, atom[0].x) }
-            : { ...first, fragments: [...fragments, ...first.fragments], x: Math.min(first.x, atom[0].x) };
+        groups[i].lines[0] = { ...first, fragments: first.rtl ? [...first.fragments, ...fragments] : [...fragments, ...first.fragments], x: Math.min(first.x, atom[0].x) };
     }
 
     const itemLefts = groups.map((g, i) => isItem[i] ? (markerLeft[i] ?? leftOf(g)) : null).filter((x): x is number => x != null);

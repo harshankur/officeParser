@@ -471,7 +471,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         const bulletLevels = getElementsByTagName(listStyle, "text:list-level-style-bullet");
         const numberLevels = getElementsByTagName(listStyle, "text:list-level-style-number");
         let kind: { listType: 'ordered' | 'unordered'; isVisible: boolean } | undefined;
-        if (numberLevels.length > 0) kind = { listType: 'ordered', isVisible: numberLevels.some(l => !!l.getAttribute("style:num-format") || !!l.getAttribute("style:num-prefix")) };
+        if (numberLevels.length > 0) kind = { listType: 'ordered', isVisible: numberLevels.some(l => !!l.getAttribute("style:num-format")) };
         else if (bulletLevels.length > 0) kind = { listType: 'unordered', isVisible: bulletLevels.some(l => !!l.getAttribute("text:bullet-char")) };
         else if (withImages && getElementsByTagName(listStyle, "text:list-level-style-image").length > 0) kind = { listType: 'unordered', isVisible: true };
         listStyleKinds.set(listStyle, kind);
@@ -2076,10 +2076,6 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                                 if (element.tagName === "text:p" || element.tagName === "text:h") {
                                     if (!hasIndexedThisItem) {
-                                        // (An item's own start, as a list going on from there has.)
-                                        const itemStart = Number((item as Element).getAttribute("text:start-value"));
-                                        const levelStart = Number(levels?.get(indentation + 1)?.getAttribute("text:start-value")) || 1;
-                                        if (itemStart >= 1) listCounters[listId][indentKey] = itemStart - levelStart - 1;
                                         listCounters[listId][indentKey]++;
                                         hasIndexedThisItem = true;
                                         for (let k = indentation + 1; k < 10; k++) {
@@ -2088,9 +2084,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                             }
                                         }
                                     }
-                                    // (From the level's own start: the first item of a list starting at 5 is the fifth.)
-                                    const startValue = levels?.get(indentation + 1)?.tagName === 'text:list-level-style-number' ? Number(levels.get(indentation + 1)!.getAttribute("text:start-value")) || 1 : 1;
-                                    const itemIndex = listCounters[listId][indentKey] + startValue - 1;
+                                    const itemIndex = listCounters[listId][indentKey];
                                     const marker = levels ? odfListMarker(levels, indentation, listCounters[listId], listType, itemIndex) : undefined;
                                     const pContent = parseParagraphContent(element, paragraphStyleMap, styleMap, config, sourceXml);
                                     const segments = splitParagraphByBreaks(pContent);

@@ -761,7 +761,7 @@ export interface PdfParserConfig {
      * from no more than one page in five with text between its first and last (a chapter's opening). A number
      * that counts no pages is the line's own, unless the line stands beside the page's number. One whose words
      * or own number change from page to page (a customer's name on merged letters, "Account 10101"), or a kind on
-     * fewer than three pages of four (a sheet's name on its sheet's pages), stays in its pages, where it is. Where
+     * fewer than two of three pages with text (a sheet's name on its sheet's pages), stays in its pages, where it is. Where
      * the lines in `auxiliary` differ, they are parts as a word processor's are (HeaderFooterMetadata `type` and
      * `section`): a first page's, even pages', or a section at each change or restart of the numbers, numbered
      * where it restarts (PageSetup.pageNumberStart), past 64 of them staying in the pages too. Pages before a
@@ -2293,7 +2293,7 @@ export interface MarkdownDialectConfig {
 export interface FallbackToHtmlConfig {
     /** Underline/subscript/superscript via `<u>`/`<sub>`/`<sup>`. */
     textFormatting?: boolean;
-    /** Heading/paragraph text alignment via `<div style="text-align:...">`, and `style="text-align"` on what stands in an HTML table. */
+    /** Heading/paragraph text alignment via `<div style="text-align:...">`. */
     alignment?: boolean;
     /** Internal-link/heading `<a id>`/`<a name>` anchor tags. */
     anchors?: boolean;
@@ -2356,11 +2356,10 @@ export interface MdGeneratorConfig {
     fallbackToHtml?: boolean | FallbackToHtmlConfig;
 
     /**
-     * How a list item the document labels other than `1.`, or with a bullet that is a word, is written.
-     * `'keep'` (the default) writes its label as text after a bullet (`- (l) Annual reports`, `- 2.1. Scope`,
-     * `- Note: Check`), as Markdown numbers in digits alone (a label that is only a number stays Markdown's
-     * own: `5. Five`); `'numbers'` writes the item's number or a plain bullet (`12. Annual reports`, `- Check`),
-     * a native list that shows another label than the document's.
+     * How an ordered list item the document labels other than `1.` is written. `'keep'` (the default)
+     * writes its label as text after a bullet (`- (l) Annual reports`, `- 2.1. Scope`), as Markdown numbers
+     * in digits alone (a label that is only a number stays Markdown's own: `5. Five`); `'numbers'` writes the
+     * item's number (`12. Annual reports`), a native ordered list that shows another label than the document's.
      */
     listMarkers?: 'keep' | 'numbers';
 

@@ -8957,8 +8957,7 @@
         "indentation": 2,
         "listId": "rtf-list-3",
         "itemIndex": 1,
-        "alignment": "left",
-        "marker": "1.1.2."
+        "alignment": "left"
       },
       "rawContent": "Four with a very long line to demonstrate that the hanging indent for the list is working correctly.\\par "
     },
@@ -9271,8 +9270,7 @@
         "indentation": 0,
         "listId": "rtf-list-5",
         "itemIndex": 1,
-        "alignment": "left",
-        "marker": "ii."
+        "alignment": "left"
       },
       "rawContent": "Two\\par "
     },

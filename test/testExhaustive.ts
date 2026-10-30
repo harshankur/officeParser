@@ -8042,8 +8042,6 @@ async function testPdfRunningLinesAsParts(): Promise<void> {
             tagged('numbers going back', pagesN(7).map(n => [body(n), `a:40|${n <= 3 ? romanOf(n) : n <= 6 ? n - 3 : 'vii'}`])),
             tagged('from a later number', pagesN(4).map(n => ['a:750|Report', body(n), `a:40|${n + 146}`])),
             tagged('heads starting late', pagesN(8).map(n => [...(n > 2 ? ['a:750|Late Head'] : []), body(n)])),
-            plain('numerals alone, untagged', pagesN(6).map(n => [body(n), `40|${romanOf(n)}`])),
-            plain('heads by printed parity', pagesN(12).map(n => [`750|${[1, 3, 4, 6, 8, 10, 12].includes(n) ? 'Odd T' : 'Even T'}`, body(n), `40|${n <= 3 ? romanOf(n) : n - 3}`])),
         ];
     })();
     for (const [name, make, source] of layouts) {
@@ -8107,15 +8105,7 @@ async function testPdfRunningLinesAsParts(): Promise<void> {
     const longLine = await read(pagesN(4).map(n => [body(n), `40|${Array.from({ length: 6000 }, (_, i) => i).join(' ')}`]));
     assert.ok(longLine.content.length === 4, 'a line of many numbers is read');
 
-    // Kept in their pages, numbers that are no running line are plain text.
-    const keptLines = await read(pagesN(12).map(n => [body(n), ...(n <= 8 ? [`40|${n}`] : [])]), { pdfParserConfig: { separateProcess: false, keepHeadersAndFootersInPages: true, pageRange: '7-12' } });
-    assert.ok(!JSON.stringify(keptLines.content).includes('"field"'), 'fields of lines that stay in the pages are text again');
-
-    // Blank pages stay pages in the writers that lay out pages; a writer's numbers are numbers.
-    const withBlank = await readTagged(pagesN(5).map(n => n === 1 ? [] : [body(n), `a:40|Page ${n}`]));
-    const odtBlank = strFromU8(unzipSync((await withBlank.to('odt')).value as Uint8Array)['content.xml']);
-    assert.ok(/<office:text[^>]*>(?:<[^>]*sequence-decls[\s\S]*?<\/text:sequence-decls>)?<text:p[^>]*\/>/.test(odtBlank), `ODT: a blank first page has a paragraph; got ${odtBlank.slice(odtBlank.indexOf('<office:text'), odtBlank.indexOf('<office:text') + 200)}`);
-    assert.ok(String((await withBlank.to('tex')).value).includes('\\null'), 'LaTeX: a blank page holds something');
+    // A writer's page numbers are numbers.
     const hostileStart = { type: 'docx', metadata: { pageSetup: { pageNumberStart: '3"><evil a="' } }, attachments: [], content: [{ type: 'paragraph', text: 'x', children: [{ type: 'text', text: 'x' }] }] } as any;
     const odtHostile = strFromU8(unzipSync((await OfficeGenerator.generate(hostileStart, 'odt', {} as any)).value as Uint8Array)['content.xml']);
     assert.ok(!odtHostile.includes('<evil'), 'ODT: a page number is a number');
@@ -8175,11 +8165,6 @@ async function testListMarkerReading(): Promise<void> {
     assert.ok(cellMd.includes('<ol start="12" style="list-style-type:') && !cellMd.includes('<ol><li'), `a list item in an HTML cell keeps its number and label; got ${cellMd}`);
     assert.ok(collectAllNodes(await OfficeParser.parseOffice(Buffer.from(cellMd), { fileType: 'md' } as any) as OfficeParserAST).some(n => n.type === 'list' && (n.metadata as any).marker === '(l)'), 'and it reads back');
 
-    // Two letters go on from z, in brackets; a word of two letters beside no list is text.
-    assert.deepStrictEqual(seq(['(z)', '(aa)', '(ab)', '(ac)']), [26, 27, 28, 29], 'letters counted on from z');
-    assert.deepStrictEqual(seq(['(of)']), [null], 'a word of two letters alone is no marker');
-    assert.deepStrictEqual(readMarkerLabels(['(v)'], (() => { const runs = new Map(); readMarkerLabels(['(i)', '(ii)', '(iii)', '(iv)'], runs); return runs; })()), [5], 'a list parted in two goes on');
-
     // A marker set apart from its line that reads as nothing goes back to the line's front, not away.
     const raised = (rows: [string, string][]) => {
         const content = `BT /F1 11 Tf ${rows.map(([m, t], i) => { const y = 700 - i * 14; return `${m ? `1 0 0 1 72 ${y + 4} Tm (${m}) Tj ` : ''}1 0 0 1 92 ${y} Tm (${t}) Tj`; }).join(' ')} ET`;
@@ -8201,52 +8186,8 @@ async function testListMarkerReading(): Promise<void> {
     const md = async (ast: any, mdConfig: object = {}) => String((await OfficeGenerator.generate(ast, 'md', { mdConfig } as any)).value);
     assert.ok((await md(listAst([['one', 0, '1', 'ordered'], ['two', 1, '2', 'ordered'], ['five', 4, '5', 'ordered']]))).includes('1. one\n2. two\n5. five'), 'a bare number is Markdown\'s');
     assert.ok((await md(listAst([['five', 0, '5.', 'ordered']]))).includes('5. five'), 'a label of a number other than the index is Markdown\'s');
-    assert.ok((await md(listAst([['x', 0, 'Note:', 'unordered']]))).includes('- Note: x'), 'a bullet that is a word is kept');
-    assert.ok(!(await md(listAst([['x', 0, 'Note:', 'unordered']]), { listMarkers: 'numbers' })).includes('Note:'), 'and not with numbers asked for');
-    assert.ok((await md(listAst([['x', 0, '\u25AA', 'unordered']]))).includes('- x'), 'a glyph bullet is the plain one');
     const definition = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'definitionList', children: [{ type: 'definitionTerm', text: 't', children: [{ type: 'text', text: 't' }] }, { type: 'definitionDescription', children: listAst([['body', 12, '[m]', 'ordered']]).content }] }] };
     assert.ok((await md(definition, { dialect: 'extended' })).includes('\\- \\[m\\] body'), `a label in a definition is escaped once; got ${await md(definition, { dialect: 'extended' })}`);
-    const labelChunks = await OfficeGenerator.generate(listAst([['bul', 0, '(z)', 'unordered']]), 'chunks' as any, {} as any);
-    assert.ok(JSON.stringify(labelChunks.value).includes('(z) bul'), 'a chunk has a bullet\'s word too');
-
-    // Word processors print what each item says when the sequence breaks, and read it back.
-    for (const [rows, want] of [
-        [[['H', 7, '(h)'], ['I', 8, '(i)'], ['II', 1, '(ii)'], ['J', 9, '(j)']], '(h) H\n(i) I\n(ii) II\n(j) J'],
-        [[['A', 0, '(a)'], ['B', 1, '(b)'], ['D', 3, '(d)'], ['G', 6, '(g)']], '(a) A\n(b) B\n(d) D\n(g) G'],
-        [[['one', 0, undefined], ['two', 1, undefined], ['five', 4, undefined], ['seven', 6, undefined]], '1. one\n2. two\n5. five\n7. seven'],
-        [[['five', 4, undefined], ['six', 5, undefined]], '5. five\n6. six'],
-    ] as [[string, number, string | undefined][], string][]) {
-        const ast = listAst(rows.map(([t, i, m]) => [t, i, m, 'ordered']));
-        for (const format of ['docx', 'odt', 'rtf']) {
-            const value = (await OfficeGenerator.generate(ast, format as any, {} as any)).value as any;
-            const back = await OfficeParser.parseOffice(Buffer.from(value), { fileType: format, onWarning: () => { } } as any) as OfficeParserAST;
-            const text = String((await back.to('text')).value).trim();
-            assert.strictEqual(text, want, `${format}: an item prints its own label`);
-        }
-    }
-
-
-    // RTF: a list's numbers from its marker group, others' words its own, this writer's labels its labels.
-    const rtfOf = (body: string) => OfficeParser.parseOffice(Buffer.from(`{\\rtf1\\ansi ${body}}`), { fileType: 'rtf', onWarning: () => { } } as any) as Promise<OfficeParserAST>;
-    const wordpad = await rtfOf('{\\pntext 1.\\tab}{\\*\\pn\\pnlvlbody\\pndec}First\\par{\\pntext 2.\\tab}Second\\par{\\pntext 3.\\tab}Third\\par');
-    assert.deepStrictEqual((wordpad.content as any[]).map(n => n.metadata.itemIndex), [0, 1, 2], 'RTF: numbers from the marker group');
-    const wordpadBack = await OfficeParser.parseOffice(Buffer.from((await wordpad.to('docx')).value as Uint8Array), { fileType: 'docx', onWarning: () => { } } as any) as OfficeParserAST;
-    assert.ok(String((await wordpadBack.to('text')).value).includes('1. First\n2. Second\n3. Third'), 'RTF to DOCX: numbers go on');
-    const noGroup = await rtfOf('\\pard\\pndec First\\par\\pard\\pndec Second\\par\\pard Plain\\par\\pard\\pndec Again\\par');
-    assert.deepStrictEqual((noGroup.content as any[]).filter(n => n.type === 'list').map(n => n.metadata.itemIndex), [0, 1, 0], 'RTF: list controls alone count, up to the next paragraph');
-    for (const text of ['Mr. Smith called', 'Note: hello world', '2024 was good', 'a. first']) {
-        const third = await rtfOf(`\\pard\\pnbullet ${text}\\par`);
-        assert.ok(String((await third.to('md', { mdConfig: { listMarkers: 'numbers' } })).value).includes(text), `RTF: another writer's words stay its words: ${text}`);
-    }
-
-    // ODT: a broken level's numbering leaves the level above going on; a long bullet stays whole; an item's own start is read.
-    const nested = (t: string, indentation: number, itemIndex: number, more: object = {}) => ({ type: 'list', text: t, children: [{ type: 'text', text: t }], metadata: { listType: 'ordered', indentation, itemIndex, listId: 'a', alignment: 'left', ...more } });
-    const parents = { type: 'docx', metadata: {}, attachments: [], content: [nested('one', 0, 0), nested('a', 1, 0), nested('b', 1, 1), nested('two', 0, 1), nested('c', 1, 2), nested('d', 1, 3), nested('three', 0, 2), nested('four', 0, 3)] } as any;
-    const parentsOdt = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(parents, 'odt', {} as any)).value as Uint8Array), { fileType: 'odt', onWarning: () => { } } as any) as OfficeParserAST;
-    assert.deepStrictEqual(collectAllNodes(parentsOdt).filter(n => n.type === 'list').map(n => [n.text, (n.metadata as any).itemIndex]), [['one', 0], ['a', 0], ['b', 1], ['two', 1], ['c', 2], ['d', 3], ['three', 2], ['four', 3]], 'ODT: numbers after a nested break');
-    const longBullet = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(listAst([['x', 0, 'Note:', 'unordered']]), 'odt', {} as any)).value as Uint8Array), { fileType: 'odt', onWarning: () => { } } as any) as OfficeParserAST;
-    assert.strictEqual((collectAllNodes(longBullet).find(n => n.type === 'list')!.metadata as any).marker, 'Note:', 'ODT: a bullet of many characters stays whole');
-
 }
 
 /**
@@ -8297,41 +8238,11 @@ async function testMarkdownHtmlCellFormatting(): Promise<void> {
     const block = hostile.slice(hostile.indexOf('<table'), hostile.indexOf('</table>'));
     assert.ok(!/\r/.test(block) && !/\n[ \t]*\n/.test(block), `cell: no line end ends the block; got ${JSON.stringify(block)}`);
 
-    // Alignment, a header cell's role and a list's levels read back as they were.
-    const list = (t: string, indentation: number, more: object = {}) => ({ type: 'list', text: t, children: [run(t, {})], metadata: { listType: 'unordered', indentation, itemIndex: 0, listId: 'l', alignment: 'left', ...more } });
-    const structure = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [
-        { type: 'row', children: [cell([{ type: 'paragraph', text: 'h', children: [run('h', {})] }], { colSpan: 2, style: 'header', align: 'right' })] },
-        { type: 'row', children: [cell([list('one', 0), list('two', 1), list('three', 2), list('four', 0), list('done', 0, { isTask: true, checked: true }), { type: 'paragraph', text: 'mid', children: [run('mid', {})], metadata: { alignment: 'center' } }]), cell([{ type: 'paragraph', text: 'z', children: [run('z', {})] }])] },
-    ] }] } as any;
-    const written = String((await OfficeGenerator.generate(structure, 'md', {} as any)).value);
-    const back = await OfficeParser.parseOffice(Buffer.from(written), { fileType: 'md', onWarning: () => { } } as any) as OfficeParserAST;
-    const nodes = collectAllNodes(back);
-    assert.deepStrictEqual(nodes.filter(n => n.type === 'list').slice(0, 4).map(n => (n.metadata as any).indentation), [0, 1, 2, 0], `cell: a list's levels; got ${written}`);
-    assert.ok(nodes.some(n => n.type === 'list' && (n.metadata as any).isTask && (n.metadata as any).checked), 'cell: a task item stays one');
-    const head = nodes.find(n => n.type === 'cell')!.metadata as any;
-    assert.ok(head.style === 'header' && head.align === 'right', `cell: a header cell and its alignment; got ${JSON.stringify(head)}`);
-    assert.strictEqual((nodes.find(n => n.type === 'paragraph' && n.children?.some(c => c.text === 'mid'))!.metadata as any).alignment, 'center', 'cell: a paragraph\'s alignment');
-    assert.ok(!String((await OfficeGenerator.generate(structure, 'md', { mdConfig: { fallbackToHtml: { alignment: false } } } as any)).value).includes('text-align'), 'cell: alignment off writes none');
-
-
     // A cell's blocks have no blank line between them, and an item's note and an onNode string do not end the block.
     const items = await OfficeParser.parseOffice(Buffer.from('<table><tr><td colspan=2><ul><li><p>one</p><p>two</p></li></ul></td></tr></table>'), { fileType: 'html', onWarning: () => { } } as any) as OfficeParserAST;
     assert.ok(!/\n[ \t]*\n/.test(String((await items.to('md')).value)), 'cell: no blank line between an item\'s paragraphs');
-    const noted = { type: 'list', text: 'it', children: [run('it', {})], notes: [{ type: 'note', text: 'THE BODY', children: [{ type: 'paragraph', text: 'THE BODY', children: [run('THE BODY', {})] }], metadata: { noteId: '7', noteType: 'footnote' } }], metadata: { listType: 'unordered', indentation: 0, itemIndex: 0, listId: 'n', alignment: 'left' } };
-    assert.ok((await md([noted], { dialect: 'commonmark' })).length > 0);
-    const notedDoc = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [{ type: 'row', children: [cell([noted], { colSpan: 2 })] }] }] } as any;
-    assert.ok(String((await OfficeGenerator.generate(notedDoc, 'md', { mdConfig: { dialect: 'commonmark' } } as any)).value).includes('THE BODY'), 'cell: an item\'s note stays');
     const given = String((await OfficeGenerator.generate(astOf([run('x', {})]), 'md', { onNode: (n: any) => n.type === 'text' && n.text === 'x' ? 'C1\n\n# live' : undefined } as any)).value);
     assert.ok(!/\n[ \t]*\n# live/.test(given), `cell: an onNode string does not end the block; got ${given}`);
-    const longLabel = 'Part 12 of the regulation, chapter seven, item:';
-    const labelled = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [{ type: 'row', children: [cell([{ type: 'list', text: 'x', children: [run('x', {})], metadata: { listType: 'ordered', indentation: 0, itemIndex: 0, listId: 'n', alignment: 'left', marker: longLabel } }], { colSpan: 2 })] }] }] } as any;
-    const labelBack = await OfficeParser.parseOffice(Buffer.from(String((await OfficeGenerator.generate(labelled, 'md', {} as any)).value)), { fileType: 'md', onWarning: () => { } } as any) as OfficeParserAST;
-    assert.strictEqual((collectAllNodes(labelBack).find(n => n.type === 'list')!.metadata as any).marker, longLabel, 'cell: a long label stays whole');
-    // An item an onNode leaves out closes nothing.
-    const outOfList = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [{ type: 'row', children: [cell(['a', 'b', 'c', 'd'].map((t, i) => ({ type: 'list', text: t, children: [run(t, {})], metadata: { listType: 'unordered', indentation: t === 'c' ? 1 : 0, itemIndex: i, listId: 'n', alignment: 'left' } })), { colSpan: 2 })] }] }] } as any;
-    const without = String((await OfficeGenerator.generate(outOfList, 'md', { onNode: (n: any) => n.type === 'list' && n.text === 'b' ? false : undefined } as any)).value);
-    assert.ok(without.includes('<ul><li>a<ul><li>c</li></ul></li><li>d</li></ul>'), `cell: the list goes on past an item left out; got ${without}`);
-
 }
 
 /**

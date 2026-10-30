@@ -319,8 +319,6 @@ interface BandLine {
     printed: string;
     numbers: string[];
     ownNumber: boolean;
-    /** What a numeral alone on the line stands for, with no page label to say so (see findRunningLines). */
-    numeral?: number;
     /** Whether the page has another line of its text (its numbers as one) at its left edge: a table's column. */
     repeated: boolean;
 }
@@ -428,8 +426,7 @@ export function findRunningLines(extracts: readonly PageExtract[], cfg: PdfLayou
             // (A page label written in the line, "Preface iii", is as one in its key as its numbers are.)
             const labelled = numbered === null && label && !label.digits && text.length <= NUMBERED_TEXT ? labelAt(text, label) : -1;
             const unlabelled = labelled >= 0 ? `${text.slice(0, labelled)}#${text.slice(labelled + label!.text.length)}` : text;
-            const numeral = numbered === null && !label ? markerWord(text)?.roman ?? undefined : undefined;
-            const keyText = keyOf(numeral !== undefined ? '#numeral' : numbered ?? unlabelled.replace(/\p{Nd}+/gu, '#'));
+            const keyText = keyOf(numbered ?? unlabelled.replace(/\p{Nd}+/gu, '#'));
             const edge = band === 'header' ? box.y : shownH - (box.y + box.height);
             const entry = entryFor(band, keyText, edge, box.x);
             if (entry.last !== extract.pageNumber) {
@@ -449,7 +446,7 @@ export function findRunningLines(extracts: readonly PageExtract[], cfg: PdfLayou
             const left = `${band}|${keyText}|`, x = Math.floor(box.x / LEFT_TOLERANCE);
             atLeft.set(left + x, (atLeft.get(left + x) ?? 0) + 1);
             lefts.push({ left, x });
-            lines.push({ runs: lineRuns(line), band, edge, left: box.x, height: box.height, fontSize: line.fontSize, entry, printed, numbers, ownNumber, ...(numeral !== undefined ? { numeral } : {}), repeated: false });
+            lines.push({ runs: lineRuns(line), band, edge, left: box.x, height: box.height, fontSize: line.fontSize, entry, printed, numbers, ownNumber, repeated: false });
         }
         // (At its own left edge, and a tolerance either side.)
         lines.forEach((l, k) => {
@@ -457,35 +454,6 @@ export function findRunningLines(extracts: readonly PageExtract[], cfg: PdfLayou
             l.repeated = (atLeft.get(left + (x - 1)) ?? 0) + (atLeft.get(left + x) ?? 0) + (atLeft.get(left + (x + 1)) ?? 0) > 1;
         });
         pagesLines.push(lines);
-    }
-
-    // Numerals alone on their lines, going on with the pages for three pages or more (i, ii, iii with no page
-    // labels to say so), are page numbers; the next page's digits say nothing of them.
-    const numerals = new Map<KeyEntry, { line: BandLine; page: number }[]>();
-    extracts.forEach((extract, i) => {
-        for (const line of pagesLines[i]) {
-            if (line.numeral === undefined) continue;
-            let list = numerals.get(line.entry);
-            if (!list) numerals.set(line.entry, list = []);
-            list.push({ line, page: extract.pageNumber });
-        }
-    });
-    for (const [entry, list] of numerals) {
-        for (let at = 0; at < list.length;) {
-            let end = at + 1;
-            while (end < list.length && list[end].line.numeral! - list[end - 1].line.numeral! === list[end].page - list[end - 1].page) end++;
-            if (end - at >= RUNNING_PAGES) {
-                for (let k = at; k < end; k++) {
-                    list[k].line.ownNumber = true;
-                    list[k].line.numbers = ['#numeral'];
-                    entry.numbered++;
-                }
-                const seen = entry.numbers.get('#numeral') ?? { pages: 0, last: -1 };
-                seen.pages += end - at;
-                entry.numbers.set('#numeral', seen);
-            }
-            at = end;
-        }
     }
 
     const need = (pages: number) => Math.max(RUNNING_PAGES, Math.ceil(RUNNING_SHARE * pages));
@@ -537,21 +505,19 @@ export function findRunningLines(extracts: readonly PageExtract[], cfg: PdfLayou
             for (let k = 0; k < taken; k++) for (const l of rows[k]) for (const r of l.runs) takenRuns.add(r);
             // (Inward of the rows taken: past the middle of the last one.)
             const from = inner(rows[taken - 1]) - rowHeight(rows[taken - 1]) / 2;
-            const rest: { near: number; height: number; left: number; right: number }[] = [];
+            const rest: { near: number; height: number; left: number }[] = [];
             let nearest = Infinity;
             for (const r of extract.runs) {
                 if (takenRuns.has(r) || !r.text.trim()) continue;
                 const box = rotateBoundsToRendered({ x: r.x, y: r.yTop, width: r.width, height: r.height }, extract.rotation, extract.authoredW, extract.authoredH);
                 const near = band === 'header' ? box.y : shownH - (box.y + box.height);
                 if (near + box.height / 2 <= from) continue;
-                rest.push({ near, height: box.height, left: box.x, right: box.x + box.width });
+                rest.push({ near, height: box.height, left: box.x });
                 if (near < nearest) nearest = near;
             }
             // The left edges of the text nearest them (its row), as places a tolerance wide.
             const placesOf = (lefts: number[]) => new Set(lefts.map(x => Math.floor(x / LEFT_TOLERANCE)));
-            // (Where its cells or columns start, not each word: a word of a paragraph can stand under anything.)
-            const nextRow = rest.filter(t => t.near - nearest <= t.height / 2).sort((a, b) => a.left - b.left);
-            let nextLefts = placesOf(nextRow.filter((t, k) => k === 0 || t.left - nextRow[k - 1].right >= t.height).map(t => t.left));
+            let nextLefts = placesOf(rest.filter(t => t.near - nearest <= t.height / 2).map(t => t.left));
             const under = (x: number) => { const k = Math.floor(x / LEFT_TOLERANCE); return nextLefts.has(k - 1) || nextLefts.has(k) || nextLefts.has(k + 1); };
             while (taken > 0) {
                 const row = rows[taken - 1];
@@ -901,7 +867,7 @@ function numberPages(pages: readonly PageFurniture[], pagesRead: readonly number
  * The lines a tagged PDF marks as artifacts are furniture, whatever they say. A line found by comparing an
  * untagged PDF's pages is where it is the same, its page fields as one, on every page of its kind that has any
  * (a page without any says nothing of it, nor a blank one), but for a first page alone, or on all its odd or even
- * pages (of the file's or as they print) and none of the others, and is missing from few of the pages with text between its first and last:
+ * pages and none of the others, and is missing from few of the pages with text between its first and last:
  * past that it may be the document's ("Customer: Alice Ltd", then Bob's, on merged letters; a line signed on
  * most pages), so it stays in its pages, where nothing is lost.
  *
@@ -920,7 +886,6 @@ export function planFurniture(furniture: readonly PageFurniture[], pagesRead: re
     const placeInText = new Map(textPages.map((n, i) => [n, i]));
     const kept = new Map<'header' | 'footer', PageFurniture[]>();
     const tooFew = (pages: number) => pages * 3 < textPages.length * 2;
-    const printedThen = numberPages(furniture.filter(p => p.nodes.length), pagesRead).numbers;
     for (const kind of ['header', 'footer'] as const) {
         const pages = furniture.filter(p => p.kind === kind && p.nodes.length);
         if (!pages.length) continue;
@@ -947,8 +912,7 @@ export function planFurniture(furniture: readonly PageFurniture[], pagesRead: re
                 on.add(page.pageNumber);
             }
         }
-        const evenAsPrinted = (n: number) => (printedThen.get(n) ?? n) % 2 === 0;
-        const wholes = [had, had.filter(n => n !== firstRead), had.filter(n => n % 2 === 0), had.filter(n => n % 2 === 1), had.filter(evenAsPrinted), had.filter(n => !evenAsPrinted(n))];
+        const wholes = [had, had.filter(n => n !== firstRead), had.filter(n => n % 2 === 0), had.filter(n => n % 2 === 1)];
         const stable = (on: Set<number>) => wholes.some(wanted => wanted.length > 0 && wanted.length === on.size && wanted.every(n => on.has(n)));
         const unstableKeys = new Set([...onPages].filter(([, on]) => !stable(on)).map(([key]) => key));
         // A first page's own lines, the others' all being stable, is a cover's.
