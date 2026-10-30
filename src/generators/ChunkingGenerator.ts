@@ -45,6 +45,13 @@ function contextLabel(text: string | undefined): string | undefined {
     return text.slice(0, code >= 0xD800 && code <= 0xDBFF ? CONTEXT_LABEL_LENGTH - 1 : CONTEXT_LABEL_LENGTH) + '…';
 }
 
+/** Move a UTF-16 offset off the middle of a surrogate pair. */
+function characterBoundary(text: string, offset: number): number {
+    const before = text.charCodeAt(offset - 1);
+    const after = text.charCodeAt(offset);
+    return before >= 0xD800 && before <= 0xDBFF && after >= 0xDC00 && after <= 0xDFFF ? offset - 1 : offset;
+}
+
 /**
  * The visible text of a content node: its own `.text` when set, otherwise its descendants' text,
  * plus any footnote/endnote bodies hanging off `node.notes`.
@@ -270,9 +277,11 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             const step = Math.max(1, width - Math.max(0, Math.floor(chunkOverlap)));
             let offset = 0;
             while (offset < text.length) {
-                const slice = text.slice(offset, offset + width);
-                results.push({ text: slice, start: offset, end: offset + slice.length });
-                offset += step;
+                const nextCharacter = offset + ((text.codePointAt(offset) ?? 0) > 0xFFFF ? 2 : 1);
+                const end = Math.max(nextCharacter, characterBoundary(text, Math.min(text.length, offset + width)));
+                const slice = text.slice(offset, end);
+                results.push({ text: slice, start: offset, end });
+                offset = Math.max(nextCharacter, characterBoundary(text, Math.min(end, offset + step)));
             }
             return results;
         }
@@ -302,9 +311,11 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
                 }
 
                 // Start next chunk
-                if (chunkOverlap > 0 && currentChunk.length > chunkOverlap && measure(currentChunk) <= chunkSize) {
-                    const overlapText = currentChunk.slice(-chunkOverlap);
-                    currentStart = absoluteOffset - chunkOverlap;
+                const overlapLength = Math.max(0, Math.floor(chunkOverlap));
+                if (overlapLength > 0 && currentChunk.length > overlapLength && measure(currentChunk) <= chunkSize) {
+                    const overlapStart = characterBoundary(currentChunk, currentChunk.length - overlapLength);
+                    const overlapText = currentChunk.slice(overlapStart);
+                    currentStart += overlapStart;
                     currentChunk = overlapText + actualSep + part;
                 } else {
                     currentStart = absoluteOffset;

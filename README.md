@@ -668,7 +668,7 @@ const { value: chunks } = await OfficeConverter.convert('report.docx', 'chunks',
 ```
 
 ### Strategy 2: Fixed-Size (Recursive)
-Splits by character count with overlap. Equivalent to LangChain's `RecursiveCharacterTextSplitter`.
+Splits by character count with overlap. Equivalent to LangChain's `RecursiveCharacterTextSplitter`. UTF-16 surrogate pairs stay whole: overlap may expand to include a complete code point, and a hard-cut chunk may exceed the size limit if one code point alone does not fit.
 
 ```ts
 const { value: chunks } = await OfficeConverter.convert('report.docx', 'chunks', {
