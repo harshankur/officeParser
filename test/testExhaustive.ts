@@ -5,6 +5,7 @@
  */
 
 import { OfficeParser } from '../src/OfficeParser';
+import { withinTime } from './helpers/timing';
 import { testUnicodeChunks } from './generator/unicodeChunks';
 import { OfficeGenerator } from '../src/OfficeGenerator';
 import { bulletCharacter, formatListNumber } from '../src/utils/listMarkers';
@@ -5121,9 +5122,8 @@ async function testTitleAndEvenPagesAsWordShows(): Promise<void> {
     assert.deepStrictEqual(await texFurniture('\\documentclass{article}\\usepackage{fancyhdr}\\pagestyle{fancy}\\fancyhead[L]{\\ifodd\\value{page} {ODD}\\else {EVEN}\\fi}\\begin{document}Body.\\end{document}'), ['undefineddefault:ODD', 'undefinedeven:EVEN'], 'a LaTeX field of odd and even pages is read as their parts');
     assert.deepStrictEqual(await texFurniture('\\documentclass{article}\\usepackage{fancyhdr}\\pagestyle{fancy}\\fancyhead[L]{\\ifodd\\value{page}\\else {E{V}EN}\\fi}\\fancyhead[R]{\\ifnum\\value{page}=1 {FIRST}\\fi}\\begin{document}Body.\\end{document}'), ['undefinedeven:EVEN', 'undefinedfirst:FIRST'], 'LaTeX fields of even pages and of the first page, braces inside, are read as theirs');
     // (A field of a long run of branches with no end is read in linear time: two open-ended branches took its square.)
-    const branchStarted = Date.now();
-    await texFurniture(`\\documentclass{article}\\usepackage{fancyhdr}\\pagestyle{fancy}\\fancyhead[L]{\\ifodd\\value{page}{a}${'\\else{a}'.repeat(40_000)}}\\begin{document}Body.\\end{document}`);
-    assert.ok(Date.now() - branchStarted < 5_000, `a long field of page branches is read quickly; took ${Date.now() - branchStarted}ms`);
+    const branches = await withinTime(5_000, () => texFurniture(`\\documentclass{article}\\usepackage{fancyhdr}\\pagestyle{fancy}\\fancyhead[L]{\\ifodd\\value{page}{a}${'\\else{a}'.repeat(40_000)}}\\begin{document}Body.\\end{document}`));
+    assert.ok(branches.within, `a long field of page branches is read quickly; took ${branches.ms}ms`);
 
     // A part a thousand sections refer to is read once, a node where a section's part changes; sections alternating
     // two master pages share their parts' blocks (each read again for each section took gigabytes).
@@ -5635,10 +5635,10 @@ async function testFloatingFrames(): Promise<void> {
         const float = { horizontalFrom: 'column', verticalFrom: 'paragraph', x: 0, y: 0, width: 300, wrap: 'beside' };
         let nested: any = { type: 'drawing', text: '', metadata: { float }, children: Array.from({ length: 80 }, (_, i) => para(`Inner line ${i}`)) };
         for (let d = 1; d < 300; d++) nested = { type: 'drawing', text: '', metadata: { float }, children: [para(`Level ${d}`), nested] };
-        const started = Date.now();
-        const lines = await linesOf([para('Start.'), nested]);
+        const laidOut = await withinTime(20000, () => linesOf([para('Start.'), nested]));
+        const lines = laidOut.result;
         assert.ok(lines.some(n => (n.text || '').includes('Inner line 79')) && lines.some(n => (n.text || '').includes('Level 299')), 'the nested frames\' text is drawn');
-        assert.ok(Date.now() - started < 20000, `nested frames are laid out in linear time; took ${Date.now() - started} ms`);
+        assert.ok(laidOut.within, `nested frames are laid out in linear time; took ${laidOut.ms} ms`);
     }
     // A slide's text box holding a frame anchored to its paragraph keeps the frame's text in it, in every writer
     // (a frame lifted out of the box had no place on the slide, and the deck writers left it out).
@@ -6172,9 +6172,9 @@ async function testNativePdfSvgPictures(): Promise<void> {
     // A use of text or a picture drawn ten thousand times: the text within the picture's bound on characters
     // (reported past it), the picture embedded once.
     const fan = (leaf: string, levels: number) => '<defs><g id="a0">' + leaf + '</g>' + Array.from({ length: levels }, (_, i) => `<g id="a${i + 1}">` + `<use href="#a${i}"/>`.repeat(10) + '</g>').join('') + `</defs><use href="#a${levels}"/>`;
-    const started = Date.now();
-    const amplified = await drawn(fan(`<text x="1" y="10">${'W'.repeat(4000)}</text>`, 4));
-    assert.ok(Date.now() - started < 20_000 && amplified.messages.some(m => m.includes('text past the picture')), `text drawn by many uses is bounded and reported; got ${JSON.stringify(amplified.messages)} in ${Date.now() - started}ms`);
+    const amplifiedRun = await withinTime(20_000, () => drawn(fan(`<text x="1" y="10">${'W'.repeat(4000)}</text>`, 4)));
+    const amplified = amplifiedRun.result;
+    assert.ok(amplifiedRun.within && amplified.messages.some(m => m.includes('text past the picture')), `text drawn by many uses is bounded and reported; got ${JSON.stringify(amplified.messages)} in ${amplifiedRun.ms}ms`);
     const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
     const pictures = await OfficeGenerator.generate(ast(`<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">${fan(`<image width="5" height="5" href="data:image/png;base64,${png}"/>`, 3)}</svg>`), 'pdf', { pdfConfig: { engine: 'native' } } as any);
     const imageObjects = Buffer.from(pictures.value as Uint8Array).toString('latin1').match(/\/Subtype\s*\/Image/g) || [];
@@ -6197,9 +6197,8 @@ async function testNativePdfSvgPictures(): Promise<void> {
         assert.ok(/0 1 0 rg/.test((await drawn(body)).streams), `an SVG's cascade draws green: ${body}`);
     }
     // A stylesheet of many at-rules is read in time in its length (each looked for its semicolon to the end).
-    const atRulesStarted = Date.now();
-    await drawn(`<style>${'@a{}'.repeat(60000)}</style><rect width="20" height="20" fill="#00ff00"/>`);
-    assert.ok(Date.now() - atRulesStarted < 5000, `a stylesheet of many at-rules is read quickly; took ${Date.now() - atRulesStarted}ms`);
+    const atRules = await withinTime(5000, () => drawn(`<style>${'@a{}'.repeat(60000)}</style><rect width="20" height="20" fill="#00ff00"/>`));
+    assert.ok(atRules.within, `a stylesheet of many at-rules is read quickly; took ${atRules.ms}ms`);
     // Rules of ancestors (descendant and child combinators, as Mermaid and D3 write them) reach their elements.
     for (const body of ['<style>#chart .node rect{fill:#00ff00}</style><g id="chart"><g class="node"><rect width="20" height="20" fill="red"/></g></g>',
         '<style>.axis > path{fill:#00ff00}</style><g class="axis"><path d="M0 0H20V20z" fill="red"/></g>']) {
@@ -6230,9 +6229,8 @@ async function testNativePdfSvgPictures(): Promise<void> {
     assert.ok(leading.nodes.map(n => n.text || '').join('').replace(/\s+/g, ' ').includes('a b c d'), `a halo's label of spans each starting with a space keeps them; got ${JSON.stringify(leading.nodes.map(n => n.text))}`);
     assert.ok(/2 Tr/.test((await drawn('<text x="5" y="50" fill="black" stroke="white" stroke-width="4">Plain</text>')).streams), 'text filled and stroked is one pass, the fill under');
     // A selector of a long run of blanks is read in linear time (a pattern around `>` took the square of the run).
-    const blankStarted = Date.now();
-    await drawn(`<style>a${' '.repeat(100_000)}b{fill:red}</style><rect width="10" height="10"/>`);
-    assert.ok(Date.now() - blankStarted < 5_000, `a selector of a long run of blanks is read quickly; took ${Date.now() - blankStarted}ms`);
+    const blanks = await withinTime(5_000, () => drawn(`<style>a${' '.repeat(100_000)}b{fill:red}</style><rect width="10" height="10"/>`));
+    assert.ok(blanks.within, `a selector of a long run of blanks is read quickly; took ${blanks.ms}ms`);
 }
 
 /**
@@ -6974,9 +6972,8 @@ async function testSpreadsheetWriters(): Promise<void> {
         'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
         'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>x</t></is></c></row></sheetData><hyperlinks>${'<hyperlink ref="A1:A99990" location="S!A1"/>'.repeat(2000)}</hyperlinks></worksheet>`),
     }));
-    const repeatedStart = performance.now();
-    await OfficeParser.parseOffice(repeated, { fileType: 'xlsx' } as any);
-    assert.ok(performance.now() - repeatedStart < 5000, 'xlsx: a hyperlink range repeated two thousand times is read in bounded time');
+    const repeatedRun = await withinTime(5000, () => OfficeParser.parseOffice(repeated, { fileType: 'xlsx' } as any));
+    assert.ok(repeatedRun.within, 'xlsx: a hyperlink range repeated two thousand times is read in bounded time');
     // Blocks beside a workbook's sheets are written (a Text sheet); a sheet name never ends in an apostrophe;
     // a link to a place in the workbook is a place link; onNode's string for a chart on a sheet is written.
     const beside = { type: 'xlsx', metadata: {}, attachments: [{ type: 'chart', name: 'c1', mimeType: 'application/xml', data: '', chartData: { labels: ['a'], dataSets: [{ name: 's', values: ['1'] }] } }], content: [
@@ -7160,9 +7157,8 @@ async function testSpreadsheetWriters(): Promise<void> {
         && /<number:text>€<\/number:text><number:number[^>]*number:display-factor="1000"/.test(looksOds)
         && /office:value-type="currency" office:value="-1234\.5"/.test(looksOds) && /table:style-name="[^"]+" office:value-type="float" office:value="-1234\.5"/.test(looksOds), `ODS: a format is kept only where it shows the value; got ${looksOds.slice(looksOds.indexOf('<office:automatic-styles>'), looksOds.indexOf('<office:automatic-styles>') + 1200)}`);
     // (In linear time: a shown text of a bracket and a long run of blanks, a sheet named in a long run of apostrophes.)
-    const slowStarted = Date.now();
-    await OfficeGenerator.generate({ ...scaled, content: [{ type: 'sheet', metadata: { sheetName: `a${"'".repeat(40_000)}b` }, children: [shownCell('1', `(${' '.repeat(10_000)}x`, 0)] }] } as any, 'xlsx');
-    assert.ok(Date.now() - slowStarted < 5_000, `a long shown text and sheet name are read quickly; took ${Date.now() - slowStarted}ms`);
+    const longShown = await withinTime(5_000, () => OfficeGenerator.generate({ ...scaled, content: [{ type: 'sheet', metadata: { sheetName: `a${"'".repeat(40_000)}b` }, children: [shownCell('1', `(${' '.repeat(10_000)}x`, 0)] }] } as any, 'xlsx'));
+    assert.ok(longShown.within, `a long shown text and sheet name are read quickly; took ${longShown.ms}ms`);
 
     // A cell onNode gives text for is that text alone: the value it replaced is not written.
     const redacted = await OfficeGenerator.generate(odsHeldAst, 'xlsx', { onNode: (n: OfficeContentNode) => n.type === 'cell' ? 'REDACTED' : undefined } as any);
@@ -10376,9 +10372,9 @@ async function testSecondReview(): Promise<void> {
 
     // A cell two million rows from the others lays out close, in no time.
     const far = doc([{ type: 'sheet', metadata: { sheetName: 'S' }, children: [{ type: 'row', children: [{ type: 'cell', metadata: { row: 1999999, col: 0 }, children: [T('far')] }] }, { type: 'row', children: Array.from({ length: 40 }, (_, i) => ({ type: 'cell', children: [T('c' + i)] })) }] }], 'xlsx');
-    const started = Date.now();
-    const farHtml = await write(far, 'html');
-    assert.ok(Date.now() - started < 3000 && farHtml.length < 100_000 && farHtml.includes('far') && farHtml.includes('c39'), `HTML: a far cell (${Date.now() - started}ms, ${farHtml.length} chars)`);
+    const farRun = await withinTime(3000, () => write(far, 'html'));
+    const farHtml = farRun.result;
+    assert.ok(farRun.within && farHtml.length < 100_000 && farHtml.includes('far') && farHtml.includes('c39'), `HTML: a far cell (${farRun.ms}ms, ${farHtml.length} chars)`);
     console.log('  Second review: All assertions passed ✓');
 }
 

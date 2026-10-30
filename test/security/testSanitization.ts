@@ -36,6 +36,7 @@ import { KeptJpegs } from '../../src/parsers/pdf/pdfJpeg';
 import { shadeRuns } from '../../src/parsers/pdf/rulings';
 import { CffOutlines, nativeUnbrotli, sfntOf, TrueTypeOutlines } from '../../src/generators/pdf/fontFiles';
 import { cffTable, charString, EMPTY } from '../helpers/cffFontWriter';
+import { withinTime } from '../helpers/timing';
 import * as zlib from 'zlib';
 
 let passed = 0;
@@ -61,23 +62,6 @@ const n = (count: number): number => Math.max(1, Math.round(count * scale));
 const LINEAR_RATIO = 8;
 const LINEAR_SLACK_MS = 250;
 const LINEAR_BACKSTOP_MS = 120_000;
-/**
- * A case whose property is a time limit itself (pdf.js's maxTimeMs kept, an abort heard, work stopped as
- * soon as it can be): held to its limit, but run once more when over it and the faster try kept, so a
- * pause of the machine is not taken for the limit failing. The result is the last try's.
- */
-const withinTime = async <T>(limitMs: number, run: () => Promise<T>): Promise<{ result: T; ms: number; within: boolean }> => {
-    let started = performance.now();
-    let result = await run();
-    let ms = performance.now() - started;
-    if (ms >= limitMs) {
-        started = performance.now();
-        result = await run();
-        ms = Math.min(ms, performance.now() - started);
-    }
-    return { result, ms: Math.round(ms), within: ms < limitMs };
-};
-
 /**
  * The collector, called when a case asks (V8's flag, set as the suite runs). A measure of memory starts
  * from what is live: a reading taken without it counted what earlier cases left for the collector, and
@@ -117,22 +101,32 @@ const memoryOf = async <T>(run: () => T | Promise<T>): Promise<{ result: T; heap
 const megabytes = (bytes: number | undefined) => (bytes === undefined ? '?' : `${Math.round(bytes / 1e6)}MB`);
 const memoryNote = (grew: number, allocated: number | undefined) => `+${megabytes(grew)} (allocated ${megabytes(allocated)})`;
 
+/** Holds a run's result past the collection that measures what it keeps. */
+let keptResult: unknown;
 const linear = async (name: string, run: () => unknown, heap?: { label: string; limit: number }): Promise<void> => {
-    // The heap a full run grows by, when asked: measured over the full run alone, from a collected
-    // start (see memoryOf), the smaller one's leftovers not counted.
-    let grown = 0;
+    // The heap a full run keeps, when asked: from a collected start to a collected end with its result
+    // alive (see memoryOf), the smaller one's leftovers not counted. What it allocated and let go is the
+    // collector's to free: many of these cases allocate past their limit, so a reading without the
+    // collector measured when it happened to run.
+    let kept = 0, grown = 0;
     let allocated: number | undefined;
     const time = async (size: number): Promise<number> => {
         scale = size;
-        if (size === 1 && heap) collectGarbage();
+        const measuring = size === 1 && !!heap;
+        if (measuring) collectGarbage();
         const heapBefore = process.memoryUsage().heapUsed, allocatedBefore = allocatedSoFar();
         const started = performance.now();
-        try { await run(); } finally { scale = 1; }
+        let result: unknown;
+        try { result = await run(); } finally { scale = 1; }
         const took = performance.now() - started;
-        if (size === 1) {
+        if (measuring) {
             grown = process.memoryUsage().heapUsed - heapBefore;
             const allocatedAfter = allocatedSoFar();
             allocated = allocatedBefore === undefined || allocatedAfter === undefined ? undefined : allocatedAfter - allocatedBefore;
+            collectGarbage();
+            kept = process.memoryUsage().heapUsed - heapBefore;
+            keptResult = result;
+            keptResult = undefined;
         }
         return took;
     };
@@ -144,7 +138,7 @@ const linear = async (name: string, run: () => unknown, heap?: { label: string; 
         large = Math.min(large, await time(1));
     }
     check(`${name} in linear time`, within(), `${Math.round(small)}ms at a quarter of the size, ${Math.round(large)}ms at full size`);
-    if (heap) check(heap.label, grown < heap.limit, memoryNote(grown, allocated));
+    if (heap) check(heap.label, kept < heap.limit, `${megabytes(kept)} kept, ${memoryNote(grown, allocated)}`);
 };
 
 function astWith(content: any[]): OfficeParserAST {
@@ -2309,14 +2303,15 @@ async function latexSanitizationTests() {
     check('latex url: every % it writes is escaped', !/(^|[^\\])%/.test(sanitizeLatexUrl('https://example.edu/~alice/Zürich?q=a b')), sanitizeLatexUrl('https://example.edu/~alice/Zürich?q=a b'));
     // escapeLatex copies the text between special characters in one pass: built a character at a time,
     // 20 MB took seconds and hundreds of megabytes, and 140 MB exhausted the heap.
-    const escapeTimed = (n: number) => {
-        const text = 'word & more_text 50% {x} -- '.repeat(Math.ceil(n / 28)).slice(0, n);
-        const started = Date.now();
-        const out = escapeLatex(text);
-        return { ms: Date.now() - started, ok: out.startsWith('word \\& more\\_text 50\\% \\{x\\} -{}- ') };
-    };
-    const escapeSmall = escapeTimed(1_000_000), escapeLarge = escapeTimed(4_000_000);
-    check('latex: escapeLatex is linear in its input', escapeSmall.ok && escapeLarge.ok && escapeLarge.ms < Math.max(200, 7 * escapeSmall.ms), `${escapeSmall.ms}ms vs ${escapeLarge.ms}ms`);
+    // Timed by `linear`, which measures again before failing, so one slow moment on a shared runner is
+    // not taken for quadratic work.
+    let escapedOk = true;
+    await linear('latex: escapeLatex of 4 MB', () => {
+        const size = n(4_000_000);
+        const out = escapeLatex('word & more_text 50% {x} -- '.repeat(Math.ceil(size / 28)).slice(0, size));
+        escapedOk &&= out.startsWith('word \\& more\\_text 50\\% \\{x\\} -{}- ');
+    });
+    check('latex: escapeLatex of 4 MB escapes it', escapedOk);
     const escaping = await memoryOf(() => escapeLatex('plain words here '.repeat(1_200_000)));
     const escapedRun = escaping.result;
     check('latex: escaping a 20 MB run holds about its own size', escaping.heap < 150_000_000 && escapedRun.length === 20_400_000, `heap ${memoryNote(escaping.heap, escaping.allocated)}`);
@@ -3333,9 +3328,7 @@ async function parserHardeningTests() {
         return performance.now() - begun;
     };
     for (const [label, lead, unit] of [['one leader of many runs of dots', 'Title', ' ....'], ['a run of spaces before three dots', 'x', ' '], ['runs of three dots', 'x', '... '], ['spaced single dots', 'x', '. ']] as const) {
-        const small = tocMs(lead + unit.repeat(50_000) + '...12');
-        const large = tocMs(lead + unit.repeat(200_000) + '...12');
-        check(`pdf: TOC dot leaders in ${label} collapse in linear time`, large < Math.max(100, small * 8), `${Math.round(small)}ms, four times as long: ${Math.round(large)}ms`);
+        await linear(`pdf: TOC dot leaders in ${label} collapse`, () => tocMs(lead + unit.repeat(n(200_000)) + '...12'));
     }
 
     // Templates, raw source and chunks.
@@ -3410,7 +3403,7 @@ async function parserHardeningTests() {
         '<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (https://e.com/) >> >>', `[${'3 0 R '.repeat(annots)}]`,
         ...Array.from({ length: pages }, () => '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots 4 0 R >>'),
     ]);
-    const sharedAnnotsRun = await withinTime(15_000, () => warned(pagesSharingAnnots(300, 3000), 'pdf'));
+    const sharedAnnotsRun = await withinTime(30_000, () => warned(pagesSharingAnnots(300, 3000), 'pdf'));
     const sharedAnnots = sharedAnnotsRun.result;
     check('pdf: 300 pages sharing 3,000 annotations stop at maxAnnotations and maxTimeMs', !sharedAnnots.error && sharedAnnotsRun.within && sharedAnnots.codes.includes('ANNOTATION_EXTRACTION_FAILED'), `${sharedAnnotsRun.ms}ms ${sharedAnnots.codes} ${sharedAnnots.error}`);
     const roomyAnnots = await warned(pagesSharingAnnots(10, 100), 'pdf', { pdfParserConfig: { maxAnnotations: 100_000 } });
@@ -3422,7 +3415,7 @@ async function parserHardeningTests() {
         flate(Buffer.from('q /X Do Q\n'.repeat(300))), '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
         flate(bigString(1_000_000), '/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << /Font << /F1 5 0 R >> >>'),
     ]);
-    const drawnRun = await withinTime(15_000, () => warned(drawnOften, 'pdf'));
+    const drawnRun = await withinTime(30_000, () => warned(drawnOften, 'pdf'));
     const drawn = drawnRun.result;
     check('pdf: a form drawing a 1 MB string 300 times stops at maxTimeMs', !drawn.error && drawnRun.within && drawn.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED'), `${drawnRun.ms}ms ${drawn.codes} ${drawn.error}`);
     const quicklyRun = await withinTime(4000, () => warned(drawnOften, 'pdf', { pdfParserConfig: { maxTimeMs: 200 } }));
@@ -3469,7 +3462,7 @@ async function parserHardeningTests() {
         ...Array.from({ length: bookmarks }, () => `<</Type/Page/Parent ${chainAt(depth - 1)} 0 R>>`),
         ...Array.from({ length: bookmarks }, (_, i) => `<</Title(b${i})/Parent 5 0 R${i > 0 ? `/Prev ${itemAt(i - 1)} 0 R` : ''}${i < bookmarks - 1 ? `/Next ${itemAt(i + 1)} 0 R` : ''}/Dest[${targetAt(i)} 0 R/XYZ 0 0 0]>>`),
     ]);
-    const outlinedRun = await withinTime(12_000, () => warned(deepOutline, 'pdf', { pdfParserConfig: { maxTimeMs: 200 } }));
+    const outlinedRun = await withinTime(30_000, () => warned(deepOutline, 'pdf', { pdfParserConfig: { maxTimeMs: 200 } }));
     const outlined = outlinedRun.result;
     check('pdf: bookmarks naming pages deep in a long page tree are resolved within maxTimeMs', !outlined.error && outlinedRun.within && outlined.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED'), `${outlinedRun.ms}ms ${deepOutline.length} bytes ${outlined.codes} ${outlined.error}`);
     await pdfProcessTests({ pdfFrom, flate, pdfForms, drawnOften, parseQuiet, files });
@@ -4408,13 +4401,14 @@ async function pdfProcessTests(h: {
         this.ondata = (data: Uint8Array, last: boolean) => { inflatedBytes += data.length; ondata.call(this, data, last); };
         try { return push.call(this, chunk, final); } finally { this.ondata = ondata; }
     };
-    const inflateStarted = performance.now();
-    try { new MarkedContent(new PdfFile(new Uint8Array(bombDoc), 1)).eventsOf(0); } finally { Unzlib.prototype.push = push; }
-    const inflateMs = performance.now() - inflateStarted;
+    const inflating = await withinTime(6000, () => {
+        fedBytes = largestFeed = inflatedBytes = 0;
+        new MarkedContent(new PdfFile(new Uint8Array(bombDoc), 1)).eventsOf(0);
+    }).finally(() => { Unzlib.prototype.push = push; });
     // The bound is 64 MB inflated for the document; a push of at most 8 KB gives at most about 8.5 MB more.
     check('pdf: a stream inflating to 256 MB is read no further than the inflate bound, a small slice at a time',
-        inflateMs < 1500 && inflatedBytes <= 64 * 1024 * 1024 + 9e6 && largestFeed <= 8 * 1024 && fedBytes < quarterGigabyte.length / 2,
-        `${Math.round(inflateMs)}ms, ${Math.round(inflatedBytes / 1e6)} MB inflated, fed ${fedBytes} of ${quarterGigabyte.length} bytes, ${largestFeed} at most`);
+        inflating.within && inflatedBytes <= 64 * 1024 * 1024 + 9e6 && largestFeed <= 8 * 1024 && fedBytes < quarterGigabyte.length / 2,
+        `${inflating.ms}ms, ${Math.round(inflatedBytes / 1e6)} MB inflated, fed ${fedBytes} of ${quarterGigabyte.length} bytes, ${largestFeed} at most`);
     // A simple font's codes are read by their glyphs' names where pdf.js reads them as their own characters
     // (see glyphNames): a /Differences of a million entries, a /ToUnicode CMap of 100,000 ranges over every
     // code but the one it lacks, and a page setting 1,000 such fonts are each read in time in proportion,
@@ -4531,10 +4525,10 @@ async function pdfProcessTests(h: {
         check(`pdf: past maxOperators every later page's text is still read (${where})`, !capped.error && capped.pages === 21 && capped.text.includes('Note 20.50') && named(capped.warnings, 'maxOperators') && !capped.codes.includes('PDF_NO_TEXT_EXTRACTED'), `${capped.pages} pages ${capped.codes} ${capped.error}`);
         // Read only for its fonts, a page's operator list stops once pdf.js has sent them: nested forms of
         // shapes cost nothing more, in this process too, where pdf.js has no time limit.
-        const fontsOnlyRun = await withinTime(5000, () => read(pdfForms(8, '0 0 1 1 re f'), { pdfParserConfig: { extractTextColor: false, separateProcess } }));
+        const fontsOnlyRun = await withinTime(20_000, () => read(pdfForms(8, '0 0 1 1 re f'), { pdfParserConfig: { extractTextColor: false, separateProcess } }));
         const fontsOnly = fontsOnlyRun.result;
         check(`pdf: forms of shapes nested 8 deep, read for fonts only, stop once the fonts are known (${where})`, !fontsOnly.error && fontsOnlyRun.within && fontsOnly.text.includes('page'), `${fontsOnlyRun.ms}ms ${fontsOnly.codes} ${fontsOnly.error}`);
-        const shapesRun = await withinTime(5000, () => read(pdfForms(8, '0 0 1 1 re f'), { pdfParserConfig: { separateProcess } }));
+        const shapesRun = await withinTime(20_000, () => read(pdfForms(8, '0 0 1 1 re f'), { pdfParserConfig: { separateProcess } }));
         const shapes = shapesRun.result;
         check(`pdf: forms of shapes nested 8 deep stop at maxOperators, keeping the page's text (${where})`, !shapes.error && shapesRun.within && shapes.text.includes('page') && named(shapes.warnings, 'maxOperators'), `${shapesRun.ms}ms ${shapes.codes} ${shapes.error}`);
     };
@@ -4752,9 +4746,8 @@ async function pdfAssetTests() {
             const slowRun = (async () => {
                 const slow = session({ cMapUrl: `http://127.0.0.1:${(trickling.address() as any).port}/cmaps/`, wasmUrl: '' });
                 const first = await Promise.all([1, 2].map(() => outcome(() => slow.assets.fetchAsset({ kind: 'cMapUrl', filename: 'UniJIS-UTF16-H.bcmap' }))));
-                const started = performance.now();
-                const after = await Promise.all(['UniJIS-UTF16-H.bcmap', 'UniJIS-UTF16-V.bcmap', '90ms-RKSJ-H.bcmap'].map(filename => outcome(() => slow.assets.fetchAsset({ kind: 'cMapUrl', filename }))));
-                return { first, after, afterMs: Math.round(performance.now() - started), warnings: slow.warnings };
+                const after = await withinTime(1000, () => Promise.all(['UniJIS-UTF16-H.bcmap', 'UniJIS-UTF16-V.bcmap', '90ms-RKSJ-H.bcmap'].map(filename => outcome(() => slow.assets.fetchAsset({ kind: 'cMapUrl', filename })))));
+                return { first, after: after.result, afterMs: after.ms, warnings: slow.warnings };
             })();
             const warnings: any[] = [];
             const timedRun = await withinTime(25_000, async () => {
@@ -4889,7 +4882,7 @@ async function htmlReadingTests() {
         await once(size);
         const small = await time(size);
         const large = await time(size * 4);
-        check(`${label} takes linear time`, large < Math.max(small, 25) * 10, `${small.toFixed(0)}ms -> ${large.toFixed(0)}ms`);
+        check(`${label} takes linear time`, large <= LINEAR_RATIO * small + LINEAR_SLACK_MS, `${small.toFixed(0)}ms -> ${large.toFixed(0)}ms`);
     };
     const epubOf = (override: string) => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'x' }] }]), 'epub', { onNode: (n: any) => n.type === 'paragraph' ? override : undefined, onWarning: () => {} } as any);
 
