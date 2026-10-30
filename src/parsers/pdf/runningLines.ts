@@ -751,7 +751,7 @@ function lineKey(node: OfficeContentNode): string {
 
 /**
  * The lines with a number that says one more on each page further on (a form's "2/4" placed after other
- * pages, a stamp's "AB-0017"), as one key each, their other numbers as one too: that number counts pages, as
+ * pages, a stamp's "AB-0017"), and nothing else in it changes, as one key each: that number counts pages, as
  * a page field does, though it is not the page's, so the line is a running one. Not a line with a page field
  * in it: a number stepping beside that one is its own ("Question 3 Page 1").
  */
@@ -762,11 +762,11 @@ function countingLines(pages: readonly PageFurniture[]): Map<string, string> {
             const text = lineKey(node);
             if (text.length > NUMBERED_TEXT || textLeaves(node).some(({ leaf }) => (leaf.metadata as TextMetadata | undefined)?.field === 'page')) continue;
             const numbers = [...text.matchAll(/\p{Nd}+/gu)];
-            const collapsed = text.replace(/\p{Nd}+/gu, '#');
             for (const [i, number] of numbers.entries()) {
                 const value = digitsValue(number[0]);
                 if (value === null) continue;
-                const shape = `${i}|${collapsed}`;
+                // (Its other numbers as they are: a line in which two change has a number of its own.)
+                const shape = `${i}|${text.slice(0, number.index)}#${text.slice(number.index! + number[0].length)}`;
                 let list = byShape.get(shape);
                 if (!list) byShape.set(shape, list = []);
                 list.push({ text, value, page: page.pageNumber });

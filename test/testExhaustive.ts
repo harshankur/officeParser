@@ -8149,6 +8149,17 @@ async function testPdfRunningLinesAsParts(): Promise<void> {
         assert.ok((await mdOf(ast)).includes(wanted), `${name} stays in the text`);
     }
 
+
+    // After a cover, a page's number is not its own place: a line with another number changing in it stays.
+    for (const [name, line, wanted] of [
+        ['an account', (p: number) => `Account ${10000 + p * 37} Page ${p}`, 'Account 10074'],
+        ['a question', (p: number) => `Question ${p + 2} Page ${p}`, 'Question 4'],
+        ['a sheet', (p: number) => `Account ${10000 + p * 37} Sheet ${p} of 6`, 'Account 10074'],
+    ] as [string, (p: number) => string, string][]) {
+        const ast = await read(pagesN(7).map(n => [body(n), ...(n > 1 ? [`750|${line(n - 1)}`] : [])]));
+        assert.ok((await mdOf(ast)).includes(wanted) && !ast.auxiliary?.headers?.length, `${name} after a cover stays in the text`);
+    }
+
 }
 
 /**
