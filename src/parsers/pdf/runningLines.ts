@@ -751,15 +751,16 @@ function lineKey(node: OfficeContentNode): string {
 
 /**
  * The lines with a number that says one more on each page further on (a form's "2/4" placed after other
- * pages, a stamp's "AB-0017", a law's "Page 383 ... § 381"), as one key each, their other numbers as one too:
- * that number counts pages, as a page field does, though it is not the page's, so the line is a running one.
+ * pages, a stamp's "AB-0017"), as one key each, their other numbers as one too: that number counts pages, as
+ * a page field does, though it is not the page's, so the line is a running one. Not a line with a page field
+ * in it: a number stepping beside that one is its own ("Question 3 Page 1").
  */
 function countingLines(pages: readonly PageFurniture[]): Map<string, string> {
     const byShape = new Map<string, { text: string; value: number; page: number }[]>();
     for (const page of pages) {
         for (const node of page.nodes) {
             const text = lineKey(node);
-            if (text.length > NUMBERED_TEXT) continue;
+            if (text.length > NUMBERED_TEXT || textLeaves(node).some(({ leaf }) => (leaf.metadata as TextMetadata | undefined)?.field === 'page')) continue;
             const numbers = [...text.matchAll(/\p{Nd}+/gu)];
             const collapsed = text.replace(/\p{Nd}+/gu, '#');
             for (const [i, number] of numbers.entries()) {
@@ -773,35 +774,6 @@ function countingLines(pages: readonly PageFurniture[]): Map<string, string> {
         }
     }
     const counting = new Map<string, string>();
-    // A line on the very baseline of its page's own number is a running head too, whatever its number says
-    // ("Page 383   TITLE 21   § 381", then "§ 382").
-    const baselineOf = (node: OfficeContentNode) => { const b = node.children?.[0]?.bounds ?? node.bounds; return b ? b.y + b.height : null; };
-    const hasField = (node: OfficeContentNode) => textLeaves(node).some(({ leaf }) => (leaf.metadata as TextMetadata | undefined)?.field === 'page');
-    const besideNumber = new Map<string, boolean>();
-    for (const page of pages) {
-        const numbered = new Set<number>();
-        for (const node of page.nodes) {
-            const y = hasField(node) ? baselineOf(node) : null;
-            if (y !== null) numbered.add(Math.round(y / 2));
-        }
-        for (const node of page.nodes) {
-            const text = lineKey(node);
-            // (Not the number's own line: its other number is its own, "Account 10101 Page 1".)
-            if (text.length > NUMBERED_TEXT || !/\p{Nd}/u.test(text) || hasField(node)) continue;
-            const at = baselineOf(node), shape = text.replace(/\p{Nd}+/gu, '#');
-            const near = at === null ? 0 : Math.round(at / 2);
-            const beside = at !== null && (numbered.has(near) || numbered.has(near - 1) || numbered.has(near + 1));
-            besideNumber.set(shape, (besideNumber.get(shape) ?? true) && beside);
-        }
-    }
-    for (const page of pages) {
-        for (const node of page.nodes) {
-            const text = lineKey(node);
-            if (text.length > NUMBERED_TEXT) continue;
-            const shape = text.replace(/\p{Nd}+/gu, '#');
-            if (besideNumber.get(shape)) counting.set(text, shape);
-        }
-    }
     for (const [shape, list] of byShape) {
         if (list.length < 2) continue;
         if (list.every((l, i) => i === 0 || (l.page > list[i - 1].page && l.value - list[i - 1].value === l.page - list[i - 1].page))) {

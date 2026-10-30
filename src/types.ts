@@ -759,7 +759,7 @@ export interface PdfParserConfig {
      * there whatever it says; a line found by comparing an untagged PDF's pages where it is the same, its page
      * numbers as one, on every page that has any, on all odd or even ones, or but for the first page, and missing
      * from no more than one page in five with text between its first and last (a chapter's opening). A number
-     * that counts no pages is the line's own, unless the line stands beside the page's number. One whose words
+     * that counts no pages is the line's own. One whose words
      * or own number change from page to page (a customer's name on merged letters, "Account 10101"), or a kind on
      * fewer than two of three pages with text (a sheet's name on its sheet's pages), stays in its pages, where it is. Where
      * the lines in `auxiliary` differ, they are parts as a word processor's are (HeaderFooterMetadata `type` and

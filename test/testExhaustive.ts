@@ -8008,8 +8008,6 @@ async function testPdfRunningLinesAsParts(): Promise<void> {
     // Lines whose number is their own, and lines missing from pages with text between, stay in the text.
     const account = await read([1, 2, 3, 4].map(n => [`750|Account 10${n <= 2 ? 1 : 2}0${n <= 2 ? 1 : 2}`, body(n)]));
     assert.ok((await mdOf(account)).includes('Account 10101') && !account.auxiliary?.headers?.length, 'a number that counts no pages is the line\'s own');
-    const lawHead = await read([1, 2, 3, 4, 5, 6].map(n => [`750|Page ${n + 100}`, `750|${n < 6 ? 'Section 7' : 'Section 8'}`.replace('750|', '750|                                                   '), body(n)]));
-    assert.ok(lawHead.auxiliary?.headers?.length, 'a number beside the page\'s own in one line is that of a running head');
 
     // Pages before a kind's first line are a section without it, in which a writer prints none of it.
     const late = await read(pageRange.map(n => [...(n > 1 ? ['750|Late head'] : []), body(n)]));
@@ -8116,10 +8114,40 @@ async function testPdfRunningLinesAsParts(): Promise<void> {
     assert.ok(!JSON.stringify(keptLines.content).includes('"field"'), 'fields of lines that stay in the pages are text again');
 
 
-    // A number of its own on the page number's own line stays in the text; on a line beside it, a running head's.
+    // A number of its own on the page number's own line stays in the text.
     const accounts = [10101, 48213, 20977, 73120, 55512, 90233];
     const ownOnLine = await read(pagesN(6).map(n => [body(n), `40|Account ${accounts[n - 1]} Page ${n}`]));
     assert.ok((await mdOf(ownOnLine)).includes('Account 48213') && !(ownOnLine.auxiliary?.footers ?? []).some(n => /Account/.test(n.text ?? '')), 'a number of its own on the page number\'s line stays in the text');
+
+
+    // Beside the page's number, or stepping with it, a number of its own is the document's.
+    const row = (y: number, x: number, text: string) => `BT /F1 11 Tf 1 0 0 1 ${x} ${y} Tm (${text}) Tj ET`;
+    const rowsPdf = (pages: string[]) => {
+        const objects: string[] = ['<< /Type /Catalog /Pages 2 0 R >>', `<< /Type /Pages /Kids [${pages.map((_, i) => `${4 + i * 2} 0 R`).join(' ')}] /Count ${pages.length} >>`, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+        pages.forEach((content, i) => objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + i * 2} 0 R >>`, `<< /Length ${content.length} >>\nstream\n${content}\nendstream`));
+        let pdf = '%PDF-1.4\n';
+        const offsets: number[] = [];
+        objects.forEach((o, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+        const xref = pdf.length;
+        pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+        return Buffer.from(pdf, 'latin1');
+    };
+    const bodyAt = (n: number) => row(500, 72, `Body text of page ${n} goes here for the reader.`);
+    const beside = async (name: string, left: (n: number) => string, right: (n: number) => string, wanted: string) => {
+        const ast = await OfficeParser.parseOffice(rowsPdf(pagesN(6).map(n => [row(750, 72, left(n)), row(750, 500, right(n)), bodyAt(n)].join('\n'))), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false }, onWarning: () => { } } as any) as OfficeParserAST;
+        assert.ok((await mdOf(ast)).includes(wanted), `${name} stays in the text`);
+    };
+    await beside('an account per statement, numbers restarting', n => `Account 10${Math.ceil(n / 2)}01`, n => `Page ${(n - 1) % 2 + 1}`, 'Account 10201');
+    await beside('a signed date beside a bare number', n => `Signed 0${n}/01/2024`, n => String(n), 'Signed 03/01/2024');
+    const balances = [100, 200, 300, 400, 400, 300];
+    await beside('a balance beside the number', n => `Balance ${balances[n - 1]}`, n => `Page ${n}`, 'Balance 200');
+    for (const [name, line, wanted] of [
+        ['a question stepping on the page number\'s line', (n: number) => `Question ${n + 2} Page ${n}`, 'Question 4'],
+        ['a date stepping on the page number\'s line', (n: number) => `Log for 2024-01-0${n + 3} Page ${n}`, '2024-01-05'],
+    ] as [string, (n: number) => string, string][]) {
+        const ast = await read(pagesN(6).map(n => [body(n), `40|${line(n)}`]));
+        assert.ok((await mdOf(ast)).includes(wanted), `${name} stays in the text`);
+    }
 
 }
 
