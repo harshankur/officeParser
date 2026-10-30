@@ -718,7 +718,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             }
             if ((node.type === 'page' || node.type === 'slide') && prevPaginated === node.type) blocks.push('\\clearpage');
             const out = (await this.renderBlockNode(node)).trim();
-            if (out) blocks.push(out);
+            // (A blank page holds something: \\clearpage on an empty one does nothing, and the page was lost.)
+            if (out || node.type === 'page') blocks.push(out || '\\null');
             prevPaginated = (node.type === 'page' || node.type === 'slide') ? node.type : null;
         }
         await flushInline();

@@ -319,6 +319,8 @@ interface BandLine {
     printed: string;
     numbers: string[];
     ownNumber: boolean;
+    /** What a numeral alone on the line stands for, with no page label to say so (see findRunningLines). */
+    numeral?: number;
     /** Whether the page has another line of its text (its numbers as one) at its left edge: a table's column. */
     repeated: boolean;
 }
@@ -426,7 +428,8 @@ export function findRunningLines(extracts: readonly PageExtract[], cfg: PdfLayou
             // (A page label written in the line, "Preface iii", is as one in its key as its numbers are.)
             const labelled = numbered === null && label && !label.digits && text.length <= NUMBERED_TEXT ? labelAt(text, label) : -1;
             const unlabelled = labelled >= 0 ? `${text.slice(0, labelled)}#${text.slice(labelled + label!.text.length)}` : text;
-            const keyText = keyOf(numbered ?? unlabelled.replace(/\p{Nd}+/gu, '#'));
+            const numeral = numbered === null && !label ? markerWord(text)?.roman ?? undefined : undefined;
+            const keyText = keyOf(numeral !== undefined ? '#numeral' : numbered ?? unlabelled.replace(/\p{Nd}+/gu, '#'));
             const edge = band === 'header' ? box.y : shownH - (box.y + box.height);
             const entry = entryFor(band, keyText, edge, box.x);
             if (entry.last !== extract.pageNumber) {
@@ -446,7 +449,7 @@ export function findRunningLines(extracts: readonly PageExtract[], cfg: PdfLayou
             const left = `${band}|${keyText}|`, x = Math.floor(box.x / LEFT_TOLERANCE);
             atLeft.set(left + x, (atLeft.get(left + x) ?? 0) + 1);
             lefts.push({ left, x });
-            lines.push({ runs: lineRuns(line), band, edge, left: box.x, height: box.height, fontSize: line.fontSize, entry, printed, numbers, ownNumber, repeated: false });
+            lines.push({ runs: lineRuns(line), band, edge, left: box.x, height: box.height, fontSize: line.fontSize, entry, printed, numbers, ownNumber, ...(numeral !== undefined ? { numeral } : {}), repeated: false });
         }
         // (At its own left edge, and a tolerance either side.)
         lines.forEach((l, k) => {
@@ -454,6 +457,35 @@ export function findRunningLines(extracts: readonly PageExtract[], cfg: PdfLayou
             l.repeated = (atLeft.get(left + (x - 1)) ?? 0) + (atLeft.get(left + x) ?? 0) + (atLeft.get(left + (x + 1)) ?? 0) > 1;
         });
         pagesLines.push(lines);
+    }
+
+    // Numerals alone on their lines, going on with the pages for three pages or more (i, ii, iii with no page
+    // labels to say so), are page numbers; the next page's digits say nothing of them.
+    const numerals = new Map<KeyEntry, { line: BandLine; page: number }[]>();
+    extracts.forEach((extract, i) => {
+        for (const line of pagesLines[i]) {
+            if (line.numeral === undefined) continue;
+            let list = numerals.get(line.entry);
+            if (!list) numerals.set(line.entry, list = []);
+            list.push({ line, page: extract.pageNumber });
+        }
+    });
+    for (const [entry, list] of numerals) {
+        for (let at = 0; at < list.length;) {
+            let end = at + 1;
+            while (end < list.length && list[end].line.numeral! - list[end - 1].line.numeral! === list[end].page - list[end - 1].page) end++;
+            if (end - at >= RUNNING_PAGES) {
+                for (let k = at; k < end; k++) {
+                    list[k].line.ownNumber = true;
+                    list[k].line.numbers = ['#numeral'];
+                    entry.numbered++;
+                }
+                const seen = entry.numbers.get('#numeral') ?? { pages: 0, last: -1 };
+                seen.pages += end - at;
+                entry.numbers.set('#numeral', seen);
+            }
+            at = end;
+        }
     }
 
     const need = (pages: number) => Math.max(RUNNING_PAGES, Math.ceil(RUNNING_SHARE * pages));
@@ -505,19 +537,21 @@ export function findRunningLines(extracts: readonly PageExtract[], cfg: PdfLayou
             for (let k = 0; k < taken; k++) for (const l of rows[k]) for (const r of l.runs) takenRuns.add(r);
             // (Inward of the rows taken: past the middle of the last one.)
             const from = inner(rows[taken - 1]) - rowHeight(rows[taken - 1]) / 2;
-            const rest: { near: number; height: number; left: number }[] = [];
+            const rest: { near: number; height: number; left: number; right: number }[] = [];
             let nearest = Infinity;
             for (const r of extract.runs) {
                 if (takenRuns.has(r) || !r.text.trim()) continue;
                 const box = rotateBoundsToRendered({ x: r.x, y: r.yTop, width: r.width, height: r.height }, extract.rotation, extract.authoredW, extract.authoredH);
                 const near = band === 'header' ? box.y : shownH - (box.y + box.height);
                 if (near + box.height / 2 <= from) continue;
-                rest.push({ near, height: box.height, left: box.x });
+                rest.push({ near, height: box.height, left: box.x, right: box.x + box.width });
                 if (near < nearest) nearest = near;
             }
             // The left edges of the text nearest them (its row), as places a tolerance wide.
             const placesOf = (lefts: number[]) => new Set(lefts.map(x => Math.floor(x / LEFT_TOLERANCE)));
-            let nextLefts = placesOf(rest.filter(t => t.near - nearest <= t.height / 2).map(t => t.left));
+            // (Where its cells or columns start, not each word: a word of a paragraph can stand under anything.)
+            const nextRow = rest.filter(t => t.near - nearest <= t.height / 2).sort((a, b) => a.left - b.left);
+            let nextLefts = placesOf(nextRow.filter((t, k) => k === 0 || t.left - nextRow[k - 1].right >= t.height).map(t => t.left));
             const under = (x: number) => { const k = Math.floor(x / LEFT_TOLERANCE); return nextLefts.has(k - 1) || nextLefts.has(k) || nextLefts.has(k + 1); };
             while (taken > 0) {
                 const row = rows[taken - 1];
@@ -658,23 +692,24 @@ export function markPageFields(furniture: readonly PageFurniture[], numPages: nu
                 return runs?.length === 1 ? digitsValue(runs[0]) : null;
             };
             const textOf = (g: typeof group[number]) => g.leaves.map(l => l.leaf.text ?? '').join('');
-            const first = numberOf(textOf(group[0]));
-            if (first === null || group.length < 2) continue;
-            const offset = group[0].pageNumber - first;
-            const spans = group.map(g => {
-                const text = textOf(g);
-                if (numberOf(text) !== g.pageNumber - offset) return null;
-                const word = /^\s*[ivxlcdm]+\s*$/i.test(text);
-                if (!word) return fieldsIn(text, g.pageNumber - offset, numPages, false, null);
-                const token = text.trim(), start = text.indexOf(token);
-                return [{ start, end: start + token.length, field: 'page' as const, format: (token === token.toLowerCase() ? 'lowerRoman' : 'upperRoman') as PageNumberFormat }];
-            });
-            if (spans.some(sp => !sp)) continue;
-            group.forEach((g, i) => { g.spans = spans[i]; });
+            // (Each run of them on its own: a stray number among them, or the numbers starting over, leaves the rest.)
+            const offsets = group.map(g => { const n = numberOf(textOf(g)); return n === null ? null : g.pageNumber - n; });
+            for (let at = 0; at < group.length;) {
+                let end = at + 1;
+                while (end < group.length && offsets[at] !== null && offsets[end] === offsets[at]) end++;
+                for (let i = at; end - at >= 2 && i < end; i++) {
+                    const g = group[i], text = textOf(g);
+                    if (!/^\s*[ivxlcdm]+\s*$/i.test(text)) { g.spans = fieldsIn(text, g.pageNumber - offsets[at]!, numPages, false, null) ?? g.spans; continue; }
+                    const token = text.trim(), start = text.indexOf(token);
+                    g.spans = [{ start, end: start + token.length, field: 'page', format: token === token.toLowerCase() ? 'lowerRoman' : 'upperRoman' }];
+                }
+                at = end;
+            }
         }
         for (const { leaves, spans, rotation } of group) {
+            if (!spans) continue;
             // From the last, so a leaf cut for the pages' number still holds the page's.
-            for (const span of [...spans!].sort((a, b) => b.start - a.start)) {
+            for (const span of [...spans].sort((a, b) => b.start - a.start)) {
                 const hit = leaves.find(l => l.at <= span.start && span.end <= l.at + (l.leaf.text ?? '').length);
                 if (!hit) continue;
                 cutField(hit, span, rotation);
@@ -758,11 +793,13 @@ function countingLines(pages: readonly PageFurniture[]): Map<string, string> {
     for (const page of pages) {
         for (const node of page.nodes) {
             const text = lineKey(node);
+            if (text.length > NUMBERED_TEXT) continue;
             const numbers = [...text.matchAll(/\p{Nd}+/gu)];
+            const collapsed = text.replace(/\p{Nd}+/gu, '#');
             for (const [i, number] of numbers.entries()) {
                 const value = digitsValue(number[0]);
                 if (value === null) continue;
-                const shape = `${i}|${text.replace(/\p{Nd}+/gu, '#')}`;
+                const shape = `${i}|${collapsed}`;
                 let list = byShape.get(shape);
                 if (!list) byShape.set(shape, list = []);
                 list.push({ text, value, page: page.pageNumber });
@@ -776,18 +813,25 @@ function countingLines(pages: readonly PageFurniture[]): Map<string, string> {
     const hasField = (node: OfficeContentNode) => textLeaves(node).some(({ leaf }) => (leaf.metadata as TextMetadata | undefined)?.field === 'page');
     const besideNumber = new Map<string, boolean>();
     for (const page of pages) {
-        const numbered = page.nodes.filter(hasField).map(baselineOf);
+        const numbered = new Set<number>();
+        for (const node of page.nodes) {
+            const y = hasField(node) ? baselineOf(node) : null;
+            if (y !== null) numbered.add(Math.round(y / 2));
+        }
         for (const node of page.nodes) {
             const text = lineKey(node);
-            if (!/\p{Nd}/u.test(text)) continue;
+            if (text.length > NUMBERED_TEXT || !/\p{Nd}/u.test(text)) continue;
             const at = baselineOf(node), shape = text.replace(/\p{Nd}+/gu, '#');
-            const beside = at !== null && numbered.some(y => y !== null && Math.abs(y - at) < 2);
+            const near = at === null ? 0 : Math.round(at / 2);
+            const beside = at !== null && (numbered.has(near) || numbered.has(near - 1) || numbered.has(near + 1));
             besideNumber.set(shape, (besideNumber.get(shape) ?? true) && beside);
         }
     }
     for (const page of pages) {
         for (const node of page.nodes) {
-            const text = lineKey(node), shape = text.replace(/\p{Nd}+/gu, '#');
+            const text = lineKey(node);
+            if (text.length > NUMBERED_TEXT) continue;
+            const shape = text.replace(/\p{Nd}+/gu, '#');
             if (besideNumber.get(shape)) counting.set(text, shape);
         }
     }
@@ -823,13 +867,41 @@ function printedNumber(nodes: readonly OfficeContentNode[]): { value: number; fo
     return null;
 }
 
+/** The number each page prints, where a line of it says, and where that is not the one the page before leads to. */
+function numberPages(pages: readonly PageFurniture[], pagesRead: readonly number[]): { numbers: Map<number, number>; restarts: Map<number, { value: number; format?: PageNumberFormat }>; firstNumbering: FurnitureNumbering } {
+    const printed = new Map<number, { value: number; format?: PageNumberFormat }>();
+    for (const page of pages) {
+        if (printed.has(page.pageNumber)) continue;
+        const number = printedNumber(page.nodes);
+        if (number) printed.set(page.pageNumber, number);
+    }
+    const numbers = new Map<number, number>();
+    const restarts = new Map<number, { value: number; format?: PageNumberFormat }>();
+    const firstKnown = pagesRead.findIndex(n => printed.has(n));
+    const leadsFrom = firstKnown >= 0 ? printed.get(pagesRead[firstKnown])!.value - firstKnown : 1;
+    // (From the first page, unless its number there would be none: a roman ii on the file's page 4.)
+    let current = leadsFrom >= 1 ? leadsFrom : 1;
+    let format = firstKnown >= 0 && leadsFrom >= 1 ? printed.get(pagesRead[firstKnown])!.format : undefined;
+    const firstNumbering: FurnitureNumbering = { ...(current !== 1 ? { pageNumberStart: current } : {}), ...(format ? { pageNumberFormat: format } : {}) };
+    for (const n of pagesRead) {
+        const known = printed.get(n);
+        if (known && (known.value !== current || known.format !== format)) {
+            restarts.set(n, known);
+            current = known.value;
+            format = known.format;
+        }
+        numbers.set(n, current++);
+    }
+    return { numbers, restarts, firstNumbering };
+}
+
 /**
  * Where each page's header and footer goes, its fields marked (markPageFields).
  *
  * The lines a tagged PDF marks as artifacts are furniture, whatever they say. A line found by comparing an
  * untagged PDF's pages is where it is the same, its page fields as one, on every page of its kind that has any
  * (a page without any says nothing of it, nor a blank one), but for a first page alone, or on all its odd or even
- * pages and none of the others, and is missing from few of the pages with text between its first and last:
+ * pages (of the file's or as they print) and none of the others, and is missing from few of the pages with text between its first and last:
  * past that it may be the document's ("Customer: Alice Ltd", then Bob's, on merged letters; a line signed on
  * most pages), so it stays in its pages, where nothing is lost.
  *
@@ -847,16 +919,18 @@ export function planFurniture(furniture: readonly PageFurniture[], pagesRead: re
     const textPages = pagesRead.filter(n => pagesWithText.has(n));
     const placeInText = new Map(textPages.map((n, i) => [n, i]));
     const kept = new Map<'header' | 'footer', PageFurniture[]>();
+    const tooFew = (pages: number) => pages * 3 < textPages.length * 2;
+    const printedThen = numberPages(furniture.filter(p => p.nodes.length), pagesRead).numbers;
     for (const kind of ['header', 'footer'] as const) {
         const pages = furniture.filter(p => p.kind === kind && p.nodes.length);
         if (!pages.length) continue;
         const had = pages.map(p => p.pageNumber);
-        // On fewer than three pages of four it is no running line, whatever its marking (a form's numbers marked
-        // as artifacts, a sheet's name on its sheet's pages): a part would print it on pages that have none.
-        // Unmarked, nor where few pages with text between its first and last have none (a chapter's opening).
+        // On fewer than two of three pages with text it is no running line, whatever its marking (a form's numbers
+        // marked as artifacts, a sheet's name on its sheet's pages): a part would print it on pages that have none.
+        // Unmarked, nor where more than one page in five with text between its first and last has none.
         const within = (placeInText.get(had[had.length - 1]) ?? textPages.length - 1) - (placeInText.get(had[0]) ?? 0) + 1;
         const missing = within - had.length;
-        if (pages.length * 4 < pagesRead.length * 3 || (!pages.every(p => p.tagged) && missing > 1 && missing * 5 > within)) {
+        if (tooFew(pages.length) || (!pages.every(p => p.tagged) && missing > 1 && missing * 5 > within)) {
             for (const page of pages) for (const node of page.nodes) plan.back.add(node);
             continue;
         }
@@ -873,7 +947,8 @@ export function planFurniture(furniture: readonly PageFurniture[], pagesRead: re
                 on.add(page.pageNumber);
             }
         }
-        const wholes = [had, had.filter(n => n !== firstRead), had.filter(n => n % 2 === 0), had.filter(n => n % 2 === 1)];
+        const evenAsPrinted = (n: number) => (printedThen.get(n) ?? n) % 2 === 0;
+        const wholes = [had, had.filter(n => n !== firstRead), had.filter(n => n % 2 === 0), had.filter(n => n % 2 === 1), had.filter(evenAsPrinted), had.filter(n => !evenAsPrinted(n))];
         const stable = (on: Set<number>) => wholes.some(wanted => wanted.length > 0 && wanted.length === on.size && wanted.every(n => on.has(n)));
         const unstableKeys = new Set([...onPages].filter(([, on]) => !stable(on)).map(([key]) => key));
         // A first page's own lines, the others' all being stable, is a cover's.
@@ -891,7 +966,7 @@ export function planFurniture(furniture: readonly PageFurniture[], pagesRead: re
             if (staying.length) inPlan.push({ ...page, nodes: staying });
         }
         // (Those sent back may leave too few again.)
-        if (inPlan.length * 4 < pagesRead.length * 3) {
+        if (tooFew(inPlan.length)) {
             for (const page of inPlan) for (const node of page.nodes) plan.back.add(node);
         } else if (inPlan.length) kept.set(kind, inPlan);
     }
@@ -899,32 +974,7 @@ export function planFurniture(furniture: readonly PageFurniture[], pagesRead: re
     interface Placed { page: PageFurniture; type: 'default' | 'first' | 'even'; startsAt: number }
     // Twice at most for each kind: a kind sent back for its sections leaves numbers the other no longer follows.
     for (;;) {
-        // The number each page prints, where a line of it says, and where that is not the one the page before leads to.
-        const printed = new Map<number, { value: number; format?: PageNumberFormat }>();
-        for (const pages of kept.values()) {
-            for (const page of pages) {
-                if (printed.has(page.pageNumber)) continue;
-                const number = printedNumber(page.nodes);
-                if (number) printed.set(page.pageNumber, number);
-            }
-        }
-        const numbers = new Map<number, number>();
-        const restarts = new Map<number, { value: number; format?: PageNumberFormat }>();
-        const firstKnown = pagesRead.findIndex(n => printed.has(n));
-        const leadsFrom = firstKnown >= 0 ? printed.get(pagesRead[firstKnown])!.value - firstKnown : 1;
-        // (From the first page, unless its number there would be none: a roman ii on the file's page 4.)
-        let current = leadsFrom >= 1 ? leadsFrom : 1;
-        let format = firstKnown >= 0 && leadsFrom >= 1 ? printed.get(pagesRead[firstKnown])!.format : undefined;
-        const firstNumbering: FurnitureNumbering = { ...(current !== 1 ? { pageNumberStart: current } : {}), ...(format ? { pageNumberFormat: format } : {}) };
-        for (const n of pagesRead) {
-            const known = printed.get(n);
-            if (known && (known.value !== current || known.format !== format)) {
-                restarts.set(n, known);
-                current = known.value;
-                format = known.format;
-            }
-            numbers.set(n, current++);
-        }
+        const { numbers, restarts, firstNumbering } = numberPages([...kept.values()].flat(), pagesRead);
 
         const placed = new Map<'header' | 'footer', Placed[]>();
         let sentBack = false;
@@ -992,12 +1042,15 @@ export function planFurniture(furniture: readonly PageFurniture[], pagesRead: re
         let inForce = firstNumbering.pageNumberFormat;
         for (const n of pagesRead) {
             const restart = restarts.get(n);
+            // (Back to digits says so: a writer's sections, LaTeX's, go on in the format before.)
+            const back = restart && !restart.format && inForce ? 'decimal' : undefined;
             if (restart) inForce = restart.format;
             if (n === firstRead) {
                 if (restart) plan.first = { ...(restart.value !== 1 ? { pageNumberStart: restart.value } : {}), ...(restart.format ? { pageNumberFormat: restart.format } : {}) };
                 continue;
             }
-            if (sectionPages.has(n)) plan.sections.set(n, { ...(restart ? { pageNumberStart: restart.value } : {}), ...(inForce ? { pageNumberFormat: inForce } : {}) });
+            const shown = inForce ?? back;
+            if (sectionPages.has(n)) plan.sections.set(n, { ...(restart ? { pageNumberStart: restart.value } : {}), ...(shown ? { pageNumberFormat: shown } : {}) });
         }
         return plan;
     }

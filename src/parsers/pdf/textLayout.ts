@@ -2025,6 +2025,8 @@ export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContex
             if (!bucket) continue;
             for (const j of bucket) {
                 if (j === i || dropped[j] || attached[j]) continue;
+                // (Another marker is no item's text: a marker on it left its own lost, once it took one too.)
+                if (STANDALONE_MARKER_RE.test(groupText(groups[j]))) continue;
                 if (Math.abs(baseOf(groups[j]) - yb) > 0.6 * fs) continue;
                 const dx = leftOf(groups[j]) - xr;
                 if (dx <= 0) continue; // the text must be to the marker's right
@@ -2059,7 +2061,10 @@ export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContex
         const fragments = atom.flatMap(l => l.fragments);
         const last = fragments[fragments.length - 1];
         if (last && !/\s$/.test(last.text)) fragments[fragments.length - 1] = { ...last, text: `${last.text} ` };
-        groups[i].lines[0] = { ...first, fragments: [...fragments, ...first.fragments], x: Math.min(first.x, atom[0].x) };
+        // (A right-to-left line is read from the other side, where a marker to its left comes last.)
+        groups[i].lines[0] = first.rtl
+            ? { ...first, fragments: [...first.fragments, ...(first.fragments.length ? fragments : [])], x: Math.min(first.x, atom[0].x) }
+            : { ...first, fragments: [...fragments, ...first.fragments], x: Math.min(first.x, atom[0].x) };
     }
 
     const itemLefts = groups.map((g, i) => isItem[i] ? (markerLeft[i] ?? leftOf(g)) : null).filter((x): x is number => x != null);

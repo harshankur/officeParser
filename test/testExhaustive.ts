@@ -7905,6 +7905,7 @@ async function testPdfRunningLinesAsParts(): Promise<void> {
     const body = (n: number) => `500|Body text of page number ${['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'][n - 1]} goes here for the reader.`;
     const mdOf = async (ast: OfficeParserAST) => String((await ast.to('md')).value);
     const partsOf = (list: any[] | undefined) => (list ?? []).map(n => `${n.metadata.page}:${n.metadata.type}:${n.metadata.section ?? '-'}`);
+    const fieldTexts = (ast: OfficeParserAST) => ((ast.auxiliary?.footers ?? []) as any[]).flatMap(n => (n.children ?? []).flatMap((c: any) => c.children ?? [c])).filter((c: any) => c.metadata?.field === 'page').map((c: any) => c.text);
     const sections = (ast: OfficeParserAST) => (ast.content as any[]).filter(n => n.type === 'break' && typeof n.metadata?.section === 'number').map(n => [n.metadata.section, n.metadata.pageSetup?.pageNumberStart, n.metadata.pageSetup?.pageNumberFormat]);
 
     // A blank page among them says nothing of the lines of the others.
@@ -7932,7 +7933,7 @@ async function testPdfRunningLinesAsParts(): Promise<void> {
     const front = await read([1, 2, 3, 4, 5, 6].map(n => ['750|The Manual', body(n), `40|${printed(n)}`]), {}, romanThenDigits);
     assert.ok(!/^(i|ii|iii|1|2|3)$/m.test(await mdOf(front)), `the numbers stay out of the text; got ${await mdOf(front)}`);
     assert.strictEqual((front.metadata as any).pageSetup?.pageNumberFormat, 'lowerRoman', 'the first section numbers in roman');
-    assert.deepStrictEqual(sections(front), [[1, 1, undefined]], `the body restarts at 1; got ${JSON.stringify(sections(front))}`);
+    assert.deepStrictEqual(sections(front), [[1, 1, 'decimal']], `the body restarts at 1, in digits again; got ${JSON.stringify(sections(front))}`);
     const frontDocx = unzipSync(new Uint8Array((await OfficeGenerator.generate(front, 'docx')).value as any));
     assert.ok(/<w:pgNumType w:start="1"\/>/.test(strFromU8(frontDocx['word/document.xml'])) || /w:start="1"/.test(strFromU8(frontDocx['word/document.xml'])), 'DOCX restarts its numbers');
     const frontOdt = unzipSync(new Uint8Array((await OfficeGenerator.generate(front, 'odt')).value as any));
@@ -8022,6 +8023,102 @@ async function testPdfRunningLinesAsParts(): Promise<void> {
     const blankDocx = strFromU8(unzipSync((await blankBefore.to('docx')).value as Uint8Array)['word/document.xml']);
     const sectionEndAt = blankDocx.indexOf('</w:p>', blankDocx.indexOf('<w:sectPr'));
     assert.strictEqual((blankDocx.slice(0, sectionEndAt).match(/<w:br w:type="page"\/>/g) ?? []).length, 2, 'DOCX: the section ends after the blank page\'s break');
+
+
+    // A table of layouts: every page prints what it had, in the native PDF's own pages and in the parts and
+    // numbers a word processor would print them from. (Where a line is drawn is the file's: `a:` an artifact.)
+    const romanOf = (n: number) => ['', 'i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii', 'viii', 'ix', 'x'][n];
+    const pagesN = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
+    const layouts: [string, () => Promise<OfficeParserAST>, string[][]][] = (() => {
+        const tagged = (name: string, pages: string[][]): [string, () => Promise<OfficeParserAST>, string[][]] => [name, () => readTagged(pages), pages];
+        const plain = (name: string, pages: string[][], more: object = {}): [string, () => Promise<OfficeParserAST>, string[][]] => [name, () => read(pages, more), pages];
+        return [
+            plain('one kind alternating', pagesN(6).map(n => [`750|${n % 2 ? 'Odd head' : 'Even head'}`, body(n), '40|Acme Footer'])),
+            plain('the other kind alternating', pagesN(6).map(n => ['750|Acme Head', body(n), `40|${n % 2 ? 'Odd foot' : 'Even foot'}`])),
+            tagged('a cover head', pagesN(5).map(n => [`a:750|${n === 1 ? 'Cover Head' : 'Report'}`, body(n), 'a:40|Acme Footer'])),
+            tagged('a cover foot, numbers from 52', pagesN(5).map(n => ['a:750|Report', body(n), n === 1 ? 'a:40|Copyright' : `a:40|Page ${n + 50}`])),
+            tagged('a cover foot, numbers from 1', pagesN(5).map(n => ['a:750|Report', body(n), n === 1 ? 'a:40|Copyright' : `a:40|Page ${n - 1}`])),
+            tagged('front matter then body', pagesN(7).map(n => [`a:750|${n <= 3 ? 'Front Matter' : 'Main Body'}`, body(n), `a:40|${n <= 3 ? romanOf(n) : n - 3}`])),
+            tagged('numbers going back', pagesN(7).map(n => [body(n), `a:40|${n <= 3 ? romanOf(n) : n <= 6 ? n - 3 : 'vii'}`])),
+            tagged('from a later number', pagesN(4).map(n => ['a:750|Report', body(n), `a:40|${n + 146}`])),
+            tagged('heads starting late', pagesN(8).map(n => [...(n > 2 ? ['a:750|Late Head'] : []), body(n)])),
+            plain('numerals alone, untagged', pagesN(6).map(n => [body(n), `40|${romanOf(n)}`])),
+            plain('heads by printed parity', pagesN(12).map(n => [`750|${[1, 3, 4, 6, 8, 10, 12].includes(n) ? 'Odd T' : 'Even T'}`, body(n), `40|${n <= 3 ? romanOf(n) : n - 3}`])),
+        ];
+    })();
+    for (const [name, make, source] of layouts) {
+        const ast = await make();
+        const lines = (page: string[], y: (n: number) => boolean) => page.map(l => l.replace(/^a:/, '')).filter(l => y(Number(l.split('|')[0]))).map(l => l.split('|')[1]).sort();
+        // The native engine's pages, read back with their lines kept in them.
+        const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+        const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false, keepHeadersAndFootersInPages: true }, onWarning: () => { } } as any) as OfficeParserAST;
+        const backPages = (back.content as any[]).filter(n => n.type === 'page').map(n => String(n.text ?? (n.children ?? []).map((c: any) => c.text).join('\n')));
+        assert.strictEqual(backPages.length, source.length, `${name}: as many pages`);
+        source.forEach((page, i) => {
+            for (const l of page) {
+                const text = l.replace(/^a:/, '').split('|')[1];
+                assert.ok(backPages[i].split('\n').some(line => line.includes(text)), `${name}: page ${i + 1} prints "${text}"; got ${JSON.stringify(backPages[i])}`);
+            }
+        });
+        // The parts: each page's kind prints what it had, taken as a word processor takes it.
+        const setup = (ast.metadata as any).pageSetup ?? {};
+        const everyPart = (kind: 'headers' | 'footers') => ((ast.auxiliary as any)?.[kind] ?? []) as any[];
+        const anyEven = [...everyPart('headers'), ...everyPart('footers')].some(n => n.metadata.type === 'even');
+        let number = setup.pageNumberStart ?? 1, section = 0, format = setup.pageNumberFormat as string | undefined, at = 0;
+        const shown = (value: number, f: string | undefined) => f === 'lowerRoman' ? romanOf(value) : String(value);
+        for (const node of ast.content as any[]) {
+            if (node.type === 'break' && typeof node.metadata?.section === 'number') {
+                section = node.metadata.section;
+                if (node.metadata.pageSetup?.pageNumberStart !== undefined) number = node.metadata.pageSetup.pageNumberStart;
+                if (node.metadata.pageSetup?.pageNumberFormat) format = node.metadata.pageSetup.pageNumberFormat === 'decimal' ? undefined : node.metadata.pageSetup.pageNumberFormat;
+            }
+            if (node.type !== 'page') continue;
+            const page = source[at];
+            for (const [kind, inBand] of [['headers', (y: number) => y > 400], ['footers', (y: number) => y < 400]] as const) {
+                const parts = everyPart(kind);
+                const type = at === 0 && setup.differentFirstPage ? 'first' : anyEven && number % 2 === 0 ? 'even' : 'default';
+                const ofType = parts.filter(n => (n.metadata.type ?? 'default') === type && (n.metadata.section ?? 0) <= section);
+                const latest = ofType.reduce((m: number, n: any) => Math.max(m, n.metadata.section ?? 0), -1);
+                const part = ofType.filter(n => (n.metadata.section ?? 0) === latest);
+                const printed = part.length ? part.filter(n => n.metadata.page === part[0].metadata.page).map(n => (n.children ?? []).flatMap((c: any) => c.children ?? [c]).map((c: any) => c.metadata?.field === 'page' ? shown(number, format) : c.text).join('')).sort() : [];
+                const had = lines(page.filter(l => !/Body text/.test(l)), inBand);
+                assert.deepStrictEqual(printed, had, `${name}: the ${kind} on page ${at + 1} as a word processor prints it`);
+            }
+            number++;
+            at++;
+        }
+    }
+
+    // Numbers past one stray among them, or starting over, are still fields.
+    const stray = await readTagged(pagesN(9).map(n => [body(n), `a:40|${n === 5 ? 560 : n}`]));
+    assert.ok(fieldTexts(stray).length === 8, `a stray number leaves the others fields; got ${JSON.stringify(fieldTexts(stray))}`);
+    const twice = await readTagged(pagesN(8).map(n => [body(n), `a:40|${n <= 4 ? n : n - 4}`]));
+    assert.ok(fieldTexts(twice).length === 8 && sections(twice).length === 1, 'numbers starting over are fields, a section at the restart');
+
+    // Few pages by those with text: blank, leading and trailing ones say nothing.
+    const everyOther = await read(pagesN(9).map(n => n % 2 ? [`750|The Title`, body(n)] : []));
+    assert.ok(!(await mdOf(everyOther)).includes('The Title'), 'blank pages between leave the line running');
+    const leading = await read(pagesN(9).map(n => [...(n > 3 ? ['750|The Title'] : []), body(n)]));
+    assert.ok(!(await mdOf(leading)).includes('The Title'), 'pages leading without the line leave it running');
+    const sheetName = await read(pagesN(6).map(n => [...(n <= 3 ? ['750|The Title'] : []), body(n)]));
+    assert.ok((await mdOf(sheetName)).includes('The Title'), 'half the pages is no running line');
+
+    // Many numbers in one line cost as much as a line: a footer of thousands is the page's.
+    const longLine = await read(pagesN(4).map(n => [body(n), `40|${Array.from({ length: 6000 }, (_, i) => i).join(' ')}`]));
+    assert.ok(longLine.content.length === 4, 'a line of many numbers is read');
+
+    // Kept in their pages, numbers that are no running line are plain text.
+    const keptLines = await read(pagesN(12).map(n => [body(n), ...(n <= 8 ? [`40|${n}`] : [])]), { pdfParserConfig: { separateProcess: false, keepHeadersAndFootersInPages: true, pageRange: '7-12' } });
+    assert.ok(!JSON.stringify(keptLines.content).includes('"field"'), 'fields of lines that stay in the pages are text again');
+
+    // Blank pages stay pages in the writers that lay out pages; a writer's numbers are numbers.
+    const withBlank = await readTagged(pagesN(5).map(n => n === 1 ? [] : [body(n), `a:40|Page ${n}`]));
+    const odtBlank = strFromU8(unzipSync((await withBlank.to('odt')).value as Uint8Array)['content.xml']);
+    assert.ok(/<office:text[^>]*>(?:<[^>]*sequence-decls[\s\S]*?<\/text:sequence-decls>)?<text:p[^>]*\/>/.test(odtBlank), `ODT: a blank first page has a paragraph; got ${odtBlank.slice(odtBlank.indexOf('<office:text'), odtBlank.indexOf('<office:text') + 200)}`);
+    assert.ok(String((await withBlank.to('tex')).value).includes('\\null'), 'LaTeX: a blank page holds something');
+    const hostileStart = { type: 'docx', metadata: { pageSetup: { pageNumberStart: '3"><evil a="' } }, attachments: [], content: [{ type: 'paragraph', text: 'x', children: [{ type: 'text', text: 'x' }] }] } as any;
+    const odtHostile = strFromU8(unzipSync((await OfficeGenerator.generate(hostileStart, 'odt', {} as any)).value as Uint8Array)['content.xml']);
+    assert.ok(!odtHostile.includes('<evil'), 'ODT: a page number is a number');
 
 }
 
@@ -8128,6 +8225,28 @@ async function testListMarkerReading(): Promise<void> {
         }
     }
 
+
+    // RTF: a list's numbers from its marker group, others' words its own, this writer's labels its labels.
+    const rtfOf = (body: string) => OfficeParser.parseOffice(Buffer.from(`{\\rtf1\\ansi ${body}}`), { fileType: 'rtf', onWarning: () => { } } as any) as Promise<OfficeParserAST>;
+    const wordpad = await rtfOf('{\\pntext 1.\\tab}{\\*\\pn\\pnlvlbody\\pndec}First\\par{\\pntext 2.\\tab}Second\\par{\\pntext 3.\\tab}Third\\par');
+    assert.deepStrictEqual((wordpad.content as any[]).map(n => n.metadata.itemIndex), [0, 1, 2], 'RTF: numbers from the marker group');
+    const wordpadBack = await OfficeParser.parseOffice(Buffer.from((await wordpad.to('docx')).value as Uint8Array), { fileType: 'docx', onWarning: () => { } } as any) as OfficeParserAST;
+    assert.ok(String((await wordpadBack.to('text')).value).includes('1. First\n2. Second\n3. Third'), 'RTF to DOCX: numbers go on');
+    const noGroup = await rtfOf('\\pard\\pndec First\\par\\pard\\pndec Second\\par\\pard Plain\\par\\pard\\pndec Again\\par');
+    assert.deepStrictEqual((noGroup.content as any[]).filter(n => n.type === 'list').map(n => n.metadata.itemIndex), [0, 1, 0], 'RTF: list controls alone count, up to the next paragraph');
+    for (const text of ['Mr. Smith called', 'Note: hello world', '2024 was good', 'a. first']) {
+        const third = await rtfOf(`\\pard\\pnbullet ${text}\\par`);
+        assert.ok(String((await third.to('md', { mdConfig: { listMarkers: 'numbers' } })).value).includes(text), `RTF: another writer's words stay its words: ${text}`);
+    }
+
+    // ODT: a broken level's numbering leaves the level above going on; a long bullet stays whole; an item's own start is read.
+    const nested = (t: string, indentation: number, itemIndex: number, more: object = {}) => ({ type: 'list', text: t, children: [{ type: 'text', text: t }], metadata: { listType: 'ordered', indentation, itemIndex, listId: 'a', alignment: 'left', ...more } });
+    const parents = { type: 'docx', metadata: {}, attachments: [], content: [nested('one', 0, 0), nested('a', 1, 0), nested('b', 1, 1), nested('two', 0, 1), nested('c', 1, 2), nested('d', 1, 3), nested('three', 0, 2), nested('four', 0, 3)] } as any;
+    const parentsOdt = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(parents, 'odt', {} as any)).value as Uint8Array), { fileType: 'odt', onWarning: () => { } } as any) as OfficeParserAST;
+    assert.deepStrictEqual(collectAllNodes(parentsOdt).filter(n => n.type === 'list').map(n => [n.text, (n.metadata as any).itemIndex]), [['one', 0], ['a', 0], ['b', 1], ['two', 1], ['c', 2], ['d', 3], ['three', 2], ['four', 3]], 'ODT: numbers after a nested break');
+    const longBullet = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(listAst([['x', 0, 'Note:', 'unordered']]), 'odt', {} as any)).value as Uint8Array), { fileType: 'odt', onWarning: () => { } } as any) as OfficeParserAST;
+    assert.strictEqual((collectAllNodes(longBullet).find(n => n.type === 'list')!.metadata as any).marker, 'Note:', 'ODT: a bullet of many characters stays whole');
+
 }
 
 /**
@@ -8194,6 +8313,25 @@ async function testMarkdownHtmlCellFormatting(): Promise<void> {
     assert.strictEqual((nodes.find(n => n.type === 'paragraph' && n.children?.some(c => c.text === 'mid'))!.metadata as any).alignment, 'center', 'cell: a paragraph\'s alignment');
     assert.ok(!String((await OfficeGenerator.generate(structure, 'md', { mdConfig: { fallbackToHtml: { alignment: false } } } as any)).value).includes('text-align'), 'cell: alignment off writes none');
 
+
+    // A cell's blocks have no blank line between them, and an item's note and an onNode string do not end the block.
+    const items = await OfficeParser.parseOffice(Buffer.from('<table><tr><td colspan=2><ul><li><p>one</p><p>two</p></li></ul></td></tr></table>'), { fileType: 'html', onWarning: () => { } } as any) as OfficeParserAST;
+    assert.ok(!/\n[ \t]*\n/.test(String((await items.to('md')).value)), 'cell: no blank line between an item\'s paragraphs');
+    const noted = { type: 'list', text: 'it', children: [run('it', {})], notes: [{ type: 'note', text: 'THE BODY', children: [{ type: 'paragraph', text: 'THE BODY', children: [run('THE BODY', {})] }], metadata: { noteId: '7', noteType: 'footnote' } }], metadata: { listType: 'unordered', indentation: 0, itemIndex: 0, listId: 'n', alignment: 'left' } };
+    assert.ok((await md([noted], { dialect: 'commonmark' })).length > 0);
+    const notedDoc = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [{ type: 'row', children: [cell([noted], { colSpan: 2 })] }] }] } as any;
+    assert.ok(String((await OfficeGenerator.generate(notedDoc, 'md', { mdConfig: { dialect: 'commonmark' } } as any)).value).includes('THE BODY'), 'cell: an item\'s note stays');
+    const given = String((await OfficeGenerator.generate(astOf([run('x', {})]), 'md', { onNode: (n: any) => n.type === 'text' && n.text === 'x' ? 'C1\n\n# live' : undefined } as any)).value);
+    assert.ok(!/\n[ \t]*\n# live/.test(given), `cell: an onNode string does not end the block; got ${given}`);
+    const longLabel = 'Part 12 of the regulation, chapter seven, item:';
+    const labelled = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [{ type: 'row', children: [cell([{ type: 'list', text: 'x', children: [run('x', {})], metadata: { listType: 'ordered', indentation: 0, itemIndex: 0, listId: 'n', alignment: 'left', marker: longLabel } }], { colSpan: 2 })] }] }] } as any;
+    const labelBack = await OfficeParser.parseOffice(Buffer.from(String((await OfficeGenerator.generate(labelled, 'md', {} as any)).value)), { fileType: 'md', onWarning: () => { } } as any) as OfficeParserAST;
+    assert.strictEqual((collectAllNodes(labelBack).find(n => n.type === 'list')!.metadata as any).marker, longLabel, 'cell: a long label stays whole');
+    // An item an onNode leaves out closes nothing.
+    const outOfList = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [{ type: 'row', children: [cell(['a', 'b', 'c', 'd'].map((t, i) => ({ type: 'list', text: t, children: [run(t, {})], metadata: { listType: 'unordered', indentation: t === 'c' ? 1 : 0, itemIndex: i, listId: 'n', alignment: 'left' } })), { colSpan: 2 })] }] }] } as any;
+    const without = String((await OfficeGenerator.generate(outOfList, 'md', { onNode: (n: any) => n.type === 'list' && n.text === 'b' ? false : undefined } as any)).value);
+    assert.ok(without.includes('<ul><li>a<ul><li>c</li></ul></li><li>d</li></ul>'), `cell: the list goes on past an item left out; got ${without}`);
+
 }
 
 /**
@@ -8241,7 +8379,8 @@ async function testPdfItemsMatchTheirOwnGlyphs(): Promise<void> {
 
     // Right-to-left text starts its item at its last letter: a hidden copy at the same place stays the hidden one.
     const cmap = `/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapName /X def\n/CMapType 2 def\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n4 beginbfchar\n<41> <05D0>\n<42> <05D1>\n<43> <05D2>\n<44> <05D3>\nendbfchar\nendcmap\nend\nend`;
-    const hebrew = (content: string) => {
+    const hebrewMarked = (content: string) => hebrew(content, `/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapName /X def\n/CMapType 2 def\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n4 beginbfchar\n<4D> <05DE05B8>\n<42> <05D1>\n<43> <05D2>\n<44> <05D3>\nendbfchar\nendcmap\nend\nend`);
+    const hebrew = (content: string, map = cmap) => {
         const objects = [
             '<< /Type /Catalog /Pages 2 0 R >>',
             '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
@@ -8249,7 +8388,7 @@ async function testPdfItemsMatchTheirOwnGlyphs(): Promise<void> {
             `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
             `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar 32 /LastChar 122 /Widths [244 ${Array(90).fill(556).join(' ')}] >>`,
             `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar 32 /LastChar 122 /Widths [244 ${Array(90).fill(556).join(' ')}] /ToUnicode 7 0 R >>`,
-            `<< /Length ${cmap.length} >>\nstream\n${cmap}\nendstream`,
+            `<< /Length ${map.length} >>\nstream\n${map}\nendstream`,
         ];
         let pdf = '%PDF-1.4\n';
         const offsets: number[] = [];
@@ -8263,6 +8402,14 @@ async function testPdfItemsMatchTheirOwnGlyphs(): Promise<void> {
         const shown = collectAllNodes(ast).filter(n => n.type === 'text' && /[\u05D0-\u05D3]/.test(n.text ?? '') && !(n.formatting as any)?.invisible).map(n => n.text);
         assert.deepStrictEqual(shown, ['\u05D0\u05D1\u05D2\u05D3'], `the drawn right-to-left word is the visible one; got ${JSON.stringify(shown)}`);
     }
+
+    // A base letter and its mark in one glyph, read backwards by pdf.js; and a mixed item, read from its start.
+    const marks = await hebrewMarked('BT /H 10 Tf 1 0 0 1 72 600 Tm (MDCB) Tj 3 Tr 1 0 0 1 72 600 Tm (MDCB) Tj 0 Tr ET');
+    const hiddenRuns = collectAllNodes(marks).filter(n => n.type === 'text' && /[\u05D0-\u05EA]/.test(n.text ?? ''));
+    assert.ok(hiddenRuns.some(n => !(n.formatting as any)?.invisible), `a glyph of a letter and its mark stays visible; got ${JSON.stringify(hiddenRuns.map(n => [n.text, n.formatting]))}`);
+    const mixedTiny = await hebrew(`${body}BT /F1 0.01 Tf 1 0 0 1 72 600 Tm (abc ) Tj 3 Tr /H 10 Tf (A) Tj 0 Tr ET`);
+    assert.ok(collectAllNodes(mixedTiny).some(n => n.type === 'text' && /abc/.test(n.text ?? '') && !(n.formatting as any)?.invisible), 'a mixed item keeps its visible text');
+
 }
 
 /**

@@ -18,6 +18,7 @@
  */
 
 import { fillPageNumber } from '../../utils/pageNumbers.js';
+import { clampInt } from '../../utils/numberUtils.js';
 import { EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, SheetMetadata, TextAlignment, TextFormatting, BreakMetadata, ChartData, HeaderFooterMetadata, NodeBounds, ShapeMetadata, SlideMetadata, PageNumberFormat } from '../../types.js';
 import { hasPageSize, onDocumentPage } from '../../utils/pageLimits.js';
 import { getAbortError, getOfficeError } from '../../utils/errorUtils.js';
@@ -1170,7 +1171,7 @@ class NativeLayout {
             for (const [index, record] of this.pageRecords.entries()) {
                 // (A section restarting its numbers restarts them on its first page; the pages after go on.)
                 const start = record.firstOfSection || index === 0 ? this.sectionSetups.get(record.section)?.pageNumberStart : undefined;
-                shown = start ?? shown + 1;
+                shown = start === undefined ? shown + 1 : clampInt(start, 0, 2_147_483_647, 1);
                 this.fieldPage = shown;
                 this.fieldFormat = this.sectionSetups.get(record.section)?.pageNumberFormat;
                 this.pageW = record.w; this.pageH = record.h; this.margin = record.margin;

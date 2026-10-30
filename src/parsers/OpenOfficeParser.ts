@@ -2076,6 +2076,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                                 if (element.tagName === "text:p" || element.tagName === "text:h") {
                                     if (!hasIndexedThisItem) {
+                                        // (An item's own start, as a list going on from there has.)
+                                        const itemStart = Number((item as Element).getAttribute("text:start-value"));
+                                        const levelStart = Number(levels?.get(indentation + 1)?.getAttribute("text:start-value")) || 1;
+                                        if (itemStart >= 1) listCounters[listId][indentKey] = itemStart - levelStart - 1;
                                         listCounters[listId][indentKey]++;
                                         hasIndexedThisItem = true;
                                         for (let k = indentation + 1; k < 10; k++) {

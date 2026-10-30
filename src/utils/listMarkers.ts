@@ -203,7 +203,7 @@ export function printedListLabel(meta: { listType?: string; marker?: unknown } |
  * escaped, so nothing in it can end the string or an attribute around it.
  */
 export function cssListMarker(marker: string): string {
-    const escaped = [...marker].slice(0, 32).map(ch => /^[\p{L}\p{N} ]$/u.test(ch) ? ch : `\\${ch.codePointAt(0)!.toString(16)} `).join('');
+    const escaped = [...marker].map(ch => /^[\p{L}\p{N} ]$/u.test(ch) ? ch : `\\${ch.codePointAt(0)!.toString(16)} `).join('');
     return `'${escaped}${marker ? ' ' : ''}'`;
 }
 
@@ -257,7 +257,7 @@ const PATTERN_FORMATS: NumberFormat[] = ['decimal', 'decimalZero', 'lowerRoman',
 export function markerPattern(meta: { listType?: string; itemIndex?: number; marker?: unknown } | undefined, level: number): MarkerPattern {
     const ordered = meta?.listType === 'ordered';
     const plain: MarkerPattern = { kind: ordered ? 'ordered' : 'unordered', format: 'decimal', prefix: '', suffix: '.', withParents: false, bullet: '•' };
-    const marker = typeof meta?.marker === 'string' ? meta.marker.slice(0, 64) : undefined;
+    const marker = typeof meta?.marker === 'string' ? meta.marker.slice(0, 255) : undefined;
     if (marker === undefined) return plain;
     if (!ordered) return { ...plain, bullet: marker };
     if (marker === '') return { ...plain, format: 'none', suffix: '' };
@@ -275,6 +275,11 @@ export function markerPattern(meta: { listType?: string; itemIndex?: number; mar
     return { ...plain, format: 'none', prefix: marker, suffix: '' };
 }
 
+/** Whether two levels write their numbers alike (their parents' numbers apart). */
+export function samePattern(a: MarkerPattern, b: MarkerPattern): boolean {
+    return a.kind === b.kind && a.format === b.format && a.prefix === b.prefix && a.suffix === b.suffix && a.withParents === b.withParents && a.bullet === b.bullet;
+}
+
 /**
  * Whether an item cannot go on the numbering a word processor keeps for its list: its number is not the
  * one that numbering reaches, or its marker not in the level's pattern (`(h)` `(i)` `(ii)` `(j)`, or
@@ -286,8 +291,7 @@ export function numberingBreaks(levels: Map<number, MarkerPattern>, startAt: Map
     const number = meta?.listType === 'ordered' && typeof meta.itemIndex === 'number' && Number.isFinite(meta.itemIndex) ? Math.trunc(meta.itemIndex) + 1 : null;
     if (known) {
         const pattern = markerPattern(meta, level);
-        const same = known.kind === pattern.kind && known.format === pattern.format && known.prefix === pattern.prefix && known.suffix === pattern.suffix && known.withParents === pattern.withParents && known.bullet === pattern.bullet;
-        if (!same || (number !== null && number !== next.get(level))) return true;
+        if (!samePattern(known, pattern) || (number !== null && number !== next.get(level))) return true;
     }
     if (number !== null) next.set(level, number + 1);
     for (const l of levels.keys()) if (l > level) next.set(l, startAt.get(l) ?? 1);

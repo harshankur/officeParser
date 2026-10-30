@@ -289,19 +289,23 @@ export function measureItems<T extends MeasuredItem>(items: T[], glyphs: PageGly
     const near = (k: number, x: number, y: number) => Math.abs(px[k] - x) <= NEAR && Math.abs(py[k] - y) <= NEAR;
     /**
      * The glyph an item starts at: of the glyphs at its place from `from` on, the nearest whose text begins
-     * the item's (ends it, for right-to-left text, read from the far side of its place), the first drawn where several are as near (a tiny run packs many glyphs into the width
-     * this looks over, so the first there need not be the item's); else the same without the text (a glyph
-     * read otherwise than pdf.js reads it); else the first there at all (not taken in order). A few of each
+     * the item's (or ends it, for right-to-left text, read from the far side of its place), the first drawn where several are as near (a tiny run packs many glyphs into the width
+     * this looks over, so the first there need not be the item's); else the same without the text, a glyph
+     * with some of its own before a blank (a glyph read otherwise than pdf.js reads it); else the first there at all (not taken in order). A few of each
      * place's glyphs are looked at (a page drawing a glyph many times at one place is read in time in its
      * length, not its square).
      */
     const find = (x: number, y: number, from: number, str: string): { k: number; inOrder: boolean } | undefined => {
         const rtl = RTL.test(str);
-        const trimmed = rtl ? str.trimEnd() : str.trimStart();
+        const head = str.trimStart(), tail = rtl ? str.trimEnd() : '';
+        const reversed = (t: string) => [...t].reverse().join('');
         const begins = (k: number) => {
             const own = text[k].replace(/\s/g, '');
             if (!own) return false;
-            return rtl ? trimmed.endsWith(own) || trimmed.endsWith(own.normalize('NFKC')) : trimmed.startsWith(own) || trimmed.startsWith(own.normalize('NFKC'));
+            const compat = own.normalize('NFKC');
+            if (head.startsWith(own) || head.startsWith(compat)) return true;
+            // (pdf.js reads a right-to-left glyph's own characters backwards too: a letter and its mark.)
+            return rtl && own.length <= 8 && (tail.endsWith(own) || tail.endsWith(compat) || tail.endsWith(reversed(own)) || tail.endsWith(reversed(compat)));
         };
         const look = (fits: (k: number) => boolean): { k: number; inOrder: boolean } | undefined => {
             let best = -1, bestGap = Infinity, any = -1;
@@ -321,7 +325,10 @@ export function measureItems<T extends MeasuredItem>(items: T[], glyphs: PageGly
             }
             return best >= 0 ? { k: best, inOrder: true } : any >= 0 ? { k: any, inOrder: false } : undefined;
         };
-        return look(begins) ?? look(() => true);
+        // (A glyph with the text out of order is no better than one in order without it.)
+        const matched = look(begins);
+        if (matched?.inOrder) return matched;
+        return look(k => !!text[k].trim()) ?? look(() => true) ?? matched;
     };
 
     // Each item of text (not a blank) matched to its first glyph, and whether in order (after the glyphs of

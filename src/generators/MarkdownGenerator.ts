@@ -231,6 +231,9 @@ const joinLines = (markdown: string, br: string): string => {
 const trimBlockEdges = (markdown: string): string => trimEndChars(trimStartChars(markdown, ' \t'), ' \t');
 
 /** Appends a node's Markdown, leaving exactly one blank line before a separated block. */
+/** `html` with no line end that could end a Markdown HTML block: no blank line, no lone carriage return. */
+const closedUpLines = (html: string): string => html.replace(/\r\n?/g, '\n').replace(/\n[ \t]*(?=\n)/g, '');
+
 const appendBlock = (output: TextBuilder, node: { type: string }, next: string): void =>
     output.append(SEPARATED_BLOCK_TYPES.has(node.type) && output.endsWith('\n\n') ? trimStartChars(next, '\n') : next);
 
@@ -1920,8 +1923,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 return url ? link(url, 'external', undefined, esc(meta?.label || url)) : co;
             }
             case 'comment':
-                // (A comment has no character references, so a blank line in it is closed up: it would end the block.)
-                if (isSourceComment(n)) return `<!--${sanitizeCommentText(n.text || '').replace(/\r\n?/g, '\n').replace(/\n[ \t]*(?=\n)/g, '')}-->`;
+                if (isSourceComment(n)) return `<!--${closedUpLines(sanitizeCommentText(n.text || ''))}-->`;
                 return !n.children?.length && n.text ? esc(n.text) : co;
             case 'chart':
             case 'drawing':
@@ -1991,20 +1993,23 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         let out = '';
         const close = () => { const top = open.pop()!; out += `${top.closes}</${top.tag}>`; };
         for (const node of items) {
-            let item: ReturnType<MarkdownGenerator['htmlListItem']> | undefined;
+            let item = undefined as ReturnType<MarkdownGenerator['htmlListItem']> | undefined;
             const piece = await this.processNodeRecursive(node, (n, co) => {
                 if (n !== node) return this.htmlCellNode(n, co);
                 item = this.htmlListItem(n, co);
                 return '';
             });
             if (!item) {
-                // An onNode verdict for the item: its own text, where it stands.
+                // An onNode verdict for the item: its own text, where it stands; none, and the list goes on.
+                if (!piece) continue;
                 while (open.length) close();
                 out += piece;
                 continue;
             }
+            // (What goes after the item's content: a note's reference or body.)
+            item.body += piece;
             const meta = node.metadata as ListMetadata | undefined;
-            const level = clampInt(meta?.indentation, 0, 999_999, 0);
+            const level = clampInt(meta?.indentation, 0, 64, 0);
             while (open.length && open[open.length - 1].level > level) close();
             const top = open[open.length - 1];
             if (top?.level === level && top.tag === item.tag && top.task === item.task && top.listId === meta?.listId && top.plain && item.plain && (item.tag === 'ul' || top.next === item.number)) {
@@ -2024,9 +2029,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     private async renderTableAsHtml(node: OfficeContentNode, override?: string | false | void): Promise<string> {
         if (override === false) return '';
         if (typeof override === 'string') {
-            if (node.type === 'row') return `  <tr><td colspan="100%">${override}</td></tr>\n`;
-            if (node.type === 'cell') return `<td>${override}</td>`;
-            return override;
+            if (node.type === 'row') return `  <tr><td colspan="100%">${closedUpLines(override)}</td></tr>\n`;
+            if (node.type === 'cell') return `<td>${closedUpLines(override)}</td>`;
+            return closedUpLines(override);
         }
 
         // A sheet is written as a table is (it was written as nothing: every sheet under a dialect
@@ -2082,6 +2087,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         content += await this.processNodeRecursive(children[i], (n, co) => this.htmlCellNode(n, co));
                     }
                 }
+                // (Whatever made it, the blocks of a cell stand apart, or an onNode string: nothing in it can end the block.)
+                content = closedUpLines(content);
             }
             const { attr, extra } = this.htmlIds(meta);
             // (A cell of spaces alone, no-break ones too, reads back as an empty one: it is written so.)

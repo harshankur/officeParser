@@ -652,6 +652,8 @@ function buildList(node: StructNode, ctx: WalkCtx, indent: number): OfficeConten
                 }
             }
         }
+        // (A right-to-left line's number reads with its dot first: ".1" is "1.")
+        if (/^\.\d+$/.test(label.trim())) label = `${label.trim().slice(1)}.`;
         const listType = classifyListType(label);
         // Number ordered items from the label the PDF actually rendered rather than the positional index,
         // so a list interrupted by a paragraph and split into two <L> elements resumes its numbering (3, 4)

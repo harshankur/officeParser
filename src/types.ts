@@ -2293,7 +2293,7 @@ export interface MarkdownDialectConfig {
 export interface FallbackToHtmlConfig {
     /** Underline/subscript/superscript via `<u>`/`<sub>`/`<sup>`. */
     textFormatting?: boolean;
-    /** Heading/paragraph text alignment via `<div style="text-align:...">`. */
+    /** Heading/paragraph text alignment via `<div style="text-align:...">`, and `style="text-align"` on what stands in an HTML table. */
     alignment?: boolean;
     /** Internal-link/heading `<a id>`/`<a name>` anchor tags. */
     anchors?: boolean;

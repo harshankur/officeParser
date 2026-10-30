@@ -330,9 +330,11 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     // The document's own marker (`a)`, `◦`), else the item's number or a bullet.
                     const marker = typeof meta?.marker === 'string' ? (meta.marker ? `${this.escapeRtf(meta.marker)} ` : '')
                         : isOrdered ? `${clampInt(meta.itemIndex, 0, 999_999_998, 0) + 1}. ` : '\\bullet ';
+                    // (Others show the marker as the item's first words; an ignorable group tells this one so.)
+                    const said = marker ? `{\\*\\oplistlabel ${marker.trim()}}` : '';
                     const listControl = isOrdered ? '\\pndec' : '\\pnbullet';
                     const pPr = this.pard();
-                    return `${pPr}\\li${indent}\\fi-360\\ilvl${level}${listControl} ${marker}${childrenOutput}\\par\n`;
+                    return `${pPr}\\li${indent}\\fi-360\\ilvl${level}${listControl} ${said}${marker}${childrenOutput}\\par\n`;
                 }
 
                 case 'table': {
