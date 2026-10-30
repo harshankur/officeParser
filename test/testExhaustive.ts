@@ -1198,6 +1198,49 @@ async function testWordParagraphMarkFormatting(): Promise<void> {
 }
 
 /**
+ * A content control showing its placeholder (`w:showingPlcHdr`) holds Word's prompt, such as "Click or
+ * tap here to enter text.", until the author fills it in; that prompt is not the document's text.
+ */
+async function testWordPlaceholders(): Promise<void> {
+    console.log('\n=== Running Word Placeholder Tests ===');
+
+    const prompt = (text: string, flag = '<w:showingPlcHdr/>') =>
+        `<w:sdt><w:sdtPr>${flag}</w:sdtPr><w:sdtContent>${text}</w:sdtContent></w:sdt>`;
+    const run = (text: string) => `<w:r><w:t xml:space="preserve">${text}</w:t></w:r>`;
+    const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    ${prompt(`<w:p>${run('Click or tap here to enter text.')}</w:p>`)}
+    <w:p>${run('Name: ')}${prompt(run('Click or tap here to enter text.'))}${run(' (required)')}</w:p>
+    <w:tbl><w:tr><w:tc><w:p>${run('Date')}</w:p></w:tc><w:tc>${prompt(`<w:p>${run('Click or tap to enter a date.')}</w:p>`)}</w:tc></w:tr></w:tbl>
+    <w:p>${run('Filled: ')}${prompt(run('Ada'), '<w:showingPlcHdr w:val="0"/>')}${prompt(run(' Lovelace'), '')}</w:p>
+  </w:body>
+</w:document>`;
+    const zip = zipSync({
+        '[Content_Types].xml': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`),
+        '_rels/.rels': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`),
+        'word/document.xml': strToU8(documentXml),
+    });
+
+    const ast = await OfficeParser.parseOffice(Buffer.from(zip), { fileType: 'docx' });
+    const text = (await ast.to('text')).value;
+    assert.ok(!text.includes('Click or tap'), `Word: a placeholder prompt is not text (got ${JSON.stringify(text)})`);
+    assert.ok(text.includes('Name:  (required)'), 'Word: the paragraph around an inline placeholder keeps its text');
+    assert.ok(text.includes('Date'), 'Word: the row of a placeholder cell keeps its other cells');
+    assert.ok(text.includes('Filled: Ada Lovelace'), 'Word: a control whose placeholder is switched off, or that has none, is read');
+
+    console.log('  Word placeholders: All assertions passed ✓');
+}
+
+/**
  * Excel stores a date or a time as a day count and shows it through the cell's number format. An
  * XLSX is built in-memory with built-in and custom date/time formats, number formats that only look
  * like dates, and both date systems; every cell must read as the sheet shows it.
@@ -10919,6 +10962,7 @@ async function runTests(): Promise<void> {
         ['AttributeRoundtrip', testAttributeRoundtrip],
         ['BlobInput', testBlobInput],
         ['WordParagraphMark', testWordParagraphMarkFormatting],
+        ['WordPlaceholders', testWordPlaceholders],
         ['ExcelDates', testExcelDates],
         ['GeneratedOutput', testGeneratedOutput],
         ['ODG', testOdg],
