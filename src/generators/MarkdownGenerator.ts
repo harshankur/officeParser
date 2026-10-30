@@ -1,7 +1,7 @@
 import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, EmbedSyntax, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, StrikethroughSyntax, TableMetadata, TextFormatting, TextMetadata, WikilinkSyntax } from '../types.js';
 import { escapeHtml, isCssLength, isVideoId, markdownEscapeInline, markdownEscapePlain, markdownEscapeTags, markdownEscapeText, sanitizeCommentText, sanitizeCssValue, sanitizeImageUrl, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
 import { isDefaultHighlight } from '../utils/colorUtils.js';
-import { cssListMarker } from '../utils/listMarkers.js';
+import { cssListMarker, printedListLabel } from '../utils/listMarkers.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { base64ByteLength, resolveEmbed } from '../utils/officeGenUtils.js';
 import { clampInt, clampRepeat } from '../utils/numberUtils.js';
@@ -910,8 +910,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     const indent = indentSpaces.repeat(this.listDepths.get(node) ?? clampRepeat(meta?.indentation || 0, 64));
                     const bullet = `${this.resolvedDialect.bulletListMarker} `;
                     const marker = meta?.isTask
-                        ? (meta.checked ? `${bullet}[x] ` : `${bullet}[ ] `)
-                        : (meta?.listType === 'ordered' ? this.orderedItemMarker(meta, bullet) : bullet);
+                        ? (this.inDefinition > 0 ? markdownEscapeInline : (m: string) => m)(meta.checked ? `${bullet}[x] ` : `${bullet}[ ] `, true)
+                        : this.listItemMarker(meta, bullet, this.inDefinition > 0);
                     const anchors = this.renderAnchors(meta);
                     // A list item is a single Markdown line. HTML-origin items carry `paragraph`
                     // children (e.g. `<li><p>a</p><ul>...`), whose renderer appends `\n\n`; dumped
@@ -926,7 +926,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     const content = joinLines(trimAsciiWhitespace(childrenOutput), br);
                     // An empty item is its marker alone, with no trailing space. In a definition (one line)
                     // an item cannot be one, and its marker is text there, escaped as text is.
-                    if (this.inDefinition > 0) return `${markdownEscapeInline(marker, true)}${anchors}${content}\n`;
+                    if (this.inDefinition > 0) return `${marker}${anchors}${content}\n`;
                     return `${indent}${anchors || content ? marker : marker.trimEnd()}${anchors}${content}\n`;
                 }
 
@@ -1593,15 +1593,24 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
      * document labels otherwise (`(l)`, `iv.`, `2.1.`) keeps its label as text after a bullet, where the
      * item's own number would print a different one (`mdConfig.listMarkers: 'numbers'` prints the number).
      */
-    private orderedItemMarker(meta: ListMetadata, bullet: string): string {
+    private listItemMarker(meta: ListMetadata | undefined, bullet: string, asText: boolean): string {
+        // (In a definition, one line, an item cannot be one: its marker is text there, escaped as text is.)
+        const native = (marker: string) => (asText ? markdownEscapeInline(marker, true) : marker);
+        const labelled = (label: string) => `${native(bullet)}${markdownEscapeInline(label, true)} `;
+        const kept = this.config.mdConfig.listMarkers !== 'numbers';
+        if (meta?.listType !== 'ordered') {
+            const label = kept ? printedListLabel(meta) : null;
+            return label ? labelled(label) : native(bullet);
+        }
         const number = clampInt(meta.itemIndex, 0, 999_999_998, 0) + 1;
-        const plain = `${number}${this.resolvedDialect.orderedListMarker} `;
-        if (this.config.mdConfig.listMarkers === 'numbers' || typeof meta.marker !== 'string') return plain;
-        const label = meta.marker.replace(/\s+/g, ' ').trim();
-        if (!label) return bullet;
-        if (label === `${number}.`) return plain;
-        if (label === `${number})`) return `${label} `;
-        return `${bullet}${markdownEscapeInline(label, true)} `;
+        const plain = native(`${number}${this.resolvedDialect.orderedListMarker} `);
+        if (!kept || typeof meta.marker !== 'string') return plain;
+        const label = printedListLabel(meta);
+        if (!label) return native(bullet);
+        // A number with no more than Markdown's own punctuation is Markdown's own (not `07.`: that prints as 7).
+        const own = /^(0|[1-9]\d{0,8})([.)]?)$/.exec(label);
+        if (own) return own[1] === String(number) && own[2] !== ')' ? plain : native(`${own[1]}${own[2] || this.resolvedDialect.orderedListMarker} `);
+        return labelled(label);
     }
 
     /** The part of a run's formatting the text writer writes (see the `text` case of generate). */
@@ -1820,9 +1829,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
      * with its link; a list item; a comment; a nested table.
      */
     private async htmlCellNode(n: OfficeContentNode, co: string): Promise<string> {
-        // A Markdown HTML block ends at a blank line, so a line end in a cell's text, code, math or an
-        // attribute is written as the character reference HTML reads back as the same character.
-        const esc = (value: string) => escapeHtml(value).replace(/\r?\n/g, '&#10;');
+        const esc = (value: string) => this.escapeInHtmlBlock(value);
         const link = (href: string, linkType: string | undefined, title: string | undefined, inner: string) => {
             const internal = linkType !== 'external';
             if (internal && this.config.ignoreInternalLinks) return inner;
@@ -1844,9 +1851,10 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     if (f.strikethrough) text = `<s>${text}</s>`;
                     if (f.subscript && html.textFormatting) text = `<sub>${text}</sub>`;
                     if (f.superscript && html.textFormatting) text = `<sup>${text}</sup>`;
-                    // As the text writer does outside a table (see the `text` case of generate): colour,
-                    // size and a highlight's own colour only when opted in, a highlight the dialect has
-                    // kept as a highlight where its colour has no span to hold it.
+                    // Colour, size and a highlight's own colour only when opted in, as the text writer has
+                    // them outside a table (see the `text` case of generate). A plain highlight is always a
+                    // mark here, this being HTML already; a coloured one is where the dialect has highlights
+                    // and its colour has no span to hold it.
                     const mark = isDefaultHighlight(f.backgroundColor) || (!!f.backgroundColor && !html.inlineFormatting && this.resolvedDialect.highlight !== 'none');
                     if (mark) text = `<mark>${text}</mark>`;
                     if (html.inlineFormatting) {
@@ -1893,22 +1901,17 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             case 'paragraph': {
                 const { attr, extra } = this.htmlIds(n.metadata);
                 // (A paragraph of spaces alone, no-break ones too, reads back as an empty one: it is written so.)
-                return `<p${attr}>${extra}${co.trim() ? co : ''}</p>`;
+                return `<p${attr}${this.htmlAlignment(n.metadata)}>${extra}${co.trim() ? co : ''}</p>`;
             }
             case 'heading': {
                 const level = Math.min(Math.max(Number((n.metadata as any)?.level) || 1, 1), 6);
                 const { attr, extra } = this.htmlIds(n.metadata);
-                return `<h${level}${attr}>${extra}${co}</h${level}>`;
+                return `<h${level}${attr}${this.htmlAlignment(n.metadata)}>${extra}${co}</h${level}>`;
             }
             case 'list': {
-                const meta = n.metadata as ListMetadata | undefined;
-                const { attr, extra } = this.htmlIds(n.metadata);
-                if (meta?.listType !== 'ordered') return `<ul><li${attr}>${extra}${co}</li></ul>`;
-                // Each item is a list of its own here, so its number and label are written with it.
-                const number = clampInt(meta.itemIndex, 0, 999_999_998, 0) + 1;
-                const label = this.config.mdConfig.listMarkers !== 'numbers' && typeof meta.marker === 'string' ? meta.marker : undefined;
-                const shown = label === undefined || label.trim() === `${number}.` ? '' : ` style="list-style-type: ${cssListMarker(label)}"`;
-                return `<ol${number > 1 ? ` start="${number}"` : ''}${shown}><li${attr}>${extra}${co}</li></ol>`;
+                // (Not among a cell's own items, see htmlCellLists: a list of its own.)
+                const item = this.htmlListItem(n, co);
+                return `${item.opens}${item.body}${item.closes}</${item.tag}>`;
             }
             case 'table': return await this.renderTableAsHtml(n);
             case 'embed': {
@@ -1917,7 +1920,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 return url ? link(url, 'external', undefined, esc(meta?.label || url)) : co;
             }
             case 'comment':
-                if (isSourceComment(n)) return `<!--${sanitizeCommentText(n.text || '')}-->`;
+                // (A comment has no character references, so a blank line in it is closed up: it would end the block.)
+                if (isSourceComment(n)) return `<!--${sanitizeCommentText(n.text || '').replace(/\r\n?/g, '\n').replace(/\n[ \t]*(?=\n)/g, '')}-->`;
                 return !n.children?.length && n.text ? esc(n.text) : co;
             case 'chart':
             case 'drawing':
@@ -1936,6 +1940,85 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             case 'definitionDescription':
                 return co;
         }
+    }
+
+    /**
+     * A Markdown HTML block ends at a blank line, and a lone carriage return is a line end to Markdown too,
+     * so every line end in a cell's text, code, math or an attribute is written as the character reference
+     * HTML reads back as the same character: nothing in it can end the block and be read as Markdown.
+     */
+    private escapeInHtmlBlock(value: string): string {
+        return escapeHtml(value).replace(/[\r\n]/g, ch => (ch === '\n' ? '&#10;' : '&#13;'));
+    }
+
+    /** A paragraph's, heading's or item's own alignment, as the text writer gives it outside a table. */
+    private htmlAlignment(metadata: unknown): string {
+        const alignment = (metadata as { alignment?: string } | undefined)?.alignment;
+        if (!this.resolvedFallbackToHtml.alignment || !alignment || alignment === 'left') return '';
+        const value = sanitizeCssValue(alignment);
+        return value ? ` style="text-align: ${this.escapeInHtmlBlock(value)}"` : '';
+    }
+
+    /** One list item of an HTML table cell: what opens its list and it, and what goes in and closes it. */
+    private htmlListItem(n: OfficeContentNode, co: string): { tag: 'ol' | 'ul'; number: number; plain: boolean; task: boolean; opens: string; item: string; body: string; closes: string } {
+        const meta = n.metadata as ListMetadata | undefined;
+        const { attr, extra } = this.htmlIds(n.metadata);
+        const style = this.htmlAlignment(n.metadata);
+        const number = clampInt(meta?.itemIndex, 0, 999_999_998, 0) + 1;
+        if (meta?.listType !== 'ordered') {
+            const task = !!meta?.isTask;
+            const label = !task && this.config.mdConfig.listMarkers !== 'numbers' ? printedListLabel(meta) : null;
+            const shown = label ? ` style="list-style-type: ${cssListMarker(label)}"` : '';
+            const item = task
+                ? `<li data-checked="${meta?.checked ? 'true' : 'false'}" data-type="taskItem"${attr}${style}><label><input type="checkbox"${meta?.checked ? ' checked' : ''}><span></span></label><div>`
+                : `<li${attr}${style}>`;
+            return { tag: 'ul', number, plain: !shown, task, opens: `<ul${task ? ' data-type="taskList"' : ''}${shown}>${item}`, item, body: `${extra}${co}`, closes: task ? '</div></li>' : '</li>' };
+        }
+        const label = this.config.mdConfig.listMarkers !== 'numbers' && typeof meta.marker === 'string' ? meta.marker : undefined;
+        const shown = label === undefined || label.trim() === `${number}.` ? '' : ` style="list-style-type: ${cssListMarker(label)}"`;
+        const item = `<li${attr}${style}>`;
+        return { tag: 'ol', number, plain: !shown, task: false, opens: `<ol${number > 1 ? ` start="${number}"` : ''}${shown}>${item}`, item, body: `${extra}${co}`, closes: '</li>' };
+    }
+
+    /**
+     * A cell's run of list items as the lists they are: an item deeper than the one before it in that item's
+     * own list, as HtmlGenerator writes them (each its own list, the levels read back as one). An item goes
+     * on the list open at its level where it is of the same list and the next number with no label of its
+     * own; otherwise it starts a list there, which says its number and label.
+     */
+    private async htmlCellLists(items: OfficeContentNode[]): Promise<string> {
+        const open: { level: number; tag: string; task: boolean; listId: unknown; next: number; plain: boolean; closes: string }[] = [];
+        let out = '';
+        const close = () => { const top = open.pop()!; out += `${top.closes}</${top.tag}>`; };
+        for (const node of items) {
+            let item: ReturnType<MarkdownGenerator['htmlListItem']> | undefined;
+            const piece = await this.processNodeRecursive(node, (n, co) => {
+                if (n !== node) return this.htmlCellNode(n, co);
+                item = this.htmlListItem(n, co);
+                return '';
+            });
+            if (!item) {
+                // An onNode verdict for the item: its own text, where it stands.
+                while (open.length) close();
+                out += piece;
+                continue;
+            }
+            const meta = node.metadata as ListMetadata | undefined;
+            const level = clampInt(meta?.indentation, 0, 999_999, 0);
+            while (open.length && open[open.length - 1].level > level) close();
+            const top = open[open.length - 1];
+            if (top?.level === level && top.tag === item.tag && top.task === item.task && top.listId === meta?.listId && top.plain && item.plain && (item.tag === 'ul' || top.next === item.number)) {
+                out += `${top.closes}${item.item}${item.body}`;
+                top.next = item.number + 1;
+                top.closes = item.closes;
+                continue;
+            }
+            if (top?.level === level) close();
+            out += `${item.opens}${item.body}`;
+            open.push({ level, tag: item.tag, task: item.task, listId: meta?.listId, next: item.number + 1, plain: item.plain, closes: item.closes });
+        }
+        while (open.length) close();
+        return out;
     }
 
     private async renderTableAsHtml(node: OfficeContentNode, override?: string | false | void): Promise<string> {
@@ -1966,7 +2049,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             // Carry table-layout alignment through the HTML fallback so it isn't lost
             // just because the table also needed HTML for merged cells.
             const tableMeta = node.metadata as any;
-            const alignAttr = tableMeta?.align ? ` data-align="${escapeHtml(tableMeta.align)}"` : '';
+            const alignAttr = tableMeta?.align ? ` data-align="${this.escapeInHtmlBlock(String(tableMeta.align))}"` : '';
             return `<table${alignAttr}>\n${rows}</table>\n`;
         } else if (node.type === 'row') {
             this.collectNotesFrom(node);
@@ -1980,21 +2063,32 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         } else if (node.type === 'cell') {
             this.collectNotesFrom(node);
             const meta = node.metadata as any;
-            const rs = meta?.rowSpan > 1 ? ` rowspan="${meta.rowSpan}"` : '';
-            const cs = meta?.colSpan > 1 ? ` colspan="${meta.colSpan}"` : '';
+            const rs = Number(meta?.rowSpan) > 1 ? ` rowspan="${Number(meta.rowSpan)}"` : '';
+            const cs = Number(meta?.colSpan) > 1 ? ` colspan="${Number(meta.colSpan)}"` : '';
 
             let content = '';
             if (node.children) {
                 // Cell content as HTML, which is what the cell is (a Markdown renderer shows an HTML
                 // block as it is, and the parser reads it with the HTML parser): the markup
                 // HtmlGenerator writes for each inline construct, so nothing in a cell is dropped.
-                for (const child of this.optimizeNodes(node.children)) {
-                    content += await this.processNodeRecursive(child, (n, co) => this.htmlCellNode(n, co));
+                const children = this.optimizeNodes(node.children);
+                for (let i = 0; i < children.length; i++) {
+                    if (children[i].type === 'list') {
+                        let end = i + 1;
+                        while (end < children.length && children[end].type === 'list') end++;
+                        content += await this.htmlCellLists(children.slice(i, end));
+                        i = end - 1;
+                    } else {
+                        content += await this.processNodeRecursive(children[i], (n, co) => this.htmlCellNode(n, co));
+                    }
                 }
             }
             const { attr, extra } = this.htmlIds(meta);
             // (A cell of spaces alone, no-break ones too, reads back as an empty one: it is written so.)
-            return `    <td${rs}${cs}${attr}>${extra}${content.trim() ? content : ''}</td>\n`;
+            const tag = meta?.style === 'header' || meta?.isHeader ? 'th' : 'td';
+            const align = this.resolvedFallbackToHtml.alignment && meta?.align ? sanitizeCssValue(String(meta.align)) : '';
+            const aligned = align ? ` style="text-align: ${this.escapeInHtmlBlock(align)}"` : '';
+            return `    <${tag}${rs}${cs}${attr}${aligned}>${extra}${content.trim() ? content : ''}</${tag}>\n`;
         }
         return '';
     }

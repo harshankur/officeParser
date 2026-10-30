@@ -2352,7 +2352,12 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     // pageRange '2-4' is the document's). A writer numbers its own pages from one, so where the pages read
     // print others, each section says where it starts (see planFurniture).
     markPageFields(furniture, numPages, extracts.length === numPages);
-    const plan = planFurniture(furniture, extracts.map(e => e.pageNumber));
+    const pagesWithText = new Set(furniture.filter(p => p.nodes.length).map(p => p.pageNumber));
+    for (const node of content) {
+        const pageNumber = node.type === 'page' ? (node.metadata as { pageNumber?: number } | undefined)?.pageNumber : undefined;
+        if (pageNumber !== undefined && node.children?.length) pagesWithText.add(pageNumber);
+    }
+    const plan = planFurniture(furniture, extracts.map(e => e.pageNumber), pagesWithText);
     for (const kind of ['header', 'footer'] as const) {
         const aux = kind === 'header' ? auxHeaders : auxFooters;
         for (const page of routed) {

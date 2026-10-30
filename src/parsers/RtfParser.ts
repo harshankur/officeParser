@@ -40,6 +40,7 @@
  * @see https://latex2rtf.sourceforge.net/RTF-Spec-1.2.pdf RTF 1.2 Specification
  */
 
+import { markerLabelWord, MarkerRun, readMarkerLabels } from '../utils/listMarkers.js';
 import { BreakMetadata, CellMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, ShapeMetadata, PageNumberFormat, IndentationMetadata, ListMetadata, ParagraphSpacing, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, PageSetup, TextFormatting } from '../types.js';
 import { MAX_PAGE_PT } from '../utils/pageLimits.js';
 import { titlePagesTakeHiddenFirsts } from '../utils/officeGenUtils.js';
@@ -54,6 +55,9 @@ import { attachmentLookup } from '../utils/repeatUtils.js';
 import { ByteDecoder, textDecoder } from '../utils/encodingUtils.js';
 
 /** The document's page words (twips), and their state keys. */
+/** A list marker written as an item's first words: a bullet, a number, or a bracketed or punctuated word. */
+const LITERAL_MARKER = /^(\u2022|[(\[]?\d+(?:\.\d+)*[.):\]]?|[(\[]?[a-zA-Z]{1,10}[.):\]]) /;
+
 const PAGE_WORDS = new Map([['paperw', 'w'], ['paperh', 'h'], ['margl', 'ml'], ['margr', 'mr'], ['margt', 'mt'], ['margb', 'mb']]);
 /**
  * A section's page number format, by its word: `\pgndec` is decimal, `\pgndecd` full-width digits; a
@@ -814,6 +818,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         return Object.keys(out).length ? { spacing: out } : {};
     };
     let isListItem = false;
+    // The item's marker came in a listtext or pntext group, not as the item's first words.
+    let markerInOwnGroup = false;
     let listType: 'ordered' | 'unordered' | undefined;
     let headingLevel: number | undefined;
     let currentListId: string | undefined;
@@ -908,6 +914,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     let currentListOverrideLs: number | undefined;
     const listOverrideMap: { [lsId: number]: number } = {}; // Maps \ls ID to \listid
 
+    // Where the letter and numeral markers written as an item's first words have reached.
+    const writtenMarkerRuns = new Map<string, MarkerRun>();
     // List counters for itemIndex tracking
     // Map: listId -> indentation level -> count
     const listCounters: { [key: string]: { [key: number]: number } } = {};
@@ -999,6 +1007,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         paragraphIndent = 0;
         paragraphAlignment = 'left';
         isListItem = false;
+        markerInOwnGroup = false;
         listType = undefined;
         headingLevel = undefined;
         currentListId = undefined;
@@ -1122,7 +1131,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
         const hasContent = currentParagraphTextChunks.length > 0 || currentParagraphChildren.length > 0;
         if (hasContent) {
-            const currentParagraphText = currentParagraphTextChunks.join('');
+            let currentParagraphText = currentParagraphTextChunks.join('');
             let nodeType: string = 'paragraph';
             let metadata: any = undefined;
 
@@ -1196,12 +1205,32 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     itemIndex = listCounters[effectiveListId][paragraphIndent];
                 }
 
+                // A marker written as the item's first words, with a list control and no group of its own
+                // (as RtfGenerator writes it): the item's label and number, not its text.
+                const written = markerInOwnGroup || currentListId ? null : LITERAL_MARKER.exec(currentParagraphText);
+                const firstRun = currentParagraphChildren[0];
+                let label: string | undefined;
+                if (written && firstRun?.type === 'text' && firstRun.text?.startsWith(written[0])) {
+                    firstRun.text = firstRun.text.slice(written[0].length);
+                    if (!firstRun.text) currentParagraphChildren.shift();
+                    currentParagraphText = currentParagraphText.slice(written[0].length);
+                    const word = markerLabelWord(written[1]);
+                    const read = /^\d+/.exec(written[1]);
+                    const number = read ? parseInt(read[0], 10) : word ? readMarkerLabels([written[1]], writtenMarkerRuns, `${effectiveListId}|${paragraphIndent}|`)[0] : null;
+                    if (effectiveListType === 'ordered' && number !== null && number >= 1) {
+                        itemIndex = number - 1;
+                        if (effectiveListId) listCounters[effectiveListId][paragraphIndent] = itemIndex;
+                    }
+                    if (written[1] !== (effectiveListType === 'ordered' ? `${itemIndex + 1}.` : '\u2022')) label = written[1];
+                }
+
                 metadata = {
                     listType: effectiveListType,
                     indentation: paragraphIndent,
                     listId: effectiveListId || '',
                     itemIndex: itemIndex,
                     alignment: paragraphAlignment,
+                    ...(label !== undefined ? { marker: label } : {}),
                 } as ListMetadata;
 
                 // Save for next listtext detection
@@ -1748,6 +1777,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             // is a list item. We extract list type info before ignoring content.
             // ═══════════════════════════════════════════════════════════
             if (node.destination === 'listtext' || node.destination === 'pntext') {
+                markerInOwnGroup = true;
                 // If this is the first list item, reset the indent
                 if (!isListItem)
                     paragraphIndent = 0;
@@ -2174,6 +2204,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 paragraphIndentation = {};
                 paragraphSpacing = {};
                 paragraphAlignment = 'left';
+                markerInOwnGroup = false;
                 isListItem = false;
                 listType = undefined;
                 headingLevel = undefined;

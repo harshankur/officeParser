@@ -1046,7 +1046,8 @@ function escapeRe(s: string): string { return s.replace(/[.*+?^${}()|[\]\\]/g, '
 function orderedMarker(core: string, raw: string, text: string): ListMarker | null {
     if (/^[0-9]+$/.test(core)) return { type: 'ordered', raw, number: parseInt(core, 10), strongBullet: false, text };
     const word = markerWord(core);
-    if (!word) return null;
+    // (Two letters counted on from `z` only in brackets, around a list that says so: `an.` is a word.)
+    if (!word || (word.letter !== null && core.length === 2 && core[0].toLowerCase() !== core[1].toLowerCase() && word.roman === null && !text.startsWith('('))) return null;
     return { type: 'ordered', raw, number: readMarkerWord(word, { letter: 0, roman: 0, last: null }, null), strongBullet: false, text, word };
 }
 
@@ -1994,6 +1995,7 @@ export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContex
     const dropped = new Array<boolean>(N).fill(false);
     const attached: (ListMarker | null)[] = new Array(N).fill(null); // separate marker merged onto a group
     const markerLeft: (number | null)[] = new Array(N).fill(null);   // the marker's own x (for nesting)
+    const atomOf: number[] = new Array(N).fill(-1);                  // the group a separate marker came from
 
     // Bucket group indices by rounded baseline so a marker scans only groups on (near) its own
     // baseline instead of all N groups: the fold below was O(markers x groups), a bounded but real
@@ -2029,7 +2031,7 @@ export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContex
                 if (dx < bestDx || (dx === bestDx && (best < 0 || j < best))) { bestDx = dx; best = j; }
             }
         }
-        if (best >= 0 && bestDx < 6 * fs) { attached[best] = mk; markerLeft[best] = xr; dropped[i] = true; }
+        if (best >= 0 && bestDx < 6 * fs) { attached[best] = mk; markerLeft[best] = xr; atomOf[best] = i; dropped[i] = true; }
     }
 
     const prefix: (ListMarker | null)[] = groups.map((g, i) => (dropped[i] || attached[i]) ? null : detectListMarker(g));
@@ -2048,6 +2050,17 @@ export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContex
         const prev = i === 0 ? carry?.prev ?? null : effective[i - 1], next = i === N - 1 ? carry?.next ?? null : effective[i + 1];
         return (!!prev && prev.type === m.type) || (!!next && next.type === m.type);
     });
+
+    // A separate marker on a group that is no item after all (no neighbour to read it as a number, a numbered
+    // heading, a line of a contents page) is text, which it goes back to the front of.
+    for (let i = 0; i < N; i++) {
+        if (!attached[i] || isItem[i]) continue;
+        const atom = groups[atomOf[i]].lines, first = groups[i].lines[0];
+        const fragments = atom.flatMap(l => l.fragments);
+        const last = fragments[fragments.length - 1];
+        if (last && !/\s$/.test(last.text)) fragments[fragments.length - 1] = { ...last, text: `${last.text} ` };
+        groups[i].lines[0] = { ...first, fragments: [...fragments, ...first.fragments], x: Math.min(first.x, atom[0].x) };
+    }
 
     const itemLefts = groups.map((g, i) => isItem[i] ? (markerLeft[i] ?? leftOf(g)) : null).filter((x): x is number => x != null);
     const levelFor = carry?.levelFor ?? indentLevels(itemLefts);

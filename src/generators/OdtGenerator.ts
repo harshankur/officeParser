@@ -8,7 +8,7 @@ import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXml
 import { heldColumns } from '../utils/columnUtils.js';
 import { onDocumentPage } from '../utils/pageLimits.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, odfUserDefinedXml, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
-import { markerPattern, MarkerPattern, odfNumFormat } from '../utils/listMarkers.js';
+import { markerPattern, MarkerPattern, numberingBreaks, odfNumFormat } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 
@@ -142,7 +142,8 @@ class StyleRegistry {
 }
 
 interface MediaPart { name: string; bytes: Uint8Array; ext: string; contentType: string; }
-interface ListDef { name: string; registry: StyleRegistry; levels: Map<number, MarkerPattern>; startAt: Map<number, number>; }
+interface ListDef { name: string; registry: StyleRegistry; levels: Map<number, MarkerPattern>; startAt: Map<number, number>;
+    next: Map<number, number>; }
 
 /**
  * Generates an OpenDocument Text (`.odt`) document from any AST, as a `Uint8Array`.
@@ -712,11 +713,19 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
 
     // ── lists ─────────────────────────────────────────────────────────────────────
 
+    private newListDef(listId: string): ListDef {
+        const def: ListDef = { name: `L${++this.listCounter}`, registry: this.activeStyles, levels: new Map(), startAt: new Map(), next: new Map() };
+        // (A def replaced is kept under a name of its own: its style is written with the rest.)
+        const before = this.listDefs.get(listId);
+        if (before) this.listDefs.set(`${listId}\u0000${before.name}`, before);
+        this.listDefs.set(listId, def);
+        return def;
+    }
+
     private ensureListStyle(listId: string): string {
         let def = this.listDefs.get(listId);
         if (!def) {
-            def = { name: `L${++this.listCounter}`, registry: this.activeStyles, levels: new Map(), startAt: new Map() };
-            this.listDefs.set(listId, def);
+            def = this.newListDef(listId);
         }
         return def.name;
     }
@@ -732,9 +741,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
 
     private async renderListRun(items: OfficeContentNode[]): Promise<string> {
         const listId = String((items[0].metadata as any)?.listId ?? 'odt-list');
-        const styleName = this.ensureListStyle(listId);
-        const firstIdx = (items[0].metadata as any)?.itemIndex;
-        const continueAttr = (typeof firstIdx === 'number' && firstIdx > 0) ? ' text:continue-numbering="true"' : '';
+        let styleName = this.ensureListStyle(listId);
         let out = '';
         let depth = -1;
         for (const item of items) {
@@ -742,8 +749,18 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             if (override === false) continue; // omit this item; the list continues
             const meta = item.metadata as any;
             const lvl = Math.max(0, Math.min(9, meta?.indentation | 0));
+            // An item its list's numbering would print otherwise, see numberingBreaks: a list of its own from it.
+            const def = this.listDefs.get(listId)!;
+            if (numberingBreaks(def.levels, def.startAt, def.next, meta, lvl)) {
+                for (let d = depth; d >= 0; d--) out += '</text:list-item></text:list>';
+                depth = -1;
+                const fresh = this.newListDef(listId);
+                styleName = fresh.name;
+                numberingBreaks(fresh.levels, fresh.startAt, fresh.next, meta, lvl);
+            }
             this.registerListLevel(listId, lvl, meta);
             if (depth < 0) {
+                const continueAttr = (typeof meta?.itemIndex === 'number' && meta.itemIndex > 0) ? ' text:continue-numbering="true"' : '';
                 out += `<text:list text:style-name="${styleName}"${continueAttr}><text:list-item>`;
                 for (let d = 1; d <= lvl; d++) out += '<text:list><text:list-item>';
                 depth = lvl;

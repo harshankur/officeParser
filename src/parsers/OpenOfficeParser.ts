@@ -471,7 +471,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         const bulletLevels = getElementsByTagName(listStyle, "text:list-level-style-bullet");
         const numberLevels = getElementsByTagName(listStyle, "text:list-level-style-number");
         let kind: { listType: 'ordered' | 'unordered'; isVisible: boolean } | undefined;
-        if (numberLevels.length > 0) kind = { listType: 'ordered', isVisible: numberLevels.some(l => !!l.getAttribute("style:num-format")) };
+        if (numberLevels.length > 0) kind = { listType: 'ordered', isVisible: numberLevels.some(l => !!l.getAttribute("style:num-format") || !!l.getAttribute("style:num-prefix")) };
         else if (bulletLevels.length > 0) kind = { listType: 'unordered', isVisible: bulletLevels.some(l => !!l.getAttribute("text:bullet-char")) };
         else if (withImages && getElementsByTagName(listStyle, "text:list-level-style-image").length > 0) kind = { listType: 'unordered', isVisible: true };
         listStyleKinds.set(listStyle, kind);
@@ -2084,7 +2084,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                             }
                                         }
                                     }
-                                    const itemIndex = listCounters[listId][indentKey];
+                                    // (From the level's own start: the first item of a list starting at 5 is the fifth.)
+                                    const startValue = levels?.get(indentation + 1)?.tagName === 'text:list-level-style-number' ? Number(levels.get(indentation + 1)!.getAttribute("text:start-value")) || 1 : 1;
+                                    const itemIndex = listCounters[listId][indentKey] + startValue - 1;
                                     const marker = levels ? odfListMarker(levels, indentation, listCounters[listId], listType, itemIndex) : undefined;
                                     const pContent = parseParagraphContent(element, paragraphStyleMap, styleMap, config, sourceXml);
                                     const segments = splitParagraphByBreaks(pContent);

@@ -738,10 +738,66 @@ export interface FurniturePlan {
     differentFirstPage: boolean;
 }
 
-/** A line of a header or footer with its page fields and page numbers as one, in any format. */
+/**
+ * A line of a header or footer with its page fields as one, in any format. A number no page field took is
+ * the line's own ("Account 10101", "Chapter 1"), another making it another line, but for one that counts the
+ * pages from elsewhere (see countingLines).
+ */
 function lineKey(node: OfficeContentNode): string {
     const text = textLeaves(node).map(({ leaf }) => (leaf.metadata as TextMetadata | undefined)?.field ? '#' : leaf.text ?? '').join('');
-    return text.replace(/\p{Nd}+/gu, '#').replace(/(^|\s)[ivxlcdm]+(?=\s*$)/iu, '$1#').replace(/^[ivxlcdm]+(?=\s)/iu, '#').replace(/[^\S\n]+/g, ' ').trim();
+    return text.replace(/[^\S\n]+/g, ' ').trim();
+}
+
+/**
+ * The lines with a number that says one more on each page further on (a form's "2/4" placed after other
+ * pages, a stamp's "AB-0017", a law's "Page 383 ... § 381"), as one key each, their other numbers as one too:
+ * that number counts pages, as a page field does, though it is not the page's, so the line is a running one.
+ */
+function countingLines(pages: readonly PageFurniture[]): Map<string, string> {
+    const byShape = new Map<string, { text: string; value: number; page: number }[]>();
+    for (const page of pages) {
+        for (const node of page.nodes) {
+            const text = lineKey(node);
+            const numbers = [...text.matchAll(/\p{Nd}+/gu)];
+            for (const [i, number] of numbers.entries()) {
+                const value = digitsValue(number[0]);
+                if (value === null) continue;
+                const shape = `${i}|${text.replace(/\p{Nd}+/gu, '#')}`;
+                let list = byShape.get(shape);
+                if (!list) byShape.set(shape, list = []);
+                list.push({ text, value, page: page.pageNumber });
+            }
+        }
+    }
+    const counting = new Map<string, string>();
+    // A line on the very baseline of its page's own number is a running head too, whatever its number says
+    // ("Page 383   TITLE 21   § 381", then "§ 382").
+    const baselineOf = (node: OfficeContentNode) => { const b = node.children?.[0]?.bounds ?? node.bounds; return b ? b.y + b.height : null; };
+    const hasField = (node: OfficeContentNode) => textLeaves(node).some(({ leaf }) => (leaf.metadata as TextMetadata | undefined)?.field === 'page');
+    const besideNumber = new Map<string, boolean>();
+    for (const page of pages) {
+        const numbered = page.nodes.filter(hasField).map(baselineOf);
+        for (const node of page.nodes) {
+            const text = lineKey(node);
+            if (!/\p{Nd}/u.test(text)) continue;
+            const at = baselineOf(node), shape = text.replace(/\p{Nd}+/gu, '#');
+            const beside = at !== null && numbered.some(y => y !== null && Math.abs(y - at) < 2);
+            besideNumber.set(shape, (besideNumber.get(shape) ?? true) && beside);
+        }
+    }
+    for (const page of pages) {
+        for (const node of page.nodes) {
+            const text = lineKey(node), shape = text.replace(/\p{Nd}+/gu, '#');
+            if (besideNumber.get(shape)) counting.set(text, shape);
+        }
+    }
+    for (const [shape, list] of byShape) {
+        if (list.length < 2) continue;
+        if (list.every((l, i) => i === 0 || (l.page > list[i - 1].page && l.value - list[i - 1].value === l.page - list[i - 1].page))) {
+            for (const { text } of list) if (!counting.has(text)) counting.set(text, shape);
+        }
+    }
+    return counting;
 }
 
 /** A page's lines of a kind as they print: its fields as the fields they are, in their formats. */
@@ -771,52 +827,54 @@ function printedNumber(nodes: readonly OfficeContentNode[]): { value: number; fo
  * Where each page's header and footer goes, its fields marked (markPageFields).
  *
  * The lines a tagged PDF marks as artifacts are furniture, whatever they say. A line found by comparing an
- * untagged PDF's pages is where it is the same, its numbers as one, on every page of its kind that has any
- * (a page without any, a blank one, says nothing of it), but for a first page alone, or on all its odd or even
- * pages and none of the others: past that its text changes, and may be the document's ("Customer: Alice Ltd",
- * then Bob's, on merged letters), so it stays in its pages, where nothing is lost.
+ * untagged PDF's pages is where it is the same, its page fields as one, on every page of its kind that has any
+ * (a page without any says nothing of it, nor a blank one), but for a first page alone, or on all its odd or even
+ * pages and none of the others, and is missing from few of the pages with text between its first and last:
+ * past that it may be the document's ("Customer: Alice Ltd", then Bob's, on merged letters; a line signed on
+ * most pages), so it stays in its pages, where nothing is lost.
  *
  * The lines left are parts for the writers that print one part over many pages: one, where every page's prints
- * alike; a first page's; even pages'; else a section at each page whose lines print otherwise, its numbers
- * restarted where they do (a front matter's roman numerals before a body's 1). Past MAX_FURNITURE_SECTIONS a
- * kind's lines stay in their pages too: that many parts are no help to anyone.
+ * alike; a first page's; even pages'; else a section at each page whose lines print otherwise, or where its
+ * number is not the one the page before leads to (a front matter's roman numerals before a body's 1). Pages
+ * before a kind's first line are a section with none of it. Which pages are even is a matter of the numbers
+ * they print, as it is to a writer; and a writer's first and even parts are the whole document's, so where one
+ * kind has them every kind does. Past MAX_FURNITURE_SECTIONS a kind's lines stay in their pages too: that many
+ * parts are no help to anyone.
  */
-export function planFurniture(furniture: readonly PageFurniture[], pagesRead: readonly number[]): FurniturePlan {
+export function planFurniture(furniture: readonly PageFurniture[], pagesRead: readonly number[], pagesWithText: ReadonlySet<number> = new Set(pagesRead)): FurniturePlan {
     const plan: FurniturePlan = { back: new Set(), parts: new Map(), sections: new Map(), first: {}, differentFirstPage: false };
     const firstRead = pagesRead[0];
-    const place = new Map(pagesRead.map((n, i) => [n, i + 1]));
-    const numbering = new Map<number, FurnitureNumbering>();
-    const note = (page: number, printed: { value: number; format?: PageNumberFormat } | null) => {
-        if (numbering.has(page)) return;
-        const start = printed && printed.value !== place.get(page) ? { pageNumberStart: printed.value } : {};
-        numbering.set(page, { ...start, ...(printed?.format ? { pageNumberFormat: printed.format } : {}) });
-    };
+    const textPages = pagesRead.filter(n => pagesWithText.has(n));
+    const placeInText = new Map(textPages.map((n, i) => [n, i]));
+    const kept = new Map<'header' | 'footer', PageFurniture[]>();
     for (const kind of ['header', 'footer'] as const) {
         const pages = furniture.filter(p => p.kind === kind && p.nodes.length);
         if (!pages.length) continue;
+        const had = pages.map(p => p.pageNumber);
         // On fewer than three pages of four it is no running line, whatever its marking (a form's numbers marked
         // as artifacts, a sheet's name on its sheet's pages): a part would print it on pages that have none.
-        if (pages.length * 4 < pagesRead.length * 3) {
+        // Unmarked, nor where few pages with text between its first and last have none (a chapter's opening).
+        const within = (placeInText.get(had[had.length - 1]) ?? textPages.length - 1) - (placeInText.get(had[0]) ?? 0) + 1;
+        const missing = within - had.length;
+        if (pages.length * 4 < pagesRead.length * 3 || (!pages.every(p => p.tagged) && missing > 1 && missing * 5 > within)) {
             for (const page of pages) for (const node of page.nodes) plan.back.add(node);
             continue;
         }
         // Which lines stay in their pages.
         const onPages = new Map<string, Set<number>>();
+        const counting = countingLines(pages.filter(p => !p.tagged));
+        const keyOfLine = (node: OfficeContentNode) => { const key = lineKey(node); return counting.get(key) ?? key; };
         for (const page of pages) {
             if (page.tagged) continue;
             for (const node of page.nodes) {
-                const key = lineKey(node);
+                const key = keyOfLine(node);
                 let on = onPages.get(key);
                 if (!on) onPages.set(key, on = new Set());
                 on.add(page.pageNumber);
             }
         }
-        const had = pages.map(p => p.pageNumber);
-        const covers = (on: Set<number>, wanted: number[]) => wanted.length > 0 && wanted.length === on.size && wanted.every(n => on.has(n));
-        const stable = (on: Set<number>) => covers(on, had)
-            || covers(on, had.filter(n => n !== firstRead))
-            || covers(on, had.filter(n => n % 2 === 0))
-            || covers(on, had.filter(n => n % 2 === 1));
+        const wholes = [had, had.filter(n => n !== firstRead), had.filter(n => n % 2 === 0), had.filter(n => n % 2 === 1)];
+        const stable = (on: Set<number>) => wholes.some(wanted => wanted.length > 0 && wanted.length === on.size && wanted.every(n => on.has(n)));
         const unstableKeys = new Set([...onPages].filter(([, on]) => !stable(on)).map(([key]) => key));
         // A first page's own lines, the others' all being stable, is a cover's.
         for (const key of [...unstableKeys]) {
@@ -825,76 +883,124 @@ export function planFurniture(furniture: readonly PageFurniture[], pagesRead: re
         }
         const inPlan: PageFurniture[] = [];
         for (const page of pages) {
-            const kept = page.tagged ? page.nodes : page.nodes.filter(node => {
-                if (!unstableKeys.has(lineKey(node))) return true;
+            const staying = page.tagged ? page.nodes : page.nodes.filter(node => {
+                if (!unstableKeys.has(keyOfLine(node))) return true;
                 plan.back.add(node);
                 return false;
             });
-            if (kept.length) inPlan.push({ ...page, nodes: kept });
+            if (staying.length) inPlan.push({ ...page, nodes: staying });
         }
-        if (!inPlan.length) continue;
+        // (Those sent back may leave too few again.)
         if (inPlan.length * 4 < pagesRead.length * 3) {
             for (const page of inPlan) for (const node of page.nodes) plan.back.add(node);
-            continue;
-        }
+        } else if (inPlan.length) kept.set(kind, inPlan);
+    }
 
-        // The parts of what is left.
-        const lines = inPlan.map(page => {
-            const printed = printedNumber(page.nodes);
-            const offset = printed ? page.pageNumber - printed.value : null;
-            return { page, printed, text: linesPrinted(page.nodes), unformatted: lineKeyOf(page.nodes), offset };
-        });
-        const [cover, ...rest] = lines;
-        if (rest.length >= 2 && cover.page.pageNumber === firstRead && rest.every(l => l.text === rest[0].text && l.offset === rest[0].offset) && cover.unformatted !== rest[0].unformatted) {
-            for (const node of cover.page.nodes) plan.parts.set(node, { type: 'first', startsAt: firstRead });
-            plan.differentFirstPage = true;
-            note(firstRead, cover.printed);
-            continue;
-        }
-        // Runs of pages each page of which prints as the last of its parity did.
-        const runs: { start: number; odd?: string; even?: string; offset: number | null; format?: PageNumberFormat; lines: typeof lines }[] = [];
-        for (const line of lines) {
-            const slot = line.page.pageNumber % 2 === 0 ? 'even' : 'odd';
-            const run = runs[runs.length - 1];
-            const fits = run && (run[slot] === undefined || run[slot] === line.text)
-                && (line.offset === null || run.offset === null || (run.offset === line.offset && run.format === line.printed?.format));
-            if (fits) {
-                run[slot] = line.text;
-                if (run.offset === null && line.offset !== null) { run.offset = line.offset; run.format = line.printed?.format; }
-                run.lines.push(line);
-            } else {
-                runs.push({ start: line.page.pageNumber, [slot]: line.text, offset: line.offset, format: line.printed?.format, lines: [line] });
+    interface Placed { page: PageFurniture; type: 'default' | 'first' | 'even'; startsAt: number }
+    // Twice at most for each kind: a kind sent back for its sections leaves numbers the other no longer follows.
+    for (;;) {
+        // The number each page prints, where a line of it says, and where that is not the one the page before leads to.
+        const printed = new Map<number, { value: number; format?: PageNumberFormat }>();
+        for (const pages of kept.values()) {
+            for (const page of pages) {
+                if (printed.has(page.pageNumber)) continue;
+                const number = printedNumber(page.nodes);
+                if (number) printed.set(page.pageNumber, number);
             }
         }
-        if (runs.length > MAX_FURNITURE_SECTIONS) {
-            for (const page of inPlan) for (const node of page.nodes) plan.back.add(node);
-            continue;
+        const numbers = new Map<number, number>();
+        const restarts = new Map<number, { value: number; format?: PageNumberFormat }>();
+        const firstKnown = pagesRead.findIndex(n => printed.has(n));
+        const leadsFrom = firstKnown >= 0 ? printed.get(pagesRead[firstKnown])!.value - firstKnown : 1;
+        // (From the first page, unless its number there would be none: a roman ii on the file's page 4.)
+        let current = leadsFrom >= 1 ? leadsFrom : 1;
+        let format = firstKnown >= 0 && leadsFrom >= 1 ? printed.get(pagesRead[firstKnown])!.format : undefined;
+        const firstNumbering: FurnitureNumbering = { ...(current !== 1 ? { pageNumberStart: current } : {}), ...(format ? { pageNumberFormat: format } : {}) };
+        for (const n of pagesRead) {
+            const known = printed.get(n);
+            if (known && (known.value !== current || known.format !== format)) {
+                restarts.set(n, known);
+                current = known.value;
+                format = known.format;
+            }
+            numbers.set(n, current++);
         }
-        for (const [i, run] of runs.entries()) {
-            const printed = run.lines.find(l => l.printed)?.printed ?? null;
-            const offset = run.offset;
-            // (From the first page, unless its number there would be none: a roman ii on the file's page 4.)
-            const start = i === 0 && (offset === null || firstRead - offset >= 1) ? firstRead : run.start;
-            const shown = offset !== null && printed ? { value: start - offset, format: printed.format } : null;
-            if (runs.length > 1 || (shown && shown.value !== place.get(start))) note(start, shown);
-            if (start !== firstRead && !plan.sections.has(start)) plan.sections.set(start, {});
-            const facing = run.odd !== undefined && run.even !== undefined && run.odd !== run.even;
-            if (runs.length === 1 && !facing) continue;
-            for (const line of run.lines) {
-                const type = facing && line.page.pageNumber % 2 === 0 ? 'even' : 'default';
-                for (const node of line.page.nodes) plan.parts.set(node, { type, startsAt: start });
+
+        const placed = new Map<'header' | 'footer', Placed[]>();
+        let sentBack = false;
+        for (const [kind, pages] of kept) {
+            const list: Placed[] = [];
+            const [cover, ...rest] = pages;
+            const text = (page: PageFurniture) => linesPrinted(page.nodes);
+            const keyOf = (page: PageFurniture) => page.nodes.map(lineKey).join('\n');
+            if (rest.length >= 2 && cover.pageNumber === firstRead && keyOf(cover) !== keyOf(rest[0])
+                && rest.every(p => text(p) === text(rest[0])) && !rest.slice(1).some(p => restarts.has(p.pageNumber) && printedNumber(p.nodes))) {
+                list.push({ page: cover, type: 'first', startsAt: firstRead });
+                const startsAt = restarts.has(rest[0].pageNumber) ? rest[0].pageNumber : firstRead;
+                for (const page of rest) list.push({ page, type: 'default', startsAt });
+                placed.set(kind, list);
+                continue;
+            }
+            // Runs of pages each page of which prints as the last of its parity did.
+            const runs: { start: number; odd?: string; even?: string; pages: PageFurniture[] }[] = [];
+            for (const page of pages) {
+                const slot = (numbers.get(page.pageNumber) ?? 1) % 2 === 0 ? 'even' : 'odd';
+                const run = runs[runs.length - 1];
+                const line = text(page);
+                if (run && (run[slot] === undefined || run[slot] === line) && !(restarts.has(page.pageNumber) && printedNumber(page.nodes))) {
+                    run[slot] = line;
+                    run.pages.push(page);
+                } else {
+                    runs.push({ start: page.pageNumber, [slot]: line, pages: [page] });
+                }
+            }
+            if (runs.length > MAX_FURNITURE_SECTIONS) {
+                for (const page of pages) for (const node of page.nodes) plan.back.add(node);
+                kept.delete(kind);
+                sentBack = true;
+                break;
+            }
+            for (const [i, run] of runs.entries()) {
+                // (Blank pages before the first say nothing of it: they are in its section.)
+                const start = i === 0 && (placeInText.get(run.start) ?? 0) === 0 ? firstRead : run.start;
+                const facing = run.odd !== undefined && run.even !== undefined && run.odd !== run.even;
+                for (const page of run.pages) list.push({ page, type: facing && (numbers.get(page.pageNumber) ?? 1) % 2 === 0 ? 'even' : 'default', startsAt: start });
+            }
+            placed.set(kind, list);
+        }
+        if (sentBack) continue;
+
+        const all = [...placed.values()].flat();
+        const anyFirst = all.some(l => l.type === 'first');
+        const anyEven = all.some(l => l.type === 'even');
+        plan.differentFirstPage = anyFirst;
+        const sectionPages = new Set<number>(restarts.keys());
+        for (const list of placed.values()) {
+            const starts = new Set(list.map(l => l.startsAt));
+            for (const start of starts) if (start !== firstRead) sectionPages.add(start);
+            if (!anyFirst && !anyEven && starts.size === 1 && starts.has(firstRead) && !list.some(l => l.type !== 'default')) continue;
+            for (const line of list) {
+                const type = anyFirst && line.page.pageNumber === firstRead ? 'first'
+                    : anyEven && line.type !== 'first' && (numbers.get(line.page.pageNumber) ?? 1) % 2 === 0 ? 'even' : line.type;
+                for (const node of line.page.nodes) plan.parts.set(node, { type, startsAt: line.startsAt });
             }
         }
-    }
-    for (const [page, how] of numbering) {
-        if (page === firstRead) plan.first = how;
-        else plan.sections.set(page, how);
-    }
-    return plan;
-}
 
-function lineKeyOf(nodes: readonly OfficeContentNode[]): string {
-    return nodes.map(lineKey).join('\n');
+        // Each section's numbering: where it restarts, and in the format in force, a writer's sections having
+        // each its own.
+        plan.first = firstNumbering;
+        let inForce = firstNumbering.pageNumberFormat;
+        for (const n of pagesRead) {
+            const restart = restarts.get(n);
+            if (restart) inForce = restart.format;
+            if (n === firstRead) {
+                if (restart) plan.first = { ...(restart.value !== 1 ? { pageNumberStart: restart.value } : {}), ...(restart.format ? { pageNumberFormat: restart.format } : {}) };
+                continue;
+            }
+            if (sectionPages.has(n)) plan.sections.set(n, { ...(restart ? { pageNumberStart: restart.value } : {}), ...(inForce ? { pageNumberFormat: inForce } : {}) });
+        }
+        return plan;
+    }
 }
 
 /** A node's page fields (see markPageFields) as the text they were read as. */

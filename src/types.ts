@@ -756,13 +756,17 @@ export interface PdfParserConfig {
      * word processor's header is: a writer that lays out pages (Word, ODT, RTF, LaTeX, the PDF writer's native
      * engine) writes it, each page numbered as it printed, and one that does not (text, Markdown, HTML and the
      * PDF writer's default HTML engine, EPUB, PowerPoint) leaves it out. A line the PDF marks as an artifact goes
-     * there whatever it says; a line found by comparing an untagged PDF's pages where it is the same, its numbers
-     * as one, on every page that has any, on all odd or even ones, or but for the first page. One whose words
-     * change from page to page (a customer's name on merged letters), or a kind on fewer than three pages of
-     * four (a sheet's name on its sheet's pages), stays in its pages, where it is. Where the lines in `auxiliary`
-     * differ, they are parts as a word processor's are (HeaderFooterMetadata `type` and `section`): a first page's,
-     * even pages', or a section at each change, numbered where it restarts (PageSetup.pageNumberStart), past 64
-     * of them staying in the pages too. A header's line larger than the text is a paragraph of it, not a heading.
+     * there whatever it says; a line found by comparing an untagged PDF's pages where it is the same, its page
+     * numbers as one, on every page that has any, on all odd or even ones, or but for the first page, and missing
+     * from no more than one page in five with text between its first and last (a chapter's opening). A number
+     * that counts no pages is the line's own, unless the line stands beside the page's number. One whose words
+     * or own number change from page to page (a customer's name on merged letters, "Account 10101"), or a kind on
+     * fewer than three pages of four (a sheet's name on its sheet's pages), stays in its pages, where it is. Where
+     * the lines in `auxiliary` differ, they are parts as a word processor's are (HeaderFooterMetadata `type` and
+     * `section`): a first page's, even pages', or a section at each change or restart of the numbers, numbered
+     * where it restarts (PageSetup.pageNumberStart), past 64 of them staying in the pages too. Pages before a
+     * kind's first line are a section without it. A writer's first and even parts being the whole document's,
+     * where one kind has them each kind does, and which pages are even goes by the numbers they print. A header's line larger than the text is a paragraph of it, not a heading.
      * Turn this on for a writer that shows each page as it was, a slide per page, so every page keeps its own
      * header and footer in its place.
      * `ignoreHeadersAndFooters` still drops them.
@@ -2352,10 +2356,11 @@ export interface MdGeneratorConfig {
     fallbackToHtml?: boolean | FallbackToHtmlConfig;
 
     /**
-     * How an ordered list item the document labels other than `1.` is written. `'keep'` (the default)
-     * writes its label as text after a bullet (`- (l) Annual reports`, `- 2.1. Scope`), as Markdown numbers
-     * in digits alone; `'numbers'` writes the item's number (`12. Annual reports`), a native ordered list
-     * that shows another label than the document's.
+     * How a list item the document labels other than `1.`, or with a bullet that is a word, is written.
+     * `'keep'` (the default) writes its label as text after a bullet (`- (l) Annual reports`, `- 2.1. Scope`,
+     * `- Note: Check`), as Markdown numbers in digits alone (a label that is only a number stays Markdown's
+     * own: `5. Five`); `'numbers'` writes the item's number or a plain bullet (`12. Annual reports`, `- Check`),
+     * a native list that shows another label than the document's.
      */
     listMarkers?: 'keep' | 'numbers';
 

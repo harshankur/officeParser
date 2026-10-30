@@ -289,17 +289,19 @@ export function measureItems<T extends MeasuredItem>(items: T[], glyphs: PageGly
     const near = (k: number, x: number, y: number) => Math.abs(px[k] - x) <= NEAR && Math.abs(py[k] - y) <= NEAR;
     /**
      * The glyph an item starts at: of the glyphs at its place from `from` on, the nearest whose text begins
-     * the item's, the first drawn where several are as near (a tiny run packs many glyphs into the width
+     * the item's (ends it, for right-to-left text, read from the far side of its place), the first drawn where several are as near (a tiny run packs many glyphs into the width
      * this looks over, so the first there need not be the item's); else the same without the text (a glyph
      * read otherwise than pdf.js reads it); else the first there at all (not taken in order). A few of each
      * place's glyphs are looked at (a page drawing a glyph many times at one place is read in time in its
      * length, not its square).
      */
     const find = (x: number, y: number, from: number, str: string): { k: number; inOrder: boolean } | undefined => {
-        const head = str.trimStart();
+        const rtl = RTL.test(str);
+        const trimmed = rtl ? str.trimEnd() : str.trimStart();
         const begins = (k: number) => {
             const own = text[k].replace(/\s/g, '');
-            return !!own && (head.startsWith(own) || head.startsWith(own.normalize('NFKC')));
+            if (!own) return false;
+            return rtl ? trimmed.endsWith(own) || trimmed.endsWith(own.normalize('NFKC')) : trimmed.startsWith(own) || trimmed.startsWith(own.normalize('NFKC'));
         };
         const look = (fits: (k: number) => boolean): { k: number; inOrder: boolean } | undefined => {
             let best = -1, bestGap = Infinity, any = -1;

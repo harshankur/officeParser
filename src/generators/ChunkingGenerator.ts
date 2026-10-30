@@ -1,3 +1,4 @@
+import { printedListLabel } from '../utils/listMarkers.js';
 import {
     DEFAULT_DOCUMENT_STRUCTURE_CHUNKING_CONFIG,
     DEFAULT_FIXED_SIZE_CHUNKING_CONFIG,
@@ -96,11 +97,10 @@ function collectNodeText(node: OfficeContentNode, context: ChunkTextContext): st
             afterBlock = block;
         }
     }
-    // A numbered item's label is its text to a reader ("see (l)"), as the text generator writes it.
+    // An item's label is its text to a reader ("see (l)"), as the text generator writes it.
     const meta = node.metadata as ListMetadata | undefined;
-    if (node.type === 'list' && meta?.listType === 'ordered' && typeof meta.marker === 'string' && meta.marker.trim() && out.trim()) {
-        out = `${meta.marker.replace(/\s+/g, ' ').trim()} ${out}`;
-    }
+    const label = node.type === 'list' ? printedListLabel(meta) : null;
+    if (label && out.trim()) out = `${label} ${out}`;
     if (node.notes && node.notes.length > 0) {
         for (const note of node.notes) {
             if (context.notesIncluded.has(note)) continue;

@@ -578,8 +578,8 @@ function buildTable(node: StructNode, ctx: WalkCtx): OfficeContentNode | null {
 function classifyListType(label: string): 'ordered' | 'unordered' {
     const t = label.trim();
     // Decimal (incl. multilevel "1.1."), or a letter or numeral in brackets or before one ("a.", "(iv)").
-    if (/^\(?\d+(\.\d+)*[.)]?$/.test(t)) return 'ordered';
-    const word = /[.)]$/.test(t) ? markerLabelWord(t) : null;
+    if (/^[(\[]?\d+(\.\d+)*[.)\]:]?$/.test(t)) return 'ordered';
+    const word = /[.)\]]$/.test(t) ? markerLabelWord(t) : null;
     return word && markerWord(word) ? 'ordered' : 'unordered';
 }
 
@@ -599,7 +599,7 @@ function stripDotLeaders(node: OfficeContentNode): void {
 /** The number a decimal list label represents ("3.", the last part of a multi-level "1.2."), or null. */
 function parseListNumber(label: string): number | null {
     const t = label.trim();
-    if (!t || !/^[\d.()\[\]\s]+$/.test(t)) return null;
+    if (!t || !/^[\d.:()\[\]\s]+$/.test(t)) return null;
     const parts = t.match(/\d+/g);
     return parts && parts.length ? parseInt(parts[parts.length - 1], 10) : null;
 }
@@ -694,7 +694,7 @@ function buildList(node: StructNode, ctx: WalkCtx, indent: number): OfficeConten
         if (bodyNodes.length || itemNotes.length) { items.push(item); own.push({ item, label: printed }); idx++; }
         appendAll(items, nested);
     }
-    const read = readMarkerLabels(own.map(o => o.label));
+    const read = readMarkerLabels(own.map(o => o.label), ctx.doc.markerRuns, `tagged|${indent}|`);
     own.forEach(({ item }, i) => {
         const meta = item.metadata as ListMetadata;
         const n = read[i];
