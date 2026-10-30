@@ -116,183 +116,183 @@ Next, we have something a little more complex, a nested table, i.e. a table in
   </tr>
   <tr>
     <td><p>Sun </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>Mon </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>Tue </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>Wed </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>Thu </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>Fri </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td colspan="2"><p>Sat </p></td>
   </tr>
   <tr>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
     <td colspan="2"><p>1 </p></td>
   </tr>
   <tr>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td colspan="2"><p> </p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p></p></td>
   </tr>
   <tr>
     <td><p>2 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>3 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>4 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>5 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>6 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>7 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td colspan="2"><p>8 </p></td>
   </tr>
   <tr>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td colspan="2"><p> </p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p></p></td>
   </tr>
   <tr>
     <td><p>9 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>10 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>11 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>12 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>13 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>14 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td colspan="2"><p>15 </p></td>
   </tr>
   <tr>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td colspan="2"><p> </p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p></p></td>
   </tr>
   <tr>
     <td><p>16 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>17 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>18 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>19 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>20 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>21 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td colspan="2"><p>22 </p></td>
   </tr>
   <tr>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td colspan="2"><p> </p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p></p></td>
   </tr>
   <tr>
     <td><p>23 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>24 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>25 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>26 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>27 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>28 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td colspan="2"><p>29 </p></td>
   </tr>
   <tr>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td colspan="2"><p> </p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p></p></td>
   </tr>
   <tr>
     <td><p>30 </p></td>
-    <td><p> </p></td>
+    <td><p></p></td>
     <td><p>31 </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td><p> </p></td>
-    <td colspan="2"><p> </p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p></p></td>
   </tr>
 </table>
 

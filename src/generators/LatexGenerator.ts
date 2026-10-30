@@ -5,6 +5,7 @@ import type { PageNumberFormat } from '../types.js';
 import { AdmonitionMetadata, BreakMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, PageSetup, OfficeWarningType, ParagraphMetadata, TexDocumentClass, TextFormatting, TextMetadata } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { onDocumentPage } from '../utils/pageLimits.js';
+import { clampInt } from '../utils/numberUtils.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { LatexMathPlan, LatexScripts, LatexUnicodePlan, LISTINGS_LANGUAGES, mathCommandsOf, planLatexMath, planLatexUnicode, withLatexMathMacros } from '../utils/latexUtils.js';
 import { escapeLatex, latexComment, latexSourceComment, sanitizeLatexImagePath, sanitizeLatexMath, sanitizeLatexUrl } from '../utils/sanitize.js';
@@ -423,7 +424,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         // The document's columns, from its first section's page (multicols), closed at its end.
         const opening = this.beamer ? '' : this.columnsSwitch(this.ast.metadata?.pageSetup?.columns);
         // The first section's own first page's and even pages' header and footer, from the start.
-        this.firstSectionSwitch = this.beamer ? '' : this.numberingTex(this.ast.metadata?.pageSetup?.pageNumberFormat) + this.sectionStyleSwitch(0, this.ast.metadata?.pageSetup);
+        this.firstSectionSwitch = this.beamer ? '' : this.numberingTex(this.ast.metadata?.pageSetup?.pageNumberFormat) + this.pageStartTex(this.ast.metadata?.pageSetup?.pageNumberStart) + this.sectionStyleSwitch(0, this.ast.metadata?.pageSetup);
         let body = this.beamer ? await this.renderBeamerBody(this.ast.content) : await this.renderFlow(this.ast.content);
         if (opening) body = `${opening}\n${body}`;
         if (this.firstSectionSwitch) body = `${this.firstSectionSwitch}\n${body}`;
@@ -2024,7 +2025,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         if (t === 'page' && !this.beamer && body && typeof (node.metadata as BreakMetadata | undefined)?.section === 'number') {
             const setup = (node.metadata as BreakMetadata).pageSetup;
             const columnsEnd = this.columnsSwitch(undefined), turn = this.orientationSwitch(setup);
-            return [columnsEnd, turn.close, '\\clearpage', this.numberingTex(setup?.pageNumberFormat), this.sectionStyleSwitch((node.metadata as BreakMetadata).section!, setup), turn.open, this.columnsSwitch(setup?.columns)].filter(Boolean).join('\n');
+            return [columnsEnd, turn.close, '\\clearpage', this.numberingTex(setup?.pageNumberFormat), this.pageStartTex(setup?.pageNumberStart), this.sectionStyleSwitch((node.metadata as BreakMetadata).section!, setup), turn.open, this.columnsSwitch(setup?.columns)].filter(Boolean).join('\n');
         }
         // A page break in columns: they end on the page, and go on, the same, on the next.
         if (t === 'page' && !this.beamer && body && this.openColumns) {
@@ -2299,6 +2300,11 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
      * the counter goes on, as the document's pages do. A format LaTeX has none of (letters, which `\\alph`
      * cannot write past 26, words) is in digits, and reported.
      */
+    /** The number a section's pages start from (see PageSetup.pageNumberStart). */
+    private pageStartTex(start: number | undefined): string {
+        return start === undefined ? '' : `\\setcounter{page}{${clampInt(start, 0, 2_147_483_647, 1)}}`;
+    }
+
     private numberingTex(format: PageNumberFormat | undefined, global = false): string {
         if (!format) return '';
         const command = format === 'decimal' ? 'arabic' : format === 'lowerRoman' ? 'roman' : format === 'upperRoman' ? 'Roman' : undefined;

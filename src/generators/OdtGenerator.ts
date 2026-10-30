@@ -160,6 +160,13 @@ interface SectionPage {
     headerXml?: string; footerXml?: string; firstHeaderXml?: string; firstFooterXml?: string; evenHeaderXml?: string; evenFooterXml?: string;
 }
 
+/** A break waiting for the block that carries it (see waitBreak): `auto` is none, for a first page's number. */
+interface OdtBreak {
+    before: 'page' | 'column' | 'auto';
+    master?: string;
+    pageNumber?: number;
+}
+
 export class OdtGenerator extends BaseGenerator<'odt'> {
     private contentStyles = new StyleRegistry();
     private stylesFileStyles = new StyleRegistry();
@@ -196,6 +203,9 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         const { iso, mtime } = resolveZipInstant(this.effectiveMetadata.modified);
 
         const metaBlock = this.config.renderMetadata ? this.renderMetadataBlock() : '';
+        // (The first page's number, where it is not 1, in its first block.)
+        const firstNumber = this.ast.metadata?.pageSetup?.pageNumberStart;
+        if (firstNumber !== undefined) this.pendingBreak = { before: 'auto', master: 'Standard', pageNumber: firstNumber };
         let body = await this.renderBlocks(this.ast.content);
         this.reportUnshownSectionPart();
         if (this.openSection) { body += '</text:section>'; this.openSection = false; }
@@ -323,28 +333,28 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
      * paragraph on every save. Returns the break that was waiting, as a paragraph of its own (two breaks
      * in a row: the first one's page is empty).
      */
-    private pendingBreak: { before: 'page' | 'column'; master?: string } | undefined;
-    private waitBreak(next: { before: 'page' | 'column'; master?: string } | undefined): string {
+    private pendingBreak: OdtBreak | undefined;
+    private waitBreak(next: OdtBreak | undefined): string {
         const before = this.pendingBreak;
         this.pendingBreak = next;
         return before ? this.breakParagraph(before) : '';
     }
     /** A break as a paragraph of its own (one that ends the blocks, or the first of two in a row). */
-    private breakParagraph(brk: { before: 'page' | 'column'; master?: string }): string {
+    private breakParagraph(brk: OdtBreak): string {
         return `<text:p text:style-name="${this.breakStyle('', 'paragraph', brk)}"/>`;
     }
-    private takeBreak(): { before: 'page' | 'column'; master?: string } | undefined {
+    private takeBreak(): OdtBreak | undefined {
         const waiting = this.pendingBreak;
         this.pendingBreak = undefined;
         return waiting;
     }
     /** A style as `name` is, the break before it (see waitBreak). */
-    private breakStyle(name: string, family: 'paragraph' | 'table', brk: { before: 'page' | 'column'; master?: string }): string {
+    private breakStyle(name: string, family: 'paragraph' | 'table', brk: OdtBreak): string {
         return this.activeStyles.derive(name, family, family === 'table' ? 'TB' : 'P', family === 'table' ? 'style:table-properties' : 'style:paragraph-properties',
-            { 'fo:break-before': brk.before }, brk.master ? { 'style:master-page-name': brk.master } : {});
+            { 'fo:break-before': brk.before, ...(brk.pageNumber !== undefined ? { 'style:page-number': String(brk.pageNumber) } : {}) }, brk.master ? { 'style:master-page-name': brk.master } : {});
     }
     /** `xml` with the break that waited in its first paragraph, heading or table; it waits on where it has none. */
-    private carryBreak(xml: string, waiting: { before: 'page' | 'column'; master?: string } | undefined): string {
+    private carryBreak(xml: string, waiting: OdtBreak | undefined): string {
         if (!waiting) return xml;
         const tag = /<(text:p|text:h|table:table)(?=[\s/>])([^>]*?)(\/?)>/.exec(xml);
         if (!tag) {
@@ -1037,11 +1047,12 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         this.pageColumns = samePaper ? this.ast.metadata?.pageSetup?.columns : setup?.columns;
         // A section of a first page of its own starts on that page's master, which hands over to its own.
         const startsOnFirst = !!(page && (page.firstHeader || page.firstFooter));
-        if (master === this.activeMaster && !startsOnFirst) return this.waitBreak({ before: 'page' });
+        const pageNumber = setup?.pageNumberStart;
+        if (master === this.activeMaster && !startsOnFirst && pageNumber === undefined) return this.waitBreak({ before: 'page' });
         const name = startsOnFirst ? `${master}First` : master || 'Body';
         if (!master) this.bodyMasterUsed = true;
         this.activeMaster = master;
-        return this.waitBreak({ before: 'page', master: name });
+        return this.waitBreak({ before: 'page', master: name, ...(pageNumber !== undefined ? { pageNumber } : {}) });
     }
     /** A section started on the same page with a header or footer of its own, not yet shown (see blockBreak). */
     private waitingSection: number | undefined;

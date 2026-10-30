@@ -125,7 +125,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         // 4. The document's page (where it gives one), the first section's columns, the header and footer, then the body
         output += documentPageRtf(this.ast.metadata?.pageSetup);
         const columns = columnsRtf(this.ast.metadata?.pageSetup?.columns, this.ast.metadata?.pageSetup);
-        const numbering = this.numberingRtf(this.ast.metadata?.pageSetup?.pageNumberFormat);
+        const numbering = this.numberingRtf(this.ast.metadata?.pageSetup?.pageNumberFormat) + this.pageStartRtf(this.ast.metadata?.pageSetup?.pageNumberStart);
         if (columns || numbering) output += `\\sectd${numbering}${columns}\n`;
         output += running;
         output += '\\f0\\fs24\n';
@@ -435,7 +435,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                         const starts = typeof meta.section === 'number' && meta.section !== this.currentSection;
                         if (typeof meta.section === 'number') this.currentSection = meta.section;
                         const own = starts ? await this.sectionFurnitureRtf(this.currentSection, meta.pageSetup) : { title: !!meta.pageSetup?.differentFirstPage, rtf: '' };
-                        return `\\sect\\sectd\\${meta.breakType === 'section' ? 'sbknone' : 'sbkpage'}${own.title ? '\\titlepg' : ''}${this.numberingRtf(meta.pageSetup?.pageNumberFormat)}${sectionPageRtf(meta.pageSetup)}${columnsRtf(meta.pageSetup?.columns, onDocumentPage(meta.pageSetup, this.ast.metadata?.pageSetup))}\n${own.rtf}`;
+                        return `\\sect\\sectd\\${meta.breakType === 'section' ? 'sbknone' : 'sbkpage'}${own.title ? '\\titlepg' : ''}${this.numberingRtf(meta.pageSetup?.pageNumberFormat)}${this.pageStartRtf(meta.pageSetup?.pageNumberStart)}${sectionPageRtf(meta.pageSetup)}${columnsRtf(meta.pageSetup?.columns, onDocumentPage(meta.pageSetup, this.ast.metadata?.pageSetup))}\n${own.rtf}`;
                     }
                     return meta?.breakType === 'page' ? '\\page\n' : '\\line\n';
                 }
@@ -585,6 +585,11 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
      * has a title page (`\titlepg`: its own first page's part, or its page's `differentFirstPage`).
      */
     /** How a section numbers its pages, as RTF's section words (`\\pgnlcrm`); decimal, RTF's own, as nothing. */
+    /** The number a section's pages start from (see PageSetup.pageNumberStart). */
+    private pageStartRtf(start: number | undefined): string {
+        return start === undefined ? '' : `\\pgnstarts${clampInt(start, 0, 32767, 1)}\\pgnrestart`;
+    }
+
     private numberingRtf(format: PageNumberFormat | undefined): string {
         if (!format || format === 'decimal') return '';
         const word = RTF_NUMBERING[format];

@@ -752,18 +752,19 @@ export interface PdfParserConfig {
      * printed alike on other pages (a chapter's head), no larger than the text and standing apart from
      * it, or the page's own number on two pages. "Question 3" at the top of one page and "Question 4" at
      * the top of the next are the pages' own. A page number in one is marked as the page field it prints
-     * (TextMetadata.field), where the pages read are the document's from its first (a `pageRange` from a
-     * later page marks none), and its pages' count only where all are read. Either is read into
-     * `auxiliary`, as a word processor's header is, where it is the same on every page read (the first of
-     * three or more may have none, a cover's) once its page numbers are fields: a writer that lays out pages (Word, ODT, RTF, LaTeX, the PDF writer's
-     * native engine) writes it on every page, each page numbered its own, and one that does not (text,
-     * Markdown, HTML and the PDF writer's default HTML engine, EPUB, PowerPoint) leaves it out. A header or
-     * footer whose text changes from page to page (a chapter's head, pages numbered from 147), or that some
-     * pages have and others not (a sheet's name on its sheet's pages), stays in its pages, where it is, as no
-     * such writer could print it; where only the first page read differs (a cover's, every other page, two at
-     * least, having the same one), that one stays on its page and the others' is the document's. A header's
-     * line larger than the text is a paragraph of it, not a heading. Turn this on for a writer that shows each
-     * page as it was, a slide per page, so every page keeps its own header and footer in its place.
+     * (TextMetadata.field), and its pages' count only where all are read. Either is read into `auxiliary`, as a
+     * word processor's header is: a writer that lays out pages (Word, ODT, RTF, LaTeX, the PDF writer's native
+     * engine) writes it, each page numbered as it printed, and one that does not (text, Markdown, HTML and the
+     * PDF writer's default HTML engine, EPUB, PowerPoint) leaves it out. A line the PDF marks as an artifact goes
+     * there whatever it says; a line found by comparing an untagged PDF's pages where it is the same, its numbers
+     * as one, on every page that has any, on all odd or even ones, or but for the first page. One whose words
+     * change from page to page (a customer's name on merged letters), or a kind on fewer than three pages of
+     * four (a sheet's name on its sheet's pages), stays in its pages, where it is. Where the lines in `auxiliary`
+     * differ, they are parts as a word processor's are (HeaderFooterMetadata `type` and `section`): a first page's,
+     * even pages', or a section at each change, numbered where it restarts (PageSetup.pageNumberStart), past 64
+     * of them staying in the pages too. A header's line larger than the text is a paragraph of it, not a heading.
+     * Turn this on for a writer that shows each page as it was, a slide per page, so every page keeps its own
+     * header and footer in its place.
      * `ignoreHeadersAndFooters` still drops them.
      *
      * Default is false.
@@ -1683,6 +1684,11 @@ export interface PageSetup {
      * page field in the section with no format of its own (TextMetadata.fieldFormat) prints its page in it.
      */
     pageNumberFormat?: PageNumberFormat;
+    /**
+     * The number the first of these pages prints, where it does not go on from the pages before (a
+     * body's 1 after a front matter's v). Absent: it goes on.
+     */
+    pageNumberStart?: number;
 }
 
 /**

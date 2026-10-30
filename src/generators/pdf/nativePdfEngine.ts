@@ -1165,9 +1165,13 @@ class NativeLayout {
         this.furniture = true;
         // Each footer's height at each page width, measured once (a page number's own width aside).
         const footerHeights = new Map<OfficeContentNode, Map<number, number>>();
+        let shown = 0;
         try {
             for (const [index, record] of this.pageRecords.entries()) {
-                this.fieldPage = index + 1;
+                // (A section restarting its numbers restarts them on its first page; the pages after go on.)
+                const start = record.firstOfSection || index === 0 ? this.sectionSetups.get(record.section)?.pageNumberStart : undefined;
+                shown = start ?? shown + 1;
+                this.fieldPage = shown;
                 this.fieldFormat = this.sectionSetups.get(record.section)?.pageNumberFormat;
                 this.pageW = record.w; this.pageH = record.h; this.margin = record.margin;
                 const header = choose(headers, record, index + 1), footer = choose(footers, record, index + 1);

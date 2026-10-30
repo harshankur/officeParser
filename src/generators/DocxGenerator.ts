@@ -7,6 +7,7 @@ import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXml
 import { heldColumns } from '../utils/columnUtils.js';
 import { onDocumentPage } from '../utils/pageLimits.js';
 import { pageFieldInstruction, wordFmtOf } from '../utils/pageNumbers.js';
+import { clampInt } from '../utils/numberUtils.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, ooxmlCustomPropertiesXml, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
 import { markerPattern, MarkerPattern } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
@@ -940,7 +941,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
      * A section's properties (`w:sectPr`): its page's size and margins (under format 'auto' the
      * section's own, else the format's), its columns, how it starts, and `refs` (its header and footer).
      */
-    private sectionProperties(setup: PageSetup | undefined, start: 'nextPage' | 'continuous', refs: string, titlePage: boolean | string): string {
+    private sectionProperties(setup: PageSetup | undefined, sectionStart: 'nextPage' | 'continuous', refs: string, titlePage: boolean | string): string {
         const cfg = this.config.docxConfig;
         const paper = resolvePaper(cfg.format, cfg.landscape, setup, cfg.margin);
         const twips = (pt: number) => Math.round(pt * TWIPS_PER_PT);
@@ -961,8 +962,9 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
             this.unwrittenNumbering.add(format);
             this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'docx', feature: `page numbers in ${format} (written in digits)` });
         }
-        const pgNumType = fmt ? `<w:pgNumType w:fmt="${fmt}"/>` : '';
-        return `<w:sectPr>${refs}${start === 'continuous' ? '<w:type w:val="continuous"/>' : ''}<w:pgSz w:w="${twips(paper.w)}" w:h="${twips(paper.h)}"${orient}/>${pgMar}${pgNumType}${cols}${title}</w:sectPr>`;
+        const start = setup?.pageNumberStart;
+        const pgNumType = fmt || start !== undefined ? `<w:pgNumType${fmt ? ` w:fmt="${fmt}"` : ''}${start !== undefined ? ` w:start="${clampInt(start, 0, 2_147_483_647, 1)}"` : ''}/>` : '';
+        return `<w:sectPr>${refs}${sectionStart === 'continuous' ? '<w:type w:val="continuous"/>' : ''}<w:pgSz w:w="${twips(paper.w)}" w:h="${twips(paper.h)}"${orient}/>${pgMar}${pgNumType}${cols}${title}</w:sectPr>`;
     }
     /** The page number formats a section had that Word has none of, each reported once. */
     private unwrittenNumbering = new Set<string>();

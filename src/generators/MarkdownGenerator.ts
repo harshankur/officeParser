@@ -1892,7 +1892,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             }
             case 'paragraph': {
                 const { attr, extra } = this.htmlIds(n.metadata);
-                return `<p${attr}>${extra}${co}</p>`;
+                // (A paragraph of spaces alone, no-break ones too, reads back as an empty one: it is written so.)
+                return `<p${attr}>${extra}${co.trim() ? co : ''}</p>`;
             }
             case 'heading': {
                 const level = Math.min(Math.max(Number((n.metadata as any)?.level) || 1, 1), 6);
@@ -1992,7 +1993,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 }
             }
             const { attr, extra } = this.htmlIds(meta);
-            return `    <td${rs}${cs}${attr}>${extra}${content}</td>\n`;
+            // (A cell of spaces alone, no-break ones too, reads back as an empty one: it is written so.)
+            return `    <td${rs}${cs}${attr}>${extra}${content.trim() ? content : ''}</td>\n`;
         }
         return '';
     }

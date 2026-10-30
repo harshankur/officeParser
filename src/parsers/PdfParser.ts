@@ -32,7 +32,7 @@
 import { zlibSync } from 'fflate';
 import { passwordAttemptLimit } from '../crypto/decryptContainer.js';
 import { DEFAULT_OFFICE_PARSER_CONFIG, DEFAULT_PDF_WORKER_SRC } from '../defaults.js';
-import { FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TextFormatting, TextMetadata, BreakMetadata, HeaderFooterMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { parseOfficeDate } from '../utils/dateUtils.js';
 import { assertNode, isBrowser } from '../utils/envUtils.js';
@@ -52,7 +52,7 @@ import { annotationMatrix, computeRunBox, identityMatrix, mulMatrix, roundBounds
 import { PageExtract, PdfImage, PdfLayoutConfig, RawRun, ResolvedFont } from './pdf/pdfTypes.js';
 import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, emitBounds, indentLevels as indentLevelsOf, joinMarkerLines, leadingMarker, ListCarry, markerLefts, PageContext, lineDirections, recoverTaggedGrids, rightToLeftLean, relevelHeadings, runsToParagraph, segmentIntoBlocks } from './pdf/textLayout.js';
 import { buildTaggedNodes } from './pdf/structTree.js';
-import { FURNITURE_BAND, findRunningLines, furnitureChanging, markPageFields, PageFurniture, RunningRuns, unmarkPageFields } from './pdf/runningLines.js';
+import { FURNITURE_BAND, findRunningLines, markPageFields, PageFurniture, planFurniture, RunningRuns, unmarkPageFields } from './pdf/runningLines.js';
 import { setOwn } from '../utils/lookupUtils.js';
 import { BROTLI_AVOIDED_LINE, acquirePdfProcess, PdfProcess } from './pdf/pdfProcess.js';
 import { avoidBrotliInThisProcess, BROTLI_FIXED_RELEASES, onBrotliRefused, runtimeHasBrotliFlaw, runtimeName } from '../utils/brotliFlaw.js';
@@ -2304,8 +2304,8 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             finalizeBounds(pageHeaders, pageCtx, pdfCfg.includeBounds);
             finalizeBounds(pageFooters, pageCtx, pdfCfg.includeBounds);
             const label = pageLabels?.[extract.pageNumber - 1];
-            const header: PageFurniture = { pageNumber: extract.pageNumber, kind: 'header', nodes: pageHeaders, rotation: extract.rotation, label };
-            const footer: PageFurniture = { pageNumber: extract.pageNumber, kind: 'footer', nodes: pageFooters, rotation: extract.rotation, label };
+            const header: PageFurniture = { pageNumber: extract.pageNumber, kind: 'header', nodes: pageHeaders, rotation: extract.rotation, label, tagged: artifactHeader.length > 0 };
+            const footer: PageFurniture = { pageNumber: extract.pageNumber, kind: 'footer', nodes: pageFooters, rotation: extract.rotation, label, tagged: artifactFooter.length > 0 };
             furniture.push(header, footer);
             appendAll(auxHeaders, pageHeaders);
             appendAll(auxFooters, pageFooters);
@@ -2348,27 +2348,18 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
 
     // The page numbers in the pages' headers and footers, marked as the page fields they print, now that
     // every page's are read (a number is marked only where each page's of that text is its own). Only what
-    // stays true of the pages read: a writer numbers its own pages from one, so a page's number is its field
-    // only where the pages read are the document's from its first, one after another, and the pages' count
-    // only where they are all of them. A range from a later page (pageRange '2-4') marks none: "Page 2 of 4"
-    // printed on its first page is no number of the output's.
-    const fromFirst = extracts.every((e, i) => e.pageNumber === i + 1);
-    if (fromFirst) markPageFields(furniture, numPages, extracts.length === numPages);
-    // A header or footer whose text is not the same on every page it is on, once its page fields are its
-    // fields (a chapter's head, a journal's pages numbered from 147), or that only some pages have (a sheet's
-    // name), stays in its pages: a writer prints one header on every page, the first page's, which lost the
-    // other pages' text or printed it where a page had none. Where the first page's alone differs or is
-    // missing (a cover's, before two pages at least), that one stays in its page and the others' is the
-    // document's.
-    const changing = furnitureChanging(furniture, extracts.map(e => e.pageNumber));
-    for (const [kind, only] of changing) {
+    // stays true of the pages read: the pages' count only where they are all of them ("of 4" printed over
+    // pageRange '2-4' is the document's). A writer numbers its own pages from one, so where the pages read
+    // print others, each section says where it starts (see planFurniture).
+    markPageFields(furniture, numPages, extracts.length === numPages);
+    const plan = planFurniture(furniture, extracts.map(e => e.pageNumber));
+    for (const kind of ['header', 'footer'] as const) {
         const aux = kind === 'header' ? auxHeaders : auxFooters;
-        const moved = new Set<OfficeContentNode>();
         for (const page of routed) {
-            if (!page[kind].length || (only !== null && (page.page.metadata as { pageNumber?: number } | undefined)?.pageNumber !== only)) continue;
+            const staying = page[kind].filter(([, went]) => plan.back.has(went));
+            if (!staying.length) continue;
             const children = page.page.children!;
-            const back = page[kind].map(([read, went]) => {
-                moved.add(went);
+            const back = staying.map(([read, went]) => {
                 // (Its box as finalized with the page's header; the fields cut in it are its text again.)
                 const node = read === went.children?.[0] ? read : { ...read, ...(went.children?.[0]?.bounds ? { bounds: went.children[0].bounds } : {}) };
                 if (node !== read && !went.children?.[0]?.bounds) delete node.bounds;
@@ -2384,9 +2375,53 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             if (kind === 'header') children.splice(page.above, 0, ...back); else children.splice(children.length - page.below, 0, ...back);
             page.page.text = children.map(n => n.text).join(config.newlineDelimiter);
         }
-        const kept = aux.filter(n => !moved.has(n));
+        const kept = aux.filter(n => !plan.back.has(n));
         aux.length = 0;
         appendAll(aux, kept);
+    }
+    // Sections where the pages' lines change, among the sections of the pages' sizes, numbered in order.
+    if (plan.sections.size || plan.parts.size || Object.keys(plan.first).length || plan.differentFirstPage) {
+        let section = 0;
+        const sectionOf = new Map<number, number>(extracts.length ? [[extracts[0].pageNumber, 0]] : []);
+        for (let i = 0; i < content.length; i++) {
+            const node = content[i];
+            const pageNumber = node.type === 'page' ? (node.metadata as { pageNumber?: number } | undefined)?.pageNumber : undefined;
+            if (pageNumber === undefined) continue;
+            const how = plan.sections.get(pageNumber);
+            const before = i > 0 ? content[i - 1] : undefined;
+            const opened = before?.type === 'break' && typeof (before.metadata as BreakMetadata | undefined)?.section === 'number' ? before : undefined;
+            if (how && !opened && i > 0) {
+                const meta = node.metadata as { pageWidth?: number; pageHeight?: number };
+                const size = meta.pageWidth !== undefined && meta.pageHeight !== undefined ? { width: meta.pageWidth, height: meta.pageHeight } : {};
+                content.splice(i, 0, { type: 'break', text: '', metadata: { breakType: 'page', section: 0, pageSetup: { ...size, ...how } } as BreakMetadata });
+                i++;
+            } else if (how && opened) {
+                const meta = opened.metadata as BreakMetadata;
+                meta.pageSetup = { ...meta.pageSetup, ...how };
+            }
+            sectionOf.set(pageNumber, section);
+        }
+        // (Numbered once all are in, by the order they stand in.)
+        section = 0;
+        for (const node of content) {
+            if (node.type === 'break' && typeof (node.metadata as BreakMetadata | undefined)?.section === 'number') (node.metadata as BreakMetadata).section = ++section;
+            else if (node.type === 'page') {
+                const pageNumber = (node.metadata as { pageNumber?: number } | undefined)?.pageNumber;
+                if (pageNumber !== undefined) sectionOf.set(pageNumber, section);
+            }
+        }
+        for (const list of [auxHeaders, auxFooters]) {
+            for (const node of list) {
+                const part = plan.parts.get(node);
+                if (!part) continue;
+                const meta = node.metadata as HeaderFooterMetadata;
+                meta.type = part.type;
+                meta.section = sectionOf.get(part.startsAt) ?? 0;
+            }
+        }
+        if (Object.keys(plan.first).length || plan.differentFirstPage) {
+            metadata.pageSetup = { ...metadata.pageSetup, ...plan.first, ...(plan.differentFirstPage ? { differentFirstPage: true } : {}) };
+        }
     }
 
     // Now that every page's headings and their positions are known, point each internal link at the
