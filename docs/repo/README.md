@@ -98,7 +98,7 @@ npm i officeparser
 ```
 
 > [!NOTE]
-> Requires Node.js >= 22.13.
+> Requires Node.js 22.23.4, 24.22.1, 26.12.1 or later in its line. Earlier releases have a flaw in their Brotli decoder (CVE-2026-111497); officeParser avoids that decoder on them and raises `BROTLI_DECODER_AVOIDED` when it does, but only upgrading protects the rest of your application.
 
 ---
 
@@ -828,6 +828,7 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `NO_WORKSHEETS_FOUND` / `NO_SLIDES_FOUND` | parse | A legitimately empty workbook/presentation. |
 | `TABLE_CELL_LIMIT_EXCEEDED` | parse | The cells an ODF or XLSX document yields passed `decompressionLimits.maxTableCells` plus one per byte of the document; the rest were not read. |
 | `REPEATED_CONTENT_LIMIT_EXCEEDED` | parse | The document repeated `decompressionLimits.maxRepeatedContent` (plus 16 characters per byte of the document) of content by reference (ODF repeated cells and chart values, XLSX shared strings, style values, link targets, chart text per frame, LaTeX titles per reference); later repeats were not made, shortened or went without the value. |
+| `BROTLI_DECODER_AVOIDED` | parse / generate | The runtime's Brotli decoder has a known flaw (CVE-2026-111497), so a PDF's Brotli streams or a WOFF2 font in `pdfConfig.fonts` were decoded by a slower decoder written in JavaScript. Raised only when such a stream or font is met. Upgrade the runtime. |
 | `PDF_SEPARATE_PROCESS_UNAVAILABLE` | parse | pdf.js could not start in a separate process (Node), so it runs in the host; a hostile PDF can then exhaust its memory, and pdf.js's time is not bounded (bound it with `abortSignal`). |
 | `PDF_CONTENT_LIMIT_EXCEEDED` | parse | A PDF passed one of its content limits (plus an allowance per byte), which the message names: past `pdfParserConfig.maxTextItems` or `maxTimeMs` the rest of it was not read; past `maxOperators` its images, text colours and font styles from that page on were not (its text was). |
 | `ALT_CHUNK_NOT_READ` | parse | A DOCX alternative-format chunk (`w:altChunk`) was not read: its part is missing, is of a format other than HTML, MHT, RTF, plain text or DOCX, is a DOCX inside a DOCX chunk, or could not be read (not a ZIP, no document part, nested too deep). The rest of the document is read; a chunk past the document's limits (`maxXmlElements`, `maxUncompressedBytes`) still fails the parse. Saving the document again in Word merges chunks into it. |

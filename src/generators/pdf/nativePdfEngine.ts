@@ -27,6 +27,7 @@ import { sanitizeOfficePackageUrl } from '../../utils/sanitize.js';
 import { cssColorHex } from '../../utils/colorUtils.js';
 import { formatListNumber } from '../../utils/listMarkers.js';
 import { drawSvg, readSvg } from './svgDrawing.js';
+import { BROTLI_FIXED_RELEASES, runtimeHasBrotliFlaw, runtimeName } from '../../utils/brotliFlaw.js';
 import { cffOutlines, colorTables, fontkitUnbrotli, nativeUnbrotli, sfntOf, substitutes, trueTypeOutlines, Unbrotli, UnreadableFont } from './fontFiles.js';
 
 /** The largest of `values` and `floor`, without spreading them into one call (which a long list overflows). */
@@ -3352,9 +3353,15 @@ async function embedFonts(pdf: any, lib: any, pc: FullGeneratorConfig['pdfConfig
 
     const fontkit = await loadFontkit(config);
     pdf.registerFontkit(fontkit);
-    // (Brotli, for a WOFF2 font: Node's where it has one, else the decoder fontkit carries.)
+    // (Brotli, for a WOFF2 font: Node's where it has one, else the decoder fontkit carries; fontkit's, and
+    // a warning, where Node's has a flaw: see brotliFlaw.)
     let unbrotli: Unbrotli | undefined;
-    const brotli = () => unbrotli ??= nativeUnbrotli() ?? fontkitUnbrotli(fontkit);
+    const brotli = () => {
+        if (unbrotli) return unbrotli;
+        const flawed = runtimeHasBrotliFlaw();
+        if (flawed) reportWarning(OfficeWarningType.BROTLI_DECODER_AVOIDED, { what: 'this WOFF2 font was', runtime: runtimeName(), fixed: BROTLI_FIXED_RELEASES });
+        return unbrotli = (flawed ? undefined : nativeUnbrotli()) ?? fontkitUnbrotli(fontkit);
+    };
     // The same bytes given for two styles are embedded once: the same view, or views of the same part of
     // one buffer (an ArrayBuffer given twice is viewed anew each time).
     const embedded = new Map<ArrayBufferLike, Map<string, Face | null>>();

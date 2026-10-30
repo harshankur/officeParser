@@ -54,7 +54,8 @@ import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, 
 import { buildTaggedNodes } from './pdf/structTree.js';
 import { FURNITURE_BAND, findRunningLines, furnitureChanging, markPageFields, PageFurniture, RunningRuns, unmarkPageFields } from './pdf/runningLines.js';
 import { setOwn } from '../utils/lookupUtils.js';
-import { acquirePdfProcess, PdfProcess } from './pdf/pdfProcess.js';
+import { BROTLI_AVOIDED_LINE, acquirePdfProcess, PdfProcess } from './pdf/pdfProcess.js';
+import { avoidBrotliInThisProcess, BROTLI_FIXED_RELEASES, onBrotliRefused, runtimeHasBrotliFlaw, runtimeName } from '../utils/brotliFlaw.js';
 import { captureConsoleWarnings, openWarningWorker, PdfAssetSession, pdfjsWorkerFile, resolvePdfAssetFolders, WarningWorker } from './pdf/pdfAssets.js';
 import { appendAll } from '../utils/nodeListUtils.js';
 
@@ -1749,7 +1750,14 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
     // The CMaps and image decoders pdf.js may need, and what its worker says it left out (see pdfAssets).
     const assets = new PdfAssetSession(await resolvePdfAssetFolders(config), config, pdfCfg.maxImagePixels);
-    const takeWarning = (line: string) => assets.workerWarning(line);
+    // A PDF's Brotli stream decoded by pdf.js itself, on a runtime whose decoder has a flaw (see brotliFlaw): said once a parse.
+    let brotliAvoidedSaid = false;
+    const brotliAvoided = () => {
+        if (brotliAvoidedSaid) return;
+        brotliAvoidedSaid = true;
+        logWarning(OfficeWarningType.BROTLI_DECODER_AVOIDED, config, { what: "this PDF's Brotli streams were", runtime: runtimeName(), fixed: BROTLI_FIXED_RELEASES });
+    };
+    const takeWarning = (line: string) => { if (line === BROTLI_AVOIDED_LINE) brotliAvoided(); else assets.workerWarning(line); };
 
     // pdf.js's worker in a process of its own (see pdfProcess), so what pdf.js does inside one stream
     // cannot exhaust this one's memory. Only for a worker Node can import from disk; one the caller
@@ -1783,10 +1791,12 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 const worker = new pdfjs.PDFWorker({ verbosity: workerFile ? 1 : 0 });
                 ownWorker = { worker, close: () => worker.destroy() };
             }
+            if (runtimeHasBrotliFlaw()) avoidBrotliInThisProcess();
             inProcessTurn = async () => {
                 const endTurn = await takeInProcessTurn(config.abortSignal);
                 const stopCapture = workerFile ? captureConsoleWarnings(takeWarning, workerFile) : undefined;
-                return () => { stopCapture?.(); endTurn(); };
+                onBrotliRefused(brotliAvoided);
+                return () => { onBrotliRefused(undefined); stopCapture?.(); endTurn(); };
             };
         }
         return await readPdf(pdfjs, buffer, config, pdfCfg, maxImageSize, pdfProcess, assets, pdfProcess?.worker ?? ownWorker?.worker, inProcessTurn);

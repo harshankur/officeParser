@@ -12,6 +12,12 @@ Maintenance and security patches are currently provided for the latest major bra
 | v7.x    | :white_check_mark: |
 | < v7.x  | :x:                |
 
+## Node.js Runtime (CVE-2026-111497)
+
+Node.js releases before 22.23.4, 24.22.1 and 26.12.1, and every release of lines without a fix (25, 23, 20 and earlier), have a flaw in their Brotli decoder that a crafted stream can use to run code. A PDF can carry a Brotli stream, and a WOFF2 font is Brotli.
+
+On such a runtime officeParser does not give either to that decoder: pdf.js and fontkit decode them in JavaScript, and a `BROTLI_DECODER_AVOIDED` warning is raised when it happens. This covers officeParser's own reading only. Anything else in your application that decompresses Brotli, including `fetch()`, and the files officeParser fetches itself (`pdfCMapUrl`, `pdfDecoderUrl` and OCR's language data, from the addresses you or its defaults name), remain exposed until you upgrade Node.js.
+
 ## Reporting a Vulnerability
 
 **Please do not open public issues for security vulnerabilities.**

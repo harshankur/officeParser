@@ -165,6 +165,8 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
         return `pdf.js could not load ${what}${at} because ${why}: ${loss}. ${fix}`;
     },
     [OfficeWarningType.PDF_SEPARATE_PROCESS_UNAVAILABLE]: `pdf.js could not start in a separate process, so it runs in this one: a hostile PDF can then exhaust this process's memory, and the time pdf.js takes is not bounded (pdfParserConfig.maxTimeMs applies to the separate process; bound the parse with abortSignal). Set pdfParserConfig.separateProcess to false to read in this process without trying.`,
+    [OfficeWarningType.BROTLI_DECODER_AVOIDED]: (info: { what: string; runtime: string; fixed: string }) =>
+        `${info.runtime} has a flaw in its Brotli decoder (CVE-2026-111497) that a crafted file can use to run code, so ${info.what} decoded by a slower decoder written in JavaScript instead. What it decodes is the same, and what it cannot decode is reported or left out as with any other. Upgrade to ${info.fixed}: this protects officeParser's own reading only, not anything else in your application that decompresses Brotli, such as fetch().`,
     [OfficeWarningType.OCR_REQUIRES_ATTACHMENTS]: () => `'ocr: true' was set without 'extractAttachments: true'; OCR runs over extracted images, so no OCR was performed. Add 'extractAttachments: true' to recognize text from the document's images.`,
     [OfficeWarningType.INVALID_CONFIG_VALUE]: (info: { option: string; value: unknown; expected: string; fallback: unknown }) => {
         // A number JSON cannot write (NaN, -Infinity) is shown as itself, not as null.

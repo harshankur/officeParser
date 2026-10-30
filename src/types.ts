@@ -158,6 +158,8 @@ export enum OfficeWarningType {
     PDF_CONTENT_LIMIT_EXCEEDED = 'PDF_CONTENT_LIMIT_EXCEEDED',
     /** pdf.js could not start in a separate process (see `pdfParserConfig.separateProcess`), so it runs in this one */
     PDF_SEPARATE_PROCESS_UNAVAILABLE = 'PDF_SEPARATE_PROCESS_UNAVAILABLE',
+    /** The runtime's Brotli decoder has a known flaw (CVE-2026-111497), so a PDF's Brotli stream or a WOFF2 font was decoded by a slower decoder written in JavaScript. Upgrade the runtime. */
+    BROTLI_DECODER_AVOIDED = 'BROTLI_DECODER_AVOIDED',
     /**
      * A file pdf.js needed for a PDF could not be had: a CMap (the text of the fonts using it is
      * missing) or an image decoder (pictures needing it are not decoded). Raised once per file per

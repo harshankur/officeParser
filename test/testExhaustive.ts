@@ -7,6 +7,7 @@
 import { OfficeParser } from '../src/OfficeParser';
 import { withinTime } from './helpers/timing';
 import { testUnicodeChunks } from './generator/unicodeChunks';
+import { testBrotliGuard } from './security/brotliGuard';
 import { OfficeGenerator } from '../src/OfficeGenerator';
 import { bulletCharacter, formatListNumber } from '../src/utils/listMarkers';
 import { decodeBmp, decodeGif } from '../src/utils/rasterUtils';
@@ -11026,6 +11027,7 @@ async function runTests(): Promise<void> {
         ['PDF text on fills', testPdfTextOnFills],
         ['PDF running headers and footers', testPdfRunningHeadersFooters],
         ['Unicode chunk boundaries', testUnicodeChunks],
+        ['Brotli decoder with a known flaw avoided', testBrotliGuard],
         ['Cancellation', testCancellation],
     ];
 

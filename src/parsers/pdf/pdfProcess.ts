@@ -15,6 +15,7 @@
 
 import type { ChildProcess } from 'child_process';
 import type { Readable } from 'stream';
+import { runtimeHasBrotliFlaw } from '../../utils/brotliFlaw.js';
 import { getAbortError } from '../../utils/errorUtils.js';
 import { MAX_WARNING_LENGTH, MAX_WORKER_WARNINGS, PDFJS_WARNING_KIND_SOURCE } from './pdfAssets.js';
 
@@ -47,6 +48,9 @@ const OWN_ARRAYS_SOURCE = `(value) => {
     };
     return own(value, 0);
 }`;
+
+/** What the child sends where it would send a warning, when it refused pdf.js the runtime's Brotli decoder (see brotliFlaw). */
+export const BROTLI_AVOIDED_LINE = 'officeparser: the runtime\'s Brotli decoder was not used';
 
 /**
  * The child's clock, in a thread of its own: every 20 ms it writes the process's CPU time, in ms, to
@@ -104,6 +108,23 @@ console.warn = (...args) => {
     warningsSent.set(kind, sent + 1);
     try { process.send({ officeparserWarning: args[0].slice(0, ${MAX_WARNING_LENGTH}) }); } catch { /* the host is gone */ }
 };
+// On a runtime whose Brotli decoder has a flaw (see brotliFlaw), the host's word: pdf.js is refused it and
+// decodes the stream itself, as it does wherever the stream fails. Only pdf.js runs here. Said once a document.
+let brotliAvoidedSaid = false;
+if (process.env.OFFICEPARSER_PDF_AVOID_BROTLI === '1' && typeof globalThis.DecompressionStream === 'function') {
+    globalThis.DecompressionStream = class DecompressionStream extends globalThis.DecompressionStream {
+        constructor(format, ...rest) {
+            if (format === 'brotli') {
+                if (!brotliAvoidedSaid && process.connected) {
+                    brotliAvoidedSaid = true;
+                    try { process.send({ officeparserWarning: ${JSON.stringify(BROTLI_AVOIDED_LINE)} }); } catch { /* the host is gone */ }
+                }
+                throw new TypeError('The Brotli decoder of this runtime is not used (CVE-2026-111497)');
+            }
+            super(format, ...rest);
+        }
+    };
+}
 const listeners = new Set();
 const port = {
     postMessage(message) { if (process.connected) process.send(capArrays(message, 0)); },
@@ -116,7 +137,7 @@ const port = {
 };
 process.on('message', (data) => {
     data = ownArrays(data);
-    if (data && data.action === 'GetDocRequest') warningsSent.clear();
+    if (data && data.action === 'GetDocRequest') { warningsSent.clear(); brotliAvoidedSaid = false; }
     for (const listener of listeners) listener({ data });
 });
 process.on('disconnect', () => process.exit(0));
@@ -241,6 +262,8 @@ const start = async (pdfjs: any, workerUrl: string, memoryMb: number): Promise<H
     const env: Record<string, string | undefined> = { ...process.env, OFFICEPARSER_PDF_WORKER: workerUrl, ELECTRON_RUN_AS_NODE: '1' };
     // The host's options (a loader, instrumentation, its own heap size) are not the child's.
     delete env.NODE_OPTIONS;
+    delete env.OFFICEPARSER_PDF_AVOID_BROTLI;
+    if (runtimeHasBrotliFlaw()) env.OFFICEPARSER_PDF_AVOID_BROTLI = '1';
     let child: ChildProcess;
     try {
         child = spawn(process.execPath, [`--max-old-space-size=${memoryMb}`, '--input-type=commonjs', '-e', CHILD_SOURCE], {
