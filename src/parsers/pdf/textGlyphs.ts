@@ -252,6 +252,9 @@ export interface MeasuredItem {
 /** How near (in user space) pdf.js's place for an item is to the glyph it starts at. */
 const NEAR = 0.05;
 
+/** How many of the glyphs at one place, from where the walk has reached, an item is matched against. */
+const LOOKED_AT = 64;
+
 /**
  * A page's text items with what their glyphs say of them: each item matched to the glyph it starts at
  * (the first, in the order drawn, at the place pdf.js gave the item, after the glyphs of the items before
@@ -285,22 +288,38 @@ export function measureItems<T extends MeasuredItem>(items: T[], glyphs: PageGly
     const isText = (it: T) => typeof it.str === 'string' && Array.isArray(it.transform) && it.transform.length >= 6 && it.transform.every(Number.isFinite);
     const near = (k: number, x: number, y: number) => Math.abs(px[k] - x) <= NEAR && Math.abs(py[k] - y) <= NEAR;
     /**
-     * The first glyph at an item's place from `from` on, else the first there at all (not taken in order).
-     * A few of each place's glyphs are looked at (a page drawing a glyph many times at one place is read in
-     * time in its length, not its square).
+     * The glyph an item starts at: of the glyphs at its place from `from` on, the nearest whose text begins
+     * the item's, the first drawn where several are as near (a tiny run packs many glyphs into the width
+     * this looks over, so the first there need not be the item's); else the same without the text (a glyph
+     * read otherwise than pdf.js reads it); else the first there at all (not taken in order). A few of each
+     * place's glyphs are looked at (a page drawing a glyph many times at one place is read in time in its
+     * length, not its square).
      */
-    const find = (x: number, y: number, from: number): { k: number; inOrder: boolean } | undefined => {
-        let best = -1, any = -1;
-        const cx = Math.round(x / NEAR), cy = Math.round(y / NEAR);
-        for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
-            const list = at.get(`${cx + dx}:${cy + dy}`);
-            if (!list) continue;
-            let lo = 0, hi = list.length;
-            while (lo < hi) { const mid = (lo + hi) >> 1; if (list[mid] < from) lo = mid + 1; else hi = mid; }
-            for (let j = lo; j < Math.min(list.length, lo + 4); j++) if (near(list[j], x, y)) { if (best < 0 || list[j] < best) best = list[j]; break; }
-            for (let j = 0; j < Math.min(lo, 4); j++) if (near(list[j], x, y)) { if (any < 0 || list[j] < any) any = list[j]; break; }
-        }
-        return best >= 0 ? { k: best, inOrder: true } : any >= 0 ? { k: any, inOrder: false } : undefined;
+    const find = (x: number, y: number, from: number, str: string): { k: number; inOrder: boolean } | undefined => {
+        const head = str.trimStart();
+        const begins = (k: number) => {
+            const own = text[k].replace(/\s/g, '');
+            return !!own && (head.startsWith(own) || head.startsWith(own.normalize('NFKC')));
+        };
+        const look = (fits: (k: number) => boolean): { k: number; inOrder: boolean } | undefined => {
+            let best = -1, bestGap = Infinity, any = -1;
+            const cx = Math.round(x / NEAR), cy = Math.round(y / NEAR);
+            for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+                const list = at.get(`${cx + dx}:${cy + dy}`);
+                if (!list) continue;
+                let lo = 0, hi = list.length;
+                while (lo < hi) { const mid = (lo + hi) >> 1; if (list[mid] < from) lo = mid + 1; else hi = mid; }
+                for (let j = lo; j < Math.min(list.length, lo + LOOKED_AT); j++) {
+                    const k = list[j];
+                    if (!near(k, x, y) || !fits(k)) continue;
+                    const gap = Math.round(Math.abs(px[k] - x) * 1000);
+                    if (gap < bestGap || (gap === bestGap && k < best)) { best = k; bestGap = gap; }
+                }
+                for (let j = 0; j < Math.min(lo, 4); j++) if (near(list[j], x, y) && fits(list[j])) { if (any < 0 || list[j] < any) any = list[j]; break; }
+            }
+            return best >= 0 ? { k: best, inOrder: true } : any >= 0 ? { k: any, inOrder: false } : undefined;
+        };
+        return look(begins) ?? look(() => true);
     };
 
     // Each item of text (not a blank) matched to its first glyph, and whether in order (after the glyphs of
@@ -310,7 +329,7 @@ export function measureItems<T extends MeasuredItem>(items: T[], glyphs: PageGly
     let next = 0;
     items.forEach((it, i) => {
         if (!isText(it) || !it.str!.trim()) return;
-        const hit = find(it.transform![4], it.transform![5], next);
+        const hit = find(it.transform![4], it.transform![5], next, it.str!);
         if (!hit) return;
         first[i] = hit.k;
         inOrder[i] = hit.inOrder;

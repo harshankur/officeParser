@@ -7883,6 +7883,50 @@ async function testTextTableCellsApart(): Promise<void> {
 }
 
 /**
+ * An item of a PDF is matched to its own first glyph, not the first within a hair of its place: a run in a
+ * font a hundredth of a point tall packs its glyphs that close, so a word after it was matched to the run's
+ * glyph, the blank between them was left out and "560 Retirement" read as one word (tagged forms print
+ * their numbers so). A hidden run after a tiny visible copy keeps being hidden, and faked bold still reads once.
+ */
+async function testPdfItemsMatchTheirOwnGlyphs(): Promise<void> {
+    const pdfOf = (content: string) => {
+        const objects = [
+            '<< /Type /Catalog /Pages 2 0 R >>',
+            '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+            '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+            `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+            `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar 32 /LastChar 122 /Widths [244 ${Array(90).fill(556).join(' ')}] >>`,
+        ];
+        let pdf = '%PDF-1.4\n';
+        const offsets: number[] = [];
+        objects.forEach((o, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+        const xref = pdf.length;
+        pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+        return Buffer.from(pdf, 'latin1');
+    };
+    const read = (content: string) => OfficeParser.parseOffice(pdfOf(content), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false }, onWarning: () => { } } as any) as Promise<OfficeParserAST>;
+    const textOf = (ast: OfficeParserAST) => collectAllNodes(ast).filter(n => n.type === 'text').map(n => n.text).join('');
+
+    const body = 'BT /F1 11 Tf 1 0 0 1 72 500 Tm (Body text so the page has a normal size of words here.) Tj ET\n';
+    for (const size of [0.01, 0.03, 0.05, 0.1]) {
+        const ast = await read(`${body}BT /F1 ${size} Tf 1 0 0 1 72 600 Tm (560) Tj ( ) Tj /F1 10 Tf (Retirement Plans) Tj ET`);
+        assert.ok(textOf(ast).includes('560 Retirement Plans'), `a word after a run ${size} pt tall keeps the blank before it; got ${JSON.stringify(textOf(ast))}`);
+    }
+
+    const hidden = await read(`${body}BT /F1 0.01 Tf 1 0 0 1 72 600 Tm (Sec) Tj /F1 10 Tf 3 Tr (Secret words) Tj 0 Tr ET`);
+    const secret = collectAllNodes(hidden).filter(n => n.type === 'text' && /Secret/.test(n.text ?? ''));
+    assert.ok(secret.length && secret.every(n => (n.formatting as any)?.invisible), `a hidden run after a tiny visible copy stays hidden; got ${JSON.stringify(secret.map(n => [n.text, n.formatting]))}`);
+
+    const bold = await read(`${body}BT /F1 10 Tf 1 0 0 1 72 600 Tm (Bold words) Tj 1 0 0 1 72.02 600 Tm (Bold words) Tj ET`);
+    assert.strictEqual(textOf(bold).match(/Bold words/g)?.length, 2, `an overprint matches its own glyphs, each copy kept as the file draws it; got ${JSON.stringify(textOf(bold))}`);
+
+    // Many glyphs drawn at one place: each item looks at a bounded number of them.
+    const many = Array.from({ length: 4000 }, () => '(x) Tj 1 0 0 1 72 600 Tm').join(' ');
+    const { result: crowded, within, ms } = await withinTime(10_000, () => read(`BT /F1 10 Tf 1 0 0 1 72 600 Tm ${many} ET`));
+    assert.ok(within && textOf(crowded).includes('x'), `4000 glyphs at one place read in time; took ${ms} ms`);
+}
+
+/**
  * Text a PDF's font maps to look-alikes of CJK ideographs (Kangxi radicals, compatibility ideographs),
  * as Chromium's PDFs of Chinese and Japanese do, reads as the unified ideographs: ⽇本語 was the text.
  */
@@ -11028,6 +11072,7 @@ async function runTests(): Promise<void> {
         ['PDF running headers and footers', testPdfRunningHeadersFooters],
         ['Unicode chunk boundaries', testUnicodeChunks],
         ['Brotli decoder with a known flaw avoided', testBrotliGuard],
+        ['PDF items match their own glyphs', testPdfItemsMatchTheirOwnGlyphs],
         ['Cancellation', testCancellation],
     ];
 
