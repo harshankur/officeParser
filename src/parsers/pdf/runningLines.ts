@@ -786,7 +786,8 @@ function countingLines(pages: readonly PageFurniture[]): Map<string, string> {
         }
         for (const node of page.nodes) {
             const text = lineKey(node);
-            if (text.length > NUMBERED_TEXT || !/\p{Nd}/u.test(text)) continue;
+            // (Not the number's own line: its other number is its own, "Account 10101 Page 1".)
+            if (text.length > NUMBERED_TEXT || !/\p{Nd}/u.test(text) || hasField(node)) continue;
             const at = baselineOf(node), shape = text.replace(/\p{Nd}+/gu, '#');
             const near = at === null ? 0 : Math.round(at / 2);
             const beside = at !== null && (numbered.has(near) || numbered.has(near - 1) || numbered.has(near + 1));

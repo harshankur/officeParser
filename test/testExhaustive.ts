@@ -8115,6 +8115,12 @@ async function testPdfRunningLinesAsParts(): Promise<void> {
     const keptLines = await read(pagesN(12).map(n => [body(n), ...(n <= 8 ? [`40|${n}`] : [])]), { pdfParserConfig: { separateProcess: false, keepHeadersAndFootersInPages: true, pageRange: '7-12' } });
     assert.ok(!JSON.stringify(keptLines.content).includes('"field"'), 'fields of lines that stay in the pages are text again');
 
+
+    // A number of its own on the page number's own line stays in the text; on a line beside it, a running head's.
+    const accounts = [10101, 48213, 20977, 73120, 55512, 90233];
+    const ownOnLine = await read(pagesN(6).map(n => [body(n), `40|Account ${accounts[n - 1]} Page ${n}`]));
+    assert.ok((await mdOf(ownOnLine)).includes('Account 48213') && !(ownOnLine.auxiliary?.footers ?? []).some(n => /Account/.test(n.text ?? '')), 'a number of its own on the page number\'s line stays in the text');
+
 }
 
 /**
