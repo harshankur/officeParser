@@ -124,8 +124,9 @@
             "shortTitle": "Where officeParser is the Wrong Tool",
             "category": "comparisons",
             "published": "2026-10-04",
-            "updated": "2026-10-28",
+            "updated": "2026-10-30",
             "revisions": [
+                { "id": "fixed-node-releases", "date": "2026-10-30", "note": "Earlier Node.js releases have a flaw in their Brotli decoder (CVE-2026-111497), so the package now asks for one with the fix." },
                 { "id": "xlsx-written", "date": "2026-10-28", "release": "8.3.0", "note": "officeParser now writes .xlsx files, with each cell's value and not its formula." },
                 { "id": "spreadsheets-and-slides", "date": "2026-10-26", "release": "8.3.0", "note": "officeParser now writes .xlsx, .ods, .pptx and .odp files, so this section is now about what those files leave out." }
             ],
