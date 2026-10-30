@@ -1219,11 +1219,19 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         }
                     }
                     // A tab is a character of the text, whatever column its tab stop sets: left out, "A<tab>B"
-                    // read "AB".
-                    else if (child.tagName === "w:tab" || child.tagName === "tab") {
+                    // read "AB". An absolute-position tab (w:ptab, as in "left<ptab>right" headers) is one too.
+                    else if (child.tagName === "w:tab" || child.tagName === "tab" || child.tagName === "w:ptab") {
                         if (hiddenResults > 0) continue;
                         text += '\t';
                         children.push({ type: 'text', text: '\t', formatting } as OfficeContentNode);
+                    }
+                    // A non-breaking hyphen is Word's own element, not a character of w:t: left out,
+                    // "co<noBreakHyphen/>operate" read "cooperate". A soft hyphen stays out, as Word shows it
+                    // only at a line end.
+                    else if (child.tagName === "w:noBreakHyphen") {
+                        if (hiddenResults > 0) continue;
+                        text += '-';
+                        children.push({ type: 'text', text: '-', formatting } as OfficeContentNode);
                     }
                     // Break nodes
                     else if (child.tagName === "w:br"

@@ -1198,6 +1198,42 @@ async function testWordParagraphMarkFormatting(): Promise<void> {
 }
 
 /**
+ * Word writes a non-breaking hyphen and an absolute-position tab as elements of the run, not as
+ * characters of `w:t`, so each must become its character or the words around it run together.
+ */
+async function testWordRunCharacters(): Promise<void> {
+    console.log('\n=== Running Word Run Character Tests ===');
+
+    const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>co</w:t><w:noBreakHyphen/><w:t>operate</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Chapter 1</w:t><w:ptab w:relativeTo="margin" w:alignment="right" w:leader="dot"/><w:t>7</w:t></w:r></w:p>
+    <w:p><w:r><w:t>soft</w:t><w:softHyphen/><w:t>ware</w:t></w:r></w:p>
+  </w:body>
+</w:document>`;
+    const zip = zipSync({
+        '[Content_Types].xml': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`),
+        '_rels/.rels': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`),
+        'word/document.xml': strToU8(documentXml),
+    });
+
+    const ast = await OfficeParser.parseOffice(Buffer.from(zip), { fileType: 'docx' });
+    const text = (await ast.to('text')).value;
+    assert.strictEqual(text, 'co-operate\nChapter 1\t7\nsoftware', 'Word: noBreakHyphen and ptab read as their characters, a soft hyphen stays hidden');
+
+    console.log('  Word run characters: All assertions passed ✓');
+}
+
+/**
  * Excel stores a date or a time as a day count and shows it through the cell's number format. An
  * XLSX is built in-memory with built-in and custom date/time formats, number formats that only look
  * like dates, and both date systems; every cell must read as the sheet shows it.
@@ -10919,6 +10955,7 @@ async function runTests(): Promise<void> {
         ['AttributeRoundtrip', testAttributeRoundtrip],
         ['BlobInput', testBlobInput],
         ['WordParagraphMark', testWordParagraphMarkFormatting],
+        ['WordRunCharacters', testWordRunCharacters],
         ['ExcelDates', testExcelDates],
         ['GeneratedOutput', testGeneratedOutput],
         ['ODG', testOdg],
