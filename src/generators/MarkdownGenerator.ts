@@ -1818,20 +1818,26 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 if (meta?.abbreviationTitle) this.collectedAbbreviations.set(n.text || '', meta.abbreviationTitle);
                 let text = esc(n.text || '');
                 const f = n.formatting;
+                const html = this.resolvedFallbackToHtml;
                 if (this.config.includeFormatting && f) {
                     if (f.font === 'monospace') text = `<code>${text}</code>`;
                     if (f.bold && !this.inImplicitBold) text = `<b>${text}</b>`;
                     if (f.italic) text = `<i>${text}</i>`;
-                    if (f.underline) text = `<u>${text}</u>`;
+                    if (f.underline && html.textFormatting) text = `<u>${text}</u>`;
                     if (f.strikethrough) text = `<s>${text}</s>`;
-                    if (f.subscript) text = `<sub>${text}</sub>`;
-                    if (f.superscript) text = `<sup>${text}</sup>`;
-                    const defaultHighlight = isDefaultHighlight(f.backgroundColor);
-                    if (defaultHighlight) text = `<mark>${text}</mark>`;
-                    const styles = [['color', f.color], ['background-color', defaultHighlight ? undefined : f.backgroundColor], ['font-size', f.size]]
-                        .map(([prop, value]) => [prop, value ? sanitizeCssValue(value) : ''])
-                        .filter(([, value]) => value).map(([prop, value]) => `${prop}: ${value}`);
-                    if (styles.length) text = `<span style="${esc(styles.join('; '))}">${text}</span>`;
+                    if (f.subscript && html.textFormatting) text = `<sub>${text}</sub>`;
+                    if (f.superscript && html.textFormatting) text = `<sup>${text}</sup>`;
+                    // As the text writer does outside a table (see the `text` case of generate): colour,
+                    // size and a highlight's own colour only when opted in, a highlight the dialect has
+                    // kept as a highlight where its colour has no span to hold it.
+                    const mark = isDefaultHighlight(f.backgroundColor) || (!!f.backgroundColor && !html.inlineFormatting && this.resolvedDialect.highlight !== 'none');
+                    if (mark) text = `<mark>${text}</mark>`;
+                    if (html.inlineFormatting) {
+                        const styles = [['color', f.color], ['background-color', mark ? undefined : f.backgroundColor], ['font-size', f.size]]
+                            .map(([prop, value]) => [prop, value ? sanitizeCssValue(value) : ''])
+                            .filter(([, value]) => value).map(([prop, value]) => `${prop}: ${value}`);
+                        if (styles.length) text = `<span style="${esc(styles.join('; '))}">${text}</span>`;
+                    }
                 }
                 if (meta?.citationKey) return `<cite data-citation-key="${esc(meta.citationKey)}">[@${esc(meta.citationKey)}]</cite>`;
                 if (meta?.wikilink) return `<a href="#${esc(this.slugify(meta.link || ''))}" data-wikilink-page="${esc(meta.link || '')}">${text}</a>`;

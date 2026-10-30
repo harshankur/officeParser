@@ -84,40 +84,25 @@ TestBool: true
 
 <table>
   <tr>
-    <td><span style="color: #000000; font-size: 12pt">We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks. </span></td>
+    <td>We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks. </td>
   </tr>
   <tr>
-    <td colspan="13"><span style="color: #365F91; font-size: 12pt">December 2007 </span></td>
+    <td colspan="13">December 2007 </td>
   </tr>
   <tr>
-    <td><span style="color: #365F91; font-size: 12pt">Sun </span></td>
+    <td>Sun </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">Mon </span></td>
+    <td>Mon </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">Tue </span></td>
+    <td>Tue </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">Wed </span></td>
+    <td>Wed </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">Thu </span></td>
+    <td>Thu </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">Fri </span></td>
+    <td>Fri </td>
     <td></td>
-    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt">Sat </span></td>
-  </tr>
-  <tr>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt">1 </span></td>
+    <td colspan="2">Sat </td>
   </tr>
   <tr>
     <td></td>
@@ -132,22 +117,7 @@ TestBool: true
     <td></td>
     <td></td>
     <td></td>
-    <td colspan="2"></td>
-  </tr>
-  <tr>
-    <td><span style="color: #365F91; font-size: 12pt">2 </span></td>
-    <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">3 </span></td>
-    <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">4 </span></td>
-    <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">5 </span></td>
-    <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">6 </span></td>
-    <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">7 </span></td>
-    <td></td>
-    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt">8 </span></td>
+    <td colspan="2">1 </td>
   </tr>
   <tr>
     <td></td>
@@ -165,19 +135,19 @@ TestBool: true
     <td colspan="2"></td>
   </tr>
   <tr>
-    <td><span style="color: #365F91; font-size: 12pt">9 </span></td>
+    <td>2 </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">10 </span></td>
+    <td>3 </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">11 </span></td>
+    <td>4 </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">12 </span></td>
+    <td>5 </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">13 </span></td>
+    <td>6 </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">14 </span></td>
+    <td>7 </td>
     <td></td>
-    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt">15 </span></td>
+    <td colspan="2">8 </td>
   </tr>
   <tr>
     <td></td>
@@ -195,19 +165,19 @@ TestBool: true
     <td colspan="2"></td>
   </tr>
   <tr>
-    <td><span style="color: #365F91; font-size: 12pt">16 </span></td>
+    <td>9 </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">17 </span></td>
+    <td>10 </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">18 </span></td>
+    <td>11 </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">19 </span></td>
+    <td>12 </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">20 </span></td>
+    <td>13 </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">21 </span></td>
+    <td>14 </td>
     <td></td>
-    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt">22 </span></td>
+    <td colspan="2">15 </td>
   </tr>
   <tr>
     <td></td>
@@ -225,19 +195,19 @@ TestBool: true
     <td colspan="2"></td>
   </tr>
   <tr>
-    <td><span style="color: #365F91; font-size: 12pt">23 </span></td>
+    <td>16 </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">24 </span></td>
+    <td>17 </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">25 </span></td>
+    <td>18 </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">26 </span></td>
+    <td>19 </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">27 </span></td>
+    <td>20 </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">28 </span></td>
+    <td>21 </td>
     <td></td>
-    <td colspan="2"><span style="color: #7F7F7F; font-size: 12pt">29 </span></td>
+    <td colspan="2">22 </td>
   </tr>
   <tr>
     <td></td>
@@ -255,9 +225,39 @@ TestBool: true
     <td colspan="2"></td>
   </tr>
   <tr>
-    <td><span style="color: #365F91; font-size: 12pt">30 </span></td>
+    <td>23 </td>
     <td></td>
-    <td><span style="color: #7F7F7F; font-size: 12pt">31 </span></td>
+    <td>24 </td>
+    <td></td>
+    <td>25 </td>
+    <td></td>
+    <td>26 </td>
+    <td></td>
+    <td>27 </td>
+    <td></td>
+    <td>28 </td>
+    <td></td>
+    <td colspan="2">29 </td>
+  </tr>
+  <tr>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td colspan="2"></td>
+  </tr>
+  <tr>
+    <td>30 </td>
+    <td></td>
+    <td>31 </td>
     <td></td>
     <td></td>
     <td></td>

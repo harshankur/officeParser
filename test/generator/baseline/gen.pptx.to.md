@@ -94,11 +94,11 @@ Next, we have something a little more complex, a nested table, i.e. a table in
 
 <table>
   <tr>
-    <td rowspan="2"><p><span style="font-size: 12pt">One </span></p><p><span style="font-size: 12pt">Three </span></p></td>
-    <td><p><span style="font-size: 12pt">Two </span></p></td>
+    <td rowspan="2"><p>One </p><p>Three </p></td>
+    <td><p>Two </p></td>
   </tr>
   <tr>
-    <td><p><span style="font-size: 12pt">Four </span></p></td>
+    <td><p>Four </p></td>
   </tr>
 </table>
 
@@ -111,188 +111,188 @@ Next, we have something a little more complex, a nested table, i.e. a table in
 
 <table>
   <tr>
-    <td colspan="13"><p><span style="color: #365F91; font-size: 12pt">December 2007 </span></p></td>
+    <td colspan="13"><p>December 2007 </p></td>
     <td><p></p></td>
   </tr>
   <tr>
-    <td><p><span style="color: #365F91; font-size: 12pt">Sun </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">Mon </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">Tue </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">Wed </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">Thu </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">Fri </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td colspan="2"><p><span style="color: #7F7F7F; font-size: 12pt">Sat </span></p></td>
+    <td><p>Sun </p></td>
+    <td><p> </p></td>
+    <td><p>Mon </p></td>
+    <td><p> </p></td>
+    <td><p>Tue </p></td>
+    <td><p> </p></td>
+    <td><p>Wed </p></td>
+    <td><p> </p></td>
+    <td><p>Thu </p></td>
+    <td><p> </p></td>
+    <td><p>Fri </p></td>
+    <td><p> </p></td>
+    <td colspan="2"><p>Sat </p></td>
   </tr>
   <tr>
-    <td><p><span style="color: #365F91; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td colspan="2"><p><span style="color: #7F7F7F; font-size: 12pt">1 </span></p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td colspan="2"><p>1 </p></td>
   </tr>
   <tr>
-    <td><p><span style="color: #365F91; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td colspan="2"><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td colspan="2"><p> </p></td>
   </tr>
   <tr>
-    <td><p><span style="color: #365F91; font-size: 12pt">2 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">3 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">4 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">5 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">6 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">7 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td colspan="2"><p><span style="color: #7F7F7F; font-size: 12pt">8 </span></p></td>
+    <td><p>2 </p></td>
+    <td><p> </p></td>
+    <td><p>3 </p></td>
+    <td><p> </p></td>
+    <td><p>4 </p></td>
+    <td><p> </p></td>
+    <td><p>5 </p></td>
+    <td><p> </p></td>
+    <td><p>6 </p></td>
+    <td><p> </p></td>
+    <td><p>7 </p></td>
+    <td><p> </p></td>
+    <td colspan="2"><p>8 </p></td>
   </tr>
   <tr>
-    <td><p><span style="color: #365F91; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td colspan="2"><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td colspan="2"><p> </p></td>
   </tr>
   <tr>
-    <td><p><span style="color: #365F91; font-size: 12pt">9 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">10 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">11 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">12 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">13 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">14 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td colspan="2"><p><span style="color: #7F7F7F; font-size: 12pt">15 </span></p></td>
+    <td><p>9 </p></td>
+    <td><p> </p></td>
+    <td><p>10 </p></td>
+    <td><p> </p></td>
+    <td><p>11 </p></td>
+    <td><p> </p></td>
+    <td><p>12 </p></td>
+    <td><p> </p></td>
+    <td><p>13 </p></td>
+    <td><p> </p></td>
+    <td><p>14 </p></td>
+    <td><p> </p></td>
+    <td colspan="2"><p>15 </p></td>
   </tr>
   <tr>
-    <td><p><span style="color: #365F91; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td colspan="2"><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td colspan="2"><p> </p></td>
   </tr>
   <tr>
-    <td><p><span style="color: #365F91; font-size: 12pt">16 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">17 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">18 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">19 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">20 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">21 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td colspan="2"><p><span style="color: #7F7F7F; font-size: 12pt">22 </span></p></td>
+    <td><p>16 </p></td>
+    <td><p> </p></td>
+    <td><p>17 </p></td>
+    <td><p> </p></td>
+    <td><p>18 </p></td>
+    <td><p> </p></td>
+    <td><p>19 </p></td>
+    <td><p> </p></td>
+    <td><p>20 </p></td>
+    <td><p> </p></td>
+    <td><p>21 </p></td>
+    <td><p> </p></td>
+    <td colspan="2"><p>22 </p></td>
   </tr>
   <tr>
-    <td><p><span style="color: #365F91; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td colspan="2"><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td colspan="2"><p> </p></td>
   </tr>
   <tr>
-    <td><p><span style="color: #365F91; font-size: 12pt">23 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">24 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">25 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">26 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">27 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">28 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td colspan="2"><p><span style="color: #7F7F7F; font-size: 12pt">29 </span></p></td>
+    <td><p>23 </p></td>
+    <td><p> </p></td>
+    <td><p>24 </p></td>
+    <td><p> </p></td>
+    <td><p>25 </p></td>
+    <td><p> </p></td>
+    <td><p>26 </p></td>
+    <td><p> </p></td>
+    <td><p>27 </p></td>
+    <td><p> </p></td>
+    <td><p>28 </p></td>
+    <td><p> </p></td>
+    <td colspan="2"><p>29 </p></td>
   </tr>
   <tr>
-    <td><p><span style="color: #365F91; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td colspan="2"><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td colspan="2"><p> </p></td>
   </tr>
   <tr>
-    <td><p><span style="color: #365F91; font-size: 12pt">30 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt">31 </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
-    <td colspan="2"><p><span style="color: #7F7F7F; font-size: 12pt"> </span></p></td>
+    <td><p>30 </p></td>
+    <td><p> </p></td>
+    <td><p>31 </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td><p> </p></td>
+    <td colspan="2"><p> </p></td>
   </tr>
 </table>
 

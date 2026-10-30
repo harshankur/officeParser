@@ -7883,6 +7883,45 @@ async function testTextTableCellsApart(): Promise<void> {
 }
 
 /**
+ * A Markdown HTML table cell keeps the options the writer keeps elsewhere: colour and size only with
+ * `inlineFormatting`, underline and sub/superscript only with `textFormatting`, and runs that differ only in
+ * a colour it does not write read as one run with none (one of them was written with its colour over both).
+ */
+async function testMarkdownHtmlCellFormatting(): Promise<void> {
+    const run = (text: string, formatting: object) => ({ type: 'text', text, formatting });
+    const cell = (children: any[], metadata: object = {}) => ({ type: 'cell', children, metadata: { row: 0, col: 0, ...metadata } });
+    const astOf = (children: any[]) => ({ type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [
+        { type: 'row', children: [cell([{ type: 'paragraph', text: 'h', children: [run('h', {})] }], { colSpan: 2 })] },
+        { type: 'row', children: [cell([{ type: 'paragraph', text: 'x', children }]), cell([{ type: 'paragraph', text: 'z', children: [run('z', {})] }])] },
+    ] }] }) as any;
+    const md = async (children: any[], mdConfig: object = {}) => String((await OfficeGenerator.generate(astOf(children), 'md', { mdConfig } as any)).value);
+
+    const styled = [run('C', { color: '#ff0000', size: '10pt' })];
+    assert.ok(!(await md(styled)).includes('<span'), 'cell: no colour or size span by default');
+    assert.ok((await md(styled, { fallbackToHtml: { inlineFormatting: true } })).includes('<span style="color: #ff0000; font-size: 10pt">C</span>'), 'cell: the span when opted in');
+
+    const twoColours = [run('R', { color: '#ff0000' }), run('G', { color: '#00ff00' })];
+    assert.ok(/<p>RG<\/p>/.test(await md(twoColours)), `cell: runs differing only in a colour not written are one plain run; got ${await md(twoColours)}`);
+    const kept = await md(twoColours, { fallbackToHtml: { inlineFormatting: true } });
+    assert.ok(kept.includes('color: #ff0000">R<') && kept.includes('color: #00ff00">G<'), `cell: each run keeps its own colour when opted in; got ${kept}`);
+
+    const wrapped = [run('U', { underline: true }), run('S', { subscript: true }), run('P', { superscript: true }), run('B', { bold: true })];
+    assert.ok(/<u>U<\/u><sub>S<\/sub><sup>P<\/sup>/.test(await md(wrapped)), 'cell: underline and sub/superscript by default');
+    const off = await md(wrapped, { fallbackToHtml: { textFormatting: false } });
+    assert.ok(!/<(u|sub|sup)>/.test(off) && off.includes('<b>B</b>'), `cell: textFormatting off drops those elements, not bold; got ${off}`);
+
+    const specific = [run('H', { backgroundColor: '#00ff00' })];
+    assert.ok((await md(specific, { dialect: 'extended' })).includes('<mark>H</mark>'), 'cell: a coloured highlight stays a highlight in a dialect with highlights');
+    const github = await md(specific, { dialect: 'github' });
+    assert.ok(!github.includes('H</mark>') && !github.includes('<span'), 'cell: nothing to hold a coloured highlight where the dialect has none, as outside a table');
+    assert.ok((await md([run('Y', { backgroundColor: '#ffff00' })])).includes('<mark>Y</mark>'), 'cell: a plain highlight is a mark');
+    assert.ok((await md(specific, { fallbackToHtml: { inlineFormatting: true } })).includes('<span style="background-color: #00ff00">H</span>'), 'cell: a coloured highlight keeps its colour when opted in');
+
+    const cm = await md(styled, { dialect: 'commonmark' });
+    assert.ok(!cm.includes('<span') && cm.includes('<table'), 'CommonMark tables, always HTML, take the same options');
+}
+
+/**
  * An item of a PDF is matched to its own first glyph, not the first within a hair of its place: a run in a
  * font a hundredth of a point tall packs its glyphs that close, so a word after it was matched to the run's
  * glyph, the blank between them was left out and "560 Retirement" read as one word (tagged forms print
@@ -11073,6 +11112,7 @@ async function runTests(): Promise<void> {
         ['Unicode chunk boundaries', testUnicodeChunks],
         ['Brotli decoder with a known flaw avoided', testBrotliGuard],
         ['PDF items match their own glyphs', testPdfItemsMatchTheirOwnGlyphs],
+        ['Markdown HTML cell formatting', testMarkdownHtmlCellFormatting],
         ['Cancellation', testCancellation],
     ];
 

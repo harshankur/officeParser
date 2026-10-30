@@ -2308,8 +2308,8 @@ export interface FallbackToHtmlConfig {
     itemLineBreaks?: boolean;
     /**
      * Inline text color, highlight, and font size via a `<span style="color:...;background-color:...;
-     * font-size:...">` run, which the Markdown parser reads back. These have no Markdown syntax and
-     * are silently lost otherwise. Unlike the other fields this is **off by default even when
+     * font-size:...">` run, which the Markdown parser reads back, in prose and in table cells alike.
+     * These have no Markdown syntax and are silently lost otherwise. Unlike the other fields this is **off by default even when
      * `fallbackToHtml` is `true`**, because it changes default output; enable it explicitly with
      * `fallbackToHtml: { inlineFormatting: true }`.
      */
