@@ -1685,6 +1685,7 @@ Pass as `mdConfig` inside `GeneratorConfig`.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `fallbackToHtml` | `boolean \| FallbackToHtmlConfig` | `true` | Use HTML tags for features Markdown cannot represent (underlines, merged table cells, embeds, etc.). Pass an object for per-feature control. `cellLineBreaks`/`itemLineBreaks` (default on) join multi-line table-cell / multi-paragraph list-item content (and a heading's or definition's line breaks) with `<br>` instead of a space. `inlineFormatting` (default `false`, opt-in even when the boolean is `true`) additionally round-trips inline color/highlight/font-size as `<span style="...">` runs. |
+| `listMarkers` | `'keep' \| 'numbers'` | `'keep'` | How an ordered list item labelled other than `1.` is written: its label after a bullet (`- (l) Annual reports`), or its number (`12. Annual reports`). |
 | `dialect` | `MarkdownDialectPreset \| MarkdownDialectConfig` | `'extended'` | Which native syntax to emit for constructs that differ across targets (GitHub/GitLab/Obsidian/Pandoc/CommonMark). Each capability is typed by the syntax it selects (e.g. `strikethrough: 'tilde'`, `highlight: 'equals'`, `admonitions: 'blockquote'`), with `'none'` to turn it off. See [Markdown Dialect Support](#markdown-dialect-support). The old `boolean` toggles and admonition flavour names (`'github'`/`'gitlab'`/`'pandoc'`) still work but are deprecated. |
 
 ### PdfGeneratorConfig

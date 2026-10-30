@@ -2346,6 +2346,14 @@ export interface MdGeneratorConfig {
     fallbackToHtml?: boolean | FallbackToHtmlConfig;
 
     /**
+     * How an ordered list item the document labels other than `1.` is written. `'keep'` (the default)
+     * writes its label as text after a bullet (`- (l) Annual reports`, `- 2.1. Scope`), as Markdown numbers
+     * in digits alone; `'numbers'` writes the item's number (`12. Annual reports`), a native ordered list
+     * that shows another label than the document's.
+     */
+    listMarkers?: 'keep' | 'numbers';
+
+    /**
      * Target Markdown dialect for generation - which native syntax to emit for constructs that
      * differ across real-world targets (GitHub/GitLab/Obsidian/Pandoc/strict CommonMark). See
      * `MarkdownDialectConfig` for the full per-feature field list. Defaults to `'extended'`

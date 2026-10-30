@@ -9,7 +9,7 @@ import { withinTime } from './helpers/timing';
 import { testUnicodeChunks } from './generator/unicodeChunks';
 import { testBrotliGuard } from './security/brotliGuard';
 import { OfficeGenerator } from '../src/OfficeGenerator';
-import { bulletCharacter, formatListNumber } from '../src/utils/listMarkers';
+import { bulletCharacter, formatListNumber, readMarkerLabels } from '../src/utils/listMarkers';
 import { decodeBmp, decodeGif } from '../src/utils/rasterUtils';
 import { excelShownText } from '../src/utils/excelFormat';
 import { fillPageNumber, pageNumberText } from '../src/utils/pageNumbers';
@@ -7883,6 +7883,60 @@ async function testTextTableCellsApart(): Promise<void> {
 }
 
 /**
+ * A letter or numeral list marker is read with the markers around it, not as a numeral first: `(l)` after
+ * `(k)` is 12, and `c.` 3. A word (Ill., Mix., Mild.) is no marker. Markdown keeps a label it cannot write
+ * as a number, as every other writer shows it.
+ */
+async function testListMarkerReading(): Promise<void> {
+    const seq = (labels: string[]) => readMarkerLabels(labels);
+    assert.deepStrictEqual(seq(['(h)', '(i)', '(j)', '(k)', '(l)', '(m)']), [8, 9, 10, 11, 12, 13], 'letters in a row read as letters');
+    assert.deepStrictEqual(seq(['i.', 'ii.', 'iii.', 'iv.', 'v.', 'vi.']), [1, 2, 3, 4, 5, 6], 'numerals in a row read as numerals');
+    assert.deepStrictEqual(seq(['a.', 'b.', 'c.', 'd.']), [1, 2, 3, 4], 'c. and d. after letters are 3 and 4');
+    assert.deepStrictEqual(seq(['(u)', '(v)', '(w)', '(x)', '(y)']), [21, 22, 23, 24, 25], 'v and x among letters');
+    assert.deepStrictEqual(seq(['(z)', '(aa)', '(bb)', '(cc)', '(dd)']), [26, 27, 28, 29, 30], 'repeated letters go on from z, cc among them');
+    assert.deepStrictEqual(seq(['xlix)', 'l)', 'li)']), [49, 50, 51], 'l among numerals is 50');
+    assert.deepStrictEqual(seq(['(h)', '(i)', '(ii)', '(j)']), [8, 1, 2, 10], 'numerals under a letter, and the letters going on after them');
+    assert.deepStrictEqual(seq(['(c)']), [3], 'a lone c is a letter');
+    assert.deepStrictEqual(seq(['(i)']), [1], 'a lone i starts numerals');
+    assert.deepStrictEqual(seq(['A.', 'b.', 'B.', 'c.']), [1, 2, 2, 3], 'each case is a run of its own');
+    assert.deepStrictEqual(seq(['Ill.', 'Mix.', 'mi.', 'cc.', 'aa.']), [null, null, null, null, null], 'words and numerals with nothing to say so are not numbers');
+
+    const pdfOf = (lines: string[]) => {
+        const content = `BT /F1 11 Tf ${lines.map((l, i) => `1 0 0 1 72 ${700 - i * 14} Tm (${l.replace(/[()]/g, '\\$&')}) Tj`).join(' ')} ET`;
+        const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>', '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>', `<< /Length ${content.length} >>\nstream\n${content}\nendstream`, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+        let pdf = '%PDF-1.4\n';
+        const offsets: number[] = [];
+        objects.forEach((o, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+        const xref = pdf.length;
+        pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+        return Buffer.from(pdf, 'latin1');
+    };
+    const read = (lines: string[]) => OfficeParser.parseOffice(pdfOf(lines), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false }, onWarning: () => { } } as any) as Promise<OfficeParserAST>;
+    const items = (ast: OfficeParserAST) => collectAllNodes(ast).filter(n => n.type === 'list').map(n => [(n.metadata as any).marker, (n.metadata as any).itemIndex + 1]);
+    const letters = await read(['(k) Keep the reports for one year.', '(l) Annual reports are sent out.', '(m) Separate funds stay apart.']);
+    assert.deepStrictEqual(items(letters), [['(k)', 11], ['(l)', 12], ['(m)', 13]], 'lines: letters read in a row');
+    assert.ok(String((await letters.to('md')).value).includes('- (k) Keep the reports for one year.\n- (l) Annual reports are sent out.\n- (m) Separate funds stay apart.'), 'Markdown keeps the labels');
+    assert.ok(/^12\. Annual reports/m.test(String((await OfficeGenerator.generate(letters, 'md', { mdConfig: { listMarkers: 'numbers' } } as any)).value)), 'listMarkers: numbers writes the numbers');
+    const chunks = (await OfficeGenerator.generate(letters, 'chunks', { onWarning: () => { } } as any)).value as any;
+    assert.ok(JSON.stringify(chunks).includes('(l) Annual reports'), 'chunks keep the label');
+    const numbering = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(letters, 'docx')).value as any))['word/numbering.xml']);
+    assert.ok(/w:startOverride w:val="11"/.test(numbering) && /w:numFmt w:val="lowerLetter"/.test(numbering) && /w:lvlText w:val="\(%1\)"/.test(numbering), `DOCX numbers them as letters from k; got ${numbering.slice(0, 500)}`);
+    const prose = await read(['Ill. in the morning, the patient rested.', 'Mix. the two parts well before use.', 'Mild. weather is expected for a week.']);
+    assert.deepStrictEqual(items(prose), [], 'words before a full stop are no markers');
+    const paired = await read(['(aa) The first of the second run.', '(bb) The next of the second run.']);
+    assert.deepStrictEqual(items(paired), [['(aa)', 27], ['(bb)', 28]], 'repeated letters with a neighbour are items');
+    assert.deepStrictEqual(items(await read(['(cc) One line with the rest of it.', 'And a plain line after that one.'])), [], 'a repeated letter alone is text');
+
+    const cellItem = (marker: string, itemIndex: number) => ({ type: 'list', text: 'x', children: [{ type: 'text', text: 'x' }], metadata: { listType: 'ordered', itemIndex, marker, indentation: 0, listId: 'c' } });
+    const cellMd = String((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [
+        { type: 'row', children: [{ type: 'cell', children: [{ type: 'paragraph', text: 'h', children: [{ type: 'text', text: 'h' }] }], metadata: { row: 0, col: 0, colSpan: 2 } }] },
+        { type: 'row', children: [{ type: 'cell', children: [cellItem('(l)', 11)], metadata: { row: 1, col: 0 } }, { type: 'cell', children: [{ type: 'paragraph', text: 'z', children: [{ type: 'text', text: 'z' }] }], metadata: { row: 1, col: 1 } }] },
+    ] }] } as any, 'md')).value);
+    assert.ok(cellMd.includes('<ol start="12" style="list-style-type:') && !cellMd.includes('<ol><li'), `a list item in an HTML cell keeps its number and label; got ${cellMd}`);
+    assert.ok(collectAllNodes(await OfficeParser.parseOffice(Buffer.from(cellMd), { fileType: 'md' } as any) as OfficeParserAST).some(n => n.type === 'list' && (n.metadata as any).marker === '(l)'), 'and it reads back');
+}
+
+/**
  * A Markdown HTML table cell keeps the options the writer keeps elsewhere: colour and size only with
  * `inlineFormatting`, underline and sub/superscript only with `textFormatting`, and runs that differ only in
  * a colour it does not write read as one run with none (one of them was written with its colour over both).
@@ -11113,6 +11167,7 @@ async function runTests(): Promise<void> {
         ['Brotli decoder with a known flaw avoided', testBrotliGuard],
         ['PDF items match their own glyphs', testPdfItemsMatchTheirOwnGlyphs],
         ['Markdown HTML cell formatting', testMarkdownHtmlCellFormatting],
+        ['List marker reading', testListMarkerReading],
         ['Cancellation', testCancellation],
     ];
 

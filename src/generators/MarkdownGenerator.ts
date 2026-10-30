@@ -1,6 +1,7 @@
 import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, EmbedSyntax, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, StrikethroughSyntax, TableMetadata, TextFormatting, TextMetadata, WikilinkSyntax } from '../types.js';
 import { escapeHtml, isCssLength, isVideoId, markdownEscapeInline, markdownEscapePlain, markdownEscapeTags, markdownEscapeText, sanitizeCommentText, sanitizeCssValue, sanitizeImageUrl, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
 import { isDefaultHighlight } from '../utils/colorUtils.js';
+import { cssListMarker } from '../utils/listMarkers.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { base64ByteLength, resolveEmbed } from '../utils/officeGenUtils.js';
 import { clampInt, clampRepeat } from '../utils/numberUtils.js';
@@ -910,7 +911,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     const bullet = `${this.resolvedDialect.bulletListMarker} `;
                     const marker = meta?.isTask
                         ? (meta.checked ? `${bullet}[x] ` : `${bullet}[ ] `)
-                        : (meta?.listType === 'ordered' ? `${clampInt(meta.itemIndex, 0, 999_999_998, 0) + 1}${this.resolvedDialect.orderedListMarker} ` : bullet);
+                        : (meta?.listType === 'ordered' ? this.orderedItemMarker(meta, bullet) : bullet);
                     const anchors = this.renderAnchors(meta);
                     // A list item is a single Markdown line. HTML-origin items carry `paragraph`
                     // children (e.g. `<li><p>a</p><ul>...`), whose renderer appends `\n\n`; dumped
@@ -1587,6 +1588,22 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         return f1 === f2 || this.markdownFormattingKey(f1) === this.markdownFormattingKey(f2);
     }
 
+    /**
+     * The marker of an ordered list item. Markdown numbers in digits and a `.` or `)` alone, so an item the
+     * document labels otherwise (`(l)`, `iv.`, `2.1.`) keeps its label as text after a bullet, where the
+     * item's own number would print a different one (`mdConfig.listMarkers: 'numbers'` prints the number).
+     */
+    private orderedItemMarker(meta: ListMetadata, bullet: string): string {
+        const number = clampInt(meta.itemIndex, 0, 999_999_998, 0) + 1;
+        const plain = `${number}${this.resolvedDialect.orderedListMarker} `;
+        if (this.config.mdConfig.listMarkers === 'numbers' || typeof meta.marker !== 'string') return plain;
+        const label = meta.marker.replace(/\s+/g, ' ').trim();
+        if (!label) return bullet;
+        if (label === `${number}.`) return plain;
+        if (label === `${number})`) return `${label} `;
+        return `${bullet}${markdownEscapeInline(label, true)} `;
+    }
+
     /** The part of a run's formatting the text writer writes (see the `text` case of generate). */
     private markdownFormattingKey(f: TextFormatting | undefined): string {
         if (!f || !this.config.includeFormatting) return '';
@@ -1883,9 +1900,14 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 return `<h${level}${attr}>${extra}${co}</h${level}>`;
             }
             case 'list': {
-                const ordered = (n.metadata as ListMetadata | undefined)?.listType === 'ordered';
+                const meta = n.metadata as ListMetadata | undefined;
                 const { attr, extra } = this.htmlIds(n.metadata);
-                return ordered ? `<ol><li${attr}>${extra}${co}</li></ol>` : `<ul><li${attr}>${extra}${co}</li></ul>`;
+                if (meta?.listType !== 'ordered') return `<ul><li${attr}>${extra}${co}</li></ul>`;
+                // Each item is a list of its own here, so its number and label are written with it.
+                const number = clampInt(meta.itemIndex, 0, 999_999_998, 0) + 1;
+                const label = this.config.mdConfig.listMarkers !== 'numbers' && typeof meta.marker === 'string' ? meta.marker : undefined;
+                const shown = label === undefined || label.trim() === `${number}.` ? '' : ` style="list-style-type: ${cssListMarker(label)}"`;
+                return `<ol${number > 1 ? ` start="${number}"` : ''}${shown}><li${attr}>${extra}${co}</li></ol>`;
             }
             case 'table': return await this.renderTableAsHtml(n);
             case 'embed': {

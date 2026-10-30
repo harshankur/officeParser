@@ -34,6 +34,106 @@ export function formatListNumber(n: number, format: NumberFormat): string {
     }
 }
 
+/** What a marker's word can stand for, as a letter and as a numeral, or null (both when it can be either). */
+export interface MarkerWord {
+    letter: number | null;
+    roman: number | null;
+    /** Its case's formats. */
+    upper: boolean;
+}
+
+/**
+ * The word of a marker (`l`, `IV`, `aa`, the `l` of `(l)`) as what it can stand for: a letter or a letter
+ * repeated (as `formatListNumber` letters), or a numeral written as `formatListNumber` writes it. In one
+ * case only and written so, or it is neither: `Ill` and `Mix` are words, not numerals.
+ */
+export function markerWord(word: string): MarkerWord | null {
+    const lower = word.toLowerCase();
+    const upper = word === word.toUpperCase();
+    if (!upper && word !== lower) return null;
+    if (!/^[a-z]{1,10}$/.test(lower)) return null;
+    const same = [...lower].every(ch => ch === lower[0]);
+    const letter = same ? (lower.charCodeAt(0) - 96) + 26 * (lower.length - 1) : null;
+    let roman: number | null = null;
+    if (/^[ivxlcdm]+$/.test(lower)) {
+        const values: Record<string, number> = { i: 1, v: 5, x: 10, l: 50, c: 100, d: 500, m: 1000 };
+        let total = 0, prev = 0;
+        for (let i = lower.length - 1; i >= 0; i--) {
+            const v = values[lower[i]];
+            total += v < prev ? -v : v;
+            prev = Math.max(prev, v);
+        }
+        if (total > 0 && formatListNumber(total, 'lowerRoman') === lower) roman = total;
+    }
+    return letter === null && roman === null ? null : { letter, roman, upper };
+}
+
+/** Numerals read with nothing around them to say so: past this a word is more likely a word (`mi`, `cc`). */
+const LONE_NUMERAL_LIMIT = 40;
+
+/** Where a run of markers of one kind has reached, as letters and as numerals, and which was read last. */
+export interface MarkerRun {
+    letter: number;
+    roman: number;
+    last: 'letter' | 'roman' | null;
+}
+
+/**
+ * What a marker's word stands for, from the markers of its kind around it (`run`, where those before it
+ * reached, and `next`, the word after it): `l` after `k` is 12, in `xlix`, `l`, `li` it is 50. Where they do
+ * not say, a lone letter is a letter (`c` is 3, not 100), but `i` starts numerals, as does a short numeral.
+ * A word that is only something past that (`cc`, `aa`, `mi`) needs a neighbour to say so, or is null.
+ * `run` is moved on past the word.
+ */
+export function readMarkerWord(word: MarkerWord, run: MarkerRun, next: MarkerWord | null | undefined): number | null {
+    const followed = word.roman !== null && next?.roman === word.roman + 1;
+    const letterFits = word.letter !== null && (word.letter === run.letter + 1 || next?.letter === word.letter + 1);
+    const romanFits = word.roman !== null && word.roman === run.roman + 1;
+    const as = (reading: 'letter' | 'roman'): number => {
+        const n = (reading === 'letter' ? word.letter : word.roman)!;
+        run[reading] = n;
+        run.last = reading;
+        return n;
+    };
+    if (followed) return as('roman');
+    if (letterFits && romanFits) return as(run.last ?? 'letter');
+    if (letterFits) return as('letter');
+    if (romanFits) return as('roman');
+    if (word.letter !== null && word.roman === null && word.letter <= 26) return as('letter');
+    if (word.roman === 1) return as('roman');
+    if (word.letter !== null && word.letter <= 26) return as('letter');
+    if (word.roman !== null && word.roman < LONE_NUMERAL_LIMIT) return as('roman');
+    return null;
+}
+
+/** A marker's word out of its label (`(l)`, `iv.`, `a)`), or null where it has none of letters alone. */
+export function markerLabelWord(label: string): string | null {
+    return /^[(\[]*([a-zA-Z]{1,10})[.)\]]*$/.exec(label.trim())?.[1] ?? null;
+}
+
+/**
+ * The numbers of a list's labels in order (null where a label has no letter or numeral word), each kind
+ * (its brackets and case) read as its own run, from `readMarkerWord`.
+ */
+export function readMarkerLabels(labels: string[]): (number | null)[] {
+    const words = labels.map(label => { const w = markerLabelWord(label); return w ? markerWord(w) : null; });
+    const kinds = labels.map((label, i) => words[i] ? `${label.trim().replace(/[a-zA-Z]+/, '')}|${words[i]!.upper}` : '');
+    const nexts = new Array<MarkerWord | null>(labels.length).fill(null);
+    const seen = new Map<string, MarkerWord>();
+    for (let i = labels.length - 1; i >= 0; i--) {
+        if (!words[i]) continue;
+        nexts[i] = seen.get(kinds[i]) ?? null;
+        seen.set(kinds[i], words[i]!);
+    }
+    const runs = new Map<string, MarkerRun>();
+    return labels.map((_, i) => {
+        if (!words[i]) return null;
+        let run = runs.get(kinds[i]);
+        if (!run) runs.set(kinds[i], run = { letter: 0, roman: 0, last: null });
+        return readMarkerWord(words[i]!, run, nexts[i]);
+    });
+}
+
 /** Word's `w:numFmt` values as a NumberFormat (others are written in digits). */
 export function wordNumberFormat(numFmt: string | undefined): NumberFormat {
     switch (numFmt) {
@@ -81,6 +181,15 @@ export function cssListStyle(type: string): { format: NumberFormat } | { bullet:
         case 'none': return { bullet: '' };
         default: return undefined;
     }
+}
+
+/**
+ * A marker as CSS `list-style-type`: a string in which anything other than a letter, a digit or a space is
+ * escaped, so nothing in it can end the string or an attribute around it.
+ */
+export function cssListMarker(marker: string): string {
+    const escaped = [...marker].slice(0, 32).map(ch => /^[\p{L}\p{N} ]$/u.test(ch) ? ch : `\\${ch.codePointAt(0)!.toString(16)} `).join('');
+    return `'${escaped}${marker ? ' ' : ''}'`;
 }
 
 /**

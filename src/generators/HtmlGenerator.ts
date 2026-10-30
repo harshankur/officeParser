@@ -4,6 +4,7 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { base64ByteLength, documentLanguage, isHeaderRow, resolveEmbed, writableSpacing } from '../utils/officeGenUtils.js';
 import { escapeHtml, isSafeHtmlAttributeName, isSafeStyleMapTag, sanitizeCommentText, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
 import { isDefaultHighlight } from '../utils/colorUtils.js';
+import { cssListMarker } from '../utils/listMarkers.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { clampInt } from '../utils/numberUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
@@ -2030,8 +2031,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             // A list item's own marker (`a)`, `iv.`, `◦`) as a CSS string, every character but a letter,
             // a digit or a space escaped, so nothing in it can end the string or the attribute.
             if (node.type === 'list' && typeof meta.marker === 'string' && !meta.isTask) {
-                const escaped = [...meta.marker].slice(0, 32).map(ch => /^[\p{L}\p{N} ]$/u.test(ch) ? ch : `\\${ch.codePointAt(0)!.toString(16)} `).join('');
-                styles.push(`list-style-type: '${escaped}${meta.marker ? ' ' : ''}'`);
+                styles.push(`list-style-type: ${cssListMarker(meta.marker)}`);
             }
             if (meta.backgroundColor) pushSafe('background-color', meta.backgroundColor);
             if (meta.verticalAlign) pushSafe('vertical-align', meta.verticalAlign);

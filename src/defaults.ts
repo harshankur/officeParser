@@ -222,6 +222,7 @@ const DEFAULT_CSV_GENERATOR_CONFIG: DeepRequired<CsvGeneratorConfig> = {
  */
 const DEFAULT_MD_GENERATOR_CONFIG: DeepRequired<MdGeneratorConfig> = {
     fallbackToHtml: true,
+    listMarkers: 'keep',
     dialect: 'extended',
 };
 

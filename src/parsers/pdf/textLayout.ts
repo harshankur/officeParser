@@ -16,6 +16,7 @@ import { rotateBoundsToRendered, roundBounds, unionAll, unionBounds } from './ge
 import { PdfLayoutConfig, PdfLine, RawRun, TextFragment } from './pdfTypes.js';
 import { median } from '../../utils/numberUtils.js';
 import { appendAll } from '../../utils/nodeListUtils.js';
+import { MarkerRun, MarkerWord, markerWord, readMarkerWord } from '../../utils/listMarkers.js';
 
 // ── small numeric helpers ───────────────────────────────────────────────────
 
@@ -762,6 +763,8 @@ export interface DocContext {
     newlineDelimiter: string;
     /** Monotonic counter giving each reconstructed geometric list a unique `listId`. */
     listCounter: { n: number };
+    /** Where each kind of letter or numeral marker has reached (see readLetterMarkers). */
+    markerRuns: Map<string, MarkerRun>;
 }
 
 /** Per-page facts needed to place bounds in rendered space. */
@@ -815,6 +818,7 @@ export function computeDocContext(allRuns: RawRun[], cfg: PdfLayoutConfig, newli
         headingLevelForSize: (s: number) => levelForSize.get(s) ?? 0,
         bodyHeadingLevel: Math.min(6, ranked.length + 1),
         listCounter: { n: 0 },
+        markerRuns: new Map(),
     };
 }
 
@@ -1016,6 +1020,8 @@ export interface ListMarker {
     number: number | null;
     /** True for a real bullet glyph (•, ◦, ▪ …) rather than the ambiguous "-"/"*" forms. */
     strongBullet: boolean;
+    /** What its word can stand for, for a letter or a numeral (see readMarkerWord). */
+    word?: MarkerWord;
     /** The marker as printed (`a)`, `1.1.1.`, `◦`), for ListMetadata.marker. */
     text: string;
 }
@@ -1028,22 +1034,20 @@ const PRIVATE_BULLETS: Record<string, string> = { '\uF0B7': '•', '\uF06C': '�
 const shownBullet = (glyph: string): string => PRIVATE_BULLETS[glyph] ?? glyph;
 const UNORDERED_RE = new RegExp(`^([${BULLET_GLYPHS}]|\\*)[ \\t\\u00a0]+`);
 // (A multi-level number, `1.2.3.`, as a multi-level list prints its items.)
-const ORDERED_RE = /^\(?([0-9]{1,3}(?:\.[0-9]{1,3}){0,8}|[a-zA-Z]|[ivxlcdmIVXLCDM]{1,7})[.)][ \t\u00a0]+/;
+const ORDERED_RE = /^\(?([0-9]{1,3}(?:\.[0-9]{1,3}){0,8}|[a-zA-Z]{1,10})[.)][ \t\u00a0]+/;
 
 /** Escapes a literal string for safe insertion into a RegExp. */
 function escapeRe(s: string): string { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-function romanValue(s: string): number {
-    const map: Record<string, number> = { i: 1, v: 5, x: 10, l: 50, c: 100, d: 500, m: 1000 };
-    const t = s.toLowerCase();
-    let total = 0, prev = 0;
-    for (let i = t.length - 1; i >= 0; i--) {
-        const v = map[t[i]];
-        if (!v) return 0;
-        total += v < prev ? -v : v;
-        prev = v;
-    }
-    return total;
+/**
+ * An ordered marker of a number (`core`) or a letter or numeral, or null for a word that is neither: its
+ * number here is its reading alone, and readLetterMarkers reads it with the markers around it.
+ */
+function orderedMarker(core: string, raw: string, text: string): ListMarker | null {
+    if (/^[0-9]+$/.test(core)) return { type: 'ordered', raw, number: parseInt(core, 10), strongBullet: false, text };
+    const word = markerWord(core);
+    if (!word) return null;
+    return { type: 'ordered', raw, number: readMarkerWord(word, { letter: 0, roman: 0, last: null }, null), strongBullet: false, text, word };
 }
 
 /**
@@ -1061,11 +1065,7 @@ function detectLineMarker(text: string): ListMarker | null {
     if (o) {
         // A multi-level number's own is its last.
         const core = o[1].includes('.') ? o[1].slice(o[1].lastIndexOf('.') + 1) : o[1];
-        let n: number | null = null;
-        if (/^[0-9]+$/.test(core)) n = parseInt(core, 10);
-        else if (/^[ivxlcdm]+$/i.test(core)) { const r = romanValue(core); n = r > 0 ? r : null; }
-        else if (/^[a-z]$/i.test(core)) n = core.toLowerCase().charCodeAt(0) - 96;
-        return { type: 'ordered', raw: o[0], number: n, strongBullet: false, text: o[0].trim() };
+        return orderedMarker(core, o[0], o[0].trim());
     }
     return null;
 }
@@ -1848,20 +1848,16 @@ export function recoverTaggedGrids(nodes: OfficeContentNode[]): OfficeContentNod
 // ── geometric list detection ─────────────────────────────────────────────────
 
 /** A marker that stands alone as its own atom (e.g. "1.1.1.", "i.", "•"), split from its item text. */
-const STANDALONE_MARKER_RE = /^(?:[•◦▪‣·○●■□∙\uF0B7\uF0A7\uF06C\uF076\uF0D8\uF0FC\uF0A8\uF0AE]|\(?(?:\d+(?:\.\d+)*|[a-zA-Z]|[ivxlcdmIVXLCDM]{1,7})[.)])$/;
+const STANDALONE_MARKER_SHAPE = /^(?:[•◦▪‣·○●■□∙\uF0B7\uF0A7\uF06C\uF076\uF0D8\uF0FC\uF0A8\uF0AE]|\(?(?:\d+(?:\.\d+)*|[a-zA-Z]{1,10})[.)])$/;
+const STANDALONE_MARKER_RE = { test: (t: string) => STANDALONE_MARKER_SHAPE.test(t) && parseStandaloneMarker(t) !== null };
 
 /** Parses a standalone marker token into a {@link ListMarker} (raw empty - nothing to strip). */
 function parseStandaloneMarker(t: string): ListMarker | null {
     if (/^[•◦▪‣·○●■□∙\uF0B7\uF0A7\uF06C\uF076\uF0D8\uF0FC\uF0A8\uF0AE]$/.test(t)) return { type: 'unordered', raw: '', number: null, strongBullet: true, text: shownBullet(t) };
-    const m = /^\(?(\d+(?:\.\d+)*|[a-zA-Z]|[ivxlcdmIVXLCDM]{1,7})[.)]$/.exec(t);
+    const m = /^\(?(\d+(?:\.\d+)*|[a-zA-Z]{1,10})[.)]$/.exec(t);
     if (!m) return null;
     const core = m[1];
-    const last = core.includes('.') ? (core.split('.').filter(Boolean).pop() ?? core) : core;
-    let num: number | null = null;
-    if (/^\d+$/.test(last)) num = parseInt(last, 10);
-    else if (/^[ivxlcdm]+$/i.test(last)) { const r = romanValue(last); num = r > 0 ? r : null; }
-    else if (/^[a-z]$/i.test(last)) num = last.toLowerCase().charCodeAt(0) - 96;
-    return { type: 'ordered', raw: '', number: num, strongBullet: false, text: t };
+    return orderedMarker(core.includes('.') ? (core.split('.').filter(Boolean).pop() ?? core) : core, '', t);
 }
 
 /** All the visible text of a paragraph group, concatenated and trimmed. */
@@ -1961,6 +1957,33 @@ export function markerLefts(lines: PdfLine[]): number[] {
     return out;
 }
 
+/**
+ * A block's letter and numeral markers read with the ones around them at their indent, of their brackets
+ * and case (see readMarkerWord): the run of each kind goes on from the block and page before. A marker
+ * that is only a letter or numeral with a neighbour to say so, and has none, is no marker: its line is text.
+ */
+function readLetterMarkers(markers: (ListMarker | null)[], lefts: number[], doc: DocContext, nextBlock: ListMarker | null | undefined): void {
+    const kindOf = (m: ListMarker) => `${m.text.replace(/[a-zA-Z]+/, '')}|${m.word!.upper}`;
+    const keys = markers.map((m, i) => m?.word ? `${kindOf(m)}|${Math.round(lefts[i] / 6)}` : '');
+    const nexts = new Array<MarkerWord | null>(markers.length).fill(null);
+    const seen = new Map<string, MarkerWord>();
+    const lastKind = nextBlock?.word ? kindOf(nextBlock) : '';
+    for (let i = markers.length - 1; i >= 0; i--) {
+        const m = markers[i];
+        if (!m?.word) continue;
+        nexts[i] = seen.get(keys[i]) ?? (kindOf(m) === lastKind ? nextBlock!.word! : null);
+        seen.set(keys[i], m.word);
+    }
+    markers.forEach((m, i) => {
+        if (!m?.word) return;
+        let run = doc.markerRuns.get(keys[i]);
+        if (!run) doc.markerRuns.set(keys[i], run = { letter: 0, roman: 0, last: null });
+        const n = readMarkerWord(m.word, run, nexts[i]);
+        if (n === null) markers[i] = null;
+        else markers[i] = { ...m, number: n };
+    });
+}
+
 export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContext, carry?: ListCarry): OfficeContentNode[] {
     const groups = groupParagraphs(block);
     const N = groups.length;
@@ -2011,6 +2034,7 @@ export function blockToNodes(block: PdfLine[], page: PageContext, doc: DocContex
 
     const prefix: (ListMarker | null)[] = groups.map((g, i) => (dropped[i] || attached[i]) ? null : detectListMarker(g));
     const effective: (ListMarker | null)[] = groups.map((_, i) => attached[i] || prefix[i]);
+    readLetterMarkers(effective, groups.map((g, i) => markerLeft[i] ?? leftOf(g)), doc, carry?.next);
     // A group starting with a number is not a list item when it is really a numbered heading (its font
     // is heading-sized) or a table-of-contents entry (dot leaders "... 3"). Stripping the number there
     // would corrupt a heading or TOC. Bullet glyphs are exempt (a heading rarely starts with one).

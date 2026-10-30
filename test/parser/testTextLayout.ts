@@ -376,6 +376,20 @@ export async function testTextLayout(): Promise<LayoutTest[]> {
         add('TOC dot leaders split into runs collapse to one space', split === 'Scope 12' && joined === 'Scope 12', 'Scope 12 (both)', `${JSON.stringify(split)} / ${JSON.stringify(joined)}`);
     }
 
+    // ── Tagged list labels: read together, a bracketed letter or numeral is a number ──────
+    {
+        const runsByMcid = new Map<string, RawRun[]>();
+        const items = ['(k)', '(l)', '(m)'].concat(['c.', '(iv)']).map((label, i) => {
+            runsByMcid.set(`l${i}`, [{ ...run(label, 72, 100 + i * 20), mcid: `l${i}` }]);
+            runsByMcid.set(`b${i}`, [{ ...run('Item body', 100, 100 + i * 20), mcid: `b${i}` }]);
+            return { role: 'LI', children: [{ role: 'Lbl', children: [{ type: 'content', id: `l${i}` }] }, { role: 'LBody', children: [{ type: 'content', id: `b${i}` }] }] };
+        });
+        const { nodes } = buildTaggedNodes({ role: 'Root', children: [{ role: 'L', children: items }] }, runsByMcid, PAGE, computeDocContext([...runsByMcid.values()].flat(), CFG, '\n'), { ignoreNotes: false, listCounter: { n: 0 } });
+        const read = nodes.map(n => `${(n.metadata as any).listType}:${(n.metadata as any).marker}:${(n.metadata as any).itemIndex + 1}`).join(' ');
+        const expected = 'ordered:(k):11 ordered:(l):12 ordered:(m):13 ordered:c.:3 ordered:(iv):4';
+        add('Tagged list labels read with the ones around them', read === expected, expected, read);
+    }
+
     // ── L-SS: super/subscript merging vs a caption ──────────────────────────
     {
         const lines = buildLines([run('H', 72, 100, 12, { width: 8 }), run('2', 80, 101.2, 8, { width: 4 })], CFG);

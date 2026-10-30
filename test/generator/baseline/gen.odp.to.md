@@ -370,13 +370,13 @@ A Multi-level list with bullets:
 
 **Continued Lists**
 
-1. One
-2. Two
+- i. One
+- ii. Two
 
 An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.
 
-3. We now resume our normal programming
-4. Four
+- iii. We now resume our normal programming
+- iv. Four
 
 ---
 

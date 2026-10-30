@@ -19,6 +19,7 @@ import { RawRun } from './pdfTypes.js';
 import { median } from '../../utils/numberUtils.js';
 import { CELL_PAGE_BOX, DocContext, PageContext, rightToLeftLean, runsToParagraph } from './textLayout.js';
 import { appendAll } from '../../utils/nodeListUtils.js';
+import { markerLabelWord, markerWord, readMarkerLabels } from '../../utils/listMarkers.js';
 
 interface StructNode {
     role?: string;
@@ -576,9 +577,10 @@ function buildTable(node: StructNode, ctx: WalkCtx): OfficeContentNode | null {
 /** Classifies a list marker label into an ordered/unordered list type. */
 function classifyListType(label: string): 'ordered' | 'unordered' {
     const t = label.trim();
-    // Decimal (incl. multilevel "1.1."), single alpha "a.", or roman "iii." markers are ordered.
-    if (/^\(?\d+(\.\d+)*[.)]?$/.test(t) || /^[a-zA-Z][.)]$/.test(t) || /^[ivxlcdmIVXLCDM]+[.)]$/.test(t)) return 'ordered';
-    return 'unordered';
+    // Decimal (incl. multilevel "1.1."), or a letter or numeral in brackets or before one ("a.", "(iv)").
+    if (/^\(?\d+(\.\d+)*[.)]?$/.test(t)) return 'ordered';
+    const word = /[.)]$/.test(t) ? markerLabelWord(t) : null;
+    return word && markerWord(word) ? 'ordered' : 'unordered';
 }
 
 /** Collapses TOC dot-leaders ("Title ...... 3" -> "Title 3") in a node's text and text-run children. */
@@ -594,37 +596,12 @@ function stripDotLeaders(node: OfficeContentNode): void {
     }
 }
 
-/** Converts a roman numeral to its integer value, or 0 if it is not a valid roman numeral. */
-function romanToInt(s: string): number {
-    const map: Record<string, number> = { i: 1, v: 5, x: 10, l: 50, c: 100, d: 500, m: 1000 };
-    const t = s.toLowerCase();
-    let total = 0, prev = 0;
-    for (let i = t.length - 1; i >= 0; i--) {
-        const v = map[t[i]];
-        if (!v) return 0;
-        total += v < prev ? -v : v;
-        prev = v;
-    }
-    return total;
-}
-
-/**
- * Parses the number an ordered-list label represents: decimal ("3."), multi-level decimal ("1.2.",
- * uses the last component), roman ("iii."), or single alpha ("c." -> 3). Returns null when the label
- * carries no recognizable number.
- */
+/** The number a decimal list label represents ("3.", the last part of a multi-level "1.2."), or null. */
 function parseListNumber(label: string): number | null {
     const t = label.trim();
-    if (!t) return null;
-    // All-decimal (possibly multi-level like "1.2."): use the last numeric component.
-    if (/^[\d.()\[\]\s]+$/.test(t)) {
-        const parts = t.match(/\d+/g);
-        if (parts && parts.length) return parseInt(parts[parts.length - 1], 10);
-    }
-    const core = t.replace(/^[(\[]+/, '').replace(/(?<![.)\]\s])[.)\]\s]+$/, '');
-    if (/^[ivxlcdm]+$/i.test(core)) { const n = romanToInt(core); return n > 0 ? n : null; }
-    if (/^[a-z]$/i.test(core)) return core.toLowerCase().charCodeAt(0) - 96; // a -> 1
-    return null;
+    if (!t || !/^[\d.()\[\]\s]+$/.test(t)) return null;
+    const parts = t.match(/\d+/g);
+    return parts && parts.length ? parseInt(parts[parts.length - 1], 10) : null;
 }
 
 /** Roles inside a list body that build their own nodes, so the item must not absorb their content. */
@@ -634,6 +611,8 @@ function buildList(node: StructNode, ctx: WalkCtx, indent: number): OfficeConten
     const items: OfficeContentNode[] = [];
     const listId = `pdf-list-${++ctx.listCounter.n}`;
     let idx = 0;
+    // This list's own items, each with its label: its letters and numerals are read together below.
+    const own: { item: OfficeContentNode; label: string }[] = [];
     for (const li of (node.children || [])) {
         if (role(li) !== 'LI') {
             // Some producers nest content directly; recurse transparently.
@@ -674,10 +653,10 @@ function buildList(node: StructNode, ctx: WalkCtx, indent: number): OfficeConten
             }
         }
         const listType = classifyListType(label);
-        // Number ordered items from the label the PDF actually rendered (decimal "3.", roman "iii.",
-        // or alpha "c.") rather than the positional index, so a list interrupted by a paragraph and
-        // split into two <L> elements resumes its numbering (3, 4) instead of restarting at 1. Falls
-        // back to the position when the label carries no parseable number.
+        // Number ordered items from the label the PDF actually rendered rather than the positional index,
+        // so a list interrupted by a paragraph and split into two <L> elements resumes its numbering (3, 4)
+        // instead of restarting at 1. Falls back to the position when the label carries no parseable number.
+        // (A letter or numeral is read below, with the labels around it.)
         let itemIndex = idx;
         if (listType === 'ordered') {
             const n = parseListNumber(label);
@@ -712,9 +691,15 @@ function buildList(node: StructNode, ctx: WalkCtx, indent: number): OfficeConten
         // list in an LI, or an empty LI): emitting an empty list node just adds a blank bullet and
         // leaves its (uncovered) marker looking like text outside the tag tree. Any nested sublist is
         // still emitted.
-        if (bodyNodes.length || itemNotes.length) { items.push(item); idx++; }
+        if (bodyNodes.length || itemNotes.length) { items.push(item); own.push({ item, label: printed }); idx++; }
         appendAll(items, nested);
     }
+    const read = readMarkerLabels(own.map(o => o.label));
+    own.forEach(({ item }, i) => {
+        const meta = item.metadata as ListMetadata;
+        const n = read[i];
+        if (meta.listType === 'ordered' && n !== null && n >= 1) meta.itemIndex = n - 1;
+    });
     return items;
 }
 
