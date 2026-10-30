@@ -327,7 +327,13 @@ export function measureItems<T extends MeasuredItem>(items: T[], glyphs: PageGly
         };
         // (A glyph with the text out of order is no better than one in order without it.)
         const matched = look(begins);
-        if (matched?.inOrder) return matched;
+        if (matched?.inOrder) {
+            // A glyph pdf.js gave no place of its own (a letter and its mark) opens the item if the page moved
+            // to it: left to the item before, that item's width reached over the gap.
+            let opening = matched.k;
+            while (opening > from && matched.k - opening < LOOKED_AT && flags[opening - 1] & LOST && near(opening - 1, x, y)) opening--;
+            return opening < matched.k && spaceBefore(opening) ? { k: opening, inOrder: true } : matched;
+        }
         return look(k => !!text[k].trim()) ?? look(() => true) ?? matched;
     };
 

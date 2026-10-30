@@ -1,7 +1,7 @@
 import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, EmbedSyntax, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, StrikethroughSyntax, TableMetadata, TextFormatting, TextMetadata, WikilinkSyntax } from '../types.js';
 import { escapeHtml, isCssLength, isVideoId, markdownEscapeInline, markdownEscapePlain, markdownEscapeTags, markdownEscapeText, sanitizeCommentText, sanitizeCssValue, sanitizeImageUrl, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
 import { isDefaultHighlight } from '../utils/colorUtils.js';
-import { cssListMarker } from '../utils/listMarkers.js';
+import { cssListMarker, writtenMarkerLabel } from '../utils/listMarkers.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { base64ByteLength, resolveEmbed } from '../utils/officeGenUtils.js';
 import { clampInt, clampRepeat } from '../utils/numberUtils.js';
@@ -1602,7 +1602,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         const number = clampInt(meta.itemIndex, 0, 999_999_998, 0) + 1;
         const plain = native(`${number}${this.resolvedDialect.orderedListMarker} `);
         if (this.config.mdConfig.listMarkers === 'numbers' || typeof meta.marker !== 'string') return plain;
-        const label = meta.marker.replace(/\s+/g, ' ').trim();
+        const label = writtenMarkerLabel(meta.marker);
         if (!label) return native(bullet);
         // A number with no more than Markdown's own punctuation is Markdown's own (not `07.`: that prints as 7).
         const own = /^(0|[1-9]\d{0,8})([.)]?)$/.exec(label);

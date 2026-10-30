@@ -183,12 +183,20 @@ export function cssListStyle(type: string): { format: NumberFormat } | { bullet:
     }
 }
 
+/** How much of a marker's label an output writes: one label can stand for every item of a large list. */
+export const MARKER_LABEL_LIMIT = 255;
+
+/** A marker's label as an output writes it. */
+export function writtenMarkerLabel(marker: string): string {
+    return [...marker.replace(/\s+/g, ' ').trim().slice(0, MARKER_LABEL_LIMIT * 2)].slice(0, MARKER_LABEL_LIMIT).join('');
+}
+
 /**
  * A marker as CSS `list-style-type`: a string in which anything other than a letter, a digit or a space is
  * escaped, so nothing in it can end the string or an attribute around it.
  */
 export function cssListMarker(marker: string): string {
-    const escaped = [...marker].slice(0, 32).map(ch => /^[\p{L}\p{N} ]$/u.test(ch) ? ch : `\\${ch.codePointAt(0)!.toString(16)} `).join('');
+    const escaped = [...marker].slice(0, MARKER_LABEL_LIMIT).map(ch => /^[\p{L}\p{N} ]$/u.test(ch) ? ch : `\\${ch.codePointAt(0)!.toString(16)} `).join('');
     return `'${escaped}${marker ? ' ' : ''}'`;
 }
 

@@ -8110,6 +8110,11 @@ async function testPdfRunningLinesAsParts(): Promise<void> {
     const odtHostile = strFromU8(unzipSync((await OfficeGenerator.generate(hostileStart, 'odt', {} as any)).value as Uint8Array)['content.xml']);
     assert.ok(!odtHostile.includes('<evil'), 'ODT: a page number is a number');
 
+
+    // Kept in their pages, numbers that are no running line are plain text.
+    const keptLines = await read(pagesN(12).map(n => [body(n), ...(n <= 8 ? [`40|${n}`] : [])]), { pdfParserConfig: { separateProcess: false, keepHeadersAndFootersInPages: true, pageRange: '7-12' } });
+    assert.ok(!JSON.stringify(keptLines.content).includes('"field"'), 'fields of lines that stay in the pages are text again');
+
 }
 
 /**
@@ -8238,11 +8243,23 @@ async function testMarkdownHtmlCellFormatting(): Promise<void> {
     const block = hostile.slice(hostile.indexOf('<table'), hostile.indexOf('</table>'));
     assert.ok(!/\r/.test(block) && !/\n[ \t]*\n/.test(block), `cell: no line end ends the block; got ${JSON.stringify(block)}`);
 
-    // A cell's blocks have no blank line between them, and an item's note and an onNode string do not end the block.
+    // A cell's blocks have no blank line between them, and an onNode string does not end the block.
     const items = await OfficeParser.parseOffice(Buffer.from('<table><tr><td colspan=2><ul><li><p>one</p><p>two</p></li></ul></td></tr></table>'), { fileType: 'html', onWarning: () => { } } as any) as OfficeParserAST;
     assert.ok(!/\n[ \t]*\n/.test(String((await items.to('md')).value)), 'cell: no blank line between an item\'s paragraphs');
     const given = String((await OfficeGenerator.generate(astOf([run('x', {})]), 'md', { onNode: (n: any) => n.type === 'text' && n.text === 'x' ? 'C1\n\n# live' : undefined } as any)).value);
     assert.ok(!/\n[ \t]*\n# live/.test(given), `cell: an onNode string does not end the block; got ${given}`);
+
+    // A label is written whole, up to a bound: one label on every item of a large list is no larger for it.
+    const longLabel = 'Part 12 of the regulation, chapter seven, item:';
+    const labelled = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [{ type: 'row', children: [cell([{ type: 'list', text: 'x', children: [run('x', {})], metadata: { listType: 'ordered', indentation: 0, itemIndex: 0, listId: 'n', alignment: 'left', marker: longLabel } }], { colSpan: 2 })] }] }] } as any;
+    const labelBack = await OfficeParser.parseOffice(Buffer.from(String((await OfficeGenerator.generate(labelled, 'md', {} as any)).value)), { fileType: 'md', onWarning: () => { } } as any) as OfficeParserAST;
+    assert.strictEqual((collectAllNodes(labelBack).find(n => n.type === 'list')!.metadata as any).marker, longLabel, 'cell: a long label stays whole');
+    const manyLabels = { type: 'docx', metadata: {}, attachments: [], content: Array.from({ length: 1000 }, (_, i) => ({ type: 'list', text: 'x', children: [run('x', {})], metadata: { listType: 'ordered', indentation: 0, itemIndex: i, listId: 'n', alignment: 'left', marker: 'L'.repeat(20000) } })) } as any;
+    for (const format of ['md', 'chunks']) {
+        const size = JSON.stringify((await OfficeGenerator.generate(manyLabels, format as any, {} as any)).value).length;
+        assert.ok(size < 2_000_000, `${format}: a long label on every item is bounded; got ${size}`);
+    }
+
 }
 
 /**
@@ -8290,7 +8307,7 @@ async function testPdfItemsMatchTheirOwnGlyphs(): Promise<void> {
 
     // Right-to-left text starts its item at its last letter: a hidden copy at the same place stays the hidden one.
     const cmap = `/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapName /X def\n/CMapType 2 def\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n4 beginbfchar\n<41> <05D0>\n<42> <05D1>\n<43> <05D2>\n<44> <05D3>\nendbfchar\nendcmap\nend\nend`;
-    const hebrewMarked = (content: string) => hebrew(content, `/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapName /X def\n/CMapType 2 def\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n4 beginbfchar\n<4D> <05DE05B8>\n<42> <05D1>\n<43> <05D2>\n<44> <05D3>\nendbfchar\nendcmap\nend\nend`);
+    const hebrewMarked = (content: string) => hebrew(content, `/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapName /X def\n/CMapType 2 def\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n6 beginbfchar\n<4D> <05DE05B8>\n<55> <05D105B8>\n<41> <05D0>\n<42> <05D1>\n<43> <05D2>\n<44> <05D3>\nendbfchar\nendcmap\nend\nend`);
     const hebrew = (content: string, map = cmap) => {
         const objects = [
             '<< /Type /Catalog /Pages 2 0 R >>',
@@ -8320,6 +8337,12 @@ async function testPdfItemsMatchTheirOwnGlyphs(): Promise<void> {
     assert.ok(hiddenRuns.some(n => !(n.formatting as any)?.invisible), `a glyph of a letter and its mark stays visible; got ${JSON.stringify(hiddenRuns.map(n => [n.text, n.formatting]))}`);
     const mixedTiny = await hebrew(`${body}BT /F1 0.01 Tf 1 0 0 1 72 600 Tm (abc ) Tj 3 Tr /H 10 Tf (A) Tj 0 Tr ET`);
     assert.ok(collectAllNodes(mixedTiny).some(n => n.type === 'text' && /abc/.test(n.text ?? '') && !(n.formatting as any)?.invisible), 'a mixed item keeps its visible text');
+
+
+    // A glyph with no place of its own opening a word the page moved to: the words stay apart.
+    const apart = await hebrewMarked(`${body}BT /H 10 Tf 1 0 0 1 72 600 Tm (DC) Tj 40 0 Td (UBAC) Tj ET`);
+    const apartText = String((await apart.to('text')).value).split('\n').filter(l => /[\u05D0-\u05EA]/.test(l));
+    assert.ok(apartText.length === 2 || /\s/.test(apartText[0].trim()), `words apart on a line stay apart; got ${JSON.stringify(apartText)}`);
 
 }
 

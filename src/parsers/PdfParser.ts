@@ -2358,6 +2358,8 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         if (pageNumber !== undefined && node.children?.length) pagesWithText.add(pageNumber);
     }
     const plan = planFurniture(furniture, extracts.map(e => e.pageNumber), pagesWithText);
+    // (Kept in the pages, what stays in them is no field either: a range's numbers would print from 1.)
+    if (pdfCfg.keepHeadersAndFootersInPages) for (const node of plan.back) unmarkPageFields(node);
     for (const kind of ['header', 'footer'] as const) {
         const aux = kind === 'header' ? auxHeaders : auxFooters;
         for (const page of routed) {
