@@ -54,8 +54,8 @@ Rain did most of the work until the middle of April.
     aside when it counts up one a page ("3" on page 3 and "4" on page 4, or "149" and "150" in an article
     printed from 147) and it is set apart as a page number is: alone on the line ("3", "- 3 -"), after a
     word like "Page", as "3 of 4", or at the end after a bar ("Annual Report | 3"). A number after any
-    other word names something of its own. Only a number that is the page's own, a "3" on page 3, later
-    becomes a page field. A line that is the page's number and nothing more ("3", "- 3 -", "Page 3 of 4")
+    other word names something of its own. <del data-revision="lines-apart">Only a number that is the page's own, a "3" on page 3, later
+    becomes a page field.</del><ins data-revision="lines-apart">A number that is the page's own, a "3" on page 3, later becomes a page field, and so does one that counts from elsewhere, a "149" on page 3, where it is the only number on the line.</ins> A line that is the page's number and nothing more ("3", "- 3 -", "Page 3 of 4")
     counts on two pages, so a two-page letter's numbers are found.
 </p>
 <p>
@@ -104,19 +104,19 @@ Rain did most of the work until the middle of April.
     PDF's page labels number its pages in roman numerals, the field is in roman numerals too.
 </p>
 <p>
-    There is one exception. When you read only part of a PDF, with a <code>pageRange</code> that starts
+    <del data-revision="ranges">There is one exception. When you read only part of a PDF, with a <code>pageRange</code> that starts
     after page 1, a field would number the output's first page 1 where the PDF printed 5. So the numbers
     are not made fields, and since the footer then reads differently on each page, it stays in each page's
-    text as it was printed. A range from page 1 that stops early does get a page field, but its count of
+    text as it was printed.</del><ins data-revision="ranges">When you read only part of a PDF, with a <code>pageRange</code> that starts after page 1, the numbers are fields too, and the output's numbering starts where the PDF's did: <code>PageSetup.pageNumberStart</code> says so.</ins> A range from page 1 that stops early does get a page field, but its count of
     pages stays as printed, since a field would count only the pages read.
 </p>
 
 <h2>Headers That Stay in Their Pages</h2>
 <p>
-    Finding running lines is per line. Moving them to <code>auxiliary</code> is a choice for the whole
+    Finding running lines is per line. <del data-revision="lines-apart">Moving them to <code>auxiliary</code> is a choice for the whole
     document, made for the header and the footer apart, and it has to answer to the writers. A writer that
     lays out pages prints a header from <code>auxiliary</code> on every page. So a header goes there only if it is the same on every
-    page read, its page numbers aside. I ran five small documents of six pages each through 8.4.1 to show
+    page read, its page numbers aside.</del><ins data-revision="lines-apart">Moving them to <code>auxiliary</code> is decided line by line, and it has to answer to the writers. A writer that lays out pages prints a header from <code>auxiliary</code> on the pages of its part: all of them, a first page, even pages, or a section. So a header goes there only if it is the same on every page that has one, its page numbers aside, or on all odd or all even pages, on no fewer than two of three pages with text, and missing from one page at most, or from no more than one in five, between its first line and its last.</ins> I ran five small documents of six pages each through 8.4.1 to show
     where the line falls:
 </p>
 <table>
@@ -126,21 +126,21 @@ Rain did most of the work until the middle of April.
     <tbody>
         <tr><td>The same on every page</td><td><code>auxiliary.headers</code></td></tr>
         <tr><td>A chapter's head, "Chapter 1" on two pages, then "Chapter 2"</td><td>Stays in each page's text</td></tr>
-        <tr><td>On some pages only</td><td>Stays in each page's text</td></tr>
+        <tr><td><del data-revision="lines-apart">On some pages only</del><ins data-revision="lines-apart">On fewer than two of three pages, or missing from more than one page in five between its first and last</ins></td><td>Stays in each page's text</td></tr>
         <tr><td>On every page but the first, a cover</td><td><code>auxiliary.headers</code></td></tr>
         <tr><td>One on the cover, another on every later page</td><td>The cover's stays on the cover, the other goes to <code>auxiliary.headers</code></td></tr>
     </tbody>
 </table>
 <p>
-    A chapter's head is a running line, but no single header could print it, so moving it would lose the
+    <del data-revision="lines-apart">A chapter's head is a running line, but no single header could print it, so moving it would lose the
     second chapter's. The same goes for a header that only some pages have. A cover is the one case I
     allowed. The first page of three or more may have no header at all (in an untagged PDF the others must
     still be three, so the header is found at all). If it has a header of its own while
     every later page agrees on another, the cover's stays on the cover and the rest go to
-    <code>auxiliary</code>. These rules for what stays in the pages apply to a tagged PDF's artifacts
+    <code>auxiliary</code>.</del><ins data-revision="lines-apart">A chapter's head is a running line, but in an untagged PDF I cannot tell it from a line that is the document's, so it stays. The same goes for a header on too few of the pages. Pages before a header's first line may have none, and they become a section without it (in an untagged PDF the others must still be three, so the header is found at all). In an untagged PDF, a cover with a header of its own while every later page agrees on another keeps its line on the cover, and the rest go to <code>auxiliary</code>.</ins> <del data-revision="parts">These rules for what stays in the pages apply to a tagged PDF's artifacts
     too. Before 8.4.1 a tagged PDF's chapter
     heads went to <code>auxiliary</code> whatever they said, so Word output printed the first chapter's
-    head on every page and lost the rest.
+    head on every page and lost the rest.</del><ins data-revision="parts">A tagged PDF's artifacts go to <code>auxiliary</code> whatever they say, unless they are on too few of the pages, because the file itself says they are no text of the page. Their differences become parts as a word processor's are: a first page's, even pages', or a section at each change, so each page prints its own head.</ins>
 </p>
 <p>
     The rule also puts a header that stays back where it was drawn: the header before the page's text, and
@@ -166,18 +166,18 @@ await parseOffice('notes.pdf', { ignoreHeadersAndFooters: true });</code></pre>
 
 <h2>What It Does Not Do Yet</h2>
 <p>
-    A few limits are worth knowing. A book often prints one head on even pages and another on odd ones: the
+    A few limits are worth knowing. <del data-revision="book-parts">A book often prints one head on even pages and another on odd ones: the
     book's title on the left, the chapter's on the right. officeParser finds these lines, but it does not yet
     write even- and odd-page headers, so they stay in their pages. And when a cover has no header, the
     other pages' header goes to <code>auxiliary</code>, but officeParser's writers do not yet give a PDF's
-    cover a first-page header of its own, so the cover gets that header too. Roman page numbers are read as
-    page numbers only where the PDF's page labels say so: without labels, "i, ii, iii" stay in the text. Front matter numbered i to iii before a body numbered in
+    cover a first-page header of its own, so the cover gets that header too.</del><ins data-revision="book-parts">A book's even and odd heads are now even and odd parts, and pages before a header's first line are a section without it, so a cover with no header prints none. A page in the middle of a run that lacks the line, a chapter's opening, still gets it from the writers.</ins> <del data-revision="roman-untagged">Roman page numbers are read as
+    page numbers only where the PDF's page labels say so: without labels, "i, ii, iii" stay in the text.</del><ins data-revision="roman-untagged">In an untagged PDF, roman page numbers are read as page numbers only where the page labels say so: without labels, "i, ii, iii" stay in the text.</ins> <del data-revision="book-parts">Front matter numbered i to iii before a body numbered in
     digits has a footer that changes its style partway, so it stays in its pages as printed. And an article
     cut from a journal, its pages printed from 147, keeps its page numbers in its text, because they are not
-    the pages' own numbers.
+    the pages' own numbers.</del><ins data-revision="book-parts">Front matter numbered i to iii before a body numbered in digits is a section at the restart, and an article cut from a journal, its pages printed from 147, starts its numbering there.</ins>
 </p>
 <p>
-    None of these loses text. That was the rule I held the whole feature to. When officeParser is not
-    sure a line is a header that one header part could hold, it leaves the line on its page. A repeated
+    None of these loses text. That was the rule I held the whole feature to. <del data-revision="lines-apart">When officeParser is not
+    sure a line is a header that one header part could hold, it leaves the line on its page.</del><ins data-revision="lines-apart">When officeParser is not sure a line of an untagged PDF is a running header, it leaves the line on its page.</ins> A repeated
     title in your text is a nuisance, but a chapter heading that disappears is a bug.
 </p>

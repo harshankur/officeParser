@@ -14,6 +14,24 @@
     ],
     "posts": [
         {
+            "slug": "text-that-looks-real-a-pdf-font-with-no-map",
+            "title": "Text That Looks Real: A PDF Font With No Map",
+            "shortTitle": "A PDF Font With No Map",
+            "category": "deep-dive",
+            "published": "2026-11-01",
+            "description": "Why a PDF line that says \"Hi there\" can extract as +LWKHUH with no error, why the file cannot always tell you, and what officeParser's PDF_FONT_UNMAPPED warning reports and misses.",
+            "deck": "A font with no map from its glyphs to characters gives text that looks real. The only evidence is a character that should not be there, which is also the one thing I had started removing."
+        },
+        {
+            "slug": "the-answer-was-in-the-glyph-name",
+            "title": "The Answer Was in the Glyph's Name: When \"nicht\" Reads \"ni!ht\"",
+            "shortTitle": "Reading a Glyph by Its Name",
+            "category": "deep-dive",
+            "published": "2026-11-01",
+            "description": "Why a word a PDF draws correctly can read \"ni!ht\" in pdf.js, what the Adobe Glyph List's rules say a name like c.sc means, how officeParser reads it, and the report I filed with pdf.js.",
+            "deck": "A font's encoding can name a glyph c.sc or T_h.alt, and with no map the text falls back to the code's own character. The name was the answer all along, so I read it, and reported it upstream."
+        },
+        {
             "slug": "reading-a-filled-pdf-form",
             "title": "Reading a Filled PDF Form: The Values Are Not in the Page",
             "shortTitle": "Reading a Filled PDF Form",
@@ -28,6 +46,14 @@
             "shortTitle": "Running Headers in a PDF",
             "category": "deep-dive",
             "published": "2026-10-29",
+            "updated": "2026-11-01",
+            "revisions": [
+                { "id": "ranges", "date": "2026-11-01", "release": "8.5.0", "note": "A range from a later page now keeps its page numbers out of the text, as fields." },
+                { "id": "parts", "date": "2026-11-01", "release": "8.5.0", "note": "Lines that differ are now parts as a word processor's are, and a tagged PDF's artifacts go there whatever they say." },
+                { "id": "book-parts", "date": "2026-11-01", "release": "8.5.0", "note": "Even and odd heads, a cover without a header, roman front matter and an article's numbers are now handled." },
+                { "id": "lines-apart", "date": "2026-11-01", "release": "8.5.0", "note": "Lines are now moved one by one, and to the pages of their part, and a header may be missing from some pages. A number counting from elsewhere is a field too." },
+                { "id": "roman-untagged", "date": "2026-11-01", "note": "This holds for an untagged PDF: a tagged PDF's artifacts in roman numerals are page numbers without page labels too." }
+            ],
             "description": "How officeParser 8.4.1 finds an untagged PDF's running headers and footers by comparing its pages, turns a printed page number back into a field, and leaves a header in its pages when no single header could hold it.",
             "deck": "A Word document's header is a part of its own, with a page number field in it. A PDF's is text drawn again on every page. Getting the header back means comparing the pages, and knowing when not to."
         },
@@ -72,6 +98,10 @@
             "shortTitle": "What is Inside a .docx",
             "category": "deep-dive",
             "published": "2026-10-04",
+            "updated": "2026-11-01",
+            "revisions": [
+                { "id": "floating-box", "date": "2026-11-01", "note": "A floating text box comes just before the paragraph that draws it, where I had written after." }
+            ],
             "description": "A tour of the .docx package: parts and relationships, runs that Word splits mid-word, lists stored in another file, merged cells, text boxes, and field codes, and what officeParser makes of them.",
             "deck": "Most developers assume a Word document is styled text in a zip archive. It is closer to a small database: parts tied together by relationships, text split into runs, lists defined in another file, and text boxes nested inside drawings."
         },
@@ -81,6 +111,10 @@
             "shortTitle": "How PPTX Stores a Slide",
             "category": "deep-dive",
             "published": "2026-10-04",
+            "updated": "2026-11-01",
+            "revisions": [
+                { "id": "inherited-sizes", "date": "2026-11-01", "note": "A size or colour a slide inherits from its layout, master or theme is filled in; I had written that it was not." }
+            ],
             "description": "Why a slide is a canvas and not a text flow: English Metric Units, the theme, master and layout chain, the shape tree, speaker notes, and why reading order is hard.",
             "deck": "A word processing file flows from top to bottom. A presentation is the opposite: a set of separate canvases where shapes sit at coordinates, formatting is inherited through four layers, and every length is a whole number of units, 914,400 to the inch."
         },
@@ -124,9 +158,9 @@
             "shortTitle": "Where officeParser is the Wrong Tool",
             "category": "comparisons",
             "published": "2026-10-04",
-            "updated": "2026-10-30",
+            "updated": "2026-11-01",
             "revisions": [
-                { "id": "fixed-node-releases", "date": "2026-10-30", "note": "Earlier Node.js releases have a flaw in their Brotli decoder (CVE-2026-111497), so the package now asks for one with the fix." },
+                { "id": "fixed-node-releases", "date": "2026-11-01", "release": "8.5.0", "note": "Earlier Node.js releases have a flaw in their Brotli decoder (CVE-2026-111497), so the package now asks for one with the fix." },
                 { "id": "xlsx-written", "date": "2026-10-28", "release": "8.3.0", "note": "officeParser now writes .xlsx files, with each cell's value and not its formula." },
                 { "id": "spreadsheets-and-slides", "date": "2026-10-26", "release": "8.3.0", "note": "officeParser now writes .xlsx, .ods, .pptx and .odp files, so this section is now about what those files leave out." }
             ],

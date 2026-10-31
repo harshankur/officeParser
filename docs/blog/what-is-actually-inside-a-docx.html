@@ -23,6 +23,7 @@
     <meta property="og:url" content="https://officeparser.harshankur.com/blog/what-is-actually-inside-a-docx.html">
     <meta property="og:site_name" content="officeParser">
     <meta property="article:published_time" content="2026-10-04">
+    <meta property="article:modified_time" content="2026-11-01">
 
     <!-- Fonts: the site's own copies (docs/fonts), shared with the home page. -->
     <link rel="stylesheet" href="../fonts/fonts.css">
@@ -59,6 +60,12 @@
                     aria-label="GitHub">
                     <svg class="header-btn-icon" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span class="header-btn-label">GitHub</span>
                 </a>
+                <button class="header-btn revision-toggle" id="revision-toggle" type="button" aria-pressed="true"
+                    aria-label="Hide changes" title="Hide changes" hidden>
+                    <svg class="header-btn-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor"
+                        stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M8 2.5v6M5 5.5h6M5 12.5h6"/></svg><span
+                        class="header-btn-label" id="revision-label">Hide changes</span>
+                </button>
                 <button class="header-btn" id="theme-toggle" type="button" aria-label="Dark mode">
                     <span class="header-btn-icon" id="theme-icon" aria-hidden="true">🌙</span><span class="header-btn-label"
                         id="theme-label">Dark mode</span>
@@ -79,7 +86,7 @@
                     <div>
                         <a href="https://harshankur.com" target="_blank" rel="noopener" class="author-name">Harsh
                             Ankur</a>
-                        <div>Published <time datetime="2026-10-04">4 October 2026</time> · 7 min read</div>
+                        <div>Published <time datetime="2026-10-04">4 October 2026</time>, updated <time datetime="2026-11-01">1 November 2026</time> · <a href="#revisions" class="byline-changes">1 change</a> · 7 min read</div>
                     </div>
                 </div>
             </div>
@@ -393,7 +400,7 @@ const { value: chunks } = await ast.to('chunks');</code></pre>
         <code>rowSpan</code> and <code>colSpan</code> worked out from <code>vMerge</code> and
         <code>gridSpan</code>. A cell can hold another table.</li>
     <li><strong>Text boxes, content controls, and SmartArt</strong> are read where they stand, after the
-        paragraph that draws them. Of the two copies in an <code>AlternateContent</code>, one is read.</li>
+        paragraph that draws them<ins datetime="2026-11-01">, but a floating text box comes just before it, so a writer can place the box first</ins><button type="button" class="revision-mark" id="change-floating-box" popovertarget="change-floating-box-note">Corrected</button><span class="revision-note" id="change-floating-box-note" popover><strong>Corrected 1 Nov 2026.</strong> A floating text box comes just before the paragraph that draws it, where I had written after. <a href="#revisions">All revisions</a><button type="button" class="revision-note-hide" hidden>Hide all changes</button></span>. Of the two copies in an <code>AlternateContent</code>, one is read.</li>
     <li><strong>Headings</strong> come from the paragraph style (<code>Heading1</code>,
         <code>Title</code>, and so on).</li>
     <li><strong>Tracked changes:</strong> inserted text is read, text deleted or moved away is not.</li>
@@ -407,6 +414,13 @@ const { value: chunks } = await ast.to('chunks');</code></pre>
     <a href="./where-officeparser-is-the-wrong-tool.html">a separate article</a> covers the jobs
     officeParser is the wrong tool for.
 </p>
+
+                <section class="article-revisions" id="revisions" aria-labelledby="revisions-title">
+                    <h2 id="revisions-title">Revisions</h2>
+                    <ol>
+                        <li><strong>Corrected</strong> <time datetime="2026-11-01">1 November 2026</time>: A floating text box comes just before the paragraph that draws it, where I had written after. <a href="#change-floating-box">See the change</a></li>
+                    </ol>
+                </section>
 
                 <div class="article-nav-footer">
                     <a href="./drawing-hindi-in-a-pdf.html" class="back-to-blog">&larr; Previous: Drawing Hindi in a PDF</a>

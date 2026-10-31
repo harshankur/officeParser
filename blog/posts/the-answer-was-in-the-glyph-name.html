@@ -1,0 +1,107 @@
+<p>
+    A page says <code>nicht The café</code>. Search for "nicht" in the PDF.js viewer and it says "Phrase not
+    found". Search for "ni!ht" and it finds the word the page shows as "nicht". The drawing is right and the text
+    behind it is wrong, and the answer is sitting in the file, in the name of the glyph.
+</p>
+<p>
+    I touched on this in <a href="post:reading-a-filled-pdf-form">the post on filled forms</a>, where it turned
+    up. This post is the whole of it: how a name can say what a glyph is, why the text comes out wrong without
+    it, how officeParser reads it since 8.4.1, and the
+    <a href="https://github.com/mozilla/pdf.js/issues/22410">report I filed with pdf.js</a> so that everyone
+    using it can get the right text.
+</p>
+
+<h2>A File Small Enough to Read</h2>
+<p>
+    I built one page with one font, an embedded subset with no <code>/ToUnicode</code> and this encoding:
+</p>
+<pre><code>&lt;&lt; /Type /Encoding /BaseEncoding /WinAnsiEncoding
+   /Differences [33 /c.sc 34 /T_h.alt 35 /uni00E9.sc] &gt;&gt;</code></pre>
+<p>
+    The content stream draws the bytes <code>ni!ht "e caf#</code>. Most of those codes mean what WinAnsi says.
+    The three in <code>/Differences</code> select glyphs by name instead: code 33, which WinAnsi calls "!",
+    draws the font's glyph named <code>c.sc</code>, a small capital c. So the page shows the right word.
+</p>
+<p>
+    Reading it is a separate question. Here is pdf.js 6.2.108, the version officeParser uses, on that file:
+</p>
+<pre><code>import { readFileSync } from 'node:fs';
+import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
+
+const data = new Uint8Array(readFileSync('glyph-name-suffix.pdf'));
+const doc = await getDocument({ data }).promise;
+const text = await (await doc.getPage(1)).getTextContent();
+console.log(JSON.stringify(text.items.map((i) => i.str).join('')));</code></pre>
+<pre><code>"ni!ht \"e caf#"</code></pre>
+<p>
+    With no name it knows and no map, each code falls back to its own character. Those are the bytes of the
+    content stream, read as text.
+</p>
+
+<h2>What a Name Says</h2>
+<p>
+    Glyph names look like private labels, but they aren't. The
+    <a href="https://github.com/adobe-type-tools/agl-specification">Adobe Glyph List specification</a> gives
+    rules for turning a name into text, so that software can do exactly this:
+</p>
+<ol>
+    <li>Drop everything from the first period on. It is a variant's suffix: <code>c.sc</code> is <code>c</code>.</li>
+    <li>Split the rest at underscores. They join the parts of a ligature: <code>T_h</code> is <code>T</code> and <code>h</code>.</li>
+    <li>Read each part: a name in the list, or <code>uniXXXX</code>, or <code>uXXXX</code> up to six digits.</li>
+    <li>The text is the parts in order.</li>
+</ol>
+<p>
+    So <code>c.sc</code> is "c", <code>T_h.alt</code> is "Th", and <code>uni00E9.sc</code> is "é". The specification even
+    recommends names like these for new fonts, so suffixes are open-ended: <code>c.alt</code>, <code>one.osf</code>
+    and <code>A.swash</code> all work the same way. A list of known names can never cover them, but the rule does.
+</p>
+<p>
+    pdf.js looks a name up whole, and knows some ligatures by name, such as <code>T_h</code>. It doesn't apply the
+    rule, so <code>c.sc</code> and <code>T_h.alt</code> and <code>uni00E9.sc</code> get no mapping. Poppler does apply it, and
+    <code>pdftotext</code> reads that file as <code>nicht The café</code>.
+</p>
+
+<h2>Where It Came From</h2>
+<p>
+    I found this in an official German form, saved through macOS's Quartz, where "Nein, trifft nicht zu" read
+    "Nein, trifft ni!ht zu". The blank form names the same glyph and gives its code a map entry: to a capital C,
+    so it reads "niCht", which is the file's own doing. Quartz rewrites the subset's encoding and
+    leaves that code out of its map. A map that leaves a code out behaves like no map at all, so any PDF with such
+    names can go this way after passing through Quartz. These are ordinary files.
+</p>
+
+<h2>What officeParser Does</h2>
+<p>
+    I can't change what pdf.js returns, so since 8.4.1 officeParser reads the encoding itself. pdf.js doesn't keep a
+    font's encoding where its text is read. It can be asked to, but that sends every font's whole CMap, so
+    officeParser reads the font's dictionary from the file, for simple fonts only. It matches each one to
+    pdf.js's font by the order the page sets them, and reads a glyph by its name only where pdf.js read that glyph as
+    its code's own character:
+</p>
+<pre><code>const ast = await parseOffice(readFileSync('glyph-name-suffix.pdf'));
+console.log((await ast.to('text')).value);</code></pre>
+<pre><code>nicht The café</code></pre>
+<p>
+    Those limits matter. A code the map does cover keeps what the map says. A composite font is left alone, and a
+    name reads only if every part of it does, so a name like <code>glyph_7</code> never turns into a stray
+    character. The rule's own answer for an unknown part is an empty string, which is fine for a font's
+    designer and bad for a reader. Beyond <code>uniXXXX</code> and <code>uXXXX</code>, the names officeParser knows
+    cover Latin, Greek and the common marks and ligatures, not the whole list. And it can't do any of this in
+    an encrypted file, whose streams it doesn't decrypt.
+</p>
+
+<h2>Fixing It Where It Belongs</h2>
+<p>
+    All of that is a workaround in one library for something every pdf.js user meets: its viewer's search and text layer
+    have the same problem, on the page that looks right. So I
+    <a href="https://github.com/mozilla/pdf.js/issues/22410">filed issue #22410</a> with pdf.js, with the small
+    file, a form made from the official blank with made-up data, where in the code the names fall through, and
+    the rule as a suggested change. With it applied to the worker of 6.2.108, that file reads correctly and
+    draws the same, byte for byte. As I write this, the issue is open, and the decision is the pdf.js team's: one
+    side effect I noted is that a non-embedded font's substitute glyphs could change. If it lands, officeParser's reading can go.
+</p>
+<p>
+    If you parse PDFs with pdf.js and see a stray "!" or "#" in the middle of a word, check the font's
+    <code>/Differences</code>. A close relative of this, a composite font with no map at all and no names
+    to read, is the subject of <a href="post:text-that-looks-real-a-pdf-font-with-no-map">another post</a>.
+</p>

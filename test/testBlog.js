@@ -278,14 +278,16 @@ if (!buildError) {
 const copy = fs.mkdtempSync(path.join(os.tmpdir(), 'officeparser-blog-'));
 try {
     fs.cpSync(SOURCE_DIR, copy, { recursive: true });
-    /** The copy built with its second post's days set, or the reason it does not build. */
+    /** A post with no revisions of its own, past the first. */
+    const unrevisedAt = blog.posts.findIndex((post, i) => i > 0 && !post.updated);
+    /** The copy built with that post's days set, or the reason it does not build. */
     const builtWith = days => {
         const changed = JSON.parse(fs.readFileSync(path.join(SOURCE_DIR, 'posts.json'), 'utf8'));
-        Object.assign(changed.posts[1], days);
+        Object.assign(changed.posts[unrevisedAt], days);
         fs.writeFileSync(path.join(copy, 'posts.json'), JSON.stringify(changed));
         try { return new Map([...renderSite(copy), ...renderSiteRoot(copy)]); } catch (error) { return error.message; }
     };
-    const second = blog.posts[1];
+    const second = blog.posts[unrevisedAt];
     const later = builtWith({ published: '2026-09-03', updated: '2027-01-20' });
     const page = typeof later === 'string' ? later : String(later.get(`${second.slug}.html`));
     check('days: a post says the day it was published and the day it was updated', page.includes('Published <time datetime="2026-09-03">3 September 2026</time>, updated <time datetime="2027-01-20">20 January 2027</time> ·')
@@ -297,7 +299,7 @@ try {
         && String(later.get('sitemap.xml')).includes(`<loc>${blog.blog.url}</loc>\n    <lastmod>2027-01-20</lastmod>`)
         && String(later.get('feed.xml')).includes('<lastBuildDate>Wed, 20 Jan 2027 00:00:00 GMT</lastBuildDate>')
         && String(later.get('feed.xml')).includes('<pubDate>Thu, 03 Sep 2026 00:00:00 GMT</pubDate>'));
-    // A revision of the second post: a correction of a word of its first paragraph, and an update for the latest release.
+    // A revision of that post: a correction of a word of its first paragraph, and an update for the latest release.
     const releases = [...fs.readFileSync(path.join(__dirname, '..', 'CHANGELOG.md'), 'utf8').matchAll(/^## \[(\d+\.\d+\.\d+)\] - (\d{4}-\d{2}-\d{2})/gm)];
     const [, latest, latestDay] = releases[0];
     const latestAnchor = `${latest.replace(/\./g, '')}---${latestDay}`;

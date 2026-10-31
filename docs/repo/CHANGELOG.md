@@ -4,6 +4,28 @@ All notable changes to `officeParser` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.5.0] - 2026-11-01
+
+### Added
+- **`mdConfig.listMarkers`.** `'keep'` (the default) writes an ordered list item labelled other than `1.` with its label after a bullet (`- (l) Annual reports`), as Markdown numbers in digits alone; a label that is only a number stays Markdown's own (`5. Five`). `'numbers'` writes the item's number (`12. Annual reports`).
+- **`PageSetup.pageNumberStart`.** The number a section's pages start from. A PDF's reader sets it where the pages print other numbers than their places, and DOCX, ODT, RTF, LaTeX and the native PDF engine write it.
+- **`BROTLI_DECODER_AVOIDED` warning.** Says a PDF's or font's Brotli data was decoded in JavaScript, on a runtime without the fix below.
+- **`PDF_FONT_UNMAPPED` warning.** Names a PDF font whose text is likely its glyph ids read as characters, and lists its pages in `details.pages`: a composite font on an Identity encoding with no `/ToUnicode`, every glyph read as its own code, and control characters among its text. Since 8.3.0 those characters are taken out of the text, which left such a line looking like ordinary letters. Text with none among it is not reported, as codes can be the characters.
+
+### Changed
+- **`engines` names the Node.js releases with the Brotli fix:** `>=22.23.4 <23 || >=24.22.1 <25 || >=26.12.1`.
+
+### Fixed
+- **A PDF or font never reaches a Brotli decoder with a known flaw.** Node's decoder writes out of bounds on crafted input (CVE-2026-111497), which a PDF's `/Filter /BrotliDecode` stream and a WOFF2 font in `pdfConfig.fonts` reached. On a runtime without the fix, pdf.js and fontkit decode them in JavaScript.
+- **A PDF's running headers and footers stay out of the text when some pages have none.** A tagged PDF's artifacts go to `auxiliary` wherever they are on at least two of three pages with text, blank pages saying nothing of them; 8.4.1 put them back in every page where the first pages had none or the numbers changed style. An untagged PDF's lines go there when alike on all odd or even pages, and when missing from no more than one page in five between their first and last. A line with a number of its own ("Account 10101", "Question 3 Page 1") stays in the text.
+- **Each page prints its own header, footer and number.** Lines that differ are parts as a word processor's (HeaderFooterMetadata `type` and `section`): a first page's, even pages', or a section at each change or restart of the numbers, pages before a kind's first line being a section without it. A range from a later page keeps its numbers as fields, and its output starts at the first page's number, restarting at each gap.
+- **A word after a tiny duplicate run keeps its space in PDF text.** A run in a font a hundredth of a point tall packs its glyphs so close that the next word was matched to one of them, and "560 Retirement" read "560Retirement". A hidden run keeps being hidden, in right-to-left text too.
+- **Markdown: an HTML table's cells take `fallbackToHtml.inlineFormatting` and `textFormatting`.** Colours and sizes wrote a `<span style>` for every run whatever the options said, near half of one large PDF's Markdown; a run differing only in a colour not written joins its neighbour.
+- **Nothing in a Markdown HTML table can end its block.** A lone carriage return, a blank line between a cell's blocks, or one in a comment or an `onNode` string ended the HTML block, and the cell's text after it was read as Markdown (a remote image in it, shown).
+- **A PDF's letter and numeral list markers are read in sequence.** `(l)` after `(k)` was 50, `(m)` 1000 and `(C)` 100; each is now read with the markers around it, `(i)` after `(h)` a letter, `(ii)` under it a numeral. A marker set apart that is no item's goes back to its line's text. Markdown and chunks keep the labels.
+- **DOCX: non-breaking hyphens and positional tabs are read as characters.**
+- **RAG chunks keep surrogate pairs whole at their boundaries.**
+
 ## [8.4.1] - 2026-10-29
 
 ### Fixed
