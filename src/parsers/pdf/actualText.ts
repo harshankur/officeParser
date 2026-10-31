@@ -109,7 +109,7 @@ export class MarkedContent {
 }
 
 /** A pdf.js text content item, as far as reading it needs (`measured` and `invisible`: see measureItems). */
-interface TextContentItem { type?: string; str?: string; transform?: number[]; width?: number; measured?: boolean; invisible?: boolean }
+interface TextContentItem { type?: string; str?: string; transform?: number[]; width?: number; measured?: boolean; invisible?: boolean; controlsTaken?: boolean }
 
 /**
  * A page's text items as they read: each span with an ActualText (see readMarkedContent) as one item of
@@ -118,7 +118,8 @@ interface TextContentItem { type?: string; str?: string; transform?: number[]; w
  * they are as many as pdf.js's marked-content begins (else the page is as pdf.js reads it). With
  * `normalize` (pdfParserConfig.normalizeText), an ActualText's marks are composed with their letters, as
  * pdf.js composes the glyphs' text: "e" and a combining acute is "é". With the page's `glyphs` (see
- * textGlyphs), the items are first placed where their glyphs are drawn (see measureItems).
+ * textGlyphs), the items are first placed where their glyphs are drawn (see measureItems). An item that
+ * stays and had control characters taken out says so (`controlsTaken`).
  */
 export function readableItems<T extends TextContentItem>(items: T[], events: MarkedEvent[] | undefined, normalize = false, glyphs?: PageGlyphs): T[] {
     return withoutCoveredSpaces(advanced(spans(measureItems(items, glyphs), events, normalize)));
@@ -210,7 +211,10 @@ function advanced<T extends TextContentItem>(items: T[]): T[] {
 
 function spans<T extends TextContentItem>(items: T[], events: MarkedEvent[] | undefined, normalize: boolean): T[] {
     const controls = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g;
-    const clean = (item: T): T => typeof item.str === 'string' && controls.test(item.str) ? { ...item, str: item.str.replace(controls, '') } : item;
+    const clean = (item: T): T => {
+        if (typeof item.str !== 'string' || !controls.test(item.str)) return item;
+        return { ...item, str: item.str.replace(controls, ''), controlsTaken: true };
+    };
     const isBegin = (item: T) => item.type === 'beginMarkedContent' || item.type === 'beginMarkedContentProps';
     const begins = events?.filter(e => e.begin) as ({ begin: true; actualText?: string })[] | undefined;
     if (!begins?.some(e => e.actualText !== undefined) || items.filter(isBegin).length !== begins.length) return items.map(clean);

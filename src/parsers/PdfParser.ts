@@ -44,7 +44,7 @@ import { collectColorMarks, ColorLookup, makeColorLookup } from './pdf/pdfColor.
 import { collectGlyphs, GlyphFont, PageGlyphs } from './pdf/textGlyphs.js';
 import { collectShapes, PdfShape, shapeBullets } from './pdf/pdfShapes.js';
 import { MarkedContent, readableItems } from './pdf/actualText.js';
-import { GlyphNames } from './pdf/glyphNames.js';
+import { askedFonts, GlyphNames } from './pdf/glyphNames.js';
 import { PdfFile } from './pdf/pdfFile.js';
 import { KeptJpegs } from './pdf/pdfJpeg.js';
 import { RuledFrame, ruledFrames, ruledTables, shadeCells, shadeRuns } from './pdf/rulings.js';
@@ -385,6 +385,8 @@ async function resolveFont(fontKey: string, commonObjs: any, styles: Record<stri
             const fontData: any = await new Promise((resolve) => commonObjs.get(fontKey, (d: any) => resolve(d)));
             const rawName: string | undefined = typeof fontData?.name === 'string' ? fontData.name : undefined;
             if (rawName) {
+                // (A Type 3 font is never a composite one: it is not looked for by name.)
+                if (!fontData.isType3Font) resolved.rawName = rawName;
                 const name = rawName.replace(/^[A-Z]{6}\+/, '');
                 if (name && !(fontData.isType3Font && name === 'Type3') && !fontData.isInvalidPDFjsFont && !TEXT_LAYER_FONT.test(name)) resolved.name = name;
                 const lower = rawName.toLowerCase();
@@ -1149,6 +1151,9 @@ const keptOperators = (OPS: any): Set<number> => {
     return kept;
 };
 
+/** The lists readOperatorList left partway: what they hold is true, and what they do not hold is unknown. */
+const cutLists = new WeakSet<object>();
+
 /**
  * A page's operator list within the budget, holding only what `keep` asks for: nothing when it is read
  * only so pdf.js resolves the page's `fonts`, and then only until pdf.js has sent them all. pdf.js
@@ -1176,6 +1181,7 @@ async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep
     /** Stops reading the list, which resolves to what was read of it. */
     const leave = (intentState: any) => {
         done = true;
+        if (intentState?.operatorList) cutLists.add(intentState.operatorList);
         work.leaveUnread(intentState?.streamReader);
         stopped(intentState?.operatorList ?? null);
     };
@@ -1221,11 +1227,53 @@ async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep
     finally { if (hooked && !done) delete page._renderPageChunk; }
 }
 
+/** At most this many characters of a font's name go into a warning. */
+const MAX_FONT_NAME_REPORTED = 128;
+
+/** What the pages say of fonts that may read as their glyph ids, judged once they are all read (see reportUnmappedFonts). */
+interface UnreadableText {
+    /** pdf.js's id of each font to the pages with readable text in it. */
+    pages: Map<string, number[]>;
+    /** The fonts some item of which that stays in the text had control characters taken out. */
+    controlled: Set<string>;
+    /** The fonts some glyph of which pdf.js read as other than its code, or whose glyphs could not be seen. */
+    mapped: Set<string>;
+}
+
+/**
+ * Warns of each font whose text is likely its glyph ids: control characters were taken out of its text,
+ * every glyph drawn with it read as its own code, and the file says nothing of what its codes are. Once
+ * per name per document, with every page it has text on. After all pages: what the file's bounds spend
+ * here takes nothing from any page's text.
+ */
+function reportUnmappedFonts(unreadable: UnreadableText, fontCache: Map<string, ResolvedFont>, glyphNames: GlyphNames, config: FullOfficeParserConfig): void {
+    // The fonts that may be reported: only fonts of their names are looked for in the file.
+    const candidates: { font: ResolvedFont; rawName: string; pages: number[] }[] = [];
+    for (const [id, pages] of unreadable.pages) {
+        const font = fontCache.get(id);
+        if (unreadable.controlled.has(id) && !unreadable.mapped.has(id) && font?.rawName !== undefined) candidates.push({ font, rawName: font.rawName, pages });
+    }
+    const asked = askedFonts(candidates.map(c => c.rawName));
+    const unmapped = new Map<string, Set<number>>();
+    for (const { font: resolved, rawName, pages } of candidates) {
+        if (!glyphNames.readsGlyphIds(rawName, pages, asked)) continue;
+        // (A file's name for a font goes into a message: of no control characters, and short.)
+        const font = (resolved.name ?? rawName).replace(/[\p{Cc}\p{Cf}]/gu, '').slice(0, MAX_FONT_NAME_REPORTED);
+        let all = unmapped.get(font);
+        if (!all) unmapped.set(font, all = new Set());
+        for (const page of pages) all.add(page);
+    }
+    for (const [font, all] of unmapped) {
+        const pages = [...all].sort((a, b) => a - b);
+        logWarning(OfficeWarningType.PDF_FONT_UNMAPPED, config, { font, pages }, undefined, { page: pages[0] });
+    }
+}
+
 /** Collects one page's text runs, images and annotations into a PageExtract. */
 async function collectPage(
     pdfjs: any, pdfDocument: any, pageNumber: number, config: FullOfficeParserConfig,
     pdfCfg: PdfLayoutConfig, fontCache: Map<string, ResolvedFont>, destCache: Map<string, SectionTarget | null>,
-    sectionLinks: SectionLinks, work: PdfWorkBudget, assets: PdfAssetSession, markedContent?: MarkedContent, glyphNames?: GlyphNames, jpegs?: KeptJpegs,
+    sectionLinks: SectionLinks, work: PdfWorkBudget, assets: PdfAssetSession, unreadable: UnreadableText, markedContent?: MarkedContent, glyphNames?: GlyphNames, jpegs?: KeptJpegs,
 ): Promise<PageExtract | undefined> {
     const page = await work.within(pdfDocument.getPage(pageNumber) as Promise<any>);
     if (!page) return undefined;
@@ -1256,6 +1304,7 @@ async function collectPage(
     // The page's drawing is read too: its shapes (a bullet drawn as a disc, a table's ruling lines) and its
     // glyphs (where each is drawn, and whether it is seen) tell what its text alone does not.
     ops = await readOperatorList(pdfjs, page, work, config.extractAttachments || pdfCfg.extractTextColor ? 'drawing' : 'shapes', newFonts);
+    const listCut = !!ops && cutLists.has(ops);
     for (const key of seen) if (!fontCache.has(key)) fontCache.set(key, await resolveFont(key, page.commonObjs, styles));
 
     // Past the budget the document is closed: the page keeps the text read, without what pdf.js would read next.
@@ -1288,6 +1337,7 @@ async function collectPage(
         return glyphFonts.get(id);
     };
     const glyphs: PageGlyphs | undefined = ops ? collectGlyphs(ops, pdfjs.OPS, glyphFont) : undefined;
+    if (glyphs) for (const [id, mapped] of glyphs.read) if (mapped) unreadable.mapped.add(id);
 
     // Per-run fill color (opt-in): recovered from the operator list, which is now fetched above.
     const colorFor: ColorLookup | null = (pdfCfg.extractTextColor && glyphs)
@@ -1300,6 +1350,7 @@ async function collectPage(
     // thousands deep took time in the square of the page.
     const stack: { mcid: string | null; artifact: boolean }[] = [];
     const runs: RawRun[] = [];
+    const readable = new Set<string>();
     // The text a producer gave its glyph clusters (ActualText), where the glyphs map to none of it.
     // Read from the file only for a page whose text has marked content, and once its budget allows.
     const hasMarked = !work.spent && textContent.items.some((it: any) => it.type === 'beginMarkedContentProps' || it.type === 'beginMarkedContent');
@@ -1315,6 +1366,8 @@ async function collectPage(
             }
             continue;
         }
+        if ((item as { controlsTaken?: boolean }).controlsTaken) unreadable.controlled.add(item.fontName);
+        if (/[^\s\p{Cc}\p{Cf}]/u.test(item.str)) readable.add(item.fontName);
         if (!item.str) continue;
         const font = fontCache.get(item.fontName) || { bold: false, italic: false, ascent: 0.8, descent: -0.2 };
         const m = pdfjs.Util.transform(layoutViewport.transform, item.transform);
@@ -1383,6 +1436,13 @@ async function collectPage(
                 link: seg.link,
             });
         }
+    }
+
+    for (const id of readable) {
+        const pages = unreadable.pages.get(id);
+        if (pages) pages.push(pageNumber); else unreadable.pages.set(id, [pageNumber]);
+        // (A glyph of the font not seen in the page's list, or the list cut, says nothing of whether pdf.js mapped it.)
+        if (glyphs?.read.get(id) === undefined || listCut) unreadable.mapped.add(id);
     }
 
     // The form's values, in their boxes among the page's text (see fieldRuns).
@@ -2084,12 +2144,13 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     const glyphNames = new GlyphNames(pdfFile);
     // The JPEGs the file stores, kept as they are where they show what pdf.js's pixels do (see pdfJpeg).
     const keptJpegs = new KeptJpegs(pdfFile);
+    const unreadable: UnreadableText = { pages: new Map(), controlled: new Set(), mapped: new Set() };
     for (const pageNum of pageNumbers) {
         checkAbortSignal(config.abortSignal);
         if (work.spent) break;
         work.reading(pageNum);
         try {
-            const extract = await collectPage(pdfjs, pdfDocument, pageNum, config, pdfCfg, fontCache, destCache, sectionLinks, work, assets, markedContent, glyphNames, keptJpegs);
+            const extract = await collectPage(pdfjs, pdfDocument, pageNum, config, pdfCfg, fontCache, destCache, sectionLinks, work, assets, unreadable, markedContent, glyphNames, keptJpegs);
             if (extract) extracts.push(extract);
         } catch (e: any) {
             // A page failing because its parse has ended (its process ended with it) is not reported.
@@ -2126,6 +2187,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     // Warn when much of the extracted text is unmappable glyphs (broken/missing ToUnicode), so consumers
     // can tell "genuinely empty" from "font could not be decoded" and reach for OCR.
     warnIfEncodingSuspect(allRuns, config);
+    reportUnmappedFonts(unreadable, fontCache, glyphNames, config);
 
     // Warn when a document yields essentially no text and OCR is off: it is very likely scanned (or its
     // text is in fonts whose CMaps could not be loaded, which the warning then says instead), and silent

@@ -7883,6 +7883,225 @@ async function testTextTableCellsApart(): Promise<void> {
 }
 
 /**
+ * A composite font that says nothing of its codes is read by pdf.js as its glyph ids, which look like text.
+ * The warning goes by the control characters taken out of the text that stays, where every glyph of the font
+ * read as its own code: nothing else parts glyph ids from codes that are the characters, and a caller may
+ * drop the text on it. It is judged after the pages, so it can take nothing from their text.
+ */
+async function testPdfUnmappedFont(): Promise<void> {
+    const garbage = '<0175000301760003015D>';
+    interface Shape { type0?: string; cid?: string; baseFont?: string; encoding?: string; fonts?: (page: number) => string; resources?: string; extra?: (string | Buffer)[]; noPageFonts?: boolean; inherited?: boolean; contents?: (content: string) => string | Buffer }
+    const type0Of = (baseFont: string, descendant: number, more = '', encoding = '/Identity-H') => `<< /Type /Font /Subtype /Type0 /BaseFont /${baseFont} /Encoding ${encoding} /DescendantFonts [${descendant} 0 R] ${more} >>`;
+    const cidOf = (baseFont: string, ordering = 'Identity', more = '') => `<< /Type /Font /Subtype /CIDFontType2 /BaseFont /${baseFont} /CIDSystemInfo << /Registry (Adobe) /Ordering (${ordering}) /Supplement 0 >> /DW 1000 ${more} >>`;
+    const pdfOf = (pages: string[], o: Shape = {}): Buffer => {
+        const baseFont = o.baseFont ?? 'NoSuchFont';
+        const start = 6 + (o.extra?.length ?? 0);
+        const shared = `/Font << /F1 3 0 R /F2 5 0 R >> ${o.resources ?? ''}`;
+        const objects: (string | Buffer)[] = [
+            '<< /Type /Catalog /Pages 2 0 R >>',
+            `<< /Type /Pages /Kids [${pages.map((_, i) => `${start + i * 2} 0 R`).join(' ')}] /Count ${pages.length} ${o.inherited ? `/Resources << ${shared} >>` : ''} >>`,
+            type0Of(baseFont, 4, o.type0 ?? '', o.encoding),
+            cidOf(baseFont, /Japan1/.test(o.cid ?? '') ? 'Japan1' : 'Identity', (o.cid ?? '').replace('Japan1', '')),
+            '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+            ...(o.extra ?? []),
+        ];
+        pages.forEach((content, i) => {
+            const resources = o.inherited ? '' : `/Resources << ${o.noPageFonts ? o.resources ?? '' : `/Font << /F1 3 0 R /F2 5 0 R ${o.fonts?.(i) ?? ''} >> ${o.resources ?? ''}`} >>`;
+            objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ${resources} /Contents ${start + i * 2 + 1} 0 R >>`, o.contents?.(content) ?? `<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
+        });
+        const parts: Buffer[] = [Buffer.from('%PDF-1.7\n')];
+        const offsets: number[] = [];
+        let at = parts[0].length;
+        objects.forEach((body, i) => {
+            const b = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), typeof body === 'string' ? Buffer.from(body, 'latin1') : body, Buffer.from('\nendobj\n')]);
+            offsets.push(at); at += b.length; parts.push(b);
+        });
+        parts.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(n => `${String(n).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+        return Buffer.concat(parts);
+    };
+    const read = async (pdf: Buffer | Uint8Array, config: object = {}) => {
+        const found: any[] = [];
+        const ast = await OfficeParser.parseOffice(pdf as Buffer, { fileType: 'pdf', ocr: false, onWarning: (issue: any) => found.push(issue), ...config } as any) as OfficeParserAST;
+        return { ast, found, unmapped: found.filter(i => i.code === 'PDF_FONT_UNMAPPED'), suspect: found.filter(i => i.code === 'PDF_TEXT_ENCODING_SUSPECT') };
+    };
+    const warned = async (pdf: Buffer | Uint8Array, config: object = {}) => (await read(pdf, config)).unmapped.map(i => i.details);
+    const plain = 'BT /F2 12 Tf 72 720 Td (A line that decodes) Tj ET';
+    const drawn = (hex: string) => `${plain}\nBT /F1 12 Tf 72 700 Td ${hex} Tj ET`;
+    const one = { font: 'NoSuchFont', pages: [1] };
+
+    // The report's file: the warning names the font and page, and the text is as it was.
+    const report = await read(pdfOf([drawn(garbage)]));
+    assert.deepStrictEqual(report.unmapped.map(i => i.details), [one], `a font read as glyph ids is reported, with its name and pages; got ${JSON.stringify(report.found.map(i => i.code))}`);
+    assert.strictEqual(report.unmapped[0].page, 1, 'and its first page');
+    assert.ok(/NoSuchFont/.test(report.unmapped[0].message) && /page 1/.test(report.unmapped[0].message), `the message says so; got ${report.unmapped[0].message}`);
+    assert.strictEqual((await report.ast.to('text')).value, 'A line that decodes\nŵŶŝ', 'the warning leaves the text alone');
+
+    // With no control character there is nothing to part glyph ids from codes that are the characters.
+    assert.deepStrictEqual(await warned(pdfOf([drawn('<01750176015D>')])), [], 'text with no control character says nothing');
+    assert.deepStrictEqual(await warned(pdfOf([drawn('<00480069>')])), [], 'nor do codes that are the characters');
+    // One page's control characters speak for the font's other pages.
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage), drawn('<0175>')])), [{ font: 'NoSuchFont', pages: [1, 2] }], 'every page with text in the font is listed');
+    // In separate shows too.
+    assert.deepStrictEqual(await warned(pdfOf([`BT /F1 12 Tf 72 700 Td <0175> Tj <0003> Tj <0176> Tj ET`])), [one], 'control characters and text apart are one font');
+
+    // An ActualText stands for its glyphs, and what it replaces is not in the text.
+    const span = (text: string) => `/Span << /ActualText (${text}) >> BDC BT /F1 12 Tf 72 700 Td ${garbage} Tj ET EMC`;
+    const spanned = await read(pdfOf([span('Hello world')]));
+    assert.ok(/Hello world/.test(String((await spanned.ast.to('text')).value)) && !spanned.unmapped.length, `text all in ActualText says nothing; got ${JSON.stringify(spanned.found.map(i => i.code))}`);
+    assert.deepStrictEqual(await warned(pdfOf([`${span('Hello world')}\nBT /F1 12 Tf 72 680 Td ${garbage} Tj ET`])), [one], 'text beside it does');
+
+    // Nothing to read: blanks, marks that show nothing, and what pdf.js leaves off the page.
+    assert.deepStrictEqual(await warned(pdfOf([drawn('<00030003>')])), [], 'a font drawing only blanks says nothing');
+    assert.deepStrictEqual(await warned(pdfOf([drawn('<0003200D200B>')])), [], 'nor one drawing only format characters');
+
+    // An embedded font is no help: pdf.js reads none of its tables for a composite font's text.
+    const ttf = fs.readFileSync(path.join(__dirname, '..', 'docs', 'vendor', 'katex-0.19.0', 'fonts', 'KaTeX_Main-Regular.ttf'));
+    const embedded = pdfOf([drawn('<002B0003004C>')], {
+        cid: '/FontDescriptor 6 0 R',
+        baseFont: 'ABCDEF+KaTeX',
+        extra: ['<< /Type /FontDescriptor /FontName /ABCDEF+KaTeX /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 7 0 R >>', Buffer.concat([Buffer.from(`<< /Length ${ttf.length} >>\nstream\n`), ttf, Buffer.from('\nendstream')])],
+    });
+    assert.deepStrictEqual(await warned(embedded), [{ font: 'KaTeX', pages: [1] }], 'an embedded font with no map is reported');
+
+    // Fonts pdf.js reads characters from: a standard font not embedded, by its name; a collection, by its map.
+    const arialDrawn = '<002B0001004C>';
+    const arial = await read(pdfOf([drawn(arialDrawn)], { baseFont: 'Arial' }));
+    assert.ok(/Hi$/.test(String((await arial.ast.to('text')).value)) && !arial.unmapped.length, `a standard font not embedded is mapped by its name; got ${JSON.stringify((await arial.ast.to('text')).value)}, ${arial.unmapped.length} warnings`);
+    assert.deepStrictEqual(await warned(pdfOf([`BT /F1 12 Tf 72 700 Td <00220003004C> Tj ET`], { cid: 'Japan1' })), [], 'a font of an Adobe character collection is not reported');
+    // That is told font by font.
+    assert.deepStrictEqual(await warned(pdfOf([`${drawn(garbage)}\nBT /F3 12 Tf 72 680 Td ${arialDrawn} Tj ET`], { fonts: () => '/F3 6 0 R', extra: [type0Of('Arial', 7), cidOf('Arial')] })), [one], 'a font mapped beside one that is not says nothing of it');
+
+    // A font that says what its codes are.
+    const stream = (body: string) => `<< /Length ${body.length} >>\nstream\n${body}\nendstream`;
+    const bfrange = '/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /T def 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfrange <0000> <FFFF> <0000> endbfrange endcmap end end';
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { type0: '/ToUnicode 6 0 R', extra: [stream(bfrange)] })), [], 'a /ToUnicode stream, identity or not, is not reported');
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { type0: '/ToUnicode /UniGB-UCS2-H' })), [], 'nor one naming a CMap');
+    for (const none of ['/Identity-H', 'null', '(x)']) assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { type0: `/ToUnicode ${none}` })), [one], `a /ToUnicode of ${none} says nothing`);
+    const cmap = '/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /T def 1 begincodespacerange <00> <FF> endcodespacerange 1 begincidrange <00> <FF> 0 endcidrange endcmap end end';
+    assert.deepStrictEqual(await warned(pdfOf(['BT /F1 12 Tf 72 700 Td (\\003Hello) Tj ET'], { encoding: '6 0 R', extra: [stream(cmap)] })), [], 'an embedded CMap defines its own codes');
+    // Control characters from a simple font are its own matter.
+    assert.deepStrictEqual(await warned(pdfOf([`BT /F2 12 Tf 72 720 Td (Hello\\003\\013world) Tj ET\nBT /F1 12 Tf 72 700 Td <0175> Tj ET`])), [], 'a simple font is not reported');
+
+    // Fonts of one name that differ settle nothing on a page, and another page may.
+    const twin = { baseFont: 'Twin', fonts: (i: number) => i === 0 ? '/F3 6 0 R' : '', extra: [type0Of('Twin', 7, '/ToUnicode 8 0 R'), cidOf('Twin'), stream(bfrange)] };
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], twin)), [], 'two fonts of a name, one with a map, say nothing');
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage), drawn('<0175>')], twin)), [{ font: 'Twin', pages: [1, 2] }], 'until a page has only the one');
+
+    // Wherever the font is found.
+    const form = (more: string, content = `BT /F1 12 Tf 10 10 Td ${garbage} Tj ET`) => `<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << ${more} >> /Length ${content.length} >>\nstream\n${content}\nendstream`;
+    assert.deepStrictEqual(await warned(pdfOf(['/Fm Do'], { noPageFonts: true, resources: '/XObject << /Fm 6 0 R >>', extra: [form('/Font << /F1 3 0 R >>')] })), [one], 'a font drawn in a form is reported');
+    assert.deepStrictEqual(await warned(pdfOf(['/Fm Do'], { noPageFonts: true, resources: '/XObject << /Fm 6 0 R >>', extra: [form('/XObject << /Fm 7 0 R >>', '/Fm Do'), form('/XObject << /Fm 6 0 R >> /Font << /F1 3 0 R >>')] })), [one], 'and in forms that reach each other');
+    const chain = Array.from({ length: 12 }, (_, i) => form(i < 11 ? `/XObject << /Fm ${7 + i} 0 R >>` : '/Font << /F1 3 0 R >>', i < 11 ? '/Fm Do' : undefined));
+    assert.deepStrictEqual(await warned(pdfOf(['/Fm Do'], { noPageFonts: true, resources: '/XObject << /Fm 6 0 R >>', extra: chain })), [one], 'and forms twelve deep');
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { inherited: true })), [one], 'and resources a page inherits');
+    assert.deepStrictEqual(await warned(pdfOf([`q BT /F1 12 Tf 72 700 Td ${garbage} Tj ET Q ${plain}`])), [one], 'and inside q and Q');
+    const doc = await PDFDocument.create();
+    const context = doc.context;
+    const descendant = context.register(context.obj({ Type: 'Font', Subtype: 'CIDFontType2', BaseFont: 'NoSuchFont', CIDSystemInfo: { Registry: PDFHexString.fromText('Adobe'), Ordering: PDFHexString.fromText('Identity'), Supplement: 0 }, DW: 1000 }));
+    const type0 = context.register(context.obj({ Type: 'Font', Subtype: 'Type0', BaseFont: 'NoSuchFont', Encoding: 'Identity-H', DescendantFonts: [descendant] }));
+    const page = doc.addPage([612, 792]);
+    page.node.set(PDFName.of('Resources'), context.obj({ Font: { F1: type0 } }));
+    page.node.set(PDFName.of('Contents'), context.register(context.flateStream(`BT /F1 12 Tf 72 700 Td ${garbage} Tj ET`)));
+    assert.deepStrictEqual(await warned(await doc.save({ useObjectStreams: true })), [one], 'and in an object stream');
+    // A font only a `gs` sets is not among the page's fonts.
+    assert.deepStrictEqual(await warned(pdfOf([`BT /G1 gs 72 700 Td ${garbage} Tj ET`], { noPageFonts: true, resources: '/ExtGState << /G1 << /Font [3 0 R 12] >> >>' })), [], 'a font only a gs sets says nothing');
+
+    // One warning for a name: a font's subsets, inline dictionaries, and pages asked for.
+    assert.deepStrictEqual(await warned(pdfOf([`${drawn(garbage)}\nBT /F3 12 Tf 72 680 Td ${garbage} Tj ET`], { baseFont: 'ABCDEF+Foo', fonts: () => '/F3 6 0 R', extra: [type0Of('GHIJKL+Foo', 7), cidOf('GHIJKL+Foo')] })), [{ font: 'Foo', pages: [1] }], 'two subsets of a font are one warning');
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage), drawn(garbage), drawn(garbage)], { baseFont: 'Inline', noPageFonts: true, resources: `/Font << /F1 ${type0Of('Inline', 4)} /F2 5 0 R >>` })), [{ font: 'Inline', pages: [1, 2, 3] }], 'an inline font on three pages is one warning');
+    const three = pdfOf([drawn(garbage), plain, drawn(garbage)]);
+    assert.deepStrictEqual((await read(three)).unmapped.map(i => [i.page, i.details.pages]), [[1, [1, 3]]], 'only pages with its text are listed');
+    assert.deepStrictEqual((await read(three, { pdfParserConfig: { pageRange: '2-3' } })).unmapped.map(i => [i.page, i.details.pages]), [[3, [3]]], 'of those read');
+
+    // A name is the file's: of no control characters, short, and however many fonts share it, one message.
+    const named = await warned(pdfOf([drawn(garbage)], { baseFont: `A#0A#00${'B'.repeat(200)}` }));
+    assert.ok(named.length === 1 && named[0].font.length <= 128 && !/[\u0000-\u001f]/.test(named[0].font), `a name in a warning is clean and short; got ${JSON.stringify(named)}`);
+    const longName = 'L'.repeat(200);
+    const many = Array.from({ length: 100 }, () => type0Of(longName, 4));
+    const crowd = await read(pdfOf([many.map((_, i) => `BT /X${i} 12 Tf 72 ${700 - i} Td ${garbage} Tj ET`).join('\n')], { baseFont: longName, noPageFonts: true, resources: `/Font << ${many.map((_, i) => `/X${i} ${6 + i} 0 R`).join(' ')} >>`, extra: many }));
+    assert.ok(crowd.unmapped.length === 1 && crowd.unmapped[0].message.length < 500, `fonts sharing a long name are one short message; got ${crowd.unmapped.length}, ${crowd.unmapped[0]?.message.length}`);
+
+    // A file's bounds spent on its pages' content are the text's: the judgement reads no content, and
+    // comes after the pages, so a late ActualText still reads and every page is still listed.
+    const { deflateSync } = await import('zlib');
+    const compressed = (content: string) => { const z = deflateSync(Buffer.from(content, 'latin1'), { level: 9 }); return Buffer.concat([Buffer.from(`<< /Filter /FlateDecode /Length ${z.length} >>\nstream\n`), z, Buffer.from('\nendstream')]); };
+    const pad = ' '.repeat(1024 * 1024);
+    const budget = await read(pdfOf([...Array.from({ length: 70 }, () => `BT /F1 12 Tf 72 700 Td ${garbage} Tj ET\n${pad}\n${plain}`), '/Span << /ActualText (RIGHT) >> BDC BT /F1 12 Tf 72 700 Td <0175> Tj ET EMC'], { contents: compressed }));
+    assert.ok(String((await budget.ast.to('text')).value).endsWith('RIGHT'), `a late ActualText still reads; got ${JSON.stringify(String((await budget.ast.to('text')).value).slice(-30))}`);
+    assert.deepStrictEqual(budget.unmapped.map(i => i.details.pages.length), [71], 'and all the pages are listed');
+
+    // The share of unmappable characters is as it was: a control character taken out counts for nothing there.
+    const lines = (draw: (y: number) => string) => Array.from({ length: 12 }, (_, i) => draw(720 - i * 20)).join('\n');
+    const twelve = await read(pdfOf([lines(y => `BT /F1 12 Tf 72 ${y} Td ${garbage} Tj ET`)]));
+    assert.ok(!twelve.suspect.length && twelve.unmapped.length === 1, `twelve lines are this font's warning alone; got ${JSON.stringify(twelve.found.map(i => i.code))}`);
+    assert.ok(!/\u0003/.test(String((await twelve.ast.to('text')).value)), 'and control characters stay out of the text');
+
+    const via = (id: string, hex: string) => `BT /${id} 12 Tf 72 700 Td ${hex} Tj ET`;
+    const descriptorOf = (name: string) => `<< /Type /FontDescriptor /FontName /${name} /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 >>`;
+    // The names a composite font has: its descendant's, its descriptor's, a direct descendant's.
+    assert.deepStrictEqual(await warned(pdfOf([via('F3', garbage)], { fonts: () => '/F3 6 0 R', extra: [type0Of('Outer', 7), cidOf('Inner')] })), [{ font: 'Inner', pages: [1] }], 'a composite font is named by its descendant');
+    assert.deepStrictEqual(await warned(pdfOf([via('F3', garbage)], { fonts: () => '/F3 6 0 R', extra: [type0Of('Outer', 7), cidOf('Outer', 'Identity', '/FontDescriptor 8 0 R'), descriptorOf('Described')] })), [{ font: 'Described', pages: [1] }], 'or by its descriptor');
+    assert.deepStrictEqual(await warned(pdfOf([via('F3', garbage)], { fonts: () => '/F3 6 0 R', extra: [`<< /Type /Font /Subtype /Type0 /BaseFont /Outer /Encoding /Identity-H /DescendantFonts ${cidOf('Inner')} >>`] })), [{ font: 'Inner', pages: [1] }], 'or by a descendant written in place');
+    // Only a composite font on an Identity CMap says nothing, of either direction.
+    const described2 = (more: string) => ['<< /Type /Font /Subtype /TrueType /BaseFont /Twin /FontDescriptor 9 0 R ' + more + ' >>', descriptorOf('Twin')];
+    assert.deepStrictEqual(await warned(pdfOf([`BT /F4 12 Tf 72 700 Td (Hello\\001 there) Tj ET`], { fonts: () => '/F3 6 0 R /F4 8 0 R', extra: [type0Of('Twin', 7), cidOf('Twin'), ...described2('/Encoding /Identity-H')] })), [], 'a simple font on /Identity-H is not a composite one');
+    // A name pdf.js writes without its underscores (a simple font with no descriptor) is another font's than a composite font's of the dashed name.
+    assert.deepStrictEqual(await warned(pdfOf([`BT /F4 12 Tf 72 700 Td (Hello\\001 there) Tj ET`], { fonts: () => '/F3 6 0 R /F4 8 0 R', extra: [type0Of('Twin-A', 7), cidOf('Twin-A'), '<< /Type /Font /Subtype /TrueType /BaseFont /Twin_A /Encoding /Identity-H >>'] })), [], 'a simple font of an underscored name is not a composite font of the dashed one');
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { encoding: '/Identity-V' })), [one], 'a vertical identity CMap says nothing too');
+    const vertical = await read(pdfOf([drawn(arialDrawn)], { baseFont: 'Arial', encoding: '/Identity-V' }));
+    assert.ok(/Hi$/.test(String((await vertical.ast.to('text')).value)) && !vertical.unmapped.length, 'and a vertical font pdf.js maps is mapped');
+    // What is left of a font's text must be readable: not a delete, a C1 control or a zero-width space.
+    for (const left of ['<0003007F>', '<00030085>', '<0003200B>']) assert.deepStrictEqual(await warned(pdfOf([drawn(left)])), [], `text of ${left} is nothing but what shows nothing`);
+    // Every page of every id of a name, in page order.
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage), plain, `${plain}\n${via('F3', garbage)}`, plain, drawn(garbage)], { baseFont: 'ABCDEF+Foo', fonts: () => '/F3 6 0 R', extra: [type0Of('GHIJKL+Foo', 7), cidOf('GHIJKL+Foo')] })), [{ font: 'Foo', pages: [1, 3, 5] }], 'the pages of two subsets are listed in order');
+    // A name is the file's: cleaned of every control character, and said when nothing is left.
+    const unnamed = await read(pdfOf([drawn(garbage)], { baseFont: '#01' }));
+    assert.ok(unnamed.unmapped.length === 1 && unnamed.unmapped[0].details.font === '' && /PDF font \(unnamed\) /.test(unnamed.unmapped[0].message), `a font with no printable name is unnamed; got ${JSON.stringify(unnamed.unmapped.map(i => i.message.slice(0, 40)))}`);
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { baseFont: 'A#85#ADB' })), [{ font: 'AB', pages: [1] }], 'C1 controls and format characters are cleaned from a name');
+    // A name past what a name can be (127 bytes, by the specification; 256 here) joins nothing, and is not copied.
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { baseFont: 'N'.repeat(256) })), [{ font: 'N'.repeat(128), pages: [1] }], 'a name of 256 characters finds its font');
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { baseFont: 'N'.repeat(257) })), [], 'one of 257 does not');
+    // Names pdf.js gives that the dictionary does not: a Type 3 font's, a string /FontName.
+    const type3 = '<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /A 7 0 R /B 7 0 R >> /Encoding << /Type /Encoding /Differences [65 /A /B] >> /FirstChar 65 /LastChar 66 /Widths [1000 1000] >>';
+    assert.deepStrictEqual(await warned(pdfOf([`BT /F9 12 Tf 72 700 Td (A\\001B) Tj ET`], { baseFont: 'Type3', fonts: () => '/F9 6 0 R', extra: [type3, stream('1000 0 d0')] })), [], 'a Type 3 font is not a composite font named Type3');
+    assert.deepStrictEqual(await warned(pdfOf([`BT /F9 12 Tf 72 700 Td (Hello\\001 there) Tj ET`], { baseFont: 'Stringy', fonts: () => '/F9 6 0 R', extra: ['<< /Type /Font /Subtype /TrueType /BaseFont /Other /FontDescriptor 7 0 R >>', '<< /Type /FontDescriptor /FontName (Stringy) /Flags 32 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 >>'] })), [], 'a font named by a string is found by it');
+    // pdf.js reads /ToUnicode from the descendant first.
+    const bfrangeOf = '/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /T def 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfrange <0000> <FFFF> <0000> endbfrange endcmap end end';
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { cid: '/ToUnicode 6 0 R', extra: [stream(bfrangeOf)] })), [], 'a /ToUnicode on the descendant is a map');
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { type0: '/ToUnicode 6 0 R', cid: '/ToUnicode ()', extra: [stream(bfrangeOf)] })), [], 'and an empty string there is none, the font\'s own is the map');
+    // A font set by a `gs` is the page's font for what is drawn after it.
+    const gs = '/ExtGState << /G1 << /Font [3 0 R 12] >> >>';
+    const set = await read(pdfOf([`BT /G1 gs 72 700 Td ${arialDrawn} Tj ET`], { baseFont: 'Arial', resources: gs }));
+    assert.ok(/Hi$/.test(String((await set.ast.to('text')).value)) && !set.unmapped.length, 'a font a gs sets, and pdf.js maps, is mapped');
+    assert.deepStrictEqual(await warned(pdfOf([`BT /G1 gs 72 700 Td ${garbage} Tj ET`], { resources: gs })), [one], 'and one it does not map is reported');
+    // A page whose operators were cut short says nothing of its fonts, however they were cut.
+    const filler = (n: number) => 'q Q '.repeat(n);
+    const small = { pdfParserConfig: { maxOperators: 100 } };
+    const cut = await read(pdfOf([`BT /F1 12 Tf 72 700 Td ${filler(20000)} ${arialDrawn} Tj ET`], { baseFont: 'Arial', contents: compressed }), small);
+    assert.ok(/Hi$/.test(String((await cut.ast.to('text')).value)) && cut.found.some(i => i.code === 'PDF_CONTENT_LIMIT_EXCEEDED') && !cut.unmapped.length, `a list cut by the operator budget says nothing; got ${JSON.stringify(cut.found.map(i => i.code))}`);
+    const seenThenCut = await read(pdfOf([`BT /F1 12 Tf 72 700 Td <0001> Tj ${filler(20000)} ${arialDrawn} Tj ET`], { baseFont: 'Arial', contents: compressed }), small);
+    assert.ok(/Hi$/.test(String((await seenThenCut.ast.to('text')).value)) && !seenThenCut.unmapped.length, `and so does one cut after a glyph of the font that reads as its code; got ${JSON.stringify(seenThenCut.found.map(i => i.code))}`);
+    assert.deepStrictEqual(await warned(pdfOf([`BT /F1 12 Tf 72 700 Td ${filler(1000)} ${garbage} Tj ET`], { contents: compressed }), small), [one], 'one within the budget is read');
+    const shapes = await read(pdfOf([`BT /F1 12 Tf 72 700 Td ${filler(120000)} ${arialDrawn} Tj ET`], { baseFont: 'Arial', contents: compressed }), { extractAttachments: false, pdfParserConfig: { extractTextColor: false } });
+    assert.ok(/Hi$/.test(String((await shapes.ast.to('text')).value)) && !shapes.unmapped.length, 'and so does one cut where only shapes are read');
+    // A page after the budget has no list at all: a font the page before it loaded, whose glyphs were not reached there, is not judged by it.
+    const reached = `BT /F1 12 Tf 72 700 Td ${'1 0 0 1 72 700 Tm '.repeat(20000)} <0003> Tj ET`;
+    const after = await read(pdfOf([reached, drawn(arialDrawn)], { baseFont: 'Arial', contents: compressed }), small);
+    assert.ok(/Hi$/.test(String((await after.ast.to('text')).value)) && after.found.some(i => i.code === 'PDF_CONTENT_LIMIT_EXCEEDED') && !after.unmapped.length, `and a page after the budget has no list at all; got ${JSON.stringify(after.found.map(i => i.code))}`);
+    // pdf.js ends a list quietly where it cannot read an operator (a pattern the page does not have), and the text after it is still read: its glyphs are not seen.
+    const quiet = await read(pdfOf([`BT /F1 12 Tf ET\n/Pattern cs /Nope scn\nBT /F1 12 Tf 72 700 Td ${arialDrawn} Tj ET`], { baseFont: 'Arial' }));
+    assert.ok(/Hi$/.test(String((await quiet.ast.to('text')).value)) && !quiet.unmapped.length, `a font whose glyphs the list ends before says nothing; got ${JSON.stringify(quiet.found.map(i => i.code))}`);
+    // A Q the form did not push for is not read as another font's (pdf.js gives a form a stack of its own): the glyphs are the form's font's.
+    const extraQ = await read(pdfOf(['BT /F1 12 Tf ET /Fm Do'], { noPageFonts: true, resources: '/Font << /F1 3 0 R /F3 6 0 R >> /XObject << /Fm 8 0 R >>', extra: [type0Of('Arial', 7), cidOf('Arial'), form('/Font << /F3 6 0 R >>', `BT /F3 12 Tf 72 700 Td Q ${arialDrawn} Tj ET`)] }));
+    assert.ok(/Hi$/.test(String((await extraQ.ast.to('text')).value)) && !extraQ.unmapped.length, `a Q in a form does not give its glyphs to the page's font; got ${JSON.stringify(extraQ.found.map(i => i.code))}`);
+    // The walk of resources is bounded: sixty forms each reaching a font table of 4,000 entries are too much to look through, forty are not.
+    const table = `<< ${Array.from({ length: 4000 }, (_, i) => `/K${i} 3 0 R`).join(' ')} >>`;
+    const walked = (forms: number) => pdfOf([drawn(garbage)], { resources: `/XObject << ${Array.from({ length: forms }, (_, i) => `/Fm${i} ${7 + i} 0 R`).join(' ')} >>`, extra: [table, ...Array.from({ length: forms }, () => `<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /Font 6 0 R >> /Length 0 >>\nstream\n\nendstream`)] });
+    assert.deepStrictEqual(await warned(walked(40)), [one], 'forty forms of a large font table are looked through');
+    assert.deepStrictEqual(await warned(walked(60)), [], 'sixty are not');
+}
+
+/**
  * A PDF's running lines stay out of its text where they repeat, and print on the right pages in the writers
  * that print them: one blank page or a line alternating by page does not put them back, numbers restart as
  * they do, and a line whose text really changes stays in its page, where nothing is lost.
@@ -11546,6 +11765,7 @@ async function runTests(): Promise<void> {
         ['Markdown HTML cell formatting', testMarkdownHtmlCellFormatting],
         ['List marker reading', testListMarkerReading],
         ['PDF running lines as parts', testPdfRunningLinesAsParts],
+        ['PDF font with no map from glyphs to characters', testPdfUnmappedFont],
         ['Cancellation', testCancellation],
     ];
 

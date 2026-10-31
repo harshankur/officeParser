@@ -150,6 +150,8 @@ export enum OfficeWarningType {
     PDF_STRUCT_TREE_UNRELIABLE = 'PDF_STRUCT_TREE_UNRELIABLE',
     /** A fifth or more of a PDF's characters (of at least 50) are unmappable glyphs (broken/missing ToUnicode); extracted text is likely garbage */
     PDF_TEXT_ENCODING_SUSPECT = 'PDF_TEXT_ENCODING_SUSPECT',
+    /** A PDF's font has no map from its codes to characters and its text has control characters among it, so what is drawn with it is likely its glyph ids read as characters. Once per font name per document, with the first page as `page`, every page with its text in `details.pages`, and in `details.font` the name its text's runs give */
+    PDF_FONT_UNMAPPED = 'PDF_FONT_UNMAPPED',
     /** A PDF yielded essentially no text: it is very likely a scanned/image-only document needing OCR, or, when a CMap its fonts need could not be had (see `PDF_ASSET_UNAVAILABLE`), its text is in those fonts */
     PDF_NO_TEXT_EXTRACTED = 'PDF_NO_TEXT_EXTRACTED',
     /** A PDF's bookmark outline was cut short by the depth/size cap or could not be read; `ast.auxiliary.outline` holds only what was recovered */
@@ -1079,7 +1081,8 @@ export interface OfficeIssue {
     /**
      * The page of the PDF being read that the issue is on (1-based), where the reader knows it: a
      * picture that could not be extracted or decoded, a page or its links that could not be read, an
-     * object a page waited for, and the page a content budget ran out on. The message names it too.
+     * object a page waited for, the page a content budget ran out on, and the first page of a font whose
+     * text is its glyph ids. The message names it too.
      */
     page?: number;
 }

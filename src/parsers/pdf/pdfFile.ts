@@ -493,6 +493,13 @@ export class PdfFile {
         return this.reader && page && this.tokensLeft > 0 ? { reader: this.reader, page } : undefined;
     }
 
+    /** A page's resources with the reader, whatever is left of the document's tokens (no content is read). */
+    pageResources(index: number): { reader: PdfReader; resources: PdfDict | undefined } | undefined {
+        this.open();
+        const page = this.pageList?.[index];
+        return this.reader && page ? { reader: this.reader, resources: page.resources } : undefined;
+    }
+
     /**
      * The file's reader, for a reader that wants an object by its number (a picture's stream, see
      * pdfJpeg) and not a page's content; undefined for a file whose structure cannot be read here

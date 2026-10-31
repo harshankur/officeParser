@@ -72,6 +72,8 @@ export interface PageGlyphs {
     named: Map<number, string>;
     /** Every show, for the colour of the text (see pdfColor). */
     shows: TextShow[];
+    /** pdf.js's id of each font a glyph is drawn with on the page, to whether some glyph of it reads as other than its code. */
+    read: Map<string, boolean>;
 }
 
 /**
@@ -91,6 +93,7 @@ const CONTROL = /[\u0000-\u001f\u007f]/;
 
 /** Graphics state the walk keeps across `q`/`Q` and forms. */
 interface State {
+    fontId: string;
     ctm: number[];
     fill: string | undefined;
     stroke: string | undefined;
@@ -116,14 +119,14 @@ function translate(m: number[], x: number, y: number): number[] {
  *   its glyphs are then placed with the usual matrix of a thousand units an em.
  */
 export function collectGlyphs(ops: any, OPS: any, fontOf: (id: string) => GlyphFont | undefined): PageGlyphs {
-    const out: PageGlyphs = { count: 0, px: [], py: [], x0: [], y0: [], x1: [], y1: [], em: [], flags: [], text: [], named: new Map(), shows: [] };
+    const out: PageGlyphs = { count: 0, px: [], py: [], x0: [], y0: [], x1: [], y1: [], em: [], flags: [], text: [], named: new Map(), shows: [], read: new Map() };
     const fnArray: number[] | undefined = ops?.fnArray;
     const argsArray: any[] | undefined = ops?.argsArray;
     if (!fnArray || !argsArray) return out;
 
     let s: State = {
         ctm: identityMatrix(), fill: undefined, stroke: undefined, mode: 0,
-        charSpacing: 0, wordSpacing: 0, hScale: 1, leading: 0, rise: 0, font: undefined, fontSize: 0,
+        charSpacing: 0, wordSpacing: 0, hScale: 1, leading: 0, rise: 0, font: undefined, fontId: '', fontSize: 0,
     };
     const stack: State[] = [];
     // The text matrix as the page draws it, and as pdf.js's text extraction moves it: the two part only
@@ -162,7 +165,10 @@ export function collectGlyphs(ops: any, OPS: any, fontOf: (id: string) => GlyphF
             case OPS.setStrokeTransparent: s.stroke = undefined; break;
 
             // Text state (mirror of pdf.js's TextState).
-            case OPS.setFont: s.font = typeof a?.[0] === 'string' ? fontOf(a[0]) : undefined; s.fontSize = num(a?.[1]); break;
+            case OPS.setFont: s.fontId = typeof a?.[0] === 'string' ? a[0] : ''; s.font = s.fontId ? fontOf(s.fontId) : undefined; s.fontSize = num(a?.[1]); break;
+            case OPS.setGState:
+                for (const entry of Array.isArray(a?.[0]) ? a[0] : []) if (Array.isArray(entry) && entry[0] === 'Font' && Array.isArray(entry[1]) && typeof entry[1][0] === 'string') s.fontId = entry[1][0];
+                break;
             case OPS.setCharSpacing: s.charSpacing = num(a?.[0]); break;
             case OPS.setWordSpacing: s.wordSpacing = num(a?.[0]); break;
             case OPS.setHScale: s.hScale = num(a?.[0], 100) / 100; break;
@@ -180,6 +186,15 @@ export function collectGlyphs(ops: any, OPS: any, fontOf: (id: string) => GlyphF
                 const invisible = s.mode === 3 || s.mode === 7;
                 const color = (s.mode === 1 || s.mode === 5) ? s.stroke : s.fill;
                 out.shows.push({ x: userX(tm, s.rise), y: userY(tm, s.rise), ...(color ? { color } : {}), mode: s.mode });
+                if (s.fontId && !out.read.get(s.fontId)) {
+                    for (const g of glyphs) {
+                        const glyph = g as { unicode?: unknown; originalCharCode?: unknown } | null;
+                        if (!glyph || typeof glyph !== 'object' || typeof glyph.originalCharCode !== 'number') continue;
+                        const mapped = glyph.unicode !== String.fromCharCode(glyph.originalCharCode);
+                        out.read.set(s.fontId, mapped);
+                        if (mapped) break;
+                    }
+                }
                 if (s.font?.vertical) break; // (placed down the page: not measured here)
                 const fm0 = num(s.font?.fontMatrix?.[0], 0.001) || 0.001;
                 const size = s.fontSize, h = s.hScale;

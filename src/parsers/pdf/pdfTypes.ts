@@ -15,6 +15,8 @@ export type RunAngle = 0 | 90 | 180 | 270 | -1;
 
 /** Resolved font attributes for one pdf.js font id, looked up once per document. */
 export interface ResolvedFont {
+    /** The name as pdf.js gives it, by which the font is found in the file (see GlyphNames.readsGlyphIds). */
+    rawName?: string;
     /** Human-readable family name with any subset prefix stripped (e.g. "Ubuntu Mono"). */
     name?: string;
     bold: boolean;

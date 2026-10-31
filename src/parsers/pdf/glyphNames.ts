@@ -119,6 +119,62 @@ const MAX_CMAP_TOKENS = 2_000_000;
 /** At most this many fonts a page sets, read here: a page setting more is left as pdf.js reads it. */
 const MAX_FONT_SETS = 500_000;
 
+/** At most this many entries of fonts' and forms' resource dictionaries are walked in a document to tell fonts apart by name. */
+const MAX_FONT_WALK = 200_000;
+
+/** A font name longer than this joins nothing (the specification limits a name to 127 bytes): checked before any copy is made. */
+const MAX_FONT_NAME = 256;
+
+/** A font name as compared: pdf.js writes a simple font's name without its commas, underscores and blanks. */
+const fontKey = (name: string) => name.replace(/[,_]/g, '-').replace(/\s/g, '');
+
+/** The descendant a composite font's first `/DescendantFonts` entry names (as pdf.js takes it), or undefined. */
+function descendantOf(reader: PdfReader, font: PdfDict): PdfDict | undefined {
+    const descendants = reader.resolve(font.get('DescendantFonts'));
+    const inner = Array.isArray(descendants) ? reader.resolve(descendants[0]) : descendants;
+    return inner instanceof Map ? inner : undefined;
+}
+
+/** The names pdf.js may give a font: its and its descendant's `/BaseFont`, and the descriptor's `/FontName` (a name, or a string as pdf.js reads it). */
+function namesOf(reader: PdfReader, font: PdfDict): Set<string> {
+    const out = new Set<string>();
+    const add = (v: PdfValue | undefined) => {
+        const n = reader.resolve(v);
+        const text = n instanceof PdfName ? n.name : n instanceof PdfString && n.bytes.length <= MAX_FONT_NAME ? String.fromCharCode(...n.bytes) : undefined;
+        if (text !== undefined && text.length <= MAX_FONT_NAME) out.add(fontKey(text));
+    };
+    for (const d of [font, descendantOf(reader, font)]) {
+        if (!d) continue;
+        add(d.get('BaseFont'));
+        const descriptor = reader.resolve(d.get('FontDescriptor'));
+        if (descriptor instanceof Map) add(descriptor.get('FontName'));
+    }
+    return out;
+}
+
+/** The names asked about (those a name can be), as compared, each with its place in the order asked. */
+export type AskedFonts = ReadonlyMap<string, number>;
+export function askedFonts(names: Iterable<string>): AskedFonts {
+    const out = new Map<string, number>();
+    for (const name of names) if (name.length <= MAX_FONT_NAME) { const key = fontKey(name); if (!out.has(key)) out.set(key, out.size); }
+    return out;
+}
+
+/** What fonts of a name say (see GlyphNames.fontsReached): nothing of their codes, or something. */
+const SAYS_NOTHING = 1, SAYS_OTHER = 2;
+
+/** A composite font on an Identity CMap with no `/ToUnicode` pdf.js reads a map from (its descendant's, else its own): its codes are its CIDs, and nothing says what those are. */
+function saysNothing(reader: PdfReader, font: PdfDict): boolean {
+    const identity = (v: unknown) => v instanceof PdfName && /^Identity-[HV]$/.test(v.name);
+    const subtype = reader.resolve(font.get('Subtype'));
+    if (!(subtype instanceof PdfName) || subtype.name !== 'Type0' || !identity(reader.resolve(font.get('Encoding')))) return false;
+    const inner = descendantOf(reader, font);
+    // (As pdf.js takes it, `descendant.get('ToUnicode') || font.get('ToUnicode')`: an empty string is none.)
+    const given = (v: PdfValue | undefined) => v instanceof PdfString && !v.bytes.length ? undefined : v;
+    const toUnicode = (inner ? given(reader.resolve(inner.get('ToUnicode'))) : undefined) || reader.resolve(font.get('ToUnicode'));
+    return !(toUnicode && isStream(toUnicode)) && !(toUnicode instanceof PdfName && !identity(toUnicode));
+}
+
 /** A font's codes read by their glyphs' names (code to text), with a key of them, equal for fonts that read alike. */
 interface CodeTexts { texts: ReadonlyMap<number, string>; key: string }
 const NONE: CodeTexts = { texts: new Map(), key: '' };
@@ -136,6 +192,9 @@ export class GlyphNames {
     private readonly reached = new Map<PdfDict, ReadonlySet<number>>();
     /** A form's fonts in the order it sets them, with the resources it was last drawn with. */
     private readonly forms = new Map<PdfValue, { resources: PdfDict | undefined; fonts: (PdfDict | undefined)[] }>();
+    /** Each resources dictionary's fonts of the names asked for (see fontsReached), read once however many pages share it. */
+    private readonly reachedFonts = new Map<PdfDict, Map<number, number>>();
+    private walkLeft = MAX_FONT_WALK;
 
     constructor(private readonly file: PdfFile) {}
 
@@ -194,6 +253,66 @@ export class GlyphNames {
         } catch {
             return undefined;
         }
+    }
+
+    /**
+     * Whether pdf.js's font of this name, with text on these pages (1-based), is a composite font that says
+     * nothing of its codes: read only once a document's text is done, as it may spend the file's bounds. pdf.js
+     * gives a font's name and not its dictionary, so the font is found by name, in the resources of the first
+     * page where the name settles it (fonts of one name that differ settle nothing). Reads no page's content.
+     *
+     * @param asked - every name asked about in the document: fonts of other names are not kept.
+     */
+    readsGlyphIds(name: string, pages: number[], asked: AskedFonts): boolean {
+        try {
+            const at = name.length <= MAX_FONT_NAME ? asked.get(fontKey(name)) : undefined;
+            if (at === undefined) return false;
+            for (const pageNumber of pages) {
+                const file = this.file.pageResources(pageNumber - 1);
+                if (!file?.resources) continue;
+                const facts = this.fontsReached(file.reader, file.resources, asked);
+                if (!facts) return false;
+                const says = facts.get(at);
+                if (says === SAYS_NOTHING) return true;
+                if (says === SAYS_OTHER) return false;
+            }
+        } catch { /* not read here */ }
+        return false;
+    }
+
+    /** The fonts a resources dictionary reaches, of the names asked: SAYS_NOTHING where each so named says nothing, SAYS_OTHER where one says something, both bits for both. */
+    private fontsReached(reader: PdfReader, resources: PdfDict, asked: AskedFonts): Map<number, number> | undefined {
+        const known = this.reachedFonts.get(resources);
+        if (known) return known;
+        const facts = new Map<number, number>();
+        const seen = new Set<PdfDict>([resources]), todo = [resources];
+        while (todo.length) {
+            const r = todo.pop()!;
+            const fonts = reader.resolve(r.get('Font')), xobjects = reader.resolve(r.get('XObject'));
+            this.walkLeft -= 1 + (fonts instanceof Map ? fonts.size : 0) + (xobjects instanceof Map ? xobjects.size : 0);
+            if (this.walkLeft < 0) return undefined;
+            if (fonts instanceof Map) {
+                for (const value of fonts.values()) {
+                    const font = reader.resolve(value);
+                    if (!(font instanceof Map)) continue;
+                    let says = 0;
+                    for (const key of namesOf(reader, font)) {
+                        const at = asked.get(key);
+                        if (at === undefined) continue;
+                        says ||= saysNothing(reader, font) ? SAYS_NOTHING : SAYS_OTHER;
+                        facts.set(at, (facts.get(at) ?? 0) | says);
+                    }
+                }
+            }
+            if (xobjects instanceof Map) {
+                for (const key of xobjects.keys()) {
+                    const res = formOf(reader, r, key)?.resources;
+                    if (res && !seen.has(res)) { seen.add(res); todo.push(res); }
+                }
+            }
+        }
+        this.reachedFonts.set(resources, facts);
+        return facts;
     }
 
     /** The codes the fonts a resources dictionary reaches (its own, and its forms', `depth` forms in) read by name. */
