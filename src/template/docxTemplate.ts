@@ -204,6 +204,11 @@ export interface DocxTemplateOptions {
     onElementLimit: () => never;
     /** What a picture writes: separators, month and day names, the UTC offset. */
     pictures: PictureSettings;
+    /**
+     * A check, not a render: a block whose condition or list is missing is not written as typed (nothing
+     * inside it is read until the data gives it, and writing it would only spend the budget a check needs).
+     */
+    checking?: boolean;
     /** The caller's own filters, by name. */
     formatters: Record<string, TemplateFormatter>;
 }
@@ -282,6 +287,8 @@ export interface CompiledDocxTemplate {
      * a loop's edge: written once, under their own ids (see {@link rangesAcrossLoops}).
      */
     rangesAcrossLoops: Set<string>;
+    /** The ids of the notes cut out of each notes part, in the part's order (see notesPartXml). */
+    loopNotes: Map<string, string[]>;
 }
 
 // ─── Phase 1: tags in text ──────────────────────────────────────────────────
@@ -1795,11 +1802,12 @@ function compilePart(name: string, xml: string, opts: DocxTemplateOptions, liter
 
 /** The paths a condition reads, each as typed, in order, once each. */
 function conditionFields(expression: TemplateExpression, out: string[]): void {
+    const seen = new Set(out);
     const todo: TemplateExpression[] = [expression];
     while (todo.length) {
         const e = todo.pop()!;
         switch (e.kind) {
-            case 'path': if (!out.includes(e.text)) out.push(e.text); break;
+            case 'path': if (!seen.has(e.text)) { seen.add(e.text); out.push(e.text); } break;
             case 'literal': break;
             case 'not': todo.push(e.operand); break;
             case 'and': case 'or': for (let i = e.operands.length - 1; i >= 0; i--) todo.push(e.operands[i]); break;
@@ -1810,7 +1818,8 @@ function conditionFields(expression: TemplateExpression, out: string[]): void {
 
 /**
  * Every tag of a compiled template, part by part in the order each holds them: fields, and the tags
- * that open a block or a branch of one. A note that only loops refer to is listed as its part holds it.
+ * that open a block or a branch of one. A note that only loops refer to is compiled on its own, and its
+ * tags follow its part's own.
  */
 export function templateTags(compiled: CompiledDocxTemplate, opts: DocxTemplateOptions): TemplateTagInfo[] {
     const out: TemplateTagInfo[] = [];
@@ -1837,11 +1846,13 @@ export function templateTags(compiled: CompiledDocxTemplate, opts: DocxTemplateO
             }
         }
     };
-    const names = new Set([...compiled.parts.keys(), ...compiled.noteTemplates.keys()]);
-    for (const name of names) {
-        const nodes = compiled.parts.get(name)?.nodes;
-        if (nodes) walk(nodes, name, []);
-        for (const note of compiled.noteTemplates.get(name)?.values() ?? []) if (note.nodes) walk(note.nodes, name, []);
+    for (const [name, part] of compiled.parts) {
+        if (part.nodes) walk(part.nodes, name, []);
+        // The notes cut out of the part (only loops refer to them) are compiled on their own: after the part's own.
+        for (const id of compiled.loopNotes.get(name) ?? []) {
+            const nodes = compiled.noteTemplates.get(name)?.get(id)?.nodes;
+            if (nodes) walk(nodes, name, []);
+        }
     }
     return out;
 }
@@ -1870,6 +1881,7 @@ export function compileDocxTemplate(entries: Record<string, Uint8Array>, opts: D
     };
     const noteTemplates = new Map<string, Map<string, NoteTemplate>>();
     const notesPartXml = new Map<string, string>();
+    const loopNotes = new Map<string, string[]>();
     const noteElements: ElementBudget = { left: opts.maxXmlElements, textRuns: opts.maxXmlElements };
     if (repeatsIds) {
         // Each note on its own, to be rendered in the scope of a reference to it inside a loop. Its
@@ -1939,8 +1951,10 @@ export function compileDocxTemplate(entries: Record<string, Uint8Array>, opts: D
         for (const { part, element } of Object.values(NOTE_PARTS)) {
             if (!entries[part]) continue;
             const xml = Buffer.from(entries[part]).toString('utf8');
-            const cut = [...noteSpans(xml, element)].filter(([id]) => inLoops.has(`${part}:${id}`) && !outside.has(`${part}:${id}`)).map(([, span]) => span).sort((a, b) => a[0] - b[0]);
+            const cutNotes = [...noteSpans(xml, element)].filter(([id]) => inLoops.has(`${part}:${id}`) && !outside.has(`${part}:${id}`)).sort((a, b) => a[1][0] - b[1][0]);
+            const cut = cutNotes.map(([, span]) => span);
             if (!cut.length) continue;
+            loopNotes.set(part, cutNotes.map(([id]) => id));
             const kept: string[] = [];
             let at = 0;
             for (const [start, end] of cut) { kept.push(xml.slice(at, start)); at = end; }
@@ -1955,7 +1969,7 @@ export function compileDocxTemplate(entries: Record<string, Uint8Array>, opts: D
     }
     const rangesAcross = new Set<string>();
     if (repeatsIds) for (const part of parts.values()) if (part.nodes) for (const key of rangesAcrossLoops(part.nodes)) rangesAcross.add(key);
-    return { entries, parts, ids: repeatsIds ? seedIds(entries, unreadScan()) : null, literalCount, noteTemplates, notesPartXml, rangesAcrossLoops: rangesAcross };
+    return { entries, parts, ids: repeatsIds ? seedIds(entries, unreadScan()) : null, literalCount, noteTemplates, notesPartXml, rangesAcrossLoops: rangesAcross, loopNotes };
 }
 
 /** The range a slot is an end of (a bookmark's or a comment's), as `bookmark:<id>` or `comment:<id>`, or null. */
@@ -2297,7 +2311,7 @@ function renderIf(node: IfNode, scope: Scope | null, state: RenderState, out: st
         let holds: boolean | typeof MISSING;
         try { holds = condition === null ? true : evaluateCondition(condition, read, incomparable, compared); }
         catch (e) { if (e === TAG_SKIPPED) return; throw e; }
-        if (holds === MISSING) { renderKept(node.kept, scope, state, out); return; }
+        if (holds === MISSING) { if (!state.opts.checking) renderKept(node.kept, scope, state, out); return; }
         if (holds) { renderNodes(node.sections[branch], scope, state, out); return; }
     }
 }
@@ -2305,7 +2319,7 @@ function renderIf(node: IfNode, scope: Scope | null, state: RenderState, out: st
 function renderFor(node: ForNode, scope: Scope | null, state: RenderState, out: string[]): void {
     state.charge(node.cost);
     const list = blockValue(node.list, node.listText, scope, state);
-    if (list === MISSING) { renderKept(node.kept, scope, state, out); return; }
+    if (list === MISSING) { if (!state.opts.checking) renderKept(node.kept, scope, state, out); return; }
     if (list === null || list === undefined) return;
     if (!Array.isArray(list) && !unlessSkipped(() => state.opts.onDataInvalid({ reason: 'not-a-list', tag: typedOf(node.record, state.opts), part: state.part, kind: kindOfValue(list) }, loopsOf(scope)))) return;
     const items = list as readonly TemplateValue[];

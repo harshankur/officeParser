@@ -3984,8 +3984,16 @@ async function testTemplateTagsAndCheck(): Promise<void> {
     assert.strictEqual(tags[0].tag, '{{name}}', 'a tag split across runs is one tag, as typed');
     assert.deepStrictEqual(tags.find(t => t.fields[0] === 'total')?.filters, ['format'], "a field's filters are named");
     assert.strictEqual(tags.find(t => t.kind === 'for')?.item, 'line', "a loop names its item");
-    const conditions = await OfficeTemplate.tags(docx(p('{{ if a and (b or not c.d) and e == 3 }}x{{ else if f }}y{{ else }}z{{ endif }}')));
-    assert.deepStrictEqual(conditions.map(t => [t.kind, t.fields]), [['if', ['a', 'b', 'c.d', 'e']], ['elseif', ['f']], ['else', []]], 'a condition names every path it reads, once, in order');
+    const conditions = await OfficeTemplate.tags(docx(p('{{ if a and (b or not c.d) and e == g and a }}x{{ else if f > 3 }}y{{ else }}z{{ endif }}')));
+    assert.deepStrictEqual(conditions.map(t => [t.kind, t.fields]), [['if', ['a', 'b', 'c.d', 'e', 'g']], ['elseif', ['f']], ['else', []]], 'a condition names every path it reads, once, in order');
+    // Notes: a footnote referred to outside loops, and one only a loop refers to (compiled on its own), each once.
+    const footnotes = (notes: Record<number, string>) => `<?xml version="1.0"?><w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${Object.entries(notes).map(([id, x]) => `<w:footnote w:id="${id}">${x}</w:footnote>`).join('')}</w:footnotes>`;
+    const fnRef = (id: number) => `<w:r><w:footnoteReference w:id="${id}"/></w:r>`;
+    const withNotes = docx(`<w:p><w:r><w:t>{{a}}</w:t></w:r>${fnRef(1)}</w:p>${p('{{ for l in ls }}')}<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1A2B3C4D"><w:r><w:t>{{ l.n }}</w:t></w:r>${fnRef(2)}</w:p>${p('{{ endfor }}')}`,
+        { 'word/footnotes.xml': footnotes({ 1: p('Source: {{ x }}'), 2: p('{{ l.y }} {{ z }}') }) });
+    const noteTags = (await OfficeTemplate.tags(withNotes)).map(t => `${t.part} ${t.fields[0] ?? ''}`);
+    assert.deepStrictEqual(noteTags, ['word/document.xml a', 'word/document.xml ls', 'word/document.xml l.n', 'word/footnotes.xml x', 'word/footnotes.xml l.y', 'word/footnotes.xml z'],
+        `each note's tags once, those of a note only a loop refers to after its part's own; got ${JSON.stringify(noteTags)}`);
     const custom = await OfficeTemplate.tags(docx(p('[[who]] {{not}}')), { delimiters: { start: '[[', end: ']]' } });
     assert.deepStrictEqual(custom.map(t => t.tag), ['[[who]]'], 'tags with the delimiters asked for');
     await assert.rejects(OfficeTemplate.tags(docx(p('{{ if a }}x'))), (e: any) => e.officeIssue?.code === 'TEMPLATE_SYNTAX', "a template's own error rejects as a render's does");
@@ -4001,6 +4009,22 @@ async function testTemplateTagsAndCheck(): Promise<void> {
         'line.price word/document.xml lines[1]', 'unformattable word/document.xml', 'not-a-list word/document.xml',
     ], `every problem at once, each once, a loop's with its pass; got ${JSON.stringify(brief2(problems))}`);
     assert.ok(problems.every(x => typeof x.message === 'string' && x.message.length > 20), 'each problem says what a render would');
+    assert.deepStrictEqual(brief2(await OfficeTemplate.check(docx(p('{{a}} and {{ a }}')), { data: {} })), ['a word/document.xml'], 'a field read twice in a part is one problem');
+    // Loops, outermost first, for a missing field, a missing list and a value that does not fit.
+    const nested = docx(p('{{ for o in orders }}') + p('{{ for l in o.lines }}') + p('{{ l.q }} {{ l.v | upper }}') + p('{{ endfor }}') + p('{{ endfor }}'));
+    const deep = await OfficeTemplate.check(nested, { data: { orders: [{ lines: [{ q: 1, v: 'a' }] }, { lines: [{ v: {} }] }, {}] } as any });
+    assert.deepStrictEqual(brief2(deep), ['l.q word/document.xml orders[1]o.lines[0]', 'unformattable word/document.xml orders[1]o.lines[0]', 'o.lines word/document.xml orders[2]'],
+        `each problem with its loops, outermost first; got ${JSON.stringify(brief2(deep))}`);
+    // A missing field in a note copied per pass of a loop is noted in the note's part, with its pass.
+    const inNote = await OfficeTemplate.check(withNotes, { data: { a: 1, x: 2, z: 3, ls: [{ n: 1, y: 2 }, { n: 3 }] } });
+    assert.deepStrictEqual(brief2(inNote), ['l.y word/footnotes.xml ls[1]'], `a note's field in its part, with the loop it is copied in; got ${JSON.stringify(brief2(inNote))}`);
+    assert.deepStrictEqual(brief2(await OfficeTemplate.check(withNotes, { data: { a: 1, x: 2, z: 3 } })), ['ls word/document.xml'], "a note only a missing loop refers to is not checked");
+    // A block whose condition is missing is not written in a check: the budget a render's writing would spend is not spent.
+    const long = docx(p('{{ for a in as }}') + p('{{ if a.c }}') + p('L'.repeat(2000)) + p('{{ endif }}') + p('{{ endfor }}'));
+    const many: any[] = [];
+    const capped = await OfficeTemplate.check(long, { data: { as: Array.from({ length: 1200 }, () => ({})) }, decompressionLimits: { maxRepeatedContent: 200_000 }, onWarning: (w: any) => many.push(w) });
+    assert.strictEqual(capped.length, 1000, `a check lists at most 1,000 problems for an entry; got ${capped.length}`);
+    assert.deepStrictEqual(many.map(w => [w.code, w.details?.limit]), [['TEMPLATE_CHECK_LIMITED', 1000]], 'and says it stopped there');
     // Only the branch the data picks is needed: paid shows no due.
     const { due, ...noDue } = full;
     assert.deepStrictEqual(await OfficeTemplate.check(tpl, { data: { ...noDue, paid: true } }), [], 'a field only the branch not taken reads is not needed');

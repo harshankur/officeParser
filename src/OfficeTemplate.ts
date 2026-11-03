@@ -173,6 +173,16 @@ function isDataObject(d: unknown): d is TemplateData {
  * Template renderer. See {@link module:OfficeTemplate} for an overview and {@link TemplateConfig} for
  * the options.
  */
+/**
+ * At most this many problems a check lists for one data entry. Past it, the check stops and says so
+ * (`TEMPLATE_CHECK_LIMITED`): each problem holds its message and loops, so a long list of rows each
+ * missing fields would otherwise hold more than the process can.
+ */
+const MAX_TEMPLATE_PROBLEMS = 1000;
+
+/** Thrown when a check has listed {@link MAX_TEMPLATE_PROBLEMS}: it stops there. */
+const CHECK_FULL: unique symbol = Symbol('check full');
+
 /** A template read and compiled, with the options a render, a listing and a check share. */
 interface PreparedTemplate { compiled: CompiledDocxTemplate; options: DocxTemplateOptions; errCfg: OfficeParserConfig }
 
@@ -287,25 +297,31 @@ export class OfficeTemplate {
      * branch uses is not needed). Where a render would reject, the problem is noted and the check goes
      * on, passing over that tag: a missing field writes nothing, and a branch or loop whose condition or
      * list is missing or does not fit is not entered, so the fields inside it are not checked until it is
-     * given. A template's own errors, and the limits a render is held to, reject as a render's do.
+     * given. A template's own errors, the limits a render is held to, and an error a filter of your own
+     * throws reject as a render's do. At most 1,000 problems are listed for one data entry: past them the
+     * check stops, and says so with a `TEMPLATE_CHECK_LIMITED` warning.
      */
     static async check(template: TemplateInput, config: TemplateConfig): Promise<TemplateProblem[] | TemplateProblem[][]> {
         const errCfg: OfficeParserConfig = { onWarning: config?.onWarning };
         const rows = dataRows(config, errCfg);
         const { compiled, options } = await prepareTemplate(template, config, errCfg);
-        const checkOne = (data: TemplateData): TemplateProblem[] => {
+        const checkOne = (data: TemplateData, entry?: number): TemplateProblem[] => {
             const problems: TemplateProblem[] = [];
             // A problem met again (a field used twice in a part, a tag in a note copied per reference) is noted once.
             const seen = new Set<string>();
             const note = (problem: TemplateProblem): void => {
                 const key = JSON.stringify([problem.code, problem.field, problem.details, problem.part, problem.loops]);
-                if (!seen.has(key)) { seen.add(key); problems.push(problem); }
+                if (seen.has(key)) return;
+                seen.add(key);
+                problems.push(problem);
+                if (problems.length >= MAX_TEMPLATE_PROBLEMS) throw CHECK_FULL;
             };
             // The part being rendered, which a missing field is noted in.
             let part = '';
             const checking: DocxTemplateOptions = {
                 ...options,
                 onMissing: 'error',
+                checking: true,
                 onFieldMissing: (field, loops) => {
                     const message = buildOfficeError(OfficeErrorType.TEMPLATE_FIELD_MISSING, field).officeIssue!.message;
                     note({ code: OfficeErrorType.TEMPLATE_FIELD_MISSING, message, field, part, loops });
@@ -316,10 +332,14 @@ export class OfficeTemplate {
                     throw TAG_SKIPPED;
                 },
             };
-            renderParts(compiled, data, checking, name => { part = name; });
+            try { renderParts(compiled, data, checking, name => { part = name; }); }
+            catch (e) {
+                if (e !== CHECK_FULL) throw e;
+                logWarning(OfficeWarningType.TEMPLATE_CHECK_LIMITED, errCfg, entry === undefined ? { limit: MAX_TEMPLATE_PROBLEMS } : { limit: MAX_TEMPLATE_PROBLEMS, entry });
+            }
             return problems;
         };
-        return Array.isArray(config.data) ? rows.map(checkOne) : checkOne(config.data);
+        return Array.isArray(config.data) ? rows.map((data, entry) => checkOne(data, entry)) : checkOne(config.data);
     }
 }
 
