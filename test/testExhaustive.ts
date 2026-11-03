@@ -3961,6 +3961,73 @@ async function testTemplate(): Promise<void> {
 }
 
 /**
+ * A template's tags are listed without data, and data is checked against them without writing a
+ * document: every problem a render with onMissing 'error' would reject for, each once, with its loops.
+ */
+async function testTemplateTagsAndCheck(): Promise<void> {
+    const { p, docx } = ooxmlHelpers();
+    const tpl = path.join(__dirname, 'files', 'template', 'invoice.docx');
+    const lines = [{ description: 'Bolts', qty: 2, price: '$500.00' }, { description: 'Nuts', qty: 1, price: '$250.00' }];
+    const full = { name: 'Acme Corp', amount: '$1,250.00', date: '2026-10-01', item: 'Widget', note: 'n', company: 'GLOBEX', missing: 'R-1', paid: false, due: '2026-11-01', lines, discount: '$50.00', contacts: [{ name: 'Ann' }], total: 1250.5, dueDate: '2026-11-01' };
+
+    // --- the tags, with no data ---
+    const tags = await OfficeTemplate.tags(tpl);
+    const brief = tags.map(t => [t.kind, t.part, t.fields.join(','), t.loops.map(l => `${l.item} in ${l.list}`).join('/')].join(' '));
+    assert.deepStrictEqual(brief, [
+        'field word/document.xml name ', 'field word/document.xml amount ', 'field word/document.xml date ', 'field word/document.xml item ',
+        'field word/document.xml missing ', 'field word/document.xml note ', 'if word/document.xml paid ', 'else word/document.xml  ',
+        'field word/document.xml amount ', 'field word/document.xml due ', 'for word/document.xml lines ',
+        'field word/document.xml line.description line in lines', 'field word/document.xml line.qty line in lines', 'field word/document.xml line.price line in lines',
+        'if word/document.xml discount ', 'field word/document.xml discount ', 'field word/document.xml total ', 'field word/document.xml dueDate ',
+        'for word/document.xml contacts ', 'field word/document.xml c.name c in contacts', 'if word/document.xml loop.last c in contacts', 'field word/header1.xml company ',
+    ], `every field and block tag, in order, a header's too; got ${JSON.stringify(brief)}`);
+    assert.strictEqual(tags[0].tag, '{{name}}', 'a tag split across runs is one tag, as typed');
+    assert.deepStrictEqual(tags.find(t => t.fields[0] === 'total')?.filters, ['format'], "a field's filters are named");
+    assert.strictEqual(tags.find(t => t.kind === 'for')?.item, 'line', "a loop names its item");
+    const conditions = await OfficeTemplate.tags(docx(p('{{ if a and (b or not c.d) and e == 3 }}x{{ else if f }}y{{ else }}z{{ endif }}')));
+    assert.deepStrictEqual(conditions.map(t => [t.kind, t.fields]), [['if', ['a', 'b', 'c.d', 'e']], ['elseif', ['f']], ['else', []]], 'a condition names every path it reads, once, in order');
+    const custom = await OfficeTemplate.tags(docx(p('[[who]] {{not}}')), { delimiters: { start: '[[', end: ']]' } });
+    assert.deepStrictEqual(custom.map(t => t.tag), ['[[who]]'], 'tags with the delimiters asked for');
+    await assert.rejects(OfficeTemplate.tags(docx(p('{{ if a }}x'))), (e: any) => e.officeIssue?.code === 'TEMPLATE_SYNTAX', "a template's own error rejects as a render's does");
+    assert.deepStrictEqual(await OfficeTemplate.tags(docx(p('No tags here.'))), [], 'a template of no tag lists none');
+
+    // --- data checked ---
+    assert.deepStrictEqual(await OfficeTemplate.check(tpl, { data: full }), [], 'data a render needs all of has no problem');
+    const brief2 = (problems: any[]) => problems.map(x => `${x.code === 'TEMPLATE_FIELD_MISSING' ? x.field : x.details.reason} ${x.part} ${x.loops.map((l: any) => `${l.list}[${l.index}]`).join('')}`.trim());
+    const { name, paid, ...rest } = full;
+    const problems = await OfficeTemplate.check(tpl, { data: { ...rest, lines: [{ description: 'Bolts', price: '$5' }, { qty: 1 }], contacts: 'Ann', total: 'abc' } as any });
+    assert.deepStrictEqual(brief2(problems), [
+        'name word/document.xml', 'paid word/document.xml', 'line.qty word/document.xml lines[0]', 'line.description word/document.xml lines[1]',
+        'line.price word/document.xml lines[1]', 'unformattable word/document.xml', 'not-a-list word/document.xml',
+    ], `every problem at once, each once, a loop's with its pass; got ${JSON.stringify(brief2(problems))}`);
+    assert.ok(problems.every(x => typeof x.message === 'string' && x.message.length > 20), 'each problem says what a render would');
+    // Only the branch the data picks is needed: paid shows no due.
+    const { due, ...noDue } = full;
+    assert.deepStrictEqual(await OfficeTemplate.check(tpl, { data: { ...noDue, paid: true } }), [], 'a field only the branch not taken reads is not needed');
+    assert.deepStrictEqual(brief2(await OfficeTemplate.check(tpl, { data: noDue })), ['due word/document.xml'], 'and is where the data takes that branch');
+    // What the data does not lead to is not checked until it does.
+    const { lines: _l, ...noLines } = full;
+    assert.deepStrictEqual(brief2(await OfficeTemplate.check(tpl, { data: noLines })), ['lines word/document.xml'], "a missing list's own fields are not reported");
+    // The kinds of value that do not fit, beyond those above.
+    const misfit = await OfficeTemplate.check(docx(p('{{ who }} {{ if n > "a" }}x{{ endif }} {{ who | upper }}')), { data: { who: { first: 'A' }, n: 3 } as any });
+    assert.deepStrictEqual(misfit.map(x => x.details?.reason), ['not-text', 'incomparable', 'unformattable'], `a value of no text, an incomparable condition, a case filter on an object; got ${JSON.stringify(misfit.map(x => x.details))}`);
+    // onMissing does not change what a check reports.
+    assert.strictEqual((await OfficeTemplate.check(tpl, { data: {}, onMissing: 'keep' })).length > 0, true, "a check reports what is missing whatever onMissing says");
+    // A batch: a list of problems per entry.
+    const batch = await OfficeTemplate.check(tpl, { data: [full, { ...full, name: undefined } as any, rest as any] });
+    assert.deepStrictEqual(batch.map(b => brief2(b)), [[], [], ['name word/document.xml', 'paid word/document.xml']], 'a batch has one list per entry; a key present as undefined is given');
+    // A check and a render agree.
+    for (const data of [full, rest, { ...full, contacts: 3 }]) {
+        const found = await OfficeTemplate.check(tpl, { data: data as any });
+        const rendered = await OfficeTemplate.render(tpl, { data: data as any, onMissing: 'error' }).then(() => null, (e: any) => e.officeIssue);
+        assert.strictEqual(rendered?.code ?? null, found[0]?.code ?? null, 'a render rejects exactly when a check finds a problem, for the first of them');
+        if (rendered) assert.strictEqual(rendered.message, found[0].message, 'with the same message');
+    }
+    await assert.rejects(OfficeTemplate.check(tpl, { data: 3 as any }), (e: any) => e.officeIssue?.code === 'IMPROPER_ARGUMENTS', 'data of the wrong shape is refused, as a render refuses it');
+    console.log('  Template tags and check: All assertions passed ✓');
+}
+
+/**
  * DOCX templating with block tags: `if`/`else if`/`else`/`endif` and `for`/`endfor`, in each of their
  * scopes (inline, paragraphs, table rows), their conditions, the data they read, the errors they raise,
  * and the document they leave (balanced XML, unique ids, every cell ending in a paragraph).
@@ -11704,6 +11771,7 @@ async function runTests(): Promise<void> {
         ['NativePdfEngine', testNativePdfEngine],
         ['Template', testTemplate],
         ['Template blocks', testTemplateBlocks],
+        ['Template tags and check', testTemplateTagsAndCheck],
         ['Chart scripts', testChartScripts],
         ['Markdown header rows', testMarkdownHeaderRows],
         ['RTF header rows', testRtfHeaderRows],

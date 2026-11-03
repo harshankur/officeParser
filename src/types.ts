@@ -2730,6 +2730,53 @@ export interface TemplateDataDetails {
     takes?: string;
 }
 
+/** A loop a template tag is read in: the list as typed in its `for` tag (`lines`, `order.lines`), and the pass, from 0. */
+export interface TemplateLoopPlace {
+    list: string;
+    index: number;
+}
+
+/**
+ * A tag of a template, as {@link OfficeTemplate.tags} lists it: a field, or a block's opening or
+ * branch tag (`endif` and `endfor` close what they open and are not listed). In the order of each part.
+ */
+export interface TemplateTagInfo {
+    /** `field` (`{{ name }}`), `if`, `elseif`, `else` or `for`. */
+    kind: 'field' | 'if' | 'elseif' | 'else' | 'for';
+    /** The tag as typed, delimiters included (a very long one is cut short). */
+    tag: string;
+    /** The document part holding it, e.g. `word/document.xml` or `word/header1.xml`. */
+    part: string;
+    /**
+     * What the tag reads from the data, each as typed: a field's path, every path in a condition, a
+     * loop's list. A path may start with a loop's item (`line.qty`) or `loop` (`loop.last`), which the
+     * enclosing `for` tags name.
+     */
+    fields: string[];
+    /** A field's filters, by name, in order. */
+    filters?: string[];
+    /** A `for` tag's item name (`line` in `{{ for line in lines }}`). */
+    item?: string;
+    /** The `for` tags this tag is inside, outermost first, each as its item name and list as typed. */
+    loops: { item: string; list: string }[];
+}
+
+/** A problem {@link OfficeTemplate.check} finds with a template's data: what a render with `onMissing: 'error'` would reject. */
+export interface TemplateProblem {
+    /** `TEMPLATE_FIELD_MISSING` (the data does not have a field the template reads) or `TEMPLATE_DATA_INVALID` (a value does not fit its tag). */
+    code: OfficeErrorType.TEMPLATE_FIELD_MISSING | OfficeErrorType.TEMPLATE_DATA_INVALID;
+    /** What a render would say. */
+    message: string;
+    /** For a missing field: the field as typed (`name`, `line.qty`). */
+    field?: string;
+    /** For a value that does not fit: why, and the tag (see {@link TemplateDataDetails}). */
+    details?: TemplateDataDetails;
+    /** The document part the tag is in. */
+    part: string;
+    /** The loops it was read in, outermost first, with each one's pass: `line.qty` in the third line is `[{ list: 'lines', index: 2 }]`. */
+    loops: TemplateLoopPlace[];
+}
+
 /**
  * A filter of the caller's own, named in `TemplateConfig.formatters` and written in a tag after `|`
  * (`{{ name | initials }}`, `{{ total | round 2 }}`). It is given the field's value as the data holds it
