@@ -188,13 +188,13 @@ export interface DocxTemplateOptions {
     onMissing: 'keep' | 'empty' | 'error';
     mtime: Date;
     /** A field the data does not have, with the loops it was read in (a render throws; a check notes it and goes on). */
-    onFieldMissing: (key: string, loops: TemplateLoopPlace[]) => void;
+    onFieldMissing: (key: string, place: TemplatePlace) => void;
     /** What the document's loops and values may add by repetition (see render), and what to throw past it. */
     maxRepeatedContent: number;
     onRepeatLimit: () => never;
     onSyntax: (details: TemplateSyntaxDetails) => never;
     /** A value that does not fit its tag, with the loops it was read in. Never returns: a check throws {@link TAG_SKIPPED}, and the tag is passed over. */
-    onDataInvalid: (details: TemplateDataDetails, loops: TemplateLoopPlace[]) => never;
+    onDataInvalid: (details: TemplateDataDetails, place: TemplatePlace) => never;
     /** Blocks nest deeper than {@link MAX_BLOCK_DEPTH}. */
     onNestingLimit: () => never;
     /** A part would grow past what one string can hold (with data that large, not by repetition). */
@@ -2075,13 +2075,36 @@ function forEachLoopSlots(nodes: TemplateNode[], visit: (slots: IdSlot[]) => voi
 interface LoopDetails { index: number; number: number; first: boolean; last: boolean; length: number }
 
 /** The names in scope: a loop's item and details, innermost first. */
-interface Scope { name: string; item: TemplateValue; list: readonly TemplateValue[]; listText: string; index: number; loop: LoopDetails; parent: Scope | null }
+interface Scope { name: string; item: TemplateValue; list: readonly TemplateValue[]; listText: string; loopId: number; index: number; loop: LoopDetails; parent: Scope | null; loops?: TemplateLoopPlace[] }
 
-/** The loops a tag is read in, outermost first: each one's list as typed and the pass. */
+/**
+ * Where a tag is read: `key` tells one pass of one set of loops from another, short whatever the lists
+ * are called (each loop by its number in the template, with its pass), and `loops` lists them, made
+ * only when asked for.
+ */
+export interface TemplatePlace { key: string; loops(): TemplateLoopPlace[] }
+
+/** The loops a scope is in, outermost first, each one's list as typed and the pass: made once per scope, its parent's shared. */
 function loopsOf(scope: Scope | null): TemplateLoopPlace[] {
-    const loops: TemplateLoopPlace[] = [];
-    for (let s = scope; s; s = s.parent) loops.push({ list: s.listText, index: s.index });
-    return loops.reverse();
+    if (!scope) return [];
+    if (!scope.loops) {
+        // (Iterative: a scope's parents are made first, so each is made once, from its own parent's.)
+        const chain: Scope[] = [];
+        for (let s: Scope | null = scope; s && !s.loops; s = s.parent) chain.push(s);
+        for (let i = chain.length - 1; i >= 0; i--) {
+            const s = chain[i];
+            // Frozen: problems of one pass share it.
+            s.loops = Object.freeze([...(s.parent?.loops ?? []), Object.freeze({ list: s.listText, index: s.index })]) as TemplateLoopPlace[];
+        }
+    }
+    return scope.loops!;
+}
+
+/** A tag's place (see {@link TemplatePlace}). Blocks nest at most MAX_BLOCK_DEPTH deep, so its key is short. */
+function placeOf(scope: Scope | null): TemplatePlace {
+    let key = '';
+    for (let s = scope; s; s = s.parent) key += `${s.loopId}:${s.index}/`;
+    return { key, loops: () => loopsOf(scope) };
 }
 
 /**
@@ -2105,6 +2128,13 @@ class RenderState {
     readonly written: Uint8Array;
     readonly valueXml = new WeakMap<object, Map<string, string>>();
     readonly valueUsed = new WeakMap<object, Set<string>>();
+    /** Each loop's number, in the order the render meets them (see {@link TemplatePlace}). */
+    private readonly loopIds = new Map<object, number>();
+    loopId(node: object): number {
+        let id = this.loopIds.get(node);
+        if (id === undefined) this.loopIds.set(node, id = this.loopIds.size);
+        return id;
+    }
     readonly ids: IdState | null;
     part = '';
     constructor(readonly data: TemplateData, readonly opts: DocxTemplateOptions, compiled: CompiledDocxTemplate) {
@@ -2198,7 +2228,7 @@ function renderField(node: FieldNode, scope: Scope | null, state: RenderState, o
     const found = lookup(node.path, node.text, scope, state.data);
     if (found === MISSING) {
         // (A tag split across runs is one field: the run it began in stands for it.)
-        if (state.opts.onMissing === 'error' && node.piece === 0) state.opts.onFieldMissing(node.text, loopsOf(scope));
+        if (state.opts.onMissing === 'error' && node.piece === 0) state.opts.onFieldMissing(node.text, placeOf(scope));
         // 'keep': each piece of the tag stays in its own run, so a tag split across runs keeps each
         // run's formatting (written again, as in a loop, it is a repeat); 'empty': nothing.
         if (state.opts.onMissing === 'keep') {
@@ -2224,7 +2254,7 @@ function renderField(node: FieldNode, scope: Scope | null, state: RenderState, o
         if (node.record.filters) value = applyFilters(value, node.record.filters, node, scope, state);
         // A list, an object, a function or a symbol has no text of its own (a function's would be its source).
         if (isContainer(value) || typeof value === 'function' || typeof value === 'symbol') {
-            state.opts.onDataInvalid({ reason: 'not-text', tag: typedOf(node.record, state.opts), part: state.part, kind: kindOfValue(value) }, loopsOf(scope));
+            state.opts.onDataInvalid({ reason: 'not-text', tag: typedOf(node.record, state.opts), part: state.part, kind: kindOfValue(value) }, placeOf(scope));
         }
     })) return;
     // Each value's run-XML, made once; a value's first use is the caller's own data, and each later
@@ -2258,7 +2288,7 @@ function renderField(node: FieldNode, scope: Scope | null, state: RenderState, o
 function applyFilters(value: TemplateValue, filters: CompiledFilter[], node: FieldNode, scope: Scope | null, state: RenderState): TemplateValue {
     const unformattable = (filter: string, takes: string, v: TemplateValue): never => state.opts.onDataInvalid({
         reason: 'unformattable', tag: typedOf(node.record, state.opts), part: state.part, kind: kindOfValue(v), filter, takes,
-    }, loopsOf(scope));
+    }, placeOf(scope));
     let current = value;
     for (const filter of filters) {
         if (filter.kind === 'custom') { current = filter.run(current, ...filter.args); continue; }
@@ -2295,7 +2325,7 @@ function applyFilters(value: TemplateValue, filters: CompiledFilter[], node: Fie
 function blockValue(path: TemplatePath, text: string, scope: Scope | null, state: RenderState): ConditionValue {
     const found = lookup(path, text, scope, state.data);
     if (found !== MISSING) return found.value;
-    if (state.opts.onMissing === 'error') state.opts.onFieldMissing(text, loopsOf(scope));
+    if (state.opts.onMissing === 'error') state.opts.onFieldMissing(text, placeOf(scope));
     return state.opts.onMissing === 'empty' ? null : MISSING;
 }
 
@@ -2304,7 +2334,7 @@ function renderIf(node: IfNode, scope: Scope | null, state: RenderState, out: st
     const read = (path: TemplatePath, text: string): ConditionValue => blockValue(path, text, scope, state);
     // Comparing two strings reads them: as long as the shorter one.
     const compared = (length: number): void => state.charge(length);
-    const incomparable = (why: Incomparable): never => state.opts.onDataInvalid({ reason: 'incomparable', tag: typedOf(node.branches[branch].record, state.opts), part: state.part, kind: why.left, otherKind: why.right }, loopsOf(scope));
+    const incomparable = (why: Incomparable): never => state.opts.onDataInvalid({ reason: 'incomparable', tag: typedOf(node.branches[branch].record, state.opts), part: state.part, kind: why.left, otherKind: why.right }, placeOf(scope));
     for (; branch < node.branches.length; branch++) {
         const { condition, cost } = node.branches[branch];
         state.charge(cost);
@@ -2321,13 +2351,13 @@ function renderFor(node: ForNode, scope: Scope | null, state: RenderState, out: 
     const list = blockValue(node.list, node.listText, scope, state);
     if (list === MISSING) { if (!state.opts.checking) renderKept(node.kept, scope, state, out); return; }
     if (list === null || list === undefined) return;
-    if (!Array.isArray(list) && !unlessSkipped(() => state.opts.onDataInvalid({ reason: 'not-a-list', tag: typedOf(node.record, state.opts), part: state.part, kind: kindOfValue(list) }, loopsOf(scope)))) return;
+    if (!Array.isArray(list) && !unlessSkipped(() => state.opts.onDataInvalid({ reason: 'not-a-list', tag: typedOf(node.record, state.opts), part: state.part, kind: kindOfValue(list) }, placeOf(scope)))) return;
     const items = list as readonly TemplateValue[];
     for (let index = 0; index < items.length; index++) {
         // Each pass costs at least one, so nested loops over long lists stay bounded even with nothing to write.
         state.charge(1);
         const loop: LoopDetails = { index, number: index + 1, first: index === 0, last: index === items.length - 1, length: items.length };
-        renderNodes(node.body, { name: node.name, item: items[index], list: items, listText: node.listText, index, loop, parent: scope }, state, out);
+        renderNodes(node.body, { name: node.name, item: items[index], list: items, listText: node.listText, loopId: state.loopId(node), index, loop, parent: scope }, state, out);
     }
 }
 

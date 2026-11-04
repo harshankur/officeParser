@@ -180,6 +180,9 @@ function isDataObject(d: unknown): d is TemplateData {
  */
 const MAX_TEMPLATE_PROBLEMS = 1000;
 
+/** At most this many problems a check of a batch lists in all: past it, the entries after are not checked (`TEMPLATE_CHECK_LIMITED`). */
+const MAX_BATCH_PROBLEMS = 10_000;
+
 /** Thrown when a check has listed {@link MAX_TEMPLATE_PROBLEMS}: it stops there. */
 const CHECK_FULL: unique symbol = Symbol('check full');
 
@@ -298,23 +301,39 @@ export class OfficeTemplate {
      * on, passing over that tag: a missing field writes nothing, and a branch or loop whose condition or
      * list is missing or does not fit is not entered, so the fields inside it are not checked until it is
      * given. A template's own errors, the limits a render is held to, and an error a filter of your own
-     * throws reject as a render's do. At most 1,000 problems are listed for one data entry: past them the
-     * check stops, and says so with a `TEMPLATE_CHECK_LIMITED` warning.
+     * throws reject as a render's do. At most 1,000 problems are listed for one data entry, and 10,000 for a
+     * whole batch: past them the check stops, and says so with a `TEMPLATE_CHECK_LIMITED` warning (for a
+     * batch, the entries after the one it stopped in are not checked, and their lists are empty).
      */
     static async check(template: TemplateInput, config: TemplateConfig): Promise<TemplateProblem[] | TemplateProblem[][]> {
         const errCfg: OfficeParserConfig = { onWarning: config?.onWarning };
         const rows = dataRows(config, errCfg);
         const { compiled, options } = await prepareTemplate(template, config, errCfg);
+        // What problems share, made once: each text's number (a key holds numbers, not the texts, which a
+        // template can make long), and each field's or tag's message.
+        const numbers = new Map<string, number>();
+        const numberOf = (text: string): number => {
+            let n = numbers.get(text);
+            if (n === undefined) numbers.set(text, n = numbers.size);
+            return n;
+        };
+        const messages = new Map<string, string>();
+        const messageOf = (key: string, make: () => string): string => {
+            let message = messages.get(key);
+            if (message === undefined) messages.set(key, message = make());
+            return message;
+        };
+        let total = 0;
         const checkOne = (data: TemplateData, entry?: number): TemplateProblem[] => {
             const problems: TemplateProblem[] = [];
-            // A problem met again (a field used twice in a part, a tag in a note copied per reference) is noted once.
+            // A problem met again (a field used twice in a pass, a tag in a note copied per reference) is noted once.
             const seen = new Set<string>();
-            const note = (problem: TemplateProblem): void => {
-                const key = JSON.stringify([problem.code, problem.field, problem.details, problem.part, problem.loops]);
+            const note = (key: string, make: () => TemplateProblem): void => {
                 if (seen.has(key)) return;
                 seen.add(key);
-                problems.push(problem);
-                if (problems.length >= MAX_TEMPLATE_PROBLEMS) throw CHECK_FULL;
+                problems.push(make());
+                total++;
+                if (problems.length >= MAX_TEMPLATE_PROBLEMS || total >= MAX_BATCH_PROBLEMS) throw CHECK_FULL;
             };
             // The part being rendered, which a missing field is noted in.
             let part = '';
@@ -322,24 +341,36 @@ export class OfficeTemplate {
                 ...options,
                 onMissing: 'error',
                 checking: true,
-                onFieldMissing: (field, loops) => {
-                    const message = buildOfficeError(OfficeErrorType.TEMPLATE_FIELD_MISSING, field).officeIssue!.message;
-                    note({ code: OfficeErrorType.TEMPLATE_FIELD_MISSING, message, field, part, loops });
+                onFieldMissing: (field, place) => {
+                    const fieldNumber = numberOf(field);
+                    note(`m${fieldNumber} ${numberOf(part)} ${place.key}`, () => ({
+                        code: OfficeErrorType.TEMPLATE_FIELD_MISSING,
+                        message: messageOf(`m${fieldNumber}`, () => buildOfficeError(OfficeErrorType.TEMPLATE_FIELD_MISSING, field).officeIssue!.message),
+                        field, part, loops: place.loops(),
+                    }));
                 },
-                onDataInvalid: (details, loops): never => {
-                    const message = buildOfficeError(OfficeErrorType.TEMPLATE_DATA_INVALID, details).officeIssue!.message;
-                    note({ code: OfficeErrorType.TEMPLATE_DATA_INVALID, message, details, part: details.part, loops });
+                onDataInvalid: (details, place): never => {
+                    const detailKey = numberOf(JSON.stringify(details));
+                    note(`d${detailKey} ${place.key}`, () => ({
+                        code: OfficeErrorType.TEMPLATE_DATA_INVALID,
+                        message: messageOf(`d${detailKey}`, () => buildOfficeError(OfficeErrorType.TEMPLATE_DATA_INVALID, details).officeIssue!.message),
+                        details, part: details.part, loops: place.loops(),
+                    }));
                     throw TAG_SKIPPED;
                 },
             };
             try { renderParts(compiled, data, checking, name => { part = name; }); }
             catch (e) {
                 if (e !== CHECK_FULL) throw e;
-                logWarning(OfficeWarningType.TEMPLATE_CHECK_LIMITED, errCfg, entry === undefined ? { limit: MAX_TEMPLATE_PROBLEMS } : { limit: MAX_TEMPLATE_PROBLEMS, entry });
+                // (The batch's limit, where both are reached: the entries after are not checked.)
+                const limit = entry !== undefined && total >= MAX_BATCH_PROBLEMS ? MAX_BATCH_PROBLEMS : MAX_TEMPLATE_PROBLEMS;
+                logWarning(OfficeWarningType.TEMPLATE_CHECK_LIMITED, errCfg, entry === undefined ? { limit } : { limit, entry, batch: limit === MAX_BATCH_PROBLEMS });
             }
             return problems;
         };
-        return Array.isArray(config.data) ? rows.map((data, entry) => checkOne(data, entry)) : checkOne(config.data);
+        if (!Array.isArray(config.data)) return checkOne(config.data);
+        // A batch: once its problems reach MAX_BATCH_PROBLEMS, the entries after are not checked.
+        return rows.map((data, entry) => total >= MAX_BATCH_PROBLEMS ? [] : checkOne(data, entry));
     }
 }
 

@@ -4025,6 +4025,18 @@ async function testTemplateTagsAndCheck(): Promise<void> {
     const capped = await OfficeTemplate.check(long, { data: { as: Array.from({ length: 1200 }, () => ({})) }, decompressionLimits: { maxRepeatedContent: 200_000 }, onWarning: (w: any) => many.push(w) });
     assert.strictEqual(capped.length, 1000, `a check lists at most 1,000 problems for an entry; got ${capped.length}`);
     assert.deepStrictEqual(many.map(w => [w.code, w.details?.limit]), [['TEMPLATE_CHECK_LIMITED', 1000]], 'and says it stopped there');
+    // A batch lists at most 10,000 in all: the entries after the one it stops in are not checked, and it says so.
+    const rows = docx(p('{{ for r in rows }}') + p('{{ r.x }}') + p('{{ endfor }}'));
+    const batchWarnings: any[] = [];
+    const entries = Array.from({ length: 12 }, () => ({ rows: Array.from({ length: 1001 }, () => ({})) }));
+    const lists = await OfficeTemplate.check(rows, { data: entries, onWarning: (w: any) => batchWarnings.push(w) });
+    assert.deepStrictEqual(lists.map(l => l.length), [1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 0, 0], `ten entries of 1,000, then none checked; got ${lists.map(l => l.length)}`);
+    assert.deepStrictEqual(batchWarnings.map(w => [w.details.entry, w.details.limit, !!w.details.batch]).slice(-2), [[8, 1000, false], [9, 10000, true]], 'each entry it stopped in is named, and the batch where it stopped');
+    assert.ok(Object.isFrozen(lists[0][0].loops) && lists[0][0].loops === lists[0][0].loops, "a problem's loops are frozen");
+    // A long condition is listed in time linear in its paths.
+    const longCondition = docx(p(`{{ if ${Array.from({ length: 80000 }, (_, i) => 'p' + i.toString(36)).join(' or ')} }}x{{ endif }}`));
+    const listed = await withinTime(4000, () => OfficeTemplate.tags(longCondition));
+    assert.ok(listed.within && listed.result[0].fields.length === 80000, `80,000 paths of one condition are listed quickly; took ${listed.ms} ms`);
     // Only the branch the data picks is needed: paid shows no due.
     const { due, ...noDue } = full;
     assert.deepStrictEqual(await OfficeTemplate.check(tpl, { data: { ...noDue, paid: true } }), [], 'a field only the branch not taken reads is not needed');
