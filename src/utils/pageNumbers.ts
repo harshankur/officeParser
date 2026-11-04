@@ -85,6 +85,27 @@ export function fieldSwitchFormat(instruction: string): PageNumberFormat | undef
 }
 
 /**
+ * The highest number a section's pages may restart at: a 32-bit signed integer's highest, the one the DOCX,
+ * ODT and LaTeX writers and the native PDF engine hold PageSetup.pageNumberStart to, so a start read is
+ * written as it was read. A value past it is a damaged file's, read as no restart.
+ */
+export const MAX_PAGE_NUMBER_START = 2_147_483_647;
+
+/**
+ * The number a section restarts its pages at, as a document states it (Word's `w:start`, ODF's
+ * `style:page-number`, RTF's `\pgnstarts` parameter): a whole number from 0 to MAX_PAGE_NUMBER_START,
+ * undefined for anything else (`auto`, `continue`, `2.5`, `-1`, `1e3`, a number past the bound), which
+ * restarts nothing.
+ */
+export function pageNumberStartOf(value: string | number | null | undefined): number | undefined {
+    if (typeof value === 'number') return Number.isSafeInteger(value) && value >= 0 && value <= MAX_PAGE_NUMBER_START ? value : undefined;
+    const digits = (value ?? '').trim();
+    if (!/^\d{1,12}$/.test(digits)) return undefined;
+    const n = Number(digits);
+    return n <= MAX_PAGE_NUMBER_START ? n : undefined;
+}
+
+/**
  * A Word section's page number format (`w:pgNumType w:fmt`): decimal where it gives none, undefined for
  * one of none of these (the saved number's form is then kept).
  */

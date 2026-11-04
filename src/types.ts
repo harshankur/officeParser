@@ -1697,7 +1697,9 @@ export interface PageSetup {
     pageNumberFormat?: PageNumberFormat;
     /**
      * The number the first of these pages prints, where it does not go on from the pages before (a
-     * body's 1 after a front matter's v). Absent: it goes on.
+     * body's 1 after a front matter's v): Word's `w:pgNumType w:start`, RTF's `\pgnrestart` at `\pgnstarts`,
+     * an ODF paragraph's or table's `style:page-number` with the master page it starts, the numbers a PDF's
+     * pages print. Absent: it goes on. Readers leave out a first section's 1, where its pages start anyway.
      */
     pageNumberStart?: number;
 }

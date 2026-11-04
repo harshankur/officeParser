@@ -49,7 +49,7 @@ import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 import { chargeRawContent } from '../utils/xmlUtils.js';
 import { dropTrailingSectionStarts, isFloatingFrame } from '../utils/nodeListUtils.js';
-import { fieldSwitchFormat } from '../utils/pageNumbers.js';
+import { fieldSwitchFormat, pageNumberStartOf } from '../utils/pageNumbers.js';
 import { attachmentLookup } from '../utils/repeatUtils.js';
 import { ByteDecoder, textDecoder } from '../utils/encodingUtils.js';
 
@@ -761,7 +761,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // twips: a section's state from its `\sectd` on; and the break each `\sect`
     // ends one with, given the next section's page once its properties are read (see sectionSetup).
     const page: Partial<Record<'w' | 'h' | 'ml' | 'mr' | 'mt' | 'mb' | 'hy' | 'fy', number>> & { landscape?: boolean } = {};
-    type SectionState = Partial<Record<'w' | 'h' | 'ml' | 'mr' | 'mt' | 'mb' | 'hy' | 'fy' | 'cols' | 'colsx', number>> & { pageNumbers?: PageNumberFormat; landscape?: boolean; ownLandscape?: boolean; ownSize?: boolean; line?: boolean; start?: 'none' | 'page'; title?: boolean; widths: Map<number, number>; colNo: number };
+    type SectionState = Partial<Record<'w' | 'h' | 'ml' | 'mr' | 'mt' | 'mb' | 'hy' | 'fy' | 'cols' | 'colsx', number>> & { pageNumbers?: PageNumberFormat; restart?: boolean; startAt?: number; landscape?: boolean; ownLandscape?: boolean; ownSize?: boolean; line?: boolean; start?: 'none' | 'page'; title?: boolean; widths: Map<number, number>; colNo: number };
     // (A section numbers its pages 1, 2, 3 until it says otherwise, `\sectd` setting it back.)
     const newSection = (): SectionState => ({ widths: new Map(), colNo: 1, pageNumbers: 'decimal' });
     let section = newSection();
@@ -2076,6 +2076,11 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             else if (node.value === 'linebetcol') section.line = true;
             // How the section numbers its pages (`\pgnlcrm`: i, ii, iii).
             else if (RTF_PAGE_NUMBERS.has(node.value)) section.pageNumbers = RTF_PAGE_NUMBERS.get(node.value);
+            // Whether it restarts them (`\pgnrestart`, at `\pgnstarts`, 1 where it gives none) or goes on
+            // (`\pgncont`, the default); `\pgnstarts` alone restarts nothing.
+            else if (node.value === 'pgnrestart') section.restart = true;
+            else if (node.value === 'pgncont') section.restart = false;
+            else if (node.value === 'pgnstarts') { const startAt = pageNumberStartOf(node.param); if (startAt !== undefined) section.startAt = startAt; }
             else if (node.value === 'colno' && node.param !== undefined) section.colNo = Math.max(1, Math.min(16, node.param));
             else if (node.value === 'colw' && node.param !== undefined && node.param > 0) section.widths.set(section.colNo, node.param);
             else if (node.value === 'sbknone') section.start = 'none';
@@ -2479,6 +2484,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             // Its first page with a header and footer of its own (`\titlepg`), as a Word section's `w:titlePg`.
             ...(state.title ? { differentFirstPage: true } : {}),
             ...(state.pageNumbers ? { pageNumberFormat: state.pageNumbers } : {}),
+            // (The first section's pages start at 1 anyway: a restart at 1 there is none.)
+            ...(state.restart && !(state === firstSection && (state.startAt ?? 1) === 1) ? { pageNumberStart: state.startAt ?? 1 } : {}),
         };
         if (config.ignorePageGeometry) return Object.keys(setup).length ? setup : undefined;
         const pt = (twips: number | undefined, fallback: number) => (twips ?? fallback) / 20;

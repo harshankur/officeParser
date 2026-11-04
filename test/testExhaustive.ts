@@ -6086,6 +6086,108 @@ async function testPageNumberFormats(): Promise<void> {
 }
 
 /**
+ * A section restarts its page numbers where the document says so (Word's `w:pgNumType w:start`, RTF's
+ * `\pgnrestart` at `\pgnstarts`, an ODF paragraph's `style:page-number` with the master page it starts):
+ * a front matter in roman then a body from 1 (test/files/page-numbers: the Word file, and LibreOffice's ODT
+ * and RTF of it) is read with the restart on the body's section, written so by every writer, and printed so.
+ * The first section's start of 1 is none (its pages start there anyway); a later one's is a restart. What
+ * goes on (`auto`, `\pgncont`, `\pgnstarts` without `\pgnrestart`, a page layout's `style:first-page-number`,
+ * which LibreOffice does not show) and what is no whole number restarts nothing.
+ */
+async function testPageNumberRestarts(): Promise<void> {
+    const starts = (ast: OfficeParserAST) => [ast.metadata.pageSetup?.pageNumberStart, ...(ast.content as any[]).filter(n => n.type === 'break' && typeof n.metadata?.section === 'number').map(n => n.metadata.pageSetup?.pageNumberStart)];
+    // Each page's footer number, from the native engine's PDF read back with its footers in their pages.
+    const printed = async (ast: OfficeParserAST) => {
+        const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+        const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false, keepHeadersAndFootersInPages: true } } as any) as OfficeParserAST;
+        return back.content.filter(n => n.type === 'page').map(p => /Page\s+(\S+)/.exec(collectAllNodes({ ...back, content: [p] } as OfficeParserAST).filter(n => n.type === 'text').map(n => n.text).join(' '))?.[1]);
+    };
+    for (const ext of ['docx', 'odt', 'rtf'] as const) {
+        const ast = await OfficeParser.parseOffice(path.join(__dirname, `files/page-numbers/restart.${ext}`)) as OfficeParserAST;
+        const label = `${ext.toUpperCase()} restart`;
+        const body = (ast.content as any[]).filter(n => n.type === 'break' && typeof n.metadata?.section === 'number').map(n => n.metadata.pageSetup?.pageNumberFormat);
+        assert.ok(ast.metadata.pageSetup?.pageNumberFormat === 'lowerRoman' && body.length === 1 && body[0] === 'decimal', `${label}: a front matter in roman, a body in digits; got ${JSON.stringify([ast.metadata.pageSetup, body])}`);
+        assert.deepStrictEqual(starts(ast), [undefined, 1], `${label}: the body's section restarts at 1, the first section's 1 is none`);
+        // Written: the body's section restarts, the front matter's states no start.
+        const docx = strFromU8(unzipSync(new Uint8Array((await ast.to('docx')).value as any))['word/document.xml']);
+        assert.deepStrictEqual(docx.match(/<w:pgNumType[^>]*>/g), ['<w:pgNumType w:fmt="lowerRoman"/>', '<w:pgNumType w:start="1"/>'], `${label}: DOCX restarts the body`);
+        const odt = strFromU8(unzipSync(new Uint8Array((await ast.to('odt')).value as any))['content.xml']);
+        assert.deepStrictEqual(odt.match(/style:page-number="[^"]*"/g), ['style:page-number="1"'], `${label}: ODT restarts the body`);
+        const rtf = String((await ast.to('rtf')).value);
+        assert.deepStrictEqual(rtf.match(/\\pgnstarts\d+\\pgnrestart/g), ['\\pgnstarts1\\pgnrestart'], `${label}: RTF restarts the body`);
+        const tex = String((await ast.to('tex')).value);
+        assert.deepStrictEqual(tex.match(/\\setcounter\{page\}\{\d+\}/g), ['\\setcounter{page}{1}'], `${label}: LaTeX restarts the body`);
+        // Read again, each written file restarts where it did.
+        for (const [fileType, written] of [['docx', (await ast.to('docx')).value], ['odt', (await ast.to('odt')).value], ['rtf', Buffer.from(rtf)]] as const) {
+            const again = await OfficeParser.parseOffice(Buffer.from(written as any), { fileType } as any) as OfficeParserAST;
+            assert.deepStrictEqual(starts(again), [undefined, 1], `${label}: its ${fileType} read again restarts the body`);
+        }
+        // Printed: i, ii, ... then 1, 2, ... (the body went on from the front matter's last page).
+        const got = await printed(ast);
+        const front = got.findIndex(t => !/^[ivx]+$/.test(t ?? ''));
+        assert.ok(front >= 2 && got.length - front >= 2 && got.slice(0, front).every((t, i) => t === pageNumberText(i + 1, 'lowerRoman')) && got.slice(front).every((t, i) => t === String(i + 1)),
+            `${label}: the native PDF engine prints the front matter in roman and the body from 1; got ${JSON.stringify(got)}`);
+    }
+
+    // Word: `w:start` on the first section and a later one.
+    const W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+    const word = async (first: string, later: string) => starts(await OfficeParser.parseOffice(Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${W_NS}><w:body><w:p><w:pPr><w:sectPr>${first}</w:sectPr></w:pPr><w:r><w:t>Front</w:t></w:r></w:p><w:p><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr>${later}</w:sectPr></w:body></w:document>`),
+    })), { fileType: 'docx' } as any) as OfficeParserAST);
+    const start = (value: string) => `<w:pgNumType w:start="${value}"/>`;
+    assert.deepStrictEqual(await word(start('1'), start('1')), [undefined, 1], 'Word: a start of 1 is none on the first section, a restart on a later one');
+    assert.deepStrictEqual(await word(start('5'), ''), [5, undefined], 'Word: the first section starting at 5 keeps it; a section of no w:pgNumType goes on');
+    assert.deepStrictEqual(await word(start('0'), `<w:pgNumType w:fmt="lowerRoman" w:start="0"/>`), [0, 0], 'Word: a start of 0 is one');
+    assert.deepStrictEqual(await word('<w:pgNumType w:fmt="lowerRoman"/>', start('2147483647')), [undefined, 2147483647], 'Word: the highest start');
+    for (const bad of ['2.5', '-1', '1e3', 'abc', '', '2147483648', '99999999999999999999999'])
+        assert.deepStrictEqual(await word(start(bad), start(bad)), [undefined, undefined], `Word: w:start="${bad}" restarts nothing`);
+
+    // RTF: `\pgnrestart` restarts, at `\pgnstarts` (1 where it gives none); `\pgnstarts` alone and `\pgncont` go on.
+    const rtf = async (...sections: string[]) => starts(await OfficeParser.parseOffice(Buffer.from(`{\\rtf1\\ansi ${sections.map((words, i) => `${words} Section ${i}.\\par `).join('\\sect ')}}`), { fileType: 'rtf' } as any) as OfficeParserAST);
+    assert.deepStrictEqual(await rtf('\\sectd\\pgnrestart', '\\sectd\\pgnrestart'), [undefined, 1], 'RTF: \\pgnrestart alone restarts at 1, none on the first section');
+    assert.deepStrictEqual(await rtf('\\sectd\\pgnrestart\\pgnstarts5', '\\sectd'), [5, undefined], 'RTF: the first section restarting at 5 keeps it; \\sectd goes on');
+    assert.deepStrictEqual(await rtf('\\sectd\\pgnstarts5', '\\sectd\\pgnstarts5'), [undefined, undefined], 'RTF: \\pgnstarts without \\pgnrestart restarts nothing');
+    assert.deepStrictEqual(await rtf('\\sectd', '\\sectd\\pgnstarts3\\pgnrestart\\pgncont'), [undefined, undefined], 'RTF: \\pgncont goes on');
+    assert.deepStrictEqual(await rtf('\\sectd', '\\sectd\\pgnstarts0\\pgnrestart'), [undefined, 0], 'RTF: a start of 0 is one');
+    for (const bad of ['-4', '99999999999', ''])
+        assert.deepStrictEqual(await rtf('\\sectd', `\\sectd\\pgnrestart\\pgnstarts${bad}`), [undefined, 1], `RTF: \\pgnstarts${bad} is no start, the restart at 1`);
+    // (A section takes the one before's properties until its \sectd, as the specification gives them, and LibreOffice shows them.)
+    assert.deepStrictEqual(await rtf('\\sectd', '\\sectd\\pgnrestart\\pgnstarts3', ''), [undefined, 3, 3], 'RTF: a section of no \\sectd restarts as the one before');
+    assert.deepStrictEqual(await rtf('\\sectd', '\\sectd\\pgnrestart\\pgnstarts3', '\\sectd'), [undefined, 3, undefined], 'RTF: \\sectd goes on');
+
+    // ODF: a paragraph's or a table's style naming a master page restarts at its `style:page-number`.
+    const ODF = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"';
+    const odfRead = async (styles: string, body: string, layouts: [string, string] = ['', '']) => await OfficeParser.parseOffice(Buffer.from(zipSync({
+        mimetype: strToU8('application/vnd.oasis.opendocument.text'),
+        'styles.xml': strToU8(`<?xml version="1.0"?><office:document-styles ${ODF}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" style:num-format="i"${layouts[0]}/></style:page-layout><style:page-layout style:name="pm2"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in"${layouts[1]}/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/><style:master-page style:name="Body" style:page-layout-name="pm2"/></office:master-styles></office:document-styles>`),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${ODF}><office:automatic-styles>${styles}</office:automatic-styles><office:body><office:text>${body}</office:text></office:body></office:document-content>`),
+    })), { fileType: 'odt' } as any) as OfficeParserAST;
+    const paraStyle = (name: string, master: string | undefined, number: string | undefined, more = '') => `<style:style style:name="${name}" style:family="paragraph"${master ? ` style:master-page-name="${master}"` : ''}><style:paragraph-properties${number !== undefined ? ` style:page-number="${number}"` : ''}${more}/></style:style>`;
+    const odf = async (first: string | undefined, later: string | undefined, laterMaster = 'Body') => starts(await odfRead(paraStyle('P1', 'Standard', first) + paraStyle('P2', laterMaster, later), '<text:p text:style-name="P1">Front</text:p><text:p text:style-name="P2">Body</text:p>'));
+    // (LibreOffice's own: the first paragraph's page restarting at 1, the body's too.)
+    const likeLibreOffice = await odfRead(paraStyle('P1', 'Standard', '1') + paraStyle('P2', 'Body', '1'), '<text:p text:style-name="P1">Front</text:p><text:p text:style-name="P2">Body</text:p>');
+    assert.deepStrictEqual(starts(likeLibreOffice), [undefined, 1], 'ODT: a start of 1 is none on the first page, a restart on a later master page');
+    assert.ok(!('P1' in (likeLibreOffice.metadata.styleMap ?? {})) && !('P2' in (likeLibreOffice.metadata.styleMap ?? {})), `ODT: a style naming only a master page and its number has nothing to show; got ${JSON.stringify(Object.keys(likeLibreOffice.metadata.styleMap ?? {}))}`);
+    assert.deepStrictEqual(await odf('5', '1'), [5, 1], 'ODT: the first page restarting at 5 keeps it');
+    assert.deepStrictEqual(await odf(undefined, '0'), [undefined, 0], 'ODT: a start of 0 is one');
+    for (const bad of ['auto', '2.5', '-1', 'abc', ''])
+        assert.deepStrictEqual(await odf(bad, bad), [undefined, undefined], `ODT: style:page-number="${bad}" restarts nothing (the master page still starts a section)`);
+    // The master page in force named again: a section of its own where it restarts, a page of the same where it does not.
+    assert.deepStrictEqual(await odf(undefined, '1', 'Standard'), [undefined, 1], 'ODT: the master page in force restarting is a section of its own');
+    assert.deepStrictEqual(await odf(undefined, 'auto', 'Standard'), [undefined], 'ODT: the master page in force going on is no section');
+    // No master page, no restart (LibreOffice restarts only where a master page starts).
+    assert.deepStrictEqual(starts(await odfRead(paraStyle('P1', 'Standard', undefined) + paraStyle('P2', undefined, '9', ' fo:break-before="page"'), '<text:p text:style-name="P1">Front</text:p><text:p text:style-name="P2">Body</text:p>')), [undefined], 'ODT: style:page-number without a master page restarts nothing');
+    // A page layout's style:first-page-number is no restart (LibreOffice shows a text document's pages going on).
+    for (const value of ['5', 'continue'])
+        assert.deepStrictEqual(starts(await odfRead(paraStyle('P2', 'Body', undefined), '<text:p>Front</text:p><text:p text:style-name="P2">Body</text:p>', [` style:first-page-number="${value}"`, ` style:first-page-number="${value}"`])), [undefined, undefined], `ODT: style:first-page-number="${value}" restarts nothing`);
+    // A table's style restarts its page as a paragraph's does.
+    const tableStyle = '<style:style style:name="T1" style:family="table" style:master-page-name="Body"><style:table-properties style:page-number="3"/></style:style>';
+    assert.deepStrictEqual(starts(await odfRead(tableStyle, '<text:p>Front</text:p><table:table table:style-name="T1"><table:table-column/><table:table-row><table:table-cell><text:p>Cell</text:p></table:table-cell></table:table-row></table:table>')), [undefined, 3], 'ODT: a table starting a master page restarts at its number');
+}
+
+/**
  * A document of sections saved again is the same document: DOCX keeps a section's end in its last
  * paragraph and ODT a break in the next block's style (each wrote a paragraph of its own, one more empty
  * paragraph on every save), each section keeps how it numbers its pages, and a section that sets no page
@@ -11909,6 +12011,7 @@ async function runTests(): Promise<void> {
         ['Native PDF shaped text', testNativePdfShapedText],
         ['Page number formats', testPageNumberFormats],
         ['Sections saved again', testSectionRoundTrips],
+        ['Page number restarts', testPageNumberRestarts],
         ['PDF lists read whole', testPdfListsReadWhole],
         ['PDF headings by size and weight', testPdfHeadingsBySizeAndWeight],
         ['PDF ruled tables', testPdfRuledTables],

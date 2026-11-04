@@ -152,6 +152,11 @@ interface ParagraphStyleInfo {
     spacing?: ParagraphSpacing;
     /** `style:master-page-name`: a paragraph of this style starts a page of that master page. */
     masterPage?: string;
+    /**
+     * `style:page-number` with that master page: the number its page restarts at (a whole number; `auto`,
+     * the pages going on, is none).
+     */
+    pageNumber?: number;
     dropCap?: boolean;
     /** `fo:break-before` - a break emitted before the paragraph that carries the style. */
     breakBefore?: 'page' | 'column';
@@ -291,7 +296,7 @@ import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
 import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 import { appendAll, dropTrailingSectionStarts, liftFloatingFrames } from '../utils/nodeListUtils.js';
-import { odfPageNumberFormat } from '../utils/pageNumbers.js';
+import { odfPageNumberFormat, pageNumberStartOf } from '../utils/pageNumbers.js';
 import { inRanges } from '../utils/sheetUtils.js';
 
 /**
@@ -572,6 +577,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     /** The master page of each section after the first, in order; set while the text body is read. */
     const sectionMasters: string[] = [];
     let readingBody = false, bodyStarted = false;
+    /** The number the first page restarts at, where the first block's style says one (see ParagraphStyleInfo.pageNumber). */
+    let firstPageNumber: number | undefined;
 
     /** Whether a master page shows a header or footer of a kind (`style:header`, `-left`, `-first`). */
     const shown = (master: Element | undefined, tag: string): Element | undefined => {
@@ -706,7 +713,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             }
             const styleInfo: ParagraphStyleInfo = {};
             const masterPage = style.getAttribute("style:master-page-name");
-            if (masterPage) styleInfo.masterPage = masterPage;
+            if (masterPage) {
+                styleInfo.masterPage = masterPage;
+                // The number the master page's page restarts at, a paragraph's or a table's (only with a master
+                // page, which the page starts on, does ODF restart a page's number).
+                const props = getDirectChildren(style, "style:paragraph-properties")[0] ?? getDirectChildren(style, "style:table-properties")[0];
+                const pageNumber = pageNumberStartOf(props?.getAttribute("style:page-number"));
+                if (pageNumber !== undefined) styleInfo.pageNumber = pageNumber;
+            }
 
             // Parse paragraph properties for alignment and drop caps
             // A style's own properties (children of it, as the schema has them): looked up through the
@@ -1824,10 +1838,13 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 // word processor goes on, not a section with a first page of its own.)
                 const inForce = sectionMasters[sectionMasters.length - 1] ?? firstMaster;
                 const handsOver = (name: string) => { const next = masterPages.get(name)?.getAttribute('style:next-style-name'); return !!next && next !== name; };
+                // (Where the page restarts its numbers, a section of its own though its master page goes on.)
+                const restart = master ? info?.pageNumber : undefined;
                 if (!bodyStarted) {
                     bodyStarted = true;
                     if (master) firstMaster = master;
-                } else if (master && master === inForce && !handsOver(master)) {
+                    firstPageNumber = restart;
+                } else if (master && master === inForce && !handsOver(master) && restart === undefined) {
                     if (config.includeBreakNodes) targetArray.push({ type: 'break', metadata: { breakType: 'page' } as BreakMetadata });
                     return;
                 } else if (master) {
@@ -1835,6 +1852,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     // (A section's start is structure, a node whatever includeBreakNodes says.)
                     {
                         const pageSetup = odfPageSetup(master);
+                        if (pageSetup && restart !== undefined) pageSetup.pageNumberStart = restart;
                         // A page that starts inside a section of columns (LibreOffice turns to a section's page
                         // on its first paragraph) is set in that section's columns: the section's own break,
                         // just before it with nothing between, is this one.
@@ -2985,8 +3003,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     }
     // Also add styles that only have alignment
     for (const styleName in paragraphStyleMap) {
-        // (A style that only names a master page, as a sheet's table style does, has nothing to show.)
-        if (!combinedStyleMap[styleName] && Object.keys(paragraphStyleMap[styleName]).some(key => key !== 'masterPage')) {
+        // (A style that only names a master page, as a sheet's table style does, has nothing to show; nor its page's number.)
+        if (!combinedStyleMap[styleName] && Object.keys(paragraphStyleMap[styleName]).some(key => key !== 'masterPage' && key !== 'pageNumber')) {
             combinedStyleMap[styleName] = {
                 formatting: {},
                 alignment: paragraphStyleMap[styleName]?.alignment
@@ -3094,6 +3112,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     // A presentation's page is its slide's size alone: slides are laid out as they are, not within margins.
     // (A text document's numbering and first page are no geometry: kept under ignorePageGeometry.)
     const firstPage = config.ignorePageGeometry && fileType !== 'odt' ? undefined : odfPageSetup(firstMaster);
+    // (The first page is 1 anyway: a restart at 1 there is none.)
+    if (fileType === 'odt' && firstPage && firstPageNumber !== undefined && firstPageNumber !== 1) firstPage.pageNumberStart = firstPageNumber;
     const pageSetup = fileType === 'odt' ? firstPage : fileType === 'odp' ? (firstPage?.width ? { width: firstPage.width, height: firstPage.height } : undefined) : sized(firstPage);
 
     return createAST(

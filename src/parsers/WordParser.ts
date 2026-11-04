@@ -64,7 +64,7 @@ import { attachmentLookup, takeRepeats } from '../utils/repeatUtils.js';
 import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, ShapeMetadata, PageNumberFormat, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { MAX_PAGE_PT } from '../utils/pageLimits.js';
 import { lengthToPt, titlePagesTakeHiddenFirsts } from '../utils/officeGenUtils.js';
-import { fieldSwitchFormat, wordPageNumberFormat } from '../utils/pageNumbers.js';
+import { fieldSwitchFormat, pageNumberStartOf, wordPageNumberFormat } from '../utils/pageNumbers.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError, logWarning } from '../utils/errorUtils.js';
 import { createAttachment, renameAttachments } from '../utils/imageUtils.js';
@@ -1617,8 +1617,12 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         const setup: PageSetup = {};
         if (isOn(getDirectChildren(sectPr, "w:titlePg")[0])) setup.differentFirstPage = true;
         // How it numbers its pages (`w:pgNumType w:fmt`: lowerRoman for front matter; decimal without one).
-        const pageNumberFormat = wordPageNumberFormat(getDirectChildren(sectPr, "w:pgNumType")[0]?.getAttribute("w:fmt"));
+        const pgNumType = getDirectChildren(sectPr, "w:pgNumType")[0];
+        const pageNumberFormat = wordPageNumberFormat(pgNumType?.getAttribute("w:fmt"));
         if (pageNumberFormat) setup.pageNumberFormat = pageNumberFormat;
+        // Where it restarts them (`w:start`: a body's 1 after a front matter's v; without one they go on).
+        const pageNumberStart = pageNumberStartOf(pgNumType?.getAttribute("w:start"));
+        if (pageNumberStart !== undefined) setup.pageNumberStart = pageNumberStart;
         if (config.ignorePageGeometry) return setup;
         const twips = (element: Element | undefined, name: string): number | undefined => {
             const v = Number(element?.getAttribute(name));
@@ -2032,6 +2036,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 sections.push(sectPr);
             }
             const first = pageSetupOf(sections[0]);
+            // (The first section's pages start at 1 anyway: a start of 1 there, as Word often writes it, is none.)
+            if (first?.pageNumberStart === 1) delete first.pageNumberStart;
             if (first) metadata.pageSetup = first;
             await readHeadersAndFooters(file.path);
             await readPart(file.path, body, () => readBlocks(body, documentContent, content));
