@@ -3346,6 +3346,13 @@ async function parserHardeningTests() {
         try { written = !!lined.ast && (await lined.ast.to('html')).value.length > 0; } catch { written = false; }
         check(`odt: a text area of 64 empty lines named by 30,000 controls ${label} makes a bounded number of nodes, and writes`, !lined.error && count < most && lined.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && written, `${count} nodes, written ${written}, ${Date.now() - started}ms ${lined.codes} ${lined.error}`);
     }
+    // Each copy's runs and breaks write its link again: a 32-line control named 20,000 times inside a
+    // 64-character link, charged for its text alone, wrote about 14 times a 2 MB budget of HTML.
+    const linesArea = `<office:forms ${formNs}><form:form form:name="F"><form:textarea form:id="c1" form:current-value="${Array(32).fill('a').join('&#10;')}"/></form:form></office:forms>`;
+    const linked = await warned(odfOf('text', `${linesArea}<text:p><text:a xlink:type="simple" xlink:href="https://example.com/${'p'.repeat(64 - 20)}">${'<draw:control draw:control="c1"/>'.repeat(20_000)}</text:a></text:p>`), 'odt', { decompressionLimits: { maxRepeatedContent: 2_000_000 } });
+    let linkedHtml = -1;
+    try { linkedHtml = linked.ast ? (await linked.ast.to('html')).value.length : -1; } catch { linkedHtml = -1; }
+    check('odt: a linked 32-line control named 20,000 times writes HTML on the order of maxRepeatedContent', !linked.error && linkedHtml > 0 && linkedHtml < 6_000_000 && linked.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${linkedHtml} ${linked.codes} ${linked.error}`);
 
     // PDF: a form XObject drawing another many times is read within a budget of text items and
     // operators (seven forms deep, 2.5 KB, ended the process out of memory).
