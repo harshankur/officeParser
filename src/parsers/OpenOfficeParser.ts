@@ -391,9 +391,9 @@ const toRepeatCount = (attr: string | null): number => {
 };
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { chargedWithValues, repeatPreview, takeRepeats, valuesLength } from '../utils/repeatUtils.js';
+import { repeatPreview, takeRepeats, valuesLength } from '../utils/repeatUtils.js';
 import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
-import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
+import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString, takeNodes } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 import { appendAll, dropTrailingSectionStarts, liftFloatingFrames } from '../utils/nodeListUtils.js';
 import { odfPageNumberFormat, pageNumberStartOf } from '../utils/pageNumbers.js';
@@ -663,21 +663,24 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     const formControls = new Map<string, Element>();
     if (stylesDom) collectFormControls(stylesDom, formControls, false);
     /**
-     * Each form control's text (see formControlText) and its lines, read once, with the runs a copy of it
-     * makes and what the copy weighs before their values (characters, plus 16 for each run and break): many `draw:control`s can name one control, and each read it again (a 50,000-option list box
-     * named 2,000 times took 18 seconds). By the control, not its id: the body's controls take the ids of a
-     * master page's.
+     * Each form control's text (see formControlText), read once, its lines, and its text on one line (its
+     * line breaks as spaces) with the start of that past the budget: many `draw:control`s can name one
+     * control, and each read it again (a 50,000-option list box named 2,000 times took 18 seconds). By the
+     * control, not its id: the body's controls take the ids of a master page's.
      */
-    const controlTexts = new Map<Element, { text: string; lines: string[]; runs: number; weight: number; preview?: string[] }>();
+    const controlTexts = new Map<Element, { lines: string[]; line: string; preview?: string }>();
     /** The form controls a `draw:control` has shown: each one after the first is a repeat. */
     const shownControls = new Set<Element>();
     /**
      * A `draw:control`'s runs: its form control's text (see formControlText), in the text's formatting and
-     * the control's own (its `draw:text-style-name`), a line break between its lines; none where it names
-     * no control. The first showing a control has its whole text; each other is charged to the repeated
-     * content budget and, once that is spent, shows the start of its text on one line, its line breaks as
-     * spaces (one 100,000-character text area named 2,000 times made 200 million characters, and a preview
-     * kept in lines made a break for each of a text area's 64 empty lines at every naming).
+     * the control's own (its `draw:text-style-name`); none where it names no control. The first showing a
+     * control has its whole text, a line break between its lines. Each other is one run: its text on one
+     * line, its line breaks as spaces, charged to the repeated content budget, and once that is spent the
+     * start of it. One run, so a copy costs what a span costs: one node for one `draw:control` element, its
+     * values (its formatting, its link, the paragraph style its paragraph gives it) charged with every other
+     * node's after parsing (boundRepeatedValues). One 100,000-character text area named 2,000 times made
+     * 200 million characters, and a copy in lines wrote a break, its formatting and its link for each line
+     * at every naming.
      */
     const controlRuns = (element: Element, around: TextFormatting, link?: { link?: string; linkType?: 'internal' | 'external' }): { text: string; children: OfficeContentNode[] } => {
         const control = formControls.get(element.getAttribute('draw:control') || '');
@@ -685,32 +688,32 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         if (!control) return out;
         let read = controlTexts.get(control);
         if (!read) {
-            const text = formControlText(control);
-            const lines = text.split(/\r\n|\r|\n/);
-            const runs = lines.filter(Boolean).length;
-            read = { text, lines, runs, weight: text.length + 16 * (runs + lines.length - 1) };
+            const lines = formControlText(control).split(/\r\n|\r|\n/);
+            // (Each line break the first showing writes is a node, as a `text:line-break` element is: counted
+            // with the document's elements, as a DOCX's chunk of RTF counts its lines. A text area's value of
+            // 2.5 million line breaks, 19 KB of ODT, made 2.5 million nodes.)
+            takeNodes(lines.length - 1, config);
+            read = { lines, line: lines.join(' ') };
             controlTexts.set(control, read);
         }
         const own = styleMap[element.getAttribute('draw:text-style-name') || ''];
         const formatting = own ? mergeFormatting(around, own) : around;
-        // Each of a copy's runs writes its formatting and link again (a 64-character font and link on each of
-        // a 32-line control's runs, uncharged, wrote 11 times the budget), so a copy is charged for them in
-        // full, here, and its runs and breaks are not charged again after parsing (boundRepeatedValues): split
-        // between the two, a copy shown whole lost its longer values to the budget the parse had spent.
-        let lines = read.lines, charged = false;
-        if (!shownControls.has(control)) shownControls.add(control);
-        else if (takeRepeats(config, 1, read.weight + read.runs * (valuesLength(formatting) + valuesLength(link))) === 0) lines = read.preview ??= [repeatPreview(read.lines.join(' '))];
-        else charged = true;
-        lines.forEach((line, k) => {
+        const run = (text: string) => {
+            out.text += text;
+            out.children.push({ type: 'text', text, formatting, metadata: link ? { ...link } : undefined });
+        };
+        if (shownControls.has(control)) {
+            if (read.line) run(takeRepeats(config, 1, read.line.length + 16) > 0 ? read.line : read.preview ??= repeatPreview(read.line));
+            return out;
+        }
+        shownControls.add(control);
+        read.lines.forEach((line, k) => {
             if (k > 0) {
                 out.text += '\n';
                 out.children.push({ type: 'break', formatting, metadata: { breakType: 'textWrapping', ...(link || {}) } as BreakMetadata });
             }
-            if (!line) return;
-            out.text += line;
-            out.children.push({ type: 'text', text: line, formatting, metadata: link ? { ...link } : undefined });
+            if (line) run(line);
         });
-        if (charged) chargedWithValues(out.children);
         return out;
     };
 

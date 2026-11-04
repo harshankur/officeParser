@@ -55,11 +55,6 @@ export const takeRepeats = (config: OfficeParserConfig, copies: number, weight: 
     return granted;
 };
 
-/** Nodes a copy made whose values were charged in full with the copy (see chargedWithValues): not charged again. */
-const chargedNodes = new WeakSet<object>();
-/** Marks the nodes of a copy whose takeRepeats weight held their formatting and metadata values in full. */
-export const chargedWithValues = (nodes: OfficeContentNode[]): void => { for (const node of nodes) chargedNodes.add(node); };
-
 /** The characters of the string values an object holds directly (a node's formatting or metadata). */
 export const valuesLength = (values: object | undefined): number => {
     let length = 0;
@@ -102,10 +97,9 @@ const MAX_ATTACHMENT_NAME = 128;
  *   node naming it alike: it is written at every picture showing it, and one relationship target of
  *   100 KB shown 2,000 times made 200 MB.
  *
- * A node reached twice (shared) counts once, and a node whose copy was charged for its values in full
- * when it was made (chargedWithValues) is not charged again.
+ * A node reached twice (shared) counts once.
  */
-export const boundRepeatedValues =(roots: (OfficeContentNode[] | undefined)[], attachments: OfficeAttachment[], config: OfficeParserConfig): void => {
+export const boundRepeatedValues = (roots: (OfficeContentNode[] | undefined)[], attachments: OfficeAttachment[], config: OfficeParserConfig): void => {
     const seenNodes = new Set<OfficeContentNode>();
     const seenValues = new Set<string>();
     const shownAttachments = new Set<string>();
@@ -130,7 +124,7 @@ export const boundRepeatedValues =(roots: (OfficeContentNode[] | undefined)[], a
             const value = holder[key];
             if (typeof value !== 'string' || value.length <= REPEAT_ALLOWANCE) continue;
             if (!seenValues.has(value)) { seenValues.add(value); continue; }
-            if (chargedNodes.has(node) || takeRepeats(config, 1, value.length) > 0) continue;
+            if (takeRepeats(config, 1, value.length) > 0) continue;
             own ??= { ...holder };
             delete own[key];
         }

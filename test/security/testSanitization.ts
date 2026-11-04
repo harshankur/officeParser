@@ -3331,53 +3331,71 @@ async function parserHardeningTests() {
         const last = texts.filter(text => text.startsWith('AAAA')).pop() ?? '';
         check(`${label} repeats within maxRepeatedContent, with REPEATED_CONTENT_LIMIT_EXCEEDED`, !named.error && total < 20_000_000 && named.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && last.length === 65 && last.endsWith('\u2026'), `${total} ${last.length} ${Date.now() - started}ms ${named.codes} ${named.error}`);
     }
-    // A text area of 64 empty lines is 64 characters, all of it its own preview: kept in lines, each copy
-    // past the budget still made 64 breaks (3.9 KB of ODT, 30,000 namings, made 1.9 million nodes).
+    // A text area of 64 empty lines named by 30,000 controls (3.9 KB of ODT) wrote 64 breaks at each naming,
+    // up to 1.9 million nodes: a control named again is one run, so about one node a naming either way.
     const breaksArea = `<office:forms ${formNs}><form:form form:name="F"><form:textarea form:id="c1" form:current-value="${'&#10;'.repeat(64)}"/></form:form></office:forms>`;
     const nodesOf = (nodes: any[] | undefined): number => (nodes ?? []).reduce((sum: number, node: any) => sum + 1 + nodesOf(node.children), 0);
-    for (const [label, limits, most] of [
-        ['with the default budget', undefined, 1_250_000],
-        ['past a budget of 1', { maxRepeatedContent: 1 }, 2 * 30_000 + 1_000],
+    for (const [label, limits, warns] of [
+        ['with the default budget', undefined, false],
+        ['past a budget of 1', { maxRepeatedContent: 1 }, true],
     ] as const) {
         const started = Date.now();
         const lined = await warned(odfOf('text', `${breaksArea}<text:p>${'<draw:control draw:control="c1"/>'.repeat(30_000)}</text:p>`), 'odt', limits ? { decompressionLimits: limits } : {});
         const count = nodesOf(lined.ast?.content);
         let written = false;
         try { written = !!lined.ast && (await lined.ast.to('html')).value.length > 0; } catch { written = false; }
-        check(`odt: a text area of 64 empty lines named by 30,000 controls ${label} makes a bounded number of nodes, and writes`, !lined.error && count < most && lined.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && written, `${count} nodes, written ${written}, ${Date.now() - started}ms ${lined.codes} ${lined.error}`);
+        check(`odt: a text area of 64 empty lines named by 30,000 controls ${label} makes about one node a naming, and writes${warns ? ', with REPEATED_CONTENT_LIMIT_EXCEEDED' : ''}`, !lined.error && count < 2 * 30_000 + 1_000 && (!warns || lined.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED')) && written, `${count} nodes, written ${written}, ${Date.now() - started}ms ${lined.codes} ${lined.error}`);
     }
-    // Each copy's runs write its link and font again: a 32-line control named 20,000 times inside a
-    // 64-character link, or in a 64-character font, charged for its text alone, wrote about 5 times a
-    // 2 MB budget of HTML (9.5 and 10.9 million characters).
+    // A text area's line breaks are nodes, counted with the document's elements: 2.5 million `&#10;` in
+    // one (19 KB of ODT) made 2.5 million breaks past decompressionLimits.maxXmlElements.
+    const breaksOf = (count: number) => `<office:forms ${formNs}><form:form form:name="F"><form:textarea form:id="c1" form:current-value="${'&#10;'.repeat(count)}"/></form:form></office:forms><text:p><draw:control draw:control="c1"/></text:p>`;
+    const overBreaks = await parseQuiet(odfOf('text', breaksOf(100_000)), 'odt', { decompressionLimits: { maxXmlElements: 50_000 } });
+    const underBreaks = await parseQuiet(odfOf('text', breaksOf(100_000)), 'odt', { decompressionLimits: { maxXmlElements: 200_000 } });
+    check('odt: a text area of 100,000 line breaks counts against maxXmlElements', /XML element limit exceeded/.test(overBreaks.error) && !underBreaks.error, `${overBreaks.error.slice(0, 120)} | ${underBreaks.error}`);
+    // A 32-line control named 20,000 times in a 64-character link or font writes about what 20,000 spans of
+    // its text on one line write with the same link or font: a control named again is one run, as a span is
+    // (a copy in lines wrote a break, the link and the font for each line).
     const linesArea = `<office:forms ${formNs}><form:form form:name="F"><form:textarea form:id="c1" form:current-value="${Array(32).fill('a').join('&#10;')}"/></form:form></office:forms>`;
-    for (const [label, body, automatic, most] of [
-        ['in a 64-character link', `<text:p><text:a xlink:type="simple" xlink:href="https://example.com/${'p'.repeat(64 - 20)}">${'<draw:control draw:control="c1"/>'.repeat(20_000)}</text:a></text:p>`, '', 7_000_000],
-        ['in a 64-character font', `<text:p>${'<draw:control draw:control="c1" draw:text-style-name="T1"/>'.repeat(20_000)}</text:p>`, `<style:style style:name="T1" style:family="text"><style:text-properties style:font-name="${'F'.repeat(64)}"/></style:style>`, 7_500_000],
+    const joinedLines = Array(32).fill('a').join(' ');
+    const href64 = `https://example.com/${'p'.repeat(64 - 20)}`;
+    for (const [label, controls, spans, automatic] of [
+        ['in a 64-character link', `<text:p><text:a xlink:type="simple" xlink:href="${href64}">${'<draw:control draw:control="c1"/>'.repeat(20_000)}</text:a></text:p>`, `<text:p><text:a xlink:type="simple" xlink:href="${href64}">${`<text:span>${joinedLines}</text:span>`.repeat(20_000)}</text:a></text:p>`, ''],
+        ['in a 64-character font', `<text:p>${'<draw:control draw:control="c1" draw:text-style-name="T1"/>'.repeat(20_000)}</text:p>`, `<text:p>${`<text:span text:style-name="T1">${joinedLines}</text:span>`.repeat(20_000)}</text:p>`, `<style:style style:name="T1" style:family="text"><style:text-properties style:font-name="${'F'.repeat(64)}"/></style:style>`],
     ] as const) {
-        const valued = await warned(odfOf('text', `${linesArea}${body}`, {}, automatic), 'odt', { decompressionLimits: { maxRepeatedContent: 2_000_000 } });
-        let html = -1;
-        try { html = valued.ast ? (await valued.ast.to('html')).value.length : -1; } catch { html = -1; }
-        check(`odt: a 32-line control named 20,000 times ${label} writes HTML on the order of maxRepeatedContent`, !valued.error && html > 0 && html < most && valued.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${html} ${valued.codes} ${valued.error}`);
+        const limits = { decompressionLimits: { maxRepeatedContent: 2_000_000 } };
+        const valued = await warned(odfOf('text', `${linesArea}${controls}`, {}, automatic), 'odt', limits);
+        const ordinary = await parseQuiet(odfOf('text', spans, {}, automatic), 'odt', limits);
+        const htmlOf = async (ast: any) => { try { return ast ? (await ast.to('html')).value.length as number : -1; } catch { return -1; } };
+        const html = await htmlOf(valued.ast), spanHtml = await htmlOf(ordinary.ast);
+        check(`odt: a 32-line control named 20,000 times ${label} writes what as many spans write, unwarned`, !valued.error && html > 0 && spanHtml > 0 && Math.abs(html - spanHtml) < spanHtml * 0.05 && !valued.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${html} against ${spanHtml} ${valued.codes} ${valued.error} ${ordinary.error}`);
     }
-    // Values just past 64 characters: charged only past 64 after parsing, a copy's 65-character values
-    // wrote 9.5 times a 2 MB budget unwarned (19 MB); charged partly at parse time and partly after, copies shown
-    // whole lost them to the budget the parse had spent. Charged in full with the copy, every whole run keeps them.
+    // Values just past 64 characters on a control named 1,250 times: a copy's values are charged after
+    // parsing as any run's are, so every run, copies included, keeps them within a 2 MB budget.
     const v65 = `<style:style style:name="T1" style:family="text"><style:text-properties xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" style:font-name="${'F'.repeat(65)}" fo:color="#${'1'.repeat(64)}" fo:font-size="${'1'.repeat(63)}pt" fo:background-color="#${'2'.repeat(64)}"/></style:style>`;
     const at65 = await warned(odfOf('text', `${linesArea}<text:p><text:a xlink:type="simple" xlink:href="https://example.com/${'p'.repeat(65 - 20)}">${'<draw:control draw:control="c1" draw:text-style-name="T1"/>'.repeat(1_250)}</text:a></text:p>`, {}, v65), 'odt', { decompressionLimits: { maxRepeatedContent: 2_000_000 } });
-    const wholeRuns: any[] = [];
-    const walkWhole = (nodes: any[] | undefined) => nodes?.forEach((node: any) => { if (node.type === 'text' && node.text === 'a') wholeRuns.push(node); walkWhole(node.children); });
-    walkWhole(at65.ast?.content);
+    const runs65: any[] = [];
+    const walk65 = (nodes: any[] | undefined) => nodes?.forEach((node: any) => { if (node.type === 'text') runs65.push(node); walk65(node.children); });
+    walk65(at65.ast?.content);
     let html65 = -1;
     try { html65 = at65.ast ? (await at65.ast.to('html')).value.length : -1; } catch { html65 = -1; }
-    const keeps65 = wholeRuns.filter(run => run.formatting?.font?.length === 65 && run.metadata?.link?.length === 65).length;
-    check('odt: a control named 1,250 times with 65-character values warns, stays near a 2 MB budget, and every whole copy keeps its values', !at65.error && at65.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && html65 > 0 && html65 < 4_500_000 && wholeRuns.length > 1_000 && keeps65 === wholeRuns.length, `${html65} html, ${keeps65}/${wholeRuns.length} whole runs keep values, ${at65.codes} ${at65.error}`);
-    // A value longer than 64 characters is charged once on each copy, after parsing: charged again by the
-    // copy, a 100-character link on a control named 2,000 times (0.7 of the budget) warned and lost its links.
+    const keeps65 = runs65.filter(run => run.formatting?.font?.length === 65 && run.metadata?.link?.length === 65).length;
+    check('odt: a control named 1,250 times with 65-character values keeps them on every run, unwarned, its HTML under 2 MB', !at65.error && !at65.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && html65 > 0 && html65 < 2_000_000 && runs65.length === 32 + 1_249 && keeps65 === runs65.length, `${html65} html, ${keeps65}/${runs65.length} runs keep values, ${at65.codes} ${at65.error}`);
+    // A value longer than 64 characters is charged once on each copy, after parsing: a 100-character link
+    // on a control named 2,000 times keeps every link, unwarned.
     const longLinked = await warned(odfOf('text', `${linesArea}<text:p><text:a xlink:type="simple" xlink:href="https://example.com/${'p'.repeat(100 - 20)}">${'<draw:control draw:control="c1"/>'.repeat(2_000)}</text:a></text:p>`), 'odt');
     const longLinkRuns: any[] = [];
     const walkRuns = (nodes: any[] | undefined) => nodes?.forEach((node: any) => { if (node.type === 'text') longLinkRuns.push(node); walkRuns(node.children); });
     walkRuns(longLinked.ast?.content);
-    check('odt: a control named 2,000 times in a 100-character link keeps every link, unwarned, within the budget', !longLinked.error && longLinkRuns.length === 64_000 && longLinkRuns.every(run => run.metadata?.link?.length === 100) && !longLinked.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${longLinkRuns.length} runs, ${longLinkRuns.filter(run => run.metadata?.link).length} linked, ${longLinked.codes} ${longLinked.error}`);
+    check('odt: a control named 2,000 times in a 100-character link keeps every link, unwarned, within the budget', !longLinked.error && longLinkRuns.length === 2_031 && longLinkRuns.every(run => run.metadata?.link?.length === 100) && !longLinked.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${longLinkRuns.length} runs, ${longLinkRuns.filter(run => run.metadata?.link).length} linked, ${longLinked.codes} ${longLinked.error}`);
+    // The paragraph style a copy takes from its paragraph is charged as any run's is: a 10,000-character
+    // style on a paragraph of 20,000 draw:controls made a JSON AST too long to write. The bound is the
+    // 16 MiB default budget past the same paragraph unstyled, with room for the document's own allowance.
+    const longStyle = 'P'.repeat(10_000);
+    const styledControls = await warned(odfOf('text', `${linesArea}<text:p text:style-name="${longStyle}">${'<draw:control draw:control="c1"/>'.repeat(20_000)}</text:p>`, {}, `<style:style style:name="${longStyle}" style:family="paragraph"/>`), 'odt');
+    const unstyledControls = await parseQuiet(odfOf('text', `${linesArea}<text:p>${'<draw:control draw:control="c1"/>'.repeat(20_000)}</text:p>`), 'odt');
+    const jsonOf = (ast: any) => { try { return ast ? JSON.stringify(ast).length : -1; } catch { return -1; } };
+    const styledJson = jsonOf(styledControls.ast), unstyledJson = jsonOf(unstyledControls.ast);
+    check('odt: a control named 20,000 times in a 10,000-character paragraph style keeps its JSON near maxRepeatedContent, with REPEATED_CONTENT_LIMIT_EXCEEDED', !styledControls.error && styledJson > 0 && unstyledJson > 0 && styledJson < unstyledJson + 18_000_000 && styledControls.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${styledJson} against ${unstyledJson} unstyled, ${styledControls.codes} ${styledControls.error}`);
 
     // PDF: a form XObject drawing another many times is read within a budget of text items and
     // operators (seven forms deep, 2.5 KB, ended the process out of memory).
