@@ -17,7 +17,7 @@ import { guardShaping } from '../src/generators/pdf/nativePdfEngine';
 import { OfficeTemplate } from '../src/OfficeTemplate';
 import { OfficeConverter } from '../src/OfficeConverter';
 import { zipSync, strToU8, unzipSync, unzlibSync, strFromU8 } from 'fflate';
-import { PDFDocument, PDFHexString, PDFName, PDFOperator, PDFRawStream, StandardFonts, TextAlignment, degrees, rgb } from 'pdf-lib';
+import { PDFDict, PDFDocument, PDFHexString, PDFName, PDFOperator, PDFRawStream, StandardFonts, TextAlignment, degrees, rgb } from 'pdf-lib';
 import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -4924,6 +4924,73 @@ async function testNativePdfFontKinds(): Promise<void> {
     const fontOf = (text: string) => collectAllNodes(back).find(n => n.type === 'text' && (n.text || '').includes(text))?.formatting?.font;
     assert.deepStrictEqual(['Serif title', 'Sans', 'inline code', 'italic serif', 'bold mono', 'noto sans'].map(fontOf),
         ['Times-Bold', 'Helvetica', 'Courier', 'Times-Italic', 'Courier-Bold', 'Helvetica'], 'each run is printed in a stand-in of its kind');
+}
+
+/**
+ * The ballot boxes (U+2610 to U+2612), a form's check boxes as the readers give them: drawn by the native
+ * engine as boxes where no font has them (the Standard-14 fonts have none), in a Type 3 font of their own,
+ * as text that reads back as its character; not reported as characters lost. A font given that has them
+ * draws them.
+ */
+async function testNativePdfBallotBoxes(): Promise<void> {
+    const [empty, ticked, crossed] = ['☐', '☑', '☒'];
+    const t = (text: string, formatting: any = {}) => ({ type: 'text', text, formatting });
+    const para = (children: any[], metadata: any = {}) => ({ type: 'paragraph', text: children.map(c => c.text).join(''), children, metadata });
+    const long = 'Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore ';
+    const doc: any = { type: 'docx', metadata: {}, attachments: [{ type: 'chart', name: 'chart1', extension: 'chart', data: '', chartData: { yAxisTitle: `${crossed} counted`, labels: ['a', 'b'], dataSets: [{ name: 's', values: ['1', '2'], pointLabels: [] }] } }], content: [
+        para([t(`${crossed} Agree ${empty} Disagree ${ticked} Maybe`)]),
+        para([t(`${crossed} Bold ${empty}`, { bold: true, size: '16pt' }), t(` ${ticked} red`, { color: '#CC0000', italic: true })]),
+        para([t(`${long}${crossed} ${long}${empty} end.`)], { alignment: 'justify' }),
+        { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [para([t('Gift')])] }, { type: 'cell', children: [para([t(crossed)])] }] }] },
+        para([t('Inline'), t(crossed, { size: '20pt' }), t('glued')]),
+        para([t(`Unseen ${ticked}`, { invisible: true })]),
+        { type: 'chart', text: '', metadata: { attachmentName: 'chart1' } },
+    ] };
+    const read = async (pdf: Uint8Array) => (await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).content.map(n => n.text).join('\n');
+    const type3Fonts = async (pdf: Uint8Array) => {
+        const loaded = await PDFDocument.load(pdf);
+        let n = 0;
+        for (const [, obj] of loaded.context.enumerateIndirectObjects()) if (obj instanceof PDFDict && obj.get(PDFName.of('Subtype')) === PDFName.of('Type3')) n++;
+        return n;
+    };
+    const result: any = await OfficeGenerator.generate(doc, 'pdf', { pdfConfig: { engine: 'native' } } as any);
+    const lost = (result.messages || []).filter((m: any) => m.code === 'CONTENT_NOT_REPRESENTABLE');
+    // (The chart's turned axis title is drawn by pdf-lib in the first font: its box is one none draws, and counted.)
+    assert.deepStrictEqual(lost.map((m: any) => [m.details?.reason, m.details?.count, m.details?.sample]), [['unencodable-text', 1, crossed]], `native PDF: only the turned axis title's box is lost; got ${JSON.stringify(lost)}`);
+    const pdf = result.value as Uint8Array;
+    assert.strictEqual(await type3Fonts(pdf), 1, 'native PDF: the boxes are drawn in one Type 3 font');
+    const text = await read(pdf);
+    for (const line of [`${crossed} Agree ${empty} Disagree ${ticked} Maybe`, `${crossed} Bold ${empty} ${ticked} red`, `Inline${crossed}glued`, `Unseen ${ticked}`])
+        assert.ok(text.includes(line), `native PDF: "${line}" reads back as written (each box as wide as it is measured); got ${JSON.stringify(text)}`);
+    assert.ok(/labore\s+☒\s+Lorem/.test(text) && /labore\s+☐\s+end\./.test(text) && /Gift\s+☒/.test(text), `native PDF: a box in a justified line and in a cell reads in its place; got ${JSON.stringify(text)}`);
+    // Drawn invisibly where the text is invisible: in text rendering mode 3.
+    const loaded = await PDFDocument.load(pdf);
+    let streams = '';
+    for (const [, obj] of loaded.context.enumerateIndirectObjects()) if (obj instanceof PDFRawStream) { try { streams += strFromU8(unzlibSync(obj.contents)); } catch { streams += strFromU8(obj.contents); } }
+    assert.ok(/3 Tr[\s\S]*?\/BallotBoxes-\d+ [\d.]+ Tf[\s\S]*?<22> Tj/.test(streams), 'native PDF: an invisible box is drawn in the invisible rendering mode');
+    assert.ok(/<26> Tj/.test(streams) && /<24> Tj/.test(streams), 'native PDF: a bold box is drawn in its heavier glyph');
+    // Nothing to draw a box for: no font of them.
+    const plain: any = await OfficeGenerator.generate({ ...doc, attachments: [], content: [para([t('No boxes here.')])] }, 'pdf', { pdfConfig: { engine: 'native' } } as any);
+    assert.strictEqual(await type3Fonts(plain.value as Uint8Array), 0, 'native PDF: a document of no box has no font of them');
+    // Another character no font has is still reported.
+    const cjk: any = await OfficeGenerator.generate({ ...doc, attachments: [], content: [para([t(`${crossed} 日`)])] }, 'pdf', { pdfConfig: { engine: 'native' } } as any);
+    assert.deepStrictEqual((cjk.messages || []).filter((m: any) => m.code === 'CONTENT_NOT_REPRESENTABLE').map((m: any) => [m.details?.count, m.details?.sample]), [[1, '日']], 'native PDF: a character no font has is reported, the box beside it not');
+    // A font given that lacks them: the boxes drawn as boxes still, nothing reported.
+    const arial = systemFont('/System/Library/Fonts/Supplemental/Arial.ttf', '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf');
+    if (arial) {
+        const given: any = await OfficeGenerator.generate({ ...doc, attachments: [], content: [para([t(`${crossed} Agree ${empty} No`)])] }, 'pdf', { pdfConfig: { engine: 'native', fonts: { regular: arial } } } as any);
+        assert.deepStrictEqual((given.messages || []).map((m: any) => m.code), [], 'native PDF: a font given without the boxes: nothing lost');
+        assert.strictEqual(await type3Fonts(given.value as Uint8Array), 1, 'native PDF: a font given without the boxes: they are drawn in their own font');
+        assert.ok((await read(given.value as Uint8Array)).includes(`${crossed} Agree ${empty} No`), 'native PDF: a font given without the boxes: they read back');
+    }
+    // A font given that has them draws them.
+    const withBoxes = systemFont('/System/Library/Fonts/Menlo.ttc', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf');
+    if (withBoxes) {
+        const given: any = await OfficeGenerator.generate({ ...doc, attachments: [], content: [para([t(`${crossed} Agree ${empty} No ${ticked}`)])] }, 'pdf', { pdfConfig: { engine: 'native', fonts: { regular: withBoxes } } } as any);
+        assert.deepStrictEqual((given.messages || []).map((m: any) => m.code), [], 'native PDF: a font given with the boxes: nothing lost');
+        assert.strictEqual(await type3Fonts(given.value as Uint8Array), 0, 'native PDF: a font given with the boxes draws them');
+        assert.ok((await read(given.value as Uint8Array)).includes(`${crossed} Agree ${empty} No ${ticked}`), 'native PDF: a font given with the boxes: they read back');
+    }
 }
 
 /**
@@ -11993,6 +12060,7 @@ async function runTests(): Promise<void> {
         ['Paragraph layout', testParagraphLayout],
         ['Paragraph spacing', testParagraphSpacing],
         ['Native PDF font kinds', testNativePdfFontKinds],
+        ['Native PDF ballot boxes', testNativePdfBallotBoxes],
         ['List markers', testListMarkers],
         ['HTML stylesheet and shading', testHtmlStylesheetAndShading],
         ['Native PDF footnotes', testNativePdfFootnotes],

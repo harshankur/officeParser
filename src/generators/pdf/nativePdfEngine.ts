@@ -462,9 +462,113 @@ const SHAPED_TEXT = /[\p{M}\u0900-\u0DFF\u0E00-\u0FFF\u1000-\u109F\u1780-\u17FF\
 /**
  * The fonts each style is drawn in, in the order they are tried for a character: the style's own font,
  * the regular one, the fallback fonts, then the Standard-14 font of the style (which comes first when
- * the style has no font given, see `embedFonts`).
+ * the style has no font given, see `embedFonts`), and last the ballot boxes' (see BOX_FACE).
  */
 type Fonts = Record<FaceKey, Face[]>;
+
+/**
+ * The ballot boxes, U+2610 to U+2612: an empty box, a ticked one and a crossed one, as a form's check
+ * box is read from a document (a Word or ODF form, a PDF's filled fields). The Standard-14 fonts have
+ * none, and many fonts given have none either: drawn as `?`, a ticked box and an empty one read the same.
+ * Where no font of a style draws one, it is drawn in a Type 3 font of its own (see ballotBoxFont): text
+ * still, at the text's size, colour and baseline, measured as any other character is (a line breaks and
+ * justifies around it), and copied, searched and read back as its character. A font that has the glyph
+ * draws it, as it comes first.
+ */
+const BOX_FIRST = 0x2610, BOX_LAST = 0x2612;
+function isBallotBox(cp: number): boolean {
+    return cp >= BOX_FIRST && cp <= BOX_LAST;
+}
+/** A box's advance, in thousandths of the text's size: a symbol font's (Arial Unicode's is 734, Apple Symbols' 830). */
+const BOX_ADVANCE = 800;
+/** The face drawing the boxes no other font of a style draws: last in every style's fonts. */
+const BOX_FACE: Face = {
+    font: { widthOfTextAtSize: (text: string, size: number) => [...text].length * BOX_ADVANCE * size / 1000 },
+    covers: isBallotBox,
+    has: isBallotBox,
+};
+
+/**
+ * The ballot boxes' Type 3 font: an empty, a ticked and a crossed box (codes 0x21 to 0x23), and the same
+ * in a heavier line for bold text (0x24 to 0x26). Each glyph is a shape alone (`d1`), filled in the text's
+ * colour, as a font's glyph is; its ToUnicode, and its glyphs' names, give each code its character.
+ * Before them, a space half an em wide that is never drawn (0x20): Poppler (pdftotext, Evince, Okular)
+ * takes a Type 3 font's size from its first glyph's width as a share of half an em, and took a box's for
+ * text 1.6 times its size, a line apart from the words around it.
+ */
+const BOX_CODE = 0x21;
+
+function ballotBoxFont(context: any): any {
+    // The box, in thousandths of the size: a square on the baseline from 90 to 710, a little under the height of a capital.
+    const left = 90, side = 620, right = left + side, top = side;
+    const n = (v: number) => String(Math.round(v * 10) / 10);
+    /**
+     * A line of width `w` through `points`, its corners mitred and its ends carried on by `e`, as a closed
+     * path filled (each side's offset lines meet at a corner).
+     */
+    const line = (points: [number, number][], w: number, e: number): string => {
+        const pts = points.map(p => [...p] as [number, number]);
+        const unit = (a: [number, number], b: [number, number]) => { const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1; return [(b[0] - a[0]) / len, (b[1] - a[1]) / len]; };
+        const first = unit(pts[0], pts[1]), last = unit(pts[pts.length - 2], pts[pts.length - 1]);
+        pts[0] = [pts[0][0] - first[0] * e, pts[0][1] - first[1] * e];
+        pts[pts.length - 1] = [pts[pts.length - 1][0] + last[0] * e, pts[pts.length - 1][1] + last[1] * e];
+        const side = (sign: number): [number, number][] => pts.map((p, i) => {
+            const d0 = unit(pts[Math.max(0, i - 1)], pts[Math.max(1, i)]), d1 = unit(pts[Math.min(i, pts.length - 2)], pts[Math.min(i + 1, pts.length - 1)]);
+            // The two segments' normals averaged, lengthened so each offset line stays w/2 away.
+            const nx = -(d0[1] + d1[1]), ny = d0[0] + d1[0], len = Math.hypot(nx, ny) || 1;
+            const cos = (nx * -d1[1] + ny * d1[0]) / len;
+            const k = sign * w / 2 / (len * Math.max(cos, 0.25));
+            return [p[0] + nx * k, p[1] + ny * k];
+        });
+        const outline = [...side(1), ...side(-1).reverse()];
+        return outline.map(([x, y], i) => `${n(x)} ${n(y)} ${i ? 'l' : 'm'}`).join(' ') + ' h f';
+    };
+    const glyph = (mark: 'none' | 'check' | 'cross', bold: boolean): string => {
+        const t = bold ? 85 : 55, w = bold ? 95 : 65, inner = side - 2 * t;
+        // The outline: the square less its inside (even-odd).
+        const ops = [`${BOX_ADVANCE} 0 ${left} 0 ${right} ${top} d1`, `${left} 0 ${side} ${side} re ${left + t} ${t} ${inner} ${inner} re f*`];
+        const at = (u: number, v: number): [number, number] => [left + t + u * inner, t + v * inner];
+        if (mark === 'cross') {
+            // Corner to corner of the inside, cut to it.
+            ops.push(`q ${left + t} ${t} ${inner} ${inner} re W n`, line([at(0, 0), at(1, 1)], w, w), line([at(0, 1), at(1, 0)], w, w), 'Q');
+        } else if (mark === 'check') {
+            ops.push(line([at(0.14, 0.5), at(0.4, 0.16), at(0.86, 0.86)], w, 0));
+        }
+        return ops.join('\n');
+    };
+    const marks = ['none', 'check', 'cross'] as const;
+    const names = ['uni2610', 'uni2611', 'uni2612'];
+    const charProcs: Record<string, any> = { space: context.register(context.stream(`500 0 0 0 0 0 d1`)) };
+    const differences: (number | string)[] = [BOX_CODE - 1, 'space'];
+    for (const bold of [false, true]) {
+        marks.forEach((mark, i) => {
+            const name = names[i] + (bold ? '.bold' : '');
+            charProcs[name] = context.register(context.stream(glyph(mark, bold)));
+            differences.push(name);
+        });
+    }
+    const hex = (code: number) => code.toString(16).toUpperCase().padStart(2, '0');
+    const entries = [0, 1, 2, 3, 4, 5].map(k => `<${hex(BOX_CODE + k)}> <${(BOX_FIRST + k % 3).toString(16).toUpperCase()}>`);
+    entries.unshift(`<${hex(BOX_CODE - 1)}> <0020>`);
+    const toUnicode = [
+        '/CIDInit /ProcSet findresource begin', '12 dict begin', 'begincmap',
+        '/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def', '/CMapName /Adobe-Identity-UCS def', '/CMapType 2 def',
+        '1 begincodespacerange', '<00> <FF>', 'endcodespacerange',
+        `${entries.length} beginbfchar`, ...entries, 'endbfchar',
+        'endcmap', 'CMapName currentdict /CMapResource defineresource pop', 'end', 'end',
+    ].join('\n');
+    return context.register(context.obj({
+        Type: 'Font', Subtype: 'Type3', FontBBox: [0, -210, BOX_ADVANCE, 730], FontMatrix: [0.001, 0, 0, 0.001, 0, 0],
+        CharProcs: charProcs, Encoding: { Type: 'Encoding', Differences: differences },
+        FirstChar: BOX_CODE - 1, LastChar: BOX_CODE + 5, Widths: [500, ...[0, 1, 2, 3, 4, 5].map(() => BOX_ADVANCE)],
+        Resources: {}, ToUnicode: context.register(context.stream(toUnicode)),
+        // (Its height as a text font's, so a reader takes a box for a word of its line.)
+        FontDescriptor: context.register(context.obj({
+            Type: 'FontDescriptor', FontName: 'BallotBoxes', Flags: 4, FontBBox: [0, -210, BOX_ADVANCE, 730], ItalicAngle: 0,
+            Ascent: 730, Descent: -210, CapHeight: top, StemV: 55,
+        })),
+    }));
+}
 
 /** A heading, as the bookmark outline needs it. */
 interface OutlineEntry { title: string; level: number; page: any; top: number; }
@@ -1515,10 +1619,11 @@ class NativeLayout {
      * or a space the fonts lack a plain space (a drawn string cannot hold a line break), and any other
      * character none of the style's fonts draws is a `?`, counted for the one warning
      * {@link reportLostCharacters} gives, unless `count` is false (text measured, not drawn). A combining
-     * mark the font of the character before it has stays, drawn with it (see segments).
+     * mark the font of the character before it has stays, drawn with it (see segments). Without `boxes`,
+     * a ballot box only a font of its own draws (BOX_FACE) is one none draws: for text pdf-lib draws itself.
      */
-    private enc(text: string, key: FaceKey = 'regular', count = true): string {
-        const chain = this.fonts[key];
+    private enc(text: string, key: FaceKey = 'regular', count = true, boxes = true): string {
+        const chain = boxes ? this.fonts[key] : this.fonts[key].filter(face => face !== BOX_FACE);
         let out = '';
         // (The font the character last written is drawn in, as segments finds it; none after a space, where
         // text is cut into words, so a mark there is one standing alone.)
@@ -1561,18 +1666,21 @@ class NativeLayout {
      */
     private segments(text: string, key: FaceKey): { text: string; face: Face }[] {
         const chain = this.fonts[key];
+        // (The style's one font, where the ballot boxes' is the only other; the last font a `?` is drawn in.)
+        const fonts = chain[chain.length - 1] === BOX_FACE ? chain.length - 1 : chain.length;
+        const only = fonts === 1 ? chain[0] : undefined, lastFont = chain[fonts - 1];
         const out: { text: string; face: Face }[] = [];
         let current: { text: string; face: Face; length: number } | undefined;
         for (const ch of text) {
             const cp = ch.codePointAt(0)!;
             const attached = isInvisible(cp) || COMBINING_MARK.test(ch);
             let face: Face | undefined;
-            if (chain.length === 1) face = chain[0];
+            if (only && !isBallotBox(cp)) face = only;
             else if (current && attached && current.face.has(cp)) face = current.face;
             // (A mark enc kept with its letter, here at the start of a stretch cut from it: in a font that has it.)
             else face = chain.find(f => f.covers(cp)) ?? (attached ? chain.find(f => f.has(cp)) : undefined);
             let drawn = ch;
-            if (!face) { if (isInvisible(cp)) continue; face = chain[chain.length - 1]; drawn = '?'; }
+            if (!face) { if (isInvisible(cp)) continue; face = lastFont; drawn = '?'; }
             // A stretch is shaped as one string, in time that grows with the square of its length on a run
             // of marks (fontkit), so it is cut at MAX_SHAPED code points: before a character that starts a
             // cluster, or, in a cluster longer than that (a letter under thousands of marks), anywhere.
@@ -1673,7 +1781,8 @@ class NativeLayout {
         try {
             for (const seg of segs) {
                 const run = this.shapedRun(seg.face, seg.text);
-                if (run) this.drawShaped(seg.face, run, seg.text, x, y, size, color);
+                if (seg.face === BOX_FACE) this.drawBallotBoxes(seg.text, key, x, y, size, color);
+                else if (run) this.drawShaped(seg.face, run, seg.text, x, y, size, color);
                 else {
                     this.useFont(seg.face.font);
                     this.page.drawText(seg.text, { x, y, size, color });
@@ -1681,6 +1790,25 @@ class NativeLayout {
                 x += this.segmentWidth(seg, size);
             }
         } finally { if (invisible) this.page.pushOperators(this.lib.popGraphicsState()); }
+    }
+
+    /** The ballot boxes' font (see ballotBoxFont), made when a box is first drawn, and each page's name for it. */
+    private ballotBoxes: any;
+    private readonly ballotBoxKeys = new WeakMap<object, unknown>();
+    /**
+     * Draws ballot boxes no font of the style has (see BOX_FACE) in their own font, a heavier line for a
+     * bold style: as text, in the text's colour and its rendering mode (invisible text stays invisible).
+     */
+    private drawBallotBoxes(text: string, key: FaceKey, x: number, y: number, size: number, color: any): void {
+        const lib = this.lib;
+        if (!this.ballotBoxes) this.ballotBoxes = ballotBoxFont(this.pdf.context);
+        let name = this.ballotBoxKeys.get(this.page);
+        if (!name) this.ballotBoxKeys.set(this.page, name = this.page.node.newFontDictionary('BallotBoxes', this.ballotBoxes));
+        const first = BOX_CODE + (/bold/i.test(key) ? 3 : 0);
+        let codes = '';
+        for (const ch of text) codes += (ch.codePointAt(0)! - BOX_FIRST + first).toString(16).padStart(2, '0');
+        this.page.pushOperators(lib.pushGraphicsState(), lib.setFillingColor(color ?? lib.rgb(0, 0, 0)), lib.beginText(), lib.setFontAndSize(name, size),
+            lib.setTextMatrix(1, 0, 0, 1, x, y), lib.showText(lib.PDFHexString.of(codes)), lib.endText(), lib.popGraphicsState());
     }
 
     /** Each page's resource name for each font it draws in, made once. */
@@ -2416,7 +2544,9 @@ class NativeLayout {
         this.page.drawLine({ start: { x: left, y: yOf(0) }, end: { x: left + width, y: yOf(0) }, thickness: 0.6, color: ink });
         if (data.yAxisTitle) {
             this.useFont(this.fonts.regular[0].font);
-            this.page.drawText(this.enc(String(data.yAxisTitle), 'regular').slice(0, 60), { x: this.margin.left + 8, y: plotBottom + plotH / 2 - this.widthOf(this.enc(String(data.yAxisTitle), 'regular').slice(0, 60), 'regular', 8) / 2, size: 8, color: ink, rotate: this.lib.degrees(90) });
+            // (Drawn by pdf-lib, turned: in the first font, a ballot box only its own font draws being one none does.)
+            const yTitle = this.enc(String(data.yAxisTitle), 'regular', true, false).slice(0, 60);
+            this.page.drawText(yTitle, { x: this.margin.left + 8, y: plotBottom + plotH / 2 - this.widthOf(yTitle, 'regular', 8) / 2, size: 8, color: ink, rotate: this.lib.degrees(90) });
         }
         const groupW = width / groups, barW = groupW * 0.8 / series.length;
         series.forEach((values, s) => values.forEach((v, g) => {
@@ -3354,7 +3484,7 @@ async function embedFonts(pdf: any, lib: any, pc: FullGeneratorConfig['pdfConfig
     }
     const fallbackGiven = fallbackList.map((value, i) => ({ name: `fallbackFonts[${i}]`, bytes: fontBytes(value, `fallbackFonts[${i}]`, reportWarning) }));
     const custom = given.some(g => g.bytes) || fallbackGiven.some(g => g.bytes);
-    if (!custom) return { fonts: Object.fromEntries(allKeys.map(key => [key, [std[key]]])) as Fonts, custom };
+    if (!custom) return { fonts: Object.fromEntries(allKeys.map(key => [key, [std[key], BOX_FACE]])) as Fonts, custom };
 
     const fontkit = await loadFontkit(config);
     pdf.registerFontkit(fontkit);
@@ -3450,11 +3580,11 @@ async function embedFonts(pdf: any, lib: any, pc: FullGeneratorConfig['pdfConfig
         const sansKey = (variant ? variant[0].toLowerCase() + variant.slice(1) : 'regular') as GivenFaceKey;
         if (key.startsWith('serif')) {
             const order = [std[key], own[sansKey], own.regular, ...fallbacks];
-            return order.filter((face, i): face is Face => !!face && order.indexOf(face) === i);
+            return [...order.filter((face, i): face is Face => !!face && order.indexOf(face) === i), BOX_FACE];
         }
         const given = key.startsWith('mono') ? own.mono : (own[sansKey] ?? own.regular);
         const order = given ? [given, own.regular, ...fallbacks, std[key]] : [std[key], own.regular, ...fallbacks];
-        return order.filter((face, i): face is Face => !!face && order.indexOf(face) === i);
+        return [...order.filter((face, i): face is Face => !!face && order.indexOf(face) === i), BOX_FACE];
     };
     return { fonts: Object.fromEntries(allKeys.map(key => [key, chain(key)])) as Fonts, custom };
 }
