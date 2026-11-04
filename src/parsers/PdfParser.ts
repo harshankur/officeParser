@@ -1735,16 +1735,17 @@ function imageBounds(viewport: any, ctm: number[]): { x: number; y: number; widt
 }
 
 /**
- * Whether the caller preloaded pdf.js's worker as `globalThis.pdfjsWorker`, which runs pdf.js in this
- * process (see `separateProcess`). pdf.js's own worker module sets that global too, when it loads
- * here: the first time pdf.js runs in this process (`separateProcess: false`, or the fallback). So
- * the global is read until then and settled when it happens (settleCallerPreloadedWorker); read
- * afterwards, one parse in this process took pdf.js's own worker for the caller's, and every later
- * parse ran pdf.js here too, without its memory limit.
+ * Whether pdf.js's worker is preloaded as `globalThis.pdfjsWorker`, the way pdf.js itself tells: by its
+ * `WorkerMessageHandler`. pdf.js then runs the worker in this realm and loads no worker file (a
+ * truthy global without the handler is not one: pdf.js starts a Worker from `workerSrc` as usual).
+ * A page or a bundle preloads it so that no worker file is fetched or looked for. In Node the global
+ * is also set by pdf.js's own worker module whenever it loads in this process (any document a
+ * caller's own pdf.js opened, or one of ours read here), so there it says nothing of the caller's
+ * intent and is relied on only where no worker file can be found (see parsePdf).
  */
-let workerPreloaded: boolean | undefined;
-const callerPreloadedWorker = (): boolean => workerPreloaded ?? !!(globalThis as any).pdfjsWorker;
-const settleCallerPreloadedWorker = (): void => { workerPreloaded ??= !!(globalThis as any).pdfjsWorker; };
+const workerPreloaded = (): boolean => {
+    try { return !!(globalThis as any).pdfjsWorker?.WorkerMessageHandler; } catch { return false; }
+};
 
 /**
  * Parses a PDF file and extracts content.
@@ -1776,9 +1777,11 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         if (workerSrc !== DEFAULT_OFFICE_PARSER_CONFIG.pdfWorkerSrc && workerSrc !== '') {
             pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
             resolved = true;
-        } else if (callerPreloadedWorker()) {
-            resolved = true;
         } else {
+            // pdf.js's worker file, which the separate process imports, is used wherever it is found,
+            // whether or not a worker module already loaded here (see workerPreloaded). A preloaded
+            // worker is for where there is no such file, a bundle that inlines pdf.js's worker.
+            let notFound: unknown;
             try {
                 // @ts-ignore - 'require' is available in Node.js/CommonJS environment
                 const localWorkerPath = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
@@ -1786,7 +1789,12 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(localWorkerPath).href;
                 resolved = true;
             } catch (e) {
-                logWarning(OfficeWarningType.PDF_WORKER_FALLBACK, config, undefined, e);
+                notFound = e;
+            }
+            if (!resolved && workerPreloaded()) {
+                resolved = true;
+            } else if (!resolved) {
+                logWarning(OfficeWarningType.PDF_WORKER_FALLBACK, config, undefined, notFound);
             }
         }
         if (!resolved) {
@@ -1820,15 +1828,14 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     const takeWarning = (line: string) => { if (line === BROTLI_AVOIDED_LINE) brotliAvoided(); else assets.workerWarning(line); };
 
     // pdf.js's worker in a process of its own (see pdfProcess), so what pdf.js does inside one stream
-    // cannot exhaust this one's memory. Only for a worker Node can import from disk; one the caller
-    // preloaded as `globalThis.pdfjsWorker`, or no separate process at all, runs pdf.js here.
+    // cannot exhaust this one's memory. Only for a worker Node can import from disk; one preloaded as
+    // `globalThis.pdfjsWorker` where no such file is found, or no separate process at all, runs pdf.js here.
     const workerUrl = String(pdfjs.GlobalWorkerOptions.workerSrc ?? '');
     let pdfProcess: PdfProcess | undefined;
-    if (!isBrowser && pdfCfg.separateProcess && !callerPreloadedWorker() && workerUrl.startsWith('file:')) {
+    if (!isBrowser && pdfCfg.separateProcess && workerUrl.startsWith('file:')) {
         pdfProcess = await acquirePdfProcess(pdfjs, workerUrl, pdfCfg.processMemoryMb, config.abortSignal);
         if (!pdfProcess) logWarning(OfficeWarningType.PDF_SEPARATE_PROCESS_UNAVAILABLE, config);
     }
-    if (!pdfProcess && !isBrowser) settleCallerPreloadedWorker();
     // pdf.js's worker for this parse runs at warning verbosity, and its warnings are taken: from the
     // separate process's messages; in this process from the console while the parse's document is open
     // (see takeInProcessTurn and captureConsoleWarnings), in a PDFWorker of the parse's own, as also in a
@@ -1842,7 +1849,7 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     try {
         if (pdfProcess) {
             pdfProcess.onWarning(takeWarning);
-        } else if (isBrowser && !callerPreloadedWorker()) {
+        } else if (isBrowser && !workerPreloaded()) {
             ownWorker = await openWarningWorker(pdfjs, String(pdfjs.GlobalWorkerOptions.workerSrc ?? ''), takeWarning, config.abortSignal);
         } else {
             // A worker port the caller set is pdf.js's to use; one PDFWorker per port.

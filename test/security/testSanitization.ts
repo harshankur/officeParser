@@ -4656,6 +4656,81 @@ async function pdfProcessTests(h: {
     const afterHereRun = await withinTime(4000, () => read(drawnOften, { pdfParserConfig: { maxTimeMs: 200 } }));
     const afterHere = afterHereRun.result;
     check('pdf: after pdf.js ran in this process, the next parse still runs it in a separate one', !afterHere.error && afterHereRun.within && named(afterHere.warnings, 'maxTimeMs'), `${afterHereRun.ms}ms ${afterHere.codes} ${afterHere.error}`);
+
+    // A caller's own pdf.js, opening a document in a fresh host before any parse, loads pdf.js's worker
+    // module, which sets `globalThis.pdfjsWorker`: taken for a worker the caller preloaded, every parse
+    // after it ran pdf.js in the host, without its memory limit and with no warning.
+    const spawnCounter = [
+        `const childProcess = require('child_process');`,
+        `const spawn = childProcess.spawn;`,
+        `let spawned = 0;`,
+        `childProcess.spawn = (...args: any[]) => { spawned++; return spawn.apply(childProcess, args); };`,
+        `require('module').syncBuiltinESMExports();`,
+    ];
+    const callerOwn = runChildScript([
+        ...spawnCounter,
+        `(async () => {`,
+        `    const pdfjs = await import(pathToFileURL(repoRequire.resolve('pdfjs-dist/legacy/build/pdf.mjs')).href);`,
+        `    pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(repoRequire.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs')).href;`,
+        `    const own = await pdfjs.getDocument({ data: new Uint8Array(fs.readFileSync(testPdf)), verbosity: 0 }).promise;`,
+        `    const ownPages = own.numPages;`,
+        `    await own.loadingTask.destroy();`,
+        `    const loaded = !!(globalThis as any).pdfjsWorker;`,
+        `    const codes: string[] = [];`,
+        `    const ast = await OfficeParser.parseOffice(fs.readFileSync(testPdf), { fileType: 'pdf', ocr: false, onWarning: (w: any) => codes.push(w.code) });`,
+        `    console.log(JSON.stringify({ ownPages, loaded, spawned, pages: ast.content.length, codes }));`,
+        `    process.exit(0);`,
+        `})();`,
+    ]);
+    check('pdf: a caller\'s own pdf.js document leaves the next parse in a separate process', callerOwn.ownPages === 8 && callerOwn.loaded === true && callerOwn.spawned === 1 && callerOwn.pages === 8 && callerOwn.codes?.length === 0, JSON.stringify(callerOwn));
+    // A worker preloaded where pdf.js's worker file cannot be found (a bundle that inlines it) is still
+    // used: pdf.js runs in the host, as asked, with no warning.
+    const bundled = runChildScript([
+        ...spawnCounter,
+        `const Module = require('module');`,
+        `const resolveFilename = Module._resolveFilename;`,
+        `Module._resolveFilename = function (request: string, ...rest: any[]) { if (request === 'pdfjs-dist/legacy/build/pdf.worker.mjs') throw new Error('not in the bundle'); return resolveFilename.call(this, request, ...rest); };`,
+        `(async () => {`,
+        `    (globalThis as any).pdfjsWorker = await import(pathToFileURL(path.join(path.dirname(repoRequire.resolve('pdfjs-dist/legacy/build/pdf.mjs')), 'pdf.worker.mjs')).href);`,
+        `    const codes: string[] = [];`,
+        `    const ast = await OfficeParser.parseOffice(fs.readFileSync(testPdf), { fileType: 'pdf', ocr: false, onWarning: (w: any) => codes.push(w.code) });`,
+        `    console.log(JSON.stringify({ spawned, pages: ast.content.length, codes }));`,
+        `    process.exit(0);`,
+        `})();`,
+    ]);
+    check('pdf: a worker preloaded where no worker file is found is used, in the host, with no warning', bundled.spawned === 0 && bundled.pages === 8 && bundled.codes?.length === 0, JSON.stringify(bundled));
+}
+
+/**
+ * Runs `lines` as a TypeScript script in a fresh Node process (as this one runs, under tsx) and returns
+ * what it printed last as JSON, or `{ error }`. In scope: `fs`, `path`, `pathToFileURL`, `repoRequire`
+ * (resolving from the repository), `testPdf` (test/files/test.pdf) and, unless `browser` is set,
+ * `OfficeParser`. With `browser`, the process passes for a browser page (a `window` with a `document`)
+ * before anything is loaded, and the script requires the parser itself.
+ */
+function runChildScript(lines: string[], browser = false): any {
+    const childProcess = require('child_process') as typeof import('child_process');
+    const repo = path.join(__dirname, '..', '..');
+    const script = path.join(os.tmpdir(), `officeparser-child-${process.pid}-${Math.random().toString(36).slice(2)}.ts`);
+    fs.writeFileSync(script, [
+        ...(browser ? [`(globalThis as any).window = globalThis;`, `(globalThis as any).document = { baseURI: 'https://app.example/' };`] : []),
+        `const fs = require('fs');`,
+        `const path = require('path');`,
+        `const { pathToFileURL } = require('url');`,
+        `const repoRequire = require('module').createRequire(${JSON.stringify(path.join(repo, 'package.json'))});`,
+        `const testPdf = ${JSON.stringify(path.join(repo, 'test', 'files', 'test.pdf'))};`,
+        ...(browser ? [] : [`const { OfficeParser } = require(${JSON.stringify(path.join(repo, 'src', 'OfficeParser'))});`]),
+        ...lines,
+    ].join('\n'));
+    try {
+        const out = childProcess.execFileSync(process.execPath, [...process.execArgv, script], { encoding: 'utf8', timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'] });
+        const last = out.trim().split('\n').pop() ?? '';
+        return JSON.parse(last);
+    } catch (e: any) {
+        return { error: String(e?.stderr || e?.message).slice(-500) };
+    } finally {
+        fs.rmSync(script, { force: true });
+    }
 }
 
 /**
@@ -4778,6 +4853,7 @@ async function pdfAssetTests() {
     } finally {
         fs.rmSync(folder, { recursive: true, force: true });
     }
+
 }
 
 /**
