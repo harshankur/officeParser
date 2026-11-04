@@ -11540,6 +11540,227 @@ function ooxmlHelpers() {
 }
 
 /**
+ * Word's legacy form fields: a check box (FORMCHECKBOX) reads as ticked or not, U+2612 or U+2610 (as the
+ * PDF reader writes a form's, and a content control's box holds), from its `w:checked`, else its
+ * `w:default`, else not ticked; a drop-down (FORMDROPDOWN) as its entry at `w:result`, else at `w:default`,
+ * else its first. Word stores no result for either: each was lost ("[x] Agree" read " Agree"). A text
+ * field's result stays as Word stores it. Each shows once, wherever its field stands.
+ */
+async function testDocxLegacyFormFields(): Promise<void> {
+    const { r, p, relsOf, rel, part, docx, parse } = ooxmlHelpers();
+    const [ticked, unticked] = ['☒', '☐'];
+    const field = (data: string, instruction: string, result = '', separate = true) => `<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="F"/><w:enabled/>${data}</w:ffData></w:fldChar></w:r>`
+        + `<w:r><w:instrText xml:space="preserve">${instruction}</w:instrText></w:r>${separate ? '<w:r><w:fldChar w:fldCharType="separate"/></w:r>' : ''}${result}<w:r><w:fldChar w:fldCharType="end"/></w:r>`;
+    const checkBox = (inner: string, result = '') => field(`<w:checkBox><w:sizeAuto/>${inner}</w:checkBox>`, ' FORMCHECKBOX ', result);
+    const dropDown = (inner: string, entries = ['Red', 'Green', 'Blue'], result = '') => field(`<w:ddList>${inner}${entries.map(e => `<w:listEntry w:val="${e}"/>`).join('')}</w:ddList>`, ' FORMDROPDOWN ', result);
+    const textOf = async (body: string, parts: Record<string, string> = {}) => (await parse(docx(body, parts))).ast.content.map(n => n.text).join('\n');
+
+    // The state, exactly: w:checked (on unless its w:val is false, 0 or off), else w:default, else not ticked.
+    const on = ['', ' w:val="true"', ' w:val="1"', ' w:val="on"'], off = [' w:val="false"', ' w:val="0"', ' w:val="off"'];
+    const table: [string, string][] = [['', unticked]];
+    for (const v of on) table.push([`<w:checked${v}/>`, ticked], [`<w:default${v}/>`, ticked], [`<w:default w:val="0"/><w:checked${v}/>`, ticked]);
+    for (const v of off) table.push([`<w:checked${v}/>`, unticked], [`<w:default${v}/>`, unticked], [`<w:default w:val="1"/><w:checked${v}/>`, unticked]);
+    for (const [inner, expected] of table)
+        assert.strictEqual(await textOf(`<w:p>${checkBox(inner)}${r(' Agree')}</w:p>`), `${expected} Agree`, `DOCX: a check box of ${inner || 'no state'} reads ${expected}`);
+    // Its size where it sets one (in half-points), else the text's.
+    const sized = (await parse(docx(`<w:p><w:r><w:rPr><w:sz w:val="28"/></w:rPr><w:fldChar w:fldCharType="begin"><w:ffData><w:checkBox><w:size w:val="40"/><w:checked/></w:checkBox></w:ffData></w:fldChar></w:r><w:r><w:instrText> FORMCHECKBOX </w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`
+        + `<w:p><w:r><w:rPr><w:b/><w:sz w:val="28"/></w:rPr><w:fldChar w:fldCharType="begin"><w:ffData><w:checkBox><w:sizeAuto/></w:checkBox></w:ffData></w:fldChar></w:r><w:r><w:instrText> FORMCHECKBOX </w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`))).ast;
+    assert.deepStrictEqual(sized.content.map(n => [n.children?.[0]?.text, n.children?.[0]?.formatting?.size, n.children?.[0]?.formatting?.bold]), [[ticked, '20pt', undefined], [unticked, '14pt', true]],
+        'DOCX: a check box is at its own size, or its text\'s, in its run\'s formatting');
+
+    // A drop-down: w:result, else w:default, else the first entry; an index no entry has passed over.
+    for (const [inner, expected] of [
+        ['<w:result w:val="2"/>', 'Blue'], ['<w:default w:val="1"/>', 'Green'], ['<w:default w:val="2"/><w:result w:val="0"/>', 'Red'], ['', 'Red'],
+        ['<w:default w:val="1"/><w:result w:val="3"/>', 'Green'], ['<w:default w:val="1"/><w:result w:val="-1"/>', 'Green'], ['<w:result w:val="x"/>', 'Red'],
+        ['<w:default w:val="9"/><w:result w:val="99999999999999999999"/>', 'Red'],
+    ] as const) assert.strictEqual(await textOf(`<w:p>${r('Pick: ')}${dropDown(inner)}</w:p>`), `Pick: ${expected}`, `DOCX: a drop-down of ${inner || 'no choice'} reads ${expected}`);
+    assert.strictEqual(await textOf(`<w:p>${r('Pick: ')}${dropDown('<w:result w:val="0"/>', [])}${r('|')}</w:p>`), 'Pick: |', 'DOCX: a drop-down of no entries shows nothing');
+    // Many entries: read in time that grows with them.
+    const many = Array.from({ length: 50_000 }, (_, i) => `E${i}`);
+    const timed = await withinTime(5000, () => textOf(`<w:p>${dropDown('<w:result w:val="49999"/>', many)}</w:p>`));
+    assert.ok(timed.result === 'E49999' && timed.within, `DOCX: a drop-down of 50,000 entries reads its last, in time (${timed.ms} ms)`);
+
+    // A text field's result stays as Word stores it, its placeholder of five en spaces too.
+    const placeholder = ' '.repeat(5);
+    assert.strictEqual(await textOf(`<w:p>${r('Name: ')}${field('<w:textInput/>', ' FORMTEXT ', r('John'))}</w:p><w:p>${r('Empty: ')}${field('<w:textInput/>', ' FORMTEXT ', r(placeholder))}${r('|')}</w:p>`),
+        `Name: John\nEmpty: ${placeholder}|`, 'DOCX: a text field reads its result');
+
+    // Nothing twice: a result a producer stored is the field's text; a result of white space alone is none.
+    assert.strictEqual(await textOf(`<w:p>${dropDown('<w:result w:val="2"/>', undefined, r('Blue'))}</w:p>`), 'Blue', 'DOCX: a drop-down whose result holds its entry reads it once');
+    assert.strictEqual(await textOf(`<w:p>${checkBox('<w:checked/>', r(ticked))}${r(' Agree')}</w:p>`), `${ticked} Agree`, 'DOCX: a check box whose result holds a box reads it once');
+    assert.strictEqual(await textOf(`<w:p>${checkBox('<w:checked/>', r(' '))}</w:p>`), ` ${ticked}`, 'DOCX: a check box whose result is a space shows its box');
+    // (Text before it separates is its instruction's, not its result.)
+    assert.strictEqual(await textOf(`<w:p><w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:checkBox><w:checked/></w:checkBox></w:ffData></w:fldChar></w:r>${r('x')}<w:r><w:instrText> FORMCHECKBOX </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`), `x${ticked}`, 'DOCX: text before a check box separates is not its result');
+    // As the specification writes them: no separate.
+    assert.strictEqual(await textOf(`<w:p>${field('<w:checkBox><w:sizeAuto/><w:default w:val="true"/></w:checkBox>', ' FORMCHECKBOX ', '', false)}</w:p>`), ticked, 'DOCX: a check box of no separate shows');
+    // A field of another instruction shows no box (its properties are not its own, 17.16.7); a field of no ffData nothing more.
+    assert.strictEqual(await textOf(`<w:p>${field('<w:checkBox><w:checked/></w:checkBox>', ' MERGEFIELD Name ', r('«Name»'))}</w:p>`), '«Name»', 'DOCX: check box properties on another field show no box');
+    assert.strictEqual(await textOf(`<w:p>${field('<w:ddList><w:listEntry w:val="A"/></w:ddList>', ' FORMCHECKBOX ')}${field('<w:checkBox><w:checked/></w:checkBox>', ' FORMDROPDOWN ')}${r('|')}</w:p>`), '|', 'DOCX: properties of the other kind show nothing');
+    assert.strictEqual(await textOf(`<w:p>${r('a')}<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> FORMCHECKBOX </w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>${r('b')}</w:p>`), 'ab', 'DOCX: a check box of no properties shows nothing (Word shows none)');
+    // Malformed: left open (shown where its paragraph ends), ends and separates of no begin, an empty ffData.
+    assert.strictEqual(await textOf(`<w:p>${r('Open ')}<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:checkBox><w:checked/></w:checkBox></w:ffData></w:fldChar></w:r><w:r><w:instrText> FORMCHECKBOX </w:instrText></w:r>${r('box')}</w:p>`), `Open box${ticked}`, 'DOCX: a check box left open shows where its paragraph ends');
+    assert.strictEqual(await textOf(`<w:p><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>${r('ok')}<w:r><w:fldChar w:fldCharType="begin"><w:ffData/></w:fldChar></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`), 'ok', 'DOCX: stray field characters and an empty ffData read nothing and throw nothing');
+    // In another field's result (an IF showing a check box): once.
+    assert.strictEqual(await textOf(`<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> IF 1 = 1 x </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>${checkBox('<w:checked/>')}<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`), ticked, 'DOCX: a check box in another field\'s result reads once');
+
+    // Every wrapper: a link, a content control in the line and around the paragraph, inserted text, alternate
+    // content, a table, a text box (and its fallback, read once), a header, a footer, a footnote. Deleted text shows none.
+    const box = checkBox('<w:checked/>');
+    const textBox = `<w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:inline><wp:docPr id="2" name="Text Box"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:txbx><w:txbxContent><w:p>${r('Boxed ')}${box}</w:p></w:txbxContent></wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice><mc:Fallback><w:pict><v:shape><v:textbox><w:txbxContent><w:p>${r('Boxed ')}${box}</w:p></w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r>`;
+    const wrapped = await parse(docx(
+        `<w:p><w:hyperlink r:id="L1">${r('Link ')}${box}</w:hyperlink></w:p>`
+        + `<w:p>${r('Control ')}<w:sdt><w:sdtPr><w:alias w:val="A"/></w:sdtPr><w:sdtContent>${box}</w:sdtContent></w:sdt></w:p>`
+        + `<w:sdt><w:sdtContent><w:p>${r('Block ')}${box}</w:p></w:sdtContent></w:sdt>`
+        + `<w:p>${r('Inserted ')}<w:ins w:id="1" w:author="A">${box}</w:ins><w:del w:id="2" w:author="A">${checkBox('<w:default/>')}</w:del></w:p>`
+        + `<w:p>${r('Alternate ')}<mc:AlternateContent><mc:Choice Requires="w14">${box}</mc:Choice><mc:Fallback>${box}</mc:Fallback></mc:AlternateContent></w:p>`
+        + `<w:tbl><w:tr><w:tc><w:p>${r('Cell ')}${box}</w:p></w:tc></w:tr></w:tbl>`
+        + `<w:p>${textBox}</w:p>`
+        + `<w:p>${r('Noted')}<w:r><w:footnoteReference w:id="1"/></w:r></w:p>`
+        + '<w:sectPr><w:headerReference w:type="default" r:id="H1"/><w:footerReference w:type="default" r:id="F1"/></w:sectPr>', {
+            'word/_rels/document.xml.rels': relsOf(rel('L1', 'hyperlink', 'https://example.com/" TargetMode="External') + rel('H1', 'header', 'header1.xml') + rel('F1', 'footer', 'footer1.xml')),
+            'word/header1.xml': part('hdr', `<w:p>${r('Header ')}${box}</w:p>`),
+            'word/footer1.xml': part('ftr', `<w:p>${r('Footer ')}${dropDown('<w:result w:val="1"/>')}</w:p>`),
+            'word/footnotes.xml': part('footnotes', `<w:footnote w:id="1"><w:p>${r('Note ')}${box}</w:p></w:footnote>`),
+        }));
+    const all = collectAllNodes(wrapped.ast);
+    // (Every paragraph's, a cell's and a note's among them.)
+    const bodyText = all.filter(n => n.type === 'paragraph').map(n => n.text).join('\n');
+    for (const label of ['Link', 'Control', 'Block', 'Inserted', 'Alternate', 'Cell', 'Boxed', 'Note'])
+        assert.ok(bodyText.split(`${label} ${ticked}`).length === 2, `DOCX: a check box in a ${label.toLowerCase()} reads once; got ${JSON.stringify(bodyText)}`);
+    assert.strictEqual([...bodyText].filter(c => c === ticked || c === unticked).length, 8, `DOCX: no box twice, none deleted; got ${JSON.stringify(bodyText)}`);
+    assert.strictEqual((all.find(n => n.type === 'text' && n.text === ticked)?.metadata as any)?.link, 'https://example.com/', 'DOCX: a check box in a link links');
+    assert.ok(all.some(n => n.type === 'note' && n.text === `Note ${ticked}`), 'DOCX: a check box in a footnote reads');
+    assert.deepStrictEqual([wrapped.ast.auxiliary?.headers?.map(h => h.text), wrapped.ast.auxiliary?.footers?.map(f => f.text)], [[`Header ${ticked}`], ['Footer Green']], 'DOCX: a check box in a header, a drop-down in a footer, read');
+
+    // A Word form (its fields in a table and a header), and the outputs: text, Markdown, HTML, and a PDF of the
+    // native engine, which draws the boxes (no font it has holds them) as boxes, losing none.
+    const form = await OfficeParser.parseOffice(path.join(__dirname, 'files/forms/legacy-fields.docx')) as OfficeParserAST;
+    const expected = `Ticked: ${ticked} Agree\nUnticked: ${unticked} Disagree\nBy default: ${ticked} Subscribe\nColour: Blue (chosen)\nDefault colour: Green\nName: Jane Doe\nEmpty: ${placeholder}|`;
+    assert.strictEqual(form.content.slice(0, 7).map(n => n.text).join('\n'), expected, 'DOCX form: each field reads as it shows');
+    assert.strictEqual(form.auxiliary?.headers?.[0]?.text, `Header ${ticked} approved`, 'DOCX form: the header\'s check box');
+    const md = String((await form.to('md')).value), html = String((await form.to('html')).value);
+    assert.ok(md.includes(`Ticked: ${ticked} Agree`) && md.includes(`Unticked: ${unticked} Disagree`) && md.includes(`| ${ticked} |`), `DOCX form: Markdown shows the boxes; got ${JSON.stringify(md)}`);
+    assert.ok(html.includes(`Ticked: ${ticked} Agree`) && html.includes(`Colour: Blue (chosen)`), 'DOCX form: HTML shows the boxes and the choice');
+    // With a content control's box beside them (w14:checkbox), as PDF Stitch converts a form, through the native engine.
+    const both = await parse(docx(`<w:p>${checkBox('<w:checked/>')}${r(' Legacy ')}<w:sdt><w:sdtPr><w14:checkbox xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w14:checked w14:val="0"/></w14:checkbox></w:sdtPr><w:sdtContent>${r(unticked)}</w:sdtContent></w:sdt>${r(' Modern')}</w:p>`));
+    for (const ast of [form, both.ast]) {
+        const result: any = await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any);
+        assert.ok(!(result.messages || []).some((m: any) => m.code === 'CONTENT_NOT_REPRESENTABLE'), `DOCX form: the native PDF loses nothing; got ${JSON.stringify(result.messages)}`);
+        const back = await OfficeParser.parseOffice(Buffer.from(result.value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+        const read = back.content.map(n => n.text).join('\n');
+        for (const line of ast === form ? [`Ticked: ${ticked} Agree`, `Unticked: ${unticked} Disagree`, 'Colour: Blue (chosen)'] : [`${ticked} Legacy ${unticked} Modern`])
+            assert.ok(read.includes(line), `DOCX form: the native PDF reads "${line}"; got ${JSON.stringify(read)}`);
+    }
+}
+
+/**
+ * ODF form controls: a `draw:control` shows the control of `office:forms` it names, read as the PDF reader
+ * reads a filled form (a check box or radio button as ticked or not, U+2612 or U+2610, and its label; a
+ * field its value; a list its selected items), in its state now as LibreOffice shows it; each was left out
+ * ("Before [x] Agree after" read "Before  after"). LibreOffice's field marks of Word's legacy check boxes
+ * and drop-downs read as Word's do.
+ */
+async function testOdtFormControls(): Promise<void> {
+    const [ticked, unticked] = ['☒', '☐'];
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:form="urn:oasis:names:tc:opendocument:xmlns:form:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0" xmlns:field="urn:openoffice:names:experimental:ooo-ms-interop:xmlns:field:1.0" office:version="1.3"';
+    const odf = (body: string, { styles = '', automatic = '', kind = 'text' }: { styles?: string; automatic?: string; kind?: string } = {}) => Buffer.from(zipSync({
+        mimetype: strToU8(`application/vnd.oasis.opendocument.${kind}`),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:automatic-styles>${automatic}</office:automatic-styles><office:body><office:${kind}>${body}</office:${kind}></office:body></office:document-content>`),
+        ...(styles ? { 'styles.xml': strToU8(`<?xml version="1.0"?><office:document-styles ${NS}>${styles}</office:document-styles>`) } : {}),
+    }));
+    const read = async (bytes: Buffer, fileType = 'odt') => await OfficeParser.parseOffice(bytes, { fileType } as any) as OfficeParserAST;
+    const forms = (controls: string) => `<office:forms><form:form form:name="Standard">${controls}</form:form></office:forms>`;
+    const control = (id: string) => `<draw:control draw:control="${id}" text:anchor-type="as-char" svg:width="1in" svg:height="0.2in"/>`;
+    /** Each control's text, one paragraph each: `[element, attributes, children]`. */
+    const shown = async (controls: [string, string, string?][]) => {
+        const ast = await read(odf(forms(controls.map(([tag, attrs, inner], i) => `<form:${tag} form:id="c${i}" xml:id="c${i}" ${attrs}${inner ? `>${inner}</form:${tag}>` : '/>'}`).join(''))
+            + controls.map((_, i) => `<text:p>[${control(`c${i}`)}]</text:p>`).join('')));
+        return ast.content.map(n => n.text);
+    };
+
+    // Check boxes and radio buttons, in their state now (LibreOffice leaves it out where it is unticked).
+    assert.deepStrictEqual(await shown([
+        ['checkbox', 'form:label="Agree" form:current-state="checked"'], ['checkbox', 'form:label="News" form:current-state="unchecked" form:state="checked"'],
+        ['checkbox', 'form:label="Started" form:state="checked"'], ['checkbox', 'form:current-state="unknown"'], ['checkbox', 'form:label="  " form:current-state="checked"'],
+        ['radio', 'form:label="Large" form:current-selected="true"'], ['radio', 'form:label="Small" form:selected="true"'], ['radio', 'form:current-selected="false"'],
+    ]), [`[${ticked} Agree]`, `[${unticked} News]`, `[${unticked} Started]`, `[${unticked}]`, `[${ticked}]`, `[${ticked} Large]`, `[${unticked} Small]`, `[${unticked}]`], 'ODT: check boxes and radio buttons read as ticked or not, with their labels');
+    // Fields their value now; a password a bullet a character; a list its selected labels; a caption its text; a button nothing.
+    assert.deepStrictEqual(await shown([
+        ['text', 'form:current-value="Jane" form:value="Default"'], ['text', 'form:value="Default"'], ['formatted-text', 'form:current-value="1,234.50"'], ['number', 'form:current-value="42"'],
+        ['combobox', 'form:current-value="Berlin"', '<form:item form:label="Paris"/>'], ['file', 'form:current-value="report.pdf"'],
+        ['date', 'form:current-value="2024-01-31"'], ['date', 'form:current-value="20240131"'], ['time', 'form:current-value="PT15H30M05S"'], ['time', 'form:current-value="09051200"'], ['time', 'form:current-value="noon"'],
+        ['password', 'form:value="hunter2"'],
+        ['listbox', 'form:multiple="true"', '<form:option form:label="Apple" form:current-selected="true"/><form:option form:label="Banana" form:selected="true"/><form:option form:value="c" form:current-selected="true"/>'],
+        ['listbox', '', '<form:option form:label="Only default" form:selected="true"/>'],
+        ['fixed-text', 'form:label="Fill in every field"'], ['frame', 'form:label="Delivery"'], ['button', 'form:label="Send"'], ['hidden', 'form:value="secret"'], ['image', ''], ['value-range', 'form:value="5"'],
+    ]), ['[Jane]', '[]', '[1,234.50]', '[42]', '[Berlin]', '[report.pdf]', '[2024-01-31]', '[2024-01-31]', '[15:30:05]', '[09:05:12]', '[noon]', '[•••••••]',
+        '[Apple, c]', '[]', '[Fill in every field]', '[Delivery]', '[]', '[]', '[]', '[]'], 'ODT: each kind of control reads as it shows');
+    // A text area: its lines as lines (a line break between them), or its paragraphs where it has no value.
+    const area = await read(odf(forms('<form:textarea form:id="a" form:current-value="One&#10;Two"/><form:textarea form:id="b"><text:p>Para one</text:p><text:p>Para two</text:p></form:textarea>') + `<text:p>${control('a')}</text:p><text:p>${control('b')}</text:p>`));
+    assert.deepStrictEqual(area.content.map(n => [n.text, n.children?.map(c => c.type)]), [['One\nTwo', ['text', 'break', 'text']], ['Para one\nPara two', ['text', 'break', 'text']]], 'ODT: a text area\'s lines are lines');
+    assert.strictEqual(area.content.length, 2, 'ODT: a text area\'s paragraphs are not read where the forms are too');
+
+    // Where a control stands: a span (its formatting), a link, a table, a frame's text box, a header, the page itself,
+    // and its own text style; forms nested in forms; ids of either kind.
+    const placed = await read(odf(forms('<form:checkbox form:id="s" form:label="Span" form:current-state="checked"/><form:form form:name="Inner"><form:text xml:id="x" form:current-value="Nested"/></form:form>'
+        + '<form:checkbox form:id="t" form:label="Cell" form:current-state="checked"/><form:checkbox form:id="f" form:label="Framed" form:current-state="checked"/><form:checkbox form:id="h" form:label="Header" form:current-state="checked"/>'
+        + '<form:text form:id="pg" form:current-value="On the page"/><form:text form:id="own" form:current-value="Own style"/><form:checkbox form:id="ln" form:label="Linked" form:current-state="checked"/>')
+        + `<text:p><text:span text:style-name="B">${control('s')}</text:span> ${control('x')} <text:a xlink:href="https://example.com/">${control('ln')}</text:a> ${control('own').replace('/>', ' draw:text-style-name="I"/>')}</text:p>`
+        + `<table:table><table:table-column/><table:table-row><table:table-cell><text:p>${control('t')}</text:p></table:table-cell></table:table-row></table:table>`
+        + `<text:p>Frame: <draw:frame text:anchor-type="as-char" svg:width="2in" svg:height="0.5in"><draw:text-box><text:p>${control('f')}</text:p></draw:text-box></draw:frame></text:p>`
+        + `<draw:control draw:control="pg" text:anchor-type="page" svg:width="1in" svg:height="0.2in"/>`, {
+        automatic: '<style:style style:name="B" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style><style:style style:name="I" style:family="paragraph"><style:text-properties fo:font-style="italic"/></style:style>',
+        styles: `<office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>${control('h')} ${control('mine')}</text:p>${forms('<form:checkbox form:id="mine" form:label="Its own" form:current-state="checked"/><form:checkbox form:id="h" form:label="Shadowed" form:current-state="unchecked"/>')}</style:header></style:master-page></office:master-styles>`,
+    }));
+    const nodes = collectAllNodes(placed);
+    const run = (text: string) => nodes.find(n => n.type === 'text' && n.text === text);
+    assert.strictEqual(placed.content[0].text, `${ticked} Span Nested ${ticked} Linked Own style`, 'ODT: controls in a span, a link and nested forms read');
+    assert.deepStrictEqual([run(`${ticked} Span`)?.formatting?.bold, (run(`${ticked} Linked`)?.metadata as any)?.link, run('Own style')?.formatting?.italic], [true, 'https://example.com/', true], 'ODT: a control takes its span\'s formatting, its link, and its own text style');
+    assert.ok(nodes.some(n => n.type === 'paragraph' && n.text === `${ticked} Cell`) && nodes.some(n => n.type === 'paragraph' && n.text === `${ticked} Framed`), 'ODT: controls in a cell and a frame read');
+    assert.ok(placed.content.some(n => n.type === 'paragraph' && n.text === 'On the page'), 'ODT: a control on the page is a paragraph of its own');
+    assert.deepStrictEqual(placed.auxiliary?.headers?.map(h => h.text), [`${ticked} Header ${ticked} Its own`], 'ODT: controls in a header read, the body\'s forms naming an id first');
+
+    // Malformed: an id no control has, no forms at all, no id, ids of an object's own keys: as before, nothing thrown.
+    for (const [label, body] of [
+        ['an id no control has', forms('<form:checkbox form:id="a" form:current-state="checked"/>') + `<text:p>Before ${control('missing')} after</text:p>`],
+        ['no forms', `<text:p>Before ${control('a')} after</text:p>`],
+        ['no id', forms('<form:checkbox form:current-state="checked"/>') + '<text:p>Before <draw:control/> after</text:p>'],
+        ['an object\'s own key', forms('<form:checkbox form:id="a"/>') + `<text:p>Before ${control('__proto__')}${control('constructor')} after</text:p>`],
+    ] as const) assert.strictEqual((await read(odf(body))).content.map(n => n.text).join('|'), 'Before  after', `ODT: a control with ${label} shows nothing`);
+    // Many options and controls: read in time that grows with them.
+    const options = Array.from({ length: 50_000 }, (_, i) => `<form:option form:label="O${i}"${i % 10_000 === 0 ? ' form:current-selected="true"' : ''}/>`).join('');
+    const timed = await withinTime(5000, async () => (await read(odf(forms(`<form:listbox form:id="l">${options}</form:listbox>`) + `<text:p>${control('l').repeat(20)}</text:p>`))).content[0].text);
+    assert.ok(timed.within && timed.result === 'O0, O10000, O20000, O30000, O40000'.repeat(20), `ODT: a list of 50,000 options shown 20 times reads its selected options, in time (${timed.ms} ms)`);
+
+    // A slide's control: a paragraph where it stands.
+    const slide = await read(odf(`<draw:page draw:name="S1">${forms('<form:checkbox form:id="k" form:label="On a slide" form:current-state="checked"/>')}<draw:control draw:control="k" svg:x="1in" svg:y="1in" svg:width="2in" svg:height="0.3in"/></draw:page>`, { kind: 'presentation' }), 'odp');
+    assert.ok(collectAllNodes(slide).some(n => n.type === 'paragraph' && n.text === `${ticked} On a slide` && !!n.bounds), 'ODP: a slide\'s control is a paragraph in its place');
+
+    // LibreOffice's own: a form's controls saved, and a Word form's legacy fields as its field marks.
+    const saved = await OfficeParser.parseOffice(path.join(__dirname, 'files/forms/controls.odt')) as OfficeParserAST;
+    assert.strictEqual(saved.content.map(n => n.text).filter(Boolean).slice(0, 5).join('\n'),
+        `Terms: ${ticked} I agree and ${unticked} Send news then ${unticked}.\nSize: ${unticked} Small ${ticked} Large\nName: Jane Doe.\nNotes: Line one\nLine two\nFruit: Apple, Cherry; City: Berlin; When: 2024-01-31; Count: ; Secret: ; Button: .`, 'ODT (LibreOffice): a form reads as LibreOffice shows it');
+    assert.ok(collectAllNodes(saved).some(n => n.type === 'paragraph' && n.text === `${ticked} In a cell`) && collectAllNodes(saved).some(n => n.type === 'paragraph' && n.text === `${ticked} In a frame`), 'ODT (LibreOffice): a cell\'s and a frame\'s controls read');
+    const marks = await OfficeParser.parseOffice(path.join(__dirname, 'files/forms/legacy-fields.odt')) as OfficeParserAST;
+    assert.strictEqual(marks.content.slice(0, 7).map(n => n.text).join('\n'), `Ticked: ${ticked} Agree\nUnticked: ${unticked} Disagree\nBy default: ${ticked} Subscribe\nColour: Blue (chosen)\nDefault colour: Red\nName: Jane Doe\nEmpty: ${' '.repeat(5)}|`, 'ODT (LibreOffice): a Word form\'s field marks read as Word\'s fields');
+    assert.strictEqual(marks.auxiliary?.headers?.[0]?.text, `Header ${ticked} approved`, 'ODT (LibreOffice): a header\'s field mark');
+    for (const [mark, expected] of [
+        ['<field:fieldmark field:type="vnd.oasis.opendocument.field.FORMCHECKBOX"/>', unticked],
+        ['<field:fieldmark field:type="vnd.oasis.opendocument.field.FORMCHECKBOX"><field:param field:name="Checkbox_Checked" field:value="false"/></field:fieldmark>', unticked],
+        ['<field:fieldmark-start field:type="vnd.oasis.opendocument.field.FORMCHECKBOX"><field:param field:name="Checkbox_Checked" field:value="true"/></field:fieldmark-start><field:fieldmark-end/>', ticked],
+        ['<field:fieldmark field:type="vnd.oasis.opendocument.field.FORMDROPDOWN"><field:param field:name="Dropdown_ListEntry" field:value="A"/><field:param field:name="Dropdown_ListEntry" field:value="B"/><field:param field:name="Dropdown_Selected" field:value="7"/></field:fieldmark>', 'A'],
+        ['<field:fieldmark field:type="vnd.oasis.opendocument.field.FORMDROPDOWN"/>', ''],
+        ['<field:fieldmark-start field:type="vnd.oasis.opendocument.field.FORMTEXT"/>typed<field:fieldmark-end/>', 'typed'],
+    ] as const) assert.strictEqual((await read(odf(`<text:p>[${mark}]</text:p>`))).content[0].text, `[${expected}]`, `ODT: the field mark ${mark.slice(0, 80)} reads ${expected}`);
+
+    // Through the native PDF engine: the boxes drawn, nothing lost.
+    const pdf: any = await saved.to('pdf', { pdfConfig: { engine: 'native' } } as any);
+    assert.ok(!(pdf.messages || []).some((m: any) => m.code === 'CONTENT_NOT_REPRESENTABLE'), `ODT (LibreOffice): the native PDF loses nothing; got ${JSON.stringify(pdf.messages)}`);
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf.value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.ok(back.content.map(n => n.text).join('\n').includes(`Terms: ${ticked} I agree and ${unticked} Send news`), 'ODT (LibreOffice): the native PDF reads the boxes');
+}
+
+/**
  * DOCX reading, from the OOXML review before 8.1.0: chunks that cannot be read, chunks in notes, comments
  * and headers (each part's ids its own relationships), text boxes and SmartArt read as blocks of their own,
  * and alternate content read from the branch the reader understands.
@@ -12016,6 +12237,8 @@ async function runTests(): Promise<void> {
         ['Second review', testSecondReview],
         ['Image links', testImageLinks],
         ['DOCX reading review', testDocxReadingReview],
+        ['DOCX legacy form fields', testDocxLegacyFormFields],
+        ['ODT form controls', testOdtFormControls],
         ['HTML', testHtml],
         ['HTML browser reading', testHtmlBrowserReading],
         ['SourceComments', testSourceComments],

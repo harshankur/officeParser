@@ -128,6 +128,42 @@ const MAX_WORD_CHILD_DEPTH = 512;
  */
 const noteRefFieldRegex = /^\s*NOTEREF\s+"?([^\s"\\]+)"?([^]*)$/i;
 
+/** A ticked and an unticked check box, as the PDF reader writes a form's and a content control holds them (U+2612, U+2610). */
+const TICKED_BOX = '\u2612';
+const UNTICKED_BOX = '\u2610';
+
+/**
+ * What a legacy form field's begin (`w:fldChar` holding `w:ffData`) shows, Word storing no result for it:
+ * a check box (FORMCHECKBOX) as ticked or not, its `w:checked`, else its `w:default`, else not ticked
+ * (ECMA-376 17.16.8, 17.16.12; each on unless its `w:val` is false, 0 or off), at its `w:size` where it
+ * sets one (17.16.29, 17.16.30); a drop-down (FORMDROPDOWN) as its entry at `w:result`, else at
+ * `w:default`, else its first (17.16.28, 17.16.11: an index no entry has is passed over). Undefined for a
+ * text field (FORMTEXT), whose result Word stores as text, and for a field of none of these.
+ */
+function legacyFormField(begin: Element): { field: 'FORMCHECKBOX' | 'FORMDROPDOWN'; text: string; size?: string } | undefined {
+    const data = getDirectChildren(begin, "w:ffData")[0];
+    if (!data) return undefined;
+    const box = getDirectChildren(data, "w:checkBox")[0];
+    if (box) {
+        const on = (element: Element | undefined) => !['false', '0', 'off'].includes(element?.getAttribute("w:val") ?? '');
+        const checked = getDirectChildren(box, "w:checked")[0], fallback = getDirectChildren(box, "w:default")[0];
+        const ticked = checked ? on(checked) : fallback ? on(fallback) : false;
+        const halfPoints = Number(getDirectChildren(box, "w:size")[0]?.getAttribute("w:val"));
+        const size = !getDirectChildren(box, "w:sizeAuto").length && Number.isInteger(halfPoints) && halfPoints > 0 && halfPoints <= 3276 ? `${halfPoints / 2}pt` : undefined; // (to Word's largest, 1,638 points)
+        return { field: 'FORMCHECKBOX', text: ticked ? TICKED_BOX : UNTICKED_BOX, ...(size ? { size } : {}) };
+    }
+    const list = getDirectChildren(data, "w:ddList")[0];
+    if (!list) return undefined;
+    const entries = getDirectChildren(list, "w:listEntry");
+    const index = (tag: string) => {
+        const value = getDirectChildren(list, tag)[0]?.getAttribute("w:val")?.trim() ?? '';
+        const n = /^\+?\d{1,9}$/.test(value) ? Number(value) : -1;
+        return n < entries.length ? n : -1;
+    };
+    const chosen = [index("w:result"), index("w:default"), 0].find(i => i >= 0)!;
+    return { field: 'FORMDROPDOWN', text: entries[chosen]?.getAttribute("w:val") ?? '' };
+}
+
 /** A text box's content, which the text box's own blocks are parsed from (see ownFirst). */
 const TEXT_BOX: ReadonlySet<string> = new Set(['w:txbxContent', 'txbxContent']);
 
@@ -1088,8 +1124,51 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
 
         // Complex fields (w:fldChar) open in the paragraph, innermost last. A formatted NOTEREF's result
         // (the note's number) is read as a reference to its note, not as text.
-        const fields: { instruction: string; resolved: boolean; hidesResult: boolean }[] = [];
+        // A legacy check box's or drop-down's (`form`): what it shows, in its begin's run's formatting, written
+        // where it ends unless its result (from where it separates) has text of its own (`resultFrom`, the
+        // count of texts read when it separated: see shownTexts), as a file of another producer may write.
+        type LegacyForm = { field: string; text: string; formatting: TextFormatting; style?: string; begin: Element; resultFrom?: number };
+        const fields: { instruction: string; resolved: boolean; hidesResult: boolean; form?: LegacyForm }[] = [];
         let hiddenResults = 0;
+        /** How many texts of more than white space the paragraph has shown so far. */
+        let shownTexts = 0;
+        /** A legacy form field's text where it ends (or where its paragraph does, for one left open): unless its result showed text. */
+        const showLegacyForm = (field: { instruction: string; form?: LegacyForm }): void => {
+            const form = field.form;
+            if (!form || hiddenResults > 0 || !form.text || /^\s*([A-Z]+)/i.exec(field.instruction)?.[1]?.toUpperCase() !== form.field) return;
+            if (form.resultFrom !== undefined && shownTexts > form.resultFrom) return;
+            text += form.text;
+            const node: OfficeContentNode = { type: 'text', text: form.text, formatting: form.formatting };
+            if (config.includeRawContent) node.rawContent = getRawContent(form.begin, documentContent, config);
+            if (form.style) node.metadata = { style: form.style };
+            children.push(node);
+        };
+        /**
+         * A complex field's character: where it begins (a legacy check box's or drop-down's text kept, in
+         * its run's formatting), where its result begins, where it ends. (Out of processChildNode, whose
+         * frame each level of nested text boxes holds on the stack.)
+         */
+        const fieldCharacter = (fieldChar: Element, formatting: TextFormatting, style: string | undefined): void => {
+            const kind = fieldChar.getAttribute("w:fldCharType");
+            if (kind === 'begin') {
+                const shown = legacyFormField(fieldChar);
+                const form = shown && { ...shown, formatting: shown.size ? { ...formatting, size: shown.size } : formatting, style, begin: fieldChar };
+                fields.push({ instruction: '', resolved: false, hidesResult: false, ...(form ? { form } : {}) });
+                pageFields.push(undefined);
+            } else if (kind === 'separate' && fields.length) {
+                const field = fields[fields.length - 1];
+                resolveField(field);
+                pageFields[pageFields.length - 1] = pageFieldOf(field.instruction);
+                if (field.form && field.form.resultFrom === undefined) field.form.resultFrom = shownTexts;
+            } else if (kind === 'end' && fields.length) {
+                const field = fields[fields.length - 1];
+                resolveField(field);
+                fields.pop();
+                pageFields.pop();
+                if (field.hidesResult) hiddenResults--;
+                showLegacyForm(field);
+            }
+        };
         // The page fields (PAGE, NUMPAGES) whose results are being read, innermost last: their text is
         // the number when the file was saved, marked so that each page can show its own.
         // (With the format the field's switch writes its number in, `PAGE \* roman`.)
@@ -1179,6 +1258,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
 
                         const tContent = tNode.textContent || '';
                         text += tContent;
+                        if (tContent.trim()) shownTexts++;
                         const textNode: OfficeContentNode = {
                             type: 'text',
                             text: tContent,
@@ -1199,19 +1279,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     }
                     // Complex fields: where one begins, its instruction, where its result begins, where it ends.
                     else if (child.tagName === "w:fldChar") {
-                        const kind = child.getAttribute("w:fldCharType");
-                        if (kind === 'begin') { fields.push({ instruction: '', resolved: false, hidesResult: false }); pageFields.push(undefined); }
-                        else if (kind === 'separate' && fields.length) {
-                            resolveField(fields[fields.length - 1]);
-                            pageFields[pageFields.length - 1] = pageFieldOf(fields[fields.length - 1].instruction);
-                        }
-                        else if (kind === 'end' && fields.length) {
-                            const field = fields[fields.length - 1];
-                            resolveField(field);
-                            fields.pop();
-                            pageFields.pop();
-                            if (field.hidesResult) hiddenResults--;
-                        }
+                        fieldCharacter(child, formatting, rStyleVal || pStyleVal || defaultParaStyleId || undefined);
                     } else if (child.tagName === "w:instrText") {
                         const field = fields[fields.length - 1];
                         if (field && !field.resolved && field.instruction.length < MAX_FIELD_INSTRUCTION) {
@@ -1507,6 +1575,9 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         for (const child of childNodes) {
             processChildNode(child);
         }
+        // A check box or drop-down whose field the paragraph leaves open still shows, where the paragraph ends.
+        // (A call, not a loop here: each level of nested text boxes holds this function's frame on the stack.)
+        fields.forEach(showLegacyForm);
 
         const commonMetadata = anchorIds.length > 0 ? { anchorIds } : {};
 

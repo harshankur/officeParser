@@ -217,6 +217,106 @@ const INLINE_NOT_SHOWN: ReadonlySet<string> = new Set(['text:note', 'text:hidden
  * script's content.
  */
 const FALLBACK_NOT_SHOWN: ReadonlySet<string> = new Set(['office:annotation', 'text:note', 'text:note-ref', 'text:hidden-text', 'text:hidden-paragraph', 'text:script', 'text:tracked-changes']);
+
+/** A ticked and an unticked check box or radio button, as the PDF reader writes a form's (U+2612, U+2610). */
+const TICKED_BOX = '\u2612';
+const UNTICKED_BOX = '\u2610';
+
+/**
+ * The form controls of a document's `office:forms`, by their `form:id` and `xml:id`: what a `draw:control`
+ * names. Read without recursion (forms nest forms), each element once.
+ */
+function collectFormControls(dom: Document, into: Map<string, Element>, override: boolean): void {
+    for (const forms of getAllElementsByTagName(dom, 'office:forms')) {
+        const pending: Element[] = [forms];
+        while (pending.length) {
+            const element = pending.pop()!;
+            for (let i = 0; i < element.childNodes.length; i++) {
+                const child = element.childNodes[i];
+                if (!isElement(child) || !child.tagName.startsWith('form:')) continue;
+                if (child.tagName === 'form:form') { pending.push(child); continue; }
+                for (const id of [child.getAttribute('form:id'), child.getAttribute('xml:id')]) {
+                    if (id && (override || !into.has(id))) into.set(id, child);
+                }
+            }
+        }
+    }
+}
+
+/**
+ * What a legacy form field LibreOffice keeps as a field mark (`field:fieldmark`, as it reads a Word form's
+ * FORMCHECKBOX or FORMDROPDOWN and writes its own) shows: a check box as ticked or not (its
+ * `Checkbox_Checked`), a drop-down its entry at `Dropdown_Selected`, else its first (as Word's). Undefined
+ * for a mark of another type (a text field's result is the text it spans).
+ */
+function fieldMarkText(mark: Element): string | undefined {
+    const type = (mark.getAttribute('field:type') || '').replace(/^.*\./, '');
+    if (type !== 'FORMCHECKBOX' && type !== 'FORMDROPDOWN') return undefined;
+    let checked = false, selected = -1;
+    const entries: string[] = [];
+    for (const param of getDirectChildren(mark, 'field:param')) {
+        const name = param.getAttribute('field:name'), value = param.getAttribute('field:value') ?? '';
+        if (name === 'Checkbox_Checked') checked = value === 'true';
+        else if (name === 'Dropdown_ListEntry') entries.push(value);
+        else if (name === 'Dropdown_Selected' && /^\d{1,9}$/.test(value)) selected = Number(value);
+    }
+    if (type === 'FORMCHECKBOX') return checked ? TICKED_BOX : UNTICKED_BOX;
+    return entries[selected >= 0 && selected < entries.length ? selected : 0] ?? '';
+}
+
+/**
+ * What a form control shows, as text, as the PDF reader writes a form's filled fields: a check box or radio
+ * button as ticked or not, then its label, which the control draws beside it; a text field (text, text
+ * area, formatted, number, date, time, a combo box's typed text, a file's name) its value; a password a
+ * bullet for each character, as it shows; a list box its selected items' labels, joined by commas; a
+ * label (fixed text) or a group box its caption. A button shows nothing to read, as a PDF's push button
+ * does not (its caption is its drawing), nor do a hidden control, an image, a table or a scroll bar.
+ *
+ * Its state now: `form:current-state`, `form:current-selected`, `form:current-value`. The state a control
+ * starts in (`form:state`, `form:selected`, `form:value`) is not what it shows: LibreOffice leaves a
+ * current state out where it is unticked, unselected or empty, and shows the control so whatever its
+ * starting state (ODF 1.3 part 3, 19.260: not selected where it is absent). A check box's third state,
+ * `unknown` (neither ticked nor not), is not ticked. A text area of no value shows its paragraphs.
+ */
+function formControlText(control: Element): string {
+    const attr = (name: string) => control.getAttribute(name);
+    const labelled = (box: string) => { const label = attr('form:label') ?? ''; return label.trim() ? `${box} ${label}` : box; };
+    const value = attr('form:current-value') ?? '';
+    switch (control.tagName) {
+        case 'form:checkbox':
+            return labelled(attr('form:current-state') === 'checked' ? TICKED_BOX : UNTICKED_BOX);
+        case 'form:radio':
+            return labelled(attr('form:current-selected') === 'true' ? TICKED_BOX : UNTICKED_BOX);
+        case 'form:text': case 'form:formatted-text': case 'form:number': case 'form:combobox': case 'form:file':
+            return value;
+        case 'form:date': {
+            // (LibreOffice's older files give a date as digits, 20240131.)
+            const digits = /^(\d{4})(\d{2})(\d{2})$/.exec(value);
+            return digits ? `${digits[1]}-${digits[2]}-${digits[3]}` : value;
+        }
+        case 'form:time': {
+            // (A time as an ISO duration, PT15H30M00S, or as LibreOffice's older digits with hundredths, 15300000.)
+            const iso = /^PT(?:(\d{1,2})H)?(?:(\d{1,2})M)?(?:(\d{1,2})(?:\.\d+)?S)?$/.exec(value);
+            const digits = /^(\d{1,2})(\d{2})(\d{2})\d{2}$/.exec(value);
+            const time = iso && (iso[1] || iso[2] || iso[3]) ? [iso[1], iso[2], iso[3]] : digits ? [digits[1], digits[2], digits[3]] : undefined;
+            return time ? time.map(part => (part ?? '0').padStart(2, '0')).join(':') : value;
+        }
+        case 'form:textarea':
+            return control.hasAttribute('form:current-value') ? value : getDirectChildren(control, 'text:p').map(p => p.textContent ?? '').join('\n');
+        case 'form:password': {
+            let shown = 0;
+            for (const ch of attr('form:value') ?? '') if (ch !== '\n' && ch !== '\r') shown++;
+            return '\u2022'.repeat(shown);
+        }
+        case 'form:listbox':
+            return getDirectChildren(control, 'form:option').filter(o => o.getAttribute('form:current-selected') === 'true')
+                .map(o => o.getAttribute('form:label') || o.getAttribute('form:value') || '').filter(Boolean).join(', ');
+        case 'form:fixed-text': case 'form:frame':
+            return attr('form:label') ?? '';
+        default:
+            return '';
+    }
+}
 /**
  * A frame's own text box, image, table, object, title or description (children of it, as the schema
  * has them): looked up through the frame's whole subtree, frames nested in text boxes took time in
@@ -558,6 +658,32 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             config, { fileType, part: 'content.xml' });
     const stylesFile = files.find(f => f.path === 'styles.xml');
     const stylesDom = stylesFile ? parseXmlString(stylesFile.content.toString(), { config }) : undefined;
+    // The form controls a `draw:control` names (see formControlText): a master page's (styles.xml), and the
+    // body's (content.xml, read with it), which name the same id first.
+    const formControls = new Map<string, Element>();
+    if (stylesDom) collectFormControls(stylesDom, formControls, false);
+    /**
+     * A `draw:control`'s runs: its form control's text (see formControlText), in the text's formatting and
+     * the control's own (its `draw:text-style-name`), a line break between its lines; none where it names
+     * no control.
+     */
+    const controlRuns = (element: Element, around: TextFormatting, link?: { link?: string; linkType?: 'internal' | 'external' }): { text: string; children: OfficeContentNode[] } => {
+        const control = formControls.get(element.getAttribute('draw:control') || '');
+        const out = { text: '', children: [] as OfficeContentNode[] };
+        if (!control) return out;
+        const own = styleMap[element.getAttribute('draw:text-style-name') || ''];
+        const formatting = own ? mergeFormatting(around, own) : around;
+        formControlText(control).split(/\r\n|\r|\n/).forEach((line, k) => {
+            if (k > 0) {
+                out.text += '\n';
+                out.children.push({ type: 'break', formatting, metadata: { breakType: 'textWrapping', ...(link || {}) } as BreakMetadata });
+            }
+            if (!line) return;
+            out.text += line;
+            out.children.push({ type: 'text', text: line, formatting, metadata: link ? { ...link } : undefined });
+        });
+        return out;
+    };
 
     // The master pages (styles.xml), by name, and the page layouts they name: the document's pages.
     const masterPages = new Map<string, Element>();
@@ -1210,6 +1336,20 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     // stands. Each was dropped, so "Figure 3" read as "Figure " and a reference to a
                     // heading as nothing.
                     fullText += parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, parentFormatting, linkMetadata, sourceXml, withFrames, sink).text;
+                } else if (tagName === 'field:fieldmark' || (tagName === 'field:fieldmark-start' && /FORMCHECKBOX$/.test(element.getAttribute('field:type') || ''))) {
+                    // A legacy check box or drop-down, as LibreOffice keeps a Word form's: what it shows.
+                    // (A check box's range holds nothing; a drop-down LibreOffice writes as a mark alone.)
+                    const shown = fieldMarkText(element);
+                    if (shown) {
+                        fullText += shown;
+                        children.push({ type: 'text', text: shown, formatting: parentFormatting, metadata: linkMetadata ? { ...linkMetadata } : undefined });
+                    }
+                } else if (tagName === 'draw:control') {
+                    // A form control in the text: what it shows (a check box as ticked or not, a field's
+                    // value), as the PDF reader reads a form; it was left out, "Name: [Jane]" read "Name: ".
+                    const shown = controlRuns(element, parentFormatting, linkMetadata);
+                    fullText += shown.text;
+                    appendAll(children, shown.children);
                 } else if (tagName === 'draw:frame' && !withFrames) {
                     // A spreadsheet cell reads its frames' pictures and objects itself; here, the text of
                     // a frame's text box only (its own frames, nested, are the cell's too).
@@ -1717,6 +1857,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         const body = getFirstElementByTagName(xml, "office:body");
         if (!body) return;
         collectNoteIds(xml);
+        collectFormControls(xml, formControls, true);
         // One budget for the entire document. It has to span every table - spreadsheet sheets,
         // ODT/ODP body tables, and nested tables alike - or a file sidesteps the cap simply by
         // splitting a huge repeat expansion across many small tables. `traverse` and the
@@ -2148,6 +2289,17 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             }
                         }
                     }
+                }
+            } else if (node.tagName === "office:forms") {
+                // The document's forms: each control is read where a `draw:control` shows it (a text area's
+                // paragraphs were read here, at the start of the document).
+            } else if (node.tagName === "draw:control") {
+                // A form control standing on the page or a slide, not in a line of text: a paragraph of what it shows.
+                const shown = controlRuns(node, {});
+                if (shown.children.length) {
+                    const paragraph: OfficeContentNode = { type: 'paragraph', text: shown.text, children: shown.children };
+                    if (config.includeRawContent) paragraph.rawContent = getRawContent(node, sourceXml, config);
+                    targetArray.push(paragraph);
                 }
             } else if (node.tagName === "draw:frame") {
                 const presClass = node.getAttribute("presentation:class");
