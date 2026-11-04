@@ -3346,13 +3346,26 @@ async function parserHardeningTests() {
         try { written = !!lined.ast && (await lined.ast.to('html')).value.length > 0; } catch { written = false; }
         check(`odt: a text area of 64 empty lines named by 30,000 controls ${label} makes a bounded number of nodes, and writes`, !lined.error && count < most && lined.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && written, `${count} nodes, written ${written}, ${Date.now() - started}ms ${lined.codes} ${lined.error}`);
     }
-    // Each copy's runs and breaks write its link again: a 32-line control named 20,000 times inside a
-    // 64-character link, charged for its text alone, wrote about 14 times a 2 MB budget of HTML.
+    // Each copy's runs write its link and font again: a 32-line control named 20,000 times inside a
+    // 64-character link, or in a 64-character font, charged for its text alone, wrote about 5 times a
+    // 2 MB budget of HTML (9.5 and 10.9 million characters).
     const linesArea = `<office:forms ${formNs}><form:form form:name="F"><form:textarea form:id="c1" form:current-value="${Array(32).fill('a').join('&#10;')}"/></form:form></office:forms>`;
-    const linked = await warned(odfOf('text', `${linesArea}<text:p><text:a xlink:type="simple" xlink:href="https://example.com/${'p'.repeat(64 - 20)}">${'<draw:control draw:control="c1"/>'.repeat(20_000)}</text:a></text:p>`), 'odt', { decompressionLimits: { maxRepeatedContent: 2_000_000 } });
-    let linkedHtml = -1;
-    try { linkedHtml = linked.ast ? (await linked.ast.to('html')).value.length : -1; } catch { linkedHtml = -1; }
-    check('odt: a linked 32-line control named 20,000 times writes HTML on the order of maxRepeatedContent', !linked.error && linkedHtml > 0 && linkedHtml < 6_000_000 && linked.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${linkedHtml} ${linked.codes} ${linked.error}`);
+    for (const [label, body, automatic, most] of [
+        ['in a 64-character link', `<text:p><text:a xlink:type="simple" xlink:href="https://example.com/${'p'.repeat(64 - 20)}">${'<draw:control draw:control="c1"/>'.repeat(20_000)}</text:a></text:p>`, '', 7_000_000],
+        ['in a 64-character font', `<text:p>${'<draw:control draw:control="c1" draw:text-style-name="T1"/>'.repeat(20_000)}</text:p>`, `<style:style style:name="T1" style:family="text"><style:text-properties style:font-name="${'F'.repeat(64)}"/></style:style>`, 7_500_000],
+    ] as const) {
+        const valued = await warned(odfOf('text', `${linesArea}${body}`, {}, automatic), 'odt', { decompressionLimits: { maxRepeatedContent: 2_000_000 } });
+        let html = -1;
+        try { html = valued.ast ? (await valued.ast.to('html')).value.length : -1; } catch { html = -1; }
+        check(`odt: a 32-line control named 20,000 times ${label} writes HTML on the order of maxRepeatedContent`, !valued.error && html > 0 && html < most && valued.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${html} ${valued.codes} ${valued.error}`);
+    }
+    // A value longer than 64 characters is charged once on each copy, after parsing: charged again by the
+    // copy, a 100-character link on a control named 2,000 times (0.7 of the budget) warned and lost its links.
+    const longLinked = await warned(odfOf('text', `${linesArea}<text:p><text:a xlink:type="simple" xlink:href="https://example.com/${'p'.repeat(100 - 20)}">${'<draw:control draw:control="c1"/>'.repeat(2_000)}</text:a></text:p>`), 'odt');
+    const longLinkRuns: any[] = [];
+    const walkRuns = (nodes: any[] | undefined) => nodes?.forEach((node: any) => { if (node.type === 'text') longLinkRuns.push(node); walkRuns(node.children); });
+    walkRuns(longLinked.ast?.content);
+    check('odt: a control named 2,000 times in a 100-character link keeps every link, unwarned, within the budget', !longLinked.error && longLinkRuns.length === 64_000 && longLinkRuns.every(run => run.metadata?.link?.length === 100) && !longLinked.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${longLinkRuns.length} runs, ${longLinkRuns.filter(run => run.metadata?.link).length} linked, ${longLinked.codes} ${longLinked.error}`);
 
     // PDF: a form XObject drawing another many times is read within a budget of text items and
     // operators (seven forms deep, 2.5 KB, ended the process out of memory).

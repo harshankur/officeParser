@@ -391,7 +391,7 @@ const toRepeatCount = (attr: string | null): number => {
 };
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { repeatPreview, takeRepeats, valuesLength } from '../utils/repeatUtils.js';
+import { REPEAT_ALLOWANCE, repeatPreview, takeRepeats, valuesLength } from '../utils/repeatUtils.js';
 import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
 import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
@@ -663,13 +663,21 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     const formControls = new Map<string, Element>();
     if (stylesDom) collectFormControls(stylesDom, formControls, false);
     /**
-     * Each form control's text (see formControlText) and its lines, read once, with the runs and breaks a
-     * copy of it makes and what those weigh before their values (characters, plus 16 for each run and
-     * break): many `draw:control`s can name one control, and each read it again (a 50,000-option list box
+     * Each form control's text (see formControlText) and its lines, read once, with the runs a copy of it
+     * makes and what the copy weighs before their values (characters, plus 16 for each run and break): many `draw:control`s can name one control, and each read it again (a 50,000-option list box
      * named 2,000 times took 18 seconds). By the control, not its id: the body's controls take the ids of a
      * master page's.
      */
-    const controlTexts = new Map<Element, { text: string; lines: string[]; nodes: number; weight: number; preview?: string[] }>();
+    const controlTexts = new Map<Element, { text: string; lines: string[]; runs: number; weight: number; preview?: string[] }>();
+    /** The length of the string values of 64 characters or less (REPEAT_ALLOWANCE) a run's formatting or link holds. */
+    const shortValuesLength = (values: object | undefined): number => {
+        let length = 0;
+        if (values) for (const key in values) {
+            const value = (values as Record<string, unknown>)[key];
+            if (typeof value === 'string' && value.length <= REPEAT_ALLOWANCE) length += value.length;
+        }
+        return length;
+    };
     /** The form controls a `draw:control` has shown: each one after the first is a repeat. */
     const shownControls = new Set<Element>();
     /**
@@ -688,18 +696,19 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         if (!read) {
             const text = formControlText(control);
             const lines = text.split(/\r\n|\r|\n/);
-            const nodes = lines.filter(Boolean).length + lines.length - 1;
-            read = { text, lines, nodes, weight: text.length + 16 * nodes };
+            const runs = lines.filter(Boolean).length;
+            read = { text, lines, runs, weight: text.length + 16 * (runs + lines.length - 1) };
             controlTexts.set(control, read);
         }
         const own = styleMap[element.getAttribute('draw:text-style-name') || ''];
         const formatting = own ? mergeFormatting(around, own) : around;
-        // A copy is charged as a repeated cell is (CellBudget.weighCell): every run and break it makes writes
-        // its formatting and link again (a 64-character font and link on each of a 32-line control's runs,
-        // uncharged, wrote 11 times the budget).
+        // Each of a copy's runs writes its formatting and link again (a 64-character font and link on each of
+        // a 32-line control's runs, uncharged, wrote 11 times the budget), so a copy is charged for them too:
+        // the values of 64 characters or less, as a value longer is charged on each fresh node after parsing
+        // (boundRepeatedValues). Its breaks are not, as writers write a bare break.
         let lines = read.lines;
         if (!shownControls.has(control)) shownControls.add(control);
-        else if (takeRepeats(config, 1, read.weight + read.nodes * (valuesLength(formatting) + valuesLength(link))) === 0) lines = read.preview ??= [repeatPreview(read.lines.join(' '))];
+        else if (takeRepeats(config, 1, read.weight + read.runs * (shortValuesLength(formatting) + shortValuesLength(link))) === 0) lines = read.preview ??= [repeatPreview(read.lines.join(' '))];
         lines.forEach((line, k) => {
             if (k > 0) {
                 out.text += '\n';
