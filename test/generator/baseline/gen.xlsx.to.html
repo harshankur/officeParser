@@ -286,6 +286,20 @@
             .spreadsheet-tab:hover { background: #e8eaed; }
             .spreadsheet-tab.active { background: white; color: var(--accent-color); font-weight: 600; border-bottom: 2px solid var(--accent-color); }
 
+            /* Sheet tabs without the script */
+            .spreadsheet-container:not([data-sheet-script]) .spreadsheet-sheet:target { display: block; }
+            .spreadsheet-container:not([data-sheet-script]):has(.spreadsheet-sheet:target) .spreadsheet-sheet.active:not(:target) { display: none; }
+            .spreadsheet-container:not([data-sheet-script]):not(:has(.spreadsheet-sheet:target)) .spreadsheet-tab:first-child,
+            .spreadsheet-container:not([data-sheet-script]):has(#sheet-0:target) .spreadsheet-tab[href="#sheet-0"],
+            .spreadsheet-container:not([data-sheet-script]):has(#sheet-1:target) .spreadsheet-tab[href="#sheet-1"],
+            .spreadsheet-container:not([data-sheet-script]):has(#sheet-2:target) .spreadsheet-tab[href="#sheet-2"],
+            .spreadsheet-container:not([data-sheet-script]):has(#sheet-3:target) .spreadsheet-tab[href="#sheet-3"],
+            .spreadsheet-container:not([data-sheet-script]):has(#sheet-4:target) .spreadsheet-tab[href="#sheet-4"],
+            .spreadsheet-container:not([data-sheet-script]):has(#sheet-5:target) .spreadsheet-tab[href="#sheet-5"],
+            .spreadsheet-container:not([data-sheet-script]):has(#sheet-6:target) .spreadsheet-tab[href="#sheet-6"],
+            .spreadsheet-container:not([data-sheet-script]):has(#sheet-7:target) .spreadsheet-tab[href="#sheet-7"],
+            .spreadsheet-container:not([data-sheet-script]):has(#sheet-8:target) .spreadsheet-tab[href="#sheet-8"] { background: white; color: var(--accent-color); font-weight: 600; border-bottom: 2px solid var(--accent-color); }
+
             /* Slide & Page Separation */
             .slide {
                 background: white;
@@ -949,6 +963,11 @@ come in handy. You can use hanging indents to ensure that a line of poetry reta
     
     
 <script>
+    function markSheetScript() {
+        document.querySelectorAll('.spreadsheet-container').forEach(c => c.setAttribute('data-sheet-script', 'on'));
+    }
+    markSheetScript();
+
     function initSpreadsheetResizing() {
         const readSize = key => {
             try {
@@ -1073,6 +1092,7 @@ come in handy. You can use hanging indents to ensure that a line of poetry reta
 
     function switchSheet() {
         try {
+            markSheetScript();
             const sheets = document.querySelectorAll('.spreadsheet-sheet');
             const tabs = document.querySelectorAll('.spreadsheet-tab');
 

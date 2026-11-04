@@ -16,6 +16,8 @@ const BLOCK_TYPES = new Set<string>(['paragraph', 'heading', 'list', 'table', 's
 
 /** Node types written as their children alone: blocks when one of their children is. */
 const TRANSPARENT_TYPES = new Set<string>(['drawing', 'header', 'footer', 'slideMaster']);
+/** The sheets whose tab is marked current without the script, each by a rule of its own (see sheetTabsWithoutScript). */
+const MAX_NO_SCRIPT_TAB_RULES = 200;
 
 /**
  * A child that is a block of its own, which a <p> cannot hold: a code block or display equation, a
@@ -298,12 +300,15 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         let metaTags = '';
         let spreadsheetTabs = '';
         let spreadsheetScript = '';
+        /** The rendered sheets' places among all the sheets, in tab order: the stylesheet's tab rules name them. */
+        let tabSheetIndexes: number[] = [];
 
         if (this.isSpreadsheetMode) {
             // The tab bar lists the sheets the body actually rendered. That decision was already made
             // (and recorded) during the body walk above, so read it back rather than asking `onNode` a
             // second time about every sheet - the hook is allowed to have side effects.
             const sheets = this.ast.content.filter(node => node.type === 'sheet' && !this.onNodeSkipped.has(node));
+            tabSheetIndexes = sheets.map(n => this.sheetIndex(n));
             // Each tab links to its sheet's own id (its place among all the sheets, as the sheet's div
             // is numbered), so a sheet `onNode` skipped does not shift the links after it.
             const tabs = sheets.map(n => {
@@ -312,6 +317,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 return `<a href="#sheet-${index}" class="spreadsheet-tab">${this.escape(sheetName)}</a>`;
             }).join('');
             spreadsheetTabs = `<div class="spreadsheet-tabs">${tabs}</div>`;
+            // The script is an enhancement: the tabs switch sheets without it too (sheetTabsWithoutScript).
+            // It marks the container as soon as it runs, which turns those rules off, so from then on the
+            // active class alone decides which sheet shows (a host switching sheets with its own script
+            // and preventDefault, after a load at #sheet-2, would otherwise show two).
             // Column widths and row heights are remembered in localStorage where the page may use it. A
             // frame with scripts but no storage (a sandbox without allow-same-origin, blocked site data)
             // throws on any access, so every read and write is guarded and sizes are then simply not
@@ -319,6 +328,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             // shows the first sheet only when none is showing (it added it beside the one shown).
             spreadsheetScript = `
 <script>
+    function markSheetScript() {
+        document.querySelectorAll('.spreadsheet-container').forEach(c => c.setAttribute('data-sheet-script', 'on'));
+    }
+    markSheetScript();
+
     function initSpreadsheetResizing() {
         const readSize = key => {
             try {
@@ -443,6 +457,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
     function switchSheet() {
         try {
+            markSheetScript();
             const sheets = document.querySelectorAll('.spreadsheet-sheet');
             const tabs = document.querySelectorAll('.spreadsheet-tab');
 
@@ -495,11 +510,14 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             metaTags = this.renderMetaTags();
         }
 
-        // Marked as the writer's own defaults, which a reader leaves out of the document's look.
+        // Marked as the writer's own defaults, which a reader leaves out of the document's look. The rules
+        // that switch sheets without the script live here too, so a reader does not take them for the
+        // document's own styling. With styles: 'none' nothing hides a sheet, so every sheet shows, one after
+        // another, and the tabs are links to each.
         const styleBlock = sa.styles === 'none' ? '' : `<style data-default-styles>${
             sa.styles === 'scoped'
-                ? this.getScopedPremiumStyles(this.isSpreadsheetMode, isPresentation, isPdf)
-                : this.getPremiumStyles(this.isSpreadsheetMode, isPresentation, isPdf)
+                ? this.getScopedPremiumStyles(this.isSpreadsheetMode, isPresentation, isPdf, tabSheetIndexes)
+                : this.getPremiumStyles(this.isSpreadsheetMode, isPresentation, isPdf, tabSheetIndexes)
         }</style>`;
 
         // 'scoped' styles are anchored to this wrapper via CSS @scope, so custom properties and
@@ -2087,7 +2105,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         return styles.join('; ');
     }
 
-    private getPremiumStyles(isSpreadsheet: boolean = false, isPresentation: boolean = false, isPdf: boolean = false): string {
+    private getPremiumStyles(isSpreadsheet: boolean = false, isPresentation: boolean = false, isPdf: boolean = false, tabSheetIndexes: number[] = []): string {
         let resolvedWidth = this.config.htmlConfig.containerWidth;
         if (!resolvedWidth || resolvedWidth === 'auto') {
             if (isSpreadsheet) {
@@ -2374,7 +2392,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 cursor: pointer;
             }
             .spreadsheet-tab:hover { background: #e8eaed; }
-            .spreadsheet-tab.active { background: white; color: var(--accent-color); font-weight: 600; border-bottom: 2px solid var(--accent-color); }
+            .spreadsheet-tab.active { background: white; color: var(--accent-color); font-weight: 600; border-bottom: 2px solid var(--accent-color); }${isSpreadsheet ? this.sheetTabsWithoutScript(tabSheetIndexes) : ''}
 
             /* Slide & Page Separation */
             .slide {
@@ -2665,6 +2683,36 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
     }
 
     /**
+     * The rules that switch a workbook's sheets without the script (scripts off, a sandbox without
+     * allow-scripts, or a fragment inserted where its script never runs). A tab is a link to its sheet's id,
+     * so the linked sheet is the `:target`: it shows, and the first sheet (the one with the active class in
+     * the markup) hides while another is targeted. They apply only while the script is not running, which
+     * marks the container (data-sheet-script) as soon as it runs; a host that leaves the script out
+     * (standalone.scripts: false) and switches sheets with its own sets that attribute itself. No
+     * `!important`, so the print rules that show every sheet still win.
+     *
+     * Hiding the first sheet needs `:has()`. A browser without it drops those rules, so with scripts off
+     * the first sheet stays beside the targeted one: both show, and every sheet is still reachable. Each
+     * tab is marked current by its own rule, for the first MAX_NO_SCRIPT_TAB_RULES sheets (a browser
+     * checks every tab against every such rule, so thousands of sheets would make each switch slow); a
+     * later tab switches its sheet all the same, with no tab marked. The ids are the sheets' places
+     * (numbers this writer makes), never a sheet's name.
+     */
+    private sheetTabsWithoutScript(tabSheetIndexes: number[]): string {
+        const off = '.spreadsheet-container:not([data-sheet-script])';
+        const current = [`${off}:not(:has(.spreadsheet-sheet:target)) .spreadsheet-tab:first-child`];
+        for (const i of tabSheetIndexes.filter(i => Number.isInteger(i) && i >= 0).slice(0, MAX_NO_SCRIPT_TAB_RULES)) {
+            current.push(`${off}:has(#sheet-${i}:target) .spreadsheet-tab[href="#sheet-${i}"]`);
+        }
+        return `
+
+            /* Sheet tabs without the script */
+            ${off} .spreadsheet-sheet:target { display: block; }
+            ${off}:has(.spreadsheet-sheet:target) .spreadsheet-sheet.active:not(:target) { display: none; }
+            ${current.join(',\n            ')} { background: white; color: var(--accent-color); font-weight: 600; border-bottom: 2px solid var(--accent-color); }`;
+    }
+
+    /**
      * Same as `getPremiumStyles()`, but wrapped in a CSS `@scope` block anchored to the
      * `.op-html-scope` wrapper so the rules only apply within the generated fragment - they
      * cannot leak onto a host page's own elements. `:root` and `body` selectors specifically
@@ -2672,8 +2720,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
      * `.op-html-scope` wrapper) first; every other selector is naturally confined by `@scope`
      * without needing per-selector rewriting. `customCss` is included in this scoping too.
      */
-    private getScopedPremiumStyles(isSpreadsheet: boolean = false, isPresentation: boolean = false, isPdf: boolean = false): string {
-        const css = this.getPremiumStyles(isSpreadsheet, isPresentation, isPdf)
+    private getScopedPremiumStyles(isSpreadsheet: boolean = false, isPresentation: boolean = false, isPdf: boolean = false, tabSheetIndexes: number[] = []): string {
+        const css = this.getPremiumStyles(isSpreadsheet, isPresentation, isPdf, tabSheetIndexes)
             .replace(/:root(\s*\{)/g, ':scope$1')
             .replace(/(^|\n)([ \t]*)body(\s*\{)/g, '$1$2:scope$3');
         return `@scope (.op-html-scope) {\n${css}\n}`;

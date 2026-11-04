@@ -304,6 +304,27 @@ async function htmlTests() {
     ]);
     const html3 = (await OfficeGenerator.generate(linkAst, 'html')).value as string;
     check('html: javascript link neutralized', !html3.includes('href="javascript:'), 'javascript href survived');
+
+    // The sheet tabs that work without the script are CSS naming each sheet's id. The ids are the
+    // sheets' places, never their names or anchors, so a hostile name or anchor reaches neither that
+    // CSS nor the markers it uses.
+    const HOSTILE_SHEET = 'x"]{}</style><script>alert(5)</script>';
+    const hostileSheets = astWith([0, 1].map(i => ({
+        type: 'sheet', metadata: { sheetName: `${HOSTILE_SHEET}${i}`, anchorIds: [`${HOSTILE_SHEET}a${i}`] },
+        children: [{ type: 'row', children: [{ type: 'cell', metadata: { row: 0, col: 0 }, children: [{ type: 'text', text: 'v' }] }] }],
+    })) as any);
+    for (const styles of ['full', 'scoped'] as const) {
+        const out = (await OfficeGenerator.generate(hostileSheets, 'html', { htmlConfig: { standalone: { styles } } } as any)).value as string;
+        const css = out.match(/<style data-default-styles>([\s\S]*?)<\/style>/)?.[1] || '';
+        const start = css.indexOf('/* Sheet tabs without the script */');
+        const noScript = start < 0 ? '' : css.slice(start, css.indexOf('}', css.lastIndexOf(':target')) + 1);
+        check(`html (${styles}): the no-script sheet tab rules are written`, noScript.includes(':target'), 'no :target rules, so the checks below would be vacuous');
+        check(`html (${styles}): a sheet's name or anchor never reaches the stylesheet`, !css.includes('alert(5)') && !css.includes('x"]'), 'sheet text in the CSS');
+        // The rule's declarations (a colour such as #fff) are not ids: only the selectors are read.
+        const ids = noScript.split('{').filter((_, i, all) => i < all.length - 1).map(part => part.slice(part.lastIndexOf('}') + 1)).join(' ').match(/#[^\s:"\])]+/g) || [];
+        check(`html (${styles}): the no-script rules name only sheet-N ids`, ids.length > 0 && ids.every(id => /^#sheet-\d+$/.test(id)), JSON.stringify(ids));
+        check(`html (${styles}): the hostile sheet name stays escaped in its tab`, !out.includes('<script>alert(5)') && out.includes('&lt;script&gt;alert(5)'), 'tab text not escaped');
+    }
 }
 
 async function htmlSourceAttributesTests() {

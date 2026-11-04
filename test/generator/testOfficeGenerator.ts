@@ -2794,7 +2794,8 @@ async function runTableGeometryTests(): Promise<GenFeatureTest[]> {
 
 /**
  * The spreadsheet viewer (HTML output of a workbook) in hosts that limit it: a frame with scripts but no
- * storage, where any localStorage access throws.
+ * storage, where any localStorage access throws, and a host with scripts off, where the sheet tabs switch
+ * by CSS `:target` alone. What a browser does with these was checked in one; here, what the HTML says.
  */
 async function runSpreadsheetViewerTests(): Promise<GenFeatureTest[]> {
     const results: GenFeatureTest[] = [];
@@ -2829,6 +2830,107 @@ async function runSpreadsheetViewerTests(): Promise<GenFeatureTest[]> {
     results.push(mk('html', 'a failed sheet switch shows the first sheet only when none is showing',
         'the catch checks for an active sheet first', catchKeepsOne ? 'checks' : 'adds unconditionally', catchKeepsOne,
         'the catch added the first sheet beside the one the switch had already shown, so two sheets showed'));
+
+    // --- Sheet tabs without the script ---
+    const defaultCss = (out: string) => (out.match(/<style data-default-styles>([\s\S]*?)<\/style>/) || [])[1] || '';
+    const noScriptCss = (out: string) => {
+        const css = defaultCss(out);
+        const at = css.indexOf('/* Sheet tabs without the script */');
+        return at < 0 ? '' : css.slice(at, css.indexOf('}', css.lastIndexOf(':target')) + 1);
+    };
+    const rules = noScriptCss(page);
+    results.push(mk('html', 'the no-script sheet tab rules are in the default styles',
+        'inside <style data-default-styles>, nowhere else', `${rules.length} chars; :target ${page.split(':target').length - 1} times in the page`,
+        rules.length > 0 && page.split(':target').length === rules.split(':target').length,
+        'a reader takes any other <style> for the document\'s own styling, so the hiding rules would come back as the document\'s'));
+    const ruleBodies = rules.replace(/\/\*[\s\S]*?\*\//g, '').split('}').filter(r => r.includes(':target'));
+    results.push(mk('html', 'the no-script rules apply only while the script is not running',
+        'every :target rule under .spreadsheet-container:not([data-sheet-script])', JSON.stringify(ruleBodies.map(r => r.trim().slice(0, 60))),
+        ruleBodies.length > 0 && ruleBodies.every(r => r.split(',').every(sel => sel.trim().startsWith('.spreadsheet-container:not([data-sheet-script])') || !sel.includes(':target'))),
+        'a host switching sheets with its own script after a load at #sheet-2 would show two'));
+    results.push(mk('html', 'the no-script rules carry no !important, so print still shows every sheet',
+        'no !important; the print rule shows every sheet', rules.includes('!important') ? 'has !important' : 'none',
+        !rules.includes('!important') && /@media print[\s\S]*\.spreadsheet-sheet \{\s*display: block !important;/.test(defaultCss(page)),
+        'the print rules (display: block !important on every sheet) must win over the :target rules'));
+    results.push(mk('html', 'the first sheet hides while another is targeted (needs :has)',
+        'a rule hiding .spreadsheet-sheet.active:not(:target) when a sheet is targeted', rules.includes(':has(.spreadsheet-sheet:target) .spreadsheet-sheet.active:not(:target) { display: none; }') ? 'present' : 'missing',
+        rules.includes(':has(.spreadsheet-sheet:target) .spreadsheet-sheet.active:not(:target) { display: none; }') && rules.includes(':not([data-sheet-script]) .spreadsheet-sheet:target { display: block; }'),
+        'with scripts off a workbook stayed on its first sheet'));
+    const marksFirst = script.indexOf("setAttribute('data-sheet-script', 'on')") >= 0
+        && script.indexOf('markSheetScript();') < script.indexOf('function initSpreadsheetResizing')
+        && /function switchSheet\(\) \{\s*try \{\s*markSheetScript\(\);/.test(script);
+    results.push(mk('html', 'the script marks the container as soon as it runs',
+        'markSheetScript() at the top and in switchSheet', marksFirst ? 'marks' : 'does not', marksFirst,
+        'the script is an enhancement: its marker turns the :target rules off'));
+
+    // The markup is what it was: a consumer's stylesheet relies on these classes, and the HTML reader
+    // flattens the container only when its class is exactly spreadsheet-container.
+    const body = page.replace(/<style[\s\S]*?<\/style>/g, '').replace(/<script[\s\S]*?<\/script>/g, '');
+    const markupKept = body.includes('<div class="spreadsheet-container">')
+        && /<div id="sheet-0" class="spreadsheet-sheet active"/.test(body)
+        && /<div id="sheet-1" class="spreadsheet-sheet">/.test(body) && /<div id="sheet-2" class="spreadsheet-sheet">/.test(body)
+        && body.includes('<div class="spreadsheet-tabs"><a href="#sheet-0" class="spreadsheet-tab">First</a><a href="#sheet-1" class="spreadsheet-tab">Second</a><a href="#sheet-2" class="spreadsheet-tab">Third</a></div>')
+        && !body.includes('data-sheet-script');
+    results.push(mk('html', 'the sheet markup is unchanged',
+        'container, sheets (first .active), ids, tab links as before; no marker in the markup', markupKept ? 'kept' : body.slice(0, 400), markupKept,
+        'the no-script tabs are stylesheet rules alone'));
+
+    const tabRule = (i: number) => `:has(#sheet-${i}:target) .spreadsheet-tab[href="#sheet-${i}"]`;
+    results.push(mk('html', 'each tab is marked current by its own rule', 'rules for sheet-0..2',
+        [0, 1, 2].map(i => rules.includes(tabRule(i))).join(','), [0, 1, 2].every(i => rules.includes(tabRule(i))),
+        'with scripts off the tab of the sheet shown is marked as the script marks it'));
+    const skipped = await html(workbook(), { onNode: (n: OfficeContentNode) => (n.type === 'sheet' && (n.metadata as any)?.sheetName === 'Second') ? false : undefined });
+    const skippedRules = noScriptCss(skipped);
+    results.push(mk('html', 'a sheet onNode skipped gets no tab rule, and the others keep their ids',
+        'rules for sheet-0 and sheet-2 only', [0, 1, 2].map(i => skippedRules.includes(tabRule(i))).join(','),
+        skippedRules.includes(tabRule(0)) && !skippedRules.includes(tabRule(1)) && skippedRules.includes(tabRule(2)),
+        'the tab rules name the sheets the tab bar lists'));
+    const many = await html(synthAst('xlsx', Array.from({ length: 250 }, (_, i) => sheet(`S${i}`, `V${i}`))));
+    const manyRules = noScriptCss(many);
+    const manyCount = manyRules.split('.spreadsheet-tab[href=').length - 1;
+    results.push(mk('html', 'tab rules stop at 200 sheets; the sheets after still switch',
+        '200 tab rules, 250 tabs, the :target rule for every sheet', `${manyCount} rules, ${many.split('class="spreadsheet-tab"').length - 1} tabs`,
+        manyCount === 200 && !manyRules.includes(tabRule(200)) && many.split('class="spreadsheet-tab"').length - 1 === 250 && manyRules.includes('.spreadsheet-sheet:target { display: block; }'),
+        'a browser checks every tab against every such rule, so thousands of sheets would make each switch slow'));
+
+    const scoped = await html(workbook(), { htmlConfig: { standalone: { styles: 'scoped' } } });
+    const scopedRules = noScriptCss(scoped);
+    results.push(mk('html', 'scoped styles carry the same no-script rules inside @scope',
+        'the plain rules, inside @scope (.op-html-scope)', scopedRules === rules ? 'same' : 'differ',
+        scopedRules === rules && /^@scope \(\.op-html-scope\) \{/.test(defaultCss(scoped)),
+        'the scoped variant is the plain one wrapped, so the two stay in step'));
+    const unstyled = await html(workbook(), { htmlConfig: { standalone: { styles: 'none' } } });
+    results.push(mk('html', "styles: 'none' writes no rule hiding a sheet, so every sheet shows",
+        'no <style>, no :target, every sheet in the markup', `${unstyled.includes('<style') ? 'style' : 'no style'}, ${(unstyled.match(/class="spreadsheet-sheet/g) || []).length} sheets`,
+        !unstyled.includes('<style') && !unstyled.includes(':target') && (unstyled.match(/class="spreadsheet-sheet/g) || []).length === 3,
+        'with no default styles nothing hides a sheet: they show one after another and the tabs are links to each'));
+
+    // Nothing new outside spreadsheet mode: a document's HTML is what it was.
+    const doc = synthAst('docx', [{ type: 'paragraph', children: [{ type: 'text', text: 'Plain' }] } as OfficeContentNode]);
+    for (const [label, config] of [['default', {}], ['fragment, no styles', { htmlConfig: { standalone: { document: false, styles: 'none' } } }], ['scoped', { htmlConfig: { standalone: { styles: 'scoped' } } }]] as const) {
+        const out = await html(doc, config);
+        const clean = !out.includes(':target') && !out.includes('data-sheet-script') && !out.includes('Sheet tabs without the script')
+            && (label !== 'fragment, no styles' || !/excel-|spreadsheet-|#sheet-\d/.test(out));
+        results.push(mk('html', `a document's HTML has none of the sheet tab rules (${label})`,
+            'no :target, no data-sheet-script', clean ? 'none' : 'present', clean,
+            'the rules are written only for a workbook'));
+    }
+
+    // The HTML reader reads a workbook's HTML back the same: the rules sit in the default styles, which
+    // it leaves out of the document's look, and the container keeps the class it flattens.
+    const xlsxPath = getSourcePath('xlsx');
+    if (fs.existsSync(xlsxPath)) {
+        const xlsxAst = await OfficeParser.parseOffice(xlsxPath, PARSER_CONFIG);
+        const xlsxHtml = await html(xlsxAst);
+        const withoutRules = xlsxHtml.replace(noScriptCss(xlsxHtml), '');
+        const readBack = async (h: string) => JSON.stringify(await OfficeParser.parseOffice(Buffer.from(h), { ...PARSER_CONFIG, ocr: false, fileType: 'html' } as any));
+        const withRules = await readBack(xlsxHtml);
+        const same = withRules === await readBack(withoutRules);
+        results.push(mk('html', 'a workbook\'s HTML reads back the same with the no-script rules',
+            'the same content with and without the rules; no :target in it', `${same ? 'same' : 'differs'}; :target ${withRules.includes(':target') ? 'read' : 'not read'}`,
+            noScriptCss(xlsxHtml).length > 0 && same && !withRules.includes(':target') && !withRules.includes('data-sheet-script'),
+            'the reader applies any <style> outside the default styles as the document\'s own'));
+    }
 
     return results;
 }
