@@ -588,6 +588,16 @@ export function captureConsoleWarnings(sink: (line: string) => void, workerFile:
 }
 /* eslint-enable no-console */
 
+/**
+ * Sets the warning level of the pdf.js worker `worker` (a `PDFWorker`) runs on, as pdf.js does when it
+ * starts one (its "configure" message), once it has started. In this process that level is the worker
+ * module's, shared by every PDFWorker on it. Nothing is set where the worker did not start (the
+ * document reports that) or has ended.
+ */
+export function setWorkerVerbosity(worker: any, verbosity: number): void {
+    try { worker.messageHandler?.send('configure', { verbosity }); } catch { /* not started, or ended */ }
+}
+
 /** A pdf.js worker this module started in the browser, and how to end it. */
 export interface WarningWorker {
     /** A pdf.js `PDFWorker` on the worker, for `getDocument({ worker })`. */

@@ -56,7 +56,7 @@ import { FURNITURE_BAND, findRunningLines, markPageFields, PageFurniture, planFu
 import { setOwn } from '../utils/lookupUtils.js';
 import { BROTLI_AVOIDED_LINE, acquirePdfProcess, PdfProcess } from './pdf/pdfProcess.js';
 import { avoidBrotliInThisProcess, BROTLI_FIXED_RELEASES, onBrotliRefused, runtimeHasBrotliFlaw, runtimeName } from '../utils/brotliFlaw.js';
-import { captureConsoleWarnings, openWarningWorker, PdfAssetSession, pdfjsWorkerFile, resolvePdfAssetFolders, WarningWorker } from './pdf/pdfAssets.js';
+import { captureConsoleWarnings, openWarningWorker, PdfAssetSession, pdfjsWorkerFile, resolvePdfAssetFolders, setWorkerVerbosity, WarningWorker } from './pdf/pdfAssets.js';
 import { appendAll } from '../utils/nodeListUtils.js';
 
 /**
@@ -1866,11 +1866,26 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 ownWorker = { worker, close: () => worker.destroy() };
             }
             if (runtimeHasBrotliFlaw()) avoidBrotliInThisProcess();
+            // pdf.js's worker module keeps one warning level for every document it reads in this process,
+            // the caller's own among them. It is raised for the turn this parse's document is open in (a
+            // parse before may have put it back meanwhile) and put back to 0 once that document has closed,
+            // so a caller's pdf.js worker reads its documents as quietly as before (pdf.js lowered it to 0
+            // for each of our documents before its warnings were taken).
+            const raised = workerFile ? ownWorker?.worker : undefined;
             inProcessTurn = async () => {
                 const endTurn = await takeInProcessTurn(config.abortSignal);
+                if (raised) {
+                    try { await raised.promise; } catch { /* the document reports a worker that did not start */ }
+                    setWorkerVerbosity(raised, 1);
+                }
                 const stopCapture = workerFile ? captureConsoleWarnings(takeWarning, workerFile) : undefined;
                 onBrotliRefused(brotliAvoided);
-                return () => { onBrotliRefused(undefined); stopCapture?.(); endTurn(); };
+                return () => {
+                    onBrotliRefused(undefined);
+                    stopCapture?.();
+                    if (raised) setWorkerVerbosity(raised, 0);
+                    endTurn();
+                };
             };
         }
         return await readPdf(pdfjs, buffer, config, pdfCfg, maxImageSize, pdfProcess, assets, pdfProcess?.worker ?? ownWorker?.worker, inProcessTurn);

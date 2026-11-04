@@ -8909,6 +8909,43 @@ async function testPdfPicturesLeftOut(): Promise<void> {
         }
     }
 
+    // A caller's own pdf.js worker, kept at verbosity 0, reads its documents as quietly after a parse in this
+    // process as before it: the parse raised the worker module's level (one for every worker in the process)
+    // to hear the pictures pdf.js leaves out, and left it there, so the caller's next document printed
+    // "Warning: Indexing all PDF objects". The parse's own pictures are still reported.
+    const { pathToFileURL } = await import('url');
+    const pdfjs: any = await import(pathToFileURL(require.resolve('pdfjs-dist/legacy/build/pdf.mjs')).href);
+    pdfjs.GlobalWorkerOptions.workerSrc ||= pathToFileURL(require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs')).href;
+    const textPdf = pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+        stream(Buffer.from('BT /F1 12 Tf 20 100 Td (Caller text) Tj ET')), '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>']);
+    // Its cross-reference offset is wrong, so pdf.js says it indexes all objects as it reads it.
+    const misindexed = new Uint8Array(Buffer.from(textPdf.toString('latin1').replace(/startxref\n\d+/, 'startxref\n1'), 'latin1'));
+    const callerWorker = new pdfjs.PDFWorker({ verbosity: 0 });
+    const printed: string[] = [];
+    const consoleMethods = ['warn', 'log', 'info'] as const;
+    const originals = consoleMethods.map(method => (console as any)[method]);
+    const openOwn = async () => {
+        consoleMethods.forEach((method, i) => { (console as any)[method] = (...args: any[]) => { printed.push(String(args[0])); if (!String(args[0]).startsWith('Warning: ')) originals[i].apply(console, args); }; });
+        try {
+            const task = pdfjs.getDocument({ data: misindexed.slice(), worker: callerWorker, verbosity: 0 });
+            await (await task.promise).getPage(1);
+            await task.destroy();
+        } finally {
+            consoleMethods.forEach((method, i) => { (console as any)[method] = originals[i]; });
+        }
+    };
+    try {
+        await openOwn();
+        const quietBefore = printed.length;
+        const between = await read({ pdfParserConfig: { separateProcess: false } });
+        assert.strictEqual(between.lost.length, 2, `a parse in this process still reports the pictures pdf.js leaves out; got ${JSON.stringify(between.lost.map(i => String(i.details)))}`);
+        await openOwn();
+        assert.deepStrictEqual([quietBefore, printed], [0, []], 'a caller\'s pdf.js worker at verbosity 0 prints nothing for its documents, before a parse in this process or after it');
+    } finally {
+        callerWorker.destroy();
+    }
+
     // Two at once in a fresh process: the pictures' document opened first, a text one second and done first.
     const os = await import('os');
     const childProcess = await import('child_process');
