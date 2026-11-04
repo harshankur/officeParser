@@ -828,7 +828,7 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `REMOTE_ASSET_BLOCKED` | parse (error) | `allowRemoteAssets` is `false` and the parse would have fetched the pdf.js worker or Tesseract's files from the library's default CDN address. The message names the options to set (`pdfWorkerSrc`, `ocrConfig.workerPath`/`corePath`/`langPath`). |
 | `NO_WORKSHEETS_FOUND` / `NO_SLIDES_FOUND` | parse | A legitimately empty workbook/presentation. |
 | `TABLE_CELL_LIMIT_EXCEEDED` | parse | The cells an ODF or XLSX document yields passed `decompressionLimits.maxTableCells` plus one per byte of the document; the rest were not read. |
-| `REPEATED_CONTENT_LIMIT_EXCEEDED` | parse | The document repeated `decompressionLimits.maxRepeatedContent` (plus 16 characters per byte of the document) of content by reference (ODF repeated cells and chart values, XLSX shared strings, style values, link targets, chart text per frame, LaTeX titles per reference); later repeats were not made, shortened or went without the value. |
+| `REPEATED_CONTENT_LIMIT_EXCEEDED` | parse | The document repeated `decompressionLimits.maxRepeatedContent` (plus 16 characters per byte of the document) of content by reference (ODF repeated cells and chart values, XLSX shared strings, style values, link targets, chart text per frame, a form control's text at each `draw:control` naming it, LaTeX titles per reference); later repeats were not made, shortened or went without the value. |
 | `BROTLI_DECODER_AVOIDED` | parse / generate | The runtime's Brotli decoder has a known flaw (CVE-2026-111497), so a PDF's Brotli streams or a WOFF2 font in `pdfConfig.fonts` were decoded by a slower decoder written in JavaScript. Raised only when such a stream or font is met. Upgrade the runtime. |
 | `PDF_SEPARATE_PROCESS_UNAVAILABLE` | parse | pdf.js could not start in a separate process (Node), so it runs in the host; a hostile PDF can then exhaust its memory, and pdf.js's time is not bounded (bound it with `abortSignal`). |
 | `PDF_CONTENT_LIMIT_EXCEEDED` | parse | A PDF passed one of its content limits (plus an allowance per byte), which the message names: past `pdfParserConfig.maxTextItems` or `maxTimeMs` the rest of it was not read; past `maxOperators` its images, text colours and font styles from that page on were not (its text was). |
@@ -2171,6 +2171,9 @@ const ast = await officeParser.parseOffice(pdfArrayBuffer, {
 
 > [!NOTE]
 > The `pdfjs-dist` worker version must match the version bundled with `officeparser` (currently `pdfjs-dist@6.2.108`).
+
+> [!NOTE]
+> `pdfjs-dist` is pinned to that exact version, not a range: what the library reads from a PDF depends on pdf.js's output, which changes between releases, and pdf.js's API refuses a worker of another version. Your application can use its own `pdfjs-dist`, of this version or another, in the same Node process wherever the library finds `pdfjs-dist`'s worker file: it then runs pdf.js's worker on a module of its own (in a separate process by default, see `pdfParserConfig.separateProcess`), so each copy keeps its own worker. A bundle that inlines pdf.js (an ESM bundle for Node, or a bundle shipped without `node_modules`) has no worker file to find: there the library's worker is preloaded as `globalThis.pdfjsWorker`, which a `pdfjs-dist` of another version in the same process would also take, so use the library's version of `pdfjs-dist` there.
 
 ---
 
