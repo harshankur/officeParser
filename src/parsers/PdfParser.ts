@@ -1244,9 +1244,9 @@ interface UnreadableText {
  * Warns of each font whose text is likely its glyph ids: control characters were taken out of its text,
  * every glyph drawn with it read as its own code, and the file says nothing of what its codes are. Once
  * per name per document, with every page it has text on. After all pages: what the file's bounds spend
- * here takes nothing from any page's text.
+ * here takes nothing from any page's text. Returns the names reported.
  */
-function reportUnmappedFonts(unreadable: UnreadableText, fontCache: Map<string, ResolvedFont>, glyphNames: GlyphNames, config: FullOfficeParserConfig): void {
+function reportUnmappedFonts(unreadable: UnreadableText, fontCache: Map<string, ResolvedFont>, glyphNames: GlyphNames, config: FullOfficeParserConfig): string[] {
     // The fonts that may be reported: only fonts of their names are looked for in the file.
     const candidates: { font: ResolvedFont; rawName: string; pages: number[] }[] = [];
     for (const [id, pages] of unreadable.pages) {
@@ -1267,6 +1267,7 @@ function reportUnmappedFonts(unreadable: UnreadableText, fontCache: Map<string, 
         const pages = [...all].sort((a, b) => a - b);
         logWarning(OfficeWarningType.PDF_FONT_UNMAPPED, config, { font, pages }, undefined, { page: pages[0] });
     }
+    return [...unmapped.keys()];
 }
 
 /** Collects one page's text runs, images and annotations into a PageExtract. */
@@ -2200,12 +2201,14 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     // Warn when much of the extracted text is unmappable glyphs (broken/missing ToUnicode), so consumers
     // can tell "genuinely empty" from "font could not be decoded" and reach for OCR.
     warnIfEncodingSuspect(allRuns, config);
-    reportUnmappedFonts(unreadable, fontCache, glyphNames, config);
+    const unmappedFonts = reportUnmappedFonts(unreadable, fontCache, glyphNames, config);
 
-    // Warn when a document yields essentially no text and OCR is off: it is very likely scanned (or its
-    // text is in fonts whose CMaps could not be loaded, which the warning then says instead), and silent
-    // empty output is otherwise indistinguishable from a genuine failure. Only when OCR is off, since
-    // with OCR the caller is already handling image-only content.
+    // Warn when a document yields essentially no text and OCR is off: it may well be scanned (or its text
+    // is in fonts whose CMaps could not be loaded, or in fonts with no map from codes to characters, which
+    // the warning then says instead), and silent empty output is otherwise indistinguishable from a
+    // genuine failure. Only when OCR is off, since with OCR the caller is already handling image-only
+    // content. The count of characters read is said, not weighed: a scanned page with a short stamp in
+    // a text layer is still one to OCR.
     if (!config.ocr) {
         // Scale the "looks empty" threshold to the pages actually read, not the whole document: with
         // a pageRange, `allRuns` covers only the selected pages, and a content limit can stop the read
@@ -2215,7 +2218,11 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         const textChars = allRuns.reduce((sum, r) => sum + r.text.replace(/\s/g, '').length, 0);
         if (processedPages > 0 && textChars < Math.max(10, processedPages)) {
             const cMaps = assets.unavailableCMaps;
-            logWarning(OfficeWarningType.PDF_NO_TEXT_EXTRACTED, config, cMaps.length ? { pages: processedPages, cMaps } : processedPages);
+            const fonts = unmappedFonts;
+            const details = cMaps.length || fonts.length
+                ? { pages: processedPages, ...(cMaps.length ? { cMaps } : {}), ...(fonts.length ? { fonts } : {}) }
+                : processedPages;
+            logWarning(OfficeWarningType.PDF_NO_TEXT_EXTRACTED, config, { pages: processedPages, characters: textChars, cMaps, fonts }, details);
         }
     }
 

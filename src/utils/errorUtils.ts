@@ -90,6 +90,9 @@ const ERROR_MESSAGES: Record<OfficeErrorType, string | ((...args: any[]) => stri
     [OfficeErrorType.OCR_TERMINATED]: `The OCR workers were terminated (terminateOcr()) before this image was recognized.`
 };
 
+/** The fonts a PDF_NO_TEXT_EXTRACTED message names before saying how many more there are (`details.fonts` lists them all). */
+const MAX_FONTS_NAMED = 10;
+
 /**
  * Lookup table for warning messages.
  */
@@ -134,12 +137,26 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
     [OfficeWarningType.PDF_STRUCT_TREE_UNRELIABLE]: (reason: string) => `PDF tagged-structure tree was not used${reason ? ` (${reason})` : ''}; recovered structure from page geometry instead.`,
     [OfficeWarningType.PDF_FONT_UNMAPPED]: (info: { font: string; pages: number[] }) => `PDF font ${info.font || '(unnamed)'} has no map from its codes to characters and its text has control characters among it, so what is drawn with it is likely its glyph ids read as characters (first on page ${info.pages[0]}, ${info.pages.length} page${info.pages.length === 1 ? '' : 's'}). Consider OCR.`,
     [OfficeWarningType.PDF_TEXT_ENCODING_SUSPECT]: (info: string) => `PDF text extraction produced many unmappable glyphs${info ? ` (${info})` : ''}; the font is likely missing a usable ToUnicode map, so the extracted text may be garbage. Consider OCR.`,
-    [OfficeWarningType.PDF_NO_TEXT_EXTRACTED]: (info: number | { pages: number; cMaps: string[] }) => {
+    [OfficeWarningType.PDF_NO_TEXT_EXTRACTED]: (info: number | { pages: number; characters?: number; cMaps?: string[]; fonts?: string[] }) => {
         const pages = typeof info === 'number' ? info : info?.pages;
-        const read = `No text was extracted from this PDF${pages ? ` (${pages} page${pages === 1 ? '' : 's'})` : ''}.`;
-        const cMaps = typeof info === 'object' && info ? info.cMaps : [];
-        if (cMaps?.length) return `${read} Its fonts read their text through ${cMaps.length === 1 ? 'a CMap' : 'CMaps'} that could not be loaded (${cMaps.join(', ')}; see PDF_ASSET_UNAVAILABLE), so the text in them is missing: set pdfCMapUrl to a folder holding pdf.js's cmaps/ files.`;
-        return `${read} It is very likely a scanned or image-only document with no text layer; set 'ocr: true' (with 'extractAttachments: true') to recognize text from the page images.`;
+        const characters = typeof info === 'object' && info ? info.characters ?? 0 : 0;
+        const pagesRead = pages ? `${pages} page${pages === 1 ? '' : 's'}` : '';
+        const read = characters > 0
+            ? `Little text was extracted from this PDF (${characters} character${characters === 1 ? '' : 's'}${pagesRead ? ` from ${pagesRead}` : ''}).`
+            : `No text was extracted from this PDF${pagesRead ? ` (${pagesRead})` : ''}.`;
+        const cMaps = typeof info === 'object' && info ? info.cMaps ?? [] : [];
+        const fonts = typeof info === 'object' && info ? info.fonts ?? [] : [];
+        const notes: string[] = [];
+        if (cMaps.length) notes.push(`Its fonts read their text through ${cMaps.length === 1 ? 'a CMap' : 'CMaps'} that could not be loaded (${cMaps.join(', ')}; see PDF_ASSET_UNAVAILABLE), so the text in them is missing: set pdfCMapUrl to a folder holding pdf.js's cmaps/ files.`);
+        if (fonts.length) {
+            const names = fonts.slice(0, MAX_FONTS_NAMED).map(font => font || '(unnamed)').join(', ');
+            const named = fonts.length > MAX_FONTS_NAMED ? `${names} and ${fonts.length - MAX_FONTS_NAMED} more` : names;
+            notes.push(`${characters > 0 ? 'What was read is' : 'Its text is'} in ${fonts.length === 1 ? 'a font' : 'fonts'} with no map from codes to characters (${named}; see PDF_FONT_UNMAPPED), so it is likely glyph ids, not the document's text. Consider OCR of the rendered pages ('ocr: true' reads only the pictures in the file).`);
+        }
+        if (notes.length) return `${read} ${notes.join(' ')}`;
+        return characters > 0
+            ? `${read} If it is a scanned or image-only document, with its text only in pictures, set 'ocr: true' (with 'extractAttachments: true') to recognize text from the page images.`
+            : `${read} It is very likely a scanned or image-only document with no text layer; set 'ocr: true' (with 'extractAttachments: true') to recognize text from the page images.`;
     },
     [OfficeWarningType.PDF_OUTLINE_TRUNCATED]: (reason: string) => `PDF document outline (bookmarks) is incomplete${reason ? ` (${reason})` : ''}; ast.auxiliary.outline holds only what was recovered.`,
     [OfficeWarningType.PDF_CONTENT_LIMIT_EXCEEDED]: (info: { limit?: 'maxTextItems' | 'maxOperators' | 'maxTimeMs'; pageNumber?: number; budgetMs?: number } = {}) => {

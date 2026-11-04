@@ -152,7 +152,7 @@ export enum OfficeWarningType {
     PDF_TEXT_ENCODING_SUSPECT = 'PDF_TEXT_ENCODING_SUSPECT',
     /** A PDF's font has no map from its codes to characters and its text has control characters among it, so what is drawn with it is likely its glyph ids read as characters. Once per font name per document, with the first page as `page`, every page with its text in `details.pages`, and in `details.font` the name its text's runs give */
     PDF_FONT_UNMAPPED = 'PDF_FONT_UNMAPPED',
-    /** A PDF yielded essentially no text: it is very likely a scanned/image-only document needing OCR, or, when a CMap its fonts need could not be had (see `PDF_ASSET_UNAVAILABLE`), its text is in those fonts */
+    /** A PDF yielded essentially no text (fewer than 10 non-space characters, or than one a page read): it may well be a scanned/image-only document needing OCR, and the message says how many characters were read; or, when a CMap its fonts need could not be had (see `PDF_ASSET_UNAVAILABLE`), its text is in those fonts; or, when its text is in fonts with no map from codes to characters (see `PDF_FONT_UNMAPPED`), what was read is likely glyph ids. `details` is the number of pages read, or `{ pages, cMaps }` naming the CMaps, `{ pages, fonts }` naming the fonts, or `{ pages, cMaps, fonts }` when both apply */
     PDF_NO_TEXT_EXTRACTED = 'PDF_NO_TEXT_EXTRACTED',
     /** A PDF's bookmark outline was cut short by the depth/size cap or could not be read; `ast.auxiliary.outline` holds only what was recovered */
     PDF_OUTLINE_TRUNCATED = 'PDF_OUTLINE_TRUNCATED',

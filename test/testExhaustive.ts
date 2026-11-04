@@ -8212,6 +8212,26 @@ async function testPdfUnmappedFont(): Promise<void> {
     const walked = (forms: number) => pdfOf([drawn(garbage)], { resources: `/XObject << ${Array.from({ length: forms }, (_, i) => `/Fm${i} ${7 + i} 0 R`).join(' ')} >>`, extra: [table, ...Array.from({ length: forms }, () => `<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /Font 6 0 R >> /Length 0 >>\nstream\n\nendstream`)] });
     assert.deepStrictEqual(await warned(walked(40)), [one], 'forty forms of a large font table are looked through');
     assert.deepStrictEqual(await warned(walked(60)), [], 'sixty are not');
+
+    // PDF_NO_TEXT_EXTRACTED says what was read. Fired on as few characters as before (a scanned page with
+    // a short stamp in a text layer is still one to OCR), it called a page of a few glyph ids, and a
+    // one-line Japanese page that was read, "very likely scanned".
+    const noText = (found: any[]) => found.filter(i => i.code === 'PDF_NO_TEXT_EXTRACTED');
+    const glyphIds = await read(pdfOf([`BT /F1 12 Tf 72 700 Td ${garbage} Tj ET`]));
+    const [ids] = noText(glyphIds.found);
+    assert.deepStrictEqual(ids?.details, { pages: 1, fonts: ['NoSuchFont'] }, `a page of glyph ids names the font in details; got ${JSON.stringify(ids?.details)}`);
+    assert.ok(/^Little text was extracted from this PDF \(3 characters from 1 page\)\./.test(ids.message) && /NoSuchFont/.test(ids.message) && /no map from codes to characters/.test(ids.message) && /PDF_FONT_UNMAPPED/.test(ids.message) && /OCR/.test(ids.message) && !/scanned/.test(ids.message), `and the message says the text is in it, not that the file is scanned; got ${ids.message}`);
+    assert.deepStrictEqual(glyphIds.unmapped.map(i => i.details), [one], 'beside the font\'s own warning');
+    const toUnicode = '/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /J def 1 begincodespacerange <0000> <FFFF> endcodespacerange 7 beginbfchar <0011> <65E5> <0012> <672C> <0013> <8A9E> <0014> <30C6> <0015> <30AD> <0016> <30B9> <0017> <30C8> endbfchar endcmap end end';
+    const japanese = await read(pdfOf(['BT /F1 12 Tf 72 700 Td <0011001200130014001500160017> Tj ET'], { type0: '/ToUnicode 6 0 R', extra: [stream(toUnicode)] }));
+    const [line] = noText(japanese.found);
+    assert.strictEqual(String((await japanese.ast.to('text')).value), '\u65E5\u672C\u8A9E\u30C6\u30AD\u30B9\u30C8', 'the Japanese line is read');
+    assert.strictEqual(line?.details, 1, `a short page of text still warns, with the pages read as details; got ${JSON.stringify(line?.details)}`);
+    assert.ok(/^Little text was extracted from this PDF \(7 characters from 1 page\)\./.test(line.message) && !/very likely/.test(line.message) && /'ocr: true'/.test(line.message), `saying how much was read, with OCR advice and no "very likely scanned"; got ${line.message}`);
+    const blankPage = await read(pdfOf(['']));
+    const [none] = noText(blankPage.found);
+    assert.strictEqual(none?.details, 1, `a page with no text warns, with the pages read; got ${JSON.stringify(none?.details)}`);
+    assert.ok(/^No text was extracted from this PDF \(1 page\)\. It is very likely a scanned/.test(none.message), `as no text, very likely scanned; got ${none.message}`);
 }
 
 /**
