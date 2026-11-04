@@ -2173,7 +2173,7 @@ const ast = await officeParser.parseOffice(pdfArrayBuffer, {
 > The `pdfjs-dist` worker version must match the version bundled with `officeparser` (currently `pdfjs-dist@6.2.108`).
 
 > [!NOTE]
-> `pdfjs-dist` is pinned to that exact version, not a range: what the library reads from a PDF depends on pdf.js's output, which changes between releases, and pdf.js's API refuses a worker of another version. Your application can use its own `pdfjs-dist`, of this version or another, in the same Node process: the library runs pdf.js's worker on a module of its own (in a separate process by default, see `pdfParserConfig.separateProcess`), so each copy keeps its own worker.
+> `pdfjs-dist` is pinned to that exact version, not a range: what the library reads from a PDF depends on pdf.js's output, which changes between releases, and pdf.js's API refuses a worker of another version. Your application can use its own `pdfjs-dist`, of this version or another, in the same Node process wherever the library finds `pdfjs-dist`'s worker file: it then runs pdf.js's worker on a module of its own (in a separate process by default, see `pdfParserConfig.separateProcess`), so each copy keeps its own worker. A bundle that inlines pdf.js (an ESM bundle for Node, or a bundle shipped without `node_modules`) has no worker file to find: there the library's worker is preloaded as `globalThis.pdfjsWorker`, which a `pdfjs-dist` of another version in the same process would also take, so use the library's version of `pdfjs-dist` there.
 
 ---
 
