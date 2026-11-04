@@ -11731,6 +11731,36 @@ async function testOdtFormControls(): Promise<void> {
     const options = Array.from({ length: 50_000 }, (_, i) => `<form:option form:label="O${i}"${i % 10_000 === 0 ? ' form:current-selected="true"' : ''}/>`).join('');
     const timed = await withinTime(5000, async () => (await read(odf(forms(`<form:listbox form:id="l">${options}</form:listbox>`) + `<text:p>${control('l').repeat(20)}</text:p>`))).content[0].text);
     assert.ok(timed.within && timed.result === 'O0, O10000, O20000, O30000, O40000'.repeat(20), `ODT: a list of 50,000 options shown 20 times reads its selected options, in time (${timed.ms} ms)`);
+    const named = await withinTime(5000, async () => (await read(odf(forms(`<form:listbox form:id="l">${options}</form:listbox>`) + `<text:p>${control('l').repeat(2000)}</text:p>`))).content[0].text);
+    assert.ok(named.within && named.result === 'O0, O10000, O20000, O30000, O40000'.repeat(2000), `ODT: a list of 50,000 options named 2,000 times is read once, in time (${named.ms} ms)`);
+    // A control named again is a repeat (decompressionLimits.maxRepeatedContent): its first showing whole,
+    // the others charged, past the budget the start of its text; a short value repeats freely.
+    const big = 'A'.repeat(100_000), preview = `${'A'.repeat(64)}\u2026`;
+    const budgeted = async (bytes: Buffer, fileType = 'odt') => {
+        const codes: string[] = [];
+        const ast = await OfficeParser.parseOffice(bytes, { fileType, decompressionLimits: { maxRepeatedContent: 1 }, onWarning: (issue: any) => codes.push(issue.code) } as any) as OfficeParserAST;
+        const texts: string[] = [];
+        const walk = (nodes: OfficeContentNode[] | undefined) => nodes?.forEach(n => { if (n.type === 'text' && n.text) texts.push(n.text); walk(n.children); });
+        walk(ast.content);
+        for (const part of ast.auxiliary?.headers ?? []) walk(part.children);
+        return { texts, codes };
+    };
+    const bigForm = forms(`<form:textarea form:id="big" form:current-value="${big}"/>`);
+    const blockControl = `<draw:control draw:control="big" text:anchor-type="page" svg:width="1in" svg:height="0.2in"/>`;
+    for (const [label, bytes, fileType] of [
+        ['inline in a paragraph', odf(`${bigForm}<text:p>${control('big')} and ${control('big')}</text:p>`), 'odt'],
+        ['on the page', odf(`${bigForm}${blockControl}${blockControl}`), 'odt'],
+        ['in table cells', odf(`${bigForm}<table:table><table:table-column/><table:table-row><table:table-cell><text:p>${control('big')}</text:p></table:table-cell></table:table-row><table:table-row><table:table-cell><text:p>${control('big')}</text:p></table:table-cell></table:table-row></table:table>`), 'odt'],
+        ['in a header', odf(`${bigForm}<text:p>Body</text:p>`, { styles: `<office:master-styles><style:master-page style:name="Standard"><style:header><text:p>${control('big')}</text:p><text:p>${control('big')}</text:p></style:header></style:master-page></office:master-styles>` }), 'odt'],
+        ['on a slide', odf(`<draw:page draw:name="S1">${bigForm}<draw:control draw:control="big" svg:x="1in" svg:y="1in" svg:width="2in" svg:height="0.3in"/><draw:control draw:control="big" svg:x="1in" svg:y="2in" svg:width="2in" svg:height="0.3in"/></draw:page>`, { kind: 'presentation' }), 'odp'],
+    ] as const) {
+        const { texts, codes } = await budgeted(bytes, fileType);
+        const copies = texts.filter(t => t.startsWith('AAAA'));
+        assert.deepStrictEqual(copies.map(t => t.length), [100_000, 65], `ODF: a 100,000-character control named twice ${label} shows whole, then its start; got ${copies.map(t => t.length)}`);
+        assert.ok(copies[0] === big && copies[1] === preview && codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `ODF: a control named twice ${label}: its second copy is its start, with REPEATED_CONTENT_LIMIT_EXCEEDED; got ${codes}`);
+    }
+    const short = await budgeted(odf(`${forms('<form:text form:id="s" form:current-value="Jane"/>')}<text:p>${control('s')} ${control('s')}</text:p>`));
+    assert.ok(JSON.stringify(short.texts) === JSON.stringify(['Jane', ' ', 'Jane']) && !short.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `ODT: a short control named twice is whole both times, unwarned; got ${JSON.stringify(short.texts)} ${short.codes}`);
 
     // A slide's control: a paragraph where it stands.
     const slide = await read(odf(`<draw:page draw:name="S1">${forms('<form:checkbox form:id="k" form:label="On a slide" form:current-state="checked"/>')}<draw:control draw:control="k" svg:x="1in" svg:y="1in" svg:width="2in" svg:height="0.3in"/></draw:page>`, { kind: 'presentation' }), 'odp');

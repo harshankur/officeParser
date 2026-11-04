@@ -391,7 +391,7 @@ const toRepeatCount = (attr: string | null): number => {
 };
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { takeRepeats, valuesLength } from '../utils/repeatUtils.js';
+import { repeatPreview, takeRepeats, valuesLength } from '../utils/repeatUtils.js';
 import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
 import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
@@ -663,17 +663,38 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     const formControls = new Map<string, Element>();
     if (stylesDom) collectFormControls(stylesDom, formControls, false);
     /**
+     * Each form control's text (see formControlText) and its lines, read once, and what a copy of it weighs
+     * (characters, plus 16 for each run and break, as a header part's): many `draw:control`s can name one
+     * control, and each read it again (a 50,000-option list box named 2,000 times took 18 seconds). By the
+     * control, not its id: the body's controls take the ids of a master page's.
+     */
+    const controlTexts = new Map<Element, { text: string; lines: string[]; weight: number; preview?: string[] }>();
+    /** The form controls a `draw:control` has shown: each one after the first is a repeat. */
+    const shownControls = new Set<Element>();
+    /**
      * A `draw:control`'s runs: its form control's text (see formControlText), in the text's formatting and
      * the control's own (its `draw:text-style-name`), a line break between its lines; none where it names
-     * no control.
+     * no control. The first showing a control has its whole text; each other is charged to the repeated
+     * content budget and, once that is spent, shows the start of its text (one 100,000-character text area
+     * named 2,000 times made 200 million characters).
      */
     const controlRuns = (element: Element, around: TextFormatting, link?: { link?: string; linkType?: 'internal' | 'external' }): { text: string; children: OfficeContentNode[] } => {
         const control = formControls.get(element.getAttribute('draw:control') || '');
         const out = { text: '', children: [] as OfficeContentNode[] };
         if (!control) return out;
+        let read = controlTexts.get(control);
+        if (!read) {
+            const text = formControlText(control);
+            const lines = text.split(/\r\n|\r|\n/);
+            read = { text, lines, weight: text.length + 16 * (lines.filter(Boolean).length + lines.length - 1) };
+            controlTexts.set(control, read);
+        }
+        let lines = read.lines;
+        if (!shownControls.has(control)) shownControls.add(control);
+        else if (takeRepeats(config, 1, read.weight) === 0) lines = read.preview ??= repeatPreview(read.text).split(/\r\n|\r|\n/);
         const own = styleMap[element.getAttribute('draw:text-style-name') || ''];
         const formatting = own ? mergeFormatting(around, own) : around;
-        formControlText(control).split(/\r\n|\r|\n/).forEach((line, k) => {
+        lines.forEach((line, k) => {
             if (k > 0) {
                 out.text += '\n';
                 out.children.push({ type: 'break', formatting, metadata: { breakType: 'textWrapping', ...(link || {}) } as BreakMetadata });

@@ -3,7 +3,8 @@
  *
  * A document can state something once and use it many times: an ODF cell repeated with
  * `table:number-columns-repeated`, an XLSX shared string shown in many cells, a style's font or a
- * relationship's link target given to every run naming it, a comment author named by id. The AST
+ * relationship's link target given to every run naming it, a comment author named by id, a form
+ * control's text at each `draw:control` naming it. The AST
  * shares the value, so it stays small, but every generator writes it once per use: a 1.7 KB DOCX
  * giving one 64 KB font to 2,000 runs made 131 MB of HTML, and 2.7 KB of XLSX showing one 1 MB
  * string in 400 cells made 400 MB of CSV. Each use after the first is charged here.

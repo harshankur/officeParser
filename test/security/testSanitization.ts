@@ -3026,7 +3026,7 @@ async function parserHardeningTests() {
     // many times, list-style lookups, chart ranges and runs of spaces are all bounded (each took
     // minutes or gigabytes, or crashed the process, from a few KB).
     const odfNs = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:chart="urn:oasis:names:tc:opendocument:xmlns:chart:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"';
-    const odfOf = (kind: 'text' | 'spreadsheet', body: string, extra: Record<string, string> = {}, automatic = '') => {
+    const odfOf = (kind: 'text' | 'spreadsheet' | 'presentation', body: string, extra: Record<string, string> = {}, automatic = '') => {
         const mime = `application/vnd.oasis.opendocument.${kind}`;
         const files: Record<string, Uint8Array> = {
             mimetype: enc(mime),
@@ -3312,6 +3312,24 @@ async function parserHardeningTests() {
             longest = Math.max(longest, out.length);
         }
         check(`${label} repeats within maxRepeatedContent, with REPEATED_CONTENT_LIMIT_EXCEEDED`, !result.error && longest > 0 && longest < 40_000_000 && result.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${longest} ${result.codes} ${result.error}`);
+    }
+    // A form control's text at each draw:control naming it: one 100,000-character text area named 2,000
+    // times (1.2 KB of ODT) made 200 million characters, and 10,000 times failed with "Invalid string length".
+    const formNs = 'xmlns:form="urn:oasis:names:tc:opendocument:xmlns:form:1.0"';
+    const bigArea = `<office:forms ${formNs}><form:form form:name="F"><form:textarea form:id="c1" form:current-value="${'A'.repeat(100_000)}"/></form:form></office:forms>`;
+    for (const [label, doc, fileType] of [
+        ['odt: a 100,000-character text area named by 2,000 controls', odfOf('text', `${bigArea}<text:p>${'<draw:control draw:control="c1"/>'.repeat(2000)}</text:p>`), 'odt'],
+        ['odt: a 100,000-character text area named by 10,000 controls', odfOf('text', `${bigArea}<text:p>${'<draw:control draw:control="c1"/>'.repeat(10000)}</text:p>`), 'odt'],
+        ['odp: a 100,000-character text area named by 2,000 controls on a slide', odfOf('presentation', `<draw:page draw:name="S1">${bigArea}${'<draw:control draw:control="c1"/>'.repeat(2000)}</draw:page>`), 'odp'],
+    ] as const) {
+        const started = Date.now();
+        const named = await warned(doc, fileType);
+        const texts: string[] = [];
+        const walk = (nodes: any[] | undefined) => nodes?.forEach((node: any) => { if (node.type === 'text' && typeof node.text === 'string') texts.push(node.text); walk(node.children); });
+        walk(named.ast?.content);
+        const total = texts.reduce((sum, text) => sum + text.length, 0);
+        const last = texts.filter(text => text.startsWith('AAAA')).pop() ?? '';
+        check(`${label} repeats within maxRepeatedContent, with REPEATED_CONTENT_LIMIT_EXCEEDED`, !named.error && total < 20_000_000 && named.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && last.length === 65 && last.endsWith('\u2026'), `${total} ${last.length} ${Date.now() - started}ms ${named.codes} ${named.error}`);
     }
 
     // PDF: a form XObject drawing another many times is read within a budget of text items and
