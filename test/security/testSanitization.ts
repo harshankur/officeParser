@@ -4854,6 +4854,30 @@ async function pdfAssetTests() {
         fs.rmSync(folder, { recursive: true, force: true });
     }
 
+    // A browser page that preloaded pdf.js's worker (`globalThis.pdfjsWorker` with its
+    // WorkerMessageHandler) fetches no worker, so allowRemoteAssets: false parses it; it was refused
+    // with REMOTE_ASSET_BLOCKED. pdf.js is then given no worker address, so a fallback of its own fails
+    // rather than fetch. A global without the handler is no preload to pdf.js, which would start a
+    // Worker from the default address: still refused. (In a fresh process passing for a browser page;
+    // pdf.js's browser build there needs the DOMMatrix its Node build provides.)
+    const inBrowser = (preload: string) => runChildScript([
+        `(async () => {`,
+        `    await import(pathToFileURL(repoRequire.resolve('pdfjs-dist/legacy/build/pdf.mjs')).href);`,
+        preload,
+        `    const { OfficeParser } = require(${JSON.stringify(path.join(__dirname, '..', '..', 'src', 'OfficeParser'))});`,
+        `    const pdfjs = await import(pathToFileURL(repoRequire.resolve('pdfjs-dist')).href);`,
+        `    let out: string;`,
+        `    try { out = 'parsed ' + (await OfficeParser.parseOffice(new Uint8Array(fs.readFileSync(testPdf)), { fileType: 'pdf', allowRemoteAssets: false, onWarning: () => {} })).content.length; } catch (e: any) { out = String(e?.officeIssue?.code ?? e?.message); }`,
+        `    console.log(JSON.stringify({ out, workerSrc: pdfjs.GlobalWorkerOptions.workerSrc }));`,
+        `    process.exit(0);`,
+        `})();`,
+    ], true);
+    const preloaded = inBrowser(`    (globalThis as any).pdfjsWorker = await import(pathToFileURL(repoRequire.resolve('pdfjs-dist/build/pdf.worker.mjs')).href);`);
+    check('pdf: in a browser, a preloaded pdf.js worker is used under allowRemoteAssets false, with no worker address left to fetch', preloaded.out === 'parsed 8' && preloaded.workerSrc === '', JSON.stringify(preloaded));
+    for (const [label, preload] of [['no preloaded worker', ''], ['a pdfjsWorker global without its WorkerMessageHandler', `    (globalThis as any).pdfjsWorker = {};`]]) {
+        const refused = inBrowser(preload);
+        check(`pdf: in a browser with ${label}, allowRemoteAssets false still refuses the default worker`, refused.out === 'REMOTE_ASSET_BLOCKED', JSON.stringify(refused));
+    }
 }
 
 /**

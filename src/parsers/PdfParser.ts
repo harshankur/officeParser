@@ -1769,8 +1769,14 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         }
     };
     if (isBrowser) {
-        blockRemoteWorker();
-        pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
+        if (config.allowRemoteAssets === false && workerSrc === DEFAULT_PDF_WORKER_SRC && workerPreloaded()) {
+            // pdf.js runs the preloaded worker on the page and fetches nothing. Given no address, a
+            // fallback of pdf.js's would fail rather than fetch the default.
+            pdfjs.GlobalWorkerOptions.workerSrc = '';
+        } else {
+            blockRemoteWorker();
+            pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
+        }
     } else {
         assertNode('pdf-worker-auto-resolution', config);
         let resolved = false;
