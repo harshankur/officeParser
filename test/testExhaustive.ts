@@ -9078,10 +9078,12 @@ async function testPdfPicturesLeftOut(): Promise<void> {
         }
     }
 
-    // A caller's own pdf.js worker, kept at verbosity 0, reads its documents as quietly after a parse in this
-    // process as before it: the parse raised the worker module's level (one for every worker in the process)
-    // to hear the pictures pdf.js leaves out, and left it there, so the caller's next document printed
-    // "Warning: Indexing all PDF objects". The parse's own pictures are still reported.
+    // A caller's own pdf.js worker keeps the warning level it was started at across a parse in this process,
+    // and the parse still reports the pictures pdf.js leaves out. pdf.js's worker module keeps one level for
+    // every document it reads: a parse raised it to hear its pictures and left it there, so a caller's
+    // worker at verbosity 0 printed "Warning: Indexing all PDF objects" for its next document; later set back
+    // to 0, a caller's worker at verbosity 1 printed nothing. The parse's worker is now a module of the
+    // library's own (see openOwnWorker), whose level no worker of the caller's shares.
     const { pathToFileURL } = await import('url');
     const pdfjs: any = await import(pathToFileURL(require.resolve('pdfjs-dist/legacy/build/pdf.mjs')).href);
     pdfjs.GlobalWorkerOptions.workerSrc ||= pathToFileURL(require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs')).href;
@@ -9090,30 +9092,76 @@ async function testPdfPicturesLeftOut(): Promise<void> {
         stream(Buffer.from('BT /F1 12 Tf 20 100 Td (Caller text) Tj ET')), '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>']);
     // Its cross-reference offset is wrong, so pdf.js says it indexes all objects as it reads it.
     const misindexed = new Uint8Array(Buffer.from(textPdf.toString('latin1').replace(/startxref\n\d+/, 'startxref\n1'), 'latin1'));
-    const callerWorker = new pdfjs.PDFWorker({ verbosity: 0 });
     const printed: string[] = [];
     const consoleMethods = ['warn', 'log', 'info'] as const;
     const originals = consoleMethods.map(method => (console as any)[method]);
-    const openOwn = async () => {
+    const openOwn = async (worker: any) => {
         consoleMethods.forEach((method, i) => { (console as any)[method] = (...args: any[]) => { printed.push(String(args[0])); if (!String(args[0]).startsWith('Warning: ')) originals[i].apply(console, args); }; });
         try {
-            const task = pdfjs.getDocument({ data: misindexed.slice(), worker: callerWorker, verbosity: 0 });
+            const task = pdfjs.getDocument({ data: misindexed.slice(), worker, verbosity: 0 });
             await (await task.promise).getPage(1);
             await task.destroy();
         } finally {
             consoleMethods.forEach((method, i) => { (console as any)[method] = originals[i]; });
         }
     };
+    const indexing = () => printed.filter(line => /^Warning: Indexing all PDF objects/.test(line)).length;
+    // Verbosity 1 first: the level the last worker started sends is the module's, and the quiet one is left last.
+    const loudWorker = new pdfjs.PDFWorker({ verbosity: 1 });
     try {
-        await openOwn();
+        await openOwn(loudWorker);
+        const loudBefore = indexing();
+        const amid = await read({ pdfParserConfig: { separateProcess: false } });
+        assert.strictEqual(amid.lost.length, 2, `a parse in this process reports the pictures pdf.js leaves out beside a caller's loud worker; got ${JSON.stringify(amid.lost.map(i => String(i.details)))}`);
+        await openOwn(loudWorker);
+        assert.deepStrictEqual([loudBefore, indexing()], [1, 2], `a caller's pdf.js worker at verbosity 1 prints pdf.js's warnings for its documents, before a parse in this process and after it; got ${JSON.stringify(printed)}`);
+    } finally {
+        loudWorker.destroy();
+    }
+    printed.length = 0;
+    const callerWorker = new pdfjs.PDFWorker({ verbosity: 0 });
+    try {
+        await openOwn(callerWorker);
         const quietBefore = printed.length;
         const between = await read({ pdfParserConfig: { separateProcess: false } });
         assert.strictEqual(between.lost.length, 2, `a parse in this process still reports the pictures pdf.js leaves out; got ${JSON.stringify(between.lost.map(i => String(i.details)))}`);
-        await openOwn();
+        await openOwn(callerWorker);
         assert.deepStrictEqual([quietBefore, printed], [0, []], 'a caller\'s pdf.js worker at verbosity 0 prints nothing for its documents, before a parse in this process or after it');
     } finally {
         callerWorker.destroy();
     }
+
+    // While a parse in this process is reading, pdf.js's lines are taken from the console as they are written
+    // for the library's own worker module (see openOwnWorker), and a line pdf.js writes at that moment for a
+    // document of the caller's, from pdf.js's same file at its plain address, reaches the caller's console.
+    // By the file a stack names (as before), the two cannot be told apart where the runtime rewrites stacks,
+    // as this test's does: the caller's line was taken as the parse's, and left out of the console.
+    const { openOwnWorker } = await import('../src/parsers/pdf/pdfAssets');
+    const own = await openOwnWorker(pdfjs, pathToFileURL(require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs')).href);
+    assert.ok(own, 'the library\'s own pdf.js worker module loads');
+    const callerLoud = new pdfjs.PDFWorker({ verbosity: 1 });
+    const taken: string[] = [];
+    const reachedConsole: string[] = [];
+    const consoleWarn = console.warn;
+    console.warn = (...args: any[]) => { reachedConsole.push(String(args[0])); };
+    const stopCapture = own!.captureWarnings(line => taken.push(line));
+    try {
+        const readWith = async (worker: any) => {
+            const task = pdfjs.getDocument({ data: misindexed.slice(), worker, verbosity: 0 });
+            await (await task.promise).getPage(1);
+            await task.destroy();
+        };
+        await Promise.all([readWith(own!.worker), readWith(callerLoud)]);
+    } finally {
+        stopCapture();
+        console.warn = consoleWarn;
+        // The caller's worker module is left quiet, as the tests after this one expect it.
+        callerLoud.messageHandler?.send('configure', { verbosity: 0 });
+        callerLoud.destroy();
+        own!.close();
+    }
+    const indexed = (lines: string[]) => lines.filter(line => /^Warning: Indexing all PDF objects/.test(line)).length;
+    assert.deepStrictEqual([indexed(taken), indexed(reachedConsole)], [1, 1], `pdf.js's line for the parse's document is taken and its line for the caller's reaches the console; taken ${JSON.stringify(taken)}, console ${JSON.stringify(reachedConsole)}`);
 
     // Two at once in a fresh process: the pictures' document opened first, a text one second and done first.
     const os = await import('os');

@@ -512,15 +512,13 @@ function callerFiles(depth: number): string[] {
 }
 
 /**
- * The file pdf.js's worker runs from in this process, as a stack names it: the module pdf.js's fake
- * worker is given (the caller's preloaded `globalThis.pdfjsWorker`, or the one imported from
- * `workerSrc`), found by asking its `WorkerMessageHandler.setup` to register its listeners with a
- * handler of this function's, which notes where it was called from. Undefined where it cannot be
- * found: the module does not load, `setup` no longer calls the handler, or the runtime gives no stack.
+ * The file `handler` (pdf.js's `WorkerMessageHandler`) runs from, as a stack names it: its `setup` is
+ * asked to register its listeners with a handler of this function's, which notes where it was called
+ * from. Undefined where it cannot be found: `setup` no longer calls the handler, or the runtime gives
+ * no stack.
  */
-export async function pdfjsWorkerFile(pdfjs: any): Promise<string | undefined> {
+function workerHandlerFile(handler: any): string | undefined {
     try {
-        const handler = await pdfjs.PDFWorker?._setupFakeWorkerGlobal;
         if (typeof handler?.setup !== 'function') return undefined;
         let file: string | undefined;
         handler.setup({ on: () => { file ??= callerFiles(1)[0]; }, send: () => { /* nothing is sent */ } }, null);
@@ -531,27 +529,199 @@ export async function pdfjsWorkerFile(pdfjs: any): Promise<string | undefined> {
 }
 
 /**
+ * The file pdf.js's worker runs from in this process, as a stack names it (see workerHandlerFile): the
+ * module pdf.js's fake worker is given (a preloaded `globalThis.pdfjsWorker`, or the one imported from
+ * `workerSrc`). Undefined where it cannot be found, or the module does not load.
+ */
+export async function pdfjsWorkerFile(pdfjs: any): Promise<string | undefined> {
+    try {
+        return workerHandlerFile(await pdfjs.PDFWorker?._setupFakeWorkerGlobal);
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * One end of a channel in this thread between pdf.js's worker and the `PDFWorker` that talks to it, as
+ * pdf.js's own worker in this process is given one (its `LoopbackPort`): what one end posts reaches
+ * the other end's listeners a microtask later, cloned, the buffers in `transfer` moved, as a worker's
+ * port delivers it, each delivery run by the receiving end's `run`. `close` drops the end's listeners
+ * and what is posted to it from then on.
+ */
+class InThreadPort {
+    peer: InThreadPort | undefined;
+    private readonly listeners = new Set<(event: { data: unknown }) => void>();
+    constructor(private readonly run: (deliver: () => void) => void) { }
+    postMessage(message: unknown, transfer?: unknown[]): void {
+        const peer = this.peer;
+        if (!peer) return;
+        const event = { data: structuredClone(message, transfer?.length ? { transfer } as any : undefined) };
+        queueMicrotask(() => peer.run(() => {
+            for (const listener of [...peer.listeners]) {
+                // A listener that throws (pdf.js's handler for a document that has ended) does not keep
+                // the message from the others, nor end the host as an uncaught error.
+                try { listener.call(peer, event); } catch { /* pdf.js's own concern */ }
+            }
+        }));
+    }
+    addEventListener(type: string, listener: (event: { data: unknown }) => void, options?: { signal?: AbortSignal }): void {
+        if (type !== 'message' || options?.signal?.aborted) return;
+        this.listeners.add(listener);
+        options?.signal?.addEventListener('abort', () => this.listeners.delete(listener), { once: true });
+    }
+    removeEventListener(_type: string, listener: (event: { data: unknown }) => void): void {
+        this.listeners.delete(listener);
+    }
+    close(): void {
+        this.listeners.clear();
+        this.peer = undefined;
+    }
+}
+
+/**
+ * What tells code run for this library's own pdf.js worker module from the rest (see openOwnWorker):
+ * Node's AsyncLocalStorage, holding OWN_WORKER in every message the module is given and in all it does
+ * from there (its promises, timers and the microtasks it queues). Undefined where the runtime has none.
+ */
+const OWN_WORKER = Symbol('officeparser pdf.js worker');
+let ownWorkerContext: { run<T>(store: unknown, fn: () => T): T; exit<T>(fn: () => T): T; getStore(): unknown } | null | undefined;
+function workerContext(): typeof ownWorkerContext {
+    if (ownWorkerContext === undefined) {
+        try {
+            const { AsyncLocalStorage } = (globalThis as any).process?.getBuiltinModule?.('async_hooks') ?? {};
+            ownWorkerContext = typeof AsyncLocalStorage === 'function' ? new AsyncLocalStorage() : null;
+        } catch {
+            ownWorkerContext = null;
+        }
+    }
+    return ownWorkerContext;
+}
+
+/** pdf.js's worker modules this library imported as its own, by the address of their file (see openOwnWorker). */
+const ownWorkerModules = new Map<string, Promise<{ handler: any; file: string | undefined } | undefined>>();
+
+/**
+ * pdf.js's worker module at `workerUrl`, imported as an instance of this library's own: at the same
+ * address with `officeparser` added to its query, which Node holds apart from the module at the plain
+ * address (an application's own pdf.js imports that one, or its own copy). Loading, the module names
+ * itself on `globalThis.pdfjsWorker`, where pdf.js's API module of any version, in this process, takes
+ * the worker it finds for its own the first time it needs one; that global is put back as it was. The
+ * module's file is as a stack names it (see workerHandlerFile). Undefined where it does not load.
+ */
+function ownWorkerModule(workerUrl: string): Promise<{ handler: any; file: string | undefined } | undefined> {
+    let loading = ownWorkerModules.get(workerUrl);
+    if (!loading) {
+        loading = (async () => {
+            let href: string;
+            try {
+                const url = new URL(workerUrl);
+                url.search = url.search ? `${url.search}&officeparser` : '?officeparser';
+                href = url.href;
+            } catch {
+                return undefined;
+            }
+            const before = Object.getOwnPropertyDescriptor(globalThis, 'pdfjsWorker');
+            let handler: any;
+            try {
+                handler = (await import(href)).WorkerMessageHandler;
+            } catch {
+                return undefined;
+            }
+            try {
+                if ((globalThis as any).pdfjsWorker?.WorkerMessageHandler === handler) {
+                    if (before) Object.defineProperty(globalThis, 'pdfjsWorker', before);
+                    else delete (globalThis as any).pdfjsWorker;
+                }
+            } catch { /* a global that cannot be put back stays as pdf.js set it */ }
+            if (typeof handler?.initializeFromPort !== 'function') return undefined;
+            return { handler, file: workerHandlerFile(handler) };
+        })();
+        ownWorkerModules.set(workerUrl, loading);
+    }
+    return loading;
+}
+
+/** pdf.js's worker on this library's own worker module (see openOwnWorker). */
+export interface OwnWorker extends WarningWorker {
+    /** Sends the module's warnings to `sink` until the returned function is called (see captureConsoleWarnings). */
+    captureWarnings(sink: (line: string) => void): () => void;
+    /** Runs `fn` as code of the parse's, not of the worker module's, where pdf.js's worker calls into the parse. */
+    outside<T>(fn: () => T): T;
+}
+
+/**
+ * pdf.js's worker in this process (Node only) on a module of this library's own (see ownWorkerModule),
+ * reached through a channel in this thread (see InThreadPort): a `PDFWorker` at warning verbosity. An
+ * application's own pdf.js in this process, of this version or another, keeps its worker: pdf.js's API
+ * takes the worker module `globalThis.pdfjsWorker` names, of whatever version (one of another version
+ * failed every parse, "The API version does not match the Worker version"), and the worker module
+ * keeps one warning level for every document it reads. Its warnings are told from the console's other
+ * lines by the code writing them, which runs for this module (see workerContext), or, where the runtime
+ * cannot tell that, by the module's file as a stack names it, which a runtime rewriting stacks (a
+ * source map, a loader) may give the application's own pdf.js worker too. Undefined in a browser, for
+ * a worker that is not a file, where the caller set a worker port (`GlobalWorkerOptions.workerPort`),
+ * or where the module does not load.
+ */
+export async function openOwnWorker(pdfjs: any, workerUrl: string): Promise<OwnWorker | undefined> {
+    if (isBrowser || !workerUrl.startsWith('file:') || pdfjs.GlobalWorkerOptions?.workerPort || typeof structuredClone !== 'function') return undefined;
+    const own = await ownWorkerModule(workerUrl);
+    if (!own) return undefined;
+    const context = workerContext();
+    // What the worker module is given runs for it; what it sends the parse runs for the parse.
+    const main = new InThreadPort(deliver => (context ? context.exit(deliver) : deliver()));
+    const side = new InThreadPort(deliver => (context ? context.run(OWN_WORKER, deliver) : deliver()));
+    main.peer = side;
+    side.peer = main;
+    let pdfWorker: any;
+    try {
+        own.handler.initializeFromPort(side);
+        // At warning verbosity where its lines can be told from the console's others, as pdfjsWorkerFile's.
+        pdfWorker = new pdfjs.PDFWorker({ port: main, verbosity: context || own.file ? 1 : 0 });
+    } catch {
+        main.close();
+        side.close();
+        return undefined;
+    }
+    const outside = <T>(fn: () => T): T => (context ? context.exit(fn) : fn());
+    return {
+        worker: pdfWorker,
+        outside,
+        captureWarnings: (sink) => {
+            if (context) return captureConsoleWarnings(line => outside(() => sink(line)), () => context.getStore() === OWN_WORKER);
+            return own.file ? captureConsoleWarnings(sink, own.file) : () => { /* its lines cannot be told */ };
+        },
+        close: () => {
+            try { pdfWorker.destroy(); } catch { /* already ended */ }
+            main.close();
+            side.close();
+        },
+    };
+}
+
+/**
  * Sends the warnings pdf.js's worker writes in this process to `sink` until the returned function is
  * called. pdf.js's worker module, run in this process, writes them with `console.warn` ("Warning: ...")
- * from its own `warn`: while any sink is open, a line that starts so and was written by code in
- * `workerFile` (see pdfjsWorkerFile) goes to the newest sink and not the console (at verbosity 0
- * pdf.js printed nothing either); every other call reaches the console as before, the caller's own
- * "Warning: " lines with it. A line is pdf.js's when one of the few frames nearest the call is in that
- * file: pdf.js's worker in this process answers the main thread's messages a microtask later, so no
- * code of the caller's runs inside its calls but the `onWarning` a reported line reaches, whose own
- * lines pass on. What this cannot tell apart is left as it is: a line the caller writes from the very
- * file pdf.js's worker is in, or from code called from it (an application bundling pdf.js's worker
- * into its own code), is taken while a PDF is open, and a line pdf.js writes for a document of the
- * caller's own read by the same worker module at that moment is taken as the parse's.
+ * from its own `warn`: while any sink is open, a line that starts so and was written by the worker goes
+ * to the newest sink and not the console (at verbosity 0 pdf.js printed nothing either); every other
+ * call reaches the console as before, the caller's own "Warning: " lines with it. `from` tells the
+ * worker's lines: a test of the code running (this library's own worker module, see openOwnWorker), or
+ * the file the worker module is in (see pdfjsWorkerFile). By its file, a line is pdf.js's when one of
+ * the few frames nearest the call is in that file: pdf.js's worker in this process answers the main
+ * thread's messages a microtask later, so no code of the caller's runs inside its calls but the
+ * `onWarning` a reported line reaches, whose own lines pass on. What a file cannot tell apart is left
+ * as it is: a line the caller writes from the very file pdf.js's worker is in, or from code called from
+ * it (an application bundling pdf.js's worker into its own code), is taken while a PDF is open, and a
+ * line pdf.js writes at that moment for a document of the caller's own, read by the same worker module
+ * (one preloaded as `globalThis.pdfjsWorker`, see parsePdf), is taken as the parse's.
  */
 /* eslint-disable no-console -- this takes pdf.js's console warnings; it writes nothing to the console itself */
-const consoleSinks: { sink: (line: string) => void; workerFile: string }[] = [];
+const consoleSinks: { sink: (line: string) => void; from: string | (() => boolean) }[] = [];
 let consoleWrapper: ((...args: unknown[]) => void) | undefined;
 let consoleOriginal: ((...args: unknown[]) => void) | undefined;
 /** The frames nearest a `console.warn` call looked at for pdf.js's worker (wrappers others put round the console come first). */
 const WARN_FRAMES = 8;
-export function captureConsoleWarnings(sink: (line: string) => void, workerFile: string): () => void {
-    const entry = { sink, workerFile };
+export function captureConsoleWarnings(sink: (line: string) => void, from: string | (() => boolean)): () => void {
+    const entry = { sink, from };
     consoleSinks.push(entry);
     if (!consoleWrapper || console.warn !== consoleWrapper) {
         const passOn = console.warn;
@@ -561,7 +731,7 @@ export function captureConsoleWarnings(sink: (line: string) => void, workerFile:
         let reporting = false;
         const wrapper = function (this: unknown, ...args: unknown[]): void {
             const current = consoleSinks[consoleSinks.length - 1];
-            if (current && !reporting && typeof args[0] === 'string' && args[0].startsWith('Warning: ') && callerFiles(WARN_FRAMES).includes(current.workerFile)) {
+            if (current && !reporting && typeof args[0] === 'string' && args[0].startsWith('Warning: ') && (typeof current.from === 'string' ? callerFiles(WARN_FRAMES).includes(current.from) : current.from())) {
                 reporting = true;
                 try { current.sink(args[0].slice(0, MAX_WARNING_LENGTH)); } catch { /* a report is never the console's concern */ } finally { reporting = false; }
                 return;
@@ -598,7 +768,7 @@ export function setWorkerVerbosity(worker: any, verbosity: number): void {
     try { worker.messageHandler?.send('configure', { verbosity }); } catch { /* not started, or ended */ }
 }
 
-/** A pdf.js worker this module started in the browser, and how to end it. */
+/** A pdf.js worker this module started (in the browser, or on its own worker module in Node), and how to end it. */
 export interface WarningWorker {
     /** A pdf.js `PDFWorker` on the worker, for `getDocument({ worker })`. */
     worker: any;

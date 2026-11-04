@@ -4803,6 +4803,64 @@ async function pdfProcessTests(h: {
         `})();`,
     ]);
     check('pdf: a worker preloaded where no worker file is found is used, in the host, with no warning', bundled.spawned === 0 && bundled.pages === 8 && bundled.codes?.length === 0, JSON.stringify(bundled));
+
+    // An application's own pdf.js of another version in the host (a copy of pdf.js numbered 9.9.9):
+    // pdf.js's API takes the worker module `globalThis.pdfjsWorker` names, of whatever version, the first
+    // time it needs one. Its document opened before a parse in the host failed that parse ("The API
+    // version does not match the Worker version"); a parse in the host before its first document failed
+    // that document the same way. Each now runs on a worker module of its own, in either order, and
+    // a parse leaves the global as it found it.
+    const pdfjsVersion = JSON.parse(fs.readFileSync(require.resolve('pdfjs-dist/package.json'), 'utf8')).version;
+    const foreignDir = fs.mkdtempSync(path.join(os.tmpdir(), 'officeparser-foreign-pdfjs-'));
+    try {
+        const pdfjsBuild = path.dirname(require.resolve('pdfjs-dist/legacy/build/pdf.mjs'));
+        for (const file of ['pdf.mjs', 'pdf.worker.mjs']) fs.writeFileSync(path.join(foreignDir, file), fs.readFileSync(path.join(pdfjsBuild, file), 'utf8').split(pdfjsVersion).join('9.9.9'));
+        const foreignScript = (first: 'app' | 'parse') => runChildScript([
+            `(async () => {`,
+            // This pdf.js's own, loaded first, gives the copy the drawing classes it would find beside its own install.
+            `    await import(pathToFileURL(repoRequire.resolve('pdfjs-dist/legacy/build/pdf.mjs')).href);`,
+            `    const app = await import(pathToFileURL(${JSON.stringify(path.join(foreignDir, 'pdf.mjs'))}).href);`,
+            `    app.GlobalWorkerOptions.workerSrc = pathToFileURL(${JSON.stringify(path.join(foreignDir, 'pdf.worker.mjs'))}).href;`,
+            `    const steps: any[] = [];`,
+            `    const open = async () => { try { const doc = await app.getDocument({ data: new Uint8Array(fs.readFileSync(testPdf)), verbosity: 0 }).promise; const pages = doc.numPages; await doc.loadingTask.destroy(); steps.push(pages); } catch (e: any) { steps.push(String(e.message).slice(0, 120)); } };`,
+            `    const parse = async (separateProcess: boolean) => {`,
+            `        const before = Object.getOwnPropertyDescriptor(globalThis, 'pdfjsWorker');`,
+            `        try { const ast = await OfficeParser.parseOffice(fs.readFileSync(testPdf), { fileType: 'pdf', ocr: false, onWarning: () => {}, pdfParserConfig: { separateProcess } }); steps.push(ast.content.length); } catch (e: any) { steps.push(String(e.message).slice(0, 120)); }`,
+            `        const after = Object.getOwnPropertyDescriptor(globalThis, 'pdfjsWorker');`,
+            `        steps.push(before?.value === after?.value && !!before === !!after ? 'global kept' : 'global changed');`,
+            `    };`,
+            ...(first === 'app'
+                ? [`    await open(); await parse(false); await open(); await parse(true); await open();`]
+                : [`    await parse(false); await open(); await parse(false); await parse(true); await open();`]),
+            `    console.log(JSON.stringify({ version: app.version, steps }));`,
+            `    process.exit(0);`,
+            `})();`,
+        ]);
+        const appFirst = foreignScript('app');
+        check('pdf: an application\'s pdf.js of another version, its document opened first, and parses in the host and in a separate process each read theirs',
+            appFirst.version === '9.9.9' && JSON.stringify(appFirst.steps) === JSON.stringify([8, 8, 'global kept', 8, 8, 'global kept', 8]), JSON.stringify(appFirst));
+        const parseFirst = foreignScript('parse');
+        check('pdf: a parse in the host before an application\'s pdf.js of another version opens its first document leaves that pdf.js its own worker',
+            parseFirst.version === '9.9.9' && JSON.stringify(parseFirst.steps) === JSON.stringify([8, 'global kept', 8, 8, 'global kept', 8, 'global kept', 8]), JSON.stringify(parseFirst));
+    } finally {
+        fs.rmSync(foreignDir, { recursive: true, force: true });
+    }
+    // A worker preloaded as `globalThis.pdfjsWorker` where pdf.js's worker file is found is not used by
+    // parses in the host, three at once, and is the global still after them.
+    const preloadedUnused = runChildScript([
+        `(async () => {`,
+        `    const used: string[] = [];`,
+        `    const preloaded = { WorkerMessageHandler: { setup: () => { used.push('setup'); }, initializeFromPort: () => { used.push('initializeFromPort'); }, createDocumentHandler: () => { used.push('createDocumentHandler'); } } };`,
+        `    (globalThis as any).pdfjsWorker = preloaded;`,
+        `    const codes: string[] = [];`,
+        `    const config = { fileType: 'pdf', ocr: false, onWarning: (w: any) => codes.push(w.code), pdfParserConfig: { separateProcess: false } };`,
+        `    const asts = await Promise.all([1, 2, 3].map(() => OfficeParser.parseOffice(fs.readFileSync(testPdf), config)));`,
+        `    console.log(JSON.stringify({ used, kept: (globalThis as any).pdfjsWorker === preloaded, pages: asts.map((ast: any) => ast.content.length), codes }));`,
+        `    process.exit(0);`,
+        `})();`,
+    ]);
+    check('pdf: parses in the host leave a preloaded worker unused where pdf.js\'s worker file is found, and the global as it was',
+        JSON.stringify(preloadedUnused) === JSON.stringify({ used: [], kept: true, pages: [8, 8, 8], codes: [] }), JSON.stringify(preloadedUnused));
 }
 
 /**

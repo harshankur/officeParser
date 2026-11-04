@@ -56,7 +56,7 @@ import { FURNITURE_BAND, findRunningLines, markPageFields, PageFurniture, planFu
 import { setOwn } from '../utils/lookupUtils.js';
 import { BROTLI_AVOIDED_LINE, acquirePdfProcess, PdfProcess } from './pdf/pdfProcess.js';
 import { avoidBrotliInThisProcess, BROTLI_FIXED_RELEASES, onBrotliRefused, runtimeHasBrotliFlaw, runtimeName } from '../utils/brotliFlaw.js';
-import { captureConsoleWarnings, openWarningWorker, PdfAssetSession, pdfjsWorkerFile, resolvePdfAssetFolders, setWorkerVerbosity, WarningWorker } from './pdf/pdfAssets.js';
+import { captureConsoleWarnings, openOwnWorker, openWarningWorker, PdfAssetSession, pdfjsWorkerFile, resolvePdfAssetFolders, setWorkerVerbosity, WarningWorker } from './pdf/pdfAssets.js';
 import { appendAll } from '../utils/nodeListUtils.js';
 
 /**
@@ -1741,8 +1741,9 @@ function imageBounds(viewport: any, ctm: number[]): { x: number; y: number; widt
  * truthy global without the handler is not one: pdf.js starts a Worker from `workerSrc` as usual).
  * A page or a bundle preloads it so that no worker file is fetched or looked for. In Node the global
  * is also set by pdf.js's own worker module whenever it loads in this process (any document a
- * caller's own pdf.js opened, or one of ours read here), so there it says nothing of the caller's
- * intent and is relied on only where no worker file can be found (see parsePdf).
+ * caller's own pdf.js opened; this library's own module puts it back, see openOwnWorker), so there it
+ * says nothing of the caller's intent and is relied on only where no worker file can be found (see
+ * parsePdf).
  */
 const workerPreloaded = (): boolean => {
     try { return !!(globalThis as any).pdfjsWorker?.WorkerMessageHandler; } catch { return false; }
@@ -1850,7 +1851,9 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // Worker is started, nothing is fetched); in another browser from a Worker that sends them back (see
     // openWarningWorker), or, where none can be made, from nowhere, pdf.js starting its own. In this
     // process a worker whose file cannot be told (see pdfjsWorkerFile) runs at verbosity 0, as pdf.js
-    // did before its warnings were taken: its lines could not be told from the caller's own.
+    // did before its warnings were taken: its lines could not be told from the caller's own. In Node the
+    // worker is on a module of this library's own (see openOwnWorker), whose lines are told by the code
+    // writing them.
     let ownWorker: WarningWorker | undefined;
     let inProcessTurn: (() => Promise<() => void>) | undefined;
     try {
@@ -1860,29 +1863,36 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             ownWorker = await openWarningWorker(pdfjs, String(pdfjs.GlobalWorkerOptions.workerSrc ?? ''), takeWarning, config.abortSignal);
         } else {
             // A worker port the caller set is pdf.js's to use; one PDFWorker per port.
-            const workerFile = pdfjs.GlobalWorkerOptions.workerPort ? undefined : await pdfjsWorkerFile(pdfjs);
-            if (!pdfjs.GlobalWorkerOptions.workerPort) {
+            const callerPort = !!pdfjs.GlobalWorkerOptions.workerPort;
+            // In Node, pdf.js's worker runs on a module of this library's own (see openOwnWorker): an
+            // application's own pdf.js, of any version, keeps its worker and that worker's warning level.
+            const own = isBrowser || callerPort ? undefined : await openOwnWorker(pdfjs, workerUrl);
+            let workerFile: string | undefined;
+            // A worker module shared with the caller's own documents: a preloaded `globalThis.pdfjsWorker`
+            // (a bundle with no worker file, or a browser page), or the one pdf.js imports where this
+            // library's own does not load. It keeps one warning level for every document it reads, the
+            // caller's among them: raised for the turn this parse's document is open in (a parse before may
+            // have set it to 0 meanwhile) and set to 0 once that document has closed. The level it had
+            // before cannot be read back (pdf.js keeps it private to the module and its `configure` message
+            // only sets it), so it is left at 0, as every release before 8.4.0 left it.
+            let raised: any;
+            if (own) {
+                ownWorker = own;
+            } else if (!callerPort) {
+                workerFile = await pdfjsWorkerFile(pdfjs);
                 const worker = new pdfjs.PDFWorker({ verbosity: workerFile ? 1 : 0 });
                 ownWorker = { worker, close: () => worker.destroy() };
+                raised = workerFile ? worker : undefined;
             }
             if (runtimeHasBrotliFlaw()) avoidBrotliInThisProcess();
-            // pdf.js's worker module keeps one warning level for every document it reads in this process,
-            // the caller's own among them. It is raised for the turn this parse's document is open in (a
-            // parse before may have set it to 0 meanwhile) and set to 0 once that document has closed. The
-            // level it had before cannot be read back (pdf.js keeps it private to the module and its
-            // `configure` message only sets it), so it is left at 0: as every release before 8.4.0 left it,
-            // and as pdf.js's API module is set by getDocument({ verbosity: 0 }). The trade-off: a caller's
-            // own PDFWorker started at verbosity 1 before the parse is left at 0 too. Restoring its level
-            // exactly needs a worker module of our own, whose level no caller's worker shares.
-            const raised = workerFile ? ownWorker?.worker : undefined;
             inProcessTurn = async () => {
                 const endTurn = await takeInProcessTurn(config.abortSignal);
                 if (raised) {
                     try { await raised.promise; } catch { /* the document reports a worker that did not start */ }
                     setWorkerVerbosity(raised, 1);
                 }
-                const stopCapture = workerFile ? captureConsoleWarnings(takeWarning, workerFile) : undefined;
-                onBrotliRefused(brotliAvoided);
+                const stopCapture = own ? own.captureWarnings(takeWarning) : workerFile ? captureConsoleWarnings(takeWarning, workerFile) : undefined;
+                onBrotliRefused(own ? () => own.outside(brotliAvoided) : brotliAvoided);
                 return () => {
                     onBrotliRefused(undefined);
                     stopCapture?.();

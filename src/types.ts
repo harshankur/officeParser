@@ -857,8 +857,10 @@ export interface PdfParserConfig {
      * `PDF_SEPARATE_PROCESS_UNAVAILABLE` warning; it also runs here, without one, when this is false or
      * pdf.js's worker file cannot be found and a worker is preloaded as `globalThis.pdfjsWorker` (a
      * bundle that inlines it). A worker module merely loaded in this process, as pdf.js's own does
-     * when a document of yours is opened with it, leaves the separate process in use. The browser
-     * runs pdf.js in a Web Worker regardless.
+     * when a document of yours is opened with it, leaves the separate process in use. In this process
+     * pdf.js's worker runs on a module of the library's own, so your own pdf.js, of this version or
+     * another, keeps its worker and its warning level. The browser runs pdf.js in a Web Worker
+     * regardless.
      *
      * Default is true.
      */
