@@ -3331,6 +3331,21 @@ async function parserHardeningTests() {
         const last = texts.filter(text => text.startsWith('AAAA')).pop() ?? '';
         check(`${label} repeats within maxRepeatedContent, with REPEATED_CONTENT_LIMIT_EXCEEDED`, !named.error && total < 20_000_000 && named.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && last.length === 65 && last.endsWith('\u2026'), `${total} ${last.length} ${Date.now() - started}ms ${named.codes} ${named.error}`);
     }
+    // A text area of 64 empty lines is 64 characters, all of it its own preview: kept in lines, each copy
+    // past the budget still made 64 breaks (3.9 KB of ODT, 30,000 namings, made 1.9 million nodes).
+    const breaksArea = `<office:forms ${formNs}><form:form form:name="F"><form:textarea form:id="c1" form:current-value="${'&#10;'.repeat(64)}"/></form:form></office:forms>`;
+    const nodesOf = (nodes: any[] | undefined): number => (nodes ?? []).reduce((sum: number, node: any) => sum + 1 + nodesOf(node.children), 0);
+    for (const [label, limits, most] of [
+        ['with the default budget', undefined, 1_250_000],
+        ['past a budget of 1', { maxRepeatedContent: 1 }, 2 * 30_000 + 1_000],
+    ] as const) {
+        const started = Date.now();
+        const lined = await warned(odfOf('text', `${breaksArea}<text:p>${'<draw:control draw:control="c1"/>'.repeat(30_000)}</text:p>`), 'odt', limits ? { decompressionLimits: limits } : {});
+        const count = nodesOf(lined.ast?.content);
+        let written = false;
+        try { written = !!lined.ast && (await lined.ast.to('html')).value.length > 0; } catch { written = false; }
+        check(`odt: a text area of 64 empty lines named by 30,000 controls ${label} makes a bounded number of nodes, and writes`, !lined.error && count < most && lined.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && written, `${count} nodes, written ${written}, ${Date.now() - started}ms ${lined.codes} ${lined.error}`);
+    }
 
     // PDF: a form XObject drawing another many times is read within a budget of text items and
     // operators (seven forms deep, 2.5 KB, ended the process out of memory).

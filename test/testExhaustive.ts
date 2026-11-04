@@ -11761,6 +11761,19 @@ async function testOdtFormControls(): Promise<void> {
     }
     const short = await budgeted(odf(`${forms('<form:text form:id="s" form:current-value="Jane"/>')}<text:p>${control('s')} ${control('s')}</text:p>`));
     assert.ok(JSON.stringify(short.texts) === JSON.stringify(['Jane', ' ', 'Jane']) && !short.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `ODT: a short control named twice is whole both times, unwarned; got ${JSON.stringify(short.texts)} ${short.codes}`);
+    // Lines: a copy within the budget keeps its runs and breaks; a copy past it is the start of its text on
+    // one line, its line breaks as spaces, with no break.
+    const shapeOf = (nodes: OfficeContentNode[]) => nodes.map(n => n.type === 'break' ? '|' : n.text).join('');
+    const manyLines = Array.from({ length: 30_000 }, () => 'Line').join('&#10;');
+    const linedCodes: string[] = [];
+    const linedAst = await OfficeParser.parseOffice(odf(`${forms(`<form:textarea form:id="t" form:current-value="${manyLines}"/>`)}<text:p>${control('t')}</text:p><text:p>${control('t')}</text:p>`), { fileType: 'odt', decompressionLimits: { maxRepeatedContent: 1 }, onWarning: (issue: any) => linedCodes.push(issue.code) } as any) as OfficeParserAST;
+    const [firstLined, secondLined] = linedAst.content.map(p => p.children ?? []);
+    assert.ok(firstLined.filter(n => n.type === 'text').length === 30_000 && firstLined.filter(n => n.type === 'break').length === 29_999, 'ODT: a 30,000-line control\'s first copy keeps its lines and breaks');
+    assert.ok(secondLined.length === 1 && secondLined[0].type === 'text' && secondLined[0].text === `${Array(30_000).fill('Line').join(' ').slice(0, 64)}…` && linedCodes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `ODT: a 30,000-line control's copy past the budget is one run, its start with spaces for breaks; got ${secondLined.length} nodes`);
+    const threeLines = await OfficeParser.parseOffice(odf(`${forms('<form:textarea form:id="t" form:current-value="First line&#10;Second line&#10;Third"/>')}<text:p>${control('t')}</text:p><text:p>${control('t')}</text:p>`), { fileType: 'odt' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(threeLines.content.map(p => shapeOf(p.children ?? [])), ['First line|Second line|Third', 'First line|Second line|Third'], 'ODT: a three-line control named twice within the budget keeps its lines both times');
+    const twoLines = await budgeted(odf(`${forms('<form:textarea form:id="t" form:current-value="a&#10;b"/>')}${`<text:p>${control('t')}</text:p>`.repeat(50)}`));
+    assert.ok(twoLines.texts.join('') === 'ab'.repeat(50) && !twoLines.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `ODT: a short two-line control named 50 times is whole every time, unwarned; got ${twoLines.codes}`);
 
     // A slide's control: a paragraph where it stands.
     const slide = await read(odf(`<draw:page draw:name="S1">${forms('<form:checkbox form:id="k" form:label="On a slide" form:current-state="checked"/>')}<draw:control draw:control="k" svg:x="1in" svg:y="1in" svg:width="2in" svg:height="0.3in"/></draw:page>`, { kind: 'presentation' }), 'odp');

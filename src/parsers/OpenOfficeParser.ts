@@ -675,8 +675,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
      * A `draw:control`'s runs: its form control's text (see formControlText), in the text's formatting and
      * the control's own (its `draw:text-style-name`), a line break between its lines; none where it names
      * no control. The first showing a control has its whole text; each other is charged to the repeated
-     * content budget and, once that is spent, shows the start of its text (one 100,000-character text area
-     * named 2,000 times made 200 million characters).
+     * content budget and, once that is spent, shows the start of its text on one line, its line breaks as
+     * spaces (one 100,000-character text area named 2,000 times made 200 million characters, and a preview
+     * kept in lines made a break for each of a text area's 64 empty lines at every naming).
      */
     const controlRuns = (element: Element, around: TextFormatting, link?: { link?: string; linkType?: 'internal' | 'external' }): { text: string; children: OfficeContentNode[] } => {
         const control = formControls.get(element.getAttribute('draw:control') || '');
@@ -691,7 +692,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         }
         let lines = read.lines;
         if (!shownControls.has(control)) shownControls.add(control);
-        else if (takeRepeats(config, 1, read.weight) === 0) lines = read.preview ??= repeatPreview(read.text).split(/\r\n|\r|\n/);
+        else if (takeRepeats(config, 1, read.weight) === 0) lines = read.preview ??= [repeatPreview(read.lines.join(' '))];
         const own = styleMap[element.getAttribute('draw:text-style-name') || ''];
         const formatting = own ? mergeFormatting(around, own) : around;
         lines.forEach((line, k) => {
