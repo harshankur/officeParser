@@ -1868,9 +1868,12 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             if (runtimeHasBrotliFlaw()) avoidBrotliInThisProcess();
             // pdf.js's worker module keeps one warning level for every document it reads in this process,
             // the caller's own among them. It is raised for the turn this parse's document is open in (a
-            // parse before may have put it back meanwhile) and put back to 0 once that document has closed,
-            // so a caller's pdf.js worker reads its documents as quietly as before (pdf.js lowered it to 0
-            // for each of our documents before its warnings were taken).
+            // parse before may have set it to 0 meanwhile) and set to 0 once that document has closed. The
+            // level it had before cannot be read back (pdf.js keeps it private to the module and its
+            // `configure` message only sets it), so it is left at 0: as every release before 8.5.0 left it,
+            // and as pdf.js's API module is set by getDocument({ verbosity: 0 }). The trade-off: a caller's
+            // own PDFWorker started at verbosity 1 before the parse is left at 0 too. Restoring its level
+            // exactly needs a worker module of our own, whose level no caller's worker shares.
             const raised = workerFile ? ownWorker?.worker : undefined;
             inProcessTurn = async () => {
                 const endTurn = await takeInProcessTurn(config.abortSignal);
