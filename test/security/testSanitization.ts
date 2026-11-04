@@ -3359,6 +3359,18 @@ async function parserHardeningTests() {
         try { html = valued.ast ? (await valued.ast.to('html')).value.length : -1; } catch { html = -1; }
         check(`odt: a 32-line control named 20,000 times ${label} writes HTML on the order of maxRepeatedContent`, !valued.error && html > 0 && html < most && valued.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${html} ${valued.codes} ${valued.error}`);
     }
+    // Values just past 64 characters: charged only past 64 after parsing, a copy's 65-character values
+    // wrote 9.5 times a 2 MB budget unwarned (19 MB); charged partly at parse time and partly after, copies shown
+    // whole lost them to the budget the parse had spent. Charged in full with the copy, every whole run keeps them.
+    const v65 = `<style:style style:name="T1" style:family="text"><style:text-properties xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" style:font-name="${'F'.repeat(65)}" fo:color="#${'1'.repeat(64)}" fo:font-size="${'1'.repeat(63)}pt" fo:background-color="#${'2'.repeat(64)}"/></style:style>`;
+    const at65 = await warned(odfOf('text', `${linesArea}<text:p><text:a xlink:type="simple" xlink:href="https://example.com/${'p'.repeat(65 - 20)}">${'<draw:control draw:control="c1" draw:text-style-name="T1"/>'.repeat(1_250)}</text:a></text:p>`, {}, v65), 'odt', { decompressionLimits: { maxRepeatedContent: 2_000_000 } });
+    const wholeRuns: any[] = [];
+    const walkWhole = (nodes: any[] | undefined) => nodes?.forEach((node: any) => { if (node.type === 'text' && node.text === 'a') wholeRuns.push(node); walkWhole(node.children); });
+    walkWhole(at65.ast?.content);
+    let html65 = -1;
+    try { html65 = at65.ast ? (await at65.ast.to('html')).value.length : -1; } catch { html65 = -1; }
+    const keeps65 = wholeRuns.filter(run => run.formatting?.font?.length === 65 && run.metadata?.link?.length === 65).length;
+    check('odt: a control named 1,250 times with 65-character values warns, stays near a 2 MB budget, and every whole copy keeps its values', !at65.error && at65.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && html65 > 0 && html65 < 4_500_000 && wholeRuns.length > 1_000 && keeps65 === wholeRuns.length, `${html65} html, ${keeps65}/${wholeRuns.length} whole runs keep values, ${at65.codes} ${at65.error}`);
     // A value longer than 64 characters is charged once on each copy, after parsing: charged again by the
     // copy, a 100-character link on a control named 2,000 times (0.7 of the budget) warned and lost its links.
     const longLinked = await warned(odfOf('text', `${linesArea}<text:p><text:a xlink:type="simple" xlink:href="https://example.com/${'p'.repeat(100 - 20)}">${'<draw:control draw:control="c1"/>'.repeat(2_000)}</text:a></text:p>`), 'odt');

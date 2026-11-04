@@ -391,7 +391,7 @@ const toRepeatCount = (attr: string | null): number => {
 };
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { REPEAT_ALLOWANCE, repeatPreview, takeRepeats, valuesLength } from '../utils/repeatUtils.js';
+import { chargedWithValues, repeatPreview, takeRepeats, valuesLength } from '../utils/repeatUtils.js';
 import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
 import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
@@ -669,15 +669,6 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
      * master page's.
      */
     const controlTexts = new Map<Element, { text: string; lines: string[]; runs: number; weight: number; preview?: string[] }>();
-    /** The length of the string values of 64 characters or less (REPEAT_ALLOWANCE) a run's formatting or link holds. */
-    const shortValuesLength = (values: object | undefined): number => {
-        let length = 0;
-        if (values) for (const key in values) {
-            const value = (values as Record<string, unknown>)[key];
-            if (typeof value === 'string' && value.length <= REPEAT_ALLOWANCE) length += value.length;
-        }
-        return length;
-    };
     /** The form controls a `draw:control` has shown: each one after the first is a repeat. */
     const shownControls = new Set<Element>();
     /**
@@ -703,12 +694,13 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         const own = styleMap[element.getAttribute('draw:text-style-name') || ''];
         const formatting = own ? mergeFormatting(around, own) : around;
         // Each of a copy's runs writes its formatting and link again (a 64-character font and link on each of
-        // a 32-line control's runs, uncharged, wrote 11 times the budget), so a copy is charged for them too:
-        // the values of 64 characters or less, as a value longer is charged on each fresh node after parsing
-        // (boundRepeatedValues). Its breaks are not, as writers write a bare break.
-        let lines = read.lines;
+        // a 32-line control's runs, uncharged, wrote 11 times the budget), so a copy is charged for them in
+        // full, here, and its runs and breaks are not charged again after parsing (boundRepeatedValues): split
+        // between the two, a copy shown whole lost its longer values to the budget the parse had spent.
+        let lines = read.lines, charged = false;
         if (!shownControls.has(control)) shownControls.add(control);
-        else if (takeRepeats(config, 1, read.weight + read.runs * (shortValuesLength(formatting) + shortValuesLength(link))) === 0) lines = read.preview ??= [repeatPreview(read.lines.join(' '))];
+        else if (takeRepeats(config, 1, read.weight + read.runs * (valuesLength(formatting) + valuesLength(link))) === 0) lines = read.preview ??= [repeatPreview(read.lines.join(' '))];
+        else charged = true;
         lines.forEach((line, k) => {
             if (k > 0) {
                 out.text += '\n';
@@ -718,6 +710,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             out.text += line;
             out.children.push({ type: 'text', text: line, formatting, metadata: link ? { ...link } : undefined });
         });
+        if (charged) chargedWithValues(out.children);
         return out;
     };
 
