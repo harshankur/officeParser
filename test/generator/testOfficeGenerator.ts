@@ -2793,6 +2793,47 @@ async function runTableGeometryTests(): Promise<GenFeatureTest[]> {
 }
 
 /**
+ * The spreadsheet viewer (HTML output of a workbook) in hosts that limit it: a frame with scripts but no
+ * storage, where any localStorage access throws.
+ */
+async function runSpreadsheetViewerTests(): Promise<GenFeatureTest[]> {
+    const results: GenFeatureTest[] = [];
+    const category = 'Spreadsheet Viewer';
+    const mk = (destFormat: string, feature: string, exp: any, act: any, ok: boolean, details: string): GenFeatureTest => ({
+        category, feature, sourceFormat: 'synthetic', destFormat,
+        result: { status: ok ? 'PASS' : 'FAIL', expected: exp, actual: act, details, duration: 0 }
+    });
+    const cell = (row: number, col: number, text: string) =>
+        ({ type: 'cell', text, metadata: { row, col }, children: [{ type: 'text', text }] } as OfficeContentNode);
+    const sheet = (name: string, value: string) => ({
+        type: 'sheet', metadata: { sheetName: name }, children: [{ type: 'row', children: [cell(0, 0, value)] }],
+    } as OfficeContentNode);
+    const workbook = () => synthAst('xlsx', [sheet('First', 'ONE'), sheet('Second', 'TWO'), sheet('Third', 'THREE')]);
+    const html = async (ast: any, config: any = {}) => String((await OfficeGenerator.generate(ast, 'html' as any, config)).value);
+
+    const page = await html(workbook());
+    const script = (page.match(/<script>([\s\S]*?)<\/script>/) || [])[1] || '';
+
+    // --- Every localStorage access is guarded ---
+    const accesses = script.split('localStorage').length - 1;
+    const unguarded = script.split('localStorage').slice(0, -1).filter(before => !/try \{\s*(?:const size = parseInt\()?window\.$/.test(before)).length;
+    results.push(mk('html', 'every localStorage access in the spreadsheet script is inside a try',
+        'two accesses (one read, one write), none unguarded', `${accesses} accesses, ${unguarded} unguarded`,
+        accesses === 2 && unguarded === 0,
+        'a frame with scripts but no storage throws on any access; inside switchSheet that showed the first sheet beside the active one'));
+    const keysKept = script.includes("docId + '_' + sheetId + '_col_' + index") && script.includes("docId + '_' + sheetId + '_row_' + index");
+    results.push(mk('html', 'saved column widths and row heights keep their keys',
+        'docId_sheetId_col_N and docId_sheetId_row_N', keysKept ? 'both' : 'changed', keysKept,
+        'sizes a reader saved before must still apply'));
+    const catchKeepsOne = /catch \(e\) \{\s*console\.error\('Sheet switch failed:', e\);\s*\/\/[^\n]*\n\s*if \(!document\.querySelector\('\.spreadsheet-sheet\.active'\)\)/.test(script);
+    results.push(mk('html', 'a failed sheet switch shows the first sheet only when none is showing',
+        'the catch checks for an active sheet first', catchKeepsOne ? 'checks' : 'adds unconditionally', catchKeepsOne,
+        'the catch added the first sheet beside the one the switch had already shown, so two sheets showed'));
+
+    return results;
+}
+
+/**
  * Regressions for how an image, a note and OCR text degrade when the target format cannot carry them
  * whole: an image too large to inline, a picture the format cannot embed, a note that opens with a
  * table, and multi-line recognized text.
@@ -3075,6 +3116,12 @@ async function runAllTests(): Promise<void> {
     const tableGeometryResults = await runTableGeometryTests();
     allResults.push(...tableGeometryResults);
     console.log(tableGeometryResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' ✗' : ' ✓');
+
+    // Spreadsheet viewer: storage that throws, sheet tabs without the script
+    process.stdout.write('  spreadsheet viewer...');
+    const spreadsheetViewerResults = await runSpreadsheetViewerTests();
+    allResults.push(...spreadsheetViewerResults);
+    console.log(spreadsheetViewerResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' \u2717' : ' \u2713');
 
     // Degrade fidelity: over-cap images, unembeddable pictures, notes, OCR line breaks
     process.stdout.write('  degrade fidelity...');

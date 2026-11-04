@@ -951,6 +951,22 @@
     
 <script>
     function initSpreadsheetResizing() {
+        const readSize = key => {
+            try {
+                const size = parseInt(window.localStorage.getItem(key), 10);
+                return size > 0 ? size : 0;
+            } catch (e) {
+                return 0;
+            }
+        };
+        const saveSize = (key, size) => {
+            try {
+                window.localStorage.setItem(key, size);
+            } catch (e) {
+                // Not remembered where the page may not use storage.
+            }
+        };
+
         document.querySelectorAll('.excel-grid').forEach(table => {
             if (table.dataset.resizingInitialized) return;
             if (table.offsetWidth === 0) return; // skip hidden tables
@@ -962,11 +978,7 @@
             // Freeze initial auto-layout widths of columns and set table layout to fixed
             const colHeaders = table.querySelectorAll('.excel-col-header');
             colHeaders.forEach((header, index) => {
-                let currentWidth = header.offsetWidth;
-                const savedWidth = localStorage.getItem(docId + '_' + sheetId + '_col_' + index);
-                if (savedWidth) {
-                    currentWidth = parseInt(savedWidth, 10);
-                }
+                const currentWidth = readSize(docId + '_' + sheetId + '_col_' + index) || header.offsetWidth;
                 header.style.width = currentWidth + 'px';
                 header.style.minWidth = currentWidth + 'px';
             });
@@ -975,11 +987,7 @@
 
             // Freeze initial auto-layout heights of rows
             table.querySelectorAll('tr').forEach((row, index) => {
-                let currentHeight = row.offsetHeight;
-                const savedHeight = localStorage.getItem(docId + '_' + sheetId + '_row_' + index);
-                if (savedHeight) {
-                    currentHeight = parseInt(savedHeight, 10);
-                }
+                const currentHeight = readSize(docId + '_' + sheetId + '_row_' + index) || row.offsetHeight;
                 row.style.height = currentHeight + 'px';
             });
 
@@ -1008,7 +1016,7 @@
                     document.removeEventListener('mouseup', onMouseUp);
                     const finalWidth = startWidth + (e.clientX - startX);
                     if (finalWidth > 40) {
-                        localStorage.setItem(docId + '_' + sheetId + '_col_' + index, finalWidth);
+                        saveSize(docId + '_' + sheetId + '_col_' + index, finalWidth);
                     }
                 };
 
@@ -1047,7 +1055,7 @@
                     document.removeEventListener('mouseup', onMouseUp);
                     const finalHeight = startHeight + (e.clientY - startY);
                     if (finalHeight > 20) {
-                        localStorage.setItem(docId + '_' + sheetId + '_row_' + index, finalHeight);
+                        saveSize(docId + '_' + sheetId + '_row_' + index, finalHeight);
                     }
                 };
 
@@ -1066,21 +1074,21 @@
 
     function switchSheet() {
         try {
-            let hash = window.location.hash;
-            if (!hash || hash === '#' || !hash.startsWith('#sheet-')) hash = '#sheet-0';
-            
             const sheets = document.querySelectorAll('.spreadsheet-sheet');
             const tabs = document.querySelectorAll('.spreadsheet-tab');
-            
+
             if (sheets.length === 0) return;
+
+            let hash = window.location.hash;
+            if (!hash || hash === '#' || !hash.startsWith('#sheet-')) hash = '#sheet-0';
+
+            let activeSheet = document.getElementById(hash.slice(1));
+            if (!activeSheet || !activeSheet.classList.contains('spreadsheet-sheet')) activeSheet = sheets[0];
+            const activeTab = Array.prototype.find.call(tabs, t => t.getAttribute('href') === hash) || tabs[0];
 
             sheets.forEach(s => s.classList.remove('active'));
             tabs.forEach(t => t.classList.remove('active'));
-            
-            const activeSheet = document.querySelector(hash) || sheets[0];
             activeSheet.classList.add('active');
-            
-            const activeTab = document.querySelector('a[href="' + hash + '"]') || tabs[0];
             if (activeTab) activeTab.classList.add('active');
 
             // Trigger chart re-render/resize when sheet becomes visible
@@ -1097,11 +1105,14 @@
             initSpreadsheetResizing();
         } catch (e) {
             console.error('Sheet switch failed:', e);
-            const firstSheet = document.querySelector('.spreadsheet-sheet');
-            if (firstSheet) firstSheet.classList.add('active');
+            // One sheet shows: the first, only when the switch left none showing.
+            if (!document.querySelector('.spreadsheet-sheet.active')) {
+                const firstSheet = document.querySelector('.spreadsheet-sheet');
+                if (firstSheet) firstSheet.classList.add('active');
+            }
         }
     }
-    
+
     window.addEventListener('hashchange', switchSheet);
     if (document.readyState === 'complete') switchSheet();
     else window.addEventListener('load', switchSheet);
