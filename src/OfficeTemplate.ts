@@ -33,7 +33,7 @@
 
 import { decryptIfNeeded } from './crypto/decryptContainer.js';
 import { DEFAULT_OFFICE_PARSER_CONFIG, DEFAULT_TEMPLATE_CONFIG } from './defaults.js';
-import { CompiledDocxTemplate, compileDocxTemplate, DocxTemplateOptions, openDocx, renderDocxTemplate, renderParts, TAG_SKIPPED, templateTags } from './template/docxTemplate.js';
+import { CompiledDocxTemplate, compileDocxTemplate, DocxTemplateOptions, openDocx, renderDocxTemplate, renderParts, TAG_SKIPPED, TemplatePlace, templateTags } from './template/docxTemplate.js';
 import { BlobLike, OfficeErrorType, OfficeParserConfig, OfficeWarningType, TemplateConfig, TemplateData, TemplateDataDetails, TemplateFormatter, TemplateProblem, TemplateSyntaxDetails, TemplateTagInfo } from './types.js';
 import { PictureSettings } from './template/templateFormat.js';
 import { assertNode } from './utils/envUtils.js';
@@ -326,9 +326,12 @@ export class OfficeTemplate {
         let total = 0;
         const checkOne = (data: TemplateData, entry?: number): TemplateProblem[] => {
             const problems: TemplateProblem[] = [];
-            // A problem met again (a field used twice in a pass, a tag in a note copied per reference) is noted once.
-            const seen = new Set<string>();
-            const note = (key: string, make: () => TemplateProblem): void => {
+            // A problem met again (a field used twice in a pass, a tag in a note copied per reference) is noted
+            // once: by its place (one object per pass, see placeOf), then by what it is, a short key.
+            const seenAt = new WeakMap<TemplatePlace, Set<string>>();
+            const note = (place: TemplatePlace, key: string, make: () => TemplateProblem): void => {
+                let seen = seenAt.get(place);
+                if (!seen) seenAt.set(place, seen = new Set());
                 if (seen.has(key)) return;
                 seen.add(key);
                 problems.push(make());
@@ -343,15 +346,15 @@ export class OfficeTemplate {
                 checking: true,
                 onFieldMissing: (field, place) => {
                     const fieldNumber = numberOf(field);
-                    note(`m${fieldNumber} ${numberOf(part)} ${place.key}`, () => ({
+                    note(place, `m${fieldNumber} ${numberOf(part)}`, () => ({
                         code: OfficeErrorType.TEMPLATE_FIELD_MISSING,
                         message: messageOf(`m${fieldNumber}`, () => buildOfficeError(OfficeErrorType.TEMPLATE_FIELD_MISSING, field).officeIssue!.message),
                         field, part, loops: place.loops(),
                     }));
                 },
                 onDataInvalid: (details, place): never => {
-                    const detailKey = numberOf(JSON.stringify(details));
-                    note(`d${detailKey} ${place.key}`, () => ({
+                    const detailKey = numberOf(`${details.reason}\u0000${details.tag}\u0000${details.part}\u0000${details.kind}\u0000${details.otherKind ?? ''}\u0000${details.filter ?? ''}\u0000${details.takes ?? ''}`);
+                    note(place, `d${detailKey}`, () => ({
                         code: OfficeErrorType.TEMPLATE_DATA_INVALID,
                         message: messageOf(`d${detailKey}`, () => buildOfficeError(OfficeErrorType.TEMPLATE_DATA_INVALID, details).officeIssue!.message),
                         details, part: details.part, loops: place.loops(),
@@ -363,8 +366,9 @@ export class OfficeTemplate {
             catch (e) {
                 if (e !== CHECK_FULL) throw e;
                 // (The batch's limit, where both are reached: the entries after are not checked.)
-                const limit = entry !== undefined && total >= MAX_BATCH_PROBLEMS ? MAX_BATCH_PROBLEMS : MAX_TEMPLATE_PROBLEMS;
-                logWarning(OfficeWarningType.TEMPLATE_CHECK_LIMITED, errCfg, entry === undefined ? { limit } : { limit, entry, batch: limit === MAX_BATCH_PROBLEMS });
+                const batch = entry !== undefined && total >= MAX_BATCH_PROBLEMS;
+                const limit = batch ? MAX_BATCH_PROBLEMS : MAX_TEMPLATE_PROBLEMS;
+                logWarning(OfficeWarningType.TEMPLATE_CHECK_LIMITED, errCfg, entry === undefined ? { limit } : batch ? { limit, entry, batch, unchecked: rows.length - entry - 1 } : { limit, entry });
             }
             return problems;
         };

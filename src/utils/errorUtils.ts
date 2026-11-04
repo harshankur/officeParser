@@ -176,8 +176,8 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
         const fallback = info.fallback === '' || info.fallback === undefined ? 'the default is' : `the default (${JSON.stringify(info.fallback)}) is`;
         return `Invalid ${info.option}: ${value}. Expected ${info.expected}; ${fallback} used instead.`;
     },
-    [OfficeWarningType.TEMPLATE_CHECK_LIMITED]: (info: { limit: number; entry?: number; batch?: boolean }) => info.batch
-        ? `A template check stopped after ${info.limit} problems in all, in data entry ${info.entry}; the entries after it were not checked. Fix these and check again.`
+    [OfficeWarningType.TEMPLATE_CHECK_LIMITED]: (info: { limit: number; entry?: number; batch?: boolean; unchecked?: number }) => info.batch
+        ? `A template check stopped after ${info.limit} problems in all, in data entry ${info.entry}${info.unchecked ? `; the ${info.unchecked} entr${info.unchecked === 1 ? 'y' : 'ies'} after it ${info.unchecked === 1 ? 'was' : 'were'} not checked` : ''}. Fix these and check again.`
         : `A template check stopped after ${info.limit} problems${info.entry !== undefined ? ` in data entry ${info.entry}` : ''}; there may be more. Fix these and check again.`,
     [OfficeWarningType.UNRECOGNIZED_CONFIG_OPTION]: (info: { keys: string[], renames?: Record<string, string> }) => {
         const detail = info.keys.map(k => {

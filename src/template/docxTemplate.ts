@@ -2075,14 +2075,17 @@ function forEachLoopSlots(nodes: TemplateNode[], visit: (slots: IdSlot[]) => voi
 interface LoopDetails { index: number; number: number; first: boolean; last: boolean; length: number }
 
 /** The names in scope: a loop's item and details, innermost first. */
-interface Scope { name: string; item: TemplateValue; list: readonly TemplateValue[]; listText: string; loopId: number; index: number; loop: LoopDetails; parent: Scope | null; loops?: TemplateLoopPlace[] }
+interface Scope { name: string; item: TemplateValue; list: readonly TemplateValue[]; listText: string; listNumber: number; index: number; loop: LoopDetails; parent: Scope | null; loops?: TemplateLoopPlace[]; place?: PlaceNode }
 
 /**
- * Where a tag is read: `key` tells one pass of one set of loops from another, short whatever the lists
- * are called (each loop by its number in the template, with its pass), and `loops` lists them, made
- * only when asked for.
+ * Where a tag is read: one object for each pass of each set of loops, as `loops` tells them apart (loops
+ * over the same list at the same pass are one place), so a place can be told from another by identity.
+ * `loops` lists them, made only when asked for.
  */
-export interface TemplatePlace { key: string; loops(): TemplateLoopPlace[] }
+export interface TemplatePlace { loops(): TemplateLoopPlace[] }
+
+/** A place, with the places inside it by list number and pass. */
+interface PlaceNode extends TemplatePlace { inside: Map<string, PlaceNode> }
 
 /** The loops a scope is in, outermost first, each one's list as typed and the pass: made once per scope, its parent's shared. */
 function loopsOf(scope: Scope | null): TemplateLoopPlace[] {
@@ -2100,11 +2103,18 @@ function loopsOf(scope: Scope | null): TemplateLoopPlace[] {
     return scope.loops!;
 }
 
-/** A tag's place (see {@link TemplatePlace}). Blocks nest at most MAX_BLOCK_DEPTH deep, so its key is short. */
-function placeOf(scope: Scope | null): TemplatePlace {
-    let key = '';
-    for (let s = scope; s; s = s.parent) key += `${s.loopId}:${s.index}/`;
-    return { key, loops: () => loopsOf(scope) };
+/**
+ * A tag's place (see {@link TemplatePlace}): looked up once per scope, from its parent's, among the places
+ * the render has met. A place is made only where a tag is noted at it, so a check's notes bound them.
+ */
+function placeOf(scope: Scope | null, state: RenderState): TemplatePlace {
+    if (!scope) return state.topPlace;
+    if (scope.place) return scope.place;
+    const parent = placeOf(scope.parent, state) as PlaceNode;
+    const key = `${scope.listNumber}:${scope.index}`;
+    let place = parent.inside.get(key);
+    if (!place) parent.inside.set(key, place = { inside: new Map(), loops: () => loopsOf(scope) });
+    return scope.place = place;
 }
 
 /**
@@ -2128,12 +2138,14 @@ class RenderState {
     readonly written: Uint8Array;
     readonly valueXml = new WeakMap<object, Map<string, string>>();
     readonly valueUsed = new WeakMap<object, Set<string>>();
-    /** Each loop's number, in the order the render meets them (see {@link TemplatePlace}). */
-    private readonly loopIds = new Map<object, number>();
-    loopId(node: object): number {
-        let id = this.loopIds.get(node);
-        if (id === undefined) this.loopIds.set(node, id = this.loopIds.size);
-        return id;
+    /** A number for each loop's list as typed, in the order the render meets them (see {@link TemplatePlace}). */
+    private readonly listNumbers = new Map<string, number>();
+    /** The place of a tag read in no loop, and through it every place the render has met (see placeOf). */
+    readonly topPlace: PlaceNode = { inside: new Map(), loops: () => [] };
+    listNumber(listText: string): number {
+        let n = this.listNumbers.get(listText);
+        if (n === undefined) this.listNumbers.set(listText, n = this.listNumbers.size);
+        return n;
     }
     readonly ids: IdState | null;
     part = '';
@@ -2228,7 +2240,7 @@ function renderField(node: FieldNode, scope: Scope | null, state: RenderState, o
     const found = lookup(node.path, node.text, scope, state.data);
     if (found === MISSING) {
         // (A tag split across runs is one field: the run it began in stands for it.)
-        if (state.opts.onMissing === 'error' && node.piece === 0) state.opts.onFieldMissing(node.text, placeOf(scope));
+        if (state.opts.onMissing === 'error' && node.piece === 0) state.opts.onFieldMissing(node.text, placeOf(scope, state));
         // 'keep': each piece of the tag stays in its own run, so a tag split across runs keeps each
         // run's formatting (written again, as in a loop, it is a repeat); 'empty': nothing.
         if (state.opts.onMissing === 'keep') {
@@ -2254,7 +2266,7 @@ function renderField(node: FieldNode, scope: Scope | null, state: RenderState, o
         if (node.record.filters) value = applyFilters(value, node.record.filters, node, scope, state);
         // A list, an object, a function or a symbol has no text of its own (a function's would be its source).
         if (isContainer(value) || typeof value === 'function' || typeof value === 'symbol') {
-            state.opts.onDataInvalid({ reason: 'not-text', tag: typedOf(node.record, state.opts), part: state.part, kind: kindOfValue(value) }, placeOf(scope));
+            state.opts.onDataInvalid({ reason: 'not-text', tag: typedOf(node.record, state.opts), part: state.part, kind: kindOfValue(value) }, placeOf(scope, state));
         }
     })) return;
     // Each value's run-XML, made once; a value's first use is the caller's own data, and each later
@@ -2288,7 +2300,7 @@ function renderField(node: FieldNode, scope: Scope | null, state: RenderState, o
 function applyFilters(value: TemplateValue, filters: CompiledFilter[], node: FieldNode, scope: Scope | null, state: RenderState): TemplateValue {
     const unformattable = (filter: string, takes: string, v: TemplateValue): never => state.opts.onDataInvalid({
         reason: 'unformattable', tag: typedOf(node.record, state.opts), part: state.part, kind: kindOfValue(v), filter, takes,
-    }, placeOf(scope));
+    }, placeOf(scope, state));
     let current = value;
     for (const filter of filters) {
         if (filter.kind === 'custom') { current = filter.run(current, ...filter.args); continue; }
@@ -2325,7 +2337,7 @@ function applyFilters(value: TemplateValue, filters: CompiledFilter[], node: Fie
 function blockValue(path: TemplatePath, text: string, scope: Scope | null, state: RenderState): ConditionValue {
     const found = lookup(path, text, scope, state.data);
     if (found !== MISSING) return found.value;
-    if (state.opts.onMissing === 'error') state.opts.onFieldMissing(text, placeOf(scope));
+    if (state.opts.onMissing === 'error') state.opts.onFieldMissing(text, placeOf(scope, state));
     return state.opts.onMissing === 'empty' ? null : MISSING;
 }
 
@@ -2334,7 +2346,7 @@ function renderIf(node: IfNode, scope: Scope | null, state: RenderState, out: st
     const read = (path: TemplatePath, text: string): ConditionValue => blockValue(path, text, scope, state);
     // Comparing two strings reads them: as long as the shorter one.
     const compared = (length: number): void => state.charge(length);
-    const incomparable = (why: Incomparable): never => state.opts.onDataInvalid({ reason: 'incomparable', tag: typedOf(node.branches[branch].record, state.opts), part: state.part, kind: why.left, otherKind: why.right }, placeOf(scope));
+    const incomparable = (why: Incomparable): never => state.opts.onDataInvalid({ reason: 'incomparable', tag: typedOf(node.branches[branch].record, state.opts), part: state.part, kind: why.left, otherKind: why.right }, placeOf(scope, state));
     for (; branch < node.branches.length; branch++) {
         const { condition, cost } = node.branches[branch];
         state.charge(cost);
@@ -2351,13 +2363,13 @@ function renderFor(node: ForNode, scope: Scope | null, state: RenderState, out: 
     const list = blockValue(node.list, node.listText, scope, state);
     if (list === MISSING) { if (!state.opts.checking) renderKept(node.kept, scope, state, out); return; }
     if (list === null || list === undefined) return;
-    if (!Array.isArray(list) && !unlessSkipped(() => state.opts.onDataInvalid({ reason: 'not-a-list', tag: typedOf(node.record, state.opts), part: state.part, kind: kindOfValue(list) }, placeOf(scope)))) return;
+    if (!Array.isArray(list) && !unlessSkipped(() => state.opts.onDataInvalid({ reason: 'not-a-list', tag: typedOf(node.record, state.opts), part: state.part, kind: kindOfValue(list) }, placeOf(scope, state)))) return;
     const items = list as readonly TemplateValue[];
     for (let index = 0; index < items.length; index++) {
         // Each pass costs at least one, so nested loops over long lists stay bounded even with nothing to write.
         state.charge(1);
         const loop: LoopDetails = { index, number: index + 1, first: index === 0, last: index === items.length - 1, length: items.length };
-        renderNodes(node.body, { name: node.name, item: items[index], list: items, listText: node.listText, loopId: state.loopId(node), index, loop, parent: scope }, state, out);
+        renderNodes(node.body, { name: node.name, item: items[index], list: items, listText: node.listText, listNumber: state.listNumber(node.listText), index, loop, parent: scope }, state, out);
     }
 }
 

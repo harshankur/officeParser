@@ -4031,8 +4031,18 @@ async function testTemplateTagsAndCheck(): Promise<void> {
     const entries = Array.from({ length: 12 }, () => ({ rows: Array.from({ length: 1001 }, () => ({})) }));
     const lists = await OfficeTemplate.check(rows, { data: entries, onWarning: (w: any) => batchWarnings.push(w) });
     assert.deepStrictEqual(lists.map(l => l.length), [1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 0, 0], `ten entries of 1,000, then none checked; got ${lists.map(l => l.length)}`);
-    assert.deepStrictEqual(batchWarnings.map(w => [w.details.entry, w.details.limit, !!w.details.batch]).slice(-2), [[8, 1000, false], [9, 10000, true]], 'each entry it stopped in is named, and the batch where it stopped');
-    assert.ok(Object.isFrozen(lists[0][0].loops) && lists[0][0].loops === lists[0][0].loops, "a problem's loops are frozen");
+    assert.deepStrictEqual(batchWarnings.map(w => [w.details.entry, w.details.limit, !!w.details.batch, w.details.unchecked]).slice(-2), [[8, 1000, false, undefined], [9, 10000, true, 2]], 'each entry it stopped in is named, and the batch where it stopped, with the entries not checked');
+    const lastWarnings: any[] = [];
+    const ten = await OfficeTemplate.check(rows, { data: entries.slice(0, 10), onWarning: (w: any) => lastWarnings.push(w) });
+    assert.ok(ten.every(l => l.length === 1000) && lastWarnings.at(-1).details.unchecked === 0 && !/not checked/.test(lastWarnings.at(-1).message), 'a batch stopping in its last entry leaves none unchecked, and says none');
+    const pass = await OfficeTemplate.check(docx(p('{{ for r in rows }}') + p('{{ r.x }} {{ r.y }}') + p('{{ endfor }}')), { data: { rows: [{}] } });
+    assert.ok(pass.length === 2 && Object.isFrozen(pass[0].loops) && pass[0].loops === pass[1].loops, "the problems of one pass share their frozen loops");
+    // Loops over the same list are one place; loops over two lists are two, and a field missing in two parts is two problems.
+    const twice = docx(p('{{ for a in xs }}') + p('{{ a.q }}') + p('{{ endfor }}') + p('{{ for a in xs }}') + p('{{ a.q }}') + p('{{ endfor }}') + p('{{ for b in ys }}') + p('{{ z }}') + p('{{ endfor }}') + p('{{ for c in zs }}') + p('{{ z }}') + p('{{ endfor }}') + p('{{ h }}'),
+        { 'word/header1.xml': `<?xml version="1.0"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${p('{{ h }}')}</w:hdr>` });
+    assert.deepStrictEqual(brief2(await OfficeTemplate.check(twice, { data: { xs: [{}, {}], ys: [1], zs: [1] } })),
+        ['a.q word/document.xml xs[0]', 'a.q word/document.xml xs[1]', 'z word/document.xml ys[0]', 'z word/document.xml zs[0]', 'h word/document.xml', 'h word/header1.xml'],
+        'two loops over one list are one place, two lists two, and two parts two');
     // A long condition is listed in time linear in its paths.
     const longCondition = docx(p(`{{ if ${Array.from({ length: 80000 }, (_, i) => 'p' + i.toString(36)).join(' or ')} }}x{{ endif }}`));
     const listed = await withinTime(4000, () => OfficeTemplate.tags(longCondition));
