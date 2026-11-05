@@ -2189,7 +2189,7 @@ const ast = await officeParser.parseOffice(pdfArrayBuffer, {
 | `md`/`html`/`csv`/`tex` buffer not detected | Add `fileType: 'md'` (or `'html'`, `'csv'`, `'tex'`) to config (these formats have no magic bytes) |
 | LaTeX images or `\input` chapters missing (`LATEX_FILE_NOT_FOUND`) | A `.tex` file does not contain the files it includes. Parse the whole project as a `.zip` (e.g. Overleaf's "Download source"), with `extractAttachments: true` for the images |
 | `IMPROPER_BUFFERS` error | Usually means no file extension and no `fileType` hint was provided for a buffer input |
-| PDF generation fails | The default engine needs the optional peer dependency (`npm install puppeteer`); or switch to the dependency-free native engine with `pdfConfig: { engine: 'native' }` (bundled `pdf-lib`, lighter output, no Chromium) |
+| PDF generation fails | The default engine needs the optional peer dependency (`npm install puppeteer`); or switch to the native engine with `pdfConfig: { engine: 'native' }`, which needs the optional peer dependency `pdf-lib` instead (`npm install pdf-lib`, plus `@pdf-lib/fontkit` when it is given fonts; in the browser, import from `officeparser/browser-native-pdf`): lighter output, no Chromium |
 
 For a full debugging guide, visit the [Live Documentation](https://harshankur.github.io/officeParser/#spec/debugging).
 
