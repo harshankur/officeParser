@@ -46,7 +46,7 @@ export interface TemplateFilter { name: string; args: (string | number)[] }
 export type TemplateBlockTagKind = Exclude<TemplateTag['kind'], 'field'>;
 
 /** A tag read from its text: what it is, or why it cannot be read. `null` text is not a tag (prose). */
-export type TagReading = { ok: true; tag: TemplateTag } | { ok: false; reason: string; misspelled?: true } | null;
+export type TagReading = { ok: true; tag: TemplateTag } | { ok: false; reason: string; misspelled?: true; respelt?: string } | null;
 
 /** Block keywords as other template languages spell them, which mean a block tag here, misspelt. */
 const MISSPELLED = new Map([['elseif', 'else if'], ['elsif', 'else if'], ['elif', 'else if']]); // a Map: `constructor` is no misspelling
@@ -357,11 +357,12 @@ export function readTag(rawText: string): TagReading {
     if (word === KEYWORD.endif || word === KEYWORD.endfor) return { ok: false, reason: `has more after ${word} than ${word} takes` };
     // `elseif`, `elif`, `end if`: a block tag as Jinja, Handlebars or Liquid spell it. Read as prose, the
     // branch it opens vanished without a word; it is a mistake to name at once.
+    // `respelt` is the tag's text as it should be typed: the keyword respelt, the rest as typed.
     const spelling = MISSPELLED.get(word);
-    if (spelling) return { ok: false, misspelled: true, reason: `is written ${word}; a branch is written ${spelling}` };
+    if (spelling) return { ok: false, misspelled: true, reason: `is written ${word}; a branch is written ${spelling}`, respelt: rest ? `${spelling} ${rest}` : spelling };
     if (word === 'end') {
         const [next] = splitFirstWord(rest);
-        if (MISSPELLED_END.has(next) && rest.trim().toLowerCase() === next) return { ok: false, misspelled: true, reason: `is written end ${next}; a block is closed with end${next}` };
+        if (MISSPELLED_END.has(next) && rest.trim().toLowerCase() === next) return { ok: false, misspelled: true, reason: `is written end ${next}; a block is closed with end${next}`, respelt: `end${next}` };
     }
     return null;
 }

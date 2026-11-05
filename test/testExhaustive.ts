@@ -4074,6 +4074,38 @@ async function testTemplateTagsAndCheck(): Promise<void> {
 }
 
 /**
+ * A block keyword spelt as other template languages spell it is refused at once, with the tag as it
+ * should be typed in `details.suggestion` (the spaces typed around its text kept), for every respelling
+ * the tag reader knows: `elseif`, `elsif`, `elif`, `end if`, `end for`.
+ */
+async function testTemplateSuggestions(): Promise<void> {
+    const { p, docx } = ooxmlHelpers();
+    const refusal = async (body: string, config: any = {}) => {
+        try { await OfficeTemplate.tags(docx(body), config); } catch (e: any) { return e.officeIssue; }
+        return null;
+    };
+    for (const [typed, suggestion] of [
+        ['{{ elseif y }}', '{{ else if y }}'], ['{{elif y > 2}}', '{{else if y > 2}}'], ['{{ ElsIf y }}', '{{ else if y }}'],
+        ['{{ end if }}', '{{ endif }}'], ['{{ End If }}', '{{ endif }}'], ['{{  end for  }}', '{{  endfor  }}'],
+    ]) {
+        const closing = typed.toLowerCase().includes('for') ? '{{ endfor }}' : '{{ endif }}';
+        const opening = typed.toLowerCase().includes('for') ? '{{ for i in xs }}' : '{{ if x }}';
+        const issue = await refusal(p(`${opening}a${typed}b${closing}`));
+        assert.strictEqual(issue?.code, 'TEMPLATE_SYNTAX', `${typed} is refused`);
+        assert.strictEqual(issue.details.tag, typed, `${typed}: the tag as typed`);
+        assert.strictEqual(issue.details.suggestion, suggestion, `${typed}: the tag as it should be typed; got ${issue.details.suggestion}`);
+        assert.ok(issue.details.detail.length > 10, `${typed}: the remedy in prose too`);
+    }
+    // With delimiters of the caller's own, the suggestion is written with them.
+    const custom = await refusal(p('<< if x >>a<< elif y >>b<< endif >>'.replace(/</g, '&lt;').replace(/>/g, '&gt;')), { delimiters: { start: '<<', end: '>>' } });
+    assert.strictEqual(custom?.details.suggestion, '<< else if y >>', `a suggestion uses the caller's delimiters; got ${custom?.details.suggestion}`);
+    // Other refusals carry none.
+    const unclosed = await refusal(p('{{ if x }}a'));
+    assert.ok(unclosed && !('suggestion' in unclosed.details), 'an unclosed block has no suggestion');
+    console.log('  Template suggestions: All assertions passed ✓');
+}
+
+/**
  * DOCX templating with block tags: `if`/`else if`/`else`/`endif` and `for`/`endfor`, in each of their
  * scopes (inline, paragraphs, table rows), their conditions, the data they read, the errors they raise,
  * and the document they leave (balanced XML, unique ids, every cell ending in a paragraph).
@@ -12358,6 +12390,7 @@ async function runTests(): Promise<void> {
         ['Template', testTemplate],
         ['Template blocks', testTemplateBlocks],
         ['Template tags and check', testTemplateTagsAndCheck],
+        ['Template suggestions', testTemplateSuggestions],
         ['Chart scripts', testChartScripts],
         ['Markdown header rows', testMarkdownHeaderRows],
         ['RTF header rows', testRtfHeaderRows],

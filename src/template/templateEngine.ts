@@ -448,7 +448,14 @@ function findTagSpans(joined: string, ctx: PartContext): TagSpan[] {
         const span: TagSpan = { start, end: e + endText.length, inner, tag: null, unreadable: null };
         span.tag = tagOfSpan(span);
         // A block keyword misspelt as another template language spells it is a mistake, named at once.
-        if (span.misspelled) ctx.opts.onSyntax({ reason: 'unreadable', tag: typedTag(decodeXmlText(span.inner), ctx.opts), part: ctx.part, detail: span.unreadable ?? '' });
+        if (span.misspelled) {
+            const typed = decodeXmlText(span.inner);
+            // The tag as it should be typed: the keyword respelt, the spaces typed around it kept.
+            const lead = typed.length - typed.trimStart().length;
+            const trail = typed.length - typed.trimEnd().length;
+            const suggestion = span.respelt === undefined ? undefined : typedTag(typed.slice(0, lead) + span.respelt + typed.slice(typed.length - trail), ctx.opts);
+            ctx.opts.onSyntax({ reason: 'unreadable', tag: typedTag(typed, ctx.opts), part: ctx.part, detail: span.unreadable ?? '', ...(suggestion ? { suggestion } : {}) });
+        }
         // `name | word` where the word is no filter is prose, as text between the delimiters always was.
         if (span.tag?.kind === 'field' && span.tag.filters?.some(f => !isFilter(f.name, ctx))) span.tag = null;
         if (span.tag || span.unreadable) spans.push(span);
@@ -488,13 +495,14 @@ function tagOfSpan(span: TagSpan): TemplateTag | null {
     if (!reading.ok) {
         span.unreadable = reading.reason;
         span.misspelled = reading.misspelled === true;
+        if (reading.respelt !== undefined) span.respelt = reading.respelt;
         return null;
     }
     return reading.tag;
 }
 
 /** A run of text between delimiters, and what it was read as. */
-interface TagSpan { start: number; end: number; inner: string; tag: TemplateTag | null; unreadable: string | null; misspelled?: boolean }
+interface TagSpan { start: number; end: number; inner: string; tag: TemplateTag | null; unreadable: string | null; misspelled?: boolean; respelt?: string }
 
 /** Whether a name is a filter: a built-in one, or one of the caller's `formatters`. */
 function isFilter(name: string, ctx: PartContext): boolean {

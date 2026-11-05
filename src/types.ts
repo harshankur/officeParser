@@ -2712,6 +2712,12 @@ export interface TemplateSyntaxDetails {
     part: string;
     /** More about the reason, where there is more to say. */
     detail?: string;
+    /**
+     * The tag as it should be typed, delimiters included, where the reason says how: a block keyword
+     * spelt as other template languages spell it (`{{ elseif x }}`, `{{ elif x }}`) is `{{ else if x }}`,
+     * and `{{ end if }}` is `{{ endif }}`. The spaces typed around the tag's text are kept.
+     */
+    suggestion?: string;
 }
 
 /** Why a template's data was rejected with `TEMPLATE_DATA_INVALID`. */
