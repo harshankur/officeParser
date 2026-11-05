@@ -8,7 +8,7 @@ import { OfficeParser } from '../src/OfficeParser';
 import { withinTime } from './helpers/timing';
 import { testUnicodeChunks } from './generator/unicodeChunks';
 import { testBrotliGuard } from './security/brotliGuard';
-import { testXhtmlReadAsHtml } from './generator/documentShapes';
+import { testRtfListTypesPerLevel, testXhtmlReadAsHtml } from './generator/documentShapes';
 import { OfficeGenerator } from '../src/OfficeGenerator';
 import { bulletCharacter, formatListNumber, readMarkerLabels } from '../src/utils/listMarkers';
 import { decodeBmp, decodeGif } from '../src/utils/rasterUtils';
@@ -12424,6 +12424,7 @@ async function runTests(): Promise<void> {
         ['PDF running lines as parts', testPdfRunningLinesAsParts],
         ['PDF font with no map from glyphs to characters', testPdfUnmappedFont],
         ['XHTML read as HTML', testXhtmlReadAsHtml],
+        ['RTF list types per level', testRtfListTypesPerLevel],
         ['Cancellation', testCancellation],
     ];
 

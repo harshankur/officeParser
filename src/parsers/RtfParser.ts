@@ -901,6 +901,12 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     let currentDefinedListId: number | undefined;
     let currentDefinedListType: 'ordered' | 'unordered' | undefined;
     const listTypeMap: { [key: number]: 'ordered' | 'unordered' } = {};
+    /** Each list definition's type per level (`\listlevel` in order, typed by its `\levelnfc`). */
+    let currentDefinedLevel = -1;
+    let currentDefinedLevelTypes: ('ordered' | 'unordered' | undefined)[] = [];
+    const listLevelTypeMap: { [key: number]: ('ordered' | 'unordered' | undefined)[] } = {};
+    /** The level types of the list behind each list id this parse hands out (`rtf-list-N`). */
+    const levelTypesByListKey: { [key: string]: ('ordered' | 'unordered' | undefined)[] } = {};
 
     // List override state for parsing \listoverridetable
     let parsingListOverrideTable = false;
@@ -1169,7 +1175,10 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 // Use lastKnownListId if currentListId is not set
                 // (happens when list item is detected via listtext/pntext)
                 const effectiveListId = currentListId || lastKnownListId;
-                const effectiveListType = listType || lastKnownListType || 'unordered';
+                // The level's own type where the list definition gives one (chosen by `\ilvl`), so a
+                // bullet list whose deeper levels are numbered stays a bullet list at its first level.
+                const levelType = effectiveListId ? levelTypesByListKey[effectiveListId]?.[paragraphIndent] : undefined;
+                const effectiveListType = levelType || listType || lastKnownListType || 'unordered';
 
                 // Calculate itemIndex
                 let itemIndex = 0;
@@ -1679,6 +1688,10 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     parsingListDefinition = true;
                     currentDefinedListId = undefined;
                     currentDefinedListType = undefined;
+                    currentDefinedLevel = -1;
+                    currentDefinedLevelTypes = [];
+                } else if (parsingListDefinition && node.destination === 'listlevel') {
+                    currentDefinedLevel++;
                 } else if (node.destination === 'listoverridetable') {
                     parsingListOverrideTable = true;
                 } else if (parsingListOverrideTable && node.destination === 'listoverride') {
@@ -1980,6 +1993,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 if (currentDefinedListId !== undefined && currentDefinedListType !== undefined) {
                     listTypeMap[currentDefinedListId] = currentDefinedListType;
                 }
+                if (currentDefinedListId !== undefined) listLevelTypeMap[currentDefinedListId] = currentDefinedLevelTypes;
             } else if (node.destination === 'listoverridetable') {
                 parsingListOverrideTable = false;
             } else if (parsingListOverrideTable && node.destination === 'listoverride') {
@@ -2037,16 +2051,14 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             if (parsingListTable) {
                 if (node.value === 'listid') {
                     currentDefinedListId = node.param;
-                } else if (node.value === 'levelnfc' || node.value === 'levelnfcn') {
-                    // 0 = Arabic, 1 = Upper Roman, 2 = Lower Roman, 3 = Upper Alpha, 4 = Lower Alpha -> Ordered
-                    // 23 = Bullet, 255 = None -> Unordered
-                    const isOrdered = node.param !== undefined && (node.param === 0 || (node.param >= 0 && node.param <= 4));
-                    // Only set if not already set (or prioritize ordered if mixed?)
-                    // We'll assume if any level is ordered, it's ordered.
-                    // Or if we haven't set it yet.
-                    if (!currentDefinedListType || (currentDefinedListType === 'unordered' && isOrdered)) {
-                        currentDefinedListType = isOrdered ? 'ordered' : 'unordered';
-                    }
+                } else if ((node.value === 'levelnfc' || node.value === 'levelnfcn') && node.param !== undefined) {
+                    // 23 is a bullet and 255 no number at all; every other value is a way of numbering
+                    // (0 Arabic, 1-4 Roman and letters, 22 Arabic with a leading zero, and so on).
+                    const levelType = node.param === 23 || node.param === 255 ? 'unordered' : 'ordered';
+                    // Each level is typed on its own (a bullet list whose deeper levels are numbered
+                    // is a bullet list at its first level); the list's own type is its first level's.
+                    if (currentDefinedLevel >= 0) currentDefinedLevelTypes[currentDefinedLevel] = levelType;
+                    if (currentDefinedLevel <= 0 || !currentDefinedListType) currentDefinedListType = levelType;
                 }
                 return;
             }
@@ -2343,6 +2355,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     if (listTypeMap[realListId]) {
                         listType = listTypeMap[realListId];
                     }
+                    if (listLevelTypeMap[realListId]) levelTypesByListKey[currentListId] = listLevelTypeMap[realListId];
                 }
             }
             // List indent level (Word 97+)
