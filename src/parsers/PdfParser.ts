@@ -32,7 +32,7 @@
 import { zlibSync } from 'fflate';
 import { passwordAttemptLimit } from '../crypto/decryptContainer.js';
 import { DEFAULT_OFFICE_PARSER_CONFIG, DEFAULT_PDF_WORKER_SRC } from '../defaults.js';
-import { FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextFormatting, TextMetadata } from '../types.js';
+import { FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TextFormatting, TextMetadata, BreakMetadata, HeaderFooterMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { parseOfficeDate } from '../utils/dateUtils.js';
 import { assertNode, isBrowser } from '../utils/envUtils.js';
@@ -41,13 +41,35 @@ import { crc32, createAttachment } from '../utils/imageUtils.js';
 import { loadPdfJs } from '../utils/moduleLoader.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { collectColorMarks, ColorLookup, makeColorLookup } from './pdf/pdfColor.js';
-import { computeRunBox, identityMatrix, mulMatrix, roundBounds, rotateBoundsToRendered, toMatrix6, unionAll } from './pdf/geometry.js';
+import { collectGlyphs, GlyphFont, PageGlyphs } from './pdf/textGlyphs.js';
+import { collectShapes, PdfShape, shapeBullets } from './pdf/pdfShapes.js';
+import { MarkedContent, readableItems } from './pdf/actualText.js';
+import { askedFonts, GlyphNames } from './pdf/glyphNames.js';
+import { PdfFile } from './pdf/pdfFile.js';
+import { KeptJpegs } from './pdf/pdfJpeg.js';
+import { RuledFrame, ruledFrames, ruledTables, shadeCells, shadeRuns } from './pdf/rulings.js';
+import { annotationMatrix, computeRunBox, identityMatrix, mulMatrix, roundBounds, rotateBoundsToRendered, toMatrix6, unionAll } from './pdf/geometry.js';
 import { PageExtract, PdfImage, PdfLayoutConfig, RawRun, ResolvedFont } from './pdf/pdfTypes.js';
-import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, PageContext, recoverTaggedGrids, runsToParagraph, segmentIntoBlocks } from './pdf/textLayout.js';
+import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, emitBounds, indentLevels as indentLevelsOf, joinMarkerLines, leadingMarker, ListCarry, markerLefts, PageContext, lineDirections, recoverTaggedGrids, rightToLeftLean, relevelHeadings, runsToParagraph, segmentIntoBlocks } from './pdf/textLayout.js';
 import { buildTaggedNodes } from './pdf/structTree.js';
+import { FURNITURE_BAND, findRunningLines, markPageFields, PageFurniture, planFurniture, RunningRuns, unmarkPageFields } from './pdf/runningLines.js';
 import { setOwn } from '../utils/lookupUtils.js';
-import { acquirePdfProcess, PdfProcess } from './pdf/pdfProcess.js';
+import { BROTLI_AVOIDED_LINE, acquirePdfProcess, PdfProcess } from './pdf/pdfProcess.js';
+import { avoidBrotliInThisProcess, BROTLI_FIXED_RELEASES, onBrotliRefused, runtimeHasBrotliFlaw, runtimeName } from '../utils/brotliFlaw.js';
+import { captureConsoleWarnings, openWarningWorker, PdfAssetSession, pdfjsWorkerFile, resolvePdfAssetFolders, WarningWorker } from './pdf/pdfAssets.js';
 import { appendAll } from '../utils/nodeListUtils.js';
+
+/**
+ * Look-alikes of CJK ideographs, which a PDF's font maps text to (Chromium's PDF of 日本語 reads as
+ * ⽇本語, a Kangxi radical first): the Kangxi radicals, the CJK radicals supplement and the
+ * compatibility ideographs. Each is read as the unified ideograph it stands for (its NFKC form), as
+ * pdftotext does, so search, copying and spelling see the text. Nothing else is normalized.
+ */
+const IDEOGRAPH_LOOKALIKE = /[\u2E80-\u2EFF\u2F00-\u2FDF\uF900-\uFAFF]|[\u{2F800}-\u{2FA1F}]/u;
+const IDEOGRAPH_LOOKALIKES = new RegExp(IDEOGRAPH_LOOKALIKE.source, 'gu');
+export function unifyIdeographs(text: string): string {
+    return IDEOGRAPH_LOOKALIKE.test(text) ? text.replace(IDEOGRAPH_LOOKALIKES, ch => ch.normalize('NFKC')) : text;
+}
 
 /** Type guard for a pdf.js TextItem (marked-content items lack `str`/`transform`). */
 function isTextItem(item: any): item is { str: string; transform: number[]; width: number; height: number; fontName: string; dir?: string; hasEOL?: boolean } {
@@ -66,6 +88,75 @@ interface ResolvedHighlight {
     /** Rect in layout (rotation-0) viewport space: [minX, minY, maxX, maxY]. */
     rect: [number, number, number, number];
     color: string;
+}
+
+/**
+ * A form field's widget whose value is read as text (see fieldValueOf), placed at its box by fieldRuns.
+ * Its drawing is left out of the page's (see withoutFieldDrawings): the value is its text.
+ */
+interface ResolvedField {
+    /** pdf.js's id of the widget (its object's), as `beginAnnotation` and the tag tree name it. */
+    id: string;
+    /** Rect in layout (rotation-0) viewport space: [minX, minY, maxX, maxY]. */
+    rect: [number, number, number, number];
+    /** 'box' for a check box's or radio button's state, else 'text'. */
+    kind: 'text' | 'box';
+    text: string;
+    /** The size the field sets its value in (its /DA), 0 where it sizes it to its box. */
+    fontSize: number;
+    /** The colour it sets its value in (its /DA), as `#rrggbb`. */
+    color?: string;
+    /** A field of several lines, set from its box's top; else on its middle. */
+    multiLine: boolean;
+    /** A comb field's boxes (its /MaxLen), its characters one to a box; 0 for any other. */
+    combCells: number;
+    /** Its /Q: 0 at its box's left, 1 centred, 2 at its right. */
+    align: number;
+    /** How far its value is turned on the page (its /MK /R), in degrees clockwise. */
+    turn: number;
+}
+
+/** A ticked and an unticked check box or radio button, as a value of the text (U+2612, U+2610). */
+const TICKED_BOX = '\u2612';
+const UNTICKED_BOX = '\u2610';
+
+/**
+ * What a form field's widget shows, as text, or undefined where it shows nothing to read: a text field's
+ * value (a password field's as a bullet for each character, as the page shows it), a check box or radio
+ * button as ticked or not (U+2612, U+2610; ticked where the field's value is its widget's own state), a
+ * choice field's selected options as they are shown (their display text, several joined by commas). Not
+ * a hidden widget, a push button (a button's caption is its drawing) or a signature, nor a field of no value.
+ */
+function fieldValueOf(annot: any): { kind: 'text' | 'box'; text: string } | undefined {
+    if (annot?.subtype !== 'Widget' || annot.hidden || !annot.rect) return undefined;
+    if (annot.fieldType === 'Tx') {
+        const value = typeof annot.fieldValue === 'string' ? annot.fieldValue : '';
+        if (!value) return undefined;
+        if (!annot.password) return { kind: 'text', text: value };
+        let shown = 0;
+        for (const ch of value) if (ch !== '\n' && ch !== '\r') shown++;
+        return { kind: 'text', text: '\u2022'.repeat(shown) };
+    }
+    if (annot.fieldType === 'Btn') {
+        if (annot.pushButton) return undefined;
+        if (annot.checkBox) return { kind: 'box', text: annot.exportValue !== undefined && annot.fieldValue === annot.exportValue ? TICKED_BOX : UNTICKED_BOX };
+        if (annot.radioButton) return { kind: 'box', text: annot.buttonValue !== undefined && annot.fieldValue === annot.buttonValue ? TICKED_BOX : UNTICKED_BOX };
+        return undefined;
+    }
+    if (annot.fieldType === 'Ch') {
+        const values: unknown[] = Array.isArray(annot.fieldValue) ? annot.fieldValue : [annot.fieldValue];
+        // (Each option's display text by its value, the first of a value: looked up through the options for
+        // each value, a list of many of both took time in the square of the field.)
+        const display = new Map<string, string>();
+        for (const o of Array.isArray(annot.options) ? annot.options : []) {
+            if (o && typeof o.exportValue === 'string' && typeof o.displayValue === 'string' && o.displayValue && !display.has(o.exportValue)) display.set(o.exportValue, o.displayValue);
+        }
+        const shown: string[] = [];
+        for (const value of values) if (typeof value === 'string' && value) shown.push(display.get(value) ?? value);
+        const text = shown.join(', ');
+        return text ? { kind: 'text', text } : undefined;
+    }
+    return undefined;
 }
 
 /** An internal destination: the 0-based target page and its top y in PDF user space (y-up), if any. */
@@ -205,7 +296,7 @@ function resolvePdfLayoutConfig(config: FullOfficeParserConfig): PdfLayoutConfig
     /** Only a number or its text is one here: `num` reads `null`, `true` and '' as 0 or 1. */
     const given = (v: unknown) => typeof v === 'number' || (typeof v === 'string' && v.trim() !== '');
     /** A budget: 0 or more, `Infinity` for no limit. */
-    const budget = (key: 'maxTextItems' | 'maxOperators' | 'maxAnnotations' | 'maxTimeMs'): number => {
+    const budget = (key: 'maxTextItems' | 'maxOperators' | 'maxAnnotations' | 'maxTimeMs' | 'maxImagePixels'): number => {
         const value = p[key];
         if (value === undefined) return defaults[key];
         const n = given(value) ? num(value, NaN, true) : NaN;
@@ -227,6 +318,7 @@ function resolvePdfLayoutConfig(config: FullOfficeParserConfig): PdfLayoutConfig
         headingDetection: p.headingDetection ?? 'auto',
         normalizeText: p.normalizeText !== false,
         extractTextColor: p.extractTextColor !== false, // default true, matching defaults.ts and its siblings
+        keepHeadersAndFootersInPages: p.keepHeadersAndFootersInPages === true,
         includeBounds: !config.ignorePageGeometry,
         separateProcess: p.separateProcess !== false,
         processMemoryMb: memory(),
@@ -234,6 +326,7 @@ function resolvePdfLayoutConfig(config: FullOfficeParserConfig): PdfLayoutConfig
         maxOperators: budget('maxOperators'),
         maxAnnotations: budget('maxAnnotations'),
         maxTimeMs: budget('maxTimeMs'),
+        maxImagePixels: budget('maxImagePixels'),
     };
 }
 
@@ -263,21 +356,39 @@ function parsePageRange(spec: string | undefined, numPages: number): number[] {
     return pages.size ? [...pages].sort((a, b) => a - b) : all();
 }
 
-/** Resolves a font id once per document into name/weight/style plus ascent/descent for geometry. */
+/** A font made only to carry an invisible text layer (Tesseract's and OCRmyPDF's), not a typeface. */
+const TEXT_LAYER_FONT = /^GlyphLessFont$/i;
+
+/**
+ * Resolves a font id once per document into name/weight/style plus ascent/descent for geometry.
+ *
+ * The name is a typeface's, or none: a Type 3 font without a FontName has no typeface (pdf.js names it
+ * "Type3"; a scan's invisible text layer is often in one; Chrome names the system fonts it draws as Type 3
+ * fonts, HiraKakuProN-W3 or ITFDevanagari-Book, and those are typefaces), pdf.js's stand-in for a
+ * font it could not read has a made-up name, and the family in the text content's styles is only ever a CSS
+ * generic one (serif, sans-serif, monospace) pdf.js chose from the font's flags. A font made to carry an
+ * invisible text layer and nothing else (Tesseract's and OCRmyPDF's `GlyphLessFont`) is no typeface either.
+ * Written as a typeface, each put a font no system has into a slide (`<a:latin typeface="Type3"/>`).
+ */
 async function resolveFont(fontKey: string, commonObjs: any, styles: Record<string, any>): Promise<ResolvedFont> {
     const style = styles[fontKey] || {};
     const resolved: ResolvedFont = {
         bold: false,
         italic: false,
-        ascent: typeof style.ascent === 'number' ? style.ascent : 0.8,
-        descent: typeof style.descent === 'number' ? style.descent : -0.2,
+        // A font's ascent and descent as pdf.js gives them, where they are numbers a font has (pdf.js gives NaN
+        // for some fallback fonts: every box of their text was NaN, and a table took it, or it was lost).
+        ascent: Number.isFinite(style.ascent) && style.ascent > 0 && style.ascent <= 2 ? style.ascent : 0.8,
+        descent: Number.isFinite(style.descent) && style.descent <= 0 && style.descent >= -1 ? style.descent : -0.2,
     };
     try {
         if (commonObjs?.has?.(fontKey)) {
             const fontData: any = await new Promise((resolve) => commonObjs.get(fontKey, (d: any) => resolve(d)));
             const rawName: string | undefined = typeof fontData?.name === 'string' ? fontData.name : undefined;
             if (rawName) {
-                resolved.name = rawName.replace(/^[A-Z]{6}\+/, '');
+                // (A Type 3 font is never a composite one: it is not looked for by name.)
+                if (!fontData.isType3Font) resolved.rawName = rawName;
+                const name = rawName.replace(/^[A-Z]{6}\+/, '');
+                if (name && !(fontData.isType3Font && name === 'Type3') && !fontData.isInvalidPDFjsFont && !TEXT_LAYER_FONT.test(name)) resolved.name = name;
                 const lower = rawName.toLowerCase();
                 resolved.bold = lower.includes('bold') || (typeof fontData.black === 'boolean' && fontData.black);
                 resolved.italic = lower.includes('italic') || lower.includes('oblique');
@@ -286,7 +397,6 @@ async function resolveFont(fontKey: string, commonObjs: any, styles: Record<stri
     } catch {
         // Font lookup failed; ascent/descent from styles are enough to proceed.
     }
-    if (typeof style.fontFamily === 'string' && !resolved.name) resolved.name = style.fontFamily;
     return resolved;
 }
 
@@ -301,6 +411,20 @@ function toViewportRect(viewport: any, rect: number[]): [number, number, number,
     const [ax, ay] = applyMatrix(m, rect[0], rect[1]);
     const [bx, by] = applyMatrix(m, rect[2], rect[3]);
     return [Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by)];
+}
+
+/**
+ * A widget's box (viewport space) no larger than this (points) across or high shows nothing: pdf.js gives a
+ * box of no size ([0 0 0 0]) as one point square about its corner.
+ */
+const MIN_WIDGET_SIZE = 1;
+
+/** Whether a widget's box (viewport space) is one a viewer shows: of a size, and on the page as it is shown. */
+function shownWidget(rect: readonly number[], width: number, height: number): boolean {
+    const [x0, y0, x1, y1] = rect;
+    if (![x0, y0, x1, y1].every(Number.isFinite)) return false;
+    if (x1 - x0 <= MIN_WIDGET_SIZE || y1 - y0 <= MIN_WIDGET_SIZE) return false;
+    return x1 > 0 && y1 > 0 && x0 < width && y0 < height;
 }
 
 /** True for a color at or extremely close to black (the default text fill), so it is not reported. */
@@ -334,37 +458,65 @@ function highlightRects(viewport: any, annot: any): [number, number, number, num
     return annot.rect ? [toViewportRect(viewport, annot.rect)] : [];
 }
 
-/** The most distinct links, and highlight areas, read from one page (see resolveAnnotations). */
+/** The most distinct links, highlight areas, and form fields, read from one page (see resolveAnnotations). */
 const MAX_PAGE_ANNOTATIONS = 1000;
 
 /**
- * Resolves a page's Link and Highlight annotations. Links become geometry + hyperlink metadata
+ * Resolves a page's Link, Highlight and Widget annotations. Links become geometry + hyperlink metadata
  * (honoring config flags); highlights become per-quad viewport rects carrying their color, so a run
- * they cover gets a `backgroundColor`. Both come from the single `getAnnotations()` call.
+ * they cover gets a `backgroundColor`; a form field's widget becomes its value at its box (see
+ * fieldValueOf), read as the page's text. All come from the single `getAnnotations()` call.
  */
 async function resolveAnnotations(
     page: any, viewport: any, pdfDocument: any, config: FullOfficeParserConfig,
     destCache: Map<string, SectionTarget | null>, sectionLinks: SectionLinks, work: PdfWorkBudget,
-): Promise<{ links: ResolvedLink[]; highlights: ResolvedHighlight[] }> {
+): Promise<{ links: ResolvedLink[]; highlights: ResolvedHighlight[]; fields: ResolvedField[] }> {
     const links: ResolvedLink[] = [];
     const highlights: ResolvedHighlight[] = [];
-    if (!work.annotationsAllowed) return { links, highlights };
+    const fields: ResolvedField[] = [];
+    if (!work.annotationsAllowed) return { links, highlights, fields };
     let annots: any[];
     try {
         const read = await work.within(page.getAnnotations() as Promise<any[]>);
-        if (!read) return { links, highlights };
+        if (!read) return { links, highlights, fields };
         annots = read;
     } catch (e) {
-        logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, config, page.pageNumber, e);
-        return { links, highlights };
+        logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, config, page.pageNumber, e, { page: page.pageNumber });
+        return { links, highlights, fields };
     }
     annots = annots.slice(0, work.takeAnnotations(annots.length, page.pageNumber));
-    // Each distinct highlight quad and link once, and at most MAX_PAGE_ANNOTATIONS of each: every run on
-    // the page is matched against them, so a page listing one annotation many times, or a highlight of
-    // a huge QuadPoints array, took time in the square of the page.
-    const seenHighlights = new Set<string>(), seenLinks = new Set<string>();
+    // Each distinct highlight quad, link and field once, and at most MAX_PAGE_ANNOTATIONS of each: every
+    // run on the page is matched against them, so a page listing one annotation many times, or a highlight
+    // of a huge QuadPoints array, took time in the square of the page.
+    const seenHighlights = new Set<string>(), seenLinks = new Set<string>(), seenFields = new Set<string>();
     let capped = false;
     for (const annot of annots) {
+        if (annot.subtype === 'Widget') {
+            const value = fieldValueOf(annot);
+            const id = typeof annot.id === 'string' ? annot.id : undefined;
+            if (!value || !id || seenFields.has(id)) continue;
+            // A widget no viewer shows is not read: one of no size (a form's hidden calculation field, at
+            // [0 0 0 0]), or one off the page as it is shown (its crop box). Its value stays in the form's
+            // fields (metadata.nativeProperties.formFields).
+            const rect = toViewportRect(viewport, annot.rect);
+            if (!shownWidget(rect, viewport.width, viewport.height)) continue;
+            if (fields.length >= MAX_PAGE_ANNOTATIONS) { capped = true; continue; }
+            seenFields.add(id);
+            const da = annot.defaultAppearanceData;
+            const size = Number(da?.fontSize);
+            const rotation = ((Math.round(Number(annot.rotation) / 90) * 90 % 360) + 360) % 360 || 0;
+            fields.push({
+                id, rect, kind: value.kind, text: value.text,
+                fontSize: Number.isFinite(size) && size > 0 ? size : 0,
+                color: rgbArrayToHex(da?.fontColor),
+                multiLine: !!annot.multiLine,
+                combCells: annot.comb && Number.isInteger(annot.maxLen) && annot.maxLen > 0 ? annot.maxLen : 0,
+                align: annot.textAlignment === 1 || annot.textAlignment === 2 ? annot.textAlignment : 0,
+                // (Its /R turns it counter-clockwise.)
+                turn: (360 - rotation) % 360,
+            });
+            continue;
+        }
         if (annot.subtype === 'Highlight') {
             // A highlight with no /C renders yellow (pdf.js synthesizes that appearance), so mirror it.
             const color = rgbArrayToHex(annot.color) ?? '#ffff00';
@@ -398,8 +550,8 @@ async function resolveAnnotations(
             links.push({ rect, meta });
         }
     }
-    if (capped) logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, config, page.pageNumber, `the page has more than ${MAX_PAGE_ANNOTATIONS} distinct links or highlight areas; the rest were not read`);
-    return { links, highlights };
+    if (capped) logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, config, page.pageNumber, `the page has more than ${MAX_PAGE_ANNOTATIONS} distinct links, highlight areas or form fields; the rest were not read`, { page: page.pageNumber });
+    return { links, highlights, fields };
 }
 
 /** Finds the highlight color covering a run: its vertical midpoint inside a quad with horizontal overlap. */
@@ -765,6 +917,11 @@ class PdfWorkBudget {
     cancelled = false;
     /** The operator budget ran out: no more operators are read, text still is. */
     operatorsSpent = false;
+    /** The page being read, which the time budget and pdf.js's warnings name; none between pages and after them. */
+    private page: number | undefined;
+    get pageBeingRead(): number | undefined {
+        return this.page;
+    }
     constructor(private pdfDocument: any, private config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, fileBytes: number, private pdfProcess?: PdfProcess) {
         this.textLeft = pdfCfg.maxTextItems + fileBytes;
         this.operatorsLeft = pdfCfg.maxOperators + 4 * fileBytes;
@@ -792,7 +949,7 @@ class PdfWorkBudget {
     private checkTime(): void {
         if (this.spent || this.clockStart === undefined) return;
         const used = this.pdfProcess!.clock() - this.clockStart;
-        if (used >= this.timeLimit) { this.spend('maxTimeMs'); return; }
+        if (used >= this.timeLimit) { this.spend('maxTimeMs', this.page); return; }
         this.timer = setTimeout(() => this.checkTime(), Math.min(MAX_TIMER_MS, Math.max(20, this.timeLimit - used)));
     }
     /**
@@ -826,7 +983,7 @@ class PdfWorkBudget {
         this.annotationsLeft -= count;
         if (this.annotationsLeft < 0 && !this.annotationsWarned) {
             this.annotationsWarned = true;
-            logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, this.config, pageNumber, 'the document\'s annotations passed pdfParserConfig.maxAnnotations (plus one per 32 bytes of the file); from this page on, the rest were not read');
+            logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, this.config, pageNumber, 'the document\'s annotations passed pdfParserConfig.maxAnnotations (plus one per 32 bytes of the file); from this page on, the rest were not read', { page: pageNumber });
         }
         return allowed;
     }
@@ -882,7 +1039,7 @@ class PdfWorkBudget {
         this.operatorsLeft -= count;
         if (this.operatorsLeft >= 0) return true;
         this.operatorsSpent = true;
-        if (!this.cancelled) logWarning(OfficeWarningType.PDF_CONTENT_LIMIT_EXCEEDED, this.config, { limit: 'maxOperators', pageNumber });
+        if (!this.cancelled) logWarning(OfficeWarningType.PDF_CONTENT_LIMIT_EXCEEDED, this.config, { limit: 'maxOperators', pageNumber }, undefined, { page: pageNumber });
         return false;
     }
     /**
@@ -899,12 +1056,16 @@ class PdfWorkBudget {
      * Closes the document once the text or time budget is spent, which stops pdf.js's tasks. A stream
      * being read is left unread rather than cancelled (see leaveUnread).
      */
+    /** Says which page is being read (none once the pages are read), for the time budget's warning and pdf.js's (see PdfAssetSession). */
+    reading(pageNumber: number | undefined): void {
+        this.page = pageNumber;
+    }
     spend(limit: 'maxTextItems' | 'maxTimeMs', pageNumber?: number): void {
         if (this.spent) return;
         this.spent = true;
         clearTimeout(this.timer);
         this.stop();
-        logWarning(OfficeWarningType.PDF_CONTENT_LIMIT_EXCEEDED, this.config, { limit, pageNumber, budgetMs: limit === 'maxTimeMs' ? this.timeLimit : undefined });
+        logWarning(OfficeWarningType.PDF_CONTENT_LIMIT_EXCEEDED, this.config, { limit, pageNumber, budgetMs: limit === 'maxTimeMs' ? this.timeLimit : undefined }, undefined, { page: pageNumber });
         try { Promise.resolve(this.pdfDocument.loadingTask.destroy()).catch(() => { /* already closed */ }); } catch { /* already closed */ }
         // A separate process ends at once, whatever it was doing.
         this.pdfProcess?.end();
@@ -946,20 +1107,52 @@ async function readTextContent(page: any, params: object, work: PdfWorkBudget): 
     return { items, styles };
 }
 
-/** The operators the image and color readers use; the rest (paths, above all) are not kept. */
+/**
+ * At most this many paths are kept on a page, for its shapes (see readOperatorList), and this many of the
+ * operators that set how they are painted (their widths, clips and opacity): a page that clips each thing it
+ * draws (as Skia does) sets a clip for most of its paths, which as paths left fewer of its own kept.
+ */
+const MAX_PATHS_KEPT = 40_000;
+const MAX_PATH_STATES_KEPT = 2 * MAX_PATHS_KEPT;
+/** At most this many operators are kept on a page read for its shapes alone, past which it is left unread. */
+const MAX_SHAPE_OPERATORS = 200_000;
+
+/**
+ * The operators that place a page's glyphs and say how they are drawn (see textGlyphs): read whatever else
+ * the page is read for, as where the text is and whether it is seen is always asked.
+ */
+const TEXT_OPERATORS = ['beginText', 'setTextMatrix', 'moveText', 'setLeadingMoveText', 'setLeading', 'nextLine', 'setTextRise',
+    'setTextRenderingMode', 'showText', 'setFont', 'setCharSpacing', 'setWordSpacing', 'setHScale'];
+
+/** The operators the shape reader uses: paths, their widths, colours and clips, and the state that places them (and the text's, see TEXT_OPERATORS). */
+const shapeOperatorsCache = new WeakMap<object, Set<number>>();
+const shapeOperators = (OPS: any): Set<number> => {
+    let kept = shapeOperatorsCache.get(OPS);
+    if (!kept) {
+        kept = new Set(['save', 'restore', 'transform', 'paintFormXObjectBegin', 'paintFormXObjectEnd', 'beginGroup', 'endGroup', 'beginAnnotation', 'endAnnotation', 'constructPath', 'setLineWidth', 'clip', 'eoClip', 'setGState',
+            'setFillRGBColor', 'setFillColorN', 'setFillTransparent', 'setStrokeRGBColor', 'setStrokeColorN', 'setStrokeTransparent',
+            ...TEXT_OPERATORS].map(name => OPS[name]).filter((op): op is number => typeof op === 'number'));
+        shapeOperatorsCache.set(OPS, kept);
+    }
+    return kept;
+};
+
+/** The operators the image, color, glyph and shape readers use (paths with their paint and width); the rest are not kept. */
 const keptOperatorsCache = new WeakMap<object, Set<number>>();
 const keptOperators = (OPS: any): Set<number> => {
     let kept = keptOperatorsCache.get(OPS);
     if (!kept) {
-        kept = new Set(['save', 'restore', 'transform', 'paintFormXObjectBegin', 'paintFormXObjectEnd', 'dependency',
+        kept = new Set(['save', 'restore', 'transform', 'paintFormXObjectBegin', 'paintFormXObjectEnd', 'beginGroup', 'endGroup', 'beginAnnotation', 'endAnnotation', 'dependency',
             'paintImageXObject', 'paintImageXObjectRepeat', 'paintInlineImageXObject',
             'setFillRGBColor', 'setFillColorN', 'setFillTransparent', 'setStrokeRGBColor', 'setStrokeColorN', 'setStrokeTransparent',
-            'beginText', 'setTextMatrix', 'moveText', 'setLeadingMoveText', 'setLeading', 'nextLine', 'setTextRise',
-            'setTextRenderingMode', 'showText'].map(name => OPS[name]).filter((op): op is number => typeof op === 'number'));
+            ...TEXT_OPERATORS, 'constructPath', 'setLineWidth', 'clip', 'eoClip', 'setGState'].map(name => OPS[name]).filter((op): op is number => typeof op === 'number'));
         keptOperatorsCache.set(OPS, kept);
     }
     return kept;
 };
+
+/** The lists readOperatorList left partway: what they hold is true, and what they do not hold is unknown. */
+const cutLists = new WeakSet<object>();
 
 /**
  * A page's operator list within the budget, holding only what `keep` asks for: nothing when it is read
@@ -970,16 +1163,25 @@ const keptOperators = (OPS: any): Set<number> => {
  * of the list is left unread (see PdfWorkBudget.leaveUnread) and the page keeps what was read of it;
  * later pages read none.
  */
-async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep: 'none' | 'drawing', fonts: readonly string[] = []): Promise<any | null> {
+async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep: 'none' | 'drawing' | 'shapes', fonts: readonly string[] = []): Promise<any | null> {
     if (work.spent || work.operatorsSpent) return null;
-    const kept = keep === 'drawing' ? keptOperators(pdfjs.OPS) : null;
+    // ('shapes': the page's paths, for its bullets and tables, and its text's placing: kept outside the
+    // budget, up to MAX_SHAPE_OPERATORS, and the rest left unread once the fonts are known.)
+    const kept = keep === 'drawing' ? keptOperators(pdfjs.OPS) : keep === 'shapes' ? shapeOperators(pdfjs.OPS) : null;
+    let shapeOps = 0;
     const showText = pdfjs.OPS.showText;
+    // Paths (and their widths, clips and opacity) are kept for the page's shapes, a bounded number of them, costing
+    // none of the budget, as when they were not kept: a plan stamping one symbol thousands of times stays whole.
+    // (The paths and what paints them each to their own bound, and that only while paths are kept.)
+    const stateOps = new Set([pdfjs.OPS.setLineWidth, pdfjs.OPS.clip, pdfjs.OPS.eoClip, pdfjs.OPS.setGState]);
+    let pathsKept = 0, statesKept = 0;
     let stopped!: (partial: any) => void;
     const stop = new Promise<any>(resolve => { stopped = resolve; });
     let done = false;
     /** Stops reading the list, which resolves to what was read of it. */
     const leave = (intentState: any) => {
         done = true;
+        if (intentState?.operatorList) cutLists.add(intentState.operatorList);
         work.leaveUnread(intentState?.streamReader);
         stopped(intentState?.operatorList ?? null);
     };
@@ -993,22 +1195,26 @@ async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep
             if (done) return;
             const fnArray: number[] = [];
             const argsArray: unknown[] = [];
-            let weight = 0;
+            let weight = 0, free = 0;
             if (kept) {
                 for (let i = 0; i < chunk.length; i++) {
                     const fn = chunk.fnArray[i];
                     if (!kept.has(fn)) continue;
+                    if (fn === pdfjs.OPS.constructPath) { if (pathsKept >= MAX_PATHS_KEPT) continue; pathsKept++; free++; }
+                    else if (stateOps.has(fn)) { if (pathsKept >= MAX_PATHS_KEPT || statesKept >= MAX_PATH_STATES_KEPT) continue; statesKept++; free++; }
                     const args = chunk.argsArray[i];
                     fnArray.push(fn);
                     argsArray.push(args);
                     if (fn === showText && Array.isArray(args?.[0])) weight += Math.floor(args[0].length / 64);
                 }
             }
-            if (!work.takeOperators(fnArray.length + weight, page.pageNumber)) { leave(intentState); return; }
+            if (keep === 'shapes') shapeOps += fnArray.length;
+            else if (!work.takeOperators(fnArray.length - free + weight, page.pageNumber)) { leave(intentState); return; }
             const result = original.call(this, { ...chunk, fnArray, argsArray, length: fnArray.length }, intentState);
-            // Read only for the page's fonts: once pdf.js has sent them (it sends a font before the
-            // operators using it), the rest of the list is not needed, and is left unread.
-            if (!kept && !chunk.lastChunk) {
+            // Read only for the page's fonts (or for its shapes, past as many as are kept): once pdf.js has
+            // sent them (it sends a font before the operators using it), the rest of the list is not needed,
+            // and is left unread.
+            if ((!kept || (keep === 'shapes' && shapeOps >= MAX_SHAPE_OPERATORS)) && !chunk.lastChunk) {
                 while (fontsSent < fonts.length && page.commonObjs?.has?.(fonts[fontsSent])) fontsSent++;
                 if (fontsSent === fonts.length) leave(intentState);
             }
@@ -1021,11 +1227,53 @@ async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep
     finally { if (hooked && !done) delete page._renderPageChunk; }
 }
 
+/** At most this many characters of a font's name go into a warning. */
+const MAX_FONT_NAME_REPORTED = 128;
+
+/** What the pages say of fonts that may read as their glyph ids, judged once they are all read (see reportUnmappedFonts). */
+interface UnreadableText {
+    /** pdf.js's id of each font to the pages with readable text in it. */
+    pages: Map<string, number[]>;
+    /** The fonts some item of which that stays in the text had control characters taken out. */
+    controlled: Set<string>;
+    /** The fonts some glyph of which pdf.js read as other than its code, or whose glyphs could not be seen. */
+    mapped: Set<string>;
+}
+
+/**
+ * Warns of each font whose text is likely its glyph ids: control characters were taken out of its text,
+ * every glyph drawn with it read as its own code, and the file says nothing of what its codes are. Once
+ * per name per document, with every page it has text on. After all pages: what the file's bounds spend
+ * here takes nothing from any page's text.
+ */
+function reportUnmappedFonts(unreadable: UnreadableText, fontCache: Map<string, ResolvedFont>, glyphNames: GlyphNames, config: FullOfficeParserConfig): void {
+    // The fonts that may be reported: only fonts of their names are looked for in the file.
+    const candidates: { font: ResolvedFont; rawName: string; pages: number[] }[] = [];
+    for (const [id, pages] of unreadable.pages) {
+        const font = fontCache.get(id);
+        if (unreadable.controlled.has(id) && !unreadable.mapped.has(id) && font?.rawName !== undefined) candidates.push({ font, rawName: font.rawName, pages });
+    }
+    const asked = askedFonts(candidates.map(c => c.rawName));
+    const unmapped = new Map<string, Set<number>>();
+    for (const { font: resolved, rawName, pages } of candidates) {
+        if (!glyphNames.readsGlyphIds(rawName, pages, asked)) continue;
+        // (A file's name for a font goes into a message: of no control characters, and short.)
+        const font = (resolved.name ?? rawName).replace(/[\p{Cc}\p{Cf}]/gu, '').slice(0, MAX_FONT_NAME_REPORTED);
+        let all = unmapped.get(font);
+        if (!all) unmapped.set(font, all = new Set());
+        for (const page of pages) all.add(page);
+    }
+    for (const [font, all] of unmapped) {
+        const pages = [...all].sort((a, b) => a - b);
+        logWarning(OfficeWarningType.PDF_FONT_UNMAPPED, config, { font, pages }, undefined, { page: pages[0] });
+    }
+}
+
 /** Collects one page's text runs, images and annotations into a PageExtract. */
 async function collectPage(
     pdfjs: any, pdfDocument: any, pageNumber: number, config: FullOfficeParserConfig,
     pdfCfg: PdfLayoutConfig, fontCache: Map<string, ResolvedFont>, destCache: Map<string, SectionTarget | null>,
-    sectionLinks: SectionLinks, work: PdfWorkBudget,
+    sectionLinks: SectionLinks, work: PdfWorkBudget, assets: PdfAssetSession, unreadable: UnreadableText, markedContent?: MarkedContent, glyphNames?: GlyphNames, jpegs?: KeptJpegs,
 ): Promise<PageExtract | undefined> {
     const page = await work.within(pdfDocument.getPage(pageNumber) as Promise<any>);
     if (!page) return undefined;
@@ -1053,20 +1301,48 @@ async function collectPage(
     let ops: any = null;
     // Not `config.ocr`: page-image OCR runs over collected images, which require extractAttachments, so
     // ocr alone needs no operator list (and must not fetch one just to discard it).
-    if (newFonts.length || config.extractAttachments || pdfCfg.extractTextColor) {
-        ops = await readOperatorList(pdfjs, page, work, config.extractAttachments || pdfCfg.extractTextColor ? 'drawing' : 'none', newFonts);
-    }
+    // The page's drawing is read too: its shapes (a bullet drawn as a disc, a table's ruling lines) and its
+    // glyphs (where each is drawn, and whether it is seen) tell what its text alone does not.
+    ops = await readOperatorList(pdfjs, page, work, config.extractAttachments || pdfCfg.extractTextColor ? 'drawing' : 'shapes', newFonts);
+    const listCut = !!ops && cutLists.has(ops);
     for (const key of seen) if (!fontCache.has(key)) fontCache.set(key, await resolveFont(key, page.commonObjs, styles));
 
-    // Per-run fill color (opt-in): recovered from the operator list, which is now fetched above.
-    const colorFor: ColorLookup | null = (pdfCfg.extractTextColor && ops)
-        ? makeColorLookup(collectColorMarks(ops, layoutViewport.transform, pdfjs.OPS))
-        : null;
-
     // Past the budget the document is closed: the page keeps the text read, without what pdf.js would read next.
-    const { links, highlights } = work.spent
-        ? { links: [] as ResolvedLink[], highlights: [] as ResolvedHighlight[] }
+    const { links, highlights, fields } = work.spent
+        ? { links: [] as ResolvedLink[], highlights: [] as ResolvedHighlight[], fields: [] as ResolvedField[] }
         : await resolveAnnotations(page, layoutViewport, pdfDocument, config, destCache, sectionLinks, work);
+    // A form field read as its value is not also read as its drawing: its box and a comb's dividers were
+    // ruling lines (a table of the box beside the label), and the value its appearance draws a colour.
+    if (ops && fields.length) ops = withoutFieldDrawings(ops, new Set(fields.map(f => f.id)), pdfjs.OPS);
+
+    // The codes of the page's fonts read by their glyphs' names, where pdf.js reads them as their own
+    // characters ("ni!ht" for "nicht", see glyphNames), normalized as the page's text items are.
+    const codeTexts = ops && !work.spent ? glyphNames?.codeTextsOf(pageNumber - 1, ops, pdfjs.OPS) : undefined;
+    const normalized = (text: string): string => pdfCfg.normalizeText && typeof pdfjs.normalizeUnicode === 'function' ? pdfjs.normalizeUnicode(text) : text;
+
+    // The page's glyphs as it draws them: where each is, how far it advances, and whether it is seen (see
+    // textGlyphs). The fonts the list names are in `commonObjs` once it is read.
+    const glyphFonts = new Map<string, GlyphFont | undefined>();
+    const glyphFont = (id: string): GlyphFont | undefined => {
+        if (!glyphFonts.has(id)) {
+            let font: GlyphFont | undefined;
+            try {
+                const data = page.commonObjs?.has?.(id) ? page.commonObjs.get(id) : undefined;
+                if (data && typeof data === 'object') font = { fontMatrix: Array.isArray(data.fontMatrix) || ArrayBuffer.isView(data.fontMatrix) ? data.fontMatrix : undefined, vertical: !!data.vertical };
+            } catch { font = undefined; }
+            const texts = codeTexts?.get(id);
+            if (texts) font = { ...font, codeTexts: new Map([...texts].map(([code, text]) => [code, normalized(text)])) };
+            glyphFonts.set(id, font);
+        }
+        return glyphFonts.get(id);
+    };
+    const glyphs: PageGlyphs | undefined = ops ? collectGlyphs(ops, pdfjs.OPS, glyphFont) : undefined;
+    if (glyphs) for (const [id, mapped] of glyphs.read) if (mapped) unreadable.mapped.add(id);
+
+    // Per-run fill color (opt-in): recovered from the operator list, which is now fetched above.
+    const colorFor: ColorLookup | null = (pdfCfg.extractTextColor && glyphs)
+        ? makeColorLookup(collectColorMarks(glyphs.shows, layoutViewport.transform))
+        : null;
 
     // Walk items, tracking the marked-content stack for mcid / Artifact scope.
     // Each entry carries the nearest mcid and whether an Artifact encloses it, set when pushed, so a run
@@ -1074,7 +1350,11 @@ async function collectPage(
     // thousands deep took time in the square of the page.
     const stack: { mcid: string | null; artifact: boolean }[] = [];
     const runs: RawRun[] = [];
-    for (const item of textContent.items) {
+    const readable = new Set<string>();
+    // The text a producer gave its glyph clusters (ActualText), where the glyphs map to none of it.
+    // Read from the file only for a page whose text has marked content, and once its budget allows.
+    const hasMarked = !work.spent && textContent.items.some((it: any) => it.type === 'beginMarkedContentProps' || it.type === 'beginMarkedContent');
+    for (const item of readableItems(textContent.items, hasMarked ? markedContent?.eventsOf(pageNumber - 1) : undefined, pdfCfg.normalizeText, glyphs)) {
         if (!isTextItem(item)) {
             const type = (item as any).type as string | undefined;
             if (type === 'beginMarkedContent' || type === 'beginMarkedContentProps') {
@@ -1086,12 +1366,25 @@ async function collectPage(
             }
             continue;
         }
+        if ((item as { controlsTaken?: boolean }).controlsTaken) unreadable.controlled.add(item.fontName);
+        if (/[^\s\p{Cc}\p{Cf}]/u.test(item.str)) readable.add(item.fontName);
         if (!item.str) continue;
         const font = fontCache.get(item.fontName) || { bold: false, italic: false, ascent: 0.8, descent: -0.2 };
         const m = pdfjs.Util.transform(layoutViewport.transform, item.transform);
         const box = computeRunBox(m, item.width || 0, font.ascent, font.descent);
+        // A run placed nowhere a number says (a matrix of NaN or infinities): after the run before it, on its line.
+        if (!Number.isFinite(box.x) || !Number.isFinite(box.yBaseline)) {
+            const prev = runs[runs.length - 1];
+            box.x = prev ? prev.x + prev.width : 0;
+            box.yBaseline = prev ? prev.yBaseline : box.fontSize;
+            box.yTop = box.yBaseline - 0.8 * box.fontSize;
+            box.height = box.fontSize;
+            box.angle = 0;
+        }
 
         const formatting: TextFormatting = {};
+        // Drawn invisibly (rendering mode 3 or 7: a scan's recognised text over its picture): read, and marked so.
+        if ((item as { invisible?: boolean }).invisible) formatting.invisible = true;
         if (font.name) formatting.font = font.name;
         if (font.bold) formatting.bold = true;
         if (font.italic) formatting.italic = true;
@@ -1114,7 +1407,10 @@ async function collectPage(
         const mcid = top?.mcid ?? null, inArtifact = !!top?.artifact;
 
         const dir = (item.dir === 'rtl' || item.dir === 'ttb') ? item.dir : 'ltr';
-        const angle = box.angle === -1 ? 0 : box.angle;
+        // A run at an angle no quarter turn is keeps it: read as level text at its origin, it was
+        // scrambled into the lines around it, or lost.
+        const angle = box.angle;
+        const turn = (Math.round(Math.atan2(m[1], m[0]) * 180 / Math.PI) % 360 + 360) % 360;
 
         // Split the item at annotation x-boundaries so a link only covers the characters it actually
         // spans, instead of the whole phrase run it merely grazes. Adjacent unlinked segments re-merge
@@ -1124,7 +1420,7 @@ async function collectPage(
             ? segmentByLinks(box.x, box.width, box.yTop, box.height, len, links)
             : [{ start: 0, end: len, link: linkForBox(box.x, box.yTop, box.width, box.height, links) }];
         for (const seg of segments) {
-            const segText = item.str.slice(seg.start, seg.end);
+            const segText = unifyIdeographs(item.str.slice(seg.start, seg.end));
             if (!segText) continue;
             const segX = box.x + (len ? (seg.start / len) * box.width : 0);
             const segW = len ? ((seg.end - seg.start) / len) * box.width : box.width;
@@ -1134,6 +1430,7 @@ async function collectPage(
                 fontSize: box.fontSize,
                 dir,
                 angle,
+                turn,
                 mcid, inArtifact,
                 formatting,
                 link: seg.link,
@@ -1141,11 +1438,21 @@ async function collectPage(
         }
     }
 
+    for (const id of readable) {
+        const pages = unreadable.pages.get(id);
+        if (pages) pages.push(pageNumber); else unreadable.pages.set(id, [pageNumber]);
+        // (A glyph of the font not seen in the page's list, or the list cut, says nothing of whether pdf.js mapped it.)
+        if (glyphs?.read.get(id) === undefined || listCut) unreadable.mapped.add(id);
+    }
+
+    // The form's values, in their boxes among the page's text (see fieldRuns).
+    appendAll(runs, fieldRuns(fields, runs, pdfCfg, work, pageNumber));
+
     // OCR of page images is emitted through the attachment path (`emitImage` requires
     // extractAttachments), so collecting images for `ocr` alone would decode and then drop them.
     // Gate on extractAttachments only; `ocr` without it raised OCR_REQUIRES_ATTACHMENTS above.
     const images = config.extractAttachments && !work.spent
-        ? await collectImages(pdfjs, page, layoutViewport, config, pageNumber, work, ops)
+        ? await collectImages(pdfjs, page, layoutViewport, config, pdfCfg, pageNumber, work, assets, ops, jpegs)
         : [];
 
     let structTree: unknown | null = null;
@@ -1155,18 +1462,113 @@ async function collectPage(
 
     if (typeof page.cleanup === 'function' && !work.spent) { try { page.cleanup(); } catch { /* best effort */ } }
 
-    return { pageNumber, width, height, authoredW, authoredH, authoredY1, rotation, runs, images, structTree };
+    const shapes = ops ? collectShapes(ops, layoutViewport.transform, pdfjs.OPS) : [];
+    // Text standing on a filled rectangle keeps its colour (white text on a coloured bar); read from the
+    // drawing like the text's own colour, so asked for with it.
+    if (pdfCfg.extractTextColor) shadeRuns(runs, shapes, authoredW, authoredH);
+
+    return { pageNumber, width, height, authoredW, authoredH, authoredY1, rotation, runs, images, structTree, shapes };
+}
+
+/**
+ * An operator list without what is drawn for the widgets `ids` names (between their `beginAnnotation` and
+ * `endAnnotation`): the form fields read as their values (see fieldRuns).
+ */
+function withoutFieldDrawings(ops: any, ids: ReadonlySet<string>, OPS: any): any {
+    const fnArray: number[] = [], argsArray: unknown[] = [];
+    const from: number[] = ops?.fnArray ?? [], args: unknown[] = ops?.argsArray ?? [];
+    // (How deep inside a widget left out the list is: pdf.js does not nest them, a list may.)
+    let inside = 0;
+    for (let i = 0; i < from.length; i++) {
+        const fn = from[i];
+        if (inside) {
+            if (fn === OPS.beginAnnotation) inside++;
+            else if (fn === OPS.endAnnotation) inside--;
+            continue;
+        }
+        if (fn === OPS.beginAnnotation && ids.has(String((args[i] as unknown[] | undefined)?.[0]))) { inside = 1; continue; }
+        fnArray.push(fn);
+        argsArray.push(args[i]);
+    }
+    return { ...ops, fnArray, argsArray };
+}
+
+/** The share of a value's size its letters rise above its baseline, as a run's font's ascent is (see computeRunBox). */
+const FIELD_ASCENT = 0.8;
+
+/**
+ * A page's form field values (see fieldValueOf) as runs of its text, one for each line of a value, in its
+ * widget's box: a check box's state over its box, a comb field's characters across the boxes they fill, a
+ * line of text from its box's left (or centred, or at its right, as the field aligns it), on the box's
+ * middle (a field of several lines from its top, a line under another). Each is the field's own: its size
+ * (TextFormatting.size) is the field's, its colour the field's under `extractTextColor`, and its marked
+ * content its widget's, by which a tagged PDF's /Form element finds it. Laid out at the page's text size at
+ * most: a value set larger than the label beside it (a form generator sizes it to its box) took a line of
+ * its own, and a heading's place. Each line costs the text budget as a text item does.
+ */
+function fieldRuns(fields: readonly ResolvedField[], pageRuns: readonly RawRun[], pdfCfg: PdfLayoutConfig, work: PdfWorkBudget, pageNumber: number): RawRun[] {
+    const out: RawRun[] = [];
+    if (!fields.length) return out;
+    // The size most of the page's letters are set in, a half point apart.
+    const weight = new Map<number, number>();
+    for (const r of pageRuns) {
+        const n = r.angle === 0 ? r.text.trim().length : 0;
+        if (n) { const size = Math.round(r.fontSize * 2) / 2; weight.set(size, (weight.get(size) ?? 0) + n); }
+    }
+    let pageSize = 0, most = 0;
+    for (const [size, n] of weight) if (n > most) { most = n; pageSize = size; }
+    for (const f of fields) {
+        const [x0, y0, x1, y1] = f.rect;
+        const w = x1 - x0, h = y1 - y0;
+        const lines = f.kind === 'box' ? [f.text] : f.text.split(/\r\n|\r|\n/);
+        const allowed = work.takeText(lines.map(str => ({ str })));
+        // The box's height across its value's lines (its width, for a value turned a quarter).
+        const across = f.turn % 180 === 0 ? h : w;
+        // The size the field sets its value in, or one its box gives where it sets none: a mark most of the
+        // box's height, a line of text in a box of a line and a third, or 12 points in a box of several.
+        const auto = f.kind === 'box' ? 0.8 * across : f.multiLine ? Math.min(12, across / 1.35) : across / 1.35;
+        const shown = Math.min(f.fontSize > 0 ? f.fontSize : auto > 0 ? auto : 12, 10_000);
+        const size = Math.max(1, Math.min(shown, across > 0 ? across : shown, pageSize > 0 ? pageSize : shown));
+        const formatting: TextFormatting = { size: `${Math.round(shown * 2) / 2}pt` };
+        if (pdfCfg.extractTextColor && f.color && !isNearBlack(f.color)) formatting.color = f.color;
+        const stacked = f.multiLine || lines.length > 1;
+        const angle = (f.turn === 90 || f.turn === 180 || f.turn === 270 ? f.turn : 0) as RawRun['angle'];
+        for (let i = 0; i < allowed; i++) {
+            const text = lines[i];
+            if (!text) continue;
+            let x = x0, width = w, yTop = y0, height = h;
+            if (angle === 0) {
+                height = size;
+                yTop = stacked ? y0 + Math.min(2, Math.max(0, h - size)) + i * 1.15 * size : y0 + (h - size) / 2;
+                if (f.combCells) width = Math.min(w, (w / f.combCells) * [...text].length);
+                else if (f.kind === 'text') {
+                    width = Math.min(Math.max(0, w - 4), 0.5 * size * text.length);
+                    x = f.align === 1 ? x0 + (w - width) / 2 : f.align === 2 ? x1 - 2 - width : x0 + Math.min(2, w / 2);
+                }
+            }
+            const run: RawRun = {
+                text, x, yTop, yBaseline: yTop + FIELD_ASCENT * size, width, height, fontSize: size,
+                dir: 'ltr', angle, turn: f.turn, mcid: `pdfjs_internal_id_${f.id}`, inArtifact: false, formatting, formField: f.kind,
+                fieldBox: { x: x0, width: w },
+            };
+            if (rightToLeftLean([run]) > 0) run.dir = 'rtl';
+            out.push(run);
+        }
+        // Past the text budget the document is closed (see readTextContent).
+        if (allowed < lines.length) { work.spend('maxTextItems', pageNumber); break; }
+    }
+    return out;
 }
 
 /** Extracts images from a page's operator list, positioned in layout-viewport space. */
-async function collectImages(pdfjs: any, page: any, viewport: any, config: FullOfficeParserConfig, pageNumber: number, work: PdfWorkBudget, prefetchedOps?: any): Promise<PdfImage[]> {
+async function collectImages(pdfjs: any, page: any, viewport: any, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, pageNumber: number, work: PdfWorkBudget, assets: PdfAssetSession, prefetchedOps?: any, jpegs?: KeptJpegs): Promise<PdfImage[]> {
     const images: PdfImage[] = [];
     try {
         const ops = prefetchedOps || await readOperatorList(pdfjs, page, work, 'drawing');
         if (!ops) return images;
         const fnArray = ops.fnArray;
         const argsArray = ops.argsArray;
-        // Graphics-state CTM, tracked exactly as `collectColorMarks` tracks it: an image fills the
+        // Graphics-state CTM, tracked exactly as `collectGlyphs` (textGlyphs) tracks it: an image fills the
         // unit square under the CTM in force when it is painted, and that CTM is built from the page
         // `cm`s, the surrounding `q`/`Q` brackets and any form XObject's `/Matrix`. Reading back only
         // the nearest preceding `transform` gets the image's own placement matrix but none of its
@@ -1174,17 +1576,31 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
         // every image mirrored, and an image inside a form got the form-local box.
         let ctm = identityMatrix();
         const ctmStack: number[][] = [];
+        // Whether what is drawn is a soft mask's own contents (its group form, `/G`): a picture there shapes
+        // what is painted through the mask and is not shown.
+        let inMask = false;
+        const maskStack: boolean[] = [];
         let inlineSeq = 0;
         let missingReported = false;
+        // A picture pdf.js could not decode (its data damaged, in a format it cannot read, or needing a
+        // decoder that could not be loaded) arrives as nothing, or as no pixels: reported once for each
+        // picture, with its page and why where pdf.js said (see PdfAssetSession.undecodablePicture).
+        const undecodable = new Set<string>();
+        const reportUndecodable = (imgName: string): void => {
+            if (undecodable.has(imgName)) return;
+            undecodable.add(imgName);
+            logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `from page ${pageNumber}`, assets.undecodablePicture(String(imgName)), { page: pageNumber });
+        };
 
         /**
          * Encodes one decoded image object to PNG at the current CTM and records it. Shared by the
-         * named-XObject, repeated-XObject and inline-image ops so all three collect identically. The
-         * megapixel guard bounds an inline image's allocation (pdf.js `maxImageSize` gates decoded
-         * XObjects, but an inline image's declared dimensions reach `convertToRgbaBuffer` directly).
+         * named-XObject, repeated-XObject and inline-image ops so all three collect identically. pdf.js's
+         * `maxImageSize` gates a picture by the dimensions its dictionary declares; the pixel guard here
+         * bounds the allocation by the dimensions the decoded picture has (a JPEG 2000 stream's own can
+         * differ), against the same `maxImagePixels`.
          */
         const pushImage = async (imgObj: any, imgName: string, placement: number[] = ctm): Promise<void> => {
-            if (!imgObj) return;
+            if (!imgObj) { reportUndecodable(imgName); return; }
             if (isBrowser && !imgObj.data && imgObj.bitmap) {
                 try {
                     const canvas = document.createElement('canvas');
@@ -1192,12 +1608,12 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
                     const ctx = canvas.getContext('2d');
                     if (ctx) { ctx.drawImage(imgObj.bitmap, 0, 0); imgObj.data = ctx.getImageData(0, 0, imgObj.width, imgObj.height).data; imgObj.kind = 3; }
                 } catch (e) {
-                    logWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, config, undefined, e);
+                    logWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, config, undefined, e, { page: pageNumber });
                 }
             }
-            if (!(imgObj.data && imgObj.width > 0 && imgObj.height > 0)) return;
-            if (imgObj.width * imgObj.height > 40_000_000) {
-                logWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, config, `image on page ${pageNumber} is too large to extract (${imgObj.width}x${imgObj.height} pixels)`);
+            if (!(imgObj.data && imgObj.width > 0 && imgObj.height > 0)) { reportUndecodable(imgName); return; }
+            if (imgObj.width * imgObj.height > pdfCfg.maxImagePixels) {
+                logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `from page ${pageNumber}`, `the picture ${String(imgName)} (${imgObj.width}x${imgObj.height} pixels) is larger than pdfParserConfig.maxImagePixels (${pdfCfg.maxImagePixels} pixels); raise the option to extract it`, { page: pageNumber });
                 return;
             }
             // `placement` maps the image's unit square onto the page ([a,b,c,d,e,f]); it defaults to the
@@ -1206,11 +1622,18 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
             // page goes out of scope instead of being retained until the emit pass.
             const bounds = imageBounds(viewport, placement);
             try {
+                // A picture the PDF stores as a JPEG that shows as its pixels do stays that JPEG, not a PNG
+                // of its pixels many times its size (see pdfJpeg); any other is encoded.
+                const jpeg = jpegs?.keep(imgObj.ref, imgObj.width, imgObj.height);
+                if (jpeg) {
+                    images.push({ name: imgName, bounds, data: jpeg, format: 'jpeg', pixelWidth: imgObj.width, pixelHeight: imgObj.height });
+                    return;
+                }
                 const rgba = convertToRgbaBuffer(imgObj.data, imgObj.width, imgObj.height, imgObj.kind);
                 const png = encodePng(imgObj.width, imgObj.height, new Uint8Array(rgba));
-                images.push({ name: imgName, bounds, png, pixelWidth: imgObj.width, pixelHeight: imgObj.height });
+                images.push({ name: imgName, bounds, data: png, format: 'png', pixelWidth: imgObj.width, pixelHeight: imgObj.height });
             } catch (e) {
-                logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `on page ${pageNumber}`, e);
+                logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `on page ${pageNumber}`, e, { page: pageNumber });
             }
         };
 
@@ -1226,6 +1649,11 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
                 continue;
             }
             if (fn === pdfjs.OPS.paintFormXObjectEnd) { if (ctmStack.length) ctm = ctmStack.pop()!; continue; }
+            if (fn === pdfjs.OPS.beginGroup) { maskStack.push(inMask); if (argsArray[j]?.[0]?.smask) inMask = true; continue; }
+            if (fn === pdfjs.OPS.endGroup) { inMask = maskStack.pop() ?? false; continue; }
+            // An annotation's appearance (a stamp's picture), in its own place on the page (see annotationMatrix).
+            if (fn === pdfjs.OPS.beginAnnotation) { ctmStack.push(ctm); ctm = annotationMatrix(argsArray[j]); continue; }
+            if (fn === pdfjs.OPS.endAnnotation) { if (ctmStack.length) ctm = ctmStack.pop()!; continue; }
             if (fn === pdfjs.OPS.dependency) {
                 for (const dep of argsArray[j]) {
                     try {
@@ -1245,7 +1673,7 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
                         }));
                         if (arrived === false) work.objectWaitRanOut();
                     } catch (e) {
-                        logWarning(OfficeWarningType.DEPENDENCY_LOAD_FAILED, config, dep, e);
+                        logWarning(OfficeWarningType.DEPENDENCY_LOAD_FAILED, config, dep, e, { page: pageNumber });
                     }
                 }
             }
@@ -1253,6 +1681,7 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
             // The repeat positions do not change the pixels, so collect the bitmap once at the current
             // placement. (`paintImageMaskXObject` is deliberately not collected: a stencil mask is painted
             // in the current fill colour, which this pass does not track, so it has no faithful bitmap.)
+            if (inMask && (fn === pdfjs.OPS.paintImageXObject || fn === pdfjs.OPS.paintImageXObjectRepeat || fn === pdfjs.OPS.paintInlineImageXObject)) continue;
             if (fn === pdfjs.OPS.paintImageXObject || fn === pdfjs.OPS.paintImageXObjectRepeat) {
                 const imgName = argsArray[j][0];
                 // A repeated (tiled) image is placed at each `[scaleX,0,0,scaleY, x,y]` from the args,
@@ -1271,7 +1700,7 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
                     if (!hasObj && page.commonObjs.has(imgName)) { hasObj = true; targetObjs = page.commonObjs; }
                     if (!hasObj) {
                         // Not dropped silently: once per page, the images pdf.js never sent are reported.
-                        if (!missingReported) logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `from page ${pageNumber}`, `pdf.js did not send the image ${String(imgName)} it draws (or others after it on the page)`);
+                        if (!missingReported) logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `from page ${pageNumber}`, `pdf.js did not send the image ${String(imgName)} it draws (or others after it on the page)`, { page: pageNumber });
                         missingReported = true;
                         continue;
                     }
@@ -1290,7 +1719,7 @@ async function collectImages(pdfjs: any, page: any, viewport: any, config: FullO
             }
         }
     } catch (e) {
-        logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `from page ${pageNumber}`, e);
+        logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `from page ${pageNumber}`, e, { page: pageNumber });
     }
     return images;
 }
@@ -1371,12 +1800,24 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // bitmap, and getOperatorList otherwise decodes every image on every page for nothing. We read
     // image bytes only when collecting attachments (page-image OCR runs over collected images too, so
     // `ocr` alone - without extractAttachments - collects nothing and must NOT raise this). When we do
-    // need pixels, cap at a generous 40 megapixels so a decompression-bomb image (a few bytes of
-    // headers declaring enormous dimensions) cannot drive a multi-GB, uncatchable allocation.
+    // need pixels, cap at `pdfParserConfig.maxImagePixels` (40 megapixels by default) so a
+    // decompression-bomb image (a few bytes of headers declaring enormous dimensions) cannot drive a
+    // multi-GB, uncatchable allocation; pdf.js reads anything but a whole number as no limit.
     // `ocr: true` without `extractAttachments: true` collects no images, so no OCR runs and no page
     // image is decoded for it. The OCR_REQUIRES_ATTACHMENTS warning is raised centrally in OfficeParser
     // (it applies to every format, not just PDF), so it is not repeated here.
-    const maxImageSize = config.extractAttachments ? 40_000_000 : 1;
+    const maxImageSize = !config.extractAttachments ? 1 : Number.isFinite(pdfCfg.maxImagePixels) ? Math.floor(pdfCfg.maxImagePixels) : -1;
+
+    // The CMaps and image decoders pdf.js may need, and what its worker says it left out (see pdfAssets).
+    const assets = new PdfAssetSession(await resolvePdfAssetFolders(config), config, pdfCfg.maxImagePixels);
+    // A PDF's Brotli stream decoded by pdf.js itself, on a runtime whose decoder has a flaw (see brotliFlaw): said once a parse.
+    let brotliAvoidedSaid = false;
+    const brotliAvoided = () => {
+        if (brotliAvoidedSaid) return;
+        brotliAvoidedSaid = true;
+        logWarning(OfficeWarningType.BROTLI_DECODER_AVOIDED, config, { what: "this PDF's Brotli streams were", runtime: runtimeName(), fixed: BROTLI_FIXED_RELEASES });
+    };
+    const takeWarning = (line: string) => { if (line === BROTLI_AVOIDED_LINE) brotliAvoided(); else assets.workerWarning(line); };
 
     // pdf.js's worker in a process of its own (see pdfProcess), so what pdf.js does inside one stream
     // cannot exhaust this one's memory. Only for a worker Node can import from disk; one the caller
@@ -1388,15 +1829,91 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         if (!pdfProcess) logWarning(OfficeWarningType.PDF_SEPARATE_PROCESS_UNAVAILABLE, config);
     }
     if (!pdfProcess && !isBrowser) settleCallerPreloadedWorker();
+    // pdf.js's worker for this parse runs at warning verbosity, and its warnings are taken: from the
+    // separate process's messages; in this process from the console while the parse's document is open
+    // (see takeInProcessTurn and captureConsoleWarnings), in a PDFWorker of the parse's own, as also in a
+    // browser whose caller preloaded pdf.js's worker to run on the page (`globalThis.pdfjsWorker`: no
+    // Worker is started, nothing is fetched); in another browser from a Worker that sends them back (see
+    // openWarningWorker), or, where none can be made, from nowhere, pdf.js starting its own. In this
+    // process a worker whose file cannot be told (see pdfjsWorkerFile) runs at verbosity 0, as pdf.js
+    // did before its warnings were taken: its lines could not be told from the caller's own.
+    let ownWorker: WarningWorker | undefined;
+    let inProcessTurn: (() => Promise<() => void>) | undefined;
     try {
-        return await readPdf(pdfjs, buffer, config, pdfCfg, maxImageSize, pdfProcess);
+        if (pdfProcess) {
+            pdfProcess.onWarning(takeWarning);
+        } else if (isBrowser && !callerPreloadedWorker()) {
+            ownWorker = await openWarningWorker(pdfjs, String(pdfjs.GlobalWorkerOptions.workerSrc ?? ''), takeWarning, config.abortSignal);
+        } else {
+            // A worker port the caller set is pdf.js's to use; one PDFWorker per port.
+            const workerFile = pdfjs.GlobalWorkerOptions.workerPort ? undefined : await pdfjsWorkerFile(pdfjs);
+            if (!pdfjs.GlobalWorkerOptions.workerPort) {
+                const worker = new pdfjs.PDFWorker({ verbosity: workerFile ? 1 : 0 });
+                ownWorker = { worker, close: () => worker.destroy() };
+            }
+            if (runtimeHasBrotliFlaw()) avoidBrotliInThisProcess();
+            inProcessTurn = async () => {
+                const endTurn = await takeInProcessTurn(config.abortSignal);
+                const stopCapture = workerFile ? captureConsoleWarnings(takeWarning, workerFile) : undefined;
+                onBrotliRefused(brotliAvoided);
+                return () => { onBrotliRefused(undefined); stopCapture?.(); endTurn(); };
+            };
+        }
+        return await readPdf(pdfjs, buffer, config, pdfCfg, maxImageSize, pdfProcess, assets, pdfProcess?.worker ?? ownWorker?.worker, inProcessTurn);
     } finally {
+        assets.close();
+        try { ownWorker?.close(); } catch { /* already ended */ }
         pdfProcess?.release();
     }
 };
 
-/** Opens the document, retrying with an onPassword-supplied password when it is encrypted, and reads it. */
-async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, maxImageSize: number, pdfProcess: PdfProcess | undefined): Promise<OfficeParserAST> {
+/**
+ * pdf.js in this process has one document open at a time. Its image decoders keep the message handler
+ * of the document opened last in a static field (pdf.js's `WasmImage`), so with two documents open in
+ * one worker, a decoder the first asked for after the second had closed waited on a closed handler
+ * forever: of two parses at once, the one finishing first left the other's JBIG2 or JPEG 2000 pictures
+ * hanging. A separate process reads one document at a time already, and each browser document has a
+ * Worker of its own. A turn lasts from opening a document to closing it (see readPdf), and no code of
+ * the caller's is waited on in it: `onPassword` is asked with no document open, OCR runs once the
+ * document is closed, and `onWarning` is called, not waited on. A parse an `onPassword` waits on, or
+ * any other, so takes its turn in between. The turn is waited for until `signal` aborts; the document
+ * before it is bounded by its own parse's limits.
+ */
+let inProcessTail: Promise<void> = Promise.resolve();
+async function takeInProcessTurn(signal?: AbortSignal | null): Promise<() => void> {
+    checkAbortSignal(signal);
+    const before = inProcessTail;
+    let end!: () => void;
+    const turn = new Promise<void>(resolve => { end = resolve; });
+    inProcessTail = before.then(() => turn);
+    if (!signal) {
+        await before;
+        return end;
+    }
+    let onAbort!: () => void;
+    const aborted = new Promise<never>((_, reject) => {
+        onAbort = () => reject(getAbortError());
+        signal.addEventListener('abort', onAbort, { once: true });
+    });
+    try {
+        await Promise.race([before, aborted]);
+    } catch (e) {
+        // The turn passes on to the next parse once the one before ends.
+        before.then(end);
+        throw e;
+    } finally {
+        signal.removeEventListener('abort', onAbort);
+    }
+    return end;
+}
+
+/**
+ * Opens the document, retrying with an onPassword-supplied password when it is encrypted, and reads it.
+ * In this process each attempt opens its document in a turn of its own (`inProcessTurn`, see
+ * takeInProcessTurn), given up once that document has closed: before `onPassword` is asked, and once
+ * pdf.js has given all the parse reads from it, before the pages are laid out and their pictures OCRed.
+ */
+async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, maxImageSize: number, pdfProcess: PdfProcess | undefined, assets: PdfAssetSession, worker: any, inProcessTurn?: () => Promise<() => void>): Promise<OfficeParserAST> {
     // Password / onPassword are top-level (they apply to every encryptable format); PDF reads them
     // the same way the OOXML/ODF decryptors do.
     const onPassword = config.onPassword;
@@ -1419,32 +1936,60 @@ async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfi
     aborted?.catch(() => { /* raced below */ });
     const stoppers = [died, aborted].filter((p): p is Promise<never> => !!p);
     const whileAlive = <T>(promise: Promise<T>): Promise<T> => stoppers.length ? Promise.race([promise, ...stoppers]) : promise;
+    // Closes a document pdf.js was asked to open, bounded: closing waits for pdf.js's tasks, and one
+    // that never ends must not hold the parse (nor one whose process has ended, which never answers).
+    // A process whose document did not close is still at work on it: it is ended, not handed to the
+    // next parse, whose requests would wait behind that work (and pay for it).
+    const closeTask = async (loadingTask: any): Promise<void> => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const closed = Promise.resolve().then(() => loadingTask.destroy()).then(() => true, () => true);
+        const wait = pdfProcess && !pdfProcess.alive ? 0 : 2000;
+        const done = await Promise.race([closed, new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), wait); })]);
+        clearTimeout(timer);
+        if (!done) pdfProcess?.end();
+    };
     try {
         while (true) {
             checkAbortSignal(config.abortSignal);
-            // A fresh copy per attempt: pdf.js transfers the data buffer to its worker, detaching it, so
-            // reusing the same Uint8Array on a password retry would fail with a transfer error.
-            const loadingTask = pdfjs.getDocument({
-                data: new Uint8Array(buffer),
-                verbosity: 0,
-                isEvalSupported: false,
-                maxImageSize,
-                password,
-                ...(pdfProcess ? { worker: pdfProcess.worker } : {}),
-            });
+            const endTurn = inProcessTurn ? await inProcessTurn() : undefined;
+            let loadingTask: any;
+            try {
+                // A fresh copy per attempt: pdf.js transfers the data buffer to its worker, detaching it, so
+                // reusing the same Uint8Array on a password retry would fail with a transfer error.
+                loadingTask = pdfjs.getDocument({
+                    data: new Uint8Array(buffer),
+                    verbosity: 0,
+                    isEvalSupported: false,
+                    maxImageSize,
+                    password,
+                    ...assets.documentOptions(),
+                    ...(worker ? { worker } : {}),
+                });
+            } catch (e) {
+                endTurn?.();
+                throw e;
+            }
+            // The attempt's document closes once (see closeTask), and the turn passes on after it.
+            let closing: Promise<void> | undefined;
+            const closeDocument = (): Promise<void> => closing ??= closeTask(loadingTask).then(() => endTurn?.());
 
             let pdfDocument;
             try {
                 pdfDocument = await whileAlive(loadingTask.promise);
             } catch (e: any) {
-                if (e?.officeIssue || e?.name === 'AbortError') throw e;
-                try { await loadingTask.destroy(); } catch { /* best effort cleanup */ }
+                if (e?.officeIssue || e?.name === 'AbortError') { await closeDocument(); throw e; }
+                // A document that failed to open closes at once, and its process serves the next attempt.
+                closing ??= Promise.resolve().then(() => loadingTask.destroy()).then(() => endTurn?.(), () => endTurn?.());
+                await closing;
                 if (e?.name === 'PasswordException') {
                     const need = pdfjs.PasswordResponses?.NEED_PASSWORD;
                     const reason: 'required' | 'incorrect' = e.code === need ? 'required' : 'incorrect';
                     if (onPassword && passwordAttempts < MAX_PASSWORD_ATTEMPTS) {
                         passwordAttempts++;
-                        const supplied = await onPassword(reason);
+                        // Asked with no document open, and given up on when the parse is aborted.
+                        const asked = Promise.resolve().then(() => onPassword(reason));
+                        asked.catch(() => { /* raced below */ });
+                        const supplied = await whileAlive(asked);
                         if (supplied) { password = supplied; continue; }
                     }
                     throw getOfficeError(reason === 'required' ? OfficeErrorType.PASSWORD_REQUIRED : OfficeErrorType.PASSWORD_INCORRECT, config);
@@ -1458,21 +2003,13 @@ async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfi
 
             // Every request to pdf.js goes through the document's budget, from the first (see PdfWorkBudget).
             const budget = work = new PdfWorkBudget(pdfDocument, config, pdfCfg, buffer.length, pdfProcess);
+            assets.follow(budget);
             try {
-                return await whileAlive(buildAst(pdfjs, pdfDocument, config, pdfCfg, budget));
+                return await whileAlive(buildAst(pdfjs, pdfDocument, config, pdfCfg, budget, buffer, assets, closeDocument));
             } finally {
                 // Whatever ended the parse, the read ends with it (see PdfWorkBudget.cancel).
                 budget.cancel();
-                // Bounded: closing waits for pdf.js's tasks, and one that never ends must not hold the
-                // parse (nor one whose process has ended, which never answers).
-                let timer: ReturnType<typeof setTimeout> | undefined;
-                const closed = Promise.resolve(loadingTask.destroy()).then(() => true, () => true);
-                const wait = pdfProcess && !pdfProcess.alive ? 0 : 2000;
-                const done = await Promise.race([closed, new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), wait); })]);
-                clearTimeout(timer);
-                // A process whose document did not close is still at work on it: it is ended, not
-                // handed to the next parse, whose requests would wait behind that work (and pay for it).
-                if (!done) pdfProcess?.end();
+                await closeDocument();
             }
         }
     } finally {
@@ -1483,7 +2020,7 @@ async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfi
 }
 
 /** Assembles the AST from an opened document. Separated so the caller can guarantee task cleanup. */
-async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, work: PdfWorkBudget): Promise<OfficeParserAST> {
+async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, work: PdfWorkBudget, buffer: Buffer, assets: PdfAssetSession, closeDocument: () => Promise<void>): Promise<OfficeParserAST> {
     const content: OfficeContentNode[] = [];
     const attachments: OfficeAttachment[] = [];
     const numPages = pdfDocument.numPages;
@@ -1505,11 +2042,6 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     };
     if (typeof info?.Language === 'string') metadata.language = info.Language as string;
 
-    const standardPdfInfoKeys = new Set([
-        'Title', 'Author', 'Subject', 'Keywords', 'Creator', 'Producer',
-        'CreationDate', 'ModDate', 'Trapped', 'IsAcroFormPresent', 'IsXFAPresent',
-        'IsCollectionPresent', 'IsSignaturesPresent', 'PDFFormatVersion'
-    ]);
     if (info) {
         metadata.nativeProperties = {};
         for (const [key, val] of Object.entries(info)) {
@@ -1519,19 +2051,17 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
                 setOwn(metadata.nativeProperties, key, val);
             }
         }
+        // A document's own properties are the Info dictionary's keys beyond the standard ones, which
+        // pdf.js gives as `Custom`. The rest of what it gives is standard (Title, Producer, ...) or read
+        // from the file's structure (IsLinearized, IsAcroFormPresent, PDFFormatVersion, Language): no
+        // property its author set, and written out as one it put `IsLinearized: false` in every output.
         const customProperties: Record<string, string | number | boolean | Date> = {};
-        for (const key of Object.keys(info)) {
-            if (standardPdfInfoKeys.has(key)) continue;
-            const val = info[key];
-            if (val === null || val === undefined) continue;
-            if (key === 'Custom' && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Date)) {
-                for (const [ck, cv] of Object.entries(val)) {
-                    if (cv === null || cv === undefined) continue;
-                    if (typeof cv === 'string' || typeof cv === 'number' || typeof cv === 'boolean' || cv instanceof Date) setOwn(customProperties, ck, cv);
-                }
-                continue;
+        const custom = info.Custom;
+        if (custom && typeof custom === 'object' && !Array.isArray(custom) && !(custom instanceof Date)) {
+            for (const [ck, cv] of Object.entries(custom)) {
+                if (cv === null || cv === undefined) continue;
+                if (typeof cv === 'string' || typeof cv === 'number' || typeof cv === 'boolean' || cv instanceof Date) setOwn(customProperties, ck, cv);
             }
-            if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean' || val instanceof Date) setOwn(customProperties, key, val);
         }
         if (Object.keys(customProperties).length > 0) metadata.customProperties = customProperties;
     }
@@ -1571,7 +2101,9 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             const fields: Record<string, unknown> = {};
             for (const name of Object.keys(fieldObjects)) {
                 const arr = (fieldObjects as any)[name];
-                const f = Array.isArray(arr) ? arr[0] : arr;
+                // A field with widgets is listed as the field itself (no type, no value) then each of its
+                // widgets, which carry the type and value: the first entry with a type is the field's.
+                const f = Array.isArray(arr) ? (arr.find((e: any) => e && typeof e === 'object' && e.type) ?? arr[0]) : arr;
                 if (!f || typeof f !== 'object') continue;
                 const entry: Record<string, unknown> = { value: f.value, type: f.type };
                 if (f.defaultValue !== undefined && f.defaultValue !== null) entry.defaultValue = f.defaultValue;
@@ -1604,18 +2136,43 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     const destCache = new Map<string, SectionTarget | null>();
     const sectionLinks = new SectionLinks();
     const extracts: PageExtract[] = [];
+    // Each page's marked content, read from the file for the ActualText pdf.js leaves out (see actualText),
+    // and its fonts' glyph names, for the codes pdf.js reads as their own characters (see glyphNames), as
+    // each page read asks for them.
+    const pdfFile = new PdfFile(buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer), numPages);
+    const markedContent = new MarkedContent(pdfFile);
+    const glyphNames = new GlyphNames(pdfFile);
+    // The JPEGs the file stores, kept as they are where they show what pdf.js's pixels do (see pdfJpeg).
+    const keptJpegs = new KeptJpegs(pdfFile);
+    const unreadable: UnreadableText = { pages: new Map(), controlled: new Set(), mapped: new Set() };
     for (const pageNum of pageNumbers) {
         checkAbortSignal(config.abortSignal);
         if (work.spent) break;
+        work.reading(pageNum);
         try {
-            const extract = await collectPage(pdfjs, pdfDocument, pageNum, config, pdfCfg, fontCache, destCache, sectionLinks, work);
+            const extract = await collectPage(pdfjs, pdfDocument, pageNum, config, pdfCfg, fontCache, destCache, sectionLinks, work, assets, unreadable, markedContent, glyphNames, keptJpegs);
             if (extract) extracts.push(extract);
         } catch (e: any) {
             // A page failing because its parse has ended (its process ended with it) is not reported.
             work.throwIfCancelled();
-            logWarning(OfficeWarningType.PAGE_LOAD_FAILED, config, pageNum, e);
+            logWarning(OfficeWarningType.PAGE_LOAD_FAILED, config, pageNum, e, { page: pageNum });
         }
     }
+    work.reading(undefined);
+    work.throwIfCancelled();
+
+    // Document outline (bookmarks / TOC), when present, into auxiliary. A malformed or hostile
+    // outline must never cost the caller the whole document, so anything thrown here is a warning.
+    let outline: OfficeContentNode[] | undefined;
+    // Past the budget the document is closed (its process ended): nothing more is asked of pdf.js.
+    if (!config.ignoreInternalLinks && !work.spent) {
+        try { outline = await buildOutline(pdfDocument, destCache, sectionLinks, config, work); }
+        catch { logWarning(OfficeWarningType.PDF_OUTLINE_TRUNCATED, config, 'it could not be read'); }
+    }
+    work.throwIfCancelled();
+    // Nothing more is asked of pdf.js: the document closes before the pages are laid out and their
+    // pictures OCRed, which in this process gives the next document its turn (see takeInProcessTurn).
+    await closeDocument();
     work.throwIfCancelled();
 
     const allRuns = extracts.flatMap(e => e.runs);
@@ -1630,10 +2187,12 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     // Warn when much of the extracted text is unmappable glyphs (broken/missing ToUnicode), so consumers
     // can tell "genuinely empty" from "font could not be decoded" and reach for OCR.
     warnIfEncodingSuspect(allRuns, config);
+    reportUnmappedFonts(unreadable, fontCache, glyphNames, config);
 
-    // Warn when a document yields essentially no text and OCR is off: it is very likely scanned, and
-    // silent empty output is otherwise indistinguishable from a genuine failure. Only when OCR is off,
-    // since with OCR the caller is already handling image-only content.
+    // Warn when a document yields essentially no text and OCR is off: it is very likely scanned (or its
+    // text is in fonts whose CMaps could not be loaded, which the warning then says instead), and silent
+    // empty output is otherwise indistinguishable from a genuine failure. Only when OCR is off, since
+    // with OCR the caller is already handling image-only content.
     if (!config.ocr) {
         // Scale the "looks empty" threshold to the pages actually read, not the whole document: with
         // a pageRange, `allRuns` covers only the selected pages, and a content limit can stop the read
@@ -1642,7 +2201,8 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         const processedPages = extracts.length;
         const textChars = allRuns.reduce((sum, r) => sum + r.text.replace(/\s/g, '').length, 0);
         if (processedPages > 0 && textChars < Math.max(10, processedPages)) {
-            logWarning(OfficeWarningType.PDF_NO_TEXT_EXTRACTED, config, processedPages);
+            const cMaps = assets.unavailableCMaps;
+            logWarning(OfficeWarningType.PDF_NO_TEXT_EXTRACTED, config, cMaps.length ? { pages: processedPages, cMaps } : processedPages);
         }
     }
 
@@ -1659,13 +2219,28 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
 
     const auxHeaders: OfficeContentNode[] = [];
     const auxFooters: OfficeContentNode[] = [];
+    // Each page's header and footer nodes, for their page numbers (see markPageFields).
+    const furniture: PageFurniture[] = [];
+    // Each page whose header and footer went to the auxiliary: its nodes as read and as they went there, and the
+    // pictures above its header and below its footer, so a kind whose text changes from page to page is put back
+    // in its pages where it stands (see furnitureChanging).
+    const routed: { page: OfficeContentNode; header: [OfficeContentNode, OfficeContentNode][]; footer: [OfficeContentNode, OfficeContentNode][]; above: number; below: number }[] = [];
+    // A document whose tags are not read for its structure does not mark its running headers and footers
+    // either (untagged, or tagged but not trusted, or its tags not asked for): the lines repeated at the top
+    // and the bottom of its pages are found by comparing them (see findRunningLines).
+    const running = pdfCfg.useTags && docTrusted ? new Map<PageExtract, RunningRuns>() : findRunningLines(extracts, layoutCfg, docCtx.bodyFontSize, pageLabels);
 
     const taggedListCounter = { n: 0 };
     let imageCounter = 0;
+    // The page of the section being read (see below), and how many sections came before it.
+    let sectionPage: { width: number; height: number } | undefined;
+    let sectionsBefore = 0;
     for (const extract of extracts) {
         checkAbortSignal(config.abortSignal);
         work.throwIfCancelled();
-        const pageCtx: PageContext = { pageNumber: extract.pageNumber, authoredW: extract.authoredW, authoredH: extract.authoredH, rotation: extract.rotation };
+        const pageCtx: PageContext = { pageNumber: extract.pageNumber, authoredW: extract.authoredW, authoredH: extract.authoredH, rotation: extract.rotation, rtl: rightToLeftLean(extract.runs) };
+        let directions: Map<RawRun, boolean> | undefined;
+        pageCtx.lineDirections = () => directions ??= lineDirections(extract.runs, pdfCfg, pageCtx.rtl);
         // The frame every node is built in: authored space, so a `/Rotate` page's boxes stay
         // comparable to the runs they came from. `finalizeBounds` maps them at the end of the page.
         const layoutCtx: PageContext = { ...pageCtx, rotation: 0 };
@@ -1674,9 +2249,19 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         // headers/footers. Everything else an Artifact scope covers (watermarks, figure labels,
         // decorative headings, whatever an InDesign or Acrobat export marked as artifact) is real
         // page text and joins the body flow instead of being dropped on the floor.
-        const { header: headerRuns, footer: footerRuns, body: midArtifacts } = splitArtifacts(extract);
+        const { header: artifactHeader, footer: artifactFooter, body: midArtifacts } = splitArtifacts(extract);
         const midSet = new Set(midArtifacts);
-        const bodyRuns = extract.runs.filter(r => !r.inArtifact || midSet.has(r));
+        // And the lines found running on an untagged page, read as a tagged page's artifacts are.
+        const runningRuns = running.get(extract);
+        // (In the page's order, as the artifacts' are: the order runs are drawn in is how a line's are joined.)
+        const withRunning = (artifacts: RawRun[], found: Set<RawRun> | undefined) => {
+            if (!found?.size) return artifacts;
+            const own = new Set(artifacts);
+            return extract.runs.filter(r => found.has(r) || own.has(r));
+        };
+        const headerRuns = withRunning(artifactHeader, runningRuns?.header);
+        const footerRuns = withRunning(artifactFooter, runningRuns?.footer);
+        const bodyRuns = extract.runs.filter(r => (!r.inArtifact || midSet.has(r)) && !runningRuns?.header.has(r) && !runningRuns?.footer.has(r));
 
         let pageContent: OfficeContentNode[] | null = null;
         let fromTags = false;
@@ -1692,12 +2277,14 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             // buildTaggedNodes guards against a hostile deep/cyclic tree internally, but wrap the call
             // too: any unexpected failure here must degrade to the geometry path, never fail the parse.
             let nodes: OfficeContentNode[] = [], coveredMcids = new Set<string>();
+            let frames: RuledFrame[] | undefined;
             try {
-                ({ nodes, coveredMcids } = buildTaggedNodes(extract.structTree, runsByMcid, layoutCtx, docCtx, { ignoreNotes: config.ignoreNotes, listCounter: taggedListCounter }));
+                ({ nodes, coveredMcids } = buildTaggedNodes(extract.structTree, runsByMcid, layoutCtx, docCtx, { ignoreNotes: config.ignoreNotes, listCounter: taggedListCounter, frames: () => frames ??= ruledFrames(extract.shapes, pageCtx.authoredW, pageCtx.authoredH) }));
             } catch { warnStruct('the tag tree could not be processed'); }
             // Coverage measures the tag tree against the page's *tagged* text, so artifact runs
             // (which by definition live outside the structure) never drag the trust signal down.
-            const textMcids = new Set(bodyRuns.filter(r => !r.inArtifact && r.text.trim() && r.mcid).map(r => r.mcid as string));
+            // (Nor do form field values, whose widgets a document need not tag: see fieldRuns.)
+            const textMcids = new Set(bodyRuns.filter(r => !r.inArtifact && !r.formField && r.text.trim() && r.mcid).map(r => r.mcid as string));
             let coveredText = 0;
             for (const m of textMcids) if (coveredMcids.has(m)) coveredText++;
             const coverage = textMcids.size ? coveredText / textMcids.size : 1;
@@ -1715,15 +2302,21 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
                     }
                     // Mid-page artifact text is expected to be outside the tag tree, so it is not
                     // evidence of a broken one: only untagged *body* text warrants the warning.
-                    if (leftover.some(r => !r.inArtifact)) warnStruct('some text on a page was outside the tag tree');
+                    // Nor is a form field's value, read from its widget, not the page's tagged content.
+                    if (leftover.some(r => !r.inArtifact && !r.formField)) warnStruct('some text on a page was outside the tag tree');
                 }
+                // Turned text the tags cover, which their lines (level text alone) leave out: after the
+                // page's text, with its angle, as the geometric path keeps it. A turned label on a slide,
+                // a chart's axis title, was lost from a tagged PDF (as a browser prints one).
+                appendAll(pageContent, rotatedTextNodes(bodyRuns.filter(r => r.angle !== 0 && r.mcid && coveredMcids.has(r.mcid)), pageCtx, pdfCfg));
             } else {
                 warnStruct('the tag tree covered too little of the page text');
             }
         }
 
         // Geometric fallback (untagged, distrusted, or low coverage).
-        if (!pageContent) pageContent = geometricNodes(bodyRuns, layoutCtx, docCtx, layoutCfg);
+        // A bullet drawn as a shape reads as its glyph (see shapeBullets).
+        if (!pageContent) pageContent = geometricNodes([...bodyRuns, ...shapeBullets(extract.shapes, bodyRuns)], layoutCtx, docCtx, layoutCfg, true, extract.shapes);
 
         // Hybrid recovery: on the tagged path, additionally fold a contiguous run of loose sibling
         // paragraphs whose geometry forms a clean grid (a calendar tagged as one paragraph per day,
@@ -1732,6 +2325,18 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         // parity. Runs on authored boxes here, before finalizeBounds, so it works under
         // ignorePageGeometry too.
         if (fromTags) pageContent = recoverTaggedGrids(pageContent);
+        // Tables' cells shaded as the page shades them (a header row's white text on its colour).
+        shadeCells(pageContent, extract.shapes, pageCtx.authoredW, pageCtx.authoredH);
+
+        // A running header and footer kept in the page: before its content and after it, as an untagged
+        // PDF's read, and before its images are placed (a logo beside the header stays with it).
+        const headerNodes = config.ignoreHeadersAndFooters ? [] : geometricNodes(headerRuns, layoutCtx, docCtx, layoutCfg, false);
+        const footerNodes = config.ignoreHeadersAndFooters ? [] : geometricNodes(footerRuns, layoutCtx, docCtx, layoutCfg, false);
+        if (!config.ignoreHeadersAndFooters && pdfCfg.keepHeadersAndFootersInPages) {
+            pageContent = [...headerNodes, ...pageContent, ...footerNodes];
+            const label = pageLabels?.[extract.pageNumber - 1];
+            furniture.push({ pageNumber: extract.pageNumber, kind: 'header', nodes: headerNodes, rotation: extract.rotation, label }, { pageNumber: extract.pageNumber, kind: 'footer', nodes: footerNodes, rotation: extract.rotation, label });
+        }
 
         // Images: emit as attachments/OCR, then splice each into the flow before the first text node
         // that sits lower on the page, so reading order is preserved without reordering text.
@@ -1743,16 +2348,30 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             if (at < 0) pageContent.push(node); else pageContent.splice(at, 0, node);
         }
 
-        // Running headers/footers route to auxiliary unless the caller asked for them to be dropped.
-        if (!config.ignoreHeadersAndFooters) {
+        let pageRouted: { header: [OfficeContentNode, OfficeContentNode][]; footer: [OfficeContentNode, OfficeContentNode][]; above: number; below: number } | undefined;
+        // Running headers/footers route to auxiliary unless the caller asked for them to be dropped,
+        // or kept in the page (see above).
+        if (!config.ignoreHeadersAndFooters && !pdfCfg.keepHeadersAndFootersInPages) {
             const pageHeaders: OfficeContentNode[] = [];
             const pageFooters: OfficeContentNode[] = [];
-            for (const node of geometricNodes(headerRuns, layoutCtx, docCtx, layoutCfg, false)) pageHeaders.push(retypeAsHeaderFooter(node, 'header'));
-            for (const node of geometricNodes(footerRuns, layoutCtx, docCtx, layoutCfg, false)) pageFooters.push(retypeAsHeaderFooter(node, 'footer'));
+            // (The pictures placed before the page's text that stand above its header, and after it below its
+            // footer, as the page's boxes are now: where a header kept in the page stands among them.)
+            const headerTop = headerNodes[0]?.bounds?.y ?? Infinity;
+            const footerEnd = footerNodes.length ? footerNodes[footerNodes.length - 1].bounds?.y ?? -Infinity : -Infinity;
+            let above = 0, below = 0;
+            while (above < pageContent.length && pageContent[above].type === 'image' && (pageContent[above].bounds?.y ?? Infinity) < headerTop) above++;
+            while (below < pageContent.length - above && pageContent[pageContent.length - 1 - below].type === 'image' && (pageContent[pageContent.length - 1 - below].bounds?.y ?? -Infinity) > footerEnd) below++;
+            for (const node of headerNodes) pageHeaders.push(retypeAsHeaderFooter(node, 'header', extract.pageNumber));
+            for (const node of footerNodes) pageFooters.push(retypeAsHeaderFooter(node, 'footer', extract.pageNumber));
             finalizeBounds(pageHeaders, pageCtx, pdfCfg.includeBounds);
             finalizeBounds(pageFooters, pageCtx, pdfCfg.includeBounds);
+            const label = pageLabels?.[extract.pageNumber - 1];
+            const header: PageFurniture = { pageNumber: extract.pageNumber, kind: 'header', nodes: pageHeaders, rotation: extract.rotation, label, tagged: artifactHeader.length > 0 };
+            const footer: PageFurniture = { pageNumber: extract.pageNumber, kind: 'footer', nodes: pageFooters, rotation: extract.rotation, label, tagged: artifactFooter.length > 0 };
+            furniture.push(header, footer);
             appendAll(auxHeaders, pageHeaders);
             appendAll(auxFooters, pageFooters);
+            pageRouted = { header: headerNodes.map((n, k) => [n, pageHeaders[k]]), footer: footerNodes.map((n, k) => [n, pageFooters[k]]), above, below };
         }
 
         finalizeBounds(pageContent, pageCtx, pdfCfg.includeBounds);
@@ -1767,27 +2386,118 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             pageNode.metadata.pageWidth = Math.round(extract.width * 100) / 100;
             pageNode.metadata.pageHeight = Math.round(extract.height * 100) / 100;
             if (extract.rotation) pageNode.metadata.rotation = extract.rotation;
+            // The document's page, for the writers that lay out pages (DOCX, ODT and PDF output kept A4);
+            // a page of another size, or turned (a landscape page among upright ones, a `/Rotate` page shown
+            // so), starts a section of the pages from it, as a word processor's section of another page
+            // does, so DOCX, ODT, RTF and LaTeX output keep each page's size. Its setup is its size alone,
+            // as the first page's is: a PDF has no margins, so the writers' own are used.
+            const page = { width: pageNode.metadata.pageWidth!, height: pageNode.metadata.pageHeight! };
+            if (extract.width > 0 && extract.height > 0) {
+                if (!metadata.pageSetup) metadata.pageSetup = { ...page };
+                else if (sectionPage && (Math.abs(page.width - sectionPage.width) > 0.5 || Math.abs(page.height - sectionPage.height) > 0.5)) {
+                    content.push({ type: 'break', text: '', metadata: { breakType: 'page', section: ++sectionsBefore, pageSetup: { ...page } } });
+                }
+                sectionPage = page;
+            }
         }
         if (pageNode.type === 'page' && pageNode.metadata) {
             const label = pageLabels?.[extract.pageNumber - 1];
             if (label && label !== String(extract.pageNumber)) pageNode.metadata.pageLabel = label;
         }
         content.push(pageNode);
+        if (pageRouted) routed.push({ page: pageNode, ...pageRouted });
     }
 
-    // Document outline (bookmarks / TOC), when present, into auxiliary. A malformed or hostile
-    // outline must never cost the caller the whole document, so anything thrown here is a warning.
-    let outline: OfficeContentNode[] | undefined;
-    // Past the budget the document is closed (its process ended): nothing more is asked of pdf.js.
-    if (!config.ignoreInternalLinks && !work.spent) {
-        try { outline = await buildOutline(pdfDocument, destCache, sectionLinks, config, work); }
-        catch { logWarning(OfficeWarningType.PDF_OUTLINE_TRUNCATED, config, 'it could not be read'); }
+    // The page numbers in the pages' headers and footers, marked as the page fields they print, now that
+    // every page's are read (a number is marked only where each page's of that text is its own). Only what
+    // stays true of the pages read: the pages' count only where they are all of them ("of 4" printed over
+    // pageRange '2-4' is the document's). A writer numbers its own pages from one, so where the pages read
+    // print others, each section says where it starts (see planFurniture).
+    markPageFields(furniture, numPages, extracts.length === numPages);
+    const pagesWithText = new Set(furniture.filter(p => p.nodes.length).map(p => p.pageNumber));
+    for (const node of content) {
+        const pageNumber = node.type === 'page' ? (node.metadata as { pageNumber?: number } | undefined)?.pageNumber : undefined;
+        if (pageNumber !== undefined && node.children?.length) pagesWithText.add(pageNumber);
     }
-    work.throwIfCancelled();
+    const plan = planFurniture(furniture, extracts.map(e => e.pageNumber), pagesWithText);
+    // (Kept in the pages, what stays in them is no field either: a range's numbers would print from 1.)
+    if (pdfCfg.keepHeadersAndFootersInPages) for (const node of plan.back) unmarkPageFields(node);
+    for (const kind of ['header', 'footer'] as const) {
+        const aux = kind === 'header' ? auxHeaders : auxFooters;
+        for (const page of routed) {
+            const staying = page[kind].filter(([, went]) => plan.back.has(went));
+            if (!staying.length) continue;
+            const children = page.page.children!;
+            const back = staying.map(([read, went]) => {
+                // (Its box as finalized with the page's header; the fields cut in it are its text again.)
+                const node = read === went.children?.[0] ? read : { ...read, ...(went.children?.[0]?.bounds ? { bounds: went.children[0].bounds } : {}) };
+                if (node !== read && !went.children?.[0]?.bounds) delete node.bounds;
+                unmarkPageFields(node);
+                // (A line of a header, larger than the text, is no heading of the page's: a paragraph, as one
+                // found by comparing the pages is.)
+                if (node.type !== 'heading') return node;
+                const { level: _level, levelSource: _source, ...rest } = (node.metadata ?? {}) as HeadingMetadata;
+                const back = { ...node, type: 'paragraph' } as OfficeContentNode;
+                if (Object.keys(rest).length) back.metadata = rest; else delete back.metadata;
+                return back;
+            });
+            if (kind === 'header') children.splice(page.above, 0, ...back); else children.splice(children.length - page.below, 0, ...back);
+            page.page.text = children.map(n => n.text).join(config.newlineDelimiter);
+        }
+        const kept = aux.filter(n => !plan.back.has(n));
+        aux.length = 0;
+        appendAll(aux, kept);
+    }
+    // Sections where the pages' lines change, among the sections of the pages' sizes, numbered in order.
+    if (plan.sections.size || plan.parts.size || Object.keys(plan.first).length || plan.differentFirstPage) {
+        let section = 0;
+        const sectionOf = new Map<number, number>(extracts.length ? [[extracts[0].pageNumber, 0]] : []);
+        for (let i = 0; i < content.length; i++) {
+            const node = content[i];
+            const pageNumber = node.type === 'page' ? (node.metadata as { pageNumber?: number } | undefined)?.pageNumber : undefined;
+            if (pageNumber === undefined) continue;
+            const how = plan.sections.get(pageNumber);
+            const before = i > 0 ? content[i - 1] : undefined;
+            const opened = before?.type === 'break' && typeof (before.metadata as BreakMetadata | undefined)?.section === 'number' ? before : undefined;
+            if (how && !opened && i > 0) {
+                const meta = node.metadata as { pageWidth?: number; pageHeight?: number };
+                const size = meta.pageWidth !== undefined && meta.pageHeight !== undefined ? { width: meta.pageWidth, height: meta.pageHeight } : {};
+                content.splice(i, 0, { type: 'break', text: '', metadata: { breakType: 'page', section: 0, pageSetup: { ...size, ...how } } as BreakMetadata });
+                i++;
+            } else if (how && opened) {
+                const meta = opened.metadata as BreakMetadata;
+                meta.pageSetup = { ...meta.pageSetup, ...how };
+            }
+            sectionOf.set(pageNumber, section);
+        }
+        // (Numbered once all are in, by the order they stand in.)
+        section = 0;
+        for (const node of content) {
+            if (node.type === 'break' && typeof (node.metadata as BreakMetadata | undefined)?.section === 'number') (node.metadata as BreakMetadata).section = ++section;
+            else if (node.type === 'page') {
+                const pageNumber = (node.metadata as { pageNumber?: number } | undefined)?.pageNumber;
+                if (pageNumber !== undefined) sectionOf.set(pageNumber, section);
+            }
+        }
+        for (const list of [auxHeaders, auxFooters]) {
+            for (const node of list) {
+                const part = plan.parts.get(node);
+                if (!part) continue;
+                const meta = node.metadata as HeaderFooterMetadata;
+                meta.type = part.type;
+                meta.section = sectionOf.get(part.startsAt) ?? 0;
+            }
+        }
+        if (Object.keys(plan.first).length || plan.differentFirstPage) {
+            metadata.pageSetup = { ...metadata.pageSetup, ...plan.first, ...(plan.differentFirstPage ? { differentFirstPage: true } : {}) };
+        }
+    }
 
     // Now that every page's headings and their positions are known, point each internal link at the
     // nearest heading on its target page (falling back to the page itself), rather than a page jump.
     resolveSectionLinks(content, extracts, sectionLinks, [content, auxHeaders, auxFooters, outline ?? []]);
+    // The headings read by size and weight, levelled by the sizes of those headings (see relevelHeadings).
+    relevelHeadings(content);
 
     const auxiliary = (auxHeaders.length || auxFooters.length || outline)
         ? { ...(auxHeaders.length ? { headers: auxHeaders } : {}), ...(auxFooters.length ? { footers: auxFooters } : {}), ...(outline ? { outline } : {}) }
@@ -1801,15 +2511,35 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
  * tables from the lines before column segmentation (off for margin artifacts, which are never
  * tables).
  */
-function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext, pdfCfg: PdfLayoutConfig, detectGridTables = true): OfficeContentNode[] {
-    const lines = buildLines(runs, pdfCfg);
-    const { tables, consumed } = detectGridTables
-        ? detectTables(lines, pageCtx, docCtx)
-        : { tables: [] as { node: OfficeContentNode; y: number }[], consumed: new Set<typeof lines[number]>() };
-    const remaining = consumed.size ? lines.filter(l => !consumed.has(l)) : lines;
+function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext, pdfCfg: PdfLayoutConfig, detectGridTables = true, shapes?: PdfShape[]): OfficeContentNode[] {
+    // Tables drawn with ruling lines first, from the lines themselves (see rulings); their text is theirs.
+    const ruled = detectGridTables ? ruledTables(ruledFrames(shapes, pageCtx.authoredW, pageCtx.authoredH), runs, {
+        cfg: pdfCfg,
+        content: cellRuns => blockToNodes(joinMarkerLines(buildLines(cellRuns, pdfCfg, pageCtx.rtl)), pageCtx, docCtx),
+        bounds: box => emitBounds(box, pageCtx, pdfCfg),
+    }) : { tables: [], consumed: new Set<RawRun>(), combs: [] as RawRun[] };
+    if (ruled.consumed.size) runs = runs.filter(r => !ruled.consumed.has(r));
+    // A comb's characters, one run where its boxes are (see rulings' combRun), are read with the text.
+    if (ruled.combs.length) runs = [...runs, ...ruled.combs];
+    // Tables are found before a list's markers are joined to their text: a table's first column of numbers
+    // (`1.`, `2.`) joined to the cell beside it gave each row a cell fewer than its header.
+    const built = buildLines(runs, pdfCfg, pageCtx.rtl);
+    const { tables, rest } = detectGridTables
+        ? detectTables(built, pageCtx, docCtx)
+        : { tables: [] as { node: OfficeContentNode; y: number }[], rest: built };
+    for (const node of ruled.tables) tables.push({ node, y: node.bounds?.y ?? Infinity });
+    const remaining = joinMarkerLines(rest);
 
     const out: OfficeContentNode[] = [];
-    for (const block of segmentIntoBlocks(remaining, pdfCfg)) appendAll(out, blockToNodes(block, pageCtx, docCtx));
+    // A list runs on from block to block, and its levels are the page's (see ListCarry).
+    const blocks = segmentIntoBlocks(remaining, pdfCfg);
+    const lefts = markerLefts(remaining);
+    const carry: ListCarry = { listId: null, type: null, left: 0, bottom: 0, lineHeight: 12, itemInList: 0, prev: null, next: null, ...(lefts.length ? { levelFor: indentLevelsOf(lefts) } : {}) };
+    blocks.forEach((block, k) => {
+        carry.next = k + 1 < blocks.length ? leadingMarker(blocks[k + 1]) : null;
+        carry.nextLine = k + 1 < blocks.length ? blocks[k + 1][0] : null;
+        appendAll(out, blockToNodes(block, pageCtx, docCtx, carry));
+    });
     // Splice each detected table into the flow at its vertical position.
     for (const t of tables) {
         const ty = t.node.bounds?.y ?? Infinity;
@@ -1823,30 +2553,56 @@ function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext
     return out;
 }
 
-/** Recovers rotated (90/180/270) runs as trailing paragraphs, one per angle, in content order. */
+/**
+ * Recovers turned runs (a quarter turn, or any other angle) as trailing paragraphs, one per angle, in
+ * content order, each with its angle (ParagraphMetadata.rotation). Text drawn invisibly is a run of its own,
+ * marked so (TextFormatting.invisible), never in one with visible text.
+ */
 function rotatedTextNodes(runs: RawRun[], pageCtx: PageContext, pdfCfg: PdfLayoutConfig): OfficeContentNode[] {
     const out: OfficeContentNode[] = [];
-    for (const angle of [90, 270, 180] as const) {
-        const group = runs.filter(r => r.angle === angle && r.text.trim().length > 0);
-        if (!group.length) continue;
+    const byTurn = new Map<number, RawRun[]>();
+    for (const r of runs) {
+        if (r.angle === 0 || !r.text.trim().length) continue;
+        const group = byTurn.get(r.turn);
+        if (group) group.push(r); else byTurn.set(r.turn, [r]);
+    }
+    for (const [turn, group] of byTurn) {
         // Joined once, a space between runs that do not already meet at one; testing the end of the
         // growing text for each run instead copied all of it every time.
-        const parts: string[] = [];
+        const pieces: { parts: string[]; runs: RawRun[]; invisible: boolean }[] = [];
         let endsInSpace = true;
         for (const r of group) {
-            if (!endsInSpace && !/^\s/.test(r.text)) parts.push(' ');
-            parts.push(r.text);
+            const invisible = r.formatting.invisible === true;
+            let piece = pieces[pieces.length - 1];
+            if (!piece || piece.invisible !== invisible) pieces.push(piece = { parts: [], runs: [], invisible });
+            if (!endsInSpace && !/^\s/.test(r.text)) piece.parts.push(' ');
+            piece.parts.push(r.text);
+            piece.runs.push(r);
             if (r.text) endsInSpace = /\s/.test(r.text[r.text.length - 1]);
         }
-        const text = parts.join('').replace(/\s+/g, ' ').trim();
-        if (!text) continue;
-        const node: OfficeContentNode = { type: 'paragraph', text, children: [{ type: 'text', text }] };
-        const box = unionAll(group.map(r => ({ x: r.x, y: r.yTop, width: r.width, height: r.height })));
-        if (pdfCfg.includeBounds && box) {
-            const rendered = roundBounds(rotateBoundsToRendered(box, pageCtx.rotation, pageCtx.authoredW, pageCtx.authoredH));
-            node.bounds = rendered;
-            if (node.children && node.children[0]) node.children[0].bounds = rendered;
+        const rendered = (rs: RawRun[]) => {
+            const box = unionAll(rs.map(r => ({ x: r.x, y: r.yTop, width: r.width, height: r.height })));
+            return pdfCfg.includeBounds && box ? roundBounds(rotateBoundsToRendered(box, pageCtx.rotation, pageCtx.authoredW, pageCtx.authoredH)) : undefined;
+        };
+        const children: OfficeContentNode[] = [];
+        for (const piece of pieces) {
+            // (One space where two runs meet, and none at the paragraph's start.)
+            let text = piece.parts.join('').replace(/\s+/g, ' ');
+            if (!children.length || children[children.length - 1].text!.endsWith(' ')) text = text.replace(/^ /, '');
+            if (!text.trim()) continue;
+            const child: OfficeContentNode = { type: 'text', text };
+            if (piece.invisible) child.formatting = { invisible: true };
+            const bounds = rendered(piece.runs);
+            if (bounds) child.bounds = bounds;
+            children.push(child);
         }
+        if (!children.length) continue;
+        // (And none at its end.)
+        const last = children[children.length - 1];
+        last.text = last.text!.replace(/ $/, '');
+        const node: OfficeContentNode = { type: 'paragraph', text: children.map(c => c.text).join(''), children, metadata: { rotation: turn } as ParagraphMetadata };
+        const bounds = rendered(group);
+        if (bounds) node.bounds = bounds;
         out.push(node);
     }
     return out;
@@ -1869,8 +2625,8 @@ function splitArtifacts(extract: PageExtract): { header: RawRun[]; footer: RawRu
         if (!r.inArtifact || !r.text.trim()) continue;
         const box = { x: r.x, y: r.yTop, width: r.width, height: r.height };
         const y = rotateBoundsToRendered(box, extract.rotation, extract.authoredW, extract.authoredH).y;
-        if (y < 0.15 * renderedH) header.push(r);
-        else if (y > 0.85 * renderedH) footer.push(r);
+        if (y < FURNITURE_BAND * renderedH) header.push(r);
+        else if (y > (1 - FURNITURE_BAND) * renderedH) footer.push(r);
         else body.push(r);
     }
     return { header, footer, body };
@@ -1898,9 +2654,33 @@ function finalizeBounds(nodes: OfficeContentNode[], page: PageContext, includeBo
     }
 }
 
-/** Wraps a paragraph produced from margin artifacts as a header/footer node. */
-function retypeAsHeaderFooter(node: OfficeContentNode, type: 'header' | 'footer'): OfficeContentNode {
-    return { type, text: node.text, children: node.children, bounds: node.bounds, metadata: { type: 'default' } };
+/**
+ * Wraps a paragraph produced from margin artifacts as a header/footer node. A line read as a list's item
+ * keeps its marker as printed, before its text: a footer's "• 3 •" is no list, and was "3 •".
+ */
+function retypeAsHeaderFooter(node: OfficeContentNode, type: 'header' | 'footer', page: number): OfficeContentNode {
+    let { text, children } = node;
+    if (node.type === 'list') {
+        const meta = node.metadata as ListMetadata;
+        // (A number and a dot, or a round bullet, is the marker its metadata leaves out: see ListMetadata.marker.)
+        const marker = meta.marker ?? (meta.listType === 'ordered' ? `${meta.itemIndex + 1}.` : '•');
+        if (marker) {
+            const first = children?.[0];
+            const lead: OfficeContentNode = { type: 'text', text: `${marker} `, ...(first?.formatting ? { formatting: { ...first.formatting } } : {}) };
+            children = [lead, ...(children ?? [])];
+            text = `${marker} ${text ?? ''}`;
+        }
+    }
+    // (Its line a paragraph in it, as a header read from any other document holds its paragraphs: a line larger
+    // than the text is no heading of the document's.)
+    let line: OfficeContentNode = node;
+    if (node.type === 'list') line = { type: 'paragraph', text, children, bounds: node.bounds };
+    else if (node.type === 'heading') {
+        const { level: _level, levelSource: _source, ...rest } = (node.metadata ?? {}) as HeadingMetadata;
+        line = { ...node, type: 'paragraph' } as OfficeContentNode;
+        if (Object.keys(rest).length) line.metadata = rest; else delete line.metadata;
+    }
+    return { type, text, children: [line], bounds: node.bounds, metadata: { type: 'default', page } };
 }
 
 /**
@@ -1912,14 +2692,15 @@ async function emitImage(
     attachments: OfficeAttachment[],
 ): Promise<OfficeContentNode | null> {
     if (!config.extractAttachments) return null;
-    const attachmentName = `pdf_image_p${pageNumber}_${index}.png`;
+    const jpeg = img.format === 'jpeg';
+    const attachmentName = `pdf_image_p${pageNumber}_${index}.${jpeg ? 'jpg' : 'png'}`;
+    const mimeType = jpeg ? 'image/jpeg' : 'image/png';
     try {
-        // Pixels were PNG-encoded at collection time; here we only name, attach and optionally OCR them.
-        const png = img.png;
-        const attachment = createAttachment(attachmentName, png);
-        attachment.mimeType = 'image/png';
+        // The picture's file was made at collection time; here we only name, attach and optionally OCR it.
+        const attachment = createAttachment(attachmentName, img.data);
+        attachment.mimeType = mimeType;
         if (config.ocr && img.pixelWidth >= 10 && img.pixelHeight >= 10) {
-            const ocrText = await ocrDuringParse(png, config, attachmentName, 'image/png');
+            const ocrText = await ocrDuringParse(img.data, config, attachmentName, mimeType);
             if (ocrText !== undefined) attachment.ocrText = ocrText;
         }
         attachments.push(attachment);
@@ -1930,7 +2711,7 @@ async function emitImage(
     } catch (e: any) {
         // A cancelled parse rejects; it is not a failed image.
         if (e?.name === 'AbortError') throw e;
-        logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, attachmentName, e);
+        logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, attachmentName, e, { page: pageNumber });
         return null;
     }
 }

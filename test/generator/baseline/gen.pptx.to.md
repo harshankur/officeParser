@@ -92,9 +92,15 @@ Next, we see a table with special formatting in various locations. Notice how th
 
 Next, we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged. The table is displayed horizontally centered. 
 
-| One <br>Three  | Two  |
-| --- | --- |
-|  | Four  |
+<table>
+  <tr>
+    <td rowspan="2"><p>One </p><p>Three </p></td>
+    <td><p>Two </p></td>
+  </tr>
+  <tr>
+    <td><p>Four </p></td>
+  </tr>
+</table>
 
 |   | To the left is a table inside a table, with some cells merged.  |
 | --- | --- |
@@ -103,20 +109,192 @@ Next, we have something a little more complex, a nested table, i.e. a table in
 
  We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.
 
-| December 2007  |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Sun  |   | Mon  |   | Tue  |   | Wed  |   | Thu  |   | Fri  |   | Sat  |  |
-|   |   |   |   |   |   |   |   |   |   |   |   | 1  |  |
-|   |   |   |   |   |   |   |   |   |   |   |   |   |  |
-| 2  |   | 3  |   | 4  |   | 5  |   | 6  |   | 7  |   | 8  |  |
-|   |   |   |   |   |   |   |   |   |   |   |   |   |  |
-| 9  |   | 10  |   | 11  |   | 12  |   | 13  |   | 14  |   | 15  |  |
-|   |   |   |   |   |   |   |   |   |   |   |   |   |  |
-| 16  |   | 17  |   | 18  |   | 19  |   | 20  |   | 21  |   | 22  |  |
-|   |   |   |   |   |   |   |   |   |   |   |   |   |  |
-| 23  |   | 24  |   | 25  |   | 26  |   | 27  |   | 28  |   | 29  |  |
-|   |   |   |   |   |   |   |   |   |   |   |   |   |  |
-| 30  |   | 31  |   |   |   |   |   |   |   |   |   |   |  |
+<table>
+  <tr>
+    <td colspan="13"><p>December 2007 </p></td>
+    <td><p></p></td>
+  </tr>
+  <tr>
+    <td><p>Sun </p></td>
+    <td><p></p></td>
+    <td><p>Mon </p></td>
+    <td><p></p></td>
+    <td><p>Tue </p></td>
+    <td><p></p></td>
+    <td><p>Wed </p></td>
+    <td><p></p></td>
+    <td><p>Thu </p></td>
+    <td><p></p></td>
+    <td><p>Fri </p></td>
+    <td><p></p></td>
+    <td colspan="2"><p>Sat </p></td>
+  </tr>
+  <tr>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p>1 </p></td>
+  </tr>
+  <tr>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p></p></td>
+  </tr>
+  <tr>
+    <td><p>2 </p></td>
+    <td><p></p></td>
+    <td><p>3 </p></td>
+    <td><p></p></td>
+    <td><p>4 </p></td>
+    <td><p></p></td>
+    <td><p>5 </p></td>
+    <td><p></p></td>
+    <td><p>6 </p></td>
+    <td><p></p></td>
+    <td><p>7 </p></td>
+    <td><p></p></td>
+    <td colspan="2"><p>8 </p></td>
+  </tr>
+  <tr>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p></p></td>
+  </tr>
+  <tr>
+    <td><p>9 </p></td>
+    <td><p></p></td>
+    <td><p>10 </p></td>
+    <td><p></p></td>
+    <td><p>11 </p></td>
+    <td><p></p></td>
+    <td><p>12 </p></td>
+    <td><p></p></td>
+    <td><p>13 </p></td>
+    <td><p></p></td>
+    <td><p>14 </p></td>
+    <td><p></p></td>
+    <td colspan="2"><p>15 </p></td>
+  </tr>
+  <tr>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p></p></td>
+  </tr>
+  <tr>
+    <td><p>16 </p></td>
+    <td><p></p></td>
+    <td><p>17 </p></td>
+    <td><p></p></td>
+    <td><p>18 </p></td>
+    <td><p></p></td>
+    <td><p>19 </p></td>
+    <td><p></p></td>
+    <td><p>20 </p></td>
+    <td><p></p></td>
+    <td><p>21 </p></td>
+    <td><p></p></td>
+    <td colspan="2"><p>22 </p></td>
+  </tr>
+  <tr>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p></p></td>
+  </tr>
+  <tr>
+    <td><p>23 </p></td>
+    <td><p></p></td>
+    <td><p>24 </p></td>
+    <td><p></p></td>
+    <td><p>25 </p></td>
+    <td><p></p></td>
+    <td><p>26 </p></td>
+    <td><p></p></td>
+    <td><p>27 </p></td>
+    <td><p></p></td>
+    <td><p>28 </p></td>
+    <td><p></p></td>
+    <td colspan="2"><p>29 </p></td>
+  </tr>
+  <tr>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p></p></td>
+  </tr>
+  <tr>
+    <td><p>30 </p></td>
+    <td><p></p></td>
+    <td><p>31 </p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p></p></td>
+  </tr>
+</table>
 
 > **Note:** Now calendars
 

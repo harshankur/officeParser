@@ -115,6 +115,24 @@ function syncVersions() {
             + ` (and its LICENSE) there, and remove the old version's folder. The site would otherwise load a worker of another version.`);
         process.exitCode = 1;
     }
+    // Beside the worker, its CMaps and image decoders, which the site passes as pdfCMapUrl and pdfDecoderUrl:
+    // every CMap the installed pdf.js has, and its JBIG2 and OpenJPEG decoders, each the same file.
+    const vendoredFolder = path.dirname(vendored);
+    const installedPdfJs = path.dirname(require.resolve('pdfjs-dist/package.json'));
+    const assets = [
+        ...fs.readdirSync(path.join(installedPdfJs, 'cmaps')).map(name => `cmaps/${name}`),
+        'wasm/jbig2.wasm', 'wasm/openjpeg.wasm', 'wasm/jbig2_nowasm_fallback.js', 'wasm/openjpeg_nowasm_fallback.js',
+    ];
+    const sameFile = file => {
+        const copy = path.join(vendoredFolder, file);
+        return fs.existsSync(copy) && fs.readFileSync(copy).equals(fs.readFileSync(path.join(installedPdfJs, file)));
+    };
+    const missingAssets = assets.filter(file => !sameFile(file));
+    if (missingAssets.length) {
+        console.error(`\n[!] docs/vendor/pdfjs-dist-${pdfJsVersion}/ lacks or differs in ${missingAssets.length} file(s) (${missingAssets.slice(0, 3).join(', ')}${missingAssets.length > 3 ? ', ...' : ''}):`
+            + ` copy node_modules/pdfjs-dist/cmaps/ there, and of node_modules/pdfjs-dist/wasm/ the JBIG2 and OpenJPEG decoders, their *_nowasm_fallback.js files and their LICENSE_* files.`);
+        process.exitCode = 1;
+    }
 
     // OCR on the site: Tesseract's worker and engine are vendored too, at the versions the browser bundle
     // is built with (the installed ones: the worker must match the bundle's tesseract.js). The page is

@@ -46,18 +46,19 @@
     <header class="blog-header">
         <div class="header-container">
             <div class="logo-group">
-                <a href="../" class="brand-logo">
-                    <span>officeParser</span>
-                    <span class="brand-badge">Blog</span>
-                </a>
+                <a href="../" class="brand-logo">officeParser</a>
+                <a href="./" class="brand-badge" aria-label="Blog: all articles">Blog</a>
             </div>
             <nav class="nav-actions" aria-label="Site">
                 <a href="../" class="nav-link"><span class="nav-long">Visualizer &amp; Docs</span><span
                         class="nav-short">Docs</span></a>
-                <a href="https://github.com/harshankur/officeParser" class="nav-link nav-secondary" target="_blank"
-                    rel="noopener">GitHub</a>
-                <button class="theme-toggle-btn" id="theme-toggle" type="button" aria-label="Toggle theme">
-                    <span id="theme-icon" aria-hidden="true">🌙</span>
+                <a href="https://github.com/harshankur/officeParser" class="header-btn" target="_blank" rel="noopener"
+                    aria-label="GitHub">
+                    <svg class="header-btn-icon" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span class="header-btn-label">GitHub</span>
+                </a>
+                <button class="header-btn" id="theme-toggle" type="button" aria-label="Dark mode">
+                    <span class="header-btn-icon" id="theme-icon" aria-hidden="true">🌙</span><span class="header-btn-label"
+                        id="theme-label">Dark mode</span>
                 </button>
             </nav>
         </div>
@@ -93,6 +94,90 @@
         <section class="articles-container" aria-label="Articles">
             <p class="search-status" id="search-status" role="status" hidden></p>
             <div class="article-grid" id="article-grid">
+                <a class="article-card" data-category="deep-dive" data-slug="text-that-looks-real-a-pdf-font-with-no-map" href="./text-that-looks-real-a-pdf-font-with-no-map.html">
+                    <div class="card-top">
+                        <span class="card-tag">Format Deep Dives</span>
+                        <h2 class="card-title">Text That Looks Real: A PDF Font With No Map</h2>
+                        <p class="card-excerpt">Why a PDF line that says &quot;Hi there&quot; can extract as +LWKHUH with no error, why the file cannot always tell you, and what officeParser&#39;s PDF_FONT_UNMAPPED warning reports and misses.</p>
+                        <p class="card-match" hidden></p>
+                    </div>
+                    <div class="card-footer">
+                        <span><time datetime="2026-11-01">1 Nov 2026</time> · 6 min read</span>
+                        <span class="read-more">Read article &rarr;</span>
+                    </div>
+                </a>
+                <a class="article-card" data-category="deep-dive" data-slug="the-answer-was-in-the-glyph-name" href="./the-answer-was-in-the-glyph-name.html">
+                    <div class="card-top">
+                        <span class="card-tag">Format Deep Dives</span>
+                        <h2 class="card-title">The Answer Was in the Glyph&#39;s Name: When &quot;nicht&quot; Reads &quot;ni!ht&quot;</h2>
+                        <p class="card-excerpt">Why a word a PDF draws correctly can read &quot;ni!ht&quot; in pdf.js, what the Adobe Glyph List&#39;s rules say a name like c.sc means, how officeParser reads it, and the report I filed with pdf.js.</p>
+                        <p class="card-match" hidden></p>
+                    </div>
+                    <div class="card-footer">
+                        <span><time datetime="2026-11-01">1 Nov 2026</time> · 5 min read</span>
+                        <span class="read-more">Read article &rarr;</span>
+                    </div>
+                </a>
+                <a class="article-card" data-category="deep-dive" data-slug="reading-a-filled-pdf-form" href="./reading-a-filled-pdf-form.html">
+                    <div class="card-top">
+                        <span class="card-tag">Format Deep Dives</span>
+                        <h2 class="card-title">Reading a Filled PDF Form: The Values Are Not in the Page</h2>
+                        <p class="card-excerpt">Where a filled PDF form keeps its values, how officeParser 8.4.1 reads each one beside its label, and two cases that break the same way: a date one digit to a printed box, and a font that reads &quot;nicht&quot; as &quot;ni!ht&quot;.</p>
+                        <p class="card-match" hidden></p>
+                    </div>
+                    <div class="card-footer">
+                        <span><time datetime="2026-10-29">29 Oct 2026</time> · 9 min read</span>
+                        <span class="read-more">Read article &rarr;</span>
+                    </div>
+                </a>
+                <a class="article-card" data-category="deep-dive" data-slug="headers-and-footers-a-pdf-never-marked" href="./headers-and-footers-a-pdf-never-marked.html">
+                    <div class="card-top">
+                        <span class="card-tag">Format Deep Dives</span>
+                        <h2 class="card-title">Headers and Footers a PDF Never Marked</h2>
+                        <p class="card-excerpt">How officeParser 8.4.1 finds an untagged PDF&#39;s running headers and footers by comparing its pages, turns a printed page number back into a field, and leaves a header in its pages when no single header could hold it.</p>
+                        <p class="card-match" hidden></p>
+                    </div>
+                    <div class="card-footer">
+                        <span><time datetime="2026-10-29">29 Oct 2026</time> · 9 min read<span class="card-updated">Updated <time datetime="2026-11-01">1 Nov 2026</time></span></span>
+                        <span class="read-more">Read article &rarr;</span>
+                    </div>
+                </a>
+                <a class="article-card" data-category="architecture" data-slug="laying-out-a-page-around-a-floating-frame" href="./laying-out-a-page-around-a-floating-frame.html">
+                    <div class="card-top">
+                        <span class="card-tag">Build Notes</span>
+                        <h2 class="card-title">Laying Out a Page From Scratch: Text Around a Floating Frame</h2>
+                        <p class="card-excerpt">How ODT, Word and RTF each say where a text box stands, how officeParser reads them into one shape, and how its PDF engine sets lines round the box, with an interactive column to try it.</p>
+                        <p class="card-match" hidden></p>
+                    </div>
+                    <div class="card-footer">
+                        <span><time datetime="2026-10-26">26 Oct 2026</time> · 6 min read</span>
+                        <span class="read-more">Read article &rarr;</span>
+                    </div>
+                </a>
+                <a class="article-card" data-category="deep-dive" data-slug="reading-the-spreadsheet-you-see" href="./reading-the-spreadsheet-you-see.html">
+                    <div class="card-top">
+                        <span class="card-tag">Format Deep Dives</span>
+                        <h2 class="card-title">Reading the Spreadsheet You See, Not the One Stored</h2>
+                        <p class="card-excerpt">A cell stores 0.19 and shows 19%. What XLSX keeps, how Excel&#39;s number formats work, and how officeParser reads both halves of a cell so a CSV keeps the numbers and a PDF prints what the sheet shows.</p>
+                        <p class="card-match" hidden></p>
+                    </div>
+                    <div class="card-footer">
+                        <span><time datetime="2026-10-26">26 Oct 2026</time> · 6 min read</span>
+                        <span class="read-more">Read article &rarr;</span>
+                    </div>
+                </a>
+                <a class="article-card" data-category="architecture" data-slug="drawing-hindi-in-a-pdf" href="./drawing-hindi-in-a-pdf.html">
+                    <div class="card-top">
+                        <span class="card-tag">Build Notes</span>
+                        <h2 class="card-title">Drawing Hindi in a PDF: Glyph Positions, Conjuncts and /ActualText</h2>
+                        <p class="card-excerpt">Why a Hindi word came apart in officeParser&#39;s PDF writer, copied with its letters out of order, or drew the wrong glyphs, and the font and PDF details behind each failure.</p>
+                        <p class="card-match" hidden></p>
+                    </div>
+                    <div class="card-footer">
+                        <span><time datetime="2026-10-26">26 Oct 2026</time> · 8 min read<span class="card-updated">Updated <time datetime="2026-10-28">28 Oct 2026</time></span></span>
+                        <span class="read-more">Read article &rarr;</span>
+                    </div>
+                </a>
                 <a class="article-card" data-category="deep-dive" data-slug="what-is-actually-inside-a-docx" href="./what-is-actually-inside-a-docx.html">
                     <div class="card-top">
                         <span class="card-tag">Format Deep Dives</span>
@@ -101,7 +186,7 @@
                         <p class="card-match" hidden></p>
                     </div>
                     <div class="card-footer">
-                        <span><time datetime="2026-10-04">4 Oct 2026</time> · 7 min read</span>
+                        <span><time datetime="2026-10-04">4 Oct 2026</time> · 7 min read<span class="card-updated">Updated <time datetime="2026-11-01">1 Nov 2026</time></span></span>
                         <span class="read-more">Read article &rarr;</span>
                     </div>
                 </a>
@@ -113,7 +198,7 @@
                         <p class="card-match" hidden></p>
                     </div>
                     <div class="card-footer">
-                        <span><time datetime="2026-10-04">4 Oct 2026</time> · 5 min read</span>
+                        <span><time datetime="2026-10-04">4 Oct 2026</time> · 5 min read<span class="card-updated">Updated <time datetime="2026-11-01">1 Nov 2026</time></span></span>
                         <span class="read-more">Read article &rarr;</span>
                     </div>
                 </a>
@@ -125,7 +210,7 @@
                         <p class="card-match" hidden></p>
                     </div>
                     <div class="card-footer">
-                        <span><time datetime="2026-10-04">4 Oct 2026</time> · 6 min read</span>
+                        <span><time datetime="2026-10-04">4 Oct 2026</time> · 6 min read<span class="card-updated">Updated <time datetime="2026-10-26">26 Oct 2026</time></span></span>
                         <span class="read-more">Read article &rarr;</span>
                     </div>
                 </a>
@@ -149,7 +234,7 @@
                         <p class="card-match" hidden></p>
                     </div>
                     <div class="card-footer">
-                        <span><time datetime="2026-10-04">4 Oct 2026</time> · 6 min read</span>
+                        <span><time datetime="2026-10-04">4 Oct 2026</time> · 6 min read<span class="card-updated">Updated <time datetime="2026-10-28">28 Oct 2026</time></span></span>
                         <span class="read-more">Read article &rarr;</span>
                     </div>
                 </a>
@@ -157,11 +242,11 @@
                     <div class="card-top">
                         <span class="card-tag">Honest Comparisons</span>
                         <h2 class="card-title">Where officeParser is the Wrong Tool: An Honest Engineering Guide</h2>
-                        <p class="card-excerpt">The jobs officeParser does not do: PDFs that match Word exactly, formula recalculation, legacy .doc files, writing spreadsheets and slides, macros, and TeX typesetting, and what to use instead.</p>
+                        <p class="card-excerpt">The jobs officeParser does not do: PDFs that match Word exactly, formula recalculation, legacy .doc files, formulas and native charts in what it writes, macros, and TeX typesetting, and what to use instead.</p>
                         <p class="card-match" hidden></p>
                     </div>
                     <div class="card-footer">
-                        <span><time datetime="2026-10-04">4 Oct 2026</time> · 5 min read</span>
+                        <span><time datetime="2026-10-04">4 Oct 2026</time> · 5 min read<span class="card-updated">Updated <time datetime="2026-11-01">1 Nov 2026</time></span></span>
                         <span class="read-more">Read article &rarr;</span>
                     </div>
                 </a>
@@ -173,7 +258,7 @@
                         <p class="card-match" hidden></p>
                     </div>
                     <div class="card-footer">
-                        <span><time datetime="2026-10-04">4 Oct 2026</time> · 5 min read</span>
+                        <span><time datetime="2026-10-04">4 Oct 2026</time> · 6 min read<span class="card-updated">Updated <time datetime="2026-10-26">26 Oct 2026</time></span></span>
                         <span class="read-more">Read article &rarr;</span>
                     </div>
                 </a>

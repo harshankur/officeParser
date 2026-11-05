@@ -1,8 +1,12 @@
-import { ChunkingConfig, CsvGeneratorConfig, DeepRequired, DocumentStructureChunkingConfig, DocxGeneratorConfig, FixedSizeChunkingConfig, FullGeneratorConfig, HtmlGeneratorConfig, HtmlParserConfig, MdGeneratorConfig, OcrConfig, OcrTimeoutConfig, OdtGeneratorConfig, OfficeParserConfig, PdfGeneratorConfig, PdfParserConfig, SemanticChunkingConfig, TemplateConfig, TemplateDateNames, TexGeneratorConfig, TexParserConfig, TextGeneratorConfig } from './types.js';
+import { ChunkingConfig, CsvGeneratorConfig, DeepRequired, DocumentStructureChunkingConfig, DocxGeneratorConfig, FixedSizeChunkingConfig, FullGeneratorConfig, HtmlGeneratorConfig, HtmlParserConfig, MdGeneratorConfig, OcrConfig, OcrTimeoutConfig, OdpGeneratorConfig, OdsGeneratorConfig, OdtGeneratorConfig, OfficeParserConfig, PdfGeneratorConfig, PdfParserConfig, PptxGeneratorConfig, SemanticChunkingConfig, TemplateConfig, TemplateDateNames, TexGeneratorConfig, TexParserConfig, TextGeneratorConfig, XlsxGeneratorConfig } from './types.js';
 
 const PDFJS_VERSION = '6.2.108';
 /** The pdf.js worker address the non-slim builds fall back to (see `allowRemoteAssets`). Empty in the slim builds. */
 export const DEFAULT_PDF_WORKER_SRC = typeof __SLIM__ !== 'undefined' && __SLIM__ ? '' : `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
+/** The folder of pdf.js's CMaps the non-slim builds fall back to in the browser (see `pdfCMapUrl`). Empty in the slim builds. */
+export const DEFAULT_PDF_CMAP_URL = typeof __SLIM__ !== 'undefined' && __SLIM__ ? '' : `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/cmaps/`;
+/** The folder of pdf.js's image decoders the non-slim builds fall back to in the browser (see `pdfDecoderUrl`). Empty in the slim builds. */
+export const DEFAULT_PDF_DECODER_URL = typeof __SLIM__ !== 'undefined' && __SLIM__ ? '' : `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/wasm/`;
 
 /**
  * The default regex used for identifying sentence boundaries.
@@ -63,10 +67,12 @@ const DEFAULT_PDF_PARSER_CONFIG: DeepRequired<PdfParserConfig> = {
     pageRange: '',
     normalizeText: true,
     extractTextColor: true,
+    keepHeadersAndFootersInPages: false,
     maxTextItems: 20_000,
     maxOperators: 250_000,
     maxAnnotations: 10_000,
     maxTimeMs: 5_000,
+    maxImagePixels: 40_000_000,
     separateProcess: true,
     processMemoryMb: 1024,
 };
@@ -103,11 +109,13 @@ export const DEFAULT_OFFICE_PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     serializeRawContent: true,
     preserveXmlWhitespace: false,
     pdfWorkerSrc: DEFAULT_PDF_WORKER_SRC,
+    pdfCMapUrl: DEFAULT_PDF_CMAP_URL,
+    pdfDecoderUrl: DEFAULT_PDF_DECODER_URL,
     includeBreakNodes: false,
     ignoreInternalLinks: false,
     ignorePageGeometry: false,
     fileType: null,
-    csvDelimiter: ',',
+    csvDelimiter: 'auto',
     decompressionLimits: {
         maxUncompressedBytes: 512 * 1024 * 1024,
         maxZipEntries: 10000,
@@ -170,9 +178,11 @@ const DEFAULT_PDF_GENERATOR_CONFIG: DeepRequired<PdfGeneratorConfig> = {
     fonts: { regular: null, bold: null, italic: null, boldItalic: null, mono: null },
     fallbackFonts: [],
     subsetFonts: true,
+    printHidden: false,
+    printSpeakerNotes: false,
     tagged: true,
     outline: false,
-    format: 'A4',
+    format: 'auto',
     width: '',
     height: '',
     landscape: false,
@@ -212,6 +222,7 @@ const DEFAULT_CSV_GENERATOR_CONFIG: DeepRequired<CsvGeneratorConfig> = {
  */
 const DEFAULT_MD_GENERATOR_CONFIG: DeepRequired<MdGeneratorConfig> = {
     fallbackToHtml: true,
+    listMarkers: 'keep',
     dialect: 'extended',
 };
 
@@ -289,15 +300,35 @@ const DEFAULT_CHUNKING_CONFIG: ChunkingConfig = DEFAULT_DOCUMENT_STRUCTURE_CHUNK
  * Default configuration for DOCX (Word) generation.
  */
 const DEFAULT_DOCX_GENERATOR_CONFIG: DeepRequired<DocxGeneratorConfig> = {
-    format: 'A4',
+    format: 'auto',
     landscape: false,
-    margin: { top: 72, right: 72, bottom: 72, left: 72 },
+    // '' is unset: under format 'auto' the document's own margin, else an inch.
+    margin: { top: '', right: '', bottom: '', left: '' },
 };
 
 const DEFAULT_ODT_GENERATOR_CONFIG: DeepRequired<OdtGeneratorConfig> = {
-    format: 'A4',
+    format: 'auto',
     landscape: false,
-    margin: { top: 72, right: 72, bottom: 72, left: 72 },
+    // '' is unset: under format 'auto' the document's own margin, else an inch.
+    margin: { top: '', right: '', bottom: '', left: '' },
+};
+
+const DEFAULT_XLSX_GENERATOR_CONFIG: DeepRequired<XlsxGeneratorConfig> = {
+    sheetPerTable: true,
+    includeText: true,
+};
+
+const DEFAULT_ODS_GENERATOR_CONFIG: DeepRequired<OdsGeneratorConfig> = {
+    sheetPerTable: true,
+    includeText: true,
+};
+
+const DEFAULT_PPTX_GENERATOR_CONFIG: DeepRequired<PptxGeneratorConfig> = {
+    backgrounds: [],
+};
+
+const DEFAULT_ODP_GENERATOR_CONFIG: DeepRequired<OdpGeneratorConfig> = {
+    backgrounds: [],
 };
 
 const DEFAULT_TEX_GENERATOR_CONFIG: DeepRequired<TexGeneratorConfig> = {
@@ -306,9 +337,10 @@ const DEFAULT_TEX_GENERATOR_CONFIG: DeepRequired<TexGeneratorConfig> = {
     bundle: false,
     embedImages: true,
     numberSections: false,
-    format: 'A4',
+    format: 'auto',
     landscape: false,
-    margin: { top: 72, right: 72, bottom: 72, left: 72 },
+    // '' is unset: under format 'auto' the document's own margin, else an inch.
+    margin: { top: '', right: '', bottom: '', left: '' },
 };
 
 export const DEFAULT_GENERATOR_CONFIG: FullGeneratorConfig = {
@@ -333,6 +365,10 @@ export const DEFAULT_GENERATOR_CONFIG: FullGeneratorConfig = {
     rtfConfig: {},
     docxConfig: DEFAULT_DOCX_GENERATOR_CONFIG,
     odtConfig: DEFAULT_ODT_GENERATOR_CONFIG,
+    xlsxConfig: DEFAULT_XLSX_GENERATOR_CONFIG,
+    odsConfig: DEFAULT_ODS_GENERATOR_CONFIG,
+    pptxConfig: DEFAULT_PPTX_GENERATOR_CONFIG,
+    odpConfig: DEFAULT_ODP_GENERATOR_CONFIG,
     texConfig: DEFAULT_TEX_GENERATOR_CONFIG,
     chunksConfig: DEFAULT_CHUNKING_CONFIG,
 };

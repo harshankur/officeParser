@@ -21,7 +21,9 @@
  * @module OpenOfficeParser
  */
 
-import { BreakMetadata, CellMetadata, ChartData, ChartMetadata, CodeMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, PageMetadata, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
+import { presetOfOdfShape } from '../utils/shapeNames.js';
+import { BreakMetadata, CellMetadata, ChartData, ChartMetadata, CodeMetadata, FullOfficeParserConfig, HeaderFooterMetadata, HeadingMetadata, ImageMetadata, IndentationMetadata, ListMetadata, PageSetup, ParagraphSpacing, ShapeMetadata, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, PageMetadata, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
+import { MAX_PAGE_PT } from '../utils/pageLimits.js';
 import { createAST } from '../utils/astUtils.js';
 import { chartRawTexts, extractChartData, MAX_CHART_VALUES } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
@@ -29,6 +31,8 @@ import { mathmlToLatex } from '../utils/mathUtils.js';
 import { cellSpan, clampRepeat, MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
 import { TextBuilder } from '../utils/textUtils.js';
 import { lookupTable, plainRecord } from '../utils/lookupUtils.js';
+import { lengthToPt } from '../utils/officeGenUtils.js';
+import { bulletCharacter, formatListNumber, odfNumberFormat } from '../utils/listMarkers.js';
 
 /**
  * Tracks how many table cells a single document has been allowed to materialize.
@@ -142,6 +146,12 @@ const createCellBudget = (config: OfficeParserConfig): CellBudget =>
  */
 interface ParagraphStyleInfo {
     alignment?: 'left' | 'center' | 'right' | 'justify';
+    /** `fo:margin-left`, `fo:margin-right` and `fo:text-indent`, in twips as Word's are read. */
+    indentation?: IndentationMetadata;
+    /** `fo:margin-top`, `fo:margin-bottom`, `fo:line-height` and `style:line-height-at-least`. */
+    spacing?: ParagraphSpacing;
+    /** `style:master-page-name`: a paragraph of this style starts a page of that master page. */
+    masterPage?: string;
     dropCap?: boolean;
     /** `fo:break-before` - a break emitted before the paragraph that carries the style. */
     breakBefore?: 'page' | 'column';
@@ -190,6 +200,10 @@ const ownParagraphs = (container: Element): Element[] => getOutermostElements(co
  * ignored), hidden text, a script, the list number the writers number lists with themselves, and blocks
  * that a paragraph cannot hold.
  */
+/** What a table cell holds paragraphs in, read through: a section, a list and its items, an index's body. */
+const CELL_CONTAINERS: ReadonlySet<string> = new Set(['text:section', 'text:list', 'text:list-item', 'text:list-header', 'text:index-body',
+    'text:table-of-content', 'text:illustration-index', 'text:table-index', 'text:object-index', 'text:user-index', 'text:alphabetical-index', 'text:bibliography']);
+
 const INLINE_NOT_SHOWN: ReadonlySet<string> = new Set(['text:note', 'text:hidden-text', 'text:hidden-paragraph', 'text:script', 'text:number', 'text:p', 'text:h', 'text:list', 'text:section', 'text:tracked-changes']);
 /**
  * What a paragraph's text, read whole when its content made no runs, leaves out: what shows nothing
@@ -220,6 +234,8 @@ const rowCells = (row: Element): Element[] => {
 };
 /** A cell's comment is its own node (its body is not the cell's text). */
 const CELL_SKIP = new Set(['office:annotation']);
+/** A sheet's column definitions come before its rows: a nested table's, in a cell, are not the sheet's. */
+const COLUMN_SKIP = new Set(['table:table-row', 'table:table-rows', 'table:table-row-group', 'table:table-header-rows']);
 
 function buildAnnotationComment(
     element: Element,
@@ -274,7 +290,9 @@ import { takeRepeats, valuesLength } from '../utils/repeatUtils.js';
 import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
 import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
-import { appendAll } from '../utils/nodeListUtils.js';
+import { appendAll, dropTrailingSectionStarts, liftFloatingFrames } from '../utils/nodeListUtils.js';
+import { odfPageNumberFormat } from '../utils/pageNumbers.js';
+import { inRanges } from '../utils/sheetUtils.js';
 
 /**
  * Helper to clean and extract attachment name from xlink:href or paths.
@@ -296,6 +314,55 @@ const ODF_FILE_TYPES: SupportedFileType[] = ['odt', 'odp', 'ods', 'odg'];
  * @param config - Parser configuration
  * @returns A promise resolving to the parsed AST
  */
+/** A table-cell style's text looks, which the cell's runs take under their own (its background is the cell's, not theirs). */
+function cellTextLooks(style: TextFormatting | undefined): TextFormatting | undefined {
+    if (!style) return undefined;
+    const { backgroundColor: _background, ...looks } = style;
+    return Object.keys(looks).length ? looks : undefined;
+}
+
+/** Whether a cell holds something: a value of a type, a paragraph with text, or a comment. */
+function holdsValue(cell: Element): boolean {
+    if (cell.getAttribute('office:value-type')) return true;
+    return getDirectChildren(cell, 'office:annotation').length > 0 || getDirectChildren(cell, 'text:p').some(p => (p.textContent || '').trim() !== '');
+}
+
+/**
+ * What an ODS cell holds (see CellMetadata.valueType and CellMetadata.value), from its `office:value-type`:
+ * a number (a percentage's or a currency amount's too) as written, a date as Excel counts its days (from
+ * 1899-12-30, with the day's fraction for its time), a time (a duration) in days, a truth value, an error;
+ * text where it is a string or says nothing. Its shown text is the cell's `text`: values were read from it, a
+ * number shown as 1.23E+05 written as 123000.
+ */
+function heldValue(cell: Element): Pick<CellMetadata, 'valueType' | 'value'> {
+    // (An error is a string to ODF; LibreOffice says which it is.)
+    if (cell.getAttribute('calcext:value-type') === 'error') return { valueType: 'error' };
+    const type = cell.getAttribute('office:value-type') || cell.getAttribute('calcext:value-type') || '';
+    // (Days to ten places: a second is about a hundred thousandth of one.)
+    const days = (n: number) => String(Number(n.toFixed(10)));
+    if (type === 'float' || type === 'percentage' || type === 'currency') {
+        const value = (cell.getAttribute('office:value') || '').trim();
+        return value && Number.isFinite(Number(value)) ? { valueType: 'number', value } : { valueType: 'text' };
+    }
+    if (type === 'date') {
+        const m = /^(-?\d{4,})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?)?/.exec(cell.getAttribute('office:date-value') || '');
+        if (!m) return { valueType: 'text' };
+        const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4] || 0), Number(m[5] || 0)) + Number(m[6] || 0) * 1000;
+        return Number.isFinite(ms) ? { valueType: 'date', value: days((ms - Date.UTC(1899, 11, 30)) / 86_400_000) } : { valueType: 'text' };
+    }
+    if (type === 'time') {
+        const m = /^(-)?P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec((cell.getAttribute('office:time-value') || '').trim());
+        if (!m || !(m[2] || m[3] || m[4] || m[5])) return { valueType: 'text' };
+        const total = Number(m[2] || 0) + (Number(m[3] || 0) + (Number(m[4] || 0) + Number(m[5] || 0) / 60) / 60) / 24;
+        return Number.isFinite(total) ? { valueType: 'time', value: days(m[1] ? -total : total) } : { valueType: 'text' };
+    }
+    if (type === 'boolean') {
+        const value = (cell.getAttribute('office:boolean-value') || '').trim().toLowerCase();
+        return value === 'true' || value === 'false' ? { valueType: 'boolean', value } : { valueType: 'text' };
+    }
+    return { valueType: 'text' };
+}
+
 export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
     // Honour cancellation requests immediately, before extracting the ZIP archive.
     // ODF containers (ODT/ODS/ODP) bundle content.xml, styles.xml, and media files;
@@ -384,7 +451,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     const listStyleIndex = new Map<Element, Map<string, Element>>();
     const listStyleKinds = new Map<Element, { listType: 'ordered' | 'unordered'; isVisible: boolean } | undefined>();
     let officeStylesElement: Element | null | undefined;
-    const listStyleKind = (styles: Element, name: string, withImages: boolean): { listType: 'ordered' | 'unordered'; isVisible: boolean } | undefined => {
+    const listStyleNamed = (styles: Element, name: string): Element | undefined => {
         let index = listStyleIndex.get(styles);
         if (!index) {
             index = new Map();
@@ -394,7 +461,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             }
             listStyleIndex.set(styles, index);
         }
-        const listStyle = index.get(name);
+        return index.get(name);
+    };
+    const listStyleKind = (styles: Element, name: string, withImages: boolean): { listType: 'ordered' | 'unordered'; isVisible: boolean } | undefined => {
+        const listStyle = listStyleNamed(styles, name);
         if (!listStyle) return undefined;
         // (A style is read by one of the two lookups only: automatic styles with pictures, office styles without.)
         if (listStyleKinds.has(listStyle)) return listStyleKinds.get(listStyle);
@@ -406,6 +476,53 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         else if (withImages && getElementsByTagName(listStyle, "text:list-level-style-image").length > 0) kind = { listType: 'unordered', isVisible: true };
         listStyleKinds.set(listStyle, kind);
         return kind;
+    };
+
+    /** A list style's levels by `text:level` (1-based), from the automatic styles or else the office ones. */
+    const odfListLevelsCache = new Map<Element | undefined, Map<string, Map<number, Element> | undefined>>();
+    const odfListLevels = (automaticStyles: Element | undefined, name: string): Map<number, Element> | undefined => {
+        let cache = odfListLevelsCache.get(automaticStyles);
+        if (!cache) odfListLevelsCache.set(automaticStyles, cache = new Map());
+        if (cache.has(name)) return cache.get(name);
+        if (stylesDom) officeStylesElement ??= getFirstElementByTagName(stylesDom, "office:styles") ?? null;
+        const listStyle = (automaticStyles ? listStyleNamed(automaticStyles, name) : undefined)
+            ?? (officeStylesElement ? listStyleNamed(officeStylesElement, name) : undefined);
+        let levels: Map<number, Element> | undefined;
+        if (listStyle) {
+            levels = new Map();
+            for (const level of Array.from(listStyle.childNodes).filter(isElement)) {
+                const n = Number(level.getAttribute("text:level"));
+                if (Number.isInteger(n) && n >= 1 && n <= 10 && !levels.has(n)) levels.set(n, level);
+            }
+        }
+        cache.set(name, levels);
+        return levels;
+    };
+
+    /**
+     * A list item's marker as LibreOffice shows it (see ListMetadata.marker): its level's prefix, the
+     * numbers of as many levels as it displays (each in its level's format, joined by dots), and suffix;
+     * or its bullet's character. Undefined when it is the item's number and a dot, or a round bullet.
+     */
+    const odfListMarker = (levels: Map<number, Element>, depth: number, counters: Record<string, number>, listType: 'ordered' | 'unordered', itemIndex: number): string | undefined => {
+        const level = levels.get(depth + 1);
+        if (!level) return undefined;
+        let marker: string;
+        if (level.tagName === 'text:list-level-style-bullet') {
+            const font = getDirectChildren(level, "style:text-properties")[0];
+            marker = bulletCharacter(level.getAttribute("text:bullet-char") || '', font?.getAttribute("fo:font-family") || font?.getAttribute("style:font-name") || undefined);
+        } else if (level.tagName === 'text:list-level-style-number') {
+            const shown = Math.min(Math.max(Number(level.getAttribute("text:display-levels")) || 1, 1), depth + 1);
+            const numbers: string[] = [];
+            for (let d = depth + 1 - shown; d <= depth; d++) {
+                const style = levels.get(d + 1);
+                const start = Number(style?.getAttribute("text:start-value")) || 1;
+                numbers.push(formatListNumber(start + Math.max(0, counters[String(d)] ?? 0), odfNumberFormat(style?.getAttribute("style:num-format"))));
+            }
+            marker = (level.getAttribute("style:num-prefix") || '') + numbers.join('.') + (level.getAttribute("style:num-suffix") || '');
+        } else return undefined;
+        const plain = listType === 'ordered' ? `${itemIndex + 1}.` : '•';
+        return marker === plain ? undefined : marker;
     };
 
     // 1. Determine File Type
@@ -436,6 +553,105 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             config, { fileType, part: 'content.xml' });
     const stylesFile = files.find(f => f.path === 'styles.xml');
     const stylesDom = stylesFile ? parseXmlString(stylesFile.content.toString(), { config }) : undefined;
+
+    // The master pages (styles.xml), by name, and the page layouts they name: the document's pages.
+    const masterPages = new Map<string, Element>();
+    const pageLayouts = new Map<string, Element>();
+    if (stylesDom) {
+        for (const master of getElementsByTagName(stylesDom, "style:master-page")) {
+            const name = master.getAttribute("style:name");
+            if (name && !masterPages.has(name)) masterPages.set(name, master);
+        }
+        for (const layout of getElementsByTagName(stylesDom, "style:page-layout")) {
+            const name = layout.getAttribute("style:name");
+            if (name && !pageLayouts.has(name)) pageLayouts.set(name, layout);
+        }
+    }
+    /** The master page the document starts on: the first block's style's, else Standard, else the first. */
+    let firstMaster: string | undefined = masterPages.has('Standard') ? 'Standard' : masterPages.keys().next().value;
+    /** The master page of each section after the first, in order; set while the text body is read. */
+    const sectionMasters: string[] = [];
+    let readingBody = false, bodyStarted = false;
+
+    /** Whether a master page shows a header or footer of a kind (`style:header`, `-left`, `-first`). */
+    const shown = (master: Element | undefined, tag: string): Element | undefined => {
+        const el = master ? getDirectChildren(master, tag)[0] : undefined;
+        return el && el.getAttribute("style:display") !== 'false' ? el : undefined;
+    };
+
+    /**
+     * A master page's pages (see PageSetup), from its page layout: how they are numbered and whether the
+     * first has a header of its own always; where geometry is wanted and the layout gives a size, the
+     * page's size and margins, the body below its header and above its footer (ODF's top margin is the
+     * header's; the header's height and gap come between it and the body), and its columns.
+     */
+    const odfPageSetup = (masterName: string | undefined): PageSetup | undefined => {
+        const master = masterName ? masterPages.get(masterName) : undefined;
+        const layout = master ? pageLayouts.get(master.getAttribute("style:page-layout-name") || '') : undefined;
+        const props = layout ? getDirectChildren(layout, "style:page-layout-properties")[0] : undefined;
+        if (!master) return undefined;
+        const setup: PageSetup = {};
+        // A first page of its own: its own first page's parts, or a master that hands over to another after
+        // its first page (a word processor's "First Page" style, and ODT output's section title pages).
+        const next = master?.getAttribute("style:next-style-name");
+        if (shown(master, "style:header-first") || shown(master, "style:footer-first") || (next && next !== masterName && masterPages.has(next))) setup.differentFirstPage = true;
+        // How its pages are numbered (`style:num-format`: i for front matter, 1 where it gives none).
+        // (A master of no page layout is on LibreOffice's default one: numbered 1, 2, 3, of no size here.)
+        const pageNumbers = odfPageNumberFormat(props?.getAttribute("style:num-format"));
+        if (pageNumbers) setup.pageNumberFormat = pageNumbers;
+        if (config.ignorePageGeometry || !props) return setup;
+        const pt = (el: Element | undefined, attr: string) => { const v = lengthToPt(el?.getAttribute(attr) || undefined); return v != null && v >= 0 && v <= MAX_PAGE_PT ? Math.round(v * 100) / 100 : undefined; };
+        const width = pt(props, "fo:page-width"), height = pt(props, "fo:page-height");
+        if (!width || !height) return setup;
+        const margin = { top: pt(props, "fo:margin-top") ?? 0, right: pt(props, "fo:margin-right") ?? 0, bottom: pt(props, "fo:margin-bottom") ?? 0, left: pt(props, "fo:margin-left") ?? 0 };
+        Object.assign(setup, { width, height, margin });
+        // The room a header or footer takes: its height and its gap to the body.
+        const room = (styleTag: string, gapAttr: string) => {
+            const hf = layout ? getDirectChildren(getDirectChildren(layout, styleTag)[0] ?? layout, "style:header-footer-properties")[0] : undefined;
+            if (!hf || !getDirectChildren(layout!, styleTag).length) return 0;
+            return (pt(hf, "fo:min-height") ?? pt(hf, "svg:height") ?? 0) + (pt(hf, gapAttr) ?? 0);
+        };
+        if (shown(master, "style:header")) { setup.headerDistance = margin.top; margin.top += room("style:header-style", "fo:margin-bottom"); }
+        if (shown(master, "style:footer")) { setup.footerDistance = margin.bottom; margin.bottom += room("style:footer-style", "fo:margin-top"); }
+        const columns = odfColumns(getDirectChildren(props, "style:columns")[0], width - margin.left - margin.right);
+        if (columns) setup.columns = columns;
+        return setup;
+    };
+    /** A setup where it sets a page (a sheet's or a slide's is its page, nothing without one). */
+    const sized = (setup: PageSetup | undefined) => setup?.width ? setup : undefined;
+    /** A `style:columns` element's columns (their number, the gap, a line between), where there are two or more. */
+    function odfColumns(columns: Element | undefined, available?: number): PageSetup['columns'] | undefined {
+        const count = Math.min(16, Math.round(Number(columns?.getAttribute("fo:column-count")) || 0));
+        if (!columns || count < 2) return undefined;
+        const sep = getDirectChildren(columns, "style:column-sep")[0];
+        // Each column's width where they are given (style:column): its relative width holds the column's
+        // indents (the halves of the gaps beside it), a share of the width the columns stand in (LibreOffice's
+        // shares sum to 65535; a share read as twentieths of a point gave columns of a thousand points).
+        const own = getDirectChildren(columns, "style:column");
+        const indent = (c: Element, attr: string) => Math.max(0, lengthToPt(c.getAttribute(attr) || undefined) ?? 0);
+        const rels = own.map(c => parseFloat(c.getAttribute("style:rel-width") || ''));
+        const total = rels.reduce((sum, r) => sum + (Number.isFinite(r) && r > 0 ? r : 0), 0);
+        const widths = own.map((c, i) => {
+            const rel = rels[i];
+            if (!(Number.isFinite(rel) && rel > 0)) return 0;
+            const whole = available !== undefined && available > 0 && total > 0 ? rel / total * available : rel / 20;
+            return Math.round((whole - indent(c, "fo:start-indent") - indent(c, "fo:end-indent")) * 100) / 100;
+        });
+        const differ = widths.length === count && widths.every(w => w > 0 && w < 1e5) && widths.some(w => Math.abs(w - widths[0]) > 0.5);
+        // The gap: as stated, else the indents between the first two columns.
+        const stated = lengthToPt(columns.getAttribute("fo:column-gap") || undefined);
+        const gap = stated ?? (own.length >= 2 ? indent(own[0], "fo:end-indent") + indent(own[1], "fo:start-indent") : 0);
+        return { count, gap: gap >= 0 && gap < 1584 ? Math.round(gap * 100) / 100 : 0, ...(differ ? { widths } : {}), ...(sep && (sep.getAttribute("style:style") ?? 'solid') !== 'none' ? { separator: true } : {}) };
+    }
+    /** Each section style's columns (`style:section-properties`'s `style:columns`), by its name; read against the page they stand on (see sectionColumnsOn). */
+    const sectionColumns = new Map<string, Element | undefined>();
+    /** A section style's columns on a page: their widths a share of the page's text width. */
+    const sectionColumnsOn = (styleName: string, page: PageSetup | undefined) => {
+        const el = sectionColumns.get(styleName);
+        return el ? odfColumns(el, page?.width ? page.width - (page.margin?.left ?? 0) - (page.margin?.right ?? 0) : undefined) : undefined;
+    };
+    /** The columns of the sections being read, innermost last (a page break inside one is set in them). */
+    const openSectionColumns: (string | undefined)[] = [];
     const content: OfficeContentNode[] = [];
     const notes: OfficeContentNode[] = [];
 
@@ -480,7 +696,17 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             const name = style.getAttribute("style:name");
             if (!name) continue;
 
+            if (style.getAttribute("style:family") === 'section') {
+                const sectionProps = getDirectChildren(style, "style:section-properties")[0];
+                if (!sectionColumns.has(name)) {
+                    const cols = sectionProps ? getDirectChildren(sectionProps, "style:columns")[0] : undefined;
+                    sectionColumns.set(name, cols && Math.round(Number(cols.getAttribute("fo:column-count")) || 0) >= 2 ? cols : undefined);
+                }
+                continue;
+            }
             const styleInfo: ParagraphStyleInfo = {};
+            const masterPage = style.getAttribute("style:master-page-name");
+            if (masterPage) styleInfo.masterPage = masterPage;
 
             // Parse paragraph properties for alignment and drop caps
             // A style's own properties (children of it, as the schema has them): looked up through the
@@ -502,6 +728,33 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     }
                 }
 
+                // Indents, in twips as the AST has Word's (a negative first-line indent is a hanging one).
+                const twips = (attr: string) => { const pt = lengthToPt(paraProps.getAttribute(attr) || undefined); return pt ? Math.round(pt * 20) : 0; };
+                const indentation: IndentationMetadata = {};
+                const left = twips("fo:margin-left"), right = twips("fo:margin-right"), first = twips("fo:text-indent");
+                if (left) indentation.left = left;
+                if (right) indentation.right = right;
+                if (first > 0) indentation.firstLine = first;
+                else if (first < 0) indentation.hanging = -first;
+                if (Object.keys(indentation).length) styleInfo.indentation = indentation;
+
+                // Spacing: margins above and below, and the line height as a percentage (proportional)
+                // or a length (fixed), or a least height. 100% is what readers assume.
+                const spacing: ParagraphSpacing = {};
+                // In points to the hundredth (a length in cm is no whole number of them).
+                const hundredths = (pt: number) => Math.round(pt * 100) / 100;
+                const points = (attr: string) => { const pt = lengthToPt(paraProps.getAttribute(attr) || undefined); return pt == null ? undefined : hundredths(pt); };
+                const above = points("fo:margin-top"), below = points("fo:margin-bottom");
+                if (above !== undefined && above >= 0) spacing.before = above;
+                if (below !== undefined && below >= 0) spacing.after = below;
+                const lineHeight = (paraProps.getAttribute("fo:line-height") || '').trim();
+                const percent = /^(\d+(?:\.\d+)?)%$/.exec(lineHeight);
+                if (percent) { const multiple = Number(percent[1]) / 100; if (multiple > 0 && multiple !== 1) spacing.lineMultiple = multiple; }
+                else if (lineHeight && lineHeight !== 'normal') { const pt = lengthToPt(lineHeight); if (pt && pt > 0) spacing.lineHeight = hundredths(pt); }
+                const least = points("style:line-height-at-least");
+                if (least && least > 0 && spacing.lineHeight === undefined && spacing.lineMultiple === undefined) { spacing.lineHeight = least; spacing.lineAtLeast = true; }
+                if (Object.keys(spacing).length) styleInfo.spacing = spacing;
+
                 // Detect Drop Caps
                 const dropCap = getDirectChildren(paraProps, "style:drop-cap")[0];
                 if (dropCap) {
@@ -517,6 +770,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 if (breakBefore === 'page' || breakBefore === 'column') styleInfo.breakBefore = breakBefore;
                 const breakAfter = paraProps.getAttribute("fo:break-after");
                 if (breakAfter === 'page' || breakAfter === 'column') styleInfo.breakAfter = breakAfter;
+            }
+
+            // A table's breaks before and after it (its style's table properties).
+            const tableProps = getDirectChildren(style, "style:table-properties")[0];
+            if (tableProps && !paraProps) {
+                const before = tableProps.getAttribute("fo:break-before"), after = tableProps.getAttribute("fo:break-after");
+                if (before === 'page' || before === 'column') styleInfo.breakBefore = before;
+                if (after === 'page' || after === 'column') styleInfo.breakAfter = after;
             }
 
             if (Object.keys(styleInfo).length > 0) {
@@ -589,6 +850,84 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
      * 
      * @param node - The paragraph element to parse
      */
+    // ── Drawing styles (graphic, presentation and drawing-page families): slides' shapes, documents' frames ──
+    /** The styles of both parts by name (graphic, presentation and drawing-page families among them). */
+    let drawingStyles: Map<string, Element> | undefined;
+    const drawingStyle = (doc: Document, name: string | null): Element | undefined => {
+        if (!name) return undefined;
+        if (!drawingStyles) {
+            drawingStyles = new Map();
+            for (const dom of [doc, stylesDom]) for (const style of dom ? getElementsByTagName(dom, "style:style") : []) {
+                const styleName = style.getAttribute("style:name");
+                if (styleName && !drawingStyles.has(styleName)) drawingStyles.set(styleName, style);
+            }
+        }
+        return drawingStyles.get(name);
+    };
+    /** A style's property (on its graphic or drawing-page properties), or its parent's. */
+    const styleProperty = (doc: Document, name: string | null, tag: string, attr: string): string | undefined => {
+        for (let style = drawingStyle(doc, name), depth = 0; style && depth < 16; style = drawingStyle(doc, style.getAttribute("style:parent-style-name")), depth++) {
+            const value = getDirectChildren(style, tag)[0]?.getAttribute(attr);
+            if (value) return value;
+        }
+        return undefined;
+    };
+    const odpLength = (value: string | null): number | undefined => {
+        const pt = value ? lengthToPt(value) : null;
+        return pt != null && Number.isFinite(pt) && Math.abs(pt) < 16128 ? pt : undefined;
+    };
+    /**
+     * A document's frame that floats beside the text (anchored to a paragraph, a character or the page,
+     * not set in its line as a character): its look and where it stands (ShapeMetadata.float), from its
+     * attributes and its graphic style. Undefined for a frame in its line, or one of no width.
+     */
+    const frameFloat = (frame: Element): ShapeMetadata | undefined => {
+        const length = (value: string | null | undefined) => { const pt = odpLength(value ?? null); return pt === undefined ? undefined : Math.round(pt * 100) / 100; };
+        const anchor = frame.getAttribute("text:anchor-type") || 'paragraph';
+        // (Without geometry, its text is read where it stands, as a frame in its line is. A slide's or a
+        // drawing's text box has its place on the slide: a frame in its text is read in it.)
+        if (config.ignorePageGeometry || fileType !== 'odt') return undefined;
+        if (anchor !== 'paragraph' && anchor !== 'char' && anchor !== 'page') return undefined;
+        const doc = frame.ownerDocument, style = frame.getAttribute("draw:style-name");
+        const prop = (attr: string) => doc ? styleProperty(doc, style, "style:graphic-properties", attr) : undefined;
+        const width = length(frame.getAttribute("svg:width") ?? frame.getAttribute("fo:min-width"));
+        if (!width || width <= 0) return undefined;
+        const height = length(frame.getAttribute("svg:height") ?? frame.getAttribute("fo:min-height"));
+        const hpos = prop("style:horizontal-pos"), hrel = prop("style:horizontal-rel") ?? (anchor === 'page' ? 'page' : 'paragraph');
+        const vpos = prop("style:vertical-pos"), vrel = prop("style:vertical-rel") ?? (anchor === 'page' ? 'page' : 'paragraph');
+        const align = hpos === 'left' || hpos === 'inside' ? 'left' as const : hpos === 'right' || hpos === 'outside' ? 'right' as const : hpos === 'center' ? 'center' as const : undefined;
+        const x = length(frame.getAttribute("svg:x")), y = length(frame.getAttribute("svg:y"));
+        // ODF's `none` is no text beside it (above and below only); `run-through` text over or under it.
+        const wrapping = prop("style:wrap");
+        const wrap = wrapping === 'run-through' ? 'none' as const : !wrapping || wrapping === 'none' ? 'aboveBelow' as const : 'beside' as const;
+        const margin = (side: string) => length(prop(`fo:margin-${side}`) ?? prop("fo:margin")) ?? 0;
+        const gap = { top: margin('top'), right: margin('right'), bottom: margin('bottom'), left: margin('left') };
+        const background = prop("fo:background-color") ?? (prop("draw:fill") === 'solid' ? prop("draw:fill-color") : undefined);
+        const fill = background && /^#[0-9a-f]{6}$/i.test(background) ? background.toUpperCase() : undefined;
+        // `0.5pt solid #3355aa`: the outline's width and colour.
+        const border = /^\s*([\d.]+[a-z]*)\s+[a-z-]+\s+(#[0-9a-f]{6})\s*$/i.exec(prop("fo:border") ?? '');
+        const lineWidth = border ? length(border[1]) : undefined;
+        const line = border && lineWidth ? { color: border[2].toUpperCase(), width: lineWidth } : undefined;
+        const pad = (side: string) => length(prop(`fo:padding-${side}`) ?? prop("fo:padding")) ?? 0;
+        return {
+            ...(fill || line ? { geometry: 'rect' } : {}),
+            ...(fill ? { fill } : {}),
+            ...(line ? { line } : {}),
+            textInsets: { top: pad('top'), right: pad('right'), bottom: pad('bottom'), left: pad('left') },
+            float: {
+                horizontalFrom: hrel === 'page' || hrel === 'page-start-margin' || hrel === 'page-end-margin' ? 'page' : hrel === 'page-content' ? 'margin' : 'column',
+                verticalFrom: vrel === 'page' ? 'page' : vrel === 'page-content' ? 'margin' : 'paragraph',
+                ...(align ? { align } : { x: x ?? 0 }),
+                // (Placed in the middle or at the foot of what it is measured down from: at its top.)
+                y: vpos === 'from-top' || vpos === undefined ? y ?? 0 : 0,
+                width,
+                ...(height ? { height } : {}),
+                wrap,
+                ...(gap.top || gap.right || gap.bottom || gap.left ? { gap } : {}),
+            },
+        };
+    };
+
     /**
      * Helper to parse inline content (text, spans, links, notes, etc.) recursively.
      * 
@@ -689,6 +1028,20 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         formatting: parentFormatting,
                         metadata: { breakType: 'textWrapping', ...(linkMetadata || {}) } as BreakMetadata
                     });
+                } else if (tagName === 'text:page-number' || tagName === 'text:page-count') {
+                    // A page field: its text is the number when the file was saved, marked so that each
+                    // page can show its own (TextMetadata.field).
+                    const text = element.textContent || '';
+                    // (The format it writes its number in, where it sets one: `style:num-format="i"`.)
+                    // (Without one it writes the page's: absent, not decimal.)
+                    const fieldFormat = element.getAttribute("style:num-format") ? odfPageNumberFormat(element.getAttribute("style:num-format")) : undefined;
+                    fullText += text;
+                    children.push({
+                        type: 'text',
+                        text,
+                        formatting: parentFormatting,
+                        metadata: { ...(linkMetadata || {}), field: tagName === 'text:page-number' ? 'page' : 'pages', ...(fieldFormat ? { fieldFormat } : {}) } as TextMetadata
+                    });
                 } else if (tagName === 'text:span') {
                     // Formatted text span
                     const styleName = element.getAttribute("text:style-name");
@@ -743,6 +1096,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 children: npContent.children,
                                 metadata: {
                                     ...(npContent.alignment ? { alignment: npContent.alignment } : {}),
+                                    ...(npContent.indentation ? { paragraphIndentation: npContent.indentation } : {}),
+                                    ...(npContent.spacing ? { spacing: npContent.spacing } : {}),
                                     ...(npContent.anchorIds?.length ? { anchorIds: npContent.anchorIds } : {})
                                 }
                             };
@@ -858,9 +1213,16 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     if (drawTextBox) {
                         const textBoxChildren: OfficeContentNode[] = [];
                         traverse(drawTextBox, textBoxChildren, false, sourceXml);
-                        appendAll(children, textBoxChildren);
                         const textBoxText = textBoxChildren.map(c => c.text || '').join('\n');
-                        fullText += textBoxText;
+                        // A frame floating beside the text: its blocks in a `drawing` node, which goes before
+                        // the paragraph (see liftFloatingFrames); its text is not the paragraph's.
+                        const floating = frameFloat(frame);
+                        if (floating) {
+                            children.push({ type: 'drawing', text: textBoxText, children: textBoxChildren, metadata: floating });
+                        } else {
+                            appendAll(children, textBoxChildren);
+                            fullText += textBoxText;
+                        }
                     } else if (drawObject) {
                         const href = drawObject.getAttribute("xlink:href");
                         let isFormula = false;
@@ -982,14 +1344,16 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         paraStyleMap: Record<string, ParagraphStyleInfo>,
         styleMap: Record<string, TextFormatting>,
         config: OfficeParserConfig,
-        sourceXml: string
-    ): { text: string; children: OfficeContentNode[]; alignment?: 'left' | 'center' | 'right' | 'justify'; style?: string; anchorIds?: string[] } => {
+        sourceXml: string,
+        inherited?: TextFormatting
+    ): { text: string; children: OfficeContentNode[]; alignment?: 'left' | 'center' | 'right' | 'justify'; indentation?: IndentationMetadata; spacing?: ParagraphSpacing; style?: string; anchorIds?: string[] } => {
         // Get paragraph style for alignment and drop caps
         const paraStyle = node.getAttribute("text:style-name");
         const styleInfo = paraStyle ? paraStyleMap[paraStyle] : undefined;
         const alignment = styleInfo?.alignment;
         const dropCap = styleInfo?.dropCap;
-        const formatting = mergeFormatting({}, paraStyle ? styleMap[paraStyle] : undefined);
+        // The looks of what holds the paragraph (a spreadsheet cell's style), under its own style's.
+        const formatting = mergeFormatting(mergeFormatting({}, inherited), paraStyle ? styleMap[paraStyle] : undefined);
 
         // Parse content recursively using the new helper
         const content = parseInlineContent(node, styleMap, config, notes, paraStyleMap, formatting, undefined, sourceXml);
@@ -1050,7 +1414,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             }
         }
 
-        return { text: content.text, children: content.children, alignment, style: paraStyle || undefined, anchorIds: content.anchorIds };
+        return { text: content.text, children: content.children, alignment, indentation: styleInfo?.indentation, spacing: styleInfo?.spacing, style: paraStyle || undefined, anchorIds: content.anchorIds };
     };
 
     /**
@@ -1146,6 +1510,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 const rowSpan = cellSpan(cell.getAttribute("table:number-rows-spanned"), MAX_ROW_SPAN);
 
                 // Helper to recursively process cell children (handles frames, text-boxes, etc. in ODP)
+                // The cell style's text looks (bold, italic, size, colour, font), which its runs take under
+                // their own: a spreadsheet sets a cell bold through its style. Its background is the cell's.
+                const cellLooks = cellTextLooks(styleMap[cell.getAttribute("table:style-name") || '']);
                 const processChildren = (node: Element) => {
                     if (!node.childNodes) return;
 
@@ -1155,7 +1522,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             const element = child as Element;
 
                             if (element.tagName === "text:p" || element.tagName === "text:h") {
-                                const pContent = parseParagraphContent(element, paraStyleMap, styleMap, config, sourceXml);
+                                const pContent = parseParagraphContent(element, paraStyleMap, styleMap, config, sourceXml, cellLooks);
                                 let pNode: OfficeContentNode;
                                 if (element.tagName === "text:h") {
                                     pNode = {
@@ -1165,6 +1532,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                         metadata: {
                                             level: parseInt(element.getAttribute("text:outline-level") || "1"),
                                             ...(pContent.alignment ? { alignment: pContent.alignment } : {}),
+                                            ...(pContent.indentation ? { paragraphIndentation: pContent.indentation } : {}),
+                                            ...(pContent.spacing ? { spacing: pContent.spacing } : {}),
                                             ...(pContent.style ? { style: pContent.style } : {})
                                         }
                                     };
@@ -1175,6 +1544,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                         children: pContent.children,
                                         metadata: {
                                             ...(pContent.alignment ? { alignment: pContent.alignment } : {}),
+                                            ...(pContent.indentation ? { paragraphIndentation: pContent.indentation } : {}),
+                                            ...(pContent.spacing ? { spacing: pContent.spacing } : {}),
                                             ...(pContent.style ? { style: pContent.style } : {})
                                         }
                                     };
@@ -1199,8 +1570,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 // Recursive call for nested table
                                 const nestedTableNode = parseTable(element, paraStyleMap, styleMap, config, sourceXml, cellBudget);
                                 cellChildren.push(nestedTableNode);
-                            } else if (element.tagName === "draw:frame" || element.tagName === "draw:text-box") {
-                                // Recursively process container content (common in ODP)
+                            } else if (element.tagName === "draw:frame" || element.tagName === "draw:text-box" || CELL_CONTAINERS.has(element.tagName)) {
+                                // Recursively process container content: frames (common in ODP), and a section,
+                                // a list or an index the cell holds (their paragraphs were dropped).
                                 processChildren(element);
                             }
                         }
@@ -1336,6 +1708,71 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         // splitting a huge repeat expansion across many small tables. `traverse` and the
         // spreadsheet branch below both close over this; `parseTable` receives it explicitly.
         const cellBudget = createCellBudget(config);
+
+        // ── Where a slide's shapes are, and what they look like (ODP; see the PPTX reader's) ─────────
+        /** A slide's fill: its own drawing-page style's, else its master page's. */
+        const odpBackground = (page: Element, doc: Document): string | undefined => {
+            const fillOf = (style: string | null) => styleProperty(doc, style, "style:drawing-page-properties", "draw:fill") === 'solid'
+                ? styleProperty(doc, style, "style:drawing-page-properties", "draw:fill-color") : undefined;
+            const master = masterPages.get(page.getAttribute("draw:master-page-name") || '');
+            const color = fillOf(page.getAttribute("draw:style-name")) ?? fillOf(master?.getAttribute("draw:style-name") ?? null);
+            return color && /^#[0-9a-f]{6}$/i.test(color) ? color.toUpperCase() : undefined;
+        };
+        /**
+         * Reads a slide's shape with its box (`svg:x`, `svg:y`, `svg:width`, `svg:height`, or a turned
+         * shape's `draw:transform`) on each node, and before them a `drawing` node where it is filled,
+         * outlined, turned, or sets its text off its top (from its graphic style). A group's shapes each
+         * have their own place.
+         */
+        const placeOdpShape = (element: Element, out: OfficeContentNode[], doc: Document, sourceXml: string): void => {
+            if (element.tagName === 'draw:g') {
+                for (const child of Array.from(element.childNodes).filter(isElement)) placeOdpShape(child, out, doc, sourceXml);
+                return;
+            }
+            const nodes: OfficeContentNode[] = [];
+            traverse(element, nodes, false, sourceXml);
+            const width = odpLength(element.getAttribute("svg:width")), height = odpLength(element.getAttribute("svg:height"));
+            let x = odpLength(element.getAttribute("svg:x")), y = odpLength(element.getAttribute("svg:y"));
+            let rotation = 0;
+            // `rotate (a) translate (x y)`: turned by a (radians, anticlockwise) about its corner, which
+            // the translation then places; its box is about the same centre, unturned.
+            const transform = /rotate\s*\(\s*(-?[\d.eE+-]+)\s*\)\s*translate\s*\(\s*([^\s)]+)\s+([^\s)]+)\s*\)/.exec(element.getAttribute("draw:transform") || '');
+            if (transform && width !== undefined && height !== undefined) {
+                const angle = Number(transform[1]), tx = odpLength(transform[2]), ty = odpLength(transform[3]);
+                if (Number.isFinite(angle) && tx !== undefined && ty !== undefined) {
+                    const cos = Math.cos(-angle), sin = Math.sin(-angle);
+                    const cx = tx + cos * width / 2 - sin * height / 2, cy = ty + sin * width / 2 + cos * height / 2;
+                    x = cx - width / 2; y = cy - height / 2;
+                    rotation = ((Math.round(-angle * 180 / Math.PI * 100) / 100) % 360 + 360) % 360;
+                }
+            }
+            if (x === undefined || y === undefined || width === undefined || height === undefined) { appendAll(out, nodes); return; }
+            const bounds = { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, width: Math.round(width * 100) / 100, height: Math.round(height * 100) / 100 };
+            for (const node of nodes) node.bounds = bounds;
+            const style = element.getAttribute("draw:style-name") || element.getAttribute("presentation:style-name");
+            const prop = (attr: string) => styleProperty(doc, style, "style:graphic-properties", attr);
+            const isShape = element.tagName !== 'draw:frame';
+            const geometryType = getFirstElementByTagName(element, "draw:enhanced-geometry")?.getAttribute("draw:type");
+            // As DrawingML names it (ShapeMetadata.geometry); a shape of a path of its own, which no preset is, a rectangle.
+            const geometry = element.tagName === 'draw:ellipse' || element.tagName === 'draw:circle' ? 'ellipse' : presetOfOdfShape(geometryType) ?? 'rect';
+            const fill = isShape && prop("draw:fill") !== 'none' ? prop("draw:fill-color") : prop("draw:fill") === 'solid' ? prop("draw:fill-color") : undefined;
+            const stroked = isShape ? prop("draw:stroke") !== 'none' : prop("draw:stroke") === 'solid';
+            const strokeColor = stroked ? (prop("svg:stroke-color") ?? (isShape ? '#000000' : undefined)) : undefined;
+            const anchor = prop("draw:textarea-vertical-align");
+            const textAnchor = anchor === 'middle' ? 'middle' as const : anchor === 'bottom' ? 'bottom' as const : undefined;
+            const metadata: ShapeMetadata = {
+                ...(fill || strokeColor ? { geometry } : {}),
+                ...(fill && /^#[0-9a-f]{6}$/i.test(fill) ? { fill: fill.toUpperCase() } : {}),
+                ...(strokeColor && /^#[0-9a-f]{6}$/i.test(strokeColor) ? { line: { color: strokeColor.toUpperCase(), width: odpLength(prop("svg:stroke-width") ?? null) || 0.75 } } : {}),
+                ...(rotation ? { rotation } : {}),
+                ...(nodes.length && textAnchor ? { textAnchor } : {}),
+            };
+            if (metadata.fill || metadata.line || (nodes.length && (rotation || textAnchor))) {
+                if (nodes.length) metadata.textInsets = { top: odpLength(prop("fo:padding-top") ?? null) ?? 3.6, right: odpLength(prop("fo:padding-right") ?? null) ?? 7.2, bottom: odpLength(prop("fo:padding-bottom") ?? null) ?? 3.6, left: odpLength(prop("fo:padding-left") ?? null) ?? 7.2 };
+                out.push({ type: 'drawing', text: '', bounds, metadata });
+            }
+            appendAll(out, nodes);
+        };
         // Automatic styles are local to content.xml, but their definitions have exactly the
         // shape styles.xml uses, so they go through the same reader rather than a second copy of
         // it - the copy is how `fo:break-before` came to be read in neither place.
@@ -1378,8 +1815,42 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
          * difference from how DOCX's `<w:br w:type="page"/>` lands.
          */
         const pushStyleBreak = (styleName: string | null, targetArray: OfficeContentNode[], edge: 'before' | 'after') => {
+            const info = styleName ? paragraphStyleMap[styleName] : undefined;
+            // A paragraph of a style naming a master page starts a page of it: the first block's sets the
+            // document's first pages, a later one's starts a section of its own (with its page).
+            if (edge === 'before' && readingBody) {
+                const master = info?.masterPage && masterPages.has(info.masterPage) ? info.masterPage : undefined;
+                // (The master page in force named again, one that hands over to no other: a new page of it, as a
+                // word processor goes on, not a section with a first page of its own.)
+                const inForce = sectionMasters[sectionMasters.length - 1] ?? firstMaster;
+                const handsOver = (name: string) => { const next = masterPages.get(name)?.getAttribute('style:next-style-name'); return !!next && next !== name; };
+                if (!bodyStarted) {
+                    bodyStarted = true;
+                    if (master) firstMaster = master;
+                } else if (master && master === inForce && !handsOver(master)) {
+                    if (config.includeBreakNodes) targetArray.push({ type: 'break', metadata: { breakType: 'page' } as BreakMetadata });
+                    return;
+                } else if (master) {
+                    sectionMasters.push(master);
+                    // (A section's start is structure, a node whatever includeBreakNodes says.)
+                    {
+                        const pageSetup = odfPageSetup(master);
+                        // A page that starts inside a section of columns (LibreOffice turns to a section's page
+                        // on its first paragraph) is set in that section's columns: the section's own break,
+                        // just before it with nothing between, is this one.
+                        const inSection = openSectionColumns[openSectionColumns.length - 1];
+                        if (pageSetup?.width && inSection) {
+                            const columns = sectionColumnsOn(inSection, pageSetup);
+                            if (columns) pageSetup.columns = columns; else delete pageSetup.columns;
+                            const before = targetArray[targetArray.length - 1];
+                            if (before?.type === 'break' && (before.metadata as BreakMetadata | undefined)?.breakType === 'section' && (before.metadata as any)?.openedSection) targetArray.pop();
+                        }
+                        targetArray.push({ type: 'break', metadata: { breakType: 'page', section: sectionMasters.length, ...(pageSetup ? { pageSetup } : {}) } as BreakMetadata });
+                    }
+                    return;
+                }
+            }
             if (!config.includeBreakNodes || !styleName) return;
-            const info = paragraphStyleMap[styleName];
             const breakType = edge === 'before' ? info?.breakBefore : info?.breakAfter;
             if (!breakType) return;
             targetArray.push({ type: 'break', metadata: { breakType } as BreakMetadata });
@@ -1393,6 +1864,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                 const metadata: any = {
                     ...(pContent.alignment ? { alignment: pContent.alignment } : {}),
+                    ...(pContent.indentation ? { paragraphIndentation: pContent.indentation } : {}),
+                    ...(pContent.spacing ? { spacing: pContent.spacing } : {}),
                     ...(pContent.style ? { style: pContent.style } : {}),
                     ...(pContent.anchorIds?.length ? { anchorIds: pContent.anchorIds } : {})
                 };
@@ -1431,6 +1904,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 const metadata: any = {
                     level,
                     ...(hContent.alignment ? { alignment: hContent.alignment } : {}),
+                    ...(hContent.indentation ? { paragraphIndentation: hContent.indentation } : {}),
+                    ...(hContent.spacing ? { spacing: hContent.spacing } : {}),
                     ...(hContent.style ? { style: hContent.style } : {}),
                     ...(hContent.anchorIds?.length ? { anchorIds: hContent.anchorIds } : {})
                 };
@@ -1476,7 +1951,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 if (config.includeRawContent) {
                     tableNode.rawContent = getRawContent(node, sourceXml, config);
                 }
+                // (A table's style starts a page, or a page style, as a paragraph's does: LibreOffice's way
+                // of turning to a page style at a table.)
+                if (!asSheet) pushStyleBreak(node.getAttribute("table:style-name"), targetArray, 'before');
                 targetArray.push(tableNode);
+                if (!asSheet) pushStyleBreak(node.getAttribute("table:style-name"), targetArray, 'after');
                 lastWasList = false;
             } else if (node.tagName === "text:list") {
                 // Parse list structure with proper listId tracking. A list header (`text:list-header`)
@@ -1512,6 +1991,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         if (office) ({ listType, isVisible } = office);
                     }
                 }
+
+                // This level's own style (a numbered list's nested level may be bulleted, and the
+                // reverse), for its items' kind and marker.
+                let depth = 0;
+                for (let parent = node.parentNode; parent; parent = parent.parentNode) if (parent.nodeName === 'text:list') depth++;
+                const levels = styleNameToCheck ? odfListLevels(automaticStyles ?? undefined, styleNameToCheck) : undefined;
+                const ownLevel = levels?.get(depth + 1);
+                if (isVisible && ownLevel) listType = ownLevel.tagName === 'text:list-level-style-number' ? 'ordered' : 'unordered';
 
                 // If the list is not visible, it's likely a layout list used by Impress.
                 // We should traverse its items and treat their content as regular nodes.
@@ -1598,6 +2085,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                         }
                                     }
                                     const itemIndex = listCounters[listId][indentKey];
+                                    const marker = levels ? odfListMarker(levels, indentation, listCounters[listId], listType, itemIndex) : undefined;
                                     const pContent = parseParagraphContent(element, paragraphStyleMap, styleMap, config, sourceXml);
                                     const segments = splitParagraphByBreaks(pContent);
 
@@ -1617,6 +2105,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                                 indentation,
                                                 itemIndex,
                                                 listId,
+                                                ...(marker !== undefined ? { marker } : {}),
                                                 alignment: pContent.alignment || 'left',
                                                 style: pContent.style
                                             } as ListMetadata : {
@@ -1762,6 +2251,31 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     }
                 }
                 for (const child of linked) targetArray.push(child);
+            } else if (node.tagName === "text:section" && readingBody && !config.ignorePageGeometry
+                && sectionColumns.get(node.getAttribute("text:style-name") || '') && odfPageSetup(sectionMasters[sectionMasters.length - 1] ?? firstMaster)?.width) {
+                // A section set in columns of its own, on the page it is on: a section break before it
+                // with its columns, and one after it with the page's again (the page it ends on: a page break
+                // inside it turns to another). Its start is structure, as a Word continuous section's is: a node
+                // whatever includeBreakNodes says (its columns are geometry: none under ignorePageGeometry).
+                const styleName = node.getAttribute("text:style-name") || '';
+                const { columns: _pageColumns, ...page } = odfPageSetup(sectionMasters[sectionMasters.length - 1] ?? firstMaster)!;
+                const opened: OfficeContentNode = { type: 'break', metadata: { breakType: 'section', pageSetup: { ...page, columns: sectionColumnsOn(styleName, page) } } as BreakMetadata };
+                // (Marked while it is the last node, so a page break at the section's start takes its place.)
+                (opened.metadata as any).openedSection = true;
+                targetArray.push(opened);
+                openSectionColumns.push(styleName);
+                try {
+                    for (let i = 0; i < node.childNodes.length; i++) {
+                        const child = node.childNodes[i];
+                        if (isElement(child)) traverse(child as Element, targetArray, forceHeading, sourceXml);
+                    }
+                } finally {
+                    openSectionColumns.pop();
+                    delete (opened.metadata as any).openedSection;
+                }
+                // (The page it ends on may be a master of no layout: the page's setup then, columns none.)
+                const { columns: endColumns, ...endPage } = odfPageSetup(sectionMasters[sectionMasters.length - 1] ?? firstMaster) ?? {};
+                targetArray.push({ type: 'break', metadata: { breakType: 'section', pageSetup: { ...endPage, ...(endColumns ? { columns: endColumns } : {}) } } as BreakMetadata });
             } else if (node.tagName !== "text:tracked-changes") {
                 // (Tracked changes hold what a deletion removed, which is not the document's text.)
                 if (node.childNodes) {
@@ -1783,10 +2297,32 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 // taken as descendants, a table nested in a cell was read again at each level (586
                 // bytes took 7 seconds), and became a sheet of its own.
                 const tables = getDirectChildren(spreadsheet, "table:table");
+                // The table styles that hide their sheet (`table:display="false"`).
+                const hiddenTableStyles = new Set<string>();
+                const contentStyles = getFirstElementByTagName(xml, "office:automatic-styles");
+                if (contentStyles) {
+                    for (const style of getDirectChildren(contentStyles, "style:style")) {
+                        if (style.getAttribute("style:family") !== 'table') continue;
+                        if (getDirectChildren(style, "style:table-properties")[0]?.getAttribute("table:display") === 'false') hiddenTableStyles.add(style.getAttribute("style:name") || '');
+                    }
+                }
+                const isHiddenVisibility = (value: string | null) => value === 'collapse' || value === 'filter';
                 for (let i = 0; i < tables.length; i++) {
                     const table = tables[i];
                     const sheetName = table.getAttribute("table:name") || `Sheet${i + 1}`;
                     const rows: OfficeContentNode[] = [];
+                    const sheetHidden = hiddenTableStyles.has(table.getAttribute("table:style-name") || '');
+                    // Hidden columns and rows are read, and marked (CellMetadata.hidden): a printout leaves
+                    // them out, as the PDF writer does, and every other output keeps them as data. A
+                    // column's repeats are ranges; the rows (where nested tables live) are not searched.
+                    const hiddenColumns: [number, number][] = [];
+                    let columnAt = 0;
+                    for (const column of getOutermostElements(table, "table:table-column", COLUMN_SKIP)) {
+                        const repeat = toRepeatCount(column.getAttribute("table:number-columns-repeated"));
+                        if (isHiddenVisibility(column.getAttribute("table:visibility"))) hiddenColumns.push([columnAt, columnAt + repeat - 1]);
+                        columnAt += repeat;
+                    }
+                    const columnHidden = inRanges(hiddenColumns);
 
                     const tableRows = getOutermostElements(table, "table:table-row");
                     let rowIndex = 0;
@@ -1798,6 +2334,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         const tableCells = rowCells(row);
 
                         let colIndex = 0;
+                        const rowHidden = isHiddenVisibility(row.getAttribute("table:visibility"));
                         const rowsRepeated = toRepeatCount(row.getAttribute("table:number-rows-repeated"));
                         // What one copy of this row writes, for its row repeats (see CellBudget.takeRepeats).
                         let rowWeight = 0;
@@ -1805,8 +2342,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         for (let c = 0; c < tableCells.length; c++) {
                             const cell = tableCells[c];
                             const colsRepeated = toRepeatCount(cell.getAttribute("table:number-columns-repeated"));
-                            // A cell a merge covers holds its column (see rowCells).
-                            if (cell.tagName === "table:covered-table-cell") {
+                            // A cell a merge covers holds its column (see rowCells); a sheet's that holds a value (a
+                            // spreadsheet keeps one there, hidden, as XLSX's are read) is read at its place, the
+                            // merge's: it was left out.
+                            if (cell.tagName === "table:covered-table-cell" && !(fileType === 'ods' && holdsValue(cell))) {
                                 colIndex += colsRepeated;
                                 continue;
                             }
@@ -1824,6 +2363,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             // Extract text from cell (paragraphs inside cell, excluding a comment's body)
                             let cellText = "";
                             const children: OfficeContentNode[] = [];
+                            const odsCellLooks = cellTextLooks(styleMap[cell.getAttribute("table:style-name") || '']);
                             const ps = getOutermostElements(cell, "text:p", CELL_SKIP);
                             for (let p = 0; p < ps.length; p++) {
                                 const para = ps[p];
@@ -1832,7 +2372,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 // span, spaces, tabs, line breaks, links and fields. Taking only the spans'
                                 // text when there were any dropped the rest ("Total: " before a bold "5").
                                 // (Its frames are read with the cell's, below.)
-                                const inline = parseInlineContent(para, styleMap, config, notes, paragraphStyleMap, {}, undefined, xmlString, false);
+                                // Its runs take the cell style's looks (a spreadsheet sets a cell bold through its style)
+                                // and the paragraph style's under their own; the cell's background is the cell's.
+                                const paraStyle = para.getAttribute("text:style-name");
+                                const inline = parseInlineContent(para, styleMap, config, notes, paragraphStyleMap, mergeFormatting(mergeFormatting({}, odsCellLooks), paraStyle ? styleMap[paraStyle] : undefined), undefined, xmlString, false);
                                 cellText += inline.text;
                                 const shown = inline.text.trim() !== '';
                                 // A paragraph after another is a line of its own: its runs followed the
@@ -1939,6 +2482,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             // that spin was itself a CPU denial-of-service, unbounded by the cell
                             // budget because it created no cells to charge against.
                             const willMaterialize = (cellText || children.length > 0 || cellComments.length > 0 || fileType !== 'ods');
+                            // What a sheet's cell holds, as its file says (`text` is what the sheet shows: 10.46, 1.23E+05).
+                            const held = fileType === 'ods' && willMaterialize ? heldValue(cell) : undefined;
                             if (!willMaterialize) {
                                 colIndex += colsRepeated;
                             } else {
@@ -1955,11 +2500,13 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                         text: cellText,
                                         children: children,
                                         metadata: {
+                                            ...held,
                                             row: rowIndex,
                                             col: colIndex,
                                             // Merged cells: the spans were not read, so the merge was lost.
                                             ...(colSpan > 1 ? { colSpan } : {}),
                                             ...(rowSpan > 1 ? { rowSpan } : {}),
+                                            ...(rowHidden || columnHidden(colIndex) ? { hidden: true } : {}),
                                         } as CellMetadata
                                     };
                                     if (config.includeRawContent) {
@@ -2008,7 +2555,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 const rowNode: OfficeContentNode = {
                                     type: 'row',
                                     children: rowCells,
-                                    metadata: undefined
+                                    metadata: rowHidden ? { hidden: true } : undefined
                                 };
                                 // Fix row index in metadata for repeated rows
                                 if (k > 0) {
@@ -2030,10 +2577,15 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         }
                     }
 
+                    // How the sheet prints: its table style's master page's pages.
+                    // (A sheet whose style names none prints on the Default page style, as Calc prints it.)
+                    const sheetMaster = paragraphStyleMap[table.getAttribute("table:style-name") || '']?.masterPage ?? (masterPages.has('Default') ? 'Default' : firstMaster);
+                    // (A sheet's print setup is its page: none where it gives no size.)
+                    const sheetPage = config.ignorePageGeometry ? undefined : sized(odfPageSetup(sheetMaster));
                     const sheetNode: OfficeContentNode = {
                         type: 'sheet',
                         children: rows,
-                        metadata: { sheetName } as SheetMetadata
+                        metadata: { sheetName, ...(sheetHidden ? { hidden: true } : {}), ...(sheetPage ? { pageSetup: sheetPage } : {}) } as SheetMetadata
                     };
                     if (config.includeRawContent) {
                         sheetNode.rawContent = getRawContent(table, xmlString, config);
@@ -2088,9 +2640,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                     }
                                     continue;
                                 }
-                                traverse(element, slideNode.children!, false, xmlString);
+                                if (config.ignorePageGeometry) traverse(element, slideNode.children!, false, xmlString);
+                                else placeOdpShape(element, slideNode.children!, xml, xmlString);
                             }
                         }
+                    }
+                    if (!config.ignorePageGeometry) {
+                        const background = odpBackground(page, xml);
+                        if (background) (slideNode.metadata as SlideMetadata).background = background;
                     }
 
                     if (config.includeRawContent) {
@@ -2157,7 +2714,12 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         else {
             const textDoc = getFirstElementByTagName(body, "office:text");
             if (textDoc) {
-                traverse(textDoc, content, false, xmlString);
+                readingBody = true;
+                try {
+                    traverse(textDoc, content, false, xmlString);
+                } finally {
+                    readingBody = false;
+                }
             }
         }
     };
@@ -2423,7 +2985,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     }
     // Also add styles that only have alignment
     for (const styleName in paragraphStyleMap) {
-        if (!combinedStyleMap[styleName]) {
+        // (A style that only names a master page, as a sheet's table style does, has nothing to show.)
+        if (!combinedStyleMap[styleName] && Object.keys(paragraphStyleMap[styleName]).some(key => key !== 'masterPage')) {
             combinedStyleMap[styleName] = {
                 formatting: {},
                 alignment: paragraphStyleMap[styleName]?.alignment
@@ -2439,36 +3002,105 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     // would otherwise leak in as literal header content. Only the first master page's visible
     // header/footer is read, through the same block traversal (the shape WordParser populates).
     let auxiliary: OfficeAuxiliaryContent | undefined;
-    if (!config.ignoreHeadersAndFooters && stylesDom && fileType === 'odt') {
+    if (!config.ignoreHeadersAndFooters && stylesDom && fileType === 'odt' && firstMaster) {
         const stylesXmlStr = stylesFile ? stylesFile.content.toString() : undefined;
-        const masterStyles = getFirstElementByTagName(stylesDom, "office:master-styles");
-        const masterPage = masterStyles ? getFirstElementByTagName(masterStyles, "style:master-page") : undefined;
-        if (masterPage) {
-            const visible = (el: Element | null | undefined): el is Element => !!el && el.getAttribute("style:display") !== "false";
-            const headerEl = getFirstElementByTagName(masterPage, "style:header");
-            const footerEl = getFirstElementByTagName(masterPage, "style:footer");
-            const headers: OfficeContentNode[] = [];
-            const footers: OfficeContentNode[] = [];
-            if (visible(headerEl)) traverse(headerEl, headers, false, stylesXmlStr);
-            if (visible(footerEl)) traverse(footerEl, footers, false, stylesXmlStr);
-            // Resolve any image/chart nodes in the header/footer the same way the body is (OCR text,
-            // chart data, attachment linkage); without this a picture in a master-page header/footer
-            // would carry no data and render blank in every destination.
-            if (headers.length) assignAttachmentData(headers);
-            if (footers.length) assignAttachmentData(footers);
-            if (headers.length || footers.length) {
-                auxiliary = {
-                    ...(headers.length ? { headers } : {}),
-                    ...(footers.length ? { footers } : {}),
-                };
+        const headers: OfficeContentNode[] = [];
+        const footers: OfficeContentNode[] = [];
+        // Each section's master page's headers and footers, as header and footer nodes of their kind
+        // (default; even for a left page's; first): the first section's, and each later one's whose
+        // master page is another (an empty one where it has none, which a section has not carried on).
+        // Only the first master page's two were read, as loose paragraphs.
+        const masters = [firstMaster, ...sectionMasters];
+        const sectioned = new Set(masters).size > 1;
+        // Whether any of the document's master pages (or one a first page's hands over to) has a left part of
+        // its own: then every section has even pages' parts, as Word's even and odd pages are the document's.
+        const facing = [...new Set(masters)].some(name => {
+            const master = masterPages.get(name), next = master?.getAttribute('style:next-style-name');
+            return [master, next && next !== name ? masterPages.get(next) : undefined].some(m => shown(m, 'style:header-left') || shown(m, 'style:footer-left'));
+        });
+        // Each part read once and its blocks shared by the sections showing it, a node only where a section's
+        // part of a kind and type is other than the one in force (that section takes it on), and each node past
+        // a part's first charged to the repeated content budget, going without its blocks once that is spent:
+        // sections alternating two master pages read their parts again for each section, gigabytes for a
+        // document of kilobytes.
+        const readParts = new Map<Element, { children: OfficeContentNode[]; text: string; weight: number }>();
+        const inForce = new Map<string, Element | null>();
+        masters.forEach((name, section) => {
+            if (section > 0 && name === masters[section - 1]) return;
+            const master = masterPages.get(name);
+            const own = [['style:header', 'header', 'default'], ['style:header-left', 'header', 'even'], ['style:header-first', 'header', 'first'],
+                ['style:footer', 'footer', 'default'], ['style:footer-left', 'footer', 'even'], ['style:footer-first', 'footer', 'first']] as const;
+            // A section's master page that hands over to another after its first page (a word processor's
+            // "First Page" style, `style:next-style-name`) holds the first page's header and footer, and
+            // the one it hands over to the rest's: read as every page's, its letterhead was repeated on
+            // every page (a later section's too, as ODT output writes one).
+            const next = master?.getAttribute('style:next-style-name');
+            const rest = next && next !== name ? masterPages.get(next) : undefined;
+            const parts: (readonly [Element | undefined, string, 'header' | 'footer', 'default' | 'even' | 'first'])[] = rest
+                ? [...(['header', 'footer'] as const).map(kind => [master, shown(master, `style:${kind}-first`) ? `style:${kind}-first` : `style:${kind}`, kind, 'first'] as const),
+                    ...own.filter(([, , type]) => type !== 'first').map(([tag, kind, type]) => [rest, tag, kind, type] as const)]
+                : own.map(([tag, kind, type]) => [master, tag, kind, type] as const);
+            // A left or first part ODF leaves out (or hides) is the right page's, where Word's (which the
+            // header and footer nodes follow) shows nothing: where the document has left parts (any master
+            // page's), each kind's default part is its left part too where it has none; where this master page
+            // has a first page's part of one kind, the other kind's default part is its first page's too. They
+            // were lost on those pages, and a later section on this master page showed another's left part.
+            // (A first page's master page that hands over shows its own parts alone.)
+            const found = parts.map(([from, tag, kind, type]) => [shown(from, tag), kind, type] as const);
+            for (const type of ['even', 'first'] as const) {
+                if (type === 'even' ? !facing : rest || !found.some(([el, , t]) => el && t === type)) continue;
+                for (const kind of ['header', 'footer'] as const) {
+                    const index = found.findIndex(([, k, t]) => k === kind && t === type);
+                    const fallback = found.find(([el, k, t]) => el && k === kind && t === 'default')?.[0];
+                    if (index >= 0 && !found[index][0] && fallback) found[index] = [fallback, kind, type];
+                }
             }
+            for (const [el, kind, type] of found) {
+                if (!el && !(sectioned && section > 0 && type === 'default')) continue;
+                const slot = `${kind}|${type}`;
+                if (section > 0 && inForce.has(slot) && inForce.get(slot) === (el ?? null)) continue;
+                inForce.set(slot, el ?? null);
+                let part = el ? readParts.get(el) : undefined;
+                const repeat = !!part;
+                if (el && !part) {
+                    const children: OfficeContentNode[] = [];
+                    traverse(el, children, false, stylesXmlStr);
+                    // Resolve any image/chart nodes the same way the body's are (OCR text, chart data,
+                    // attachment linkage): without it a picture in a header would render blank.
+                    if (children.length) assignAttachmentData(children);
+                    const text = children.map(c => c.text || '').join('\n');
+                    let count = 0;
+                    const stack = [...children];
+                    while (stack.length) { const n = stack.pop()!; count++; for (const c of n.children ?? []) stack.push(c); }
+                    readParts.set(el, part = { children, text, weight: text.length + 16 * count });
+                }
+                const kept = part && (!repeat || takeRepeats(config, 1, part.weight) > 0);
+                (kind === 'header' ? headers : footers).push({ type: kind, text: kept ? part!.text : '', children: kept ? part!.children : [],
+                    metadata: { type, ...(sectioned ? { section } : {}) } as HeaderFooterMetadata });
+            }
+        });
+        if (headers.length || footers.length) {
+            auxiliary = {
+                ...(headers.length ? { headers } : {}),
+                ...(footers.length ? { footers } : {}),
+            };
         }
     }
+    // Frames floating beside a paragraph's text, read where they are anchored, stand before it.
+    liftFloatingFrames(content);
+    for (const part of [...(auxiliary?.headers ?? []), ...(auxiliary?.footers ?? [])]) if (part.children) liftFloatingFrames(part.children);
+    // (A section starting after the last text, or a section of columns ending the document, starts nothing.)
+    if (fileType === 'odt') dropTrailingSectionStarts(content);
+    // A presentation's page is its slide's size alone: slides are laid out as they are, not within margins.
+    // (A text document's numbering and first page are no geometry: kept under ignorePageGeometry.)
+    const firstPage = config.ignorePageGeometry && fileType !== 'odt' ? undefined : odfPageSetup(firstMaster);
+    const pageSetup = fileType === 'odt' ? firstPage : fileType === 'odp' ? (firstPage?.width ? { width: firstPage.width, height: firstPage.height } : undefined) : sized(firstPage);
 
     return createAST(
         fileType,
         {
             ...metadata,
+            ...(pageSetup ? { pageSetup } : {}),
             styleMap: plainRecord(combinedStyleMap)
         },
         content,

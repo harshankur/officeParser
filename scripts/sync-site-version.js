@@ -34,11 +34,23 @@ function packageVersion() {
     return version;
 }
 
-/** The badge for a version: the version, linked to what changed in it. */
+/**
+ * The changelog's section for a version (`## [8.3.0] - 2026-10-22`), as GitHub ids its heading (lower
+ * case, punctuation left out, each space a hyphen: `830---2026-10-22`); none where it has no section.
+ */
+function changelogAnchor(version) {
+    let changelog;
+    try { changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8'); } catch { return ''; }
+    const heading = changelog.split(/\r?\n/).find(line => line.startsWith(`## [${version}]`));
+    return heading ? heading.slice(3).trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s/g, '-') : '';
+}
+
+/** The badge for a version: the version, linked to what changed in it (its section of the changelog). */
 function versionBadge(version, indent) {
+    const anchor = changelogAnchor(version);
     return [
         START,
-        `<a class="badge-link" href="https://github.com/harshankur/officeParser/blob/master/CHANGELOG.md" target="_blank"`,
+        `<a class="badge-link" href="https://github.com/harshankur/officeParser/blob/master/CHANGELOG.md${anchor ? `#${anchor}` : ''}" target="_blank"`,
         `    rel="noopener" aria-label="officeParser version ${version}: see what changed">`,
         `    <div class="badge badge-version" id="version-badge">v${version}</div>`,
         `</a>`,

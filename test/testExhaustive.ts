@@ -5,19 +5,30 @@
  */
 
 import { OfficeParser } from '../src/OfficeParser';
+import { withinTime } from './helpers/timing';
+import { testUnicodeChunks } from './generator/unicodeChunks';
+import { testBrotliGuard } from './security/brotliGuard';
 import { OfficeGenerator } from '../src/OfficeGenerator';
+import { bulletCharacter, formatListNumber, readMarkerLabels } from '../src/utils/listMarkers';
+import { decodeBmp, decodeGif } from '../src/utils/rasterUtils';
+import { excelShownText } from '../src/utils/excelFormat';
+import { fillPageNumber, pageNumberText } from '../src/utils/pageNumbers';
+import { guardShaping } from '../src/generators/pdf/nativePdfEngine';
 import { OfficeTemplate } from '../src/OfficeTemplate';
 import { OfficeConverter } from '../src/OfficeConverter';
-import { zipSync, strToU8, unzipSync, strFromU8 } from 'fflate';
+import { zipSync, strToU8, unzipSync, unzlibSync, strFromU8 } from 'fflate';
+import { PDFDocument, PDFHexString, PDFName, PDFOperator, PDFRawStream, StandardFonts, TextAlignment, degrees, rgb } from 'pdf-lib';
 import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
-import type { ImageMetadata, OfficeContentNode, OfficeParserAST } from '../src/types';
+import type { ImageMetadata, OfficeContentNode, OfficeParserAST, ShapeMetadata } from '../src/types';
 import { parseXmlString } from '../src/utils/xmlUtils';
 import { decodeWindows1252, textDecoder } from '../src/utils/encodingUtils';
 import { ocrTestHooks, performOcr, terminateOcr } from '../src/utils/ocrUtils';
 import { imageFromPdf, imageToTextPdf, newDecodeBudget } from '../src/utils/textPdf';
-import { decodeBase64, hexColor, isHeaderRow, lengthToPt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw } from '../src/utils/officeGenUtils';
+import { PdfFile } from '../src/parsers/pdf/pdfFile';
+import { KeptJpegs } from '../src/parsers/pdf/pdfJpeg';
+import { decodeBase64, hexColor, isHeaderRow, lengthToPt, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toBookmarkNameRaw } from '../src/utils/officeGenUtils';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -981,12 +992,12 @@ async function testRtfDestinations(): Promise<void> {
 
     // A table ending a section, before the next section's header.
     const sections = await parse(String.raw`\sectd{\header \pard Head1\par}\pard Intro\par\trowd\cellx3000\cellx6000\pard\intbl A\cell B\cell\row\pard\par\sect\sectd{\header \pard Head2\par}\pard After\par`);
-    assert.deepStrictEqual(sections.content.map(shape), [['paragraph', 'Intro'], ['table', [['row', [['cell', [['paragraph', 'A']]], ['cell', [['paragraph', 'B']]]]]]], ['paragraph', 'After']], 'RTF: a table ending a section stays in the body');
-    assert.deepStrictEqual(sections.auxiliary?.headers?.map(shape), [['paragraph', 'Head1'], ['paragraph', 'Head2']], 'RTF: the headers hold their own paragraphs only');
+    assert.deepStrictEqual(sections.content.map(shape), [['paragraph', 'Intro'], ['table', [['row', [['cell', [['paragraph', 'A']]], ['cell', [['paragraph', 'B']]]]]]], ['break', undefined], ['paragraph', 'After']], 'RTF: a table ending a section stays in the body (the next section starting after it)');
+    assert.deepStrictEqual(sections.auxiliary?.headers?.map(h => [(h.metadata as any)?.type, h.children!.map(shape)]), [['default', [['paragraph', 'Head1']]], ['default', [['paragraph', 'Head2']]]], 'RTF: the headers hold their own paragraphs only, each a part');
     // A header's own table, and a footer written inside a table cell.
     const headerTable = await parse(String.raw`\trowd\cellx3000\pard\intbl A\cell\row{\header \trowd\cellx3000\pard\intbl H\cell\row\pard Hx\par}\pard After\par`);
     assert.deepStrictEqual(headerTable.content.map(shape), [['table', [['row', [['cell', [['paragraph', 'A']]]]]]], ['paragraph', 'After']], 'RTF: a header with a table leaves the body\'s table in the body');
-    assert.deepStrictEqual(headerTable.auxiliary?.headers?.map(shape), [['table', [['row', [['cell', [['paragraph', 'H']]]]]]], ['paragraph', 'Hx']], 'RTF: a header keeps its own table');
+    assert.deepStrictEqual(headerTable.auxiliary?.headers?.flatMap(h => h.children!).map(shape), [['table', [['row', [['cell', [['paragraph', 'H']]]]]]], ['paragraph', 'Hx']], 'RTF: a header keeps its own table');
     const footerInCell = await parse(String.raw`\trowd\cellx3000\cellx6000\pard\intbl A{\footer \pard Foot\par}\cell B\cell\row\pard After\par`);
     assert.deepStrictEqual(footerInCell.content.map(shape), [['table', [['row', [['cell', [['paragraph', 'A']]], ['cell', [['paragraph', 'B']]]]]]], ['paragraph', 'After']], 'RTF: a footer written in a cell leaves the cell as it was');
 
@@ -1189,22 +1200,18 @@ async function testWordParagraphMarkFormatting(): Promise<void> {
 }
 
 /**
- * A content control showing its placeholder (`w:showingPlcHdr`) holds Word's prompt, such as "Click or
- * tap here to enter text.", until the author fills it in; that prompt is not the document's text.
+ * Word writes a non-breaking hyphen and an absolute-position tab as elements of the run, not as
+ * characters of `w:t`, so each must become its character or the words around it run together.
  */
-async function testWordPlaceholders(): Promise<void> {
-    console.log('\n=== Running Word Placeholder Tests ===');
+async function testWordRunCharacters(): Promise<void> {
+    console.log('\n=== Running Word Run Character Tests ===');
 
-    const prompt = (text: string, flag = '<w:showingPlcHdr/>') =>
-        `<w:sdt><w:sdtPr>${flag}</w:sdtPr><w:sdtContent>${text}</w:sdtContent></w:sdt>`;
-    const run = (text: string) => `<w:r><w:t xml:space="preserve">${text}</w:t></w:r>`;
     const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:body>
-    ${prompt(`<w:p>${run('Click or tap here to enter text.')}</w:p>`)}
-    <w:p>${run('Name: ')}${prompt(run('Click or tap here to enter text.'))}${run(' (required)')}</w:p>
-    <w:tbl><w:tr><w:tc><w:p>${run('Date')}</w:p></w:tc><w:tc>${prompt(`<w:p>${run('Click or tap to enter a date.')}</w:p>`)}</w:tc></w:tr></w:tbl>
-    <w:p>${run('Filled: ')}${prompt(run('Ada'), '<w:showingPlcHdr w:val="0"/>')}${prompt(run(' Lovelace'), '')}</w:p>
+    <w:p><w:r><w:t>co</w:t><w:noBreakHyphen/><w:t>operate</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Chapter 1</w:t><w:ptab w:relativeTo="margin" w:alignment="right" w:leader="dot"/><w:t>7</w:t></w:r></w:p>
+    <w:p><w:r><w:t>soft</w:t><w:softHyphen/><w:t>ware</w:t></w:r></w:p>
   </w:body>
 </w:document>`;
     const zip = zipSync({
@@ -1223,12 +1230,9 @@ async function testWordPlaceholders(): Promise<void> {
 
     const ast = await OfficeParser.parseOffice(Buffer.from(zip), { fileType: 'docx' });
     const text = (await ast.to('text')).value;
-    assert.ok(!text.includes('Click or tap'), `Word: a placeholder prompt is not text (got ${JSON.stringify(text)})`);
-    assert.ok(text.includes('Name:  (required)'), 'Word: the paragraph around an inline placeholder keeps its text');
-    assert.ok(text.includes('Date'), 'Word: the row of a placeholder cell keeps its other cells');
-    assert.ok(text.includes('Filled: Ada Lovelace'), 'Word: a control whose placeholder is switched off, or that has none, is read');
+    assert.strictEqual(text, 'co-operate\nChapter 1\t7\nsoftware', 'Word: noBreakHyphen and ptab read as their characters, a soft hyphen stays hidden');
 
-    console.log('  Word placeholders: All assertions passed ✓');
+    console.log('  Word run characters: All assertions passed ✓');
 }
 
 /**
@@ -1414,6 +1418,26 @@ async function testGeneratedOutput(): Promise<void> {
         const chunkChars = strip(chunks.map(c => c.text).join(' ')).length;
         const plainChars = strip(((await ast.to('text')).value as string) || '').length;
         assert.ok(chunkChars >= plainChars * 0.9, `chunking (${origin}): retains >=90% of .to('text') chars (${chunkChars}/${plainChars})`);
+    }
+
+    // A split table's header row heads every chunk of its rows, also where the header and one row are more
+    // than a chunk holds (a header over half a chunk was a chunk of its own, the rows after it unnamed).
+    {
+        const table = await parseMd('| Quarter | Revenue | Operating margin |\n|---|---|---|\n| Q1 | 41,900 | 16.2% |\n| Q2 | 43,750 | 17.1% |\n| Q3 | 45,200 | 18.4% |');
+        for (const maxChunkSize of [30, 60, 90]) {
+            const tableChunks = ((await OfficeGenerator.generate(table, 'chunks', { chunksConfig: { maxChunkSize, tableSplitStrategy: 'row' } } as any)).value as any[]).filter(c => c.metadata?.isTableChunk);
+            assert.ok(tableChunks.length >= 2 && tableChunks.every(c => c.text.startsWith('| Quarter | Revenue | Operating margin |\n|')),
+                `maxChunkSize ${maxChunkSize}: every table chunk starts with the header and holds rows; got ${JSON.stringify(tableChunks.map(c => c.text))}`);
+            assert.deepStrictEqual(tableChunks.flatMap(c => c.text.match(/Q\d/g) ?? []), ['Q1', 'Q2', 'Q3'], `maxChunkSize ${maxChunkSize}: each row once, in order`);
+        }
+        // A size under one character, or a fraction, cuts whole characters: none lost, none repeated.
+        const word = await parseMd('| H |\n|---|\n| abcdefgh |');
+        for (const maxChunkSize of [1.5, 2.5]) {
+            const pieces = ((await OfficeGenerator.generate(word, 'chunks', { chunksConfig: { maxChunkSize, tableSplitStrategy: 'row' } } as any)).value as any[])
+                .filter(c => c.metadata?.isTableChunk).map(c => c.text.replace(/^\| H \|\n?/, ''));
+            // (The header, which repeated would be more than twice the table, may be a chunk of its own.)
+            assert.strictEqual(pieces.join('').replace(/[\s|H]/g, ''), 'abcdefgh', `maxChunkSize ${maxChunkSize}: the row's characters each once; got ${JSON.stringify(pieces)}`);
+        }
     }
 
     // 3.B: empty metadata emits no frontmatter fence, and doesn't reparse into a `## ---` heading.
@@ -3078,7 +3102,12 @@ async function testLatexGeneration(): Promise<void> {
     assert.strictEqual(await geometryOf({}), 'a4paper,margin=1in', 'TEX config: the default page is A4 with inch margins');
     assert.strictEqual(await geometryOf({ format: 'Letter', margin: { top: 50, right: 50, bottom: 50, left: 50 } }), 'letterpaper,margin=50bp', 'TEX config: a length that is no round number of inches or millimetres is in big points');
     assert.strictEqual(await geometryOf({ format: 'Tabloid', margin: { top: '25mm', right: '25mm', bottom: '25mm', left: '25mm' } }), 'ansibpaper,margin=25mm', 'TEX config: tabloid is geometry\'s ANSI B');
-    assert.strictEqual(await geometryOf({ format: 'Ledger' }), 'paperwidth=17in,paperheight=11in,margin=1in', 'TEX config: a sheet geometry has no upright name for is given by its size');
+    assert.strictEqual(await geometryOf({ format: 'Ledger' }), 'ansibpaper,landscape,margin=1in', 'TEX config: ledger is ANSI B turned');
+    assert.strictEqual(await geometryOf({ format: 'auto' }), 'a4paper,margin=1in', 'TEX config: a document without a page of its own is on A4');
+    const letterLandscape = { ...synthetic, metadata: { ...synthetic.metadata, pageSetup: { width: 792, height: 612 } } };
+    assert.strictEqual(/\\usepackage\[([^\]]*)\]\{geometry\}/.exec((await OfficeGenerator.generate(letterLandscape, 'tex', {} as any)).value as string)?.[1], 'letterpaper,landscape,margin=1in', 'TEX config: the document\'s own page by default');
+    const oddSize = { ...synthetic, metadata: { ...synthetic.metadata, pageSetup: { width: 500, height: 700 } } };
+    assert.ok(((await OfficeGenerator.generate(oddSize, 'tex', {} as any)).value as string).includes('paperwidth='), 'TEX config: a page no paper is named for is given by its size');
     assert.strictEqual(await geometryOf({ format: 'A5', landscape: true }), 'a5paper,landscape,margin=1in', 'TEX config: landscape turns the named paper');
     // A paragraph's indents and a picture's size are the document's points too.
     const indented = { type: 'docx', content: [{ type: 'paragraph', text: 'Indented.', children: [{ type: 'text', text: 'Indented.' }], metadata: { paragraphIndentation: { left: 720, right: 360, hanging: 240 } } }], metadata: {}, attachments: [] } as any;
@@ -4590,6 +4619,5446 @@ async function testRtfHeaderRows(): Promise<void> {
 }
 
 /**
+ * An XLSX number cell keeps its value as its text and records what the sheet shows through its number
+ * format (CellMetadata.shownText); PDF output prints that, as a spreadsheet's printout does (it printed
+ * 0.19 for 19%, 120 for €120.00, 2026-10-01 for 01.10.2026), and data outputs keep the value.
+ */
+async function testXlsxShownText(): Promise<void> {
+    const cases: [string, string, string | undefined][] = [
+        ['120', '[$€-407]#,##0.00', '€120.00'], ['0.19', '0%', '19%'], ['46296', 'dd\\.mm\\.yyyy', '01.10.2026'], ['2', '0.00', '2.00'],
+        ['-1250.5', '#,##0.00;[Red](#,##0.00)', '(1,250.50)'], ['0', '#,##0.00;(#,##0.00);"-"', '-'], ['1234567', '#,##0,"K"', '1,235K'],
+        ['46296.5', 'mmm d, yyyy h:mm AM/PM', 'Oct 1, 2026 12:00 PM'], ['0.5', 'hh:mm:ss', '12:00:00'], ['1234.5', '#,##0.00 _€;-#,##0.00 _€', '1,234.50'],
+        ['12', 'General', undefined], ['3', '@', undefined], ['1.5', '# ?/?', undefined], ['1.5', '0.00E+00', undefined], ['30', '[h]:mm', '720:00'],
+        // Elapsed time: the first unit in all, the others after it.
+        ['1.25', '[h]:mm', '30:00'], ['1.5', '[h]:mm:ss', '36:00:00'], ['0.0625', '[mm]:ss', '90:00'], ['0.001', '[ss]', '86'], ['0.25', '[hh]:mm', '06:00'], ['-1.25', '[h]:mm', undefined],
+        // Where Excel shows ####: a negative time in the 1900 date system, or past its last day.
+        ['1e300', '[h]:mm', undefined], ['1e305', '[h]:mm:ss', undefined], ['2958465', '[h]:mm', '71003160:00'],
+        // (The last day runs to its midnight.)
+        ['2958465.5', '[h]:mm:ss', '71003172:00:00'], ['2958466', '[h]:mm', undefined],
+        // An empty section shows nothing, `mmmmm` the month's letter, and a fill (`*x`) is a space.
+        ['0', '0;-0;;@', ''], ['46296', 'mmmmm', 'O'], ['46296', 'mmmmm yy', 'O 26'],
+        ['0', '_($* #,##0_);_($* (#,##0);_($* "-"_);_(@_)', '$ -'], ['1234', '_($* #,##0_);_($* (#,##0);_($* "-"_);_(@_)', '$ 1,234'],
+        ['0', '_("$"* #,##0.00_);_("$"* \\(#,##0.00\\);_("$"* "-"??_);_(@_)', '$ -'], ['1', '0'.repeat(300), undefined],
+    ];
+    for (const [value, code, shown] of cases) assert.strictEqual(excelShownText(value, code, false), shown, `${value} through ${code}`);
+    assert.strictEqual(excelShownText('-0.5', '[h]:mm', true), '-12:00', 'the 1904 date system shows a negative elapsed time');
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const xlsx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+        'xl/styles.xml': strToU8(`<?xml version="1.0"?><styleSheet ${ns}><numFmts count="2"><numFmt numFmtId="165" formatCode="dd\\.mm\\.yyyy"/><numFmt numFmtId="166" formatCode="[$€-407]#,##0.00"/></numFmts><cellXfs count="4"><xf numFmtId="0"/><xf numFmtId="165"/><xf numFmtId="166"/><xf numFmtId="9"/></cellXfs></styleSheet>`),
+        'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData><row r="1"><c r="A1" s="1"><v>46296</v></c><c r="B1" s="2"><v>120</v></c><c r="C1" s="3"><v>0.19</v></c><c r="D1"><v>7</v></c></row></sheetData></worksheet>`),
+    }));
+    const ast = await OfficeParser.parseOffice(xlsx, { fileType: 'xlsx' } as any) as OfficeParserAST;
+    const cells = ast.content[0].children![0].children!;
+    assert.deepStrictEqual(cells.map(c => [c.text, (c.metadata as any).shownText]), [['2026-10-01', '01.10.2026'], ['120', '€120.00'], ['0.19', '19%'], ['7', undefined]], 'the value is the text, the shown text beside it');
+    assert.ok(String((await ast.to('csv')).value).startsWith('2026-10-01,120,0.19,7'), 'CSV keeps the values');
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const printed = String((await back.to('text')).value);
+    assert.ok(['01.10.2026', '€120.00', '19%', '7'].every(t => printed.includes(t)) && !printed.includes('0.19'), `the PDF prints what the sheet shows; got ${JSON.stringify(printed)}`);
+}
+
+/**
+ * A sheet is printed as a spreadsheet prints it: a merged range is one cell (XLSX keeps its covered cells,
+ * empty, and they were drawn as boxes under the merged one's text, which was wrapped to its first column),
+ * each column as wide as its content asks so a number is never broken over two lines (equal columns broke
+ * 104 into "10" over "4"), and each sheet on pages of its own, under its name.
+ */
+async function testSheetTablesInPdf(): Promise<void> {
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const column = (i: number) => (i >= 26 ? String.fromCharCode(64 + Math.floor(i / 26)) : '') + String.fromCharCode(65 + i % 26);
+    const wide = [0, 1].map(r => `<row r="${r + 1}">${Array.from({ length: 26 }, (_, c) => `<c r="${column(c)}${r + 1}"><v>${100 + r * 26 + c}</v></c>`).join('')}</row>`).join('');
+    const xlsx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="Invoice" sheetId="1" r:id="rId1"/><sheet name="Wide" sheetId="2" r:id="rId2"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/><Relationship Id="rId2" Target="worksheets/sheet2.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+        'xl/sharedStrings.xml': strToU8(`<?xml version="1.0"?><sst ${ns}><si><t>Invoice 2026-17 for ACME Corporation</t></si></sst>`),
+        'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1"/><c r="C1"/></row><row r="2"><c r="A2"><v>1</v></c><c r="B2"><v>2</v></c><c r="C2"><v>3</v></c></row></sheetData><mergeCells count="1"><mergeCell ref="A1:C1"/></mergeCells></worksheet>`),
+        'xl/worksheets/sheet2.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData>${wide}</sheetData></worksheet>`),
+    }));
+    const ast = await OfficeParser.parseOffice(xlsx, { fileType: 'xlsx' } as any) as OfficeParserAST;
+    const title = ast.content[0].children![0].children![0];
+    assert.deepStrictEqual([title.text, (title.metadata as any).colSpan, (title.metadata as any).rowSpan], ['Invoice 2026-17 for ACME Corporation', 3, undefined], 'a merged range is read as its top-left cell\'s span');
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const pages = back.content.filter(n => n.type === 'page').map(page => String(page.text ?? (page.children || []).map(c => c.text).join('\n')));
+    assert.strictEqual(pages.length, 2, `each sheet on a page of its own; got ${pages.length} pages`);
+    assert.ok(pages[0].includes('Invoice 2026-17 for ACME Corporation'), `the merged cell's text is on one line; got ${JSON.stringify(pages[0])}`);
+    assert.ok(pages[1].trimStart().startsWith('Wide'), `a sheet is printed under its name; got ${JSON.stringify(pages[1].slice(0, 40))}`);
+    const words = new Set(pages[1].split(/\s+/));
+    const broken = Array.from({ length: 52 }, (_, i) => String(100 + i)).filter(n => !words.has(n));
+    assert.deepStrictEqual(broken, [], 'no number in a 26-column sheet is broken over two lines');
+}
+
+/**
+ * The native PDF engine's links are clickable: a web address opens, a `#id` goes to its anchor (on a later
+ * page here), and a script or a relative path stays drawn as a link that goes nowhere. They were only
+ * coloured and underlined. The words of a link share it, formatted or not.
+ */
+async function testNativePdfLinks(): Promise<void> {
+    const html = '<h1 id="top">Title</h1><p>See <a href="https://example.com/a(b)">the <b>bold</b> site</a>, <a href="#end">the end</a>, '
+        + '<a href="javascript:alert(1)">script</a> and <a href="notes.html">notes</a>.</p>' + '<p>filler</p>'.repeat(80) + '<h2 id="end">End</h2><p><a href="#top">back</a></p>';
+    const ast = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' } as any) as OfficeParserAST;
+    const read = async (config: any) => {
+        const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' }, ...config } as any)).value as Uint8Array;
+        const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+        return new Set(collectAllNodes(back).map(n => (n.metadata as any)?.link).filter(Boolean));
+    };
+    const links = await read({});
+    assert.ok(links.has('https://example.com/a%28b%29'), `a web link opens its address; got ${JSON.stringify([...links])}`);
+    assert.ok([...links].filter(l => l.startsWith('#')).length === 2, `both links into the document go somewhere; got ${JSON.stringify([...links])}`);
+    assert.ok(![...links].some(l => /javascript|notes/.test(l)), `a script or relative link is not clickable; got ${JSON.stringify([...links])}`);
+    const external = await read({ ignoreInternalLinks: true });
+    assert.deepStrictEqual([...external], ['https://example.com/a%28b%29'], 'ignoreInternalLinks leaves the links into the document unclickable');
+}
+
+/**
+ * Paragraphs keep their alignment and indents: the native PDF engine sets them (every paragraph printed
+ * left-aligned, from the margin), Word's justified paragraphs (`w:jc="both"`) are read as justified, and
+ * ODT's and RTF's indents are read (RTF's plain paragraphs lost their alignment too) and written by RTF.
+ */
+async function testParagraphLayout(): Promise<void> {
+    const html = '<h1 style="text-align:center">Centred title</h1><p style="text-align:right">Right aligned line</p><p style="text-align:justify">'
+        + 'Justified words fill the whole line from edge to edge, '.repeat(6) + 'and the last line is not stretched.</p>';
+    const ast = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' } as any) as OfficeParserAST;
+    ast.content.push({ type: 'paragraph', metadata: { paragraphIndentation: { left: 1440, right: 1440 } }, children: [{ type: 'text', text: 'An inch in from each side, '.repeat(8) }] } as any);
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const [title, right, justified, indented] = back.content[0].children!.map(n => n.bounds!);
+    const near = (a: number, b: number, what: string) => assert.ok(Math.abs(a - b) < 3, `${what}: ${a.toFixed(1)}, not ${b.toFixed(1)}`);
+    const pageW = 595.28, margin = 48;
+    near(title.x + title.width / 2, pageW / 2, 'a centred heading is centred');
+    near(right.x + right.width, pageW - margin, 'a right-aligned line ends at the right margin');
+    near(justified.width, pageW - 2 * margin, 'a justified paragraph fills the line');
+    near(indented.x, margin + 72, 'an indented paragraph starts an inch in');
+    assert.ok(indented.x + indented.width <= pageW - margin - 72 + 3, `an indented paragraph ends an inch in; got ${indented.x + indented.width}`);
+
+    const ns = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+    const docx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${ns}><w:body>${['both', 'start', 'end', 'distribute'].map(jc => `<w:p><w:pPr><w:jc w:val="${jc}"/></w:pPr><w:r><w:t>${jc}</w:t></w:r></w:p>`).join('')}</w:body></w:document>`),
+    }));
+    const word = await OfficeParser.parseOffice(docx, { fileType: 'docx' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(word.content.map(n => (n.metadata as any).alignment), ['justify', 'left', 'right', 'justify'], 'Word\'s w:jc values are read');
+
+    const rtf = await OfficeParser.parseOffice(Buffer.from('{\\rtf1\\ansi\\pard\\qc\\li720\\ri360\\fi-360 Centred and indented.\\par\\pard\\li0 Plain.\\par}'), { fileType: 'rtf' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(rtf.content.map(n => [(n.metadata as any)?.alignment, (n.metadata as any)?.paragraphIndentation]), [['center', { left: 720, right: 360, hanging: 360 }], [undefined, undefined]], 'RTF paragraphs keep their alignment and indents');
+    const rtfOut = String((await rtf.to('rtf', { includeFormatting: true } as any)).value);
+    assert.ok(/\\qc\\li720\\ri360\\fi-360/.test(rtfOut), `RTF output writes them; got ${rtfOut.slice(0, 400)}`);
+
+    const odt = await OfficeParser.parseOffice(Buffer.from(zipSync({
+        'mimetype': strToU8('application/vnd.oasis.opendocument.text'),
+        'content.xml': strToU8('<?xml version="1.0"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0">'
+            + '<office:automatic-styles><style:style style:name="P1" style:family="paragraph"><style:paragraph-properties fo:margin-left="0.5in" fo:margin-right="0in" fo:text-indent="0.25in"/></style:style></office:automatic-styles>'
+            + '<office:body><office:text><text:p text:style-name="P1">Indented.</text:p></office:text></office:body></office:document-content>'),
+    })), { fileType: 'odt' } as any) as OfficeParserAST;
+    assert.deepStrictEqual((odt.content[0].metadata as any).paragraphIndentation, { left: 720, firstLine: 360 }, 'ODT indents are read, in twips');
+}
+
+/**
+ * Paragraph spacing (space before and after, line spacing) is read from Word, ODT, RTF and HTML, written
+ * by DOCX, ODT, RTF and HTML output, and set by the native PDF engine: double-spaced text printed single.
+ */
+async function testParagraphSpacing(): Promise<void> {
+    const ns = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+    const para = (spacing: string, text: string) => `<w:p><w:pPr>${spacing}<w:rPr><w:spacing w:val="40"/></w:rPr></w:pPr><w:r><w:t>${text}</w:t></w:r></w:p>`;
+    const docx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${ns}><w:body>`
+            + para('<w:spacing w:before="240" w:after="0" w:line="480" w:lineRule="auto"/>', 'Double. '.repeat(40))
+            + para('<w:spacing w:line="300" w:lineRule="exact"/>', 'Exact')
+            + para('<w:spacing w:line="360" w:lineRule="atLeast"/>', 'At least')
+            + para('', 'Plain') + '</w:body></w:document>'),
+    }));
+    const word = await OfficeParser.parseOffice(docx, { fileType: 'docx' } as any) as OfficeParserAST;
+    const expected = [{ before: 12, after: 0, lineMultiple: 2 }, { lineHeight: 15 }, { lineHeight: 18, lineAtLeast: true }, undefined];
+    assert.deepStrictEqual(word.content.map(n => (n.metadata as any).spacing), expected, 'Word\'s paragraph spacing is read (not the run\'s letter spacing)');
+
+    for (const format of ['docx', 'odt', 'rtf', 'html'] as const) {
+        const out = (await word.to(format, { includeFormatting: true } as any)).value;
+        const back = await OfficeParser.parseOffice(Buffer.from(out as any), { fileType: format } as any) as OfficeParserAST;
+        const spacings = back.content.filter(n => n.type === 'paragraph').map(n => (n.metadata as any)?.spacing);
+        // CSS has no least height for a line: HTML keeps it as a fixed one. RTF output gives each paragraph
+        // 6pt after unless it sets its own.
+        const want = format === 'html' ? [expected[0], expected[1], { lineHeight: 18 }, undefined]
+            : format === 'rtf' ? expected.map(e => ({ after: 6, ...e })) : expected;
+        assert.deepStrictEqual(spacings, want, `${format} output keeps paragraph spacing`);
+    }
+
+    const pdf = (await word.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const lines = collectAllNodes(back).filter(n => n.type === 'text' && /Double/.test(n.text || '') && n.bounds).map(n => n.bounds!.y);
+    const rows = [...new Set(lines.map(y => Math.round(y)))].sort((a, b) => a - b);
+    assert.ok(rows.length >= 3, `the double-spaced paragraph has several lines; got ${JSON.stringify(rows)}`);
+    const step = rows[1] - rows[0];
+    assert.ok(step > 25 && step < 34, `its lines are double spaced (about 30pt apart at 11pt); got ${step}`);
+}
+
+/**
+ * The native PDF engine prints a run in a stand-in of its font's kind: Times for a serif font, Courier for
+ * a monospaced one (inline code too), Helvetica otherwise. Everything printed in Helvetica.
+ */
+async function testNativePdfFontKinds(): Promise<void> {
+    const html = '<h1 style="font-family: Georgia">Serif title</h1><p>Sans <code>inline code</code> and <span style="font-family: \'Times New Roman\'"><i>italic serif</i></span>'
+        + ' and <span style="font-family: \'Courier New\'"><b>bold mono</b></span> and <span style="font-family: \'Noto Sans\'">noto sans</span>.</p>';
+    const ast = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' } as any) as OfficeParserAST;
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const fontOf = (text: string) => collectAllNodes(back).find(n => n.type === 'text' && (n.text || '').includes(text))?.formatting?.font;
+    assert.deepStrictEqual(['Serif title', 'Sans', 'inline code', 'italic serif', 'bold mono', 'noto sans'].map(fontOf),
+        ['Times-Bold', 'Helvetica', 'Courier', 'Times-Italic', 'Courier-Bold', 'Helvetica'], 'each run is printed in a stand-in of its kind');
+}
+
+/**
+ * A list item records its marker where the document shows other than its number and a dot or a round
+ * bullet (`a)`, `1.1.1.`, `iv.`, `▪`, `◦`), read from Word numbering, ODF list styles and HTML's list
+ * styles, and PDF output prints it: nested numbering printed as 1. 2. and every bullet as a round one.
+ * A nested Word level counts afresh under each item of the level above, as Word numbers it.
+ */
+async function testListMarkers(): Promise<void> {
+    assert.deepStrictEqual([1, 2, 26, 27, 4, 1994].map((n, i) => formatListNumber(n, (['lowerLetter', 'lowerLetter', 'upperLetter', 'lowerLetter', 'lowerRoman', 'upperRoman'] as const)[i])),
+        ['a', 'b', 'Z', 'aa', 'iv', 'MCMXCIV'], 'numbers are written in their formats');
+    assert.deepStrictEqual([bulletCharacter('\uF0B7', 'Symbol'), bulletCharacter('\uF0A7', 'Wingdings'), bulletCharacter('o', 'Courier New'), bulletCharacter('◦', 'OpenSymbol'), bulletCharacter('\uE000')],
+        ['•', '▪', '◦', '◦', '•'], 'symbol-font bullets are the characters they draw');
+    const markersOf = (ast: OfficeParserAST) => collectAllNodes(ast).filter(n => n.type === 'list').map(n => (n.metadata as any).marker ?? `${(n.metadata as any).listType === 'ordered' ? (n.metadata as any).itemIndex + 1 + '.' : '•'}`);
+    const expected = ['•', '•', '1.', '2.', '1.', '1.1.', '1.1.1.', '1.1.2.', '1.1.3.', '2.', '▪', '•', '•', '◦', '▪', 'i.', 'ii.', 'iii.', 'iv.'];
+    for (const format of ['docx', 'odt'] as const) {
+        const ast = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', `test.${format}`)), { fileType: format } as any) as OfficeParserAST;
+        assert.deepStrictEqual(markersOf(ast), expected, `${format} list markers`);
+    }
+    const html = await OfficeParser.parseOffice(Buffer.from('<ol type="a"><li>x</li><li>y</li></ol><ol style="list-style-type: upper-roman" start="3"><li>z</li></ol><ul style="list-style: square inside"><li>s</li></ul><ol><li>plain</li></ol>'), { fileType: 'html' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(markersOf(html), ['a.', 'b.', 'III.', '▪', '1.'], 'HTML list styles are read');
+
+    const docx = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.docx')), { fileType: 'docx' } as any) as OfficeParserAST;
+    for (const format of ['docx', 'odt', 'html'] as const) {
+        const out = (await docx.to(format, { includeFormatting: true } as any)).value;
+        const back = await OfficeParser.parseOffice(Buffer.from(out as any), { fileType: format } as any) as OfficeParserAST;
+        assert.deepStrictEqual(markersOf(back), expected, `${format} output keeps the list markers`);
+    }
+    const text = String((await docx.to('text')).value);
+    assert.ok(['1.1.1. Three', '▪ One', 'iv. Four'].every(line => text.includes(line)), 'text output writes the markers');
+    assert.ok(String((await docx.to('tex')).value).includes('\\item[{1.1.1.}]'), 'LaTeX output writes the markers as item labels');
+    const result = await docx.to('pdf', { pdfConfig: { engine: 'native' } } as any);
+    assert.ok(!(result.messages || []).some((m: any) => m.details?.reason === 'unencodable-text'), 'a square or circle bullet is drawn, not lost');
+    const back = await OfficeParser.parseOffice(Buffer.from(result.value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const printed = String((await back.to('text')).value);
+    assert.ok(['1.1.1. Three', '1.1.2. Four', 'iii. We now', 'iv. Four'].every(m => printed.includes(m)), `PDF output prints the markers, and reading it back keeps them; got ${JSON.stringify(printed.slice(printed.lastIndexOf('Multi-level'), printed.lastIndexOf('Multi-level') + 400))}`);
+}
+
+/**
+ * HTML styled by its own stylesheet keeps the look: a `<style>` element's rules (classes, ids, types,
+ * descendant and child selectors) reach the elements they select, under their own `style`, and the
+ * `background` shorthand's colour is read. The native PDF engine fills shaded cells, aligns and colours
+ * their text, highlights a run's background, and reads named and rgb() colours.
+ */
+async function testHtmlStylesheetAndShading(): Promise<void> {
+    const html = '<html><head><style>.red { color: #c00 } p.lead { font-weight: bold; text-align: center } .box td { background-color: #1F497D; color: white }'
+        + ' #t { color: blue } @media print { .red { color: green } } .list li > b { color: purple } p { margin: 40px } td:hover { color: red }</style></head><body>'
+        + '<p class="lead">Lead <span class="red">red</span> <span class="red" style="color: green">own</span> <span style="background: url(x.png) yellow">high</span></p>'
+        + '<p id="t">blue</p><table class="box"><tr><td>cell</td><td style="text-align: right; background: none">right</td></tr></table><ul class="list"><li><b>bold</b></li></ul></body></html>';
+    const ast = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' } as any) as OfficeParserAST;
+    const run = (text: string) => collectAllNodes(ast).find(n => n.type === 'text' && n.text === text)?.formatting ?? {};
+    assert.strictEqual(ast.content[0].metadata && (ast.content[0].metadata as any).alignment, 'center', 'a type-and-class rule aligns its paragraph');
+    assert.strictEqual((ast.content[1].metadata as any).spacing, undefined, 'a rule for every element of a type is the page\'s theme, not the document\'s');
+    assert.deepStrictEqual([run('red').color, run('own').color, run('blue').color, run('bold').color, run('Lead ').bold], ['#c00', 'green', 'blue', 'purple', true],
+        'class, id and child rules apply, an element\'s own style wins, and an at-rule\'s rules do not');
+    assert.deepStrictEqual([run('high').backgroundColor, run('cell').backgroundColor, run('cell').color], ['yellow', '#1F497D', 'white'], 'the background shorthand\'s colour and descendant rules are read');
+
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const at = (text: string) => collectAllNodes(back).find(n => n.type === 'text' && (n.text || '').includes(text));
+    assert.strictEqual(at('cell')?.formatting?.color?.toUpperCase(), '#FFFFFF', 'a cell\'s text is drawn in its colour');
+    const cell = at('cell')!.bounds!, right = at('right')!.bounds!;
+    assert.ok(right.x > cell.x + 200, `a right-aligned cell's text sits at its right; got ${right.x} against ${cell.x}`);
+}
+
+/**
+ * The native PDF engine numbers footnotes (1, 2, 3) and endnotes (i, ii, iii), raises each number where it
+ * is cited, and draws a footnote at the foot of the page that cites it, an endnote at the end: all of
+ * them printed at the end of the document, with nothing in the text to say where. A superscript or
+ * subscript run is drawn smaller and raised or lowered.
+ */
+async function testNativePdfFootnotes(): Promise<void> {
+    const note = (kind: 'footnote' | 'endnote', text: string) => ({ type: 'note', metadata: { noteType: kind }, children: [{ type: 'paragraph', children: [{ type: 'text', text }] }] });
+    const filler = Array.from({ length: 60 }, (_, i) => ({ type: 'paragraph', children: [{ type: 'text', text: `Filler paragraph ${i} with some words in it to take a line.` }] }));
+    const ast = { type: 'docx', metadata: {}, attachments: [], content: [
+        { type: 'paragraph', children: [{ type: 'text', text: 'First cites a footnote', notes: [note('footnote', 'Footnote one text.')] }, { type: 'text', text: ' and an endnote', notes: [note('endnote', 'Endnote text.')] }, { type: 'text', text: '.' }] },
+        ...filler,
+        { type: 'paragraph', children: [{ type: 'text', text: 'Second cites another', notes: [note('footnote', 'Footnote two text.')] }, { type: 'text', text: ' and H' }, { type: 'text', text: '2', formatting: { subscript: true } }, { type: 'text', text: 'O.' }] },
+    ] } as any;
+    const pdf = (await OfficeGenerator.generate(ast, 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const pages = back.content.filter(n => n.type === 'page').map(p => collectAllNodes({ content: [p] } as any).filter(n => n.type === 'text').map(n => n.text).join(' '));
+    const pageOf = (text: string) => pages.findIndex(p => p.includes(text));
+    assert.ok(pages.length >= 2, `the filler takes more than a page; got ${pages.length}`);
+    assert.strictEqual(pageOf('Footnote one text.'), pageOf('First cites'), 'the first footnote is at the foot of the page that cites it');
+    assert.strictEqual(pageOf('Footnote two text.'), pageOf('Second cites'), 'the second footnote is at the foot of its page');
+    assert.ok(pageOf('Footnote one text.') < pageOf('Footnote two text.'), 'the footnotes are on their own pages, not gathered at the end');
+    assert.ok(pages[pages.length - 1].includes('Endnote text.'), 'an endnote is at the end');
+    const raised = collectAllNodes(back).filter(n => n.type === 'text' && /^(1|2|i)$/.test((n.text || '').trim()) && n.bounds && n.bounds.height < 9);
+    assert.ok(raised.length >= 3, `the numbers cited are drawn small; got ${JSON.stringify(raised.map(n => [n.text, n.bounds?.height]))}`);
+}
+
+/**
+ * A Word document's sections keep their pages in PDF output: each its size and orientation (every page
+ * printed A4 portrait), each page its section's header and footer (they printed once, every part's at
+ * once, at the top and the end), a first page's own where the section has one, page fields filled in
+ * for each page ("Page 4 of 5" from the saved file on every page), and parts Word does not show left out.
+ */
+async function testDocxSectionsInPdf(): Promise<void> {
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const part = (tag: 'hdr' | 'ftr', body: string) => strToU8(`<?xml version="1.0"?><w:${tag} ${W}>${body}</w:${tag}>`);
+    const para = (text: string) => `<w:p><w:r><w:t>${text}</w:t></w:r></w:p>`;
+    const pageField = '<w:p><w:r><w:t xml:space="preserve">Page </w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>9</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>'
+        + '<w:r><w:t xml:space="preserve"> of </w:t></w:r><w:fldSimple w:instr=" NUMPAGES "><w:r><w:t>9</w:t></w:r></w:fldSimple></w:p>';
+    const sect = (size: string, refs: string, extra = '') => `<w:sectPr>${refs}<w:pgSz ${size}/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/>${extra}</w:sectPr>`;
+    const body = Array.from({ length: 70 }, (_, i) => para(`Portrait paragraph ${i}.`)).join('')
+        + `<w:p><w:pPr>${sect('w:w="12240" w:h="15840"', '<w:headerReference w:type="default" r:id="h1"/><w:headerReference w:type="first" r:id="h2"/><w:headerReference w:type="even" r:id="h4"/><w:footerReference w:type="default" r:id="f1"/>', '<w:titlePg/>')}</w:pPr><w:r><w:t>End of one.</w:t></w:r></w:p>`
+        + para('Landscape page.') + sect('w:w="15840" w:h="12240" w:orient="landscape"', '<w:headerReference w:type="default" r:id="h3"/>');
+    const docx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/_rels/document.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            + ['h1:header1', 'h2:header2', 'h3:header3', 'h4:header4', 'f1:footer1'].map(x => { const [id, name] = x.split(':'); return `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${name.replace(/\d/, '')}" Target="${name}.xml"/>`; }).join('') + '</Relationships>'),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${W}><w:body>${body}</w:body></w:document>`),
+        'word/header1.xml': part('hdr', para('Running header')),
+        'word/header2.xml': part('hdr', para('Title page header')),
+        'word/header3.xml': part('hdr', para('Landscape header')),
+        'word/header4.xml': part('hdr', para('Even header not shown')),
+        'word/footer1.xml': part('ftr', pageField),
+    }));
+    const ast = await OfficeParser.parseOffice(docx, { fileType: 'docx', includeBreakNodes: true } as any) as OfficeParserAST;
+    assert.deepStrictEqual([ast.metadata.pageSetup?.width, ast.metadata.pageSetup?.height, ast.metadata.pageSetup?.margin?.top], [612, 792, 72], 'the first section\'s page is the document\'s');
+    assert.deepStrictEqual(ast.auxiliary!.headers!.map(h => [h.text, (h.metadata as any).type, (h.metadata as any).section, (h.metadata as any).hidden]),
+        [['Running header', 'default', 0, undefined], ['Title page header', 'first', 0, undefined], ['Even header not shown', 'even', 0, true], ['Landscape header', 'default', 1, undefined]], 'each header part is read once, with its kind and section');
+    const sectionBreak = ast.content.find(n => (n.metadata as any)?.section === 1)!;
+    assert.deepStrictEqual([(sectionBreak.metadata as any).breakType, (sectionBreak.metadata as any).pageSetup.width], ['page', 792], 'a section starts on a page break that carries its page');
+
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const pages = back.content.filter(n => n.type === 'page');
+    const texts = pages.map(p => collectAllNodes({ content: [p] } as any).filter(n => n.type === 'text').map(n => n.text).join(' ') + ' ' + [...(back.auxiliary?.headers ?? []), ...(back.auxiliary?.footers ?? [])].filter(h => (h.metadata as any)?.pageNumber === (p.metadata as any).pageNumber).map(h => h.text).join(' '));
+    const sizes = pages.map(p => [(p.metadata as any).pageWidth, (p.metadata as any).pageHeight]);
+    assert.ok(sizes.length >= 3 && sizes.slice(0, -1).every(([w, h]) => w === 612 && h === 792) && sizes[sizes.length - 1][0] === 792, `Letter pages, then a landscape one; got ${JSON.stringify(sizes)}`);
+    // (A header or footer read back is its node's text: a page number in one is a field of its own, cut from its words.)
+    const printed = String((await back.to('text')).value) + ' ' + [...(back.auxiliary?.headers ?? []), ...(back.auxiliary?.footers ?? [])].map(x => x.text).join(' ');
+    const n = pages.length;
+    assert.ok(printed.includes('Title page header') && printed.includes('Running header') && printed.includes('Landscape header') && !printed.includes('Even header not shown'), 'each page prints its section\'s header, its first page its own, and an unused part none');
+    // (The title page has no first page's footer: none, as Word shows it.)
+    for (let i = 2; i < n; i++) assert.ok(printed.includes(`Page ${i} of ${n}`), `page ${i}'s footer is numbered for it; got ${JSON.stringify(printed.slice(0, 200))}`);
+    assert.ok(!printed.includes(`Page 1 of ${n}`), 'the title page shows no footer of its own');
+    assert.strictEqual((printed.match(/Title page header/g) || []).length, 1, 'the first page\'s header is on the first page alone');
+
+    // A writer with one header for the whole document writes the first section's default one, once.
+    const docxOut = unzipSync(new Uint8Array((await ast.to('docx')).value as any));
+    assert.strictEqual(strFromU8(docxOut['word/header1.xml']).replace(/<[^>]+>/g, '').trim(), 'Running header', 'DOCX output writes the document\'s running header alone');
+    const perPage = { ...ast, auxiliary: { headers: [1, 2, 3].map(() => ({ type: 'header', text: 'Same on every page', metadata: { type: 'default' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'Same on every page' }] }] })) } } as any;
+    const odtOut = unzipSync(new Uint8Array((await OfficeGenerator.generate(perPage, 'odt', {} as any)).value as any));
+    // (Once on each master page: a section on a page of its own has a master of its own, with the body's header.)
+    const odtStyles = strFromU8(odtOut['styles.xml']);
+    // (A title page with no first page's part of its own shows none, as Word does: that master holds none.)
+    const masterTexts = (odtStyles.match(/<style:master-page [\s\S]*?<\/style:master-page>/g) || []).map(m => (m.match(/Same on every page/g) || []).length);
+    assert.ok(masterTexts.some(c => c === 1) && masterTexts.every(c => c <= 1), `a header given for each page (as a PDF gives it) is written once a master page; got ${masterTexts}`);
+}
+
+/**
+ * An ODT document's master pages give its pages: the first's size, margins, header and footer, and a
+ * paragraph whose style names another master page starts a section of that master's pages (only the
+ * first master page's header and footer were read, as loose paragraphs, and every page printed A4).
+ * Page number and count fields are marked and filled in for each page.
+ */
+async function testOdtMasterPagesInPdf(): Promise<void> {
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"';
+    const layout = (name: string, w: string, h: string) => `<style:page-layout style:name="${name}"><style:page-layout-properties fo:page-width="${w}" fo:page-height="${h}" fo:margin-top="0.5in" fo:margin-bottom="0.5in" fo:margin-left="1in" fo:margin-right="1in"/>`
+        + '<style:header-style><style:header-footer-properties fo:min-height="0.2in" fo:margin-bottom="0.1in"/></style:header-style><style:footer-style><style:header-footer-properties fo:min-height="0.2in" fo:margin-top="0.1in"/></style:footer-style></style:page-layout>';
+    const styles = `<?xml version="1.0"?><office:document-styles ${NS}><office:automatic-styles>${layout('pm1', '8.5in', '11in')}${layout('pm2', '11in', '8.5in')}</office:automatic-styles><office:master-styles>`
+        + '<style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>Portrait header</text:p></style:header><style:footer><text:p>Page <text:page-number>7</text:page-number> of <text:page-count>7</text:page-count></text:p></style:footer></style:master-page>'
+        + '<style:master-page style:name="Landscape" style:page-layout-name="pm2"/></office:master-styles></office:document-styles>';
+    const content = `<?xml version="1.0"?><office:document-content ${NS}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:master-page-name="Landscape"/></office:automatic-styles><office:body><office:text>`
+        + Array.from({ length: 60 }, (_, i) => `<text:p>Portrait paragraph ${i}.</text:p>`).join('') + '<text:p text:style-name="P1">Landscape page.</text:p></office:text></office:body></office:document-content>';
+    const odt = Buffer.from(zipSync({ 'mimetype': strToU8('application/vnd.oasis.opendocument.text'), 'content.xml': strToU8(content), 'styles.xml': strToU8(styles) }));
+    const ast = await OfficeParser.parseOffice(odt, { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+    assert.deepStrictEqual([ast.metadata.pageSetup?.width, ast.metadata.pageSetup?.height, ast.metadata.pageSetup?.headerDistance, ast.metadata.pageSetup?.margin?.top], [612, 792, 36, 57.6], 'the first master page\'s pages, the body below its header');
+    assert.deepStrictEqual(ast.auxiliary!.headers!.map(h => [h.text, (h.metadata as any).section]), [['Portrait header', 0], ['', 1]], 'each section\'s master page\'s header, none where it has none');
+    const footerRuns = collectAllNodes({ content: ast.auxiliary!.footers! } as any).filter(n => (n.metadata as any)?.field).map(n => (n.metadata as any).field);
+    assert.deepStrictEqual(footerRuns, ['page', 'pages'], 'page fields are marked');
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const pages = back.content.filter(n => n.type === 'page');
+    const sizes = pages.map(p => [(p.metadata as any).pageWidth, (p.metadata as any).pageHeight]);
+    assert.ok(sizes.length >= 2 && sizes[0][0] === 612 && sizes[sizes.length - 1][0] === 792, `Letter pages, then a landscape one; got ${JSON.stringify(sizes)}`);
+    const printed = String((await back.to('text')).value) + collectAllNodes({ content: [...(back.auxiliary?.headers ?? []), ...(back.auxiliary?.footers ?? [])] } as any).map(n => n.text || '').join(' ');
+    assert.ok(printed.includes(`Page 1 of ${pages.length}`) && !printed.includes('Page 7 of 7'), 'page fields are filled in for each page');
+}
+
+/**
+ * A title page and even pages show only their own parts, as Word shows them: a title page made by one
+ * kind's first page's part shows none of the other kind, and an even page none of a kind with no even
+ * part, in every writer; ODF's left or first part left out is the right page's; and an RTF section
+ * keeps the one before's properties until its `\sectd`.
+ */
+async function testTitleAndEvenPagesAsWordShows(): Promise<void> {
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const para = (text: string) => `<w:p><w:r><w:t>${text}</w:t></w:r></w:p>`;
+    const parts: [string, 'header' | 'footer', string, string][] = [['header1', 'header', 'first', 'HFIRST'], ['footer1', 'footer', 'even', 'FEVEN'], ['footer2', 'footer', 'default', 'FDEF']];
+    const body = Array.from({ length: 140 }, (_, i) => para(`Body paragraph ${i + 1} with enough words to fill a line or so.`)).join('')
+        + `<w:sectPr>${parts.map(([id, kind, type]) => `<w:${kind}Reference w:type="${type}" r:id="${id}"/>`).join('')}<w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/><w:titlePg/></w:sectPr>`;
+    const docx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/_rels/document.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            + parts.map(([id, kind]) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${kind}" Target="${id}.xml"/>`).join('')
+            + '<Relationship Id="st" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/></Relationships>'),
+        'word/settings.xml': strToU8(`<?xml version="1.0"?><w:settings ${W}><w:evenAndOddHeaders/></w:settings>`),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${W}><w:body>${body}</w:body></w:document>`),
+        ...Object.fromEntries(parts.map(([id, kind, , text]) => [`word/${id}.xml`, strToU8(`<?xml version="1.0"?><w:${kind === 'header' ? 'hdr' : 'ftr'} ${W}>${para(text)}</w:${kind === 'header' ? 'hdr' : 'ftr'}>`)])),
+    }));
+    const ast = await OfficeParser.parseOffice(docx, { fileType: 'docx', includeBreakNodes: true } as any) as OfficeParserAST;
+
+    // DOCX: the default footer is not the title page's.
+    const docxXml = strFromU8(unzipSync(new Uint8Array((await ast.to('docx')).value as any))['word/document.xml']);
+    assert.ok(!/footerReference w:type="first"/.test(docxXml) && /headerReference w:type="first"/.test(docxXml) && /footerReference w:type="even"/.test(docxXml), `DOCX output gives the title page no default footer; got ${docxXml.match(/<w:sectPr>[\s\S]*?<\/w:sectPr>/)?.[0]}`);
+    // ODT: the even pages' footer is written, and the title page's master has no default footer.
+    const odtStyles = strFromU8(unzipSync(new Uint8Array((await ast.to('odt')).value as any))['styles.xml']);
+    const masters = Object.fromEntries((odtStyles.match(/<style:master-page [\s\S]*?<\/style:master-page>/g) || []).map(m => [/style:name="([^"]+)"/.exec(m)![1], m]));
+    assert.ok(/<style:footer-left>[\s\S]*FEVEN[\s\S]*<\/style:footer-left>/.test(masters.Rest ?? '') && /<style:footer>[\s\S]*FDEF/.test(masters.Rest ?? ''), `ODT output writes the even pages' footer beside the default one; got ${masters.Rest}`);
+    assert.ok(/HFIRST/.test(masters.Standard ?? '') && !/FDEF/.test(masters.Standard ?? ''), `ODT output's title page shows its header alone; got ${masters.Standard}`);
+    // LaTeX: the even pages' footer on even pages, the title page's header alone on the title page.
+    const tex = String((await ast.to('tex' as any)).value);
+    const style = (name: string) => tex.match(new RegExp(`\\\\fancypagestyle\\{${name}\\}\\{.*`))?.[0] ?? '';
+    assert.ok(/FEVEN/.test(style('osec0')) && /FDEF/.test(style('osec0')) && /HFIRST/.test(style('osec0first')) && !/FDEF/.test(style('osec0first')), `LaTeX output's page styles follow the title and even pages; got ${style('osec0')} / ${style('osec0first')}`);
+    // Native PDF: each page's parts.
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const doc = await PDFDocument.load(pdf);
+    const pageTexts: string[] = [];
+    for (let i = 0; i < Math.min(4, doc.getPageCount()); i++) {
+        const one = await PDFDocument.create();
+        const [copied] = await one.copyPages(doc, [i]);
+        one.addPage(copied);
+        const back = await OfficeParser.parseOffice(Buffer.from(await one.save()), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+        pageTexts.push(collectAllNodes({ content: [...back.content, ...(back.auxiliary?.headers ?? []), ...(back.auxiliary?.footers ?? [])] } as any).filter(n => n.type === 'text').map(n => n.text).join(' '));
+    }
+    const marks = pageTexts.map(t => (t.match(/HFIRST|FEVEN|FDEF/g) || []).join(','));
+    assert.deepStrictEqual(marks, ['HFIRST', 'FEVEN', 'FDEF', 'FEVEN'], 'native PDF output shows each page its own parts alone');
+
+    // ODF: a master page with its own left header and one footer shows that footer on left pages too.
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"';
+    const odt = Buffer.from(zipSync({ 'mimetype': strToU8('application/vnd.oasis.opendocument.text'),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:body><office:text><text:p>Body.</text:p></office:text></office:body></office:document-content>`),
+        'styles.xml': strToU8(`<?xml version="1.0"?><office:document-styles ${NS}><office:master-styles><style:master-page style:name="Standard"><style:header><text:p>HODD</text:p></style:header><style:header-left><text:p>HLEFT</text:p></style:header-left><style:footer><text:p>FSHARED</text:p></style:footer></style:master-page></office:master-styles></office:document-styles>`) }));
+    const odtAst = await OfficeParser.parseOffice(odt, { fileType: 'odt' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(odtAst.auxiliary!.footers!.map(f => [f.text, (f.metadata as any).type]), [['FSHARED', 'default'], ['FSHARED', 'even']], 'an ODF footer with no left part of its own is the left pages\' too');
+
+    // RTF: a section after `\sect` without `\sectd` keeps the one before's landscape page.
+    const rtf = '{\\rtf1\\ansi{\\fonttbl{\\f0 Times;}}\\paperw12240\\paperh15840\\sectd\\lndscpsxn\\pgwsxn15840\\pghsxn12240 One.\\par\\sect Two.\\par}';
+    const rtfAst = await OfficeParser.parseOffice(Buffer.from(rtf), { fileType: 'rtf', includeBreakNodes: true } as any) as OfficeParserAST;
+    const second = rtfAst.content.find(n => (n.metadata as any)?.section === 1);
+    assert.strictEqual((second?.metadata as any)?.pageSetup?.width ?? rtfAst.metadata.pageSetup?.width, 792, 'an RTF section keeps the section before\'s page until its \\sectd');
+    // A table ending a section stays in it (it was put after the break, on the next section's turned pages);
+    // `\footnote\ftnalt` is an endnote whatever `\fet` says (LibreOffice writes no `\fet2`); a PAGE or NUMPAGES
+    // field's result is marked, for each page's number (every page printed the number it was saved with).
+    const rtfTable = '{\\rtf1\\ansi{\\fonttbl{\\f0 Times;}}\\paperw12240\\paperh15840\\sectd Before.\\par\\trowd\\cellx2000\\cellx4000 A\\cell B\\cell\\row'
+        + '\\sect\\sectd\\lndscpsxn\\pgwsxn15840\\pghsxn12240 Turned{\\chftn{\\*\\footnote\\ftnalt\\chftn End note.}}.\\par'
+        + '{\\footer Page {\\field{\\*\\fldinst PAGE }{\\fldrslt 4}} of {\\field{\\*\\fldinst NUMPAGES }{\\fldrslt 5}}\\par}}';
+    const rtfTableAst = await OfficeParser.parseOffice(Buffer.from(rtfTable), { fileType: 'rtf', includeBreakNodes: true } as any) as OfficeParserAST;
+    assert.deepStrictEqual(rtfTableAst.content.map(n => n.type), ['paragraph', 'table', 'break', 'paragraph'], 'an RTF table before a section break stays in its section');
+    const rtfNote = collectAllNodes(rtfTableAst).flatMap(n => n.notes ?? [])[0];
+    assert.strictEqual((rtfNote?.metadata as any)?.noteType, 'endnote', 'an RTF note marked \\ftnalt is an endnote');
+    const rtfFields = collectAllNodes({ content: rtfTableAst.auxiliary?.footers ?? [] } as any).filter(n => (n.metadata as any)?.field).map(n => [(n.metadata as any).field, n.text]);
+    assert.deepStrictEqual(rtfFields, [['page', '4'], ['pages', '5']], `an RTF page field's result is marked; got ${JSON.stringify(rtfFields)}`);
+    // ... but a page size of its own is that section's page, a landscape page kept from before turning it no more.
+    const portrait = await OfficeParser.parseOffice(Buffer.from(rtf.replace('\\sect Two.', '\\sect\\pgwsxn12240\\pghsxn15840 Two.')), { fileType: 'rtf', includeBreakNodes: true } as any) as OfficeParserAST;
+    const portraitBreak = portrait.content.find(n => (n.metadata as any)?.section === 1);
+    assert.deepStrictEqual([(portraitBreak?.metadata as any)?.pageSetup?.width, (portraitBreak?.metadata as any)?.pageSetup?.height], [612, 792], 'an RTF section\'s own portrait size is not turned by the landscape page before it');
+
+    // DOCX: sections of their own parts, as a list of sections each `[references, title page]`, the parts by id.
+    const sectioned = (secs: [string, boolean][], texts: Record<string, string>, evenAndOdd = false) => {
+        const ids = Object.keys(texts);
+        const body = secs.map(([refs, title], i) => {
+            const sectPr = `<w:sectPr>${refs}<w:pgSz w:w="12240" w:h="15840"/>${title ? '<w:titlePg/>' : ''}</w:sectPr>`;
+            return Array.from({ length: 3 }, (_, k) => para(`Section ${i} paragraph ${k}.`)).join('') + (i < secs.length - 1 ? `<w:p><w:pPr>${sectPr}</w:pPr></w:p>` : sectPr);
+        }).join('');
+        return Buffer.from(zipSync({
+            '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+            '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+            'word/_rels/document.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                + ids.map(id => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${id.startsWith('header') ? 'header' : 'footer'}" Target="${id}.xml"/>`).join('')
+                + '<Relationship Id="st" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/></Relationships>'),
+            'word/settings.xml': strToU8(`<?xml version="1.0"?><w:settings ${W}>${evenAndOdd ? '<w:evenAndOddHeaders/>' : ''}</w:settings>`),
+            'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${W}><w:body>${body}</w:body></w:document>`),
+            ...Object.fromEntries(ids.map(id => [`word/${id}.xml`, strToU8(`<?xml version="1.0"?><w:${id.startsWith('header') ? 'hdr' : 'ftr'} ${W}>${para(texts[id])}</w:${id.startsWith('header') ? 'hdr' : 'ftr'}>`)])),
+        }));
+    };
+    const furniture = (a: OfficeParserAST) => (a.auxiliary?.headers ?? []).map(h => `${(h.metadata as any).section}${(h.metadata as any).type}${(h.metadata as any).hidden ? 'H' : ''}:${collectAllNodes({ content: [h] } as any).filter(n => n.type === 'text').map(n => n.text).join('')}`).sort();
+    const ref = (type: string, id: string) => `<w:headerReference w:type="${type}" r:id="${id}"/>`;
+    // A part two sections refer to is each one's (the second section showed the first's part read once, or another's).
+    const shared = await OfficeParser.parseOffice(sectioned([[ref('default', 'header1'), false], [ref('default', 'header2'), false], [ref('default', 'header1'), false]], { header1: 'HA', header2: 'HB' }), { fileType: 'docx', includeBreakNodes: true } as any) as OfficeParserAST;
+    assert.deepStrictEqual(furniture(shared), ['0default:HA', '1default:HB', '2default:HA'], 'a DOCX part two sections refer to is read for each');
+    const sharedBack = await OfficeParser.parseOffice(Buffer.from((await shared.to('docx')).value as any), { fileType: 'docx' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(furniture(sharedBack), furniture(shared), 'DOCX output\'s parts written once for two sections read back for both');
+    // A later title page takes on a first page's part a section without one keeps (hidden).
+    const inherited = await OfficeParser.parseOffice(sectioned([[ref('default', 'header1') + ref('first', 'header2'), false], [ref('default', 'header3'), true]], { header1: 'HD', header2: 'HF', header3: 'HD2' }), { fileType: 'docx' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(furniture(inherited), ['0default:HD', '0firstH:HF', '1default:HD2', '1first:HF'], 'a later title page takes on the first page\'s part an earlier section keeps hidden');
+    // Even and odd pages' parts set on with none anywhere: even pages show none.
+    const noEven = await OfficeParser.parseOffice(sectioned([[ref('default', 'header1'), false]], { header1: 'HD' }, true), { fileType: 'docx' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(furniture(noEven), ['undefineddefault:HD', 'undefinedeven:'], 'even and odd pages set on with no even part leave even pages without one');
+
+    // ODT: master pages of which one has left parts: every section's even pages have their own (the others' every-page ones).
+    const masterOf = (name: string, left: boolean) => `<style:master-page style:name="${name}"><style:header><text:p>${name}H</text:p></style:header>${left ? `<style:header-left><text:p>${name}L</text:p></style:header-left>` : ''}</style:master-page>`;
+    const twoMasters = Buffer.from(zipSync({ 'mimetype': strToU8('application/vnd.oasis.opendocument.text'),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:master-page-name="M2"/><style:style style:name="P2" style:family="paragraph" style:master-page-name="Standard"/></office:automatic-styles><office:body><office:text><text:p>One.</text:p><text:p text:style-name="P1">Two.</text:p><text:p text:style-name="P2">Three.</text:p></office:text></office:body></office:document-content>`),
+        'styles.xml': strToU8(`<?xml version="1.0"?><office:document-styles ${NS}><office:master-styles>${masterOf('Standard', false)}${masterOf('M2', true)}</office:master-styles></office:document-styles>`) }));
+    const twoMastersAst = await OfficeParser.parseOffice(twoMasters, { fileType: 'odt' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(furniture(twoMastersAst), ['0default:StandardH', '0even:StandardH', '1default:M2H', '1even:M2L', '2default:StandardH', '2even:StandardH'], 'an ODT master page without left parts shows its own on left pages, where another has left parts');
+
+    // LaTeX: a page style defined and set (`\fancypagestyle{main}{...}\pagestyle{main}`) is the pages' own; one
+    // only defined is not; a field on odd pages, or odd and even pages, is read as their parts.
+    const texFurniture = async (src: string) => furniture(await OfficeParser.parseOffice(Buffer.from(src), { fileType: 'tex' } as any) as OfficeParserAST);
+    assert.deepStrictEqual(await texFurniture('\\documentclass{article}\\usepackage{fancyhdr}\\fancypagestyle{main}{\\fancyhf{}\\fancyhead[L]{MAIN}}\\pagestyle{main}\\begin{document}Body.\\end{document}'), ['undefineddefault:MAIN'], 'a LaTeX page style set is read');
+    assert.deepStrictEqual(await texFurniture('\\documentclass{article}\\usepackage{fancyhdr}\\pagestyle{fancy}\\fancyhead[L]{FANCY}\\fancypagestyle{plain}{\\fancyhf{}\\fancyhead[L]{PLAIN}}\\begin{document}Body.\\end{document}'), ['undefineddefault:FANCY'], 'a LaTeX page style only defined is not the pages\'');
+    assert.deepStrictEqual(await texFurniture('\\documentclass{article}\\usepackage{fancyhdr}\\pagestyle{fancy}\\fancyhead[L]{\\ifodd\\value{page} {ODD}\\else {EVEN}\\fi}\\begin{document}Body.\\end{document}'), ['undefineddefault:ODD', 'undefinedeven:EVEN'], 'a LaTeX field of odd and even pages is read as their parts');
+    assert.deepStrictEqual(await texFurniture('\\documentclass{article}\\usepackage{fancyhdr}\\pagestyle{fancy}\\fancyhead[L]{\\ifodd\\value{page}\\else {E{V}EN}\\fi}\\fancyhead[R]{\\ifnum\\value{page}=1 {FIRST}\\fi}\\begin{document}Body.\\end{document}'), ['undefinedeven:EVEN', 'undefinedfirst:FIRST'], 'LaTeX fields of even pages and of the first page, braces inside, are read as theirs');
+    // (A field of a long run of branches with no end is read in linear time: two open-ended branches took its square.)
+    const branches = await withinTime(5_000, () => texFurniture(`\\documentclass{article}\\usepackage{fancyhdr}\\pagestyle{fancy}\\fancyhead[L]{\\ifodd\\value{page}{a}${'\\else{a}'.repeat(40_000)}}\\begin{document}Body.\\end{document}`));
+    assert.ok(branches.within, `a long field of page branches is read quickly; took ${branches.ms}ms`);
+
+    // A part a thousand sections refer to is read once, a node where a section's part changes; sections alternating
+    // two master pages share their parts' blocks (each read again for each section took gigabytes).
+    const many = await OfficeParser.parseOffice(sectioned(Array.from({ length: 1000 }, () => [ref('default', 'header1'), false] as [string, boolean]), { header1: 'HD' }), { fileType: 'docx' } as any) as OfficeParserAST;
+    assert.strictEqual(many.auxiliary?.headers?.length, 1, 'a part every section refers to is one node');
+    const alternating = Buffer.from(zipSync({ 'mimetype': strToU8('application/vnd.oasis.opendocument.text'),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:master-page-name="M2"/><style:style style:name="P2" style:family="paragraph" style:master-page-name="Standard"/></office:automatic-styles><office:body><office:text><text:p>One.</text:p>${'<text:p text:style-name="P1">A.</text:p><text:p text:style-name="P2">B.</text:p>'.repeat(500)}</office:text></office:body></office:document-content>`),
+        'styles.xml': strToU8(`<?xml version="1.0"?><office:document-styles ${NS}><office:master-styles>${masterOf('Standard', false)}${masterOf('M2', true)}</office:master-styles></office:document-styles>`) }));
+    const alternatingAst = await OfficeParser.parseOffice(alternating, { fileType: 'odt' } as any) as OfficeParserAST;
+    assert.ok(new Set(alternatingAst.auxiliary!.headers!.map(h => h.children)).size <= 4, 'sections alternating two master pages share their parts\' blocks');
+    // An ODT paragraph naming the master page in force starts a page of it, not a section with a title page.
+    const sameMaster = Buffer.from(zipSync({ 'mimetype': strToU8('application/vnd.oasis.opendocument.text'),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:automatic-styles><style:style style:name="P2" style:family="paragraph" style:master-page-name="Standard"/></office:automatic-styles><office:body><office:text><text:p>One.</text:p><text:p text:style-name="P2">Two.</text:p></office:text></office:body></office:document-content>`),
+        'styles.xml': strToU8(`<?xml version="1.0"?><office:document-styles ${NS}><office:master-styles>${masterOf('Standard', false)}</office:master-styles></office:document-styles>`) }));
+    const sameMasterBreaks = (await OfficeParser.parseOffice(sameMaster, { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST).content.filter(n => n.type === 'break').map(n => [(n.metadata as any).breakType, (n.metadata as any).section]);
+    assert.deepStrictEqual(sameMasterBreaks, [['page', undefined]], 'the master page in force named again is a page break');
+
+    // A section starting on the same page but on pages of another size starts a page of its own (native PDF, ODT).
+    const block = (text: string) => ({ type: 'paragraph', text, children: [{ type: 'text', text }] });
+    const turned = { type: 'docx', metadata: { pageSetup: { width: 612, height: 792 } }, attachments: [], content: [block('Portrait.'),
+        { type: 'break', metadata: { breakType: 'section', section: 1, pageSetup: { width: 792, height: 612 } } }, block('Landscape.')] } as any;
+    const turnedPdf = await PDFDocument.load((await OfficeGenerator.generate(turned, 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array);
+    assert.deepStrictEqual(turnedPdf.getPages().map(p => [Math.round(p.getWidth()), Math.round(p.getHeight())]), [[612, 792], [792, 612]], 'native PDF: a section of turned pages starts one');
+    const turnedParts = unzipSync(new Uint8Array((await OfficeGenerator.generate(turned, 'odt')).value as any));
+    const turnedContent = strFromU8(turnedParts['content.xml']), turnedStyles = strFromU8(turnedParts['styles.xml']);
+    const turnTo = /<style:style style:name="(P\d+)"[^>]*style:master-page-name="([^"]+)"/.exec(turnedContent);
+    const turnedLayout = turnTo ? new RegExp(`<style:master-page style:name="${turnTo[2]}" style:page-layout-name="([^"]+)"`).exec(turnedStyles)?.[1] : undefined;
+    assert.ok(turnTo && new RegExp(`text:style-name="${turnTo[1]}">Landscape\\.`).test(turnedContent) && turnedLayout && new RegExp(`style:name="${turnedLayout}"><style:page-layout-properties fo:page-width="11in" fo:page-height="8\\.5in"`).test(turnedStyles),
+        `ODT: a section of turned pages starts on a page of its turned master (its first paragraph turning to it); got ${turnedContent.slice(0, 400)}`);
+    // LaTeX output sets a section of turned pages turned (pdflscape's landscape), the next turned back.
+    const turnedTex = String((await OfficeGenerator.generate({ ...turned, content: [block('Portrait.'), { type: 'break', metadata: { breakType: 'page', section: 1, pageSetup: { width: 792, height: 612 } } }, block('Landscape.'),
+        { type: 'break', metadata: { breakType: 'page', section: 2, pageSetup: { width: 612, height: 792 } } }, block('Back.')] } as any, 'tex' as any)).value);
+    assert.ok(/\\usepackage\{pdflscape\}/.test(turnedTex) && /\\begin\{landscape\}[\s\S]*Landscape\.[\s\S]*\\end\{landscape\}[\s\S]*Back\./.test(turnedTex), 'LaTeX output turns a section of turned pages');
+    // (One starting on the same page too: on a page of its own, turned.)
+    const turnedOnPage = String((await OfficeGenerator.generate(turned, 'tex' as any)).value);
+    assert.ok(/\\clearpage[\s\S]*\\begin\{landscape\}[\s\S]*Landscape\.[\s\S]*\\end\{landscape\}/.test(turnedOnPage), 'LaTeX output turns a section of turned pages starting on the same page');
+}
+
+/**
+ * A sheet prints on its own paper, orientation and margins (XLSX pageSetup and pageMargins), and a
+ * presentation's slides on pages of their size: every page printed A4 portrait.
+ */
+async function testSheetAndSlidePages(): Promise<void> {
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const sheet = (setup: string) => strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>${setup}</worksheet>`);
+    const xlsx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="Wide" sheetId="1" r:id="rId1"/><sheet name="Plain" sheetId="2" r:id="rId2"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/><Relationship Id="rId2" Target="worksheets/sheet2.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+        'xl/worksheets/sheet1.xml': sheet('<pageMargins left="0.5" right="0.5" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="landscape"/>'),
+        'xl/worksheets/sheet2.xml': sheet(''),
+    }));
+    const book = await OfficeParser.parseOffice(xlsx, { fileType: 'xlsx' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(book.content.map(n => (n.metadata as any).pageSetup), [{ width: 841.89, height: 595.28, margin: { top: 54, right: 36, bottom: 54, left: 36 }, headerDistance: 21.6, footerDistance: 21.6 }, undefined], 'a sheet\'s print setup is read');
+    const pdf = (await book.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.deepStrictEqual(back.content.filter(n => n.type === 'page').map(p => [(p.metadata as any).pageWidth, (p.metadata as any).pageHeight]), [[841.89, 595.28], [595.28, 841.89]], 'each sheet prints on its own paper, a sheet with none on A4');
+    const pptx = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.pptx')), { fileType: 'pptx' } as any) as OfficeParserAST;
+    const slide = pptx.metadata.pageSetup!;
+    assert.ok(slide.width! > slide.height! && !slide.margin, `a presentation's page is its slide's size; got ${JSON.stringify(slide)}`);
+    const deck = (await pptx.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const deckBack = await OfficeParser.parseOffice(Buffer.from(deck), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.ok(deckBack.content.filter(n => n.type === 'page').every(p => Math.abs((p.metadata as any).pageWidth - slide.width!) < 1), 'its slides print on pages of their size');
+}
+
+/**
+ * The native PDF engine draws a chart from its data, as HTML output does (bars, axis, labels, legend),
+ * where it printed the data as text; a chart in a sheet's cell after its table, not as the cell's text;
+ * and a picture in a table cell in the cell, where it printed its alt text.
+ */
+async function testNativePdfChartsAndCellPictures(): Promise<void> {
+    const ods = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.ods')), { fileType: 'ods', extractAttachments: true } as any) as OfficeParserAST;
+    const result = await ods.to('pdf', { pdfConfig: { engine: 'native' } } as any);
+    const reasons = (result.messages || []).map((m: any) => m.details?.reason);
+    assert.ok(!reasons.includes('chart') && !reasons.includes('image-in-table-cell'), `the chart and the cell's picture are drawn; got ${JSON.stringify(reasons)}`);
+    const back = await OfficeParser.parseOffice(Buffer.from(result.value as Uint8Array), { fileType: 'pdf', ocr: false, extractAttachments: true, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const printed = String((await back.to('text')).value);
+    assert.ok(['Chart Title', 'Category 1', 'Series D2'].every(t => printed.includes(t)), 'the chart\'s title, labels and legend are drawn');
+    assert.ok(!/Series D2\s+4\.3\s+2\.5/.test(printed), 'the chart\'s data is not printed as text in its cell');
+    assert.ok(back.attachments.some(a => a.type === 'image'), 'the cell\'s picture is in the PDF');
+    const noData = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'chart', text: 'Revenue 10 20', metadata: { attachmentName: 'missing' } }] } as any;
+    const textOnly = await OfficeGenerator.generate(noData, 'pdf', { pdfConfig: { engine: 'native' } } as any);
+    assert.ok((textOnly.messages || []).some((m: any) => m.details?.reason === 'chart'), 'a chart without data is its text, reported');
+    // A chart's title of no text of its own is the one Office draws ("Chart Title", for a chart of several
+    // series); it was left out.
+    const deck = await OfficeParser.parseOffice(path.join(__dirname, 'files', 'test.pptx'), { extractAttachments: true } as any) as OfficeParserAST;
+    assert.strictEqual(deck.attachments.find(a => a.chartData)?.chartData?.title, 'Chart Title', 'an automatic chart title is read as Office shows it');
+    // A page field's result saved in several runs (its digits in two looks) prints one number.
+    const split = String.raw`{\rtf1\ansi{\fonttbl{\f0 Times;}}{\footer Page {\field{\*\fldinst PAGE}{\fldrslt {\b 1}{\i 0}}}\par}Body.\par}`;
+    const splitPdf = (await (await OfficeParser.parseOffice(Buffer.from(split), { fileType: 'rtf' } as any) as OfficeParserAST).to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const splitText = String((await (await OfficeParser.parseOffice(Buffer.from(splitPdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).to('text')).value);
+    assert.ok(/Page 1\b/.test(splitText) && !/Page 11/.test(splitText), `a page field of several runs prints its number once; got ${JSON.stringify(splitText)}`);
+    // What the field's result holds around its number stays ("- 3 -" saved in three runs).
+    const dashed = String.raw`{\rtf1\ansi{\fonttbl{\f0 Times;}}{\footer {\field{\*\fldinst PAGE}{\fldrslt {- }{\b 7}{ -}}}\par}Body.\par}`;
+    const dashedPdf = (await (await OfficeParser.parseOffice(Buffer.from(dashed), { fileType: 'rtf' } as any) as OfficeParserAST).to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const dashedText = String((await (await OfficeParser.parseOffice(Buffer.from(dashedPdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).to('text')).value);
+    assert.ok(/- 1 -/.test(dashedText) && !/7/.test(dashedText), `the text around a page field's number stays; got ${JSON.stringify(dashedText)}`);
+}
+
+/**
+ * A picture among a paragraph's words is drawn in its line (it broke the paragraph in two, as a picture
+ * between them), and a page's footer stays below the body and its footnotes (it rose into them).
+ */
+async function testNativePdfInlinePictures(): Promise<void> {
+    const dot = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP8z8BAEmAiTfmohlENQwkDAJQxAR9rsc8UAAAAAElFTkSuQmCC';
+    const html = `<p>Before <img src="data:image/png;base64,${dot}" alt="dot"> after the icon.</p>`;
+    const ast = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html', extractAttachments: true } as any) as OfficeParserAST;
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, extractAttachments: true, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const nodes = collectAllNodes(back);
+    const image = nodes.find(n => n.type === 'image')?.bounds, before = nodes.find(n => n.type === 'text' && (n.text || '').includes('Before'))?.bounds;
+    assert.ok(image && before && Math.abs((image.y + image.height) - (before.y + before.height)) < 4 && image.x > before.x, `the picture stands in the line, after "Before"; got ${JSON.stringify([image, before])}`);
+
+    const note = { type: 'note', metadata: { noteType: 'footnote' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'The footnote text.' }] }] };
+    const doc = { type: 'docx', metadata: { pageSetup: { width: 612, height: 792, margin: { top: 72, right: 72, bottom: 68, left: 72 }, footerDistance: 54 } }, attachments: [],
+        content: [{ type: 'paragraph', children: [{ type: 'text', text: 'Cites it.', notes: [note] }] }],
+        auxiliary: { footers: [{ type: 'footer', metadata: { type: 'default' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'Footer line' }] }] }] } } as any;
+    const out = (await OfficeGenerator.generate(doc, 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const read = collectAllNodes(await OfficeParser.parseOffice(Buffer.from(out), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST);
+    const footnote = read.find(n => n.type === 'text' && (n.text || '').includes('footnote text'))?.bounds, footer = read.find(n => n.type === 'text' && (n.text || '').includes('Footer line'))?.bounds;
+    assert.ok(footnote && footer && footer.y >= footnote.y + footnote.height, `the footer is below the footnote; got ${JSON.stringify([footnote, footer])}`);
+}
+
+/**
+ * A slide's shapes have their places (bounds, through groups and from their layout's placeholders), a
+ * shape its look (a drawing node: outline, fill, line, turn, text anchor), the slide its background and
+ * its text the sizes and colours its master gives; the native PDF engine draws the slide as laid out.
+ * A deck was laid out as flowing text on pages of the slide's size.
+ */
+async function testSlidesDrawnAsLaidOut(): Promise<void> {
+    const P = 'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const emu = (pt: number) => Math.round(pt * 12700);
+    const xfrm = (x: number, y: number, w: number, h: number, rot = 0) => `<a:xfrm${rot ? ` rot="${rot * 60000}"` : ''}><a:off x="${emu(x)}" y="${emu(y)}"/><a:ext cx="${emu(w)}" cy="${emu(h)}"/></a:xfrm>`;
+    const rel = (id: string, type: string, target: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${target}"/>`;
+    const rels = (...items: string[]) => strToU8(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${items.join('')}</Relationships>`);
+    const master = `<?xml version="1.0"?><p:sldMaster ${P}><p:cSld><p:bg><p:bgPr><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></p:bgPr></p:bg><p:spTree>`
+        + `<p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:spPr>${xfrm(40, 30, 640, 60)}</p:spPr></p:sp></p:spTree></p:cSld>`
+        + '<p:txStyles><p:titleStyle><a:lvl1pPr><a:defRPr sz="4000"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:defRPr></a:lvl1pPr></p:titleStyle><p:bodyStyle/><p:otherStyle/></p:txStyles></p:sldMaster>';
+    const theme = `<?xml version="1.0"?><a:theme ${P}><a:themeElements><a:clrScheme name="t"><a:dk1><a:srgbClr val="000000"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:accent1><a:srgbClr val="0B3D91"/></a:accent1></a:clrScheme></a:themeElements></a:theme>`;
+    const slide = `<?xml version="1.0"?><p:sld ${P}><p:cSld><p:spTree>`
+        + '<p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:t>Slide title</a:t></a:r></a:p></p:txBody></p:sp>'
+        + `<p:grpSp><p:grpSpPr><a:xfrm><a:off x="${emu(400)}" y="${emu(200)}"/><a:ext cx="${emu(200)}" cy="${emu(100)}"/><a:chOff x="0" y="0"/><a:chExt cx="${emu(400)}" cy="${emu(200)}"/></a:xfrm></p:grpSpPr>`
+        + `<p:sp><p:nvSpPr><p:cNvPr id="3" name="Box"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(0, 0, 400, 200)}<a:prstGeom prst="ellipse"/><a:solidFill><a:srgbClr val="FFCC00"/></a:solidFill></p:spPr><p:txBody><a:bodyPr anchor="ctr"/><a:p><a:r><a:rPr sz="1800"/><a:t>In a circle</a:t></a:r></a:p></p:txBody></p:sp></p:grpSp>`
+        + `<p:sp><p:nvSpPr><p:cNvPr id="4" name="Turned"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(40, 150, 200, 40, 270)}</p:spPr><p:txBody><a:bodyPr/><a:p><a:r><a:rPr sz="1800"/><a:t>Turned label</a:t></a:r></a:p></p:txBody></p:sp>`
+        + `<p:sp><p:nvSpPr><p:cNvPr id="5" name="Slanted"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(300, 330, 200, 40, 30)}</p:spPr><p:txBody><a:bodyPr/><a:p><a:r><a:rPr sz="1800"/><a:t>Slanted words</a:t></a:r></a:p></p:txBody></p:sp>`
+        + '</p:spTree></p:cSld></p:sld>';
+    const pptx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>'),
+        'ppt/presentation.xml': strToU8(`<?xml version="1.0"?><p:presentation ${P}><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:sldSz cx="${emu(720)}" cy="${emu(405)}"/></p:presentation>`),
+        'ppt/_rels/presentation.xml.rels': rels(rel('rId1', 'slide', 'slides/slide1.xml')),
+        'ppt/slides/slide1.xml': strToU8(slide),
+        'ppt/slides/_rels/slide1.xml.rels': rels(rel('rId1', 'slideLayout', '../slideLayouts/slideLayout1.xml')),
+        'ppt/slideLayouts/slideLayout1.xml': strToU8(`<?xml version="1.0"?><p:sldLayout ${P}><p:cSld><p:spTree/></p:cSld></p:sldLayout>`),
+        'ppt/slideLayouts/_rels/slideLayout1.xml.rels': rels(rel('rId1', 'slideMaster', '../slideMasters/slideMaster1.xml')),
+        'ppt/slideMasters/slideMaster1.xml': strToU8(master),
+        'ppt/slideMasters/_rels/slideMaster1.xml.rels': rels(rel('rId1', 'theme', '../theme/theme1.xml')),
+        'ppt/theme/theme1.xml': strToU8(theme),
+    }));
+    const ast = await OfficeParser.parseOffice(pptx, { fileType: 'pptx' } as any) as OfficeParserAST;
+    const deck = ast.content[0];
+    assert.deepStrictEqual([(deck.metadata as any).background, ast.metadata.pageSetup], ['#0B3D91', { width: 720, height: 405 }], 'the slide\'s background is its master\'s, in the theme\'s colour, and its page the slide size');
+    const title = deck.children!.find(n => n.text === 'Slide title')!;
+    assert.deepStrictEqual([title.bounds, title.children![0].formatting?.size, title.children![0].formatting?.color], [{ x: 40, y: 30, width: 640, height: 60 }, '40pt', '#FFFFFF'], 'a placeholder takes its master\'s place, size and colour');
+    const drawings = deck.children!.filter(n => n.type === 'drawing');
+    assert.deepStrictEqual(drawings.map(n => [n.bounds, (n.metadata as any).geometry, (n.metadata as any).fill, (n.metadata as any).rotation, (n.metadata as any).textAnchor]),
+        [[{ x: 400, y: 200, width: 200, height: 100 }, 'ellipse', '#FFCC00', undefined, 'middle'], [{ x: 40, y: 150, width: 200, height: 40 }, undefined, undefined, 270, undefined], [{ x: 300, y: 330, width: 200, height: 40 }, undefined, undefined, 30, undefined]], 'a shape in a group is placed by the group, and a turned one carries its turn');
+    const flat = await OfficeParser.parseOffice(pptx, { fileType: 'pptx', ignorePageGeometry: true } as any) as OfficeParserAST;
+    assert.ok(collectAllNodes(flat).every(n => !n.bounds && n.type !== 'drawing'), 'ignorePageGeometry leaves the places and shapes out');
+
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const page = back.content[0];
+    assert.deepStrictEqual([(page.metadata as any).pageWidth, (page.metadata as any).pageHeight, back.content.length], [720, 405, 1], 'the slide is one page of its size');
+    const at = (text: string) => collectAllNodes(back).find(n => n.type === 'text' && (n.text || '').includes(text))?.bounds;
+    const titleBox = at('Slide title')!, circle = at('In a circle')!, turned = at('Turned label')!;
+    assert.ok(Math.abs(titleBox.x - 47.2) < 3 && titleBox.y > 30 && titleBox.y < 60, `the title is in its box; got ${JSON.stringify(titleBox)}`);
+    assert.ok(circle.x > 400 && circle.x + circle.width < 600 && circle.y > 225 && circle.y < 260, `the circle's text is in its middle; got ${JSON.stringify(circle)}`);
+    assert.ok(turned.height > turned.width, `the turned label runs up the page; got ${JSON.stringify(turned)}`);
+    // Read back, the turned text is kept whole, with its angle (export: it was lost from a tagged PDF and kept level from others).
+    const turnedParagraph = collectAllNodes(back).find(n => n.type === 'paragraph' && (n.text || '').includes('Turned label'));
+    assert.deepStrictEqual([turnedParagraph?.text, (turnedParagraph?.metadata as any)?.rotation], ['Turned label', 270], 'a PDF\'s turned text is read with its angle');
+    const slanted = collectAllNodes(back).find(n => n.type === 'paragraph' && (n.text || '').includes('Slanted'));
+    assert.deepStrictEqual([slanted?.text, (slanted?.metadata as any)?.rotation], ['Slanted words', 30], 'text at an angle no quarter turn is is read whole, with its angle');
+
+    // An ODP deck's frames and shapes have their places and looks too (svg:x, svg:y, graphic styles).
+    const odp = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.odp')), { fileType: 'odp' } as any) as OfficeParserAST;
+    const first = odp.content[0];
+    const odpTitle = first.children!.find(n => n.type !== 'drawing' && (n.text || '').startsWith('Demonstration'))!;
+    assert.ok((first.metadata as any).background && odpTitle.bounds && first.children!.some(n => n.type === 'drawing' && (n.metadata as any).fill), `an ODP slide has its background, places and filled shapes; got ${JSON.stringify([(first.metadata as any).background, odpTitle.bounds])}`);
+    const odpPdf = await OfficeParser.parseOffice(Buffer.from((await odp.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.strictEqual(odpPdf.content.length, odp.content.length, 'each ODP slide is one page');
+}
+
+/**
+ * The native PDF engine's page furniture and footnotes hold up at their limits: footnotes too many for
+ * one page carry on to the next (they were drawn above the page and over its text), a tall header and
+ * footer push the body clear of them (they ran into it and off the page), a section's last footnotes keep
+ * its margins, a footnote cited in a table cell is raised there and placed at its page's foot, a row of
+ * large pictures beside a long cell loses no line, extreme chart values are written as text (they
+ * crashed the conversion), a slide after other content starts a page, and a deck's titles are in the
+ * outline.
+ */
+/**
+ * Formats are read as their applications show them: Word's even pages' headers are shown where its
+ * settings say so (its settings were not read, so they were always hidden), PDF text a few degrees off
+ * level is read in its lines, a PowerPoint master's colour map picks the theme's colours a shape's
+ * `tx1` and `bg1` are, a sheet's print setup is not a custom view's, a CSV of `;` and decimal commas is
+ * read with `;`, hidden columns are found among many ranges, and a page's stylesheet keeps only what
+ * reading looks at, each property once, with `!important` ones over an element's own `style`.
+ */
+async function testFormatsReadAsTheyShow(): Promise<void> {
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const para = (text: string) => `<w:p><w:r><w:t>${text}</w:t></w:r></w:p>`;
+    const word = (settings: boolean) => Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/_rels/document.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="h1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/><Relationship Id="h2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header2.xml"/></Relationships>'),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${W}><w:body>${para('Body')}<w:sectPr><w:headerReference w:type="default" r:id="h1"/><w:headerReference w:type="even" r:id="h2"/></w:sectPr></w:body></w:document>`),
+        'word/header1.xml': strToU8(`<?xml version="1.0"?><w:hdr ${W}>${para('Odd header')}</w:hdr>`),
+        'word/header2.xml': strToU8(`<?xml version="1.0"?><w:hdr ${W}>${para('Even header')}</w:hdr>`),
+        ...(settings ? { 'word/settings.xml': strToU8(`<?xml version="1.0"?><w:settings ${W}><w:evenAndOddHeaders/></w:settings>`) } : {}),
+    }));
+    const evenShown = async (settings: boolean) => ((await OfficeParser.parseOffice(word(settings), { fileType: 'docx' } as any) as OfficeParserAST).auxiliary!.headers!.find(h => h.text === 'Even header')!.metadata as any).hidden;
+    assert.deepStrictEqual([await evenShown(true), await evenShown(false)], [undefined, true], 'an even pages\' header is shown where the settings say so, and hidden where they do not');
+
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    const page = pdf.addPage([400, 300]);
+    page.drawText('Level words before', { x: 40, y: 250, size: 12, font });
+    page.drawText('Tilted scan line', { x: 40, y: 200, size: 12, font, rotate: degrees(4) });
+    page.drawText('Turned well apart', { x: 200, y: 100, size: 12, font, rotate: degrees(40) });
+    const read = await OfficeParser.parseOffice(Buffer.from(await pdf.save()), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const paragraphs = collectAllNodes(read).filter(n => n.type === 'paragraph');
+    const tilted = paragraphs.find(n => (n.text || '').includes('Tilted scan line')), turned = paragraphs.find(n => (n.text || '').includes('Turned well apart'));
+    assert.deepStrictEqual([(tilted?.metadata as any)?.rotation, (turned?.metadata as any)?.rotation], [undefined, 320], 'text a few degrees off level is read as level text, text well apart with its angle');
+    assert.ok(paragraphs.findIndex(n => n === tilted) === paragraphs.findIndex(n => (n.text || '').includes('Level words before')) + 1, 'the tilted line is read in its place, after the line above it');
+
+    const P = 'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const rel = (id: string, type: string, target: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${target}"/>`;
+    const rels = (...items: string[]) => strToU8(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${items.join('')}</Relationships>`);
+    const deck = (layoutOverride: string) => Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>'),
+        'ppt/presentation.xml': strToU8(`<?xml version="1.0"?><p:presentation ${P}><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:sldSz cx="9144000" cy="5143500"/></p:presentation>`),
+        'ppt/_rels/presentation.xml.rels': rels(rel('rId1', 'slide', 'slides/slide1.xml')),
+        'ppt/slides/slide1.xml': strToU8(`<?xml version="1.0"?><p:sld ${P}><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="T"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:solidFill><a:schemeClr val="bg1"/></a:solidFill></p:spPr><p:txBody><a:bodyPr/><a:p><a:r><a:rPr><a:solidFill><a:schemeClr val="tx1"/></a:solidFill></a:rPr><a:t>On the dark master</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>`),
+        'ppt/slides/_rels/slide1.xml.rels': rels(rel('rId1', 'slideLayout', '../slideLayouts/slideLayout1.xml')),
+        'ppt/slideLayouts/slideLayout1.xml': strToU8(`<?xml version="1.0"?><p:sldLayout ${P}><p:cSld><p:spTree/></p:cSld>${layoutOverride}</p:sldLayout>`),
+        'ppt/slideLayouts/_rels/slideLayout1.xml.rels': rels(rel('rId1', 'slideMaster', '../slideMasters/slideMaster1.xml')),
+        'ppt/slideMasters/slideMaster1.xml': strToU8(`<?xml version="1.0"?><p:sldMaster ${P}><p:cSld><p:spTree/></p:cSld><p:clrMap bg1="dk1" tx1="lt1" bg2="dk2" tx2="lt2" accent1="accent1" hlink="hlink" folHlink="folHlink"/></p:sldMaster>`),
+        'ppt/slideMasters/_rels/slideMaster1.xml.rels': rels(rel('rId1', 'theme', '../theme/theme1.xml')),
+        'ppt/theme/theme1.xml': strToU8(`<?xml version="1.0"?><a:theme ${P}><a:themeElements><a:clrScheme name="t"><a:dk1><a:srgbClr val="111111"/></a:dk1><a:lt1><a:srgbClr val="EEEEEE"/></a:lt1><a:dk2><a:srgbClr val="222222"/></a:dk2><a:lt2><a:srgbClr val="DDDDDD"/></a:lt2></a:clrScheme></a:themeElements></a:theme>`),
+    }));
+    const looks = async (override: string) => {
+        const slide = (await OfficeParser.parseOffice(deck(override), { fileType: 'pptx' } as any) as OfficeParserAST).content[0];
+        const text = collectAllNodes({ content: [slide] } as any).find(n => n.type === 'text' && n.text === 'On the dark master')!;
+        return [(slide.children!.find(n => n.type === 'drawing')?.metadata as any)?.fill, text.formatting?.color];
+    };
+    assert.deepStrictEqual(await looks(''), ['#111111', '#EEEEEE'], 'a master\'s colour map makes the background dark and the text light');
+    assert.deepStrictEqual(await looks('<p:clrMapOvr><a:overrideClrMapping bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2"/></p:clrMapOvr>'), ['#EEEEEE', '#111111'], 'a layout\'s own colour map is used over its master\'s');
+    // A notes page is in its notes master's colours: a dark slide master's light text is no notes' colour.
+    const darkDeck = unzipSync(new Uint8Array(fs.readFileSync(path.join(__dirname, 'files', 'test.pptx'))));
+    const notesPath = Object.keys(darkDeck).find(name => /^ppt\/notesSlides\/notesSlide\d+\.xml$/.test(name))!;
+    darkDeck[notesPath] = strToU8(strFromU8(darkDeck[notesPath]).replace(/<a:rPr([^>]*?)\/>/, '<a:rPr$1><a:solidFill><a:schemeClr val="tx1"/></a:solidFill></a:rPr>').replace(/<a:rPr([^>]*?)>(?!<a:solidFill>)/, '<a:rPr$1><a:solidFill><a:schemeClr val="tx1"/></a:solidFill>'));
+    for (const name of Object.keys(darkDeck).filter(n => /^ppt\/slideMasters\/slideMaster\d+\.xml$/.test(n))) darkDeck[name] = strToU8(strFromU8(darkDeck[name]).replace(/<p:clrMap [^>]*\/>/, '<p:clrMap bg1="dk1" tx1="lt1" bg2="dk2" tx2="lt2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>'));
+    const darkNotes = collectAllNodes({ content: ((await OfficeParser.parseOffice(Buffer.from(zipSync(darkDeck)), { fileType: 'pptx' } as any)) as OfficeParserAST).content.flatMap(slide => slide.notes ?? []) } as any).filter(n => n.type === 'text' && n.formatting?.color);
+    assert.ok(darkNotes.length && darkNotes.every(n => n.formatting!.color !== '#FFFFFF'), `notes are in their notes master's colours, not the slide master's; got ${JSON.stringify(darkNotes.map(n => n.formatting?.color))}`);
+    const flatSlide = (await OfficeParser.parseOffice(deck(''), { fileType: 'pptx', ignorePageGeometry: true } as any) as OfficeParserAST).content[0];
+    assert.strictEqual(collectAllNodes({ content: [flatSlide] } as any).find(n => n.type === 'text')?.formatting?.color, '#EEEEEE', 'a run\'s theme colour is read without the slide\'s geometry too');
+
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const cols = Array.from({ length: 2000 }, (_, i) => `<col min="${2 * i + 2}" max="${2 * i + 2}" hidden="1"/>`).join('');
+    const xlsx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+        'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><cols>${cols}</cols><sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c><c r="C1"><v>3</v></c><c r="ZZ1"><v>4</v></c></row></sheetData>`
+            + '<customSheetViews><customSheetView guid="{00000000-0000-0000-0000-000000000000}"><pageMargins left="2" right="2" top="2" bottom="2" header="1" footer="1"/><pageSetup paperSize="5" orientation="landscape"/></customSheetView></customSheetViews>'
+            + '<pageMargins left="0.5" right="0.5" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><pageSetup paperSize="9"/></worksheet>'),
+    }));
+    const book = await OfficeParser.parseOffice(xlsx, { fileType: 'xlsx' } as any) as OfficeParserAST;
+    assert.deepStrictEqual([(book.content[0].metadata as any).pageSetup.width, (book.content[0].metadata as any).pageSetup.margin.left], [595.28, 36], 'the sheet\'s print setup is its own, not a custom view\'s');
+    const cells = collectAllNodes(book).filter(n => n.type === 'cell');
+    assert.deepStrictEqual(cells.map(c => [c.text, (c.metadata as any).hidden]), [['1', undefined], ['2', true], ['3', undefined], ['4', true]], 'hidden columns are found among many ranges');
+
+    const html = `<html><head><style>.a { color: red !important; color: blue; background: #ff0 url(data:image/png;base64,${'A'.repeat(4000)}) no-repeat; content: "x" }
+        p.b { text-align: center }  #c   >   span { font-weight: bold }</style></head>
+        <body><p class="a" style="color: green">Red</p><p class="a b" style="color: green !important">Green</p><div id="c"><span>Bold</span></div></body></html>`;
+    const styled = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' } as any) as OfficeParserAST;
+    const runs = styled.content.map(n => n.children![0].formatting);
+    assert.deepStrictEqual([runs[0]?.color, runs[0]?.backgroundColor, runs[1]?.color, (styled.content[1].metadata as any)?.alignment, runs[2]?.bold], ['red', '#ff0', 'green', 'center', true],
+        'an !important rule wins over the element\'s style, and the element\'s own !important over it');
+    const quoted = await OfficeParser.parseOffice(Buffer.from('<style>.q { background: url("img (1).png") yellow } .s { background: url(\'a).png\'); color: green }</style><p><span class="q" style="color: blue; font-weight: bold">Q</span> <span class="s" style="font-weight: bold">S</span></p>'), { fileType: 'html' } as any) as OfficeParserAST;
+    const [q, , sRun] = quoted.content[0].children!.map(c => c.formatting);
+    assert.deepStrictEqual([q?.color, q?.bold, q?.backgroundColor, sRun?.color, sRun?.bold], ['blue', true, 'yellow', 'green', true], 'a `)` in a quoted url() address does not swallow the declarations after it');
+
+    const csv = async (text: string) => collectAllNodes(await OfficeParser.parseOffice(Buffer.from(text), { fileType: 'csv' } as any) as OfficeParserAST).filter(n => n.type === 'cell').map(c => c.text);
+    assert.deepStrictEqual(await csv('Müller;1,5\nSchmidt;2,25\n'), ['Müller', '1,5', 'Schmidt', '2,25'], 'a CSV of `;` and decimal commas is read with `;`');
+    assert.deepStrictEqual(await csv('a,b\nc,d\n'), ['a', 'b', 'c', 'd'], 'a comma CSV is read with `,`');
+}
+
+/**
+ * DOCX output keeps a footnote's style and an admonition's border on paragraphs with spacing of their
+ * own (they were written only on paragraphs without properties); a list level whose parents are not in
+ * its list writes their numbers as text; the native PDF engine draws a PDF's own headers on their pages;
+ * a running header is one with something in it; a document's page too small or too large to write on is
+ * A4; a drawing node holding nodes writes them; and a list marker is cut at a whole character.
+ */
+async function testWritersHoldUp(): Promise<void> {
+    const furnitureOf = (tag: 'header' | 'footer', text: string, type: string) => ({ type: tag, text, children: text ? [{ type: 'paragraph', text, children: [{ type: 'text', text }] }] : [], metadata: { type, section: 0 } });
+    assert.deepStrictEqual([resolvePaper('auto', false, { width: 50, height: 50 }), resolvePaper('auto', false, { width: 612, height: 792 })].map(p => [Math.round(p.w * 100) / 100, Math.round(p.h * 100) / 100]), [[595.28, 841.89], [612, 792]], 'a page too small to write on is A4, a letter page is its own');
+    // A small page keeps its size and its own margins (they were the configured inch, which left no room).
+    const card = { type: 'docx', metadata: { pageSetup: { width: 252, height: 144, margin: { top: 7.2, right: 7.2, bottom: 7.2, left: 7.2 } } }, attachments: [], content: [{ type: 'paragraph', text: 'Card', children: [{ type: 'text', text: 'Card' }] }] } as any;
+    const cardDoc = docxParts((await OfficeGenerator.generate(card, 'docx')).value as Uint8Array)['word/document.xml'];
+    assert.ok(/<w:pgSz w:w="5040" w:h="2880"/.test(cardDoc) && /<w:pgMar w:top="144" w:right="144" w:bottom="144" w:left="144"/.test(cardDoc), `DOCX: a business card keeps its size and margins; got ${cardDoc.match(/<w:pg[^>]*>/g)}`);
+    const cardOdt = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(card, 'odt')).value as Uint8Array))['styles.xml']);
+    assert.ok(/fo:page-width="3\.5in"/.test(cardOdt) && /fo:margin-left="7\.2pt"/.test(cardOdt), 'ODT: so does it in ODT');
+    assert.ok(/<w:pgMar w:top="720"/.test(docxParts((await OfficeGenerator.generate(card, 'docx', { docxConfig: { margin: { top: 36 } } } as any)).value as Uint8Array)['word/document.xml']), 'DOCX: a margin given is used as given');
+    // A first page's own header (a letterhead, the default one empty) is written as the first page's.
+    const letterhead = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', text: 'Body', children: [{ type: 'text', text: 'Body' }] }],
+        auxiliary: { headers: [furnitureOf('header', '', 'default'), furnitureOf('header', 'Letterhead', 'first')], footers: [furnitureOf('footer', 'Foot', 'default')] } } as any;
+    const lhDoc = docxParts((await OfficeGenerator.generate(letterhead, 'docx')).value as Uint8Array)['word/document.xml'];
+    assert.ok(/<w:headerReference w:type="first"/.test(lhDoc) && !/<w:headerReference w:type="default"/.test(lhDoc) && /<w:footerReference w:type="default"/.test(lhDoc) && !/<w:footerReference w:type="first"/.test(lhDoc) && /<w:titlePg\/>/.test(lhDoc), 'DOCX: a letterhead is the title page\'s header, the footer on the other pages (a title page shows its own parts alone, as Word shows it)');
+    for (const format of ['docx', 'odt', 'rtf', 'tex'] as const) {
+        const back = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(letterhead, format)).value as any), { fileType: format } as any) as OfficeParserAST;
+        const heads = runningFurniture(back.auxiliary?.headers, 'header');
+        assert.deepStrictEqual([heads.map(h => collectAllNodes({ content: [h] } as any).filter(n => n.type === 'text').map(n => n.text).join('')), (heads[0]?.metadata as any)?.type], [['Letterhead'], 'first'], `${format}: a letterhead reads back as the first page's header`);
+    }
+    const lhOdt = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(letterhead, 'odt')).value as Uint8Array))['styles.xml']);
+    assert.ok(/<style:master-page style:name="Standard"[^>]*style:next-style-name="Rest"><style:header>.*Letterhead.*<\/style:header>/.test(lhOdt) && /<style:master-page style:name="Rest"[^>]*><style:footer>/.test(lhOdt), 'ODT: a letterhead is on the first page\'s master, which hands over to the rest');
+    const evenOnly = { ...letterhead, auxiliary: { headers: [furnitureOf('header', 'Even pages', 'even')] } };
+    const evenOdt = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(evenOnly, 'odt')).value as Uint8Array))['styles.xml']);
+    assert.ok(/<style:header><text:p\/><\/style:header><style:header-left>.*Even pages/.test(evenOdt), 'ODT: even pages\' own header follows an odd pages\' header of an empty paragraph (an empty one is read as none, its left pages\' with it)');
+    const unshown = await OfficeParser.parseOffice(Buffer.from(String.raw`{\rtf1\ansi{\fonttbl{\f0 Arial;}}{\headerf {\pard Letterhead\par}}{\headerl {\pard Left\par}}{\pard Body\par}}`), { fileType: 'rtf' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(unshown.auxiliary?.headers?.map(h => [(h.metadata as any).type, (h.metadata as any).hidden]), [['first', true], ['even', true]], 'RTF: a first page\'s part without \\titlepg, and a left page\'s without \\facingp, are kept hidden');
+    const evenParts = docxParts((await OfficeGenerator.generate(evenOnly, 'docx')).value as Uint8Array);
+    assert.ok(/<w:headerReference w:type="even"/.test(evenParts['word/document.xml']) && /<w:evenAndOddHeaders\/>/.test(evenParts['word/settings.xml'] ?? ''), 'DOCX: even pages\' own header is written for even pages, with the setting that shows it');
+    const furniture = (text: string, meta: object) => ({ type: 'header', text, children: text ? [{ type: 'paragraph', text, children: [{ type: 'text', text }] }] : [], metadata: meta }) as any;
+    assert.deepStrictEqual(runningFurniture([furniture('', { type: 'default', section: 0 }), furniture('Letterhead', { type: 'first', section: 0 })], 'header').map(n => n.text), ['Letterhead'], 'an empty default header does not stand in for the one with text');
+    const drawingAst = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'drawing', children: [{ type: 'paragraph', text: 'Inside a drawing', children: [{ type: 'text', text: 'Inside a drawing' }] }] }] } as any;
+    for (const format of ['md', 'html', 'txt'] as const) assert.ok(String((await OfficeGenerator.generate(drawingAst, format)).value).includes('Inside a drawing'), `${format}: a drawing node holding nodes writes them`);
+    const astral = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'list', text: 'Item', children: [{ type: 'text', text: 'Item' }], metadata: { listType: 'unordered', indentation: 0, listId: 'l', itemIndex: 0, marker: 'x'.repeat(31) + '\u{1F600}\u{1F600}' } }] } as any;
+    assert.ok(!/\\d[89ab][0-9a-f]{2} /.test(String((await OfficeGenerator.generate(astral, 'html')).value)), 'HTML: a long marker is cut at a whole character, not inside one');
+    const listAst = (items: [number, string, string][]) => ({ type: 'pdf', metadata: {}, attachments: [], content: items.map(([level, marker, text], i) => ({
+        type: 'list', text, children: [{ type: 'text', text }], metadata: { listType: 'ordered', indentation: level, listId: level ? `sub${i}` : 'top', itemIndex: 0, marker } })) }) as any;
+    const parts = docxParts((await OfficeGenerator.generate(listAst([[1, '2.1.', 'A sub-item alone']]), 'docx')).value as Uint8Array);
+    assert.ok(/<w:lvl w:ilvl="1"[^]*?<w:lvlText w:val="2\.%2\."\/>/.test(parts['word/numbering.xml']), 'DOCX: a level whose parents are in no list of its own writes their number as text');
+    const nested = docxParts((await OfficeGenerator.generate({ ...listAst([[0, '1.', 'Top']]), content: [...listAst([[0, '1.', 'Top']]).content, { ...listAst([[1, '1.1.', 'Under']]).content[0], metadata: { listType: 'ordered', indentation: 1, listId: 'top', itemIndex: 0, marker: '1.1.' } }] }, 'docx')).value as Uint8Array);
+    assert.ok(/<w:lvl w:ilvl="1"[^]*?<w:lvlText w:val="%1\.%2\."\/>/.test(nested['word/numbering.xml']), 'DOCX: a level under its list\'s own parents numbers with their fields');
+    const odt = Object.entries(unzipSync(new Uint8Array((await OfficeGenerator.generate(listAst([[1, '2.1.', 'A sub-item alone']]), 'odt')).value as Uint8Array))).map(([, b]) => strFromU8(b)).join('');
+    assert.ok(/text:level="2"[^>]*style:num-prefix="2\."/.test(odt) && !/text:level="2"[^>]*text:display-levels/.test(odt), 'ODT: the same level writes its parents\' number as its prefix');
+
+    const note = { type: 'note', metadata: { noteType: 'footnote' }, children: [{ type: 'paragraph', text: 'Spaced note', metadata: { spacing: { after: 2 } }, children: [{ type: 'text', text: 'Spaced note' }] }] };
+    const doc = { type: 'docx', metadata: {}, attachments: [], content: [
+        { type: 'paragraph', text: 'Cites', children: [{ type: 'text', text: 'Cites', notes: [note] }] },
+        { type: 'admonition', metadata: { admonitionType: 'warning' }, children: [{ type: 'paragraph', text: 'Spaced', metadata: { spacing: { before: 6 }, alignment: 'center' }, children: [{ type: 'text', text: 'Spaced' }] }] }] } as any;
+    const written = docxParts((await OfficeGenerator.generate(doc, 'docx')).value as Uint8Array);
+    assert.ok(/<w:pPr><w:pStyle w:val="FootnoteText"\/><w:spacing w:after="40"\/><\/w:pPr>/.test(written['word/footnotes.xml']), 'DOCX: a footnote paragraph with spacing keeps the footnote style');
+    assert.ok(/<w:pPr><w:pBdr>[^]*?<\/w:pBdr><w:spacing w:before="120"\/><w:ind w:left="360"\/><w:jc w:val="center"\/><\/w:pPr><w:r><w:t[^>]*>Spaced/.test(written['word/document.xml']), 'DOCX: an admonition\'s paragraph with spacing keeps its border, in the order Word reads');
+
+    const header = (page: number, text: string) => ({ type: 'header', text, children: [{ type: 'text', text }], metadata: { type: 'default', page } });
+    const paged = { type: 'pdf', metadata: {}, attachments: [], content: [
+        { type: 'paragraph', text: 'First body', children: [{ type: 'text', text: 'First body' }] }, { type: 'break', metadata: { breakType: 'page' } },
+        { type: 'paragraph', text: 'Second body', children: [{ type: 'text', text: 'Second body' }] }],
+        auxiliary: { headers: [header(1, 'Cover head'), header(1, 'Cover subtitle'), header(2, 'Chapter head')] } } as any;
+    const out = (await OfficeGenerator.generate(paged, 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(out), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const pdfText = String((await back.to('text')).value);
+    const at = (text: string) => pdfText.indexOf(text);
+    assert.ok(pdfText.lastIndexOf('Cover') < at('First body') && at('First body') < at('Chapter head') && at('Chapter head') === pdfText.lastIndexOf('Chapter head') && at('Chapter head') < at('Second body'),
+        `a PDF's headers are drawn on their own pages; got ${JSON.stringify(pdfText)}`);
+    // A PDF's page laid out on several pages has its header on each of them.
+    const source = await PDFDocument.create();
+    const helvetica = await source.embedFont(StandardFonts.Helvetica);
+    for (let p = 0; p < 2; p++) {
+        const sheet = source.addPage([612, 792]);
+        // Marked as an artifact, as a running header is, the same on every page.
+        sheet.pushOperators(PDFOperator.of('BMC' as any, [PDFName.of('Artifact')]));
+        sheet.drawText('Running title', { x: 72, y: 750, size: 10, font: helvetica });
+        sheet.pushOperators(PDFOperator.of('EMC' as any));
+        for (let i = 0; i < 30; i++) sheet.drawText(`Body line ${p * 30 + i} of the report, long enough to wrap on a small page.`, { x: 72, y: 680 - i * 18, size: 11, font: helvetica });
+    }
+    const reflowSource = await OfficeParser.parseOffice(Buffer.from(await source.save()), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.ok(reflowSource.auxiliary?.headers?.length, 'the PDF\'s running headers are read');
+    {
+        const small = (await OfficeGenerator.generate(reflowSource, 'pdf', { pdfConfig: { engine: 'native', format: 'a6' } } as any)).value as Uint8Array;
+        // (Read back with its headers kept in their pages: repeated on each page, they are its running headers.)
+        const smallPages = (await OfficeParser.parseOffice(Buffer.from(small), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false, keepHeadersAndFootersInPages: true } } as any) as OfficeParserAST).content.filter(n => n.type === 'page');
+        const titled = smallPages.map(p => /Running title/.test(JSON.stringify(p)) || false);
+        assert.ok(smallPages.length > 4 && titled.every(Boolean), `each page a PDF's page is laid out on has its header; got ${titled}`);
+    }
+}
+
+/**
+ * A text frame or text box floating beside a document's text (ODT `draw:frame`, Word `wp:anchor` and
+ * VML, RTF `\shp`) is a `drawing` node holding its blocks, with where it stands (ShapeMetadata.float),
+ * before the paragraph it is anchored to: it was read as that paragraph's text, or as paragraphs after
+ * it. The native PDF engine draws it in its place, the paragraph's lines beside it and other blocks
+ * below it; every writer keeps its text.
+ */
+async function testFloatingFrames(): Promise<void> {
+    const frameOf = (nodes: OfficeContentNode[]) => {
+        const at = nodes.findIndex(n => n.type === 'drawing');
+        return { frame: nodes[at], after: nodes[at + 1], at };
+    };
+    // ODT: a frame anchored to its paragraph, 4.2in from its left, filled and outlined; one set as a character stays in its line.
+    const ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"';
+    const odt = Buffer.from(zipSync({ mimetype: strToU8('application/vnd.oasis.opendocument.text'), 'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${ODF_NS}><office:automatic-styles>`
+        + `<style:style style:name="fr1" style:family="graphic"><style:graphic-properties style:wrap="parallel" style:horizontal-pos="from-left" style:horizontal-rel="paragraph" fo:background-color="#dde8ff" fo:border="0.5pt solid #3355aa" fo:padding="0.05in"/></style:style>`
+        + `</office:automatic-styles><office:body><office:text><text:p>Before.</text:p><text:p><draw:frame draw:style-name="fr1" text:anchor-type="paragraph" svg:x="4.2in" svg:y="0in" svg:width="2.2in" svg:height="1in"><draw:text-box><text:p>Framed words.</text:p></draw:text-box></draw:frame>Beside the frame.</text:p>`
+        + `<text:p>Inline <draw:frame text:anchor-type="as-char" svg:width="1in" svg:height="0.3in"><draw:text-box><text:p>Boxed</text:p></draw:text-box></draw:frame> end.</text:p></office:text></office:body></office:document-content>`) }));
+    const odtAst = await OfficeParser.parseOffice(odt, { fileType: 'odt' } as any) as OfficeParserAST;
+    {
+        const { frame, after, at } = frameOf(odtAst.content);
+        const meta = frame?.metadata as ShapeMetadata | undefined;
+        assert.ok(frame && at === 1 && after?.text === 'Beside the frame.' && frame.children?.[0]?.text === 'Framed words.', `ODT: the frame is a drawing before its paragraph, which keeps its own text; got ${JSON.stringify(odtAst.content.map(n => [n.type, n.text]))}`);
+        assert.deepStrictEqual(meta?.float, { horizontalFrom: 'column', verticalFrom: 'paragraph', x: 302.4, y: 0, width: 158.4, height: 72, wrap: 'beside' }, `ODT: where the frame stands; got ${JSON.stringify(meta?.float)}`);
+        assert.ok(meta?.fill === '#DDE8FF' && meta?.line?.color === '#3355AA' && meta?.line?.width === 0.5 && meta?.textInsets?.left === 3.6, `ODT: the frame's fill, outline and padding; got ${JSON.stringify(meta)}`);
+        assert.ok(/Inline\s*Boxed\s*end\./.test(odtAst.content.find(n => (n.text || '').startsWith('Inline'))?.text || '') && odtAst.content.filter(n => n.type === 'drawing').length === 1, 'ODT: a frame set as a character stays in its line');
+    }
+
+    // DOCX: a DrawingML text box anchored beside the text, one above and below the text, and a VML one placed absolutely.
+    const W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word"';
+    const anchored = (text: string, wrap: string, h: string, v: string) => `<w:r><w:drawing><wp:anchor distT="0" distB="0" distL="114300" distR="114300" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/>${h}${v}<wp:extent cx="2011680" cy="914400"/>${wrap}<wp:docPr id="1" name="Box"/>`
+        + `<a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:prstGeom prst="rect"/><a:solidFill><a:srgbClr val="DDE8FF"/></a:solidFill><a:ln w="12700"><a:solidFill><a:srgbClr val="3355AA"/></a:solidFill></a:ln></wps:spPr>`
+        + `<wps:txbx><w:txbxContent><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:txbxContent></wps:txbx><wps:bodyPr lIns="0" tIns="0" rIns="0" bIns="0"/></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>`;
+    const docxXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W_NS}><w:body>`
+        + `<w:p>${anchored('Boxed beside', '<wp:wrapSquare wrapText="bothSides"/>', '<wp:positionH relativeFrom="column"><wp:posOffset>3840480</wp:posOffset></wp:positionH>', '<wp:positionV relativeFrom="paragraph"><wp:posOffset>12700</wp:posOffset></wp:positionV>')}<w:r><w:t>First anchor.</w:t></w:r></w:p>`
+        + `<w:p>${anchored('Boxed above', '<wp:wrapTopAndBottom/>', '<wp:positionH relativeFrom="margin"><wp:align>right</wp:align></wp:positionH>', '<wp:positionV relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionV>')}<w:r><w:t>Second anchor.</w:t></w:r></w:p>`
+        + `<w:p><w:r><w:pict><v:shape style="position:absolute;margin-left:10pt;margin-top:5pt;width:120pt;height:40pt;mso-position-horizontal-relative:page" fillcolor="#ffeecc" stroked="f"><v:textbox inset="2pt,1pt,2pt,1pt"><w:txbxContent><w:p><w:r><w:t>Old box</w:t></w:r></w:p></w:txbxContent></v:textbox><w10:wrap type="square"/></v:shape></w:pict></w:r><w:r><w:t>Third anchor.</w:t></w:r></w:p>`
+        + `</w:body></w:document>`;
+    const docx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8(`<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`),
+        '_rels/.rels': strToU8(`<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`),
+        'word/document.xml': strToU8(docxXml),
+    }));
+    const docxAst = await OfficeParser.parseOffice(docx, { fileType: 'docx' } as any) as OfficeParserAST;
+    {
+        const shape = docxAst.content.map(n => [n.type, n.type === 'drawing' ? n.children?.map(c => c.text).join() : n.text]);
+        assert.deepStrictEqual(shape, [['drawing', 'Boxed beside'], ['paragraph', 'First anchor.'], ['drawing', 'Boxed above'], ['paragraph', 'Second anchor.'], ['drawing', 'Old box'], ['paragraph', 'Third anchor.']], `DOCX: each floating text box before its paragraph; got ${JSON.stringify(shape)}`);
+        const floats = docxAst.content.filter(n => n.type === 'drawing').map(n => n.metadata as ShapeMetadata);
+        assert.deepStrictEqual(floats[0].float, { horizontalFrom: 'column', verticalFrom: 'paragraph', x: 302.4, y: 1, width: 158.4, height: 72, wrap: 'beside', gap: { top: 0, right: 9, bottom: 0, left: 9 } }, `DOCX: where the text box stands; got ${JSON.stringify(floats[0].float)}`);
+        assert.ok(floats[0].fill === '#DDE8FF' && floats[0].line?.color === '#3355AA' && floats[0].line?.width === 1 && floats[0].textInsets?.left === 0, `DOCX: the text box's look; got ${JSON.stringify(floats[0])}`);
+        assert.ok(floats[1].float?.wrap === 'aboveBelow' && floats[1].float?.align === 'right' && floats[1].float?.horizontalFrom === 'margin' && floats[1].float?.verticalFrom === 'page', `DOCX: a text box above and below the text, at the margin's right; got ${JSON.stringify(floats[1].float)}`);
+        assert.deepStrictEqual(floats[2].float, { horizontalFrom: 'page', verticalFrom: 'paragraph', x: 10, y: 5, width: 120, height: 40, wrap: 'beside' }, `DOCX: a VML text box placed absolutely; got ${JSON.stringify(floats[2].float)}`);
+        assert.ok(floats[2].fill === '#FFEECC' && !floats[2].line && floats[2].textInsets?.top === 1, `DOCX: the VML text box's look; got ${JSON.stringify(floats[2])}`);
+    }
+
+    // RTF: a shape's text box, 6048 to 9215 twips across, square wrapping, its colours 0xBBGGRR.
+    const rtf = String.raw`{\rtf1\ansi{\fonttbl{\f0 Times;}}\pard Lead.\par\pard {\shp{\*\shpinst\shpleft6048\shptop0\shpright9216\shpbottom1440\shpwr2\shpbxcolumn\shpbypara{\sp{\sn fillColor}{\sv 16771293}}{\sp{\sn lineColor}{\sv 11162931}}{\sp{\sn dxTextLeft}{\sv 0}}{\shptxt \pard Shape words.\par}}}Anchor text.\par}`;
+    const rtfAst = await OfficeParser.parseOffice(Buffer.from(rtf), { fileType: 'rtf' } as any) as OfficeParserAST;
+    {
+        const shape = rtfAst.content.map(n => [n.type, n.type === 'drawing' ? n.children?.map(c => c.text).join() : n.text]);
+        assert.deepStrictEqual(shape, [['paragraph', 'Lead.'], ['drawing', 'Shape words.'], ['paragraph', 'Anchor text.']], `RTF: the shape's text box before its paragraph; got ${JSON.stringify(shape)}`);
+        const meta = rtfAst.content[1].metadata as ShapeMetadata;
+        assert.ok(meta.float?.x === 302.4 && meta.float?.width === 158.4 && meta.float?.height === 72 && meta.float?.wrap === 'beside' && meta.float?.horizontalFrom === 'column' && meta.float?.verticalFrom === 'paragraph', `RTF: where the shape stands; got ${JSON.stringify(meta.float)}`);
+        assert.ok(meta.fill === '#DDE8FF' && meta.line?.color === '#3355AA' && meta.textInsets?.left === 0, `RTF: the shape's colours and insets; got ${JSON.stringify(meta)}`);
+    }
+
+    // Without geometry, a frame's text is read where it stands, as before.
+    {
+        const plain = await OfficeParser.parseOffice(docx, { fileType: 'docx', ignorePageGeometry: true } as any) as OfficeParserAST;
+        const shape = plain.content.map(n => [n.type, n.text]);
+        assert.ok(!plain.content.some(n => n.type === 'drawing') && shape[0][1] === 'First anchor.' && shape[1][1] === 'Boxed beside', `ignorePageGeometry: no frame, its text after its paragraph; got ${JSON.stringify(shape)}`);
+        const flat = await OfficeParser.parseOffice(odt, { fileType: 'odt', ignorePageGeometry: true } as any) as OfficeParserAST;
+        assert.ok(!flat.content.some(n => n.type === 'drawing') && /Framed words\.\s*Beside the frame\./.test(flat.content[1]?.text || ''), `ignorePageGeometry: an ODT frame's text in its paragraph; got ${JSON.stringify(flat.content.map(n => n.text))}`);
+    }
+
+    // Every writer keeps a frame's text.
+    for (const format of ['text', 'md', 'html', 'docx', 'odt', 'rtf', 'tex', 'xlsx', 'ods', 'pptx', 'odp'] as const) {
+        const value = (await odtAst.to(format as any)).value;
+        const text = typeof value === 'string' ? value : JSON.stringify((await OfficeParser.parseOffice(Buffer.from(value as Uint8Array), { fileType: format } as any)).content);
+        assert.ok(text.includes('Framed words') && text.includes('Beside the frame'), `${format}: the frame's text and its paragraph's are kept`);
+    }
+
+    // The native PDF engine: the frame at its place, the paragraph's lines beside it, a table below it.
+    const words = Array.from({ length: 60 }, (_, i) => `word${i}`).join(' ');
+    const para = (text: string) => ({ type: 'paragraph', text, children: [{ type: 'text', text }] });
+    const drawn = { type: 'odt', metadata: {}, attachments: [], content: [
+        { type: 'drawing', text: 'Framed words.', children: [para('Framed words.')], metadata: { geometry: 'rect', fill: '#DDE8FF', textInsets: { top: 2, right: 2, bottom: 2, left: 2 }, float: { horizontalFrom: 'column', verticalFrom: 'paragraph', x: 300, y: 0, width: 150, height: 72, wrap: 'beside' } } },
+        para(words),
+        { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [para('Cell text')] }] }] },
+        { type: 'drawing', text: 'Banner box.', children: [para('Banner box.')], metadata: { float: { horizontalFrom: 'column', verticalFrom: 'paragraph', align: 'center', y: 0, width: 200, height: 40, wrap: 'aboveBelow' } } },
+        para('Under the banner.'),
+    ] } as any;
+    const pdf = (await OfficeGenerator.generate(drawn, 'pdf', { pdfConfig: { engine: 'native', format: 'letter', margin: '1in' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    // (A line of the frame's beside one of the paragraph's on its baseline is read as one line.)
+    const lines = collectAllNodes(back).filter(n => n.type === 'text' && n.bounds && (n.text || '').trim());
+    const box = (text: string) => lines.find(n => (n.text || '').includes(text))?.bounds;
+    const left = Math.min(...lines.filter(n => /word\d/.test(n.text || '')).map(n => n.bounds!.x));
+    const first = box('word0')!, framed = box('Framed')!, cell = box('Cell text')!, banner = box('Banner box')!, under = box('Under the banner')!;
+    assert.ok(framed && framed.x + framed.width >= left + 300 + 20, `the frame's text is in the frame, 300pt into the column; got ${JSON.stringify(framed)}`);
+    const beside = lines.filter(n => /word\d/.test(n.text || '') && !(n.text || '').includes('Framed') && n.bounds!.y < first.y + 68);
+    const belowIt = lines.filter(n => /word\d/.test(n.text || '') && n.bounds!.y > first.y + 76);
+    assert.ok(beside.length >= 3 && beside.every(n => n.bounds!.x + n.bounds!.width <= left + 300 - 4), `the paragraph's lines beside the frame end before it; got ${JSON.stringify(beside.map(n => n.bounds))}`);
+    assert.ok(belowIt.length && belowIt.some(n => n.bounds!.x + n.bounds!.width > left + 320), `its lines below the frame have the column's width again; got ${JSON.stringify(belowIt.map(n => n.bounds))}`);
+    assert.ok(cell && cell.y > first.y + 70, `a table after it stands below the frame; got ${JSON.stringify(cell)}`);
+    assert.ok(banner && under && under.y > banner.y + 30 && Math.abs(banner.x + banner.width / 2 - 306) < 110, `text goes below a frame it may not stand beside; got ${JSON.stringify([banner, under])}`);
+
+    const linesOf = async (content: any[]) => {
+        const out = (await OfficeGenerator.generate({ type: 'odt', metadata: {}, attachments: [], content } as any, 'pdf', { pdfConfig: { engine: 'native', format: 'letter' } } as any)).value as Uint8Array;
+        const read = await OfficeParser.parseOffice(Buffer.from(out), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+        return collectAllNodes(read).filter(n => n.type === 'text' && n.bounds && (n.text || '').trim());
+    };
+    const at = (lines: OfficeContentNode[], text: string) => lines.find(n => (n.text || '').includes(text))?.bounds;
+    // Frames nested 300 deep, each more than a page holds, set in the flow once (measured again at each level, a
+    // chain 1,600 deep took half a minute): the innermost text is drawn, in linear time.
+    {
+        const float = { horizontalFrom: 'column', verticalFrom: 'paragraph', x: 0, y: 0, width: 300, wrap: 'beside' };
+        let nested: any = { type: 'drawing', text: '', metadata: { float }, children: Array.from({ length: 80 }, (_, i) => para(`Inner line ${i}`)) };
+        for (let d = 1; d < 300; d++) nested = { type: 'drawing', text: '', metadata: { float }, children: [para(`Level ${d}`), nested] };
+        const laidOut = await withinTime(20000, () => linesOf([para('Start.'), nested]));
+        const lines = laidOut.result;
+        assert.ok(lines.some(n => (n.text || '').includes('Inner line 79')) && lines.some(n => (n.text || '').includes('Level 299')), 'the nested frames\' text is drawn');
+        assert.ok(laidOut.within, `nested frames are laid out in linear time; took ${laidOut.ms} ms`);
+    }
+    // A slide's text box holding a frame anchored to its paragraph keeps the frame's text in it, in every writer
+    // (a frame lifted out of the box had no place on the slide, and the deck writers left it out).
+    {
+        const slideXml = `<draw:page draw:name="S1"><draw:frame svg:x="1cm" svg:y="1cm" svg:width="20cm" svg:height="5cm"><draw:text-box><text:p>Slide words.<draw:frame text:anchor-type="paragraph" svg:width="5cm" svg:height="2cm"><draw:text-box><text:p>InnerFrame</text:p></draw:text-box></draw:frame></text:p></draw:text-box></draw:frame></draw:page>`;
+        const odp = Buffer.from(zipSync({ mimetype: strToU8('application/vnd.oasis.opendocument.presentation'), 'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${ODF_NS} xmlns:presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0"><office:body><office:presentation>${slideXml}</office:presentation></office:body></office:document-content>`) }));
+        const deck = await OfficeParser.parseOffice(odp, { fileType: 'odp' } as any) as OfficeParserAST;
+        for (const format of ['pptx', 'odp'] as const) {
+            const value = (await deck.to(format as any)).value as Uint8Array;
+            const text = JSON.stringify((await OfficeParser.parseOffice(Buffer.from(value), { fileType: format } as any)).content);
+            assert.ok(text.includes('InnerFrame') && text.includes('Slide words'), `${format}: a frame in a slide's text box keeps its text`);
+        }
+    }
+    // A frame placed over text already laid out (measured from the page, above its anchor) stands at its anchor.
+    {
+        const lines = await linesOf([...Array.from({ length: 9 }, (_, i) => para(`Earlier${i} text that runs across the column and wraps on to a second line of its own here.`)),
+            { type: 'drawing', text: 'SIDEBAR', children: [para('SIDEBAR')], metadata: { fill: '#FFCC00', float: { horizontalFrom: 'margin', verticalFrom: 'page', align: 'right', y: 72, width: 200, height: 150, wrap: 'beside' } } },
+            para('Anchor paragraph.')]);
+        const side = at(lines, 'SIDEBAR')!, anchor = at(lines, 'Anchor')!, last = at(lines, 'Earlier8')!;
+        assert.ok(side && anchor && side.y >= last.y + 10 && Math.abs(side.y - anchor.y) < 12, `a frame above its anchor's text stands at its anchor; got ${JSON.stringify([last, anchor, side])}`);
+    }
+    // A frame's text more than a page holds is set in the flow, all of it.
+    {
+        const lines = await linesOf([{ type: 'drawing', text: '', children: Array.from({ length: 120 }, (_, i) => para(`Framed line ${i}`)), metadata: { float: { horizontalFrom: 'column', verticalFrom: 'paragraph', x: 0, y: 0, width: 200, wrap: 'beside' } } }, para('After.')]);
+        const read = new Set(lines.flatMap(n => [...(n.text || '').matchAll(/Framed line (\d+)/g)].map(m => m[1])));
+        assert.strictEqual(read.size, 120, `a frame's text past a page is kept; got ${read.size} of 120 lines`);
+    }
+    // A table starting just above a frame starts below it, instead of running into it.
+    {
+        const lines = await linesOf([para('Lead.'), { type: 'drawing', text: 'LowBox', children: [para('LowBox')], metadata: { float: { horizontalFrom: 'column', verticalFrom: 'paragraph', x: 0, y: 30, width: 200, height: 60, wrap: 'beside' } } },
+            { type: 'table', children: ['Row1', 'Row2', 'Row3'].map(t => ({ type: 'row', children: [{ type: 'cell', children: [para(t)] }] })) }]);
+        const box = at(lines, 'LowBox')!, row = at(lines, 'Row1')!;
+        assert.ok(box && row && row.y > box.y + 50, `a table that would reach a frame starts below it; got ${JSON.stringify([box, row])}`);
+    }
+}
+
+/**
+ * A font of the system's (a collection's first font where the system keeps it in one, `.ttc`), or null
+ * where none of the paths is there: the tests of shaped text need a font of the script, which the
+ * repository does not ship.
+ */
+function systemFont(...paths: string[]): Uint8Array | null {
+    for (const at of paths) {
+        if (!fs.existsSync(at)) continue;
+        const b = fs.readFileSync(at);
+        if (b.toString('latin1', 0, 4) !== 'ttcf') return new Uint8Array(b);
+        // The collection's first font, its tables copied after a table directory of its own.
+        const start = b.readUInt32BE(12), count = b.readUInt16BE(start + 4);
+        const tables = Array.from({ length: count }, (_, i) => { const r = start + 12 + 16 * i; return { tag: b.subarray(r, r + 4), sum: b.readUInt32BE(r + 4), offset: b.readUInt32BE(r + 8), length: b.readUInt32BE(r + 12) }; });
+        const header = Buffer.alloc(12 + 16 * count);
+        b.copy(header, 0, start, start + 12);
+        const parts: Buffer[] = [header];
+        let offset = header.length;
+        tables.forEach((t, i) => {
+            const r = 12 + 16 * i;
+            t.tag.copy(header, r); header.writeUInt32BE(t.sum, r + 4); header.writeUInt32BE(offset, r + 8); header.writeUInt32BE(t.length, r + 12);
+            const pad = (4 - (t.length % 4)) % 4;
+            parts.push(b.subarray(t.offset, t.offset + t.length), Buffer.alloc(pad));
+            offset += t.length + pad;
+        });
+        return new Uint8Array(Buffer.concat(parts));
+    }
+    return null;
+}
+
+/**
+ * The native PDF engine draws text a font shapes where the font places each glyph (a mark over its
+ * letter at its offset, of no advance: "हिंदी" was drawn as "हिं" and "दी" apart), and marks each run as
+ * the text it stands for, so a word copies in the order it is written (Hindi's ि was copied before its
+ * letter). A font embedded whole writes the widths of the glyphs shaping gives (a conjunct took 1000
+ * units); an OpenType font of CFF outlines is embedded whole (its subset drew other glyphs, or none),
+ * marked as OpenType. Uses the system's Devanagari fonts, where it has them.
+ */
+async function testNativePdfShapedText(): Promise<void> {
+    const devanagari = systemFont('/System/Library/Fonts/Supplemental/Devanagari Sangam MN.ttc', '/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf',
+        '/usr/share/fonts/opentype/noto/NotoSansDevanagari-Regular.ttf', '/usr/share/fonts/truetype/lohit-devanagari/Lohit-Devanagari.ttf', '/usr/share/fonts/truetype/fonts-deva-extra/kalimati.ttf');
+    const cff = systemFont('/System/Library/Fonts/Kohinoor.ttc', '/usr/share/fonts/opentype/noto/NotoSansDevanagari-Regular.otf');
+    if (!devanagari && !cff) { console.log('  (no Devanagari font on this system: shaped text not tested)'); return; }
+    const hindi = 'हिंदी हिन्दी नमस्ते क्षत्रिय श्री कृष्ण';
+    const doc = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', text: hindi, children: [{ type: 'text', text: hindi, formatting: { size: '20pt' } }] }] } as any;
+    const read = async (pdf: Uint8Array) => (await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).content.map(n => n.text).join('\n');
+    // Each glyph's string, as drawn: a run is one string of glyphs (TJ), marked with its text.
+    const contents = async (pdf: Uint8Array) => {
+        const loaded = await PDFDocument.load(pdf);
+        let out = '';
+        for (const [, obj] of loaded.context.enumerateIndirectObjects()) if (obj instanceof PDFRawStream) { try { out += strFromU8(unzlibSync(obj.contents)); } catch { /* not Flate */ } }
+        return { loaded, out };
+    };
+    for (const [name, font] of [['TrueType', devanagari], ['CFF', cff]] as const) {
+        if (!font) continue;
+        for (const subsetFonts of [true, false]) {
+            const result: any = await OfficeGenerator.generate(doc, 'pdf', { pdfConfig: { engine: 'native', fallbackFonts: [font], subsetFonts } } as any);
+            assert.deepStrictEqual((result.messages || []).map((m: any) => m.code), [], `${name} (subset ${subsetFonts}): nothing lost`);
+            const pdf = result.value as Uint8Array;
+            assert.strictEqual(await read(pdf), hindi, `${name} (subset ${subsetFonts}): the words read as written, whole and in order`);
+            const { loaded, out } = await contents(pdf);
+            assert.ok(/\/ActualText <FEFF0939093F0902092609400?>/.test(out) || out.includes('/ActualText'), `${name} (subset ${subsetFonts}): each run is marked with its text`);
+            assert.ok(/\] TJ/.test(out), `${name} (subset ${subsetFonts}): a run is drawn as one string of glyphs`);
+            // Widths for the glyphs drawn, none of the default 1000 a conjunct took; a CFF font whole, as OpenType.
+            let widths: number[] = [], fontFile: string | undefined, openType = false;
+            for (const [, obj] of loaded.context.enumerateIndirectObjects()) {
+                const dict = obj instanceof PDFRawStream ? obj.dict : (obj as any);
+                if (typeof dict?.get !== 'function') continue;
+                const w = dict.get(PDFName.of('W'));
+                if (w) widths = JSON.parse(String(w).replace(/\s+/g, ',').replace(/\[,/g, '[').replace(/,\]/g, ']')).flat(2);
+                if (dict.get(PDFName.of('FontFile3')) || dict.get(PDFName.of('FontFile2'))) fontFile = dict.get(PDFName.of('FontFile3')) ? 'FontFile3' : 'FontFile2';
+                const subtype = dict.get(PDFName.of('Subtype'));
+                if (obj instanceof PDFRawStream && subtype && String(subtype) === '/OpenType') openType = true;
+            }
+            assert.ok(widths.length > 1 && widths.length < 200, `${name} (subset ${subsetFonts}): widths for the glyphs drawn alone; got ${widths.length}`);
+            if (name === 'CFF') assert.ok(fontFile === 'FontFile3' && openType, `a CFF font is embedded whole, as OpenType; got ${fontFile} ${openType}`);
+            else assert.ok(fontFile === 'FontFile2' && !openType, `a TrueType font is embedded as TrueType; got ${fontFile} ${openType}`);
+        }
+    }
+    // A vowel sign with no letter of its script before it (alone, a word split where its runs change their
+    // look), and a word longer than a line: drawn and read whole (a font of Apple's layout tables, shaped by
+    // fontkit, filled the heap on such a sign and ended the process).
+    if (devanagari) {
+        const long = 'कि'.repeat(120);
+        const parts = { ...doc, content: [
+            { type: 'paragraph', text: 'हिंदी', children: [{ type: 'text', text: 'हि', formatting: { bold: true } }, { type: 'text', text: 'ंदी' }] },
+            { type: 'paragraph', text: 'x ि y', children: [{ type: 'text', text: 'x ि y' }] },
+            // Old spellings and doubled signs (अा for आ, a doubled anusvara and virama) ran fontkit's state machine forever too.
+            { type: 'paragraph', text: 'अा कंं क््', children: [{ type: 'text', text: 'अा कंं क््' }] },
+            { type: 'paragraph', text: long, children: [{ type: 'text', text: long }] }] };
+        const result: any = await OfficeGenerator.generate(parts, 'pdf', { pdfConfig: { engine: 'native', fallbackFonts: [devanagari] } } as any);
+        const text = await read(result.value as Uint8Array);
+        assert.ok(text.startsWith('हिंदी') && text.includes('x ि y') && text.includes('अा') && (text.match(/कि/g) || []).length === 120, `stray vowel signs and a long word are drawn and read; got ${JSON.stringify(text.slice(0, 40))}`);
+    }
+    // The bound itself, on a stub font whose state machine inserts glyphs forever on one code point: that
+    // word is laid out unshaped, the others as shaped, and the machine stops within its bound.
+    {
+        let entries = 0;
+        const glyph = (cp: number) => ({ id: cp, advanceWidth: 500, codePoints: [cp] });
+        const subtable = { table: { stateTable: {} } };
+        const machine = {
+            process(glyphs: any[], _reverse: boolean, entry: (...a: unknown[]) => unknown) {
+                for (let i = 0; i < glyphs.length; i++) {
+                    entry(glyphs[i], {}, i);
+                    entries++;
+                    // A "don't advance" loop inserting a glyph a step, on U+0902.
+                    while (glyphs[i].id === 0x902) { entry(glyphs[i], {}, i); entries++; glyphs.splice(i, 0, glyph(0x25CC)); i++; }
+                }
+                return glyphs;
+            },
+        };
+        const stub: any = {
+            glyphForCodePoint: glyph,
+            layout(text: string) {
+                const glyphs = [...text].map(c => glyph(c.codePointAt(0)!));
+                machine.process(glyphs, false, () => undefined);
+                return { glyphs: glyphs.map(g => ({ ...g, shaped: true })), positions: glyphs.map(() => ({ xAdvance: 400, yAdvance: 0, xOffset: 0, yOffset: 0 })) };
+            },
+            _layoutEngine: { engine: { morxProcessor: { morx: { chains: [{ subtables: [subtable] }] }, getStateMachine: () => machine } } },
+        };
+        guardShaping({ embedder: { font: stub } });
+        const run = stub.layout('\u0915\u0902 \u0928');
+        assert.deepStrictEqual(run.glyphs.map((g: any) => [g.id, !!g.shaped]), [[0x915, false], [0x902, false], [0x20, false], [0x928, true]], `the runaway word unshaped, the others shaped; got ${JSON.stringify(run.glyphs.map((g: any) => [g.id, !!g.shaped]))}`);
+        assert.ok(entries < 8 * 3 + 64 + 512, `the machine stopped within its bound; got ${entries} steps`);
+        const plain = stub.layout('\u0928\u0928');
+        assert.ok(plain.glyphs.every((g: any) => g.shaped), 'text that does not run away is shaped as before');
+    }
+    // A mark over a Latin letter, and Latin text in a font of no shaping: as before.
+    const latinFont = systemFont('/System/Library/Fonts/Supplemental/Arial.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf');
+    if (latinFont) {
+        const latin = 'Cafe\u0301 plain';
+        const result = await OfficeGenerator.generate({ ...doc, content: [{ type: 'paragraph', text: latin, children: [{ type: 'text', text: latin }] }] }, 'pdf', { pdfConfig: { engine: 'native', fonts: { regular: latinFont } } } as any);
+        assert.deepStrictEqual((result.messages || []).map((m: any) => m.code), [], 'the Latin font draws the mark');
+        assert.strictEqual(await read(result.value as Uint8Array), 'Caf\u00E9 plain', 'a Latin letter and its mark read as written');
+    }
+}
+
+/**
+ * A page field prints each page's number in the field's format (a switch, `\* roman`), else its section's
+ * (`\pgnlcrm`, `w:pgNumType`, a page layout's `style:num-format`), else the form its saved result is in
+ * (digits of any script, a roman numeral, letters), its result's runs read as one: a stale result in any
+ * form not one of these was printed on every page.
+ */
+async function testPageNumberFormats(): Promise<void> {
+    const fill = (texts: string[], n: number, format?: any) => fillPageNumber(texts, n, format);
+    assert.deepStrictEqual(fill(['1', '1'], 3), ['3', ''], 'a number saved in two looks is one number');
+    assert.deepStrictEqual(fill(['- ', 'iii', ' -'], 4), ['- ', 'iv', ' -'], 'a roman numeral with text around it');
+    assert.deepStrictEqual(fill(['३'], 12), ['१२'], 'Devanagari digits stay Devanagari');
+    assert.deepStrictEqual(fill(['٣'], 10), ['١٠'], 'Arabic-Indic digits stay Arabic-Indic');
+    assert.deepStrictEqual(fill(['B'], 28), ['BB'], 'letters as Word writes ALPHABETIC');
+    assert.deepStrictEqual(fill(['three'], 2), ['2'], 'a result of words, its format unknown, is the number');
+    assert.deepStrictEqual(fill([''], 5), ['5'], 'a result saved empty is the number');
+    assert.deepStrictEqual(fill(['Page ', '7'], 9, 'upperRoman'), ['Page ', 'IX'], 'the format given');
+    assert.deepStrictEqual([pageNumberText(21, 'ordinalText'), pageNumberText(123, 'cardinalText'), pageNumberText(12, 'ordinal'), pageNumberText(255, 'hex'), pageNumberText(3, 'decimalDash')],
+        ['twenty-first', 'one hundred twenty-three', '12th', 'FF', '- 3 -'], 'the formats written');
+    assert.deepStrictEqual([fill(['C'], 4), fill(['I'], 4), fill(['ii'], 4), fill(['Page C'], 4), fill(['x'], 9)], [['D'], ['IV'], ['iv'], ['Page D'], ['ix']],
+        'a letter alone is a roman numeral only as i, v or x, another a page in letters');
+    // Every script's digits: the number in that script's, from its zero (the mathematical digits are five
+    // sets of ten in a row, each its own zero).
+    for (let cp = 0; cp <= 0x10FFFF; cp++) {
+        if (cp >= 0xD800 && cp <= 0xDFFF) continue;
+        const ch = String.fromCodePoint(cp);
+        if (!/\p{Nd}/u.test(ch)) continue;
+        const written = [...fill([ch], 10)[0]].map(c => c.codePointAt(0)!);
+        const folded = ch.normalize('NFKC'), value = /^[0-9]$/.test(folded) ? Number(folded) : undefined;
+        assert.ok(written.length === 2 && written[0] === written[1] + 1 && cp - written[1] >= 0 && cp - written[1] <= 9 && (value === undefined || cp - written[1] === value),
+            `U+${cp.toString(16)}: 10 in its own digits; got ${written.map(c => c.toString(16))}`);
+    }
+    // Through RTF: a field's switch, a section's format, and a result of no ASCII digits, page by page.
+    const pagesOf = async (rtf: string) => {
+        const ast = await OfficeParser.parseOffice(Buffer.from(rtf), { fileType: 'rtf' } as any) as OfficeParserAST;
+        const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+        const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+        return (back.auxiliary?.footers ?? []).map(f => (f.text || '').trim()).concat(back.content.flatMap(p => (p.children ?? []).map(c => (c.text || '').trim())).filter(t => /^Page /.test(t)));
+    };
+    const body = 'Body line.\\par '.repeat(110);
+    const rtf = (field: string, section = '') => String.raw`{\rtf1\ansi{\fonttbl{\f0 Times;}}` + section + String.raw`{\footer Page ` + field + String.raw`\par}` + body + '}';
+    for (const [what, field, section, expected] of [
+        ['a switch', String.raw`{\field{\*\fldinst PAGE \\* ROMAN}{\fldrslt 3}}`, '', ['Page I', 'Page II', 'Page III']],
+        ['a section format', String.raw`{\field{\*\fldinst PAGE}{\fldrslt 3}}`, String.raw`\pgnlcrm`, ['Page i', 'Page ii', 'Page iii']],
+        ['words', String.raw`{\field{\*\fldinst PAGE \\* CardText}{\fldrslt three}}`, '', ['Page one', 'Page two', 'Page three']],
+        // (A section numbers its pages 1, 2, 3 unless it says otherwise: a result saved in roman is a page's digits.)
+        ['a roman result in a decimal section', String.raw`{\field{\*\fldinst PAGE}{\fldrslt - iii -}}`, '', ['Page - 1 -', 'Page - 2 -', 'Page - 3 -']],
+        ['a digit result in a roman section', String.raw`{\field{\*\fldinst PAGE}{\fldrslt - 3 -}}`, String.raw`\pgnucrm`, ['Page - I -', 'Page - II -', 'Page - III -']],
+        ['a split result', String.raw`{\field{\*\fldinst PAGE}{\fldrslt {\b 1}{\i 1}}}`, '', ['Page 1', 'Page 2', 'Page 3']],
+    ] as const) {
+        const got = await pagesOf(rtf(field, section));
+        assert.ok(expected.every(t => got.includes(t)) && new Set(got).size === got.length, `${what}: each page its own number; got ${JSON.stringify(got)}`);
+    }
+    // The readers carry the format: Word's switch and section, ODF's field and page layout.
+    const W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+    const docx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${W_NS}><w:body><w:p><w:fldSimple w:instr=" PAGE \\* alphabetic "><w:r><w:t>c</w:t></w:r></w:fldSimple></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgNumType w:fmt="lowerRoman"/></w:sectPr></w:body></w:document>`),
+    }));
+    const word = await OfficeParser.parseOffice(docx, { fileType: 'docx' } as any) as OfficeParserAST;
+    const wordField = collectAllNodes(word).find(n => (n.metadata as any)?.field === 'page');
+    assert.ok((wordField?.metadata as any)?.fieldFormat === 'lowerLetter' && word.metadata.pageSetup?.pageNumberFormat === 'lowerRoman', `Word: the switch and the section's format; got ${JSON.stringify([wordField?.metadata, word.metadata.pageSetup])}`);
+    const ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"';
+    const odt = Buffer.from(zipSync({
+        mimetype: strToU8('application/vnd.oasis.opendocument.text'),
+        'styles.xml': strToU8(`<?xml version="1.0"?><office:document-styles ${ODF_NS}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" style:num-format="I"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>`),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${ODF_NS}><office:body><office:text><text:p><text:page-number style:num-format="a">c</text:page-number></text:p></office:text></office:body></office:document-content>`),
+    }));
+    const odf = await OfficeParser.parseOffice(odt, { fileType: 'odt' } as any) as OfficeParserAST;
+    const odfField = collectAllNodes(odf).find(n => (n.metadata as any)?.field === 'page');
+    assert.ok((odfField?.metadata as any)?.fieldFormat === 'lowerLetter' && odf.metadata.pageSetup?.pageNumberFormat === 'upperRoman', `ODT: the field's and the page layout's format; got ${JSON.stringify([odfField?.metadata, odf.metadata.pageSetup])}`);
+
+    // Each page's footer number, page by page (the footers kept in their pages).
+    const footerNumbers = async (ast: OfficeParserAST) => {
+        const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+        const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false, keepHeadersAndFootersInPages: true } } as any) as OfficeParserAST;
+        // (A page number read back is a field of its own, its text a leaf apart from "Page ".)
+        return back.content.filter(n => n.type === 'page').map(p => /Page\s+(\S+)/.exec(collectAllNodes({ ...back, content: [p] } as OfficeParserAST).filter(n => n.type === 'text').map(n => n.text).join(' '))?.[1]);
+    };
+    // A front matter numbered i, ii, then a body in digits (Word's default, said by no w:pgNumType): each
+    // page in its section's numbers, the body's footer its own or the front matter's carried on (saved
+    // `i`), with or without includeBreakNodes (a section's start is a node either way).
+    const W_FULL = `${W_NS} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`;
+    const footerXml = (saved: string) => `<?xml version="1.0"?><w:ftr ${W_FULL}><w:p><w:r><w:t xml:space="preserve">Page </w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>${saved}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:ftr>`;
+    const lines = (label: string, n: number) => Array.from({ length: n }, (_, i) => `<w:p><w:r><w:t>${label} line ${i}.</w:t></w:r></w:p>`).join('');
+    const pg = '<w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>';
+    const sectioned = (ownBodyFooter: boolean) => Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/><Override PartName="/word/footer2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/_rels/document.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdF1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/><Relationship Id="rIdF2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer2.xml"/></Relationships>'),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${W_FULL}><w:body>${lines('Front', 70)}<w:p><w:pPr><w:sectPr><w:footerReference w:type="default" r:id="rIdF1"/>${pg}<w:pgNumType w:fmt="lowerRoman"/></w:sectPr></w:pPr></w:p>${lines('Body', 100)}<w:sectPr>${ownBodyFooter ? '<w:footerReference w:type="default" r:id="rIdF2"/>' : ''}${pg}</w:sectPr></w:body></w:document>`),
+        'word/footer1.xml': strToU8(footerXml('i')),
+        'word/footer2.xml': strToU8(footerXml('3')),
+    }));
+    const frontThenBody = (got: (string | undefined)[]) => {
+        const front = got.findIndex(t => !/^[ivx]+$/.test(t ?? ''));
+        return front >= 2 && got.slice(0, front).every((t, i) => t === pageNumberText(i + 1, 'lowerRoman')) && got.slice(front).every((t, i) => t === String(front + i + 1));
+    };
+    for (const own of [true, false]) {
+        for (const includeBreakNodes of [false, true]) {
+            const ast = await OfficeParser.parseOffice(sectioned(own), { fileType: 'docx', includeBreakNodes } as any) as OfficeParserAST;
+            const breaks = ast.content.filter(n => n.type === 'break' && (n.metadata as any)?.section === 1);
+            assert.ok(breaks.length === 1 && (breaks[0].metadata as any).pageSetup?.pageNumberFormat === 'decimal', `DOCX: the body's section starts in a node, numbering its pages in digits (includeBreakNodes ${includeBreakNodes}); got ${JSON.stringify(breaks.map(b => b.metadata))}`);
+            const got = await footerNumbers(ast);
+            assert.ok(frontThenBody(got), `DOCX: the front matter in roman, the body in digits (its own footer ${own}, includeBreakNodes ${includeBreakNodes}); got ${JSON.stringify(got)}`);
+        }
+    }
+    // The same through RTF (`\pgnlcrm`, then `\sectd` back to digits), the body's footer carried on.
+    const rtfLines = (label: string, n: number) => Array.from({ length: n }, (_, i) => `${label} line ${i}.\\par `).join('');
+    const rtfSectioned = String.raw`{\rtf1\ansi{\fonttbl{\f0 Times;}}\sectd\pgnlcrm{\footer Page {\field{\*\fldinst PAGE}{\fldrslt i}}\par}` + rtfLines('Front', 70) + String.raw`\sect\sectd ` + rtfLines('Body', 100) + '}';
+    for (const includeBreakNodes of [false, true]) {
+        const got = await footerNumbers(await OfficeParser.parseOffice(Buffer.from(rtfSectioned), { fileType: 'rtf', includeBreakNodes } as any) as OfficeParserAST);
+        assert.ok(frontThenBody(got), `RTF: the front matter in roman, the body in digits (includeBreakNodes ${includeBreakNodes}); got ${JSON.stringify(got)}`);
+    }
+    // A continuous section (`\sbknone`) in upper roman: the pages that start in it are numbered in it.
+    const continuous = String.raw`{\rtf1\ansi{\fonttbl{\f0 Times;}}\sectd{\footer Page {\field{\*\fldinst PAGE}{\fldrslt 1}}\par}` + rtfLines('One', 20) + String.raw`\sect\sectd\sbknone\pgnucrm{\footer Page {\field{\*\fldinst PAGE}{\fldrslt II}}\par}` + rtfLines('Two', 120) + '}';
+    const continuousGot = await footerNumbers(await OfficeParser.parseOffice(Buffer.from(continuous), { fileType: 'rtf' } as any) as OfficeParserAST);
+    assert.ok(continuousGot.length >= 3 && continuousGot[0] === '1' && continuousGot.slice(1).every((t, i) => t === pageNumberText(i + 2, 'upperRoman')), `RTF: a continuous section's own numbers from its first page; got ${JSON.stringify(continuousGot)}`);
+
+    // A section's numbers and title page are its own, not its page: a section that sets no page has a
+    // setup without one (RTF set its Letter defaults), and ignorePageGeometry keeps them.
+    const rtfSetup = async (words: string, config: any = {}) => (await OfficeParser.parseOffice(Buffer.from(`{\\rtf1\\ansi${words} Text\\par}`), { fileType: 'rtf', ...config } as any) as OfficeParserAST).metadata.pageSetup;
+    assert.deepStrictEqual(await rtfSetup('\\pgnlcrm'), { pageNumberFormat: 'lowerRoman' }, 'RTF: a section in roman sets no page');
+    assert.deepStrictEqual(await rtfSetup('\\titlepg'), { differentFirstPage: true, pageNumberFormat: 'decimal' }, 'RTF: a title page sets no page');
+    const stated = await rtfSetup('\\paperw11906\\paperh16838\\pgnlcrm');
+    assert.ok(stated?.width === 595.3 && stated.pageNumberFormat === 'lowerRoman', `RTF: a stated page with its numbers; got ${JSON.stringify(stated)}`);
+    assert.deepStrictEqual(await rtfSetup('\\paperw11906\\paperh16838\\cols2\\pgnlcrm', { ignorePageGeometry: true }), { pageNumberFormat: 'lowerRoman' }, 'RTF: ignorePageGeometry keeps the numbers, not the page or columns');
+    const romanPdf = (await (await OfficeParser.parseOffice(Buffer.from('{\\rtf1\\ansi\\pgnlcrm Text\\par}'), { fileType: 'rtf' } as any) as OfficeParserAST).to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const romanBack = await OfficeParser.parseOffice(Buffer.from(romanPdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.strictEqual(Math.round((romanBack.content[0].metadata as any).pageWidth), 595, 'RTF: a section in roman is printed on the default paper, not on Letter');
+    const wordSetup = async (sectPr: string, config: any = {}) => (await OfficeParser.parseOffice(Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${W_NS}><w:body><w:p><w:r><w:t>Text</w:t></w:r></w:p><w:sectPr>${sectPr}</w:sectPr></w:body></w:document>`),
+    })), { fileType: 'docx', ...config } as any) as OfficeParserAST).metadata.pageSetup;
+    assert.deepStrictEqual(await wordSetup('<w:pgNumType w:fmt="upperRoman"/><w:titlePg/>'), { differentFirstPage: true, pageNumberFormat: 'upperRoman' }, 'Word: a section of no w:pgSz keeps its numbers and title page');
+    assert.deepStrictEqual(await wordSetup(`${pg}<w:pgNumType w:fmt="lowerRoman"/>`, { ignorePageGeometry: true }), { pageNumberFormat: 'lowerRoman' }, 'Word: ignorePageGeometry keeps a section\'s numbers');
+    // ODF: a page style of its own starts a section in a node by default.
+    const ODF_STYLE_NS = `${ODF_NS} xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"`;
+    const odtSections = Buffer.from(zipSync({
+        mimetype: strToU8('application/vnd.oasis.opendocument.text'),
+        'styles.xml': strToU8(`<?xml version="1.0"?><office:document-styles ${ODF_STYLE_NS}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" style:num-format="i"/></style:page-layout><style:page-layout style:name="pm2"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/><style:master-page style:name="Body" style:page-layout-name="pm2"/></office:master-styles></office:document-styles>`),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${ODF_STYLE_NS}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:master-page-name="Body"/></office:automatic-styles><office:body><office:text><text:p>Front</text:p><text:p text:style-name="P1">Body</text:p></office:text></office:body></office:document-content>`),
+    }));
+    const odtRead = await OfficeParser.parseOffice(odtSections, { fileType: 'odt' } as any) as OfficeParserAST;
+    const odtBreaks = odtRead.content.filter(n => n.type === 'break').map(n => n.metadata as any);
+    assert.ok(odtRead.metadata.pageSetup?.pageNumberFormat === 'lowerRoman' && odtBreaks.length === 1 && odtBreaks[0].section === 1 && odtBreaks[0].pageSetup?.pageNumberFormat === 'decimal',
+        `ODT: the second page style's section is a node, numbered in digits; got ${JSON.stringify([odtRead.metadata.pageSetup, odtBreaks])}`);
+    // A document of one section has no section break.
+    assert.ok(!(await OfficeParser.parseOffice(Buffer.from('{\\rtf1\\ansi One\\par Two\\par}'), { fileType: 'rtf' } as any) as OfficeParserAST).content.some(n => n.type === 'break'), 'RTF: one section, no break');
+
+    // A field ends where anything else comes between its runs: two page numbers on two lines are two.
+    const twoFields = { type: 'docx', metadata: {}, attachments: [], content: Array.from({ length: 80 }, (_, i) => ({ type: 'paragraph', children: [{ type: 'text', text: `Line ${i}` }] })),
+        auxiliary: { footers: [{ type: 'footer', metadata: { type: 'default' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'Page ' }, { type: 'text', text: '1', metadata: { field: 'page' } }, { type: 'break', metadata: { breakType: 'textWrapping' } }, { type: 'text', text: '1', metadata: { field: 'page' } }] }] }] } } as any;
+    const twoPdf = (await OfficeGenerator.generate(twoFields, 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const twoBack = await OfficeParser.parseOffice(Buffer.from(twoPdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false, keepHeadersAndFootersInPages: true } } as any) as OfficeParserAST;
+    const secondPage = collectAllNodes({ ...twoBack, content: [twoBack.content.filter(n => n.type === 'page')[1]] } as OfficeParserAST).filter(n => n.type === 'text').map(n => (n.text || '').trim()).filter(Boolean);
+    assert.ok(secondPage.join(' ').endsWith('Page 2 2'), `a page field, a line break and another: each page's number twice; got ${JSON.stringify(secondPage.slice(-4))}`);
+}
+
+/**
+ * A document of sections saved again is the same document: DOCX keeps a section's end in its last
+ * paragraph and ODT a break in the next block's style (each wrote a paragraph of its own, one more empty
+ * paragraph on every save), each section keeps how it numbers its pages, and a section that sets no page
+ * is on the document's. A section's start is no text in flowing outputs, and one with nothing after it is
+ * none.
+ */
+async function testSectionRoundTrips(): Promise<void> {
+    const shapeOf = (ast: OfficeParserAST) => ast.content.map(n => n.type === 'break' ? `B${(n.metadata as any)?.section ?? ''}` : n.type === 'table' ? 'T' : (n.text || '').trim() ? 'P' : 'e').join('');
+    const para = (t: string) => ({ type: 'paragraph', text: t, children: [{ type: 'text', text: t }] });
+    const table = { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [para('Cell')] }] }] };
+    const page = { width: 612, height: 792, margin: { top: 72, right: 72, bottom: 72, left: 72 } };
+    const sectioned = (first: any) => ({ type: 'docx', metadata: { pageSetup: { ...page, pageNumberFormat: 'lowerRoman' } }, attachments: [],
+        content: [para('Front one.'), first, { type: 'break', metadata: { breakType: 'page', section: 1, pageSetup: { ...page, pageNumberFormat: 'upperLetter' } } }, para('Body.')] }) as any;
+    for (const [format, fileType] of [['docx', 'docx'], ['odt', 'odt'], ['rtf', 'rtf']] as const) {
+        for (const [what, first] of [['a paragraph', para('Front two.')], ['a table', table]] as const) {
+            for (const includeBreakNodes of [false, true]) {
+                const shapes: string[] = [], formats: string[] = [];
+                let ast: OfficeParserAST = sectioned(first);
+                for (let save = 0; save < 3; save++) {
+                    const bytes = (await OfficeGenerator.generate(ast, format, { onWarning: () => {} } as any)).value;
+                    ast = await OfficeParser.parseOffice(Buffer.from(bytes as any), { fileType, includeBreakNodes } as any) as OfficeParserAST;
+                    shapes.push(shapeOf(ast));
+                    formats.push([ast.metadata.pageSetup?.pageNumberFormat, ...ast.content.filter(n => typeof (n.metadata as any)?.section === 'number').map(n => (n.metadata as any).pageSetup?.pageNumberFormat)].join(','));
+                }
+                assert.ok(shapes.every(s => s === shapes[1]) && shapes[0].endsWith('B1P'), `${format}: a section ending in ${what} is the same saved again (includeBreakNodes ${includeBreakNodes}); got ${JSON.stringify(shapes)}`);
+                assert.ok(formats.every(f => f === 'lowerRoman,upperLetter'), `${format}: each section numbers its pages as it did; got ${JSON.stringify(formats)}`);
+            }
+        }
+    }
+    // Word: the section's end is in its last paragraph, as Word writes it.
+    const docxXml = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(sectioned(para('Front two.')), 'docx')).value as any))['word/document.xml']);
+    assert.ok(/<w:p><w:pPr><w:sectPr>[^]*?<\/w:sectPr><\/w:pPr><w:r>[^]*?Front two\./.test(docxXml) && !/<w:p><w:pPr><w:sectPr>(?:(?!<\/w:p>)[^])*<\/w:pPr><\/w:p>/.test(docxXml) && docxXml.includes('<w:pgNumType w:fmt="upperLetter"/>'),
+        `DOCX: the section ends in its last paragraph, numbered as it is; got ${docxXml.slice(0, 600)}`);
+    // A section's end in an onNode paragraph whose properties are spaced or empty: one pPr, its own kept.
+    for (const given of ['<w:p>\n  <w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>OV</w:t></w:r></w:p>', '<w:p><w:pPr/><w:r><w:t>OV</w:t></w:r></w:p>']) {
+        const xml = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [para('OV'), { type: 'break', metadata: { breakType: 'page', section: 1 } }, para('Next.')] } as any, 'docx',
+            { onNode: (n: any) => n.text === 'OV' ? given : undefined } as any)).value as any))['word/document.xml']);
+        const ov = xml.slice(xml.indexOf('<w:p>'), xml.indexOf('OV'));
+        assert.ok((ov.match(/<w:pPr[\s>/]/g) ?? []).length === 1 && ov.includes('<w:sectPr>') && (!given.includes('center') || ov.includes('<w:jc w:val="center"/>')), `DOCX: one pPr holds the section's end; got ${ov}`);
+    }
+    // ODT: author page breaks saved again stay as they were.
+    let breaks: OfficeParserAST = { type: 'docx', metadata: {}, attachments: [], content: [para('One.'), { type: 'break', metadata: { breakType: 'page' } }, para('Two.')] } as any;
+    const breakShapes: string[] = [];
+    for (let save = 0; save < 3; save++) {
+        breaks = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(breaks, 'odt')).value as any), { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+        breakShapes.push(shapeOf(breaks));
+    }
+    assert.deepStrictEqual(breakShapes, ['PBP', 'PBP', 'PBP'], 'ODT: a page break is the next paragraph\'s, saved again the same');
+
+    // ODT read: a table's style turning to a page style starts a section; one that sets no layout no longer throws.
+    const ODF = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"';
+    const odtOf = (contentAuto: string, body: string, stylesAuto: string, masters: string) => Buffer.from(zipSync({
+        mimetype: strToU8('application/vnd.oasis.opendocument.text'),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${ODF}><office:automatic-styles>${contentAuto}</office:automatic-styles><office:body><office:text>${body}</office:text></office:body></office:document-content>`),
+        'styles.xml': strToU8(`<?xml version="1.0"?><office:document-styles ${ODF}><office:automatic-styles>${stylesAuto}</office:automatic-styles><office:master-styles>${masters}</office:master-styles></office:document-styles>`),
+    }));
+    const layouts = '<style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in"/></style:page-layout><style:page-layout style:name="pm2"><style:page-layout-properties fo:page-width="11in" fo:page-height="8.5in"/></style:page-layout>';
+    const tableTurns = await OfficeParser.parseOffice(odtOf('<style:style style:name="Table1" style:family="table" style:master-page-name="Land"><style:table-properties style:width="6in" fo:break-before="page"/></style:style>',
+        '<text:p>One.</text:p><table:table table:name="T" table:style-name="Table1"><table:table-column/><table:table-row><table:table-cell><text:p>Cell.</text:p></table:table-cell></table:table-row></table:table>',
+        layouts, '<style:master-page style:name="Standard" style:page-layout-name="pm1"/><style:master-page style:name="Land" style:page-layout-name="pm2"/>'), { fileType: 'odt' } as any) as OfficeParserAST;
+    assert.strictEqual(shapeOf(tableTurns), 'PB1T', 'ODT: a table turning to a page style starts a section');
+    const noLayout = await OfficeParser.parseOffice(odtOf('<style:style style:name="Sect1" style:family="section"><style:section-properties><style:columns fo:column-count="2" fo:column-gap="0.2in"/></style:section-properties></style:style><style:style style:name="P2" style:family="paragraph" style:master-page-name="Other"/>',
+        '<text:p>Before.</text:p><text:section text:name="S" text:style-name="Sect1"><text:p>In.</text:p><text:p text:style-name="P2">Turned.</text:p></text:section><text:p>After.</text:p>',
+        layouts, '<style:master-page style:name="Standard" style:page-layout-name="pm1"/><style:master-page style:name="Other" style:page-layout-name="nope"/>'), { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+    assert.deepStrictEqual(noLayout.content.map(n => n.type === 'break' ? `B:${(n.metadata as any).breakType}` : n.text), ['Before.', 'B:section', 'In.', 'B:page', 'Turned.', 'B:section', 'After.'], 'ODT: a section turning to a page style of no layout is read');
+    // A section in columns of its own is the document's structure, as a Word continuous section is: its breaks
+    // are nodes whatever includeBreakNodes says. Its columns are geometry: none under ignorePageGeometry.
+    const columnsShape = (a: OfficeParserAST) => a.content.map(n => n.type === 'break' ? `B:${(n.metadata as any).breakType}:${(n.metadata as any).pageSetup?.columns?.count ?? 1}` : n.text);
+    const columnsOdt = odtOf('<style:style style:name="Sect1" style:family="section"><style:section-properties><style:columns fo:column-count="2" fo:column-gap="0.2in"/></style:section-properties></style:style>',
+        '<text:p>Before.</text:p><text:section text:name="S" text:style-name="Sect1"><text:p>In.</text:p></text:section><text:p>After.</text:p>',
+        layouts, '<style:master-page style:name="Standard" style:page-layout-name="pm1"/>');
+    const columnsRead = await OfficeParser.parseOffice(columnsOdt, { fileType: 'odt' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(columnsShape(columnsRead), ['Before.', 'B:section:2', 'In.', 'B:section:1', 'After.'], 'ODT: a section in columns of its own is read without includeBreakNodes');
+    const columnsFlat = await OfficeParser.parseOffice(columnsOdt, { fileType: 'odt', ignorePageGeometry: true } as any) as OfficeParserAST;
+    assert.deepStrictEqual(columnsShape(columnsFlat), ['Before.', 'In.', 'After.'], 'ODT: no column section breaks under ignorePageGeometry');
+    // Its columns reach every writer that sets columns, and the flowing outputs show nothing for them.
+    const columnsDocx = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(columnsRead, 'docx')).value as any))['word/document.xml']);
+    assert.ok(/<w:cols w:num="2"/.test(columnsDocx) && (columnsDocx.match(/<w:type w:val="continuous"\/>/g) || []).length === 2, 'DOCX: an ODT section in columns is a continuous section of its columns');
+    const columnsOdtOut = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(columnsRead, 'odt')).value as any))['content.xml']);
+    assert.ok(/fo:column-count="2"/.test(columnsOdtOut) && /<text:section [^>]*>[^]*In\.[^]*<\/text:section>/.test(columnsOdtOut), 'ODT: an ODT section in columns is written as a section of its columns');
+    assert.ok(/\\cols2/.test(String((await OfficeGenerator.generate(columnsRead, 'rtf')).value)), 'RTF: an ODT section in columns is written in its columns');
+    assert.ok(/\\begin\{multicols\}\{2\}[^]*In\.[^]*\\end\{multicols\}/.test(String((await OfficeGenerator.generate(columnsRead, 'tex')).value)), 'LaTeX: an ODT section in columns is in multicols');
+    assert.strictEqual(String((await OfficeGenerator.generate(columnsRead, 'text')).value).trim(), 'Before.\nIn.\nAfter.', 'text: an ODT section in columns shows nothing');
+    assert.strictEqual(String((await OfficeGenerator.generate(columnsRead, 'md')).value).trim(), 'Before.\n\nIn.\n\nAfter.', 'Markdown: an ODT section in columns shows nothing');
+    const columnsHtml = String((await OfficeGenerator.generate(columnsRead, 'html', { htmlConfig: { standalone: false } } as any)).value);
+    assert.ok(!/<hr/.test(columnsHtml) && columnsHtml.includes('In.'), 'HTML: an ODT section in columns shows nothing');
+
+    // A section that sets no page is on the document's: Letter in every writer, landscape closed in LaTeX.
+    const sizeless = { type: 'docx', metadata: { pageSetup: page }, attachments: [], content: [para('Portrait.'), { type: 'break', metadata: { breakType: 'page', section: 1, pageSetup: { width: 792, height: 612 } } }, para('Landscape.'),
+        { type: 'break', metadata: { breakType: 'page', section: 2, pageSetup: { pageNumberFormat: 'lowerRoman' } } }, para('Third.')] } as any;
+    const sizes = [...strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(sizeless, 'docx')).value as any))['word/document.xml']).matchAll(/<w:pgSz w:w="(\d+)" w:h="(\d+)"/g)].map(m => `${m[1]}x${m[2]}`);
+    assert.deepStrictEqual(sizes, ['12240x15840', '15840x12240', '12240x15840'], 'DOCX: a section that sets no page is on the document\'s');
+    const odtStyles = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(sizeless, 'odt')).value as any))['styles.xml']);
+    assert.ok(!/fo:page-width="8\.27/.test(odtStyles), 'ODT: no A4 page for a section that sets none');
+    const tex = String((await OfficeGenerator.generate(sizeless, 'tex')).value);
+    assert.ok(tex.indexOf('\\end{landscape}') >= 0 && tex.indexOf('\\end{landscape}') < tex.indexOf('Third.') && tex.includes('\\renewcommand{\\thepage}{\\roman{page}}'), 'LaTeX: the landscape section ends before a section on the document\'s page, numbered its way');
+
+    // Flowing outputs: a section's start is no text; HTML starts a page there in print, no rule on screen.
+    const flowing = { type: 'docx', metadata: {}, attachments: [], content: [para('Front.'), { type: 'break', metadata: { breakType: 'page', section: 1 } }, para('Body.')] } as any;
+    assert.strictEqual(String((await OfficeGenerator.generate(flowing, 'text')).value).trim(), 'Front.\nBody.', 'text: a section\'s start is no blank line');
+    const html = String((await OfficeGenerator.generate(flowing, 'html')).value).split('<body')[1];
+    assert.ok(!html.includes('<hr class="page-break">') && html.includes('<hr class="page-break section-start" style="border:none;height:0;margin:0;break-after:page">'), 'HTML: a section\'s start is a page break, shown as no rule on screen with any stylesheet or none');
+    const fullHtml = String((await OfficeGenerator.generate(flowing, 'html')).value);
+    assert.ok(fullHtml.includes('.page-break.section-start::after { content: none; }'), 'HTML: a section\'s start has no rule on screen');
+    const htmlBack = await OfficeParser.parseOffice(Buffer.from(fullHtml), { fileType: 'html' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(htmlBack.content.map(n => n.type === 'break' ? `B:${(n.metadata as any).breakType}` : n.text ?? (n.children ?? []).map(c => c.text).join('')), ['Front.', 'B:page', 'Body.'], 'HTML: a section\'s start reads back as a page break, no empty paragraph');
+
+    // ODT: a block an onNode string gives takes the break before it; a block of a named style after a break keeps its look read back.
+    const brk = (extra: any = {}) => ({ type: 'break', metadata: { breakType: 'page', ...extra } });
+    const withOverride = async (content: any[], replacement: string) => {
+        const bytes = (await OfficeGenerator.generate({ type: 'docx', metadata: { pageSetup: page }, attachments: [], content } as any, 'odt', { onNode: (n: any) => n.text === 'X' ? replacement : undefined } as any)).value;
+        return await OfficeParser.parseOffice(Buffer.from(bytes as any), { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+    };
+    const order = (ast: OfficeParserAST) => ast.content.map(n => n.type === 'break' ? `B:${(n.metadata as any).breakType}` : n.text);
+    assert.deepStrictEqual(order(await withOverride([para('A'), brk(), para('X'), para('B')], '<text:p>OVERRIDE</text:p>')), ['A', 'B:page', 'OVERRIDE', 'B'], 'ODT: an onNode block after a page break is on the new page');
+    assert.deepStrictEqual(order(await withOverride([para('A'), brk(), para('X'), para('B')], '')), ['A', 'B:page', 'B'], 'ODT: an onNode block of nothing leaves the break to the next block');
+    const turnedOverride = await withOverride([para('A'), brk({ section: 1, pageSetup: { width: 792, height: 612 } }), para('X'), para('B')], '<text:p>OVERRIDE</text:p>');
+    assert.ok(order(turnedOverride).join('|') === 'A|B:page|OVERRIDE|B' && (turnedOverride.content[1].metadata as any).section === 1, `ODT: an onNode block after a section's start is the section's first; got ${JSON.stringify(order(turnedOverride))}`);
+    const named = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate({ type: 'docx', metadata: { pageSetup: page }, attachments: [], content: [para('A'), brk(),
+        { type: 'paragraph', text: 'Quoted', metadata: { style: 'Quote' }, children: [{ type: 'text', text: 'Quoted' }] }, brk({ section: 1, pageSetup: { width: 792, height: 612 } }),
+        { type: 'heading', text: 'Head', metadata: { level: 1 }, children: [{ type: 'text', text: 'Head' }] }, para('Z')] } as any, 'odt')).value as any), { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+    const quote = named.content.find(n => n.text === 'Quoted'), head = named.content.find(n => n.text === 'Head');
+    assert.ok(order(named).join('|') === 'A|B:page|Quoted|B:page|Head|Z' && quote?.children?.[0]?.formatting?.italic && head?.type === 'heading' && head.children?.[0]?.formatting?.bold,
+        `ODT: a quote and a heading after a break keep their look read back; got ${JSON.stringify([order(named), quote, head])}`);
+
+    // LaTeX: a continuous section's numbering is defined globally after the page ships out (\\globaldefs broke every \\write after it).
+    const continuousTex = String((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [para('One.'), { type: 'break', metadata: { breakType: 'section', section: 1, pageSetup: { pageNumberFormat: 'upperRoman' } } }, para('Two.'), brk(), para('Three.')] } as any, 'tex')).value);
+    assert.ok(continuousTex.includes('\\AddToHookNext{shipout/after}{\\gdef\\thepage{\\Roman{page}}}') && !/\\globaldefs=1 \\renewcommand/.test(continuousTex), 'LaTeX: a continuous section\'s numbering is a global definition');
+    // A trailing `\sect` (writers end every section with one) starts no section.
+    const trailing = await OfficeParser.parseOffice(Buffer.from('{\\rtf1\\ansi Hello\\par\\sect}'), { fileType: 'rtf' } as any) as OfficeParserAST;
+    assert.strictEqual(shapeOf(trailing), 'P', 'RTF: a section with nothing in it after the text is none');
+
+    // Page numbers in a script's digits: a section format RTF has and this library does not is none,
+    // the saved number's script kept; decimal keeps it too, but not a part carried on from another section's.
+    const rtfSection = async (words: string) => (await OfficeParser.parseOffice(Buffer.from(`{\\rtf1\\ansi${words} Text\\par}`), { fileType: 'rtf' } as any) as OfficeParserAST).metadata.pageSetup?.pageNumberFormat;
+    assert.deepStrictEqual([await rtfSection('\\pgnhindia'), await rtfSection('\\pgnthaia'), await rtfSection('\\pgndecd'), await rtfSection('')], [undefined, undefined, 'decimalFullWidth', 'decimal'], 'RTF: format words this library has none of are none');
+    const arabic = String.fromCodePoint(0x663), arabicFive = String.fromCodePoint(0x665), thai = String.fromCodePoint(0xE53);
+    assert.deepStrictEqual([fillPageNumber([arabic], 5, 'decimal'), fillPageNumber(['3'], 5, 'decimal'), fillPageNumber(['ii'], 5, 'decimal', { own: false, format: 'lowerRoman' }),
+        fillPageNumber([thai], 5, 'decimal', { own: false, format: 'decimalThai' }), fillPageNumber(['ii'], 5, undefined, { own: false, format: 'lowerRoman' }), fillPageNumber(['3'], 5, 'decimalArabicIndic')],
+        [[arabicFive], ['5'], ['5'], ['5'], ['5'], [arabicFive]], 'decimal keeps the saved digits\' script, not a carried part\'s');
+}
+
+/**
+ * The native PDF engine draws an SVG picture as vector graphics (it was dropped with
+ * IMAGE_PROCESSING_FAILED): its shapes, paths, text, symbols and styles, in its place among the text,
+ * at its size; what it cannot draw (a gradient in one colour) is reported, and an SVG that cannot be
+ * read is reported as it was.
+ */
+async function testNativePdfSvgPictures(): Promise<void> {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="300" height="150" viewBox="0 0 200 100">
+        <style>.blue { fill: #2255cc }</style>
+        <defs><linearGradient id="g"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="yellow"/></linearGradient><symbol id="dot" viewBox="0 0 10 10"><circle cx="5" cy="5" r="5" fill="green"/></symbol></defs>
+        <rect class="blue" x="10" y="10" width="40" height="30"/><circle cx="80" cy="25" r="15" fill="url(#g)"/>
+        <path d="M150 40 A 20 20 0 0 1 190 40 Q 170 60 150 40 z" fill="none" stroke="purple" stroke-width="3"/>
+        <g transform="translate(10 60) rotate(-5)"><text x="0" y="10" font-size="12">Drawn label</text></g>
+        <use xlink:href="#dot" x="150" y="70" width="20" height="20"/></svg>`;
+    const ast = (data: string, name = 'a.svg') => ({ type: 'docx', metadata: {}, attachments: [{ type: 'image', name, mimeType: 'image/svg+xml', extension: 'svg', data: Buffer.from(data).toString('base64') }],
+        content: [{ type: 'paragraph', text: 'Before', children: [{ type: 'text', text: 'Before' }] }, { type: 'image', metadata: { attachmentName: name } }, { type: 'paragraph', text: 'After', children: [{ type: 'text', text: 'After' }] }] }) as any;
+    const result = await OfficeGenerator.generate(ast(svg), 'pdf', { pdfConfig: { engine: 'native' } } as any);
+    const reasons = (result.messages || []).map((m: any) => [m.code, m.details?.reason]);
+    assert.deepStrictEqual(reasons, [['CONTENT_NOT_REPRESENTABLE', 'svg']], `the SVG is drawn, its gradient reported as drawn in one colour; got ${JSON.stringify(result.messages)}`);
+    const back = await OfficeParser.parseOffice(Buffer.from(result.value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.strictEqual(back.content.filter(n => n.type === 'page').length, 1, 'the page the SVG is drawn on is no page of the document');
+    const nodes = collectAllNodes(back);
+    const at = (text: string) => nodes.find(n => n.type === 'text' && (n.text || '').includes(text))?.bounds;
+    const before = at('Before')!, after = at('After')!, label = at('Drawn');
+    assert.ok(label && label.y > before.y && label.y < after.y && after.y - before.y > 100, `the SVG stands between the paragraphs at its size, its text drawn; got ${JSON.stringify([before, label, after])}`);
+    const unreadable = await OfficeGenerator.generate(ast('<svg><g>', 'b.svg'), 'pdf', { pdfConfig: { engine: 'native' } } as any);
+    assert.ok((unreadable.messages || []).some((m: any) => m.code === 'IMAGE_PROCESSING_FAILED'), 'an SVG that cannot be read is reported');
+    // Text placed by tspan offsets, text in a link and along a path, numbers no page holds, a path of
+    // hundreds of thousands of segments, groups nested past the limit.
+    const drawn = async (body: string) => {
+        const out = await OfficeGenerator.generate(ast(`<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">${body}</svg>`), 'pdf', { pdfConfig: { engine: 'native' } } as any);
+        const bytes = Buffer.from(out.value as Uint8Array);
+        const doc = await PDFDocument.load(bytes);
+        let streams = '';
+        for (const [, obj] of doc.context.enumerateIndirectObjects()) {
+            if (!(obj instanceof PDFRawStream)) continue;
+            let raw: Uint8Array = obj.contents;
+            if (String(obj.dict.get(PDFName.of('Filter'))) === '/FlateDecode') { try { raw = unzlibSync(raw); } catch { /* not a content stream */ } }
+            if (!String(obj.dict.get(PDFName.of('Subtype'))).includes('Image')) streams += Buffer.from(raw).toString('latin1');
+        }
+        const read = await OfficeParser.parseOffice(bytes, { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+        return { messages: (out.messages || []).map((m: any) => `${m.code}:${m.details?.reason ?? ''}:${m.details?.feature ?? ''}`), streams, nodes: collectAllNodes(read).filter(n => n.type === 'text' && n.bounds) };
+    };
+    const lines = await drawn('<text x="10" y="20">Line one<tspan x="10" dy="1.2em">Line two</tspan><tspan x="10" dy="1.2em">Line three</tspan><tspan dx="30">Shifted</tspan></text>');
+    const y = (t: string) => lines.nodes.find(n => (n.text || '').includes(t))?.bounds;
+    assert.ok(y('one') && y('two') && y('three') && y('one')!.y < y('two')!.y && y('two')!.y < y('three')!.y && y('Shifted')!.x > y('three')!.x + y('three')!.width + 10,
+        `tspan dy sets lines below one another, dx moves on from the text before; got ${JSON.stringify(['one', 'two', 'three', 'Shifted'].map(y))}`);
+    const children = await drawn('<path id="p" d="M10 80 L190 80"/><text><textPath href="#p">AlongPath</textPath></text><text x="10" y="40"><a href="#x">LinkedText</a></text>');
+    assert.ok(['AlongPath', 'LinkedText'].every(t => children.nodes.some(n => (n.text || '').includes(t))) && children.messages.some(m => m.includes('text along paths')), `text in a textPath and a link is drawn, the path's shape reported; got ${JSON.stringify(children.messages)}`);
+    const huge = await drawn('<rect width="1e999" height="10"/><path d="M0 0 L1e300 5"/><line x2="10" y2="10" stroke="red" stroke-width="1e999"/><g transform="scale(1e300)"><rect width="1" height="1"/></g><text x="10" y="50" font-size="1e999">Big</text><path d="M10 10 A 1e-200 1e-200 0 0 1 50 50" stroke="black"/><text x="10" y="90">StillHere</text>');
+    assert.ok(!/NaN|Infinity|\de[+-]\d/.test(huge.streams) && huge.nodes.some(n => (n.text || '').includes('StillHere')), 'numbers no page holds are held to finite ones, and what follows is drawn');
+    const long = await drawn(`<path stroke="black" d="M0 0${' L1 1'.repeat(100_000)}"/><text x="10" y="50">AfterPath</text>`);
+    assert.ok(!long.messages.some(m => m.startsWith('IMAGE_PROCESSING_FAILED')) && long.nodes.some(n => (n.text || '').includes('AfterPath')), `a path of 100,000 segments is drawn; got ${JSON.stringify(long.messages)}`);
+    const deep = await drawn('<g>'.repeat(200) + '<rect width="5" height="5"/>' + '</g>'.repeat(200) + '<g id="a"><use href="#b"/></g><g id="b"><use href="#a"/></g>');
+    assert.ok(deep.messages.some(m => m.includes('groups nested past')) && deep.messages.some(m => m.includes('inside itself')), `groups past the depth limit and a use cycle are reported; got ${JSON.stringify(deep.messages)}`);
+    // A use of text or a picture drawn ten thousand times: the text within the picture's bound on characters
+    // (reported past it), the picture embedded once.
+    const fan = (leaf: string, levels: number) => '<defs><g id="a0">' + leaf + '</g>' + Array.from({ length: levels }, (_, i) => `<g id="a${i + 1}">` + `<use href="#a${i}"/>`.repeat(10) + '</g>').join('') + `</defs><use href="#a${levels}"/>`;
+    const amplifiedRun = await withinTime(20_000, () => drawn(fan(`<text x="1" y="10">${'W'.repeat(4000)}</text>`, 4)));
+    const amplified = amplifiedRun.result;
+    assert.ok(amplifiedRun.within && amplified.messages.some(m => m.includes('text past the picture')), `text drawn by many uses is bounded and reported; got ${JSON.stringify(amplified.messages)} in ${amplifiedRun.ms}ms`);
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    const pictures = await OfficeGenerator.generate(ast(`<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">${fan(`<image width="5" height="5" href="data:image/png;base64,${png}"/>`, 3)}</svg>`), 'pdf', { pdfConfig: { engine: 'native' } } as any);
+    const imageObjects = Buffer.from(pictures.value as Uint8Array).toString('latin1').match(/\/Subtype\s*\/Image/g) || [];
+    // (Once: the picture and its alpha channel's mask.)
+    assert.ok(imageObjects.length <= 2, `a picture drawn a thousand times by use is embedded once; got ${imageObjects.length} image objects`);
+    // Hidden text is not drawn; a selector naming one class many times is that one class.
+    const hidden = await drawn('<text x="10" y="30" visibility="hidden">HIDDENTEXT</text><g visibility="hidden"><text x="10" y="60">HIDDENGROUP</text></g><text x="10" y="90">VISIBLETEXT</text>');
+    assert.ok(!hidden.nodes.some(n => /HIDDEN/.test(n.text || '')) && hidden.nodes.some(n => (n.text || '').includes('VISIBLETEXT')), 'text in visibility="hidden" is not drawn');
+    const classes = await drawn(`<style>${'.a'.repeat(5000)} { fill: #ff0000 }</style><rect class="a" width="50" height="50"/>`);
+    assert.ok(/1 0 0 rg/.test(classes.streams), 'a selector repeating one class matches it');
+
+    // A rule after a media query's block or an at-rule statement, !important declarations, and a gradient stop's
+    // colour from a rule are read as a browser reads them.
+    for (const body of ['<style>@media print{rect{fill:red}} rect{fill:#00ff00}</style><rect width="20" height="20"/>',
+        '<style>@import url(a.css); rect{fill:#00ff00}</style><rect width="20" height="20" fill="red"/>',
+        '<style>@import url(a;b.css); rect{fill:#00ff00}</style><rect width="20" height="20" fill="red"/>',
+        '<style>@import "a;b.css"; rect{fill:#00ff00}</style><rect width="20" height="20" fill="red"/>',
+        '<style>.s{stop-color:#00ff00}</style><defs><linearGradient id="g"><stop class="s" offset="0"/><stop class="s" offset="1"/></linearGradient></defs><rect width="20" height="20" fill="url(#g)"/>',
+        '<style>rect{fill:#00ff00 !important} #a{fill:red}</style><rect id="a" width="20" height="20" style="fill:blue"/>']) {
+        assert.ok(/0 1 0 rg/.test((await drawn(body)).streams), `an SVG's cascade draws green: ${body}`);
+    }
+    // A stylesheet of many at-rules is read in time in its length (each looked for its semicolon to the end).
+    const atRules = await withinTime(5000, () => drawn(`<style>${'@a{}'.repeat(60000)}</style><rect width="20" height="20" fill="#00ff00"/>`));
+    assert.ok(atRules.within, `a stylesheet of many at-rules is read quickly; took ${atRules.ms}ms`);
+    // Rules of ancestors (descendant and child combinators, as Mermaid and D3 write them) reach their elements.
+    for (const body of ['<style>#chart .node rect{fill:#00ff00}</style><g id="chart"><g class="node"><rect width="20" height="20" fill="red"/></g></g>',
+        '<style>.axis > path{fill:#00ff00}</style><g class="axis"><path d="M0 0H20V20z" fill="red"/></g>']) {
+        assert.ok(/0 1 0 rg/.test((await drawn(body)).streams), `a rule of ancestors draws green: ${body}`);
+    }
+    assert.ok(!/0 1 0 rg/.test((await drawn('<style>.axis > path{fill:#00ff00}</style><g class="axis"><g><path d="M0 0H20V20z" fill="red"/></g></g>')).streams), 'a child combinator matches a child alone');
+    // A switch draws its first child whose conditions hold, alone (a drawing's "cannot display" note was drawn over it).
+    const switched = await drawn('<switch><g requiredFeatures="http://www.w3.org/TR/SVG11/feature#Extensibility"/><text x="5" y="50">CANNOTDISPLAY</text></switch>'
+        + '<switch><foreignObject width="50" height="20"><p xmlns="http://www.w3.org/1999/xhtml">HTML</p></foreignObject><text x="5" y="80">FALLBACKLABEL</text></switch>');
+    assert.ok(!switched.nodes.some(n => /CANNOTDISPLAY/.test(n.text || '')) && switched.nodes.some(n => /FALLBACKLABEL/.test(n.text || '')), `a switch draws its first child that holds; got ${JSON.stringify(switched.nodes.map(n => n.text))}`);
+    // Text of an outline alone is drawn stroked; a picture keeps its aspect in its box; a nested svg with no size fills its viewport.
+    assert.ok(/1 Tr/.test((await drawn('<text x="5" y="50" fill="none" stroke="#00ff00" font-size="30">Outline</text>')).streams), 'outlined text is drawn stroked');
+    const widePng = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAADUlEQVR4nGP4zwAE/wEHAAH/4iOeWQAAAABJRU5ErkJggg==';
+    const fitted = await drawn(`<image width="100" height="100" href="data:image/png;base64,${widePng}"/>`);
+    assert.ok(/50 0 0 50 0 25 cm/.test(fitted.streams), 'a picture is fitted to its box keeping its aspect');
+    const marked = await drawn('<line x1="0" y1="10" x2="100" y2="10" stroke="black" marker-end="url(#m)"/>');
+    assert.ok(marked.messages.some(m => /markers/.test(m)), `markers are named; got ${JSON.stringify(marked.messages)}`);
+    // A label's halo (`paint-order: stroke`) is painted under its letters, its fill after it; a fill and stroke in
+    // their own order is one pass, the fill under. (The halo covered the letters.)
+    const haloDrawn = await drawn('<text x="5" y="50" fill="black" stroke="white" stroke-width="4" paint-order="stroke">Halo</text>'), halo = haloDrawn.streams;
+    assert.ok(/1 Tr[\s\S]*0 Tr/.test(halo) && !/2 Tr/.test(halo), 'a halo is stroked first, then filled');
+    // (Its halo's pass is text of none: the label reads once.)
+    assert.strictEqual(haloDrawn.nodes.map(n => n.text || '').join('').split('Halo').length - 1, 1, `a halo's label reads once; got ${JSON.stringify(haloDrawn.nodes.map(n => n.text))}`);
+    // (Its words in spans keep their spaces.)
+    const spanned = await drawn('<text x="5" y="50" fill="black" stroke="white" stroke-width="4" paint-order="stroke" font-size="12">Population <tspan font-weight="bold">12,345</tspan> people</text>');
+    assert.ok(spanned.nodes.map(n => n.text || '').join('').includes('Population 12,345 people'), `a halo's label in spans keeps its spaces; got ${JSON.stringify(spanned.nodes.map(n => n.text))}`);
+    const leading = await drawn('<text x="5" y="50" fill="black" stroke="white" stroke-width="4" paint-order="stroke" font-size="14">a<tspan> b</tspan><tspan> c </tspan>d</text>');
+    assert.ok(leading.nodes.map(n => n.text || '').join('').replace(/\s+/g, ' ').includes('a b c d'), `a halo's label of spans each starting with a space keeps them; got ${JSON.stringify(leading.nodes.map(n => n.text))}`);
+    assert.ok(/2 Tr/.test((await drawn('<text x="5" y="50" fill="black" stroke="white" stroke-width="4">Plain</text>')).streams), 'text filled and stroked is one pass, the fill under');
+    // A selector of a long run of blanks is read in linear time (a pattern around `>` took the square of the run).
+    const blanks = await withinTime(5_000, () => drawn(`<style>a${' '.repeat(100_000)}b{fill:red}</style><rect width="10" height="10"/>`));
+    assert.ok(blanks.within, `a selector of a long run of blanks is read quickly; took ${blanks.ms}ms`);
+}
+
+/**
+ * A PDF's lists are read whole: a bullet drawn as a shape (a disc, a ring, a square, as a browser
+ * draws `<ul>` markers) is a bullet, items spaced apart are one list, a multi-level list whose markers
+ * are set apart from their text (`1.1.2.` in a hanging indent) keeps its levels and wrapped lines, and
+ * a symbol font's private-use bullet is a bullet. They read as one list an item, or as paragraphs.
+ */
+async function testPdfListsReadWhole(): Promise<void> {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    const page = pdf.addPage([400, 600]);
+    let y = 560;
+    const line = (text: string, x = 60, size = 11) => { page.drawText(text, { x, y, size, font }); y -= size * 1.6 + 6; };
+    line('Shopping:', 40);
+    for (const item of ['Apples', 'Bread', 'Cheese']) { page.drawCircle({ x: 50, y: y + 4, size: 1.6, color: rgb(0, 0, 0) }); line(item); }
+    page.drawEllipse({ x: 70, y: y + 4, xScale: 1.6, yScale: 1.6, borderColor: rgb(0, 0, 0), borderWidth: 0.6 }); line('Green apples', 80);
+    page.drawRectangle({ x: 48.4, y: y + 2.4, width: 3.2, height: 3.2, color: rgb(0, 0, 0) }); line('Dairy');
+    line('Steps:', 40);
+    for (const [n, step] of [['1.', 'Wash'], ['2.', 'Slice'], ['3.', 'Serve']]) { page.drawText(n, { x: 45, y, size: 11, font }); line(step); }
+    line('Outline:', 40);
+    for (const [n, text, x] of [['1.', 'One', 45], ['1.1.', 'Two', 60], ['1.1.1.', 'Three', 75], ['1.1.2.', 'Four, a long item that wraps onto', 75]] as const) {
+        page.drawText(n, { x, y, size: 11, font });
+        page.drawText(text, { x: x + 60, y, size: 11, font });
+        y -= 14;
+    }
+    page.drawText('the line below it.', { x: 135, y, size: 11, font }); y -= 20;
+    line('Done.', 40);
+    const ast = await OfficeParser.parseOffice(Buffer.from(await pdf.save()), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const items = collectAllNodes(ast).filter(n => n.type === 'list').map(n => { const m = n.metadata as any; return [n.text, m.listType, m.indentation, m.marker ?? null, m.listId]; });
+    const ids = [...new Set(items.map(i => i[4]))];
+    assert.deepStrictEqual(items.map(i => i.slice(0, 4)), [
+        ['Apples', 'unordered', 0, null], ['Bread', 'unordered', 0, null], ['Cheese', 'unordered', 0, null], ['Green apples', 'unordered', 1, '◦'], ['Dairy', 'unordered', 0, '▪'],
+        ['Wash', 'ordered', 0, null], ['Slice', 'ordered', 0, null], ['Serve', 'ordered', 0, null],
+        ['One', 'ordered', 0, null], ['Two', 'ordered', 1, '1.1.'], ['Three', 'ordered', 2, '1.1.1.'], ['Four, a long item that wraps onto the line below it.', 'ordered', 2, '1.1.2.'],
+    ], `the lists are read whole; got ${JSON.stringify(items)}`);
+    assert.strictEqual(ids.length, 3, `each list is one list, its items spaced apart; got ${JSON.stringify(items.map(i => i[4]))}`);
+    assert.ok(!collectAllNodes(ast).some(n => n.type === 'paragraph' && /^(Apples|Wash|1\.1)/.test(n.text || '')), 'no item is left a paragraph');
+}
+
+/**
+ * An untagged PDF's headings are found by size and weight as a word processor sets them: a point or two
+ * larger than the text and bold, or bold at its size over a paragraph, levelled by the headings' own
+ * sizes; a drop cap, a bold lead-in, a bold table header row, a table of contents and a caption are not
+ * headings. LibreOffice's PDF of a document gave 2 of its 17 headings.
+ */
+async function testPdfHeadingsBySizeAndWeight(): Promise<void> {
+    const pdf = await PDFDocument.create();
+    const regular = await pdf.embedFont(StandardFonts.Helvetica), bold = await pdf.embedFont(StandardFonts.HelveticaBold), italic = await pdf.embedFont(StandardFonts.HelveticaOblique);
+    const page = pdf.addPage([500, 760]);
+    let y = 720;
+    const body = 'Body text runs across the page in sentences that fill the line from margin to margin, as prose does.';
+    const put = (text: string, font: any, size: number, x = 50, gapAfter = 6) => { page.drawText(text, { x, y, size, font }); y -= size * 1.25 + gapAfter; };
+    const paragraph = () => { put(body.slice(0, 70), regular, 11, 50, 2); put(body.slice(70), regular, 11, 50, 10); };
+    put('Report Title', regular, 24, 50, 12);
+    put('1. Introduction', bold, 13.5, 50, 4); paragraph();
+    put('1.1 Background', bold, 12.5, 50, 4); paragraph();
+    put('Scope', bold, 11, 50, 4); paragraph();
+    page.drawText('D', { x: 50, y: y - 20, size: 40, font: regular }); put('rop capped paragraph starts with a large letter and runs on.', regular, 11, 80, 2); put('It continues here.', regular, 11, 80, 24);
+    page.drawText('Lead-in.', { x: 50, y, size: 11, font: bold }); put(' The rest of the paragraph is regular text after it.', regular, 11, 95, 10);
+    page.drawText('Name', { x: 50, y, size: 11, font: bold }); put('Value', bold, 11, 250, 2);
+    page.drawText('Alpha', { x: 50, y, size: 11, font: regular }); put('1', regular, 11, 250, 10);
+    put('Contents ....................... 3', bold, 11, 50, 10);
+    put('Figure 1: a caption under a picture', italic, 11, 50, 10);
+    put('2. Methods', bold, 13.5, 50, 4); paragraph();
+    const ast = await OfficeParser.parseOffice(Buffer.from(await pdf.save()), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const headings = collectAllNodes(ast).filter(n => n.type === 'heading').map(n => [n.text, (n.metadata as any).level, (n.metadata as any).levelSource]);
+    assert.deepStrictEqual(headings, [['Report Title', 1, 'font-size'], ['1. Introduction', 2, 'font-size'], ['1.1 Background', 3, 'font-size'], ['Scope', 4, 'font-size'], ['2. Methods', 2, 'font-size']],
+        `the headings, levelled by their sizes, and nothing else; got ${JSON.stringify(headings)}`);
+    assert.ok(!collectAllNodes(ast).some(n => n.type === 'list' && /Introduction|Methods/.test(n.text || '')), 'a numbered heading is no list item');
+}
+
+/**
+ * A PDF's tables drawn with ruling lines are read from the lines: a table of two columns, a merged title
+ * row (colSpan), a cell spanning rows (rowSpan), an empty cell, a header whose cells wrap, and a table
+ * inside a cell. Read from their text alone they were missed, cut up or flattened. A table whose
+ * producer left rules out (partial borders) is not read as merged cells.
+ */
+/**
+ * PDFs of scripts, columns and lists as browsers and LibreOffice make them: a conjunct's lost width moves
+ * the rest of its line only (not the tables after it), right-to-left and Korean words keep their spaces,
+ * text in a font pdf.js gives no metrics keeps its place (no table takes it), bullets in a column beside
+ * text are bullets while a chart legend's keys in a row are none, a nested list continued after a
+ * paragraph keeps its level, and a row drawn as one string across a table's rules is cut at them.
+ */
+async function testPdfScriptsColumnsAndLists(): Promise<void> {
+    const read = async (file: string) => OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', file)), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as Promise<OfficeParserAST>;
+    const rowsOf = (t: OfficeContentNode) => (t.children ?? []).map(r => (r.children ?? []).map(c => (c.text || '').trim()));
+    const blocks = (ast: OfficeParserAST) => ast.content.flatMap(p => p.children ?? []);
+
+    const hindi = await read('hindi_tables_libreoffice.pdf');
+    const tables = collectAllNodes(hindi).filter(n => n.type === 'table');
+    assert.deepStrictEqual(rowsOf(tables[0]), [['Name', 'City', 'Score'], ['Asha', 'Pune', '91'], ['Ravi', 'Delhi', '78']], `a table after a line of Hindi keeps its columns; got ${JSON.stringify(rowsOf(tables[0]))}`);
+    const closing = blocks(hindi).find(n => (n.text || '').startsWith('Closing line'));
+    assert.ok(closing && closing.bounds!.x < 60, `a line after them starts where it is drawn; got ${closing?.bounds?.x}`);
+
+    const rtl = (await read('rtl_words_chrome.pdf')).content.map(p => p.text).join('\n');
+    // (In the order they are read, as pdftotext gives them: Chrome sets each word as a run of its own.)
+    assert.ok(rtl.includes('العربية لغة جميلة وهذا نص عربي') && rtl.includes('שלום עולם זה טקסט בעברית'), `right-to-left words keep their spaces, in reading order; got ${JSON.stringify(rtl.slice(0, 200))}`);
+
+    const scripts = await read('scripts_table_chrome.pdf');
+    const scriptText = blocks(scripts).filter(n => n.type === 'paragraph').map(n => n.text).join('\n');
+    assert.ok(scriptText.includes('한국어 텍스트') && scriptText.includes('क्षत्रिय श्री कृष्ण'), `text in fonts of no metrics keeps its place, its words spaced; got ${JSON.stringify(scriptText)}`);
+    const scriptTable = collectAllNodes(scripts).find(n => n.type === 'table')!;
+    assert.deepStrictEqual(rowsOf(scriptTable)[0], ['क्षत्रिय', 'العربية', '中文'], `the table takes its own cells' text alone; got ${JSON.stringify(rowsOf(scriptTable))}`);
+
+    const columnItems = collectAllNodes(await read('column_bullets_chrome.pdf')).filter(n => n.type === 'list').map(n => n.text);
+    assert.deepStrictEqual(columnItems, ['First right item', 'Second right item', 'Third right item', 'Fourth right item'], `bullets in a column beside text are its list's; got ${JSON.stringify(columnItems)}`);
+
+    const nested = collectAllNodes(await read('nested_list_continued_chrome.pdf')).filter(n => n.type === 'list').map(n => [n.text, (n.metadata as any).indentation]);
+    assert.deepStrictEqual(nested, [['Outer item one', 0], ['Outer item with a note', 0], ['Inner first', 1], ['Inner second', 1]], `a nested list after its item's paragraph keeps its level; got ${JSON.stringify(nested)}`);
+
+    // A legend's keys in a row, and a table row drawn as one string across its rules.
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    const page = pdf.addPage([500, 400]);
+    const black = rgb(0, 0, 0);
+    let x = 60;
+    for (const label of ['Series 1', 'Series 2', 'Series 3']) {
+        page.drawRectangle({ x, y: 352, width: 5, height: 5, color: rgb(0.2, 0.4, 0.8) });
+        page.drawText(label, { x: x + 9, y: 350, size: 10, font });
+        x += 9 + font.widthOfTextAtSize(label, 10) + 12;
+    }
+    for (const y of [300, 280, 260]) page.drawLine({ start: { x: 40, y }, end: { x: 280, y }, thickness: 0.75, color: black });
+    for (const lx of [40, 80, 200, 280]) page.drawLine({ start: { x: lx, y: 260 }, end: { x: lx, y: 300 }, thickness: 0.75, color: black });
+    page.drawText('No.', { x: 44, y: 286, size: 10, font }); page.drawText('Item', { x: 84, y: 286, size: 10, font }); page.drawText('Qty', { x: 204, y: 286, size: 10, font });
+    page.drawText('1.', { x: 44, y: 266, size: 10, font });
+    page.drawText('Apples' + ' '.repeat(Math.ceil((206 - 84 - font.widthOfTextAtSize('Apples', 10)) / font.widthOfTextAtSize(' ', 10))) + '10', { x: 84, y: 266, size: 10, font });
+    const drawn = await OfficeParser.parseOffice(Buffer.from(await pdf.save()), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.ok(!collectAllNodes(drawn).some(n => n.type === 'list') && !drawn.content[0].text!.includes('▪'), `a legend's keys in a row are no bullets; got ${JSON.stringify(drawn.content[0].text)}`);
+    const drawnTable = collectAllNodes(drawn).find(n => n.type === 'table');
+    assert.deepStrictEqual(drawnTable && rowsOf(drawnTable), [['No.', 'Item', 'Qty'], ['1.', 'Apples', '10']], `a row drawn as one string is cut at the table's rules; got ${JSON.stringify(drawnTable && rowsOf(drawnTable))}`);
+}
+
+async function testPdfRuledTables(): Promise<void> {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    const page = pdf.addPage([500, 700]);
+    const black = rgb(0, 0, 0);
+    // A grid's rules: horizontal at ys across [x0, x1], vertical at xs across [y0, y1] (page space, y up).
+    const hline = (y: number, x0: number, x1: number) => page.drawLine({ start: { x: x0, y }, end: { x: x1, y }, thickness: 0.75, color: black });
+    const vline = (x: number, y0: number, y1: number) => page.drawLine({ start: { x, y: y0 }, end: { x, y: y1 }, thickness: 0.75, color: black });
+    const text = (t: string, x: number, y: number) => page.drawText(t, { x, y, size: 10, font });
+    page.drawText('Before the tables.', { x: 40, y: 660, size: 11, font });
+    // A key/value table of two columns, ruled throughout.
+    for (const y of [640, 620, 600, 580]) hline(y, 40, 240);
+    for (const x of [40, 120, 240]) vline(x, 580, 640);
+    text('Width', 45, 626); text('120 mm', 125, 626); text('Height', 45, 606); text('80 mm', 125, 606); text('Weight', 45, 586); text('2.4 kg', 125, 586);
+    // A merged title row, a cell spanning two rows, an empty cell, and a table inside a cell.
+    for (const y of [540, 520, 500, 440, 420]) hline(y, 40, 400);
+    hline(480, 160, 400); // no rule under "Alpha": it spans two rows
+    vline(40, 420, 540); vline(400, 420, 540);
+    for (const x of [160, 280]) vline(x, 420, 520);
+    text('Quarterly figures', 180, 526);
+    text('Team', 45, 506); text('Member', 165, 506); text('Detail', 285, 506);
+    text('Alpha', 45, 470); text('Ann', 165, 486);
+    // The inner table, inset in the third column's cell (480 to 440).
+    for (const y of [475, 460, 445]) hline(y, 290, 390);
+    for (const x of [290, 340, 390]) vline(x, 445, 475);
+    text('Q1', 295, 464); text('10', 345, 464); text('Q2', 295, 449); text('12', 345, 449);
+    text('Bob', 165, 446);
+    text('Beta', 45, 426); text('Dee', 165, 426);
+    // A table with partial borders: an outer frame and a header rule, no rule between its columns below.
+    for (const y of [380, 365, 320]) hline(y, 40, 240);
+    vline(40, 320, 380); vline(240, 320, 380); vline(120, 365, 380);
+    text('Item', 45, 369); text('Count', 125, 369);
+    text('Books', 45, 352); text('1', 125, 352); text('Pens', 45, 337); text('3', 125, 337); text('Paper', 45, 322); text('9', 125, 322);
+    const ast = await OfficeParser.parseOffice(Buffer.from(await pdf.save()), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const shape = (t: OfficeContentNode): any => t.children!.map(r => r.children!.map(c => {
+        const m = c.metadata as any;
+        const inner = c.children?.find(x => x.type === 'table');
+        return [c.text, ...(m.colSpan ? [`cs${m.colSpan}`] : []), ...(m.rowSpan ? [`rs${m.rowSpan}`] : []), ...(inner ? [shape(inner)] : [])];
+    }));
+    const tables = ast.content[0].children!.filter(n => n.type === 'table');
+    assert.deepStrictEqual(shape(tables[0]), [[['Width'], ['120 mm']], [['Height'], ['80 mm']], [['Weight'], ['2.4 kg']]], 'a ruled table of two columns is read');
+    assert.deepStrictEqual(shape(tables[1]), [
+        [['Quarterly figures', 'cs3']],
+        [['Team'], ['Member'], ['Detail']],
+        [['Alpha', 'rs2'], ['Ann'], ['']],
+        [['Bob'], ['Q1 10\nQ2 12', [[['Q1'], ['10']], [['Q2'], ['12']]]]],
+        [['Beta'], ['Dee'], ['']],
+    ], `a merged title, a cell spanning rows, empty cells and a table inside a cell are read; got ${JSON.stringify(shape(tables[1]))}`);
+    assert.ok(!tables.slice(2).some(t => collectAllNodes({ content: [t] } as any).some(n => n.type === 'cell' && /Books[\s\S]*Pens/.test(n.text || ''))), 'a table with partial borders is not read as one merged cell');
+    assert.ok(!ast.content[0].children!.some(n => n.type === 'paragraph' && /^(Width|Team|Q1)/.test(n.text || '')), 'the tables\' text is in their cells, not the page\'s paragraphs');
+
+    // A box with rules between its rows and none between its columns (as spreadsheets print), and a table
+    // whose first column numbers its rows (`1.`, `2.`): read by their columns, a cell a column.
+    const second = await PDFDocument.create();
+    const font2 = await second.embedFont(StandardFonts.Helvetica);
+    const p2 = second.addPage([500, 700]);
+    const t2 = (t: string, x: number, y: number) => p2.drawText(t, { x, y, size: 10, font: font2 });
+    p2.drawText('Quarterly results by region.', { x: 40, y: 660, size: 11, font: font2 });
+    for (const y of [640, 622, 604, 586, 568]) p2.drawLine({ start: { x: 40, y }, end: { x: 440, y }, thickness: 0.75, color: black });
+    for (const x of [40, 440]) p2.drawLine({ start: { x, y: 568 }, end: { x, y: 640 }, thickness: 0.75, color: black });
+    [['Region', 'Revenue', 'Cost', 'Margin'], ['North', '1200', '800', '400'], ['South', '950', '700', '250'], ['East', '1430', '1000', '430']]
+        .forEach((row, r) => row.forEach((v, c) => t2(v, 45 + c * 100, 628 - r * 18)));
+    p2.drawText('The store room, counted on Monday.', { x: 40, y: 520, size: 11, font: font2 });
+    [['No.', 'Item', 'Quantity', 'Location'], ['1.', 'Apples', '30', 'Shelf A'], ['2.', 'Bananas', '12', 'Shelf B'], ['3.', 'Cherries', '7', 'Shelf C']]
+        .forEach((row, r) => row.forEach((v, c) => t2(v, [45, 110, 220, 320][c], 500 - r * 16)));
+    const read2 = await OfficeParser.parseOffice(Buffer.from(await second.save()), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const rowsOf = (t: OfficeContentNode) => t.children!.map(r => r.children!.map(c => c.text));
+    const [boxed, numbered] = read2.content[0].children!.filter(n => n.type === 'table');
+    assert.deepStrictEqual(boxed && rowsOf(boxed)[1], ['North', '1200', '800', '400'], `a box ruled between its rows alone is read by its columns; got ${boxed && JSON.stringify(rowsOf(boxed))}`);
+    assert.deepStrictEqual(numbered && rowsOf(numbered), [['No.', 'Item', 'Quantity', 'Location'], ['1.', 'Apples', '30', 'Shelf A'], ['2.', 'Bananas', '12', 'Shelf B'], ['3.', 'Cherries', '7', 'Shelf C']], `a table's numbered first column keeps its cells; got ${numbered && JSON.stringify(rowsOf(numbered))}`);
+    // A merged title row keeps its span: a run in a merged cell is not cut at the grid lines under it.
+    const titled = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'merged_title_table.pdf')), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const titledTable = collectAllNodes(titled).find(n => n.type === 'table');
+    assert.ok(titledTable && (titledTable.children![0].children![0].metadata as any)?.colSpan === 3 && titledTable.children![0].children![0].text === 'Quarterly results by region'
+        && titledTable.children![1].children!.map(c => c.text).join('|') === 'North|South|East', `a ruled table's merged title row stays one cell over its columns; got ${JSON.stringify(titledTable?.text)}`);
+    // Chrome sets each word as a run of its own: right-to-left lines are read last word first on the page,
+    // and a word space after an Indic conjunct (whose width pdf.js lost) is kept.
+    const scripts = String((await (await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'scripts_words_chrome.pdf')), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).to('text')).value);
+    for (const line of ['שלום עולם זה טקסט בעברית עם כמה מילים', 'مرحبا بالعالم هذا نص عربي فيه كلمات كثيرة', 'தமிழ் மொழி ஒரு அழகான மொழி', 'বাংলা ভাষা একটি সুন্দর ভাষা']) assert.ok(scripts.includes(line), `a Chrome PDF reads "${line}"; got ${JSON.stringify(scripts.slice(0, 400))}`);
+
+    // Lines are read in their direction: a line of English with a Hebrew phrase keeps its order and its
+    // list items apart; brackets, quotes and numbers sit where they are read; spaces are the page's.
+    // (The blocks' text, as read: text output sets a PDF's lines out by their places.)
+    const readText = async (file: string) => collectAllNodes(await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', file)), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST)
+        .filter(n => ['paragraph', 'heading', 'list', 'cell'].includes(n.type)).map(n => n.text || '').join('\n');
+    const mixed = await readText('bidi_mixed_chrome.pdf');
+    for (const line of ['The word (שלום עולם) means hello world.', 'See "שלום עולם" here.', 'Item שלום, עולם, גדול end.', 'טלפון: 03-1234567']) assert.ok(mixed.includes(line), `a mixed line reads "${line}"; got ${JSON.stringify(mixed.slice(0, 500))}`);
+    // A line's direction is its column's and its paragraph's: a baseline across two columns is two lines, a
+    // line set against one edge of the page says nothing on a page of one direction's letters, and a table's
+    // column of dashes is no list's markers; a right-to-left page's two columns are read one after the other;
+    // a right-to-left line's last full stop beside an English word is read last.
+    const bidiLines: [string, string[]][] = [
+        ['columns_bidi_words_chrome.pdf', ['The museum guide said ברוכים הבאים to every group, then switched to English for the tour of the old city walls.', 'The final line has the words בית ספר in it, and then a few more English words to finish.']],
+        ['bilingual_columns_libreoffice.pdf', ['סעיף 2. כל מחלוקת תוכרע בתל אביב לפי דיני מדינת ישראל (State of Israel), ולבתי המשפט שם תהיה סמכות ייחודית.']],
+        ['indented_bidi_libreoffice.pdf', ['This indented quotation is justified, and it mentions the greeting שלום עליכם in the middle of a long sentence']],
+        ['right_aligned_bidi_chrome.pdf', ['Source: עיתון הארץ, page 12']],
+        ['dash_column_table_libreoffice.pdf', ['שלום (shalom)', 'לילה טוב (laila tov)']],
+        ['hebrew_columns_libreoffice.pdf', ['הפסקה הראשונה מציגה את הנושא במילים פשוטות בעברית שממלאות את הטור משוליים לשוליים לאורך כמה שורות של טקסט.', 'השלט בחנות אמר Open Monday to Friday מעל הדלת, והמחיר היה 25 שקלים לספר בכריכה רכה, במזומן בלבד.']],
+        ['hebrew_punctuation_chrome.pdf', ['שלב 3: לחצו על OK.', 'שלום is how you say hello in Hebrew.']],
+    ];
+    for (const [file, expected] of bidiLines) {
+        const read = await readText(file);
+        for (const line of expected) assert.ok(read.includes(line), `${file} reads "${line}"; got ${JSON.stringify(read.slice(0, 600))}`);
+    }
+    // A borderless table read right to left is a table: its columns by their cells' right edges, a cell's text
+    // wrapped onto another line its own (a row of one cell ended the table, read as loose paragraphs).
+    const rtlTable = collectAllNodes(await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'hebrew_table_borderless_libreoffice.pdf')), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST);
+    const rtlCells = rtlTable.filter(n => n.type === 'cell').map(n => n.text);
+    assert.ok(rtlTable.some(n => n.type === 'table') && rtlCells.includes('מעבד תמלילים (גרסה 2021)') && rtlCells.includes('עורך מסמכים בדפדפן Chrome') && rtlCells.includes('Notepad'), `a borderless right-to-left table with wrapped cells is read as one; got ${JSON.stringify(rtlCells)}`);
+    // Paragraphs are read whole: a quotation's lines, lines beside a picture and ragged lines whose next word is
+    // wide stop short of the block's widest line and are no paragraph's end; a two-column paper set with a
+    // narrow gutter is read column by column (it was read across, line by line); English paragraphs in a Hebrew
+    // page keep their lines. Each of these documents' paragraphs starts "P<n>.".
+    const authored = async (file: string) => {
+        const blocks = (await readText(file)).split('\n').filter(t => t.trim());
+        return { blocks, apart: blocks.filter(t => !/^P\d+\./.test(t)), joined: blocks.filter(t => (t.match(/\bP\d+\./g) || []).length > 1) };
+    };
+    for (const [file, pageBreaks] of [['indented_quote_libreoffice.pdf', 0], ['text_beside_picture_libreoffice.pdf', 0], ['ragged_prose_libreoffice.pdf', 3], ['two_columns_narrow_latex.pdf', 5]] as const) {
+        const read = await authored(file);
+        // (A paragraph a page break cuts reads as two.)
+        assert.ok(read.apart.length <= pageBreaks && !read.joined.length, `${file}: each paragraph is read whole; got ${read.apart.length} pieces and ${read.joined.length} joined: ${JSON.stringify([...read.apart, ...read.joined].slice(0, 4))}`);
+    }
+    // A form's labels and values beside one another keep their rows, and a paragraph across the page after two
+    // columns stays whole after them.
+    const form = (await readText('form_labels_libreoffice.pdf')).split('\n');
+    assert.ok(!form.some(t => t.includes('Applicant full legal name') && t.includes('Street address of residence')), `a form's labels are not read as a column apart from their values; got ${JSON.stringify(form.slice(0, 4))}`);
+    const afterColumns = (await readText('columns_then_paragraph_libreoffice.pdf')).split('\n').filter(t => t.trim());
+    assert.ok(/^CLOSING full width paragraph/.test(afterColumns.at(-1) ?? '') && afterColumns.filter(t => t.includes('CLOSING')).length === 1, `a paragraph across the page after two columns is read whole after them; got ${JSON.stringify(afterColumns.slice(-3))}`);
+    const englishInHebrew = await authored('english_in_hebrew_libreoffice.pdf');
+    assert.ok(!englishInHebrew.joined.length && englishInHebrew.blocks.filter(t => /^P\d+\./.test(t)).length === 8, `English paragraphs in a Hebrew page keep their lines; got ${JSON.stringify(englishInHebrew.blocks.map(t => t.slice(0, 30)))}`);
+    // A borderless table's sparse rows stay rows, and the text under it stays under it.
+    const tableRows = async (file: string) => collectAllNodes(await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', file)), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).filter(n => n.type === 'row').map(n => n.text);
+    assert.deepStrictEqual(await tableRows('sparse_table_libreoffice.pdf'), ['Item Qty Price Supplier', 'Apples 3 1.00 Acme', 'Bananas 0.50', 'Cherries 12 4.25 Bolt', 'Dates Corex', 'Figs 7 2.10 Acme', 'Grapes 9'], 'a sparse row is a row of its own');
+    const underRows = await tableRows('table_then_text_libreoffice.pdf');
+    assert.ok(underRows.at(-1) === 'West 880 1%' && (await readText('table_then_text_libreoffice.pdf')).includes('Source: internal sales data.'), `the text under a table stays out of it; got ${JSON.stringify(underRows)}`);
+    // Chinese and Japanese lines are joined without a space.
+    const cjk = await readText('cjk_wrapped_chrome.pdf');
+    assert.ok(cjk.includes('来年度の予算と計画') && cjk.includes('研讨会很有用'), `wrapped CJK lines join without a space; got ${JSON.stringify(cjk.slice(0, 200))}`);
+    // Paragraphs set with neither space between them nor an indent are read apart where a line stops short.
+    const flush = (await readText('paragraphs_flush_libreoffice.pdf')).split('\n').filter(t => /^Paragraph \d+:/.test(t));
+    assert.ok(flush.length >= 12, `paragraphs set flush are read apart; got ${flush.length}`);
+    const numbers = await readText('bidi_numbers_chrome.pdf');
+    for (const line of ['הספר (מהדורה שנייה) יצא לאור', 'في عام 2026 افتتح المكتب الجديد', 'الكتاب (الطبعة الثانية) صدر']) assert.ok(numbers.includes(line), `a right-to-left line reads "${line}"; got ${JSON.stringify(numbers.slice(0, 500))}`);
+    const listed = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'lists_rtl_items_libreoffice.pdf')), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const items = collectAllNodes(listed).filter(n => n.type === 'list').map(n => (n.text || '').trim());
+    assert.ok(['First English item', 'שלום עולם גדול מאוד', 'مرحبا بالعالم الكبير', 'Fourth English item', 'Alpha step', 'שלב שני בעברית', 'Gamma step'].every(t => items.includes(t)), `an English list's right-to-left items stay items of their own; got ${JSON.stringify(items)}`);
+    assert.ok((await readText('indic_conjunct_spaces_chrome.pdf')).includes('க்ஷ ஸ்ரீ கற்'), 'a conjunct joined by a virama is one cluster: the space after it is kept');
+    // A line reads as its paragraph does: one with a product's name at an edge, an English sentence with a
+    // Hebrew word at an edge or a "(a)" or "1." at its end, a Hebrew list's item mostly in Latin letters.
+    const edges = await readText('bidi_edges_chrome.pdf');
+    for (const line of ['Microsoft Word הוא מעבד התמלילים הנפוץ ביותר של Microsoft', 'שלום means hello and the word for world is עולם', 'The Hebrew word שלום is listed under (a)', 'Option שלום was chosen, see 1.']) assert.ok(edges.includes(line), `a line reads "${line}"; got ${JSON.stringify(edges.slice(0, 600))}`);
+    assert.ok((await readText('hebrew_document_chrome.pdf')).includes('Microsoft Office הוא חבילה'), 'a Hebrew list\'s item in mostly Latin letters reads as its list does');
+    // A superscript a little larger than four fifths of its line (Chrome's) stays in its line.
+    const sup = await readText('superscripts_chrome.pdf');
+    assert.ok(sup.includes('See the note1 on the next page.') && sup.includes('ראו הערה1 בעמוד הבא'), `a superscript stays in its line; got ${JSON.stringify(sup.slice(0, 300))}`);
+    const supRuns = collectAllNodes(await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'superscripts_chrome.pdf')), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST)
+        .filter(n => n.type === 'text' && (n as any).formatting?.superscript).map(n => (n.text || '').trim());
+    assert.ok(supRuns.includes('1') && supRuns.includes('2'), `a superscript set at five sixths of its line's size is marked; got ${JSON.stringify(supRuns)}`);
+    // Laid out as the page is, a right-to-left run's space, drawn at its left edge, still sets it apart from the
+    // run it touches there.
+    const laidOut = async (file: string) => String((await (await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', file)), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).to('text')).value);
+    const edgesLaid = await laidOut('bidi_edges_chrome.pdf'), supLaid = await laidOut('superscripts_chrome.pdf');
+    const columnsLaid = await laidOut('hebrew_columns_libreoffice.pdf');
+    assert.ok(edgesLaid.includes('Microsoft הוא') && edgesLaid.includes('Android פרסמה') && supLaid.includes('בעמוד הבא הערה') && !columnsLaid.includes('לכמהGoogle'), `laid-out text keeps the space at a right-to-left run's edge; got ${JSON.stringify([edgesLaid.slice(0, 300), supLaid.slice(0, 300)])}`);
+
+}
+
+/**
+ * A document's columns are read (Word's `w:cols`, a continuous section that runs on on the page, ODF
+ * page layouts' and sections' columns: PageSetup.columns, a 'section' break), laid out by the native PDF
+ * engine (text running from column to column, a section a continuous break ends balanced, a line
+ * between where drawn), and written by DOCX, ODT, RTF and LaTeX. Two-column sections printed as one.
+ */
+async function testColumns(): Promise<void> {
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const lorem = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.';
+    const para = (text: string) => `<w:p><w:r><w:t>${text}</w:t></w:r></w:p>`;
+    const sect = (cols: string, type = '') => `<w:sectPr>${type}<w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/>${cols}</w:sectPr>`;
+    const body = para('Title across the page') + `<w:p><w:pPr>${sect('<w:cols w:space="720"/>')}</w:pPr><w:r><w:t>Intro in one column.</w:t></w:r></w:p>`
+        + Array.from({ length: 6 }, (_, i) => para(`Column paragraph ${i + 1}. ${lorem}`)).join('')
+        + `<w:p><w:pPr>${sect('<w:cols w:num="2" w:space="720" w:sep="1"/>', '<w:type w:val="continuous"/>')}</w:pPr></w:p>`
+        + para('After, in one column again.') + sect('<w:cols w:space="720"/>', '<w:type w:val="continuous"/>');
+    const docx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${W}><w:body>${body}</w:body></w:document>`),
+    }));
+    const ast = await OfficeParser.parseOffice(docx, { fileType: 'docx', includeBreakNodes: true } as any) as OfficeParserAST;
+    const breaks = ast.content.filter(n => n.type === 'break').map(n => { const m = n.metadata as any; return [m.breakType, m.section, m.pageSetup?.columns ?? null]; });
+    assert.deepStrictEqual(breaks, [['section', 1, { count: 2, gap: 36, separator: true }], ['section', 2, null]], 'continuous sections are section breaks carrying their columns');
+
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.strictEqual(back.content.filter(n => n.type === 'page').length, 1, 'a short section in columns stays on its page');
+    // The columns' lines: those between the intro and the paragraph after, left and right of the page's middle.
+    const lines = collectAllNodes(back).filter(n => n.type === 'text' && n.bounds && !/^(Title|Intro|After)/.test(n.text || '')).map(n => n.bounds!);
+    const left = lines.filter(b => b.x < 300), right = lines.filter(b => b.x > 300);
+    const top = (bs: typeof lines) => Math.min(...bs.map(b => b.y)), end = (bs: typeof lines) => Math.max(...bs.map(b => b.y + b.height));
+    assert.ok(left.length && right.length && Math.abs(top(left) - top(right)) < 3, `the text runs from the left column into the right, both starting level; got ${JSON.stringify([top(left), top(right)])}`);
+    assert.ok(Math.abs(end(left) - end(right)) < 30, `balanced columns end within a line or two of each other; got ${JSON.stringify([end(left), end(right)])}`);
+    const after = collectAllNodes(back).find(n => n.type === 'text' && (n.text || '').startsWith('After'))!.bounds!;
+    assert.ok(after.x < 120 && after.y > Math.max(end(left), end(right)) && after.y < 400, `the section after starts under the columns, across the page; got ${JSON.stringify(after)}`);
+
+    const written = docxParts((await OfficeGenerator.generate(ast, 'docx')).value as Uint8Array)['word/document.xml'];
+    assert.ok(/<w:sectPr><w:type w:val="continuous"\/>[^]*?<w:cols w:num="2" w:space="720" w:sep="1"\/>/.test(written), 'DOCX: the section in columns is a continuous section of them');
+    const odtParts = unzipSync(new Uint8Array((await OfficeGenerator.generate(ast, 'odt')).value as Uint8Array));
+    const content = strFromU8(odtParts['content.xml']);
+    assert.ok(/style:family="section"><style:section-properties><style:columns fo:column-count="2" fo:column-gap="36pt"><style:column-sep/.test(content) && /<text:section [^>]*>[^]*Column paragraph 6[^]*<\/text:section>/.test(content), 'ODT: the columns are a section of their own');
+    const odtBack = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(ast, 'odt')).value as Uint8Array), { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+    assert.deepStrictEqual(odtBack.content.filter(n => n.type === 'break').map(n => (n.metadata as any).pageSetup?.columns?.count ?? 1), [2, 1], 'ODT: its column section reads back');
+    assert.ok(/\\sect\\sectd\\sbknone(?:\\[a-z]+\d*)*?\\cols2\\colsx720\\linebetcol/.test(String((await OfficeGenerator.generate(ast, 'rtf')).value)), 'RTF: a section of two columns');
+    const tex = String((await OfficeGenerator.generate(ast, 'tex')).value);
+    assert.ok(/\\usepackage\{multicol\}/.test(tex) && /\\begin\{multicols\}\{2\}[^]*Column paragraph 6[^]*\\end\{multicols\}/.test(tex), 'LaTeX: the columns are a multicols');
+
+    // A footnote cited in the second column goes under the lowest line of both columns (else to the next page).
+    const P = (text: string, extra: any = {}) => ({ type: 'paragraph', children: [{ type: 'text', text, ...extra }] });
+    const columnsOf = (columns: any, content: any[]) => ({ type: 'docx', metadata: { pageSetup: { columns } }, attachments: [], content }) as any;
+    const pdfRead = async (doc: any, extra: any = {}) => {
+        const out = await OfficeGenerator.generate(doc, 'pdf', { pdfConfig: { engine: 'native' }, ...extra } as any);
+        return { out, read: await OfficeParser.parseOffice(Buffer.from(out.value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST };
+    };
+    const many = Array.from({ length: 40 }, (_, i) => P(`Para ${i}. ${lorem}`));
+    many[22] = P('CITES NOTE here. ' + lorem, { notes: [{ type: 'note', metadata: { noteType: 'footnote' }, children: [P('FOOTNOTE BODY ' + lorem + ' ' + lorem)] }] });
+    const noted = (await pdfRead(columnsOf({ count: 2, gap: 18 }, many))).read;
+    for (const page of noted.content) {
+        const texts = collectAllNodes({ ...noted, content: [page] }).filter(n => n.type === 'text' && n.bounds);
+        const note = texts.find(n => (n.text || '').includes('FOOTNOTE BODY'));
+        if (!note) continue;
+        const body = texts.filter(n => /^Para |CITES/.test(n.text || ''));
+        assert.ok(body.every(n => n.bounds!.y + n.bounds!.height <= note.bounds!.y + 1), 'a footnote cited in a column is drawn under every column\'s text, not over it');
+    }
+    assert.ok(collectAllNodes(noted).some(n => (n.text || '').includes('FOOTNOTE BODY')), 'the footnote is drawn');
+    // Columns of unequal widths: a paragraph and a table running on into the narrow one are as wide as it.
+    const table = { type: 'table', children: Array.from({ length: 30 }, (_, r) => ({ type: 'row', children: [0, 1, 2].map(c => ({ type: 'cell', children: [P(`r${r}c${c} some longer words in a cell`)] })) })) };
+    for (const content of [[...many.slice(0, 18).map((p, i) => i === 17 ? P('LONG ' + Array.from({ length: 12 }, () => lorem).join(' ')) : p)], [...many.slice(0, 17), table]]) {
+        const { read } = await pdfRead(columnsOf({ count: 2, gap: 18, widths: [400, 100] }, content));
+        const past = collectAllNodes(read).filter(n => n.type === 'text' && n.bounds && n.bounds.x + n.bounds.width > 595.28 - 30);
+        assert.strictEqual(past.length, 0, `text running on into a narrower column is laid out at its width; ${past.length} past the page's margin`);
+    }
+    // Balancing a section measures it without asking onNode again or warning twice.
+    const balanced = [P('Title'), { type: 'break', metadata: { breakType: 'section', pageSetup: { columns: { count: 2, gap: 18 } } } }, P('One'), P('Two'),
+        { type: 'image', metadata: { attachmentName: 'missing.png' } }, { type: 'break', metadata: { breakType: 'section', pageSetup: {} } }, P('After')];
+    const asked = new Map<unknown, number>();
+    const { out: balancedOut } = await pdfRead({ type: 'docx', metadata: {}, attachments: [], content: balanced }, { onNode: (n: unknown) => { asked.set(n, (asked.get(n) ?? 0) + 1); return undefined; } });
+    assert.ok([...asked.values()].every(v => v === 1) && (balancedOut.messages || []).filter((m: any) => m.code === 'IMAGE_PROCESSING_FAILED').length === 1, 'a balanced section asks onNode once a node and warns once');
+    // LaTeX: a table in columns closes them for itself (multicols takes no longtable, and a tabular there ran off the
+    // page); a page break ends and reopens the columns; a section break inside a table cell opens none there.
+    const texCols = String((await OfficeGenerator.generate(columnsOf({ count: 2, gap: 18 }, [P('Intro'), { ...table, children: table.children.slice(0, 5) }, { type: 'break', metadata: { breakType: 'page' } }, P('Next page')]), 'tex')).value);
+    const inCols = texCols.slice(texCols.indexOf('\\begin{multicols}'));
+    assert.ok(/\\end\{multicols\}\}\s*\\begin\{longtable\}/.test(inCols) && !/\\begin\{multicols\}\{2\}[^]*\\begin\{tabular\}[^]*\\end\{multicols\}/.test(inCols.replace(/\\begin\{longtable\}[^]*?\\end\{longtable\}/g, '')) && /\\end\{multicols\}\}\n\\clearpage\n\{[^\n]*\\begin\{multicols\}\{2\}/.test(inCols), 'LaTeX: a table in columns closes them for itself, a page break ends and reopens them');
+    const texCell = String((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [P('x'), { type: 'break', metadata: { breakType: 'section', pageSetup: { columns: { count: 2, gap: 10 } } } }, P('y')] }] }] }] } as any, 'tex')).value);
+    assert.ok(!texCell.includes('multicols'), 'LaTeX: a section break inside a table cell opens no columns there');
+    // ODT: columns of their own widths read back; a section inside a table cell is read.
+    // (On a page whose text width holds them and their gaps: a column's width is a share of that width.)
+    const widthsDoc = { type: 'docx', metadata: { pageSetup: { width: 830, height: 600, margin: { top: 72, right: 72, bottom: 72, left: 72 }, columns: { count: 3, gap: 18, widths: [100, 200, 350] } } }, attachments: [], content: [P('Wide'), P('Text')] } as any;
+    const widthsBack = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(widthsDoc, 'odt')).value as Uint8Array), { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+    assert.deepStrictEqual(widthsBack.metadata.pageSetup?.columns?.widths, [100, 200, 350], 'ODT: columns of their own widths read back');
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"';
+    const sectionInCell = Buffer.from(zipSync({ mimetype: strToU8('application/vnd.oasis.opendocument.text'),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:body><office:text><table:table><table:table-column/><table:table-row><table:table-cell><text:p>x</text:p><text:section text:name="S1"><text:p>SECTION IN CELL</text:p></text:section><text:list><text:list-item><text:p>LIST IN CELL</text:p></text:list-item></text:list></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>`) }));
+    const cellText = JSON.stringify(await OfficeParser.parseOffice(sectionInCell, { fileType: 'odt' } as any));
+    assert.ok(cellText.includes('SECTION IN CELL') && cellText.includes('LIST IN CELL'), 'ODT: a section and a list inside a table cell are read');
+
+    // A section on a page of its own (landscape, its own columns) keeps it through ODT: a master page of its own.
+    const landscapeDoc = { type: 'docx', metadata: { pageSetup: { width: 612, height: 792, margin: { top: 72, right: 72, bottom: 72, left: 72 } } }, attachments: [], content: [
+        { type: 'paragraph', children: [{ type: 'text', text: 'Portrait first.' }] },
+        { type: 'break', metadata: { breakType: 'page', section: 1, pageSetup: { width: 792, height: 612, margin: { top: 72, right: 72, bottom: 72, left: 72 }, columns: { count: 2, gap: 36 } } } },
+        { type: 'paragraph', children: [{ type: 'text', text: 'Landscape after.' }] },
+    ] } as any;
+    const landOdt = Buffer.from((await OfficeGenerator.generate(landscapeDoc, 'odt')).value as unknown as Uint8Array);
+    const landBack = await OfficeParser.parseOffice(landOdt, { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+    const landBreak = landBack.content.find(n => n.type === 'break' && (n.metadata as any)?.pageSetup?.width === 792);
+    assert.ok(landBreak && (landBreak.metadata as any).pageSetup.height === 612 && (landBreak.metadata as any).pageSetup.columns?.count === 2, `odt: a landscape section of two columns keeps its page; got ${JSON.stringify(landBack.content.filter(n => n.type === 'break').map(n => n.metadata))}`);
+
+    // A table in a section of columns, long or short (one of tall rows ran off the page too): the columns close
+    // for it (a longtable across the page), and open again after.
+    const tableRows = (n: number, tag: string) => ({ type: 'table', children: Array.from({ length: n }, (_, i) => ({ type: 'row', children: [{ type: 'cell', children: [{ type: 'paragraph', children: [{ type: 'text', text: `${tag}${i}` }] }] }] })) });
+    const inColumns = (n: number) => ({ type: 'docx', metadata: {}, attachments: [], content: [{ type: 'break', metadata: { breakType: 'section', section: 1, pageSetup: { columns: { count: 2, gap: 18 } } } }, { type: 'paragraph', children: [{ type: 'text', text: 'Before' }] }, tableRows(n, 'R'), { type: 'paragraph', children: [{ type: 'text', text: 'AfterTable' }] }] }) as any;
+    const longTex = String((await OfficeGenerator.generate(inColumns(90), 'tex')).value);
+    assert.ok(/\\end\{multicols\}\}\s*\\begin\{longtable\}[^]*R89[^]*\\end\{longtable\}\s*\{\\setlength\{\\columnsep\}\{18pt\}\\begin\{multicols\}\{2\}[^]*AfterTable/.test(longTex), 'LaTeX: a long table closes the columns, runs across the page, and they open again after it');
+    const shortTex = String((await OfficeGenerator.generate(inColumns(5), 'tex')).value);
+    assert.ok(/\\end\{multicols\}\}\s*\\begin\{longtable\}[^]*R4[^]*\\end\{longtable\}\s*\{\\setlength\{\\columnsep\}\{18pt\}\\begin\{multicols\}\{2\}[^]*AfterTable/.test(shortTex), 'LaTeX: a short table closes the columns too (one of tall rows ran off the page)');
+
+    // Each section's own header and footer (a section with none takes on the one before it, as Word does).
+    const hfPart = (tag: 'hdr' | 'ftr', text: string) => `<?xml version="1.0"?><w:${tag} ${W}>${para(text)}</w:${tag}>`;
+    const sectionsWithHeaders = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+            + ['header1', 'header2', 'header3'].map(n => `<Override PartName="/word/${n}.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>`).join('') + ['footer1', 'footer2'].map(n => `<Override PartName="/word/${n}.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>`).join('') + '</Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+        'word/_rels/document.xml.rels': strToU8(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${['h1', 'h2', 'h3'].map(id => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header${id.slice(1)}.xml"/>`).join('')}<Relationship Id="f1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/><Relationship Id="f2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer2.xml"/></Relationships>`),
+        'word/document.xml': strToU8(`<?xml version="1.0"?><w:document ${W}><w:body>${para('Section A')}<w:p><w:pPr><w:sectPr><w:headerReference w:type="default" r:id="h1"/><w:footerReference w:type="default" r:id="f1"/><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:pPr></w:p>`
+            + `${para('Section B')}<w:p><w:pPr><w:sectPr><w:headerReference w:type="default" r:id="h2"/><w:footerReference w:type="default" r:id="f2"/><w:pgSz w:w="15840" w:h="12240" w:orient="landscape"/></w:sectPr></w:pPr></w:p>${para('Section C')}<w:sectPr><w:headerReference w:type="default" r:id="h3"/><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:body></w:document>`),
+        'word/header1.xml': strToU8(hfPart('hdr', 'HEADER-A')), 'word/header2.xml': strToU8(hfPart('hdr', 'HEADER-B')), 'word/header3.xml': strToU8(hfPart('hdr', 'HEADER-C')),
+        'word/footer1.xml': strToU8(hfPart('ftr', 'FOOTER-A')), 'word/footer2.xml': strToU8(hfPart('ftr', 'FOOTER-B')),
+    }));
+    const sectioned = await OfficeParser.parseOffice(sectionsWithHeaders, { fileType: 'docx', includeBreakNodes: true } as any) as OfficeParserAST;
+    // Each writer's pages by section: which header and footer each section's pages show, read back.
+    const furnitureBySection = (ast: OfficeParserAST) => {
+        const own = (list: OfficeContentNode[] | undefined, section: number) => {
+            for (let s = section; s >= 0; s--) { const hit = (list ?? []).find(n => ((n.metadata as any)?.section ?? 0) === s && ((n.metadata as any)?.type ?? 'default') === 'default'); if (hit) return (hit.text || collectAllNodes({ content: [hit] } as any).map(n => n.text).join('')).trim(); }
+            return '';
+        };
+        const sections = 1 + ast.content.filter(n => n.type === 'break' && typeof (n.metadata as any)?.section === 'number').length;
+        return Array.from({ length: sections }, (_, i) => `${own(ast.auxiliary?.headers, i)}/${own(ast.auxiliary?.footers, i)}`);
+    };
+    assert.deepStrictEqual(furnitureBySection(sectioned), ['HEADER-A/FOOTER-A', 'HEADER-B/FOOTER-B', 'HEADER-C/FOOTER-B'], 'DOCX: each section reads its own header and footer');
+    for (const format of ['docx', 'odt', 'rtf'] as const) {
+        const out = (await OfficeGenerator.generate(sectioned, format)).value as any;
+        const read = await OfficeParser.parseOffice(typeof out === 'string' ? Buffer.from(out) : Buffer.from(out), { fileType: format, includeBreakNodes: true } as any) as OfficeParserAST;
+        assert.deepStrictEqual(furnitureBySection(read), ['HEADER-A/FOOTER-A', 'HEADER-B/FOOTER-B', 'HEADER-C/FOOTER-B'], `${format}: each section keeps its own header and footer`);
+        const pages = read.content.filter(n => n.type === 'break' && typeof (n.metadata as any)?.section === 'number').map(n => (n.metadata as any).pageSetup?.width);
+        assert.deepStrictEqual(pages, [792, 612], `${format}: each section keeps its page`);
+    }
+
+    // RTF reads its page and its sections (their pages, landscape, columns of their own widths).
+    const rtf = '{\\rtf1\\ansi\\paperw12240\\paperh15840\\margl1440\\margr1440\\margt1440\\margb1440 First\\par\\sect\\sectd\\sbkpage\\pgwsxn15840\\pghsxn12240\\lndscpsxn\\cols3\\colsx360\\colno1\\colw2000\\colsr360\\colno2\\colw4000\\colsr360\\colno3\\colw7000 Second\\par\\sect\\sectd\\sbknone Third\\par}';
+    const rtfAst = await OfficeParser.parseOffice(Buffer.from(rtf), { fileType: 'rtf', includeBreakNodes: true } as any) as OfficeParserAST;
+    assert.deepStrictEqual([rtfAst.metadata.pageSetup?.width, rtfAst.metadata.pageSetup?.height, rtfAst.metadata.pageSetup?.margin?.left], [612, 792, 72], 'RTF: the document\'s page is read');
+    assert.deepStrictEqual(rtfAst.content.filter(n => n.type === 'break').map(n => { const m = n.metadata as any; return [m.breakType, m.section, m.pageSetup?.width, m.pageSetup?.height, m.pageSetup?.columns?.count ?? 1, m.pageSetup?.columns?.widths ?? null]; }),
+        [['page', 1, 792, 612, 3, [100, 200, 350]], ['section', 2, 612, 792, 1, null]], 'RTF: each section\'s page, columns and start are read');
+
+    // A LibreOffice-saved ODT: column widths as shares of the text width (summing to 65535), the gap in the
+    // columns' indents, and a section's page turned to on its first paragraph: the page break is in its columns.
+    const loOdt = Buffer.from(zipSync({
+        mimetype: strToU8('application/vnd.oasis.opendocument.text'),
+        'content.xml': strToU8('<?xml version="1.0"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"><office:automatic-styles>'
+            + '<style:style style:name="P1" style:family="paragraph" style:parent-style-name="Standard" style:master-page-name="Wide"/>'
+            + '<style:style style:name="Sect1" style:family="section"><style:section-properties><style:columns fo:column-count="3"><style:column style:rel-width="10412*" fo:start-indent="0in" fo:end-indent="0.125in"/><style:column style:rel-width="20824*" fo:start-indent="0.125in" fo:end-indent="0.125in"/><style:column style:rel-width="34299*" fo:start-indent="0.125in" fo:end-indent="0in"/></style:columns></style:section-properties></style:style>'
+            + '</office:automatic-styles><office:body><office:text><text:p text:style-name="Standard">Portrait</text:p><text:section text:style-name="Sect1" text:name="S"><text:p text:style-name="P1">In three columns</text:p></text:section><text:p text:style-name="Standard">After</text:p></office:text></office:body></office:document-content>'),
+        'styles.xml': strToU8('<?xml version="1.0"?><office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"><office:automatic-styles>'
+            + '<style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" fo:margin-top="1in" fo:margin-bottom="1in" fo:margin-left="1in" fo:margin-right="1in"/></style:page-layout>'
+            + '<style:page-layout style:name="pm2"><style:page-layout-properties fo:page-width="11in" fo:page-height="8.5in" fo:margin-top="1in" fo:margin-bottom="1in" fo:margin-left="1in" fo:margin-right="1in"/></style:page-layout>'
+            + '</office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/><style:master-page style:name="Wide" style:page-layout-name="pm2"/></office:master-styles></office:document-styles>'),
+    }));
+    const loRead = await OfficeParser.parseOffice(loOdt, { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+    const loBreaks = loRead.content.filter(n => n.type === 'break').map(n => n.metadata as any);
+    const turned = loBreaks.find(m => m.breakType === 'page');
+    const widths = turned?.pageSetup?.columns?.widths ?? [];
+    assert.ok(turned && turned.pageSetup.width === 792 && turned.pageSetup.columns?.count === 3 && Math.abs(turned.pageSetup.columns.gap - 18) < 0.5
+        && Math.abs(widths[1] / widths[0] - 2) < 0.1 && widths.reduce((a: number, b: number) => a + b, 0) + 36 < 650, `ODT: a section's page, turned to inside it, is in its columns, widths a share of the page; got ${JSON.stringify(loBreaks)}`);
+    assert.ok(!loBreaks.some(m => m.breakType === 'section' && m.pageSetup?.columns?.count === 3) && loBreaks[loBreaks.length - 1].pageSetup?.width === 792, 'ODT: no section break of its own before it, and the break after it on the page it ends on');
+
+    // Balanced columns: a section running onto a second page ends level there; unequal columns end level too.
+    const balancedRun = async (columns: any, n: number) => {
+        const doc = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'break', metadata: { breakType: 'section', section: 1, pageSetup: { columns } } }, ...Array.from({ length: n }, (_, i) => ({ type: 'paragraph', children: [{ type: 'text', text: `Para${i} ${lorem}` }] })), { type: 'break', metadata: { breakType: 'section', section: 2, pageSetup: {} } }, { type: 'paragraph', children: [{ type: 'text', text: 'Tail' }] }] } as any;
+        const read = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(doc, 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+        const pages = read.content.filter(n => n.type === 'page');
+        const last = pages[pages.length - 1];
+        const boxes = collectAllNodes({ content: [last] } as any).filter(n => n.type === 'text' && n.bounds && /^Para/.test(n.text || '')).map(n => n.bounds!);
+        // (Between the two columns' starts.)
+        const starts = boxes.map(b => b.x), middle = (Math.min(...starts) + Math.max(...starts)) / 2, ends = (side: (b: { x: number; y: number; height: number }) => boolean) => Math.max(0, ...boxes.filter(side).map(b => b.y + b.height));
+        return { pages: pages.length, left: ends(b => b.x < middle), right: ends(b => b.x >= middle) };
+    };
+    const spanning = await balancedRun({ count: 2, gap: 18 }, 34);
+    assert.ok(spanning.pages === 2 && spanning.right > 0 && Math.abs(spanning.left - spanning.right) < 60, `a balanced section's last page ends level; got ${JSON.stringify(spanning)}`);
+    const unequal = await balancedRun({ count: 2, gap: 18, widths: [150, 300] }, 8);
+    assert.ok(unequal.pages === 1 && unequal.right > 0 && Math.abs(unequal.left - unequal.right) < 80, `unequal columns end level; got ${JSON.stringify(unequal)}`);
+
+    // Lines never wider than their column: a line that ran on into a narrower column kept the word that
+    // drew it past the column's edge (a word wider than the column is cut to it).
+    const narrowDoc = { type: 'docx', metadata: { pageSetup: { width: 612, height: 792, margin: { top: 72, right: 72, bottom: 72, left: 72 }, columns: { count: 3, gap: 18, widths: [75, 125, 232] } } }, attachments: [],
+        content: Array.from({ length: 60 }, (_, i) => ({ type: 'paragraph', children: [{ type: 'text', text: `N${i + 1}. ${lorem} Supercalifragilisticexpialidocious` }] })) } as any;
+    const narrowRead = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(narrowDoc, 'pdf', { pdfConfig: { engine: 'native', format: 'auto' } } as any)).value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    let overlaps = 0;
+    for (const page of narrowRead.content.filter(n => n.type === 'page')) {
+        const words = collectAllNodes({ content: [page] } as any).filter(n => n.type === 'text' && n.bounds).map(n => n.bounds!);
+        for (let i = 0; i < words.length; i++) for (let j = i + 1; j < words.length; j++) {
+            const a = words[i], b = words[j];
+            if (a.x < b.x + b.width - 0.5 && b.x < a.x + a.width - 0.5 && a.y < b.y + b.height - 1 && b.y < a.y + a.height - 1) overlaps++;
+        }
+    }
+    assert.strictEqual(overlaps, 0, 'no line of unequal columns runs over the next column');
+
+    // A later section's first page's and even pages' header and footer, written by DOCX, ODT, RTF and LaTeX.
+    const hfNode = (kind: string, text: string, metadata: any) => ({ type: kind, text, metadata, children: [{ type: 'paragraph', children: [{ type: 'text', text }] }] });
+    const page = { width: 612, height: 792, margin: { top: 72, right: 72, bottom: 72, left: 72 } };
+    const ownParts = { type: 'docx', metadata: { pageSetup: page }, attachments: [], auxiliary: {
+        headers: [hfNode('header', 'HDR-A', { type: 'default', section: 0 }), hfNode('header', 'HDR-B', { type: 'default', section: 1 }), hfNode('header', 'FIRST-B', { type: 'first', section: 1 }), hfNode('header', 'EVEN-B', { type: 'even', section: 1 })],
+        footers: [hfNode('footer', 'FOOT-A', { type: 'default', section: 0 })] },
+        content: [{ type: 'paragraph', children: [{ type: 'text', text: 'A' }] }, { type: 'break', metadata: { breakType: 'page', section: 1, pageSetup: page } }, { type: 'paragraph', children: [{ type: 'text', text: 'B' }] }] } as any;
+    const sectionedDocx = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(ownParts, 'docx')).value as Uint8Array), { fileType: 'docx' } as any) as OfficeParserAST;
+    const kept = (sectionedDocx.auxiliary?.headers ?? []).map(h => `${(h.metadata as any).section}:${(h.metadata as any).type}:${h.text?.trim() || JSON.stringify(h).match(/"text":"([^"]+)"/)?.[1]}`);
+    assert.ok(kept.includes('1:first:FIRST-B') && kept.includes('1:default:HDR-B') && kept.includes('1:even:EVEN-B'), `DOCX: a section's first page's and even pages' headers are written; got ${kept}`);
+    const sectionedOdt = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(ownParts, 'odt')).value as Uint8Array))['styles.xml']);
+    assert.ok(/style:name="Section1First"[^>]*style:next-style-name="Section1"[^]*FIRST-B/.test(sectionedOdt) && /<style:header-left>[^]*EVEN-B/.test(sectionedOdt), 'ODT: a section\'s first page is a master of its own handing over to the section\'s, its even pages its header-left');
+    const sectionedRtf = String((await OfficeGenerator.generate(ownParts, 'rtf')).value);
+    assert.ok(/\\sect\\sectd\\sbkpage\\titlepg/.test(sectionedRtf) && /\{\\headerf [^]*FIRST-B/.test(sectionedRtf) && /\{\\headerl [^]*EVEN-B/.test(sectionedRtf) && sectionedRtf.includes('\\facingp'), 'RTF: a section\'s first page (\\titlepg, \\headerf) and even pages (\\facingp, \\headerl) are written');
+    const sectionedTex = String((await OfficeGenerator.generate(ownParts, 'tex')).value);
+    assert.ok(/\\fancypagestyle\{osec1\}[^\n]*HDR-B[^\n]*EVEN-B|\\fancypagestyle\{osec1\}[^\n]*EVEN-B[^\n]*HDR-B/.test(sectionedTex) && /\\fancypagestyle\{osec1first\}[^\n]*FIRST-B/.test(sectionedTex) && /\\clearpage\n\\pagestyle\{osec1\}\\thispagestyle\{osec1first\}/.test(sectionedTex), 'LaTeX: a section\'s own header, first page and even pages are a page style of its own');
+
+    // Pages and columns no page holds: the RTF reader holds them as Word's does, and every writer keeps the text.
+    const rtfRead = await OfficeParser.parseOffice(Buffer.from('{\\rtf1\\ansi\\sectd\\cols2\\colsx2000000 Hello world\\par}'), { fileType: 'rtf' } as any) as OfficeParserAST;
+    // (A section that states no page is on RTF's Letter page: its gap at most a quarter of 612 points, and no page of its own.)
+    assert.ok((rtfRead.metadata.pageSetup?.columns?.gap ?? Infinity) <= 612 / 4 && rtfRead.metadata.pageSetup?.width === undefined, `RTF: a column gap is at most a quarter of the page; got ${JSON.stringify(rtfRead.metadata.pageSetup)}`);
+    const rtfHuge = await OfficeParser.parseOffice(Buffer.from('{\\rtf1\\ansi\\paperw2147483647\\paperh1 Text\\par}'), { fileType: 'rtf' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(rtfHuge.metadata.pageSetup, { pageNumberFormat: 'decimal' }, 'RTF: a page no page is (two billion twips by one) is none (its section numbering its pages 1, 2, 3)');
+    const absurd = { type: 'docx', metadata: { pageSetup: { ...page, columns: { count: 1e9, gap: 1e9, widths: [1e9, -5] } } }, attachments: [],
+        content: [{ type: 'paragraph', children: [{ type: 'text', text: 'Hello absurd' }] }, { type: 'break', metadata: { breakType: 'page', section: 1, pageSetup: { width: 1e12, height: 0.05, margin: { top: 1e9, right: -1, bottom: NaN, left: 5 }, headerDistance: 1e9, columns: { count: 3, gap: 2e6 } } } }, { type: 'paragraph', children: [{ type: 'text', text: 'After absurd' }] }] } as any;
+    for (const format of ['docx', 'odt', 'rtf'] as const) {
+        const out = Buffer.from((await OfficeGenerator.generate(absurd, format)).value as unknown as Uint8Array);
+        const text = String((await (await OfficeParser.parseOffice(out, { fileType: format } as any) as OfficeParserAST).to('text')).value);
+        assert.ok(text.includes('Hello absurd') && text.includes('After absurd'), `${format}: pages and columns no page holds keep their text`);
+    }
+    const docxCols = docxParts((await OfficeGenerator.generate(absurd, 'docx')).value as Uint8Array)['word/document.xml'];
+    assert.ok([...docxCols.matchAll(/w:space="(\d+)"/g)].every(m => Number(m[1]) <= 12240 / 4) && !/w:num="(1[7-9]|[2-9]\d|\d{3,})"/.test(docxCols), 'DOCX: columns held to the page');
+    const absurdPdf = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(absurd, 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const absurdText = String((await absurdPdf.to('text')).value);
+    // (Its text kept, broken where narrow columns break it.)
+    assert.ok(absurdText.replace(/\s+/g, '').includes('Helloabsurd') && absurdText.includes('After absurd') && absurdPdf.content.every(p => (p.metadata as any).pageWidth >= 72 && (p.metadata as any).pageHeight >= 72), 'native PDF: a section page no page is takes the document\'s, its text kept');
+
+    // A later section's own first-page header reads back as its first page's, not as every page's.
+    const firstHdr = (kind: string, type: string, section: number, text: string) => ({ type: kind, text, metadata: { type, section }, children: [{ type: 'paragraph', children: [{ type: 'text', text }] }] });
+    const firstPageDoc = { type: 'docx', metadata: { pageSetup: { width: 612, height: 792, margin: { top: 72, right: 72, bottom: 72, left: 72 } } }, attachments: [],
+        content: [{ type: 'paragraph', children: [{ type: 'text', text: 'One' }] }, { type: 'break', metadata: { breakType: 'page', section: 1, pageSetup: { width: 612, height: 792, margin: { top: 72, right: 72, bottom: 72, left: 72 }, differentFirstPage: true } } }, { type: 'paragraph', children: [{ type: 'text', text: 'Two' }] }],
+        auxiliary: { headers: [firstHdr('header', 'default', 0, 'HDR-A'), firstHdr('header', 'default', 1, 'HDR-B'), firstHdr('header', 'first', 1, 'FIRST-B')] } } as any;
+    const firstBack = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(firstPageDoc, 'odt')).value as unknown as Uint8Array), { fileType: 'odt' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(firstBack.auxiliary!.headers!.map(h => [h.text, (h.metadata as any).type, (h.metadata as any).section]), [['HDR-A', 'default', 0], ['FIRST-B', 'first', 1], ['HDR-B', 'default', 1]], 'odt: a later section\'s first-page header reads back as its first page\'s');
+
+    // Word's rule for sections' headers: a section without its own part of a type takes the one before it
+    // (DOCX and RTF leave it to the word processor; ODT writes the part in force), and its title page comes
+    // from its page's differentFirstPage too, read back by every reader.
+    const sectionPage = (extra: any = {}) => ({ width: 612, height: 792, margin: { top: 72, right: 72, bottom: 72, left: 72 }, headerDistance: 36, footerDistance: 36, ...extra });
+    const hdrOf = (type: string, section: number, text: string) => ({ type: 'header', text, metadata: { type, section }, children: [{ type: 'paragraph', children: [{ type: 'text', text }] }] });
+    const inheriting = { type: 'docx', metadata: { pageSetup: sectionPage({ differentFirstPage: true }) }, attachments: [],
+        content: [{ type: 'paragraph', children: [{ type: 'text', text: 'One' }] }, { type: 'break', metadata: { breakType: 'page', section: 1, pageSetup: sectionPage({ differentFirstPage: true }) } }, { type: 'paragraph', children: [{ type: 'text', text: 'Two' }] }],
+        auxiliary: { headers: [hdrOf('default', 0, 'H1DEF'), hdrOf('first', 0, 'H1FIRST'), hdrOf('even', 0, 'H1EVEN'), hdrOf('default', 1, 'H2DEF')] } } as any;
+    const docxSections = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(inheriting, 'docx')).value as unknown as Uint8Array))['word/document.xml']);
+    const secondSect = docxSections.slice(docxSections.indexOf('</w:sectPr>') + 1);
+    assert.ok(!/w:type="first"|w:type="even"/.test(secondSect.slice(0, secondSect.indexOf('</w:sectPr>'))) && (docxSections.match(/<w:titlePg\/>/g) || []).length === 2, 'docx: a section names only its own parts (Word gives it the others), its title page from differentFirstPage');
+    const rtfSections = String((await OfficeGenerator.generate(inheriting, 'rtf')).value);
+    const afterSect = rtfSections.slice(rtfSections.indexOf('\\sect'));
+    assert.ok(/\\titlepg/.test(afterSect) && !/\\headerf|\\headerl/.test(afterSect), 'rtf: a section writes only its own parts, its title page from differentFirstPage');
+    const rtfBack = await OfficeParser.parseOffice(Buffer.from(rtfSections), { fileType: 'rtf', includeBreakNodes: true } as any) as OfficeParserAST;
+    assert.ok(rtfBack.metadata.pageSetup?.differentFirstPage && (rtfBack.content.find(n => (n.metadata as any)?.section === 1)?.metadata as any)?.pageSetup?.differentFirstPage, 'rtf: \\titlepg reads back as each section\'s differentFirstPage');
+    const odtSections = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(inheriting, 'odt')).value as unknown as Uint8Array), { fileType: 'odt', includeBreakNodes: true } as any) as OfficeParserAST;
+    const odtHeaders = odtSections.auxiliary!.headers!.filter(h => (h.metadata as any).section === 1).map(h => [h.text, (h.metadata as any).type]);
+    assert.deepStrictEqual(odtHeaders.sort(), [['H1EVEN', 'even'], ['H1FIRST', 'first'], ['H2DEF', 'default']], 'odt: a section\'s title page and even pages show the parts in force before it');
+    assert.ok(odtSections.metadata.pageSetup?.differentFirstPage && odtSections.metadata.pageSetup?.headerDistance === 36, 'odt: the title page and the header distance read back');
+    // LaTeX: the first section's first page's and even pages' parts are written too.
+    const texSections = String((await OfficeGenerator.generate(inheriting, 'tex')).value);
+    assert.ok(/\\fancypagestyle\{osec0first\}\{[^\n]*H1FIRST/.test(texSections) && /osec0\}\{[^\n]*H1EVEN/.test(texSections) && texSections.includes('\\pagestyle{osec0}\\thispagestyle{osec0first}'), 'tex: the first section\'s first and even pages\' headers are written');
+    // A continuous section's own header: LaTeX from its next page, ODT reported where no page break shows it.
+    const continuing = { type: 'docx', metadata: { pageSetup: sectionPage() }, attachments: [],
+        content: [{ type: 'paragraph', children: [{ type: 'text', text: 'One' }] }, { type: 'break', metadata: { breakType: 'section', section: 1, pageSetup: sectionPage() } }, { type: 'paragraph', children: [{ type: 'text', text: 'Two' }] }],
+        auxiliary: { headers: [hdrOf('default', 0, 'HS0'), hdrOf('default', 1, 'HS1')] } } as any;
+    assert.ok(String((await OfficeGenerator.generate(continuing, 'tex')).value).includes('\\AddToHookNext{shipout/after}{{\\globaldefs=1 \\pagestyle{osec1}}}'), 'tex: a continuous section\'s header from its next page');
+    assert.ok(((await OfficeGenerator.generate(continuing, 'odt')).messages || []).some((m: any) => /section starting mid-page/.test(m.details?.feature ?? '')), 'odt: a continuous section\'s header no page break shows is reported');
+    // Large papers keep their size (A2), and a narrow column's first line never sets out past its edge.
+    const posterDoc = { type: 'odt', metadata: { pageSetup: { width: 1190.55, height: 1683.78, margin: { top: 56, right: 56, bottom: 56, left: 56 } } }, attachments: [], content: [{ type: 'paragraph', children: [{ type: 'text', text: 'Poster' }] }] } as any;
+    const posterPdf = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(posterDoc, 'pdf', { pdfConfig: { engine: 'native', format: 'auto' } } as any)).value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.ok(Math.round((posterPdf.content[0].metadata as any).pageWidth) === 1191, `native pdf: an A2 page stays A2; got ${(posterPdf.content[0].metadata as any).pageWidth}`);
+    const sixDoc = { type: 'docx', metadata: { pageSetup: { width: 612, height: 792, margin: { top: 72, right: 72, bottom: 72, left: 72 }, columns: { count: 6, gap: 18 } } }, attachments: [],
+        content: Array.from({ length: 12 }, (_, i) => ({ type: 'paragraph', children: [{ type: 'text', text: `Para${i} lorem ipsum dolor sit amet consectetur adipiscing elit sed do` }] })) } as any;
+    const sixBack = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(sixDoc, 'pdf', { pdfConfig: { engine: 'native', format: 'auto' } } as any)).value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    assert.ok(collectAllNodes(sixBack).filter(n => n.type === 'text' && n.bounds).every(n => n.bounds!.x >= 71.5), 'native pdf: no line starts left of its column');
+
+    // A first section with no header of its own has none (a later section's is that section's); an A1 page
+    // keeps its size through RTF; a header list edited in place is read afresh; a section's first-page part
+    // shows only where that section has a title page.
+    const sp = (t: string) => ({ type: 'paragraph', children: [{ type: 'text', text: t }] });
+    const sh = (kind: string, type: string, section: number, text: string) => ({ type: kind, text, metadata: { type, section }, children: [sp(text)] });
+    const a1 = { width: 2384, height: 1684, margin: { top: 72, right: 72, bottom: 72, left: 72 } };
+    const bare = { type: 'docx', metadata: { pageSetup: { width: 612, height: 792, margin: { top: 72, right: 72, bottom: 72, left: 72 } } }, attachments: [],
+        content: [sp('Cover'), { type: 'break', metadata: { breakType: 'page', section: 1, pageSetup: a1 } }, sp('Body')],
+        auxiliary: { headers: [sh('header', 'default', 1, 'H2DEFAULT')] } } as any;
+    for (const format of ['docx', 'odt', 'rtf'] as const) {
+        const back = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(bare, format)).value as unknown as Uint8Array), { fileType: format, includeBreakNodes: true } as any) as OfficeParserAST;
+        const heads = (back.auxiliary?.headers ?? []).filter(h => !(h.metadata as any)?.hidden && (h.text || '').trim());
+        assert.ok(heads.every(h => ((h.metadata as any)?.section ?? 0) >= 1), `${format}: the first section has no header of a later one; got ${JSON.stringify(heads.map(h => [h.text, h.metadata]))}`);
+        const brk = back.content.find(n => n.type === 'break' && (n.metadata as any)?.pageSetup?.width > 2000);
+        assert.ok(brk && Math.round((brk.metadata as any).pageSetup.height) === 1684, `${format}: an A1 landscape section keeps its page`);
+    }
+    const edited = { ...bare, auxiliary: { headers: [sh('header', 'default', 0, 'BEFORE')] } } as any;
+    await OfficeGenerator.generate(edited, 'tex');
+    edited.auxiliary.headers[0] = sh('header', 'default', 0, 'EDITED');
+    assert.ok(String((await OfficeGenerator.generate(edited, 'tex')).value).includes('EDITED'), 'a header list edited in place is read afresh');
+    const rtfFirst = '{\\rtf1\\ansi{\\header H1DEFAULT\\par} First\\par\\sect\\sectd{\\headerf H2FIRST\\par}{\\header H2DEFAULT\\par} Second\\par}';
+    const rtfFirstBack = await OfficeParser.parseOffice(Buffer.from(rtfFirst), { fileType: 'rtf' } as any) as OfficeParserAST;
+    assert.ok((rtfFirstBack.auxiliary?.headers ?? []).some(h => h.text === 'H2FIRST' && (h.metadata as any)?.hidden), 'rtf: a section\'s first-page header without its own \\titlepg is not shown');
+
+}
+
+/**
+ * A PDF's text is read from the ActualText a producer gives its glyph clusters (a conjunct of an Indic
+ * script, a ligature), where its glyphs map to none of it or to the wrong letters: Chromium's PDF of
+ * Hindi, Bengali and Tamil read as "ह ी" and the like. A conjunct pdf.js gives no width keeps its place
+ * in its word.
+ */
+async function testPdfActualText(): Promise<void> {
+    const read = async (bytes: Uint8Array) => (await OfficeParser.parseOffice(Buffer.from(bytes), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST).content[0].children!.map(n => n.text);
+    assert.deepStrictEqual(await read(fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'indic_chromium.pdf'))),
+        ['हिन्दी', 'हिन्दी भाषा क्षत्रिय श्री कृष्ण', 'বাংলা ভাষা ক্ষত্রিয়', 'தமிழ் மொழி க்ஷ ஸ்ரீ'], 'Chromium\'s PDF of four Indic lines reads as written');
+    // Glyphs whose text is wrong ("xy", "zz"), each cluster with its ActualText, as producers write it.
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    const page = pdf.addPage([300, 200]);
+    const span = (actual: string, glyphs: string, x: number) => {
+        const hex = 'FEFF' + [...actual].map(c => c.codePointAt(0)!.toString(16).padStart(4, '0')).join('').toUpperCase();
+        page.pushOperators(PDFOperator.of('BDC' as any, [PDFName.of('Span'), pdf.context.obj({ ActualText: PDFHexString.of(hex) }) as any]));
+        page.drawText(glyphs, { x, y: 150, size: 14, font });
+        page.pushOperators(PDFOperator.of('EMC' as any));
+    };
+    const xy = font.widthOfTextAtSize('xy', 14), zz = font.widthOfTextAtSize('zz', 14), space = font.widthOfTextAtSize(' ', 14);
+    span('हि', 'xy', 40); span('न्दी', 'zz', 40 + xy);
+    page.drawText('plain', { x: 40 + xy + zz + space, y: 150, size: 14, font });
+    assert.deepStrictEqual(await read(await pdf.save()), ['हिन्दी plain'], 'each span reads as its ActualText, in its place, and the text around it as drawn');
+}
+
+/**
+ * XLSX and ODS output: a spreadsheet is written sheet for sheet (its values typed and shown in their
+ * formats, merged cells, hidden sheets, rows and columns kept), a document as its tables, each a sheet
+ * named after the heading before it, typed from their text (a currency, a percentage, a date; a code with
+ * leading zeros and a long number stay text), and its text on a sheet of its own; pictures are reported.
+ */
+async function testSpreadsheetWriters(): Promise<void> {
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const xlsx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="Sales" sheetId="1" r:id="rId1"/><sheet name="Secret" sheetId="2" state="hidden" r:id="rId2"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/><Relationship Id="rId2" Target="worksheets/sheet2.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+        'xl/styles.xml': strToU8(`<?xml version="1.0"?><styleSheet ${ns}><numFmts count="1"><numFmt numFmtId="166" formatCode="[$€-407]#,##0.00"/></numFmts><cellXfs count="3"><xf numFmtId="0"/><xf numFmtId="166"/><xf numFmtId="9"/></cellXfs></styleSheet>`),
+        'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><cols><col min="3" max="3" hidden="1"/></cols><sheetData>`
+            + '<row r="1"><c r="A1" t="inlineStr"><is><t>Quarterly sales</t></is></c></row>'
+            + '<row r="2"><c r="A2" t="inlineStr"><is><t>Item</t></is></c><c r="B2" t="inlineStr"><is><t>Price</t></is></c><c r="C2" t="inlineStr"><is><t>Cost</t></is></c><c r="D2" t="inlineStr"><is><t>Share</t></is></c></row>'
+            + '<row r="3"><c r="A3" t="inlineStr"><is><t>Pens</t></is></c><c r="B3" s="1"><v>1250.5</v></c><c r="C3"><v>800</v></c><c r="D3" s="2"><v>0.19</v></c></row>'
+            + '<row r="4" hidden="1"><c r="A4" t="inlineStr"><is><t>Draft</t></is></c></row>'
+            + '</sheetData><mergeCells count="1"><mergeCell ref="A1:D1"/></mergeCells></worksheet>'),
+        'xl/worksheets/sheet2.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData><row r="1"><c r="A1"><v>42</v></c></row></sheetData></worksheet>`),
+    }));
+    const book = await OfficeParser.parseOffice(xlsx, { fileType: 'xlsx' } as any) as OfficeParserAST;
+    const shape = (ast: OfficeParserAST) => ast.content.map(sheet => [(sheet.metadata as any).sheetName, !!(sheet.metadata as any).hidden,
+        sheet.children!.filter(r => r.type === 'row').map(r => [!!(r.metadata as any)?.hidden, r.children!.map(c => { const m = c.metadata as any; return [c.text, m.shownText ?? null, m.colSpan ?? 1, !!m.hidden]; })])]);
+    for (const format of ['xlsx', 'ods'] as const) {
+        const out = await OfficeGenerator.generate(book, format);
+        const back = await OfficeParser.parseOffice(Buffer.from(out.value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+        const sheets = shape(back);
+        assert.deepStrictEqual(sheets.map(s => [s[0], s[1]]), [['Sales', false], ['Secret', true]], `${format}: the sheets keep their names, the hidden one hidden`);
+        const rows = sheets[0][2] as any[];
+        const cell = (r: number, c: number) => rows[r][1][c];
+        assert.strictEqual(cell(0, 0)[2], 4, `${format}: the merged title spans its four columns`);
+        assert.deepStrictEqual([cell(2, 1)[1] ?? cell(2, 1)[0], cell(2, 3)[1] ?? cell(2, 3)[0]], ['€1,250.50', '19%'], `${format}: numbers are shown in their formats`);
+        assert.ok(cell(2, 2)[3] && rows[3][0], `${format}: the hidden column and row stay hidden`);
+    }
+    // A document's tables, typed from their text, and its text.
+    const doc = await OfficeParser.parseOffice(Buffer.from('<p>Before.</p><h2>Prices</h2><table><tr><th>Item</th><th>Price</th><th>Share</th><th>Date</th><th>Code</th><th>Card</th></tr>'
+        + '<tr><td>Pens</td><td>€1,250.50</td><td>19%</td><td>2026-10-01</td><td>007</td><td>12345678901234567890</td></tr></table><p><img src="data:image/png;base64,iVBORw0KGgo=" alt="x"> After.</p>'), { fileType: 'html', extractAttachments: true } as any) as OfficeParserAST;
+    const written = await OfficeGenerator.generate(doc, 'xlsx');
+    const parts = unzipSync(new Uint8Array(written.value as Uint8Array));
+    const workbook = strFromU8(parts['xl/workbook.xml']), sheet1 = strFromU8(parts['xl/worksheets/sheet1.xml']), styles = strFromU8(parts['xl/styles.xml']);
+    assert.ok(/<sheet name="Prices"[^>]*\/><sheet name="Text"/.test(workbook), `the table is a sheet named after its heading, the text another; got ${workbook}`);
+    assert.ok(/<c r="B2" s="\d+"><v>1250.5<\/v><\/c><c r="C2" s="\d+"><v>0.19<\/v><\/c><c r="D2" s="\d+"><v>46296<\/v><\/c>/.test(sheet1) && /formatCode="&quot;€&quot;#,##0.00"/.test(styles), 'a currency, a percentage and a date are numbers in their formats');
+    assert.ok(/<c r="E2"[^>]*t="inlineStr"><is><t[^>]*>007<\/t>/.test(sheet1) && /<c r="F2"[^>]*t="inlineStr"><is><t[^>]*>12345678901234567890</.test(sheet1), 'a code with leading zeros and a long number stay text');
+    assert.ok((written.messages || []).some((m: any) => m.code === 'CONTENT_NOT_REPRESENTABLE' && m.details?.feature === 'pictures'), 'a picture, which a cell cannot hold, is reported');
+    const together = unzipSync(new Uint8Array((await OfficeGenerator.generate(doc, 'xlsx', { xlsxConfig: { sheetPerTable: false, includeText: false } } as any)).value as Uint8Array));
+    assert.deepStrictEqual(strFromU8(together['xl/workbook.xml']).match(/<sheet name="[^"]+"/g), ['<sheet name="Tables"'], 'sheetPerTable false and includeText false: the tables on one sheet, no text sheet');
+    // A cell's hyperlink is written and read back (XLSX through the sheet's relationships, ODS as text:a).
+    const linked = await OfficeParser.parseOffice(Buffer.from('<table><tr><td><a href="https://example.com/My Report.pdf">Report</a></td><td>plain</td></tr></table>'), { fileType: 'html' } as any) as OfficeParserAST;
+    for (const format of ['xlsx', 'ods'] as const) {
+        const back = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(linked, format)).value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+        const report = collectAllNodes(back).find(n => n.type === 'text' && n.text === 'Report');
+        assert.strictEqual((report?.metadata as any)?.link, 'https://example.com/My%20Report.pdf', `${format}: a cell's hyperlink reads back`);
+    }
+    // A cell's first link the workbook can hold is written: a bookmark no sheet holds does not take the place
+    // of the web link after it; a place named in ODF's form (#Sheet.A1) is a place; a sheet reading as a cell
+    // is quoted; an address longer than Excel opens is reported.
+    const tl = (text: string, link?: string) => ({ type: 'text', text, ...(link ? { metadata: { link } } : {}) });
+    const linkBook = { type: 'xlsx', metadata: {}, attachments: [], content: [
+        { type: 'sheet', metadata: { sheetName: 'Q1' }, children: [{ type: 'row', children: [
+            { type: 'cell', metadata: { row: 0, col: 0 }, children: [tl('Top', '#_top'), tl(' site', 'https://example.com/')] },
+            { type: 'cell', metadata: { row: 0, col: 1 }, children: [tl('There', '#Q1.B2')] },
+            { type: 'cell', metadata: { row: 0, col: 2 }, children: [tl('Long', `https://example.com/${'a'.repeat(2100)}`)] },
+        ] }] },
+    ] } as any;
+    const xlsxLinks = await OfficeGenerator.generate(linkBook, 'xlsx');
+    const linkParts = unzipSync(new Uint8Array(xlsxLinks.value as unknown as Uint8Array));
+    const sheetLinks = strFromU8(linkParts['xl/worksheets/sheet1.xml']) + strFromU8(linkParts['xl/worksheets/_rels/sheet1.xml.rels'] ?? new Uint8Array());
+    assert.ok(sheetLinks.includes('Target="https://example.com/"') && sheetLinks.includes('location="&apos;Q1&apos;!B2"') && !sheetLinks.includes('aaaaaaaaaa'), `xlsx: the first writable link, ODF's place form, a quoted cell-like sheet; got ${sheetLinks.slice(0, 600)}`);
+    assert.ok((xlsxLinks.messages || []).some((m: any) => m.details?.feature === 'links of more than 2,079 characters'), 'xlsx: an address past Excel\'s length is reported');
+    // Every link not written is reported, the written one counted; a range keeps its span; a relative link
+    // is written (a script's is not).
+    const moreLinks = { type: 'xlsx', metadata: {}, attachments: [], content: [
+        { type: 'sheet', metadata: { sheetName: 'Other' }, children: [{ type: 'row', children: [
+            { type: 'cell', metadata: { row: 0, col: 0 }, children: [tl('Site', 'https://a.example/'), tl(' toc', '#_Toc123')] },
+            { type: 'cell', metadata: { row: 0, col: 1 }, children: [tl('Range', '#Other!A1:C3')] },
+            { type: 'cell', metadata: { row: 0, col: 2 }, children: [tl('Readme', 'docs/readme.html'), tl(' bad', 'javascript:alert(1)')] },
+        ] }] },
+    ] } as any;
+    for (const format of ['xlsx', 'ods'] as const) {
+        const out = await OfficeGenerator.generate(moreLinks, format);
+        const all = Object.values(unzipSync(new Uint8Array(out.value as unknown as Uint8Array))).map(v => strFromU8(v)).join('');
+        assert.ok((out.messages || []).some((m: any) => m.details?.feature === 'links to places outside the workbook\'s sheets'), `${format}: a bookmark beside a written link is reported`);
+        assert.ok(all.includes(format === 'xlsx' ? 'Other!A1:C3' : '#Other.A1:Other.C3') && all.includes('docs/readme.html') && !all.includes('javascript'), `${format}: a range, a relative link, no script`);
+    }
+    // An address already encoded is kept as given (it was encoded again: a%2520b), in every writer that encodes.
+    const encoded = await OfficeParser.parseOffice(Buffer.from('<p><a href="https://example.com/a%20b?q=x%26y">Encoded</a></p><table><tr><td><a href="https://example.com/a%20b?q=x%26y">Cell</a></td></tr></table>'), { fileType: 'html' } as any) as OfficeParserAST;
+    for (const format of ['xlsx', 'ods', 'pptx', 'odp', 'docx', 'odt'] as const) {
+        const parts = unzipSync(new Uint8Array((await OfficeGenerator.generate(encoded, format)).value as unknown as Uint8Array));
+        const all = Object.values(parts).map(v => strFromU8(v)).join('\n');
+        assert.ok(all.includes('a%20b?q=x%26y') && !all.includes('%2520'), `${format}: an encoded address is written as given`);
+    }
+    // A sheet's hyperlinks are read in time bounded by the cells they visit, however often a range repeats.
+    const repeated = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': strToU8('<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>'),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+        'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>x</t></is></c></row></sheetData><hyperlinks>${'<hyperlink ref="A1:A99990" location="S!A1"/>'.repeat(2000)}</hyperlinks></worksheet>`),
+    }));
+    const repeatedRun = await withinTime(5000, () => OfficeParser.parseOffice(repeated, { fileType: 'xlsx' } as any));
+    assert.ok(repeatedRun.within, 'xlsx: a hyperlink range repeated two thousand times is read in bounded time');
+    // Blocks beside a workbook's sheets are written (a Text sheet); a sheet name never ends in an apostrophe;
+    // a link to a place in the workbook is a place link; onNode's string for a chart on a sheet is written.
+    const beside = { type: 'xlsx', metadata: {}, attachments: [{ type: 'chart', name: 'c1', mimeType: 'application/xml', data: '', chartData: { labels: ['a'], dataSets: [{ name: 's', values: ['1'] }] } }], content: [
+        { type: 'sheet', metadata: { sheetName: 'S' }, children: [{ type: 'row', children: [{ type: 'cell', metadata: { row: 0, col: 0 }, children: [{ type: 'text', text: 'go', metadata: { link: '#T!B2', linkType: 'internal' } }] }] }, { type: 'chart', metadata: { attachmentName: 'c1' } }] },
+        { type: 'sheet', metadata: { sheetName: 'T' }, children: [{ type: 'row', children: [{ type: 'cell', metadata: { row: 0, col: 0 }, children: [{ type: 'text', text: 't' }] }] }] },
+        { type: 'sheet', metadata: { sheetName: 'a'.repeat(30) + "'b" }, children: [] },
+        { type: 'paragraph', children: [{ type: 'text', text: 'BESIDE THE SHEETS' }] },
+    ] } as any;
+    for (const format of ['xlsx', 'ods'] as const) {
+        const parts = unzipSync(new Uint8Array((await OfficeGenerator.generate(beside, format, { onNode: (n: OfficeContentNode) => n.type === 'chart' ? 'CHART REPLACED' : undefined } as any)).value as unknown as Uint8Array));
+        const all = Object.values(parts).map(v => strFromU8(v)).join('\n');
+        assert.ok(all.includes('BESIDE THE SHEETS'), `${format}: a block beside the sheets is written`);
+        assert.ok(all.includes('CHART REPLACED'), `${format}: onNode's string for a chart on a sheet is written`);
+        assert.ok(!/(?:sheet |table:)name="[^"]*'"/.test(all), `${format}: no sheet name ends in an apostrophe`);
+        assert.ok(format === 'xlsx' ? all.includes('location="T!B2"') : all.includes('xlink:href="#T.B2"'), `${format}: a link to a place in the workbook is a place link`);
+    }
+    // A run onNode leaves out takes its note, comment and link with it.
+    const withExtras = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'kept ' },
+        { type: 'text', text: 'GONE', metadata: { link: 'https://gone.example/' }, notes: [{ type: 'note', metadata: { noteType: 'footnote' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'GONENOTE' }] }] }], comments: [{ type: 'comment', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'GONECOMMENT' }] }] }] }] }] }] }] }] } as any;
+    for (const format of ['xlsx', 'ods', 'pptx', 'odp'] as const) {
+        const parts = unzipSync(new Uint8Array((await OfficeGenerator.generate(withExtras, format, { onNode: (n: OfficeContentNode) => n.text === 'GONE' ? false : undefined } as any)).value as unknown as Uint8Array));
+        const all = Object.values(parts).map(v => strFromU8(v)).join('\n');
+        assert.ok(!/GONE|gone\.example/.test(all), `${format}: a removed run's note, comment and link go with it`);
+    }
+
+    // A hidden row hides that row, not the columns its cells are in (a parser marks a hidden row's cells hidden).
+    const rowHidden = await OfficeParser.parseOffice(Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+        'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Name</t></is></c><c r="B1"><v>1</v></c></row><row r="2" hidden="1"><c r="A2" t="inlineStr"><is><t>Draft</t></is></c><c r="B2"><v>2</v></c></row></sheetData></worksheet>`),
+    })), { fileType: 'xlsx' } as any) as OfficeParserAST;
+    const rowHiddenXlsx = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(rowHidden, 'xlsx')).value as unknown as Uint8Array))['xl/worksheets/sheet1.xml']);
+    const rowHiddenOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(rowHidden, 'ods')).value as unknown as Uint8Array))['content.xml']);
+    assert.ok(!/<col [^>]*hidden/.test(rowHiddenXlsx) && /<row r="2" hidden="1">/.test(rowHiddenXlsx) && !/table-column[^>]*collapse/.test(rowHiddenOds) && /table-row table:visibility="collapse"/.test(rowHiddenOds), 'a hidden row hides its row, not its columns');
+
+    // Cells that name no column are laid out as a table is: a cell merged down holds its column below, merges never overlap.
+    const merged = await OfficeParser.parseOffice(Buffer.from('<table><tr><th rowspan="2">Region</th><th colspan="2">Sales</th></tr><tr><th>Q1</th><th>Q2</th></tr><tr><td rowspan="2">A</td><td>B</td><td>C</td></tr><tr><td colspan="2">Total</td></tr></table>'), { fileType: 'html' } as any) as OfficeParserAST;
+    const mergedXml = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(merged, 'xlsx')).value as unknown as Uint8Array))['xl/worksheets/sheet1.xml']);
+    assert.ok(/<c r="B2"[^>]*><is><t[^>]*>Q1</.test(mergedXml) && /<c r="C2"[^>]*><is><t[^>]*>Q2</.test(mergedXml) && /<c r="B4"[^>]*><is><t[^>]*>Total</.test(mergedXml), `cells take the columns merges leave them; got ${mergedXml}`);
+    assert.deepStrictEqual(mergedXml.match(/<mergeCell ref="[^"]+"/g), ['<mergeCell ref="A1:A2"', '<mergeCell ref="B1:C1"', '<mergeCell ref="A3:A4"', '<mergeCell ref="B4:C4"'], 'no two merges overlap');
+
+    // A sheet's stored numbers (its file says they are) are numbers (exponents, all seventeen digits); a leading
+    // plus whose kind no file says stays text; a long id is shown in full.
+    const stored = { type: 'xlsx', metadata: {}, attachments: [], content: [{ type: 'sheet', metadata: { sheetName: 'N' }, children: [{ type: 'row', children: ['0.30000000000000004', '1E-10', '+4915112345678'].map((text, col) => ({ type: 'cell', text, metadata: { row: 0, col, ...(col < 2 ? { valueType: 'number' } : {}) }, children: [{ type: 'text', text }] })) }] }] } as any;
+    const storedXml = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(stored, 'xlsx')).value as unknown as Uint8Array))['xl/worksheets/sheet1.xml']);
+    assert.ok(/<c r="A1"><v>0.30000000000000004<\/v>/.test(storedXml) && /<c r="B1"><v>1e-10<\/v>/.test(storedXml) && /<c r="C1" t="inlineStr"><is><t[^>]*>\+4915112345678</.test(storedXml), `a sheet's stored numbers are numbers, a phone number text; got ${storedXml}`);
+    const ids = await OfficeParser.parseOffice(Buffer.from('<table><tr><td>123456789012</td><td>+5</td></tr></table>'), { fileType: 'html' } as any) as OfficeParserAST;
+    const idParts = unzipSync(new Uint8Array((await OfficeGenerator.generate(ids, 'xlsx')).value as unknown as Uint8Array));
+    assert.ok(/<c r="A1" s="(\d+)"><v>123456789012<\/v>/.test(strFromU8(idParts['xl/worksheets/sheet1.xml'])) && /<xf numFmtId="1"/.test(strFromU8(idParts['xl/styles.xml'])) && /<c r="B1" t="inlineStr"><is><t[^>]*>\+5</.test(strFromU8(idParts['xl/worksheets/sheet1.xml'])), 'a twelve-digit id is shown in full, a leading plus kept');
+
+    // Notes: footnotes and endnotes, and slides' speaker notes, on a sheet of their own.
+    for (const [file, wanted] of [['test.docx', /^Footnote 1 In paged media/], ['test.pptx', /^Slide 1 Slide Note 1/]] as const) {
+        const src = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', file)), { fileType: file.split('.')[1] } as any) as OfficeParserAST;
+        for (const format of ['xlsx', 'ods'] as const) {
+            const back = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(src, format)).value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+            const notes = back.content.find(s => (s.metadata as any)?.sheetName === 'Notes');
+            const first = (notes?.children?.[0]?.children ?? []).map(c => c.text || '').join(' ').replace(/\s+/g, ' ');
+            assert.ok(wanted.test(first), `${format}: ${file}'s notes are on a Notes sheet; got ${first}`);
+        }
+    }
+
+    // Sheet names cut at whole characters and unique; a long cell cut to what Excel holds, and reported.
+    const long = 'Quarterly revenue by region 20';
+    const named = { type: 'xlsx', metadata: {}, attachments: [], content: [`${long}\u{1F600} extra`, long].map(sheetName => ({ type: 'sheet', metadata: { sheetName }, children: [{ type: 'row', children: [{ type: 'cell', text: 'x'.repeat(40_000), metadata: { row: 0, col: 0 }, children: [{ type: 'text', text: 'x'.repeat(40_000) }] }] }] })) } as any;
+    const namedOut = await OfficeGenerator.generate(named, 'xlsx');
+    const namedParts = unzipSync(new Uint8Array(namedOut.value as unknown as Uint8Array));
+    const names = [...strFromU8(namedParts['xl/workbook.xml']).matchAll(/<sheet name="([^"]+)"/g)].map(m => m[1]);
+    assert.ok(names.length === 2 && names[0].toLowerCase() !== names[1].toLowerCase() && names.every(n => n.length <= 31 && !/[\ud800-\udfff]/.test(n)), `sheet names are whole and unique; got ${names}`);
+    assert.ok(/<t xml:space="preserve">x{32767}<\/t>/.test(strFromU8(namedParts['xl/worksheets/sheet1.xml'])) && namedOut.messages.filter((m: any) => m.details?.feature === 'cell text past 32,767 characters').length === 1, 'a cell past 32,767 characters is cut and reported once');
+
+    // onNode once a node; a row's text one cell; charts left out when asked, unreported; custom properties kept.
+    let asked = 0;
+    const seen = new Set<unknown>();
+    let twice = false;
+    await OfficeGenerator.generate(doc, 'xlsx', { onNode: (n: any) => { asked++; if (seen.has(n)) twice = true; seen.add(n); return undefined; } } as any);
+    assert.ok(asked > 0 && !twice, 'onNode is asked once a node');
+    const rowAst = { type: 'docx', metadata: { keywords: 'alpha, beta', customProperties: { Client: 'Acme' } }, attachments: [], content: [{ type: 'table', children: [
+        { type: 'row', children: ['h1', 'h2'].map(text => ({ type: 'cell', children: [{ type: 'text', text }] })) },
+        { type: 'row', metadata: { tag: 'R' }, children: ['a', 'b'].map(text => ({ type: 'cell', children: [{ type: 'text', text }] })) }] }, { type: 'chart', metadata: { attachmentName: 'c' } }] } as any;
+    for (const format of ['xlsx', 'ods'] as const) {
+        const out = await OfficeGenerator.generate(rowAst, format, { includeCharts: false, onNode: (n: any) => n.metadata?.tag === 'R' ? 'ROW TEXT' : undefined } as any);
+        const parts = unzipSync(new Uint8Array(out.value as unknown as Uint8Array));
+        const body = format === 'xlsx' ? strFromU8(parts['xl/worksheets/sheet1.xml']) : strFromU8(parts['content.xml']);
+        assert.strictEqual((body.match(/ROW TEXT/g) || []).length, 1, `${format}: a row onNode gives text for is one cell`);
+        assert.ok(!out.messages.some((m: any) => m.details?.feature === 'charts'), `${format}: charts left out (includeCharts: false) are not reported`);
+        const meta = format === 'xlsx' ? strFromU8(parts['docProps/custom.xml'] ?? new Uint8Array()) : strFromU8(parts['meta.xml']);
+        assert.ok(/Acme/.test(meta) && (format === 'xlsx' || /<meta:keyword>beta<\/meta:keyword>/.test(meta)), `${format}: custom properties and keywords are written`);
+    }
+
+    // A cell holds the kind of value its file says (CellMetadata.valueType, CellMetadata.value): text stays text
+    // however it reads, a number the number held (not what the sheet shows), a date, a truth value and a
+    // duration as such, an XLSX number format as Excel wrote it. A cell whose source says nothing (a CSV's)
+    // is read as a table's is: no exponent, at most fifteen digits.
+    const typedCell = (col: number, text: string, meta: Record<string, unknown>) => ({ type: 'cell', text, metadata: { row: 0, col, ...meta }, children: [{ type: 'text', text }] });
+    const typed = { type: 'xlsx', metadata: {}, attachments: [], content: [{ type: 'sheet', metadata: { sheetName: 'Typed' }, children: [{ type: 'row', children: [
+        typedCell(0, '1E5', { valueType: 'text' }), typedCell(1, '10.46', { valueType: 'number', value: '10.456' }), typedCell(2, '03/15/2023', { valueType: 'date', value: '45000' }),
+        typedCell(3, 'TRUE', { valueType: 'boolean', value: 'true' }), typedCell(4, '30:00:00', { valueType: 'time', value: '1.25' }), typedCell(5, '12.5', { valueType: 'number', numberFormat: '0.0 "kg"', shownText: '12.5 kg' }),
+        typedCell(6, '4111111111111111', {}), typedCell(7, '2E3', {}), typedCell(8, '#DIV/0!', { valueType: 'error' })] }] }] } as any;
+    const typedXlsx = unzipSync(new Uint8Array((await OfficeGenerator.generate(typed, 'xlsx')).value as Uint8Array));
+    const typedSheet = strFromU8(typedXlsx['xl/worksheets/sheet1.xml']);
+    const xlsxCell = (ref: string) => new RegExp(`<c r="${ref}"[^>]*>(.*?)</c>`).exec(typedSheet)?.[0] ?? '';
+    assert.ok(/inlineStr/.test(xlsxCell('A1')) && /<v>10\.456<\/v>/.test(xlsxCell('B1')) && /<v>45000<\/v>/.test(xlsxCell('C1')) && /t="b"><v>1<\/v>/.test(xlsxCell('D1')) && /<v>1\.25<\/v>/.test(xlsxCell('E1')), `XLSX: cells hold the kinds of value their file says; got ${typedSheet}`);
+    assert.ok(/inlineStr/.test(xlsxCell('G1')) && /inlineStr/.test(xlsxCell('H1')) && /t="e"><v>#DIV\/0!<\/v>/.test(xlsxCell('I1')), `XLSX: a CSV's card number and code stay text, an error is one; got ${typedSheet}`);
+    const typedStyles = strFromU8(typedXlsx['xl/styles.xml']);
+    // (A duration in its hours is Excel's built-in format 46, written by its id.)
+    assert.ok(/formatCode="0\.0 &quot;kg&quot;"/.test(typedStyles) && /numFmtId="46"/.test(typedStyles), `XLSX: a cell's own number format is kept, a duration shown in its hours; got ${typedStyles}`);
+    const typedOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(typed, 'ods')).value as Uint8Array))['content.xml']);
+    assert.ok(/office:value="10\.456"/.test(typedOds) && /office:date-value="2023-03-15"/.test(typedOds) && /office:boolean-value="true"/.test(typedOds) && /office:time-value="PT30H0M0S"/.test(typedOds), `ODS: cells hold the kinds of value their file says; got ${typedOds.slice(0, 3000)}`);
+    // XLSX reading says what each cell holds; a place on a sheet whose name is quoted is read as a link.
+    const placed = { type: 'xlsx', metadata: {}, attachments: [], content: [
+        { type: 'sheet', metadata: { sheetName: 'Index' }, children: [{ type: 'row', children: [{ type: 'cell', text: 'Go', metadata: { row: 0, col: 0 }, children: [{ type: 'text', text: 'Go', metadata: { link: "#'Q1 Sales'!B3" } }] }, typedCell(1, '1E5', { valueType: 'text' }), typedCell(2, '7', { valueType: 'number' })] }] },
+        { type: 'sheet', metadata: { sheetName: 'Q1 Sales' }, children: [{ type: 'row', children: [typedCell(0, 'x', { valueType: 'text' })] }] }] } as any;
+    const placedBack = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(placed, 'xlsx')).value as Uint8Array), { fileType: 'xlsx' } as any) as OfficeParserAST;
+    const placedCells = collectAllNodes(placedBack).filter(n => n.type === 'cell');
+    assert.deepStrictEqual(placedCells.slice(0, 3).map(c => (c.metadata as any).valueType), ['text', 'text', 'number'], 'XLSX reading: each cell\'s kind of value');
+    assert.ok(collectAllNodes(placedBack).some(n => (n.metadata as any)?.link === "#'Q1 Sales'!B3"), 'XLSX reading: a link to a quoted sheet name is read');
+    // A link to a sheet written under another name (cut to Excel's 31, made unique) goes to it; ODS keeps long names.
+    const longName = 'Revenue by region and quarter 2026 (final)';
+    const renamed = { type: 'xlsx', metadata: {}, attachments: [], content: [
+        { type: 'sheet', metadata: { sheetName: 'Index' }, children: [{ type: 'row', children: [{ type: 'cell', text: 'Go', metadata: { row: 0, col: 0 }, children: [{ type: 'text', text: 'Go', metadata: { link: `#'${longName}'!B2` } }] }] }] },
+        { type: 'sheet', metadata: { sheetName: longName }, children: [{ type: 'row', children: [typedCell(0, 'x', { valueType: 'text' })] }] }] } as any;
+    const renamedXlsx = await OfficeGenerator.generate(renamed, 'xlsx');
+    assert.ok(/location="&apos;Revenue by region and quarter 2&apos;!B2"/.test(strFromU8(unzipSync(new Uint8Array(renamedXlsx.value as Uint8Array))['xl/worksheets/sheet1.xml'])) && !renamedXlsx.messages.length, 'XLSX: a link to a sheet whose name was cut goes to it');
+    assert.ok(new RegExp(`table:name="${longName.replace(/[()]/g, '\\$&')}"`).test(strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(renamed, 'ods')).value as Uint8Array))['content.xml'])), 'ODS: a long sheet name is kept');
+    // Columns past a sheet's 16,384 are reported, not lost unsaid; a sheet's empty rows are one repeated row in ODS.
+    const wide = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [{ type: 'row', children: Array.from({ length: 16_390 }, (_, i) => ({ type: 'cell', children: [{ type: 'text', text: `v${i}` }] })) }] }] } as any;
+    for (const format of ['xlsx', 'ods'] as const) assert.ok((await OfficeGenerator.generate(wide, format)).messages.some((m: any) => /columns past/.test(m.details?.feature ?? '')), `${format}: columns past a sheet's are reported`);
+    const sparse = { type: 'xlsx', metadata: {}, attachments: [], content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [
+        { type: 'row', children: [typedCell(0, 'top', { valueType: 'text' })] }, { type: 'row', children: [{ ...typedCell(0, 'far', { valueType: 'text' }), metadata: { row: 500_000, col: 0, valueType: 'text' } }] }] }] } as any;
+    const sparseOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(sparse, 'ods')).value as Uint8Array))['content.xml']);
+    assert.ok(sparseOds.length < 10_000 && /table:number-rows-repeated="499999"/.test(sparseOds), `ODS: empty rows are one repeated row; got ${sparseOds.length} characters`);
+    // A footnote's link is written on the Notes sheet.
+    const noted = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', children: [{ type: 'text', text: 'Body', notes: [{ type: 'note', metadata: { noteType: 'footnote' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'See site', metadata: { link: 'https://footnote.example/' } }] }] }] }] }] } as any;
+    const notedXlsx = unzipSync(new Uint8Array((await OfficeGenerator.generate(noted, 'xlsx')).value as Uint8Array));
+    assert.ok(Object.entries(notedXlsx).some(([k, v]) => /sheet\d+\.xml\.rels$/.test(k) && /footnote\.example/.test(strFromU8(v))), 'XLSX: a footnote\'s link is written on the Notes sheet');
+
+    // An ODS cell holds its value, not the text the sheet shows: a number in full, a date, a duration, a truth
+    // value, an error (they were read from the shown text, 123456 shown as 1.23E+05 written as 123000).
+    const odsNs = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:calcext="urn:org:documentfoundation:names:experimental:calc:xmlns:calcext:1.0"';
+    const odsCell = (attrs: string, shown: string) => `<table:table-row><table:table-cell ${attrs}><text:p>${shown}</text:p></table:table-cell></table:table-row>`;
+    const odsHeldFile = Buffer.from(zipSync({ 'mimetype': strToU8('application/vnd.oasis.opendocument.spreadsheet'),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${odsNs}><office:body><office:spreadsheet><table:table table:name="Values">`
+            + odsCell('office:value-type="float" office:value="10.456"', '10.46') + odsCell('office:value-type="float" office:value="123456"', '1.23E+05')
+            + odsCell('office:value-type="date" office:date-value="2023-03-15T12:00:00"', '03/15/2023 12:00') + odsCell('office:value-type="time" office:time-value="PT30H00M00S"', '30:00:00')
+            + odsCell('office:value-type="boolean" office:boolean-value="true"', 'TRUE') + odsCell('office:value-type="string" calcext:value-type="error"', '#DIV/0!')
+            + odsCell('office:value-type="string"', '1E5') + '</table:table></office:spreadsheet></office:body></office:document-content>') }));
+    const odsHeldAst = await OfficeParser.parseOffice(odsHeldFile, { fileType: 'ods' } as any) as OfficeParserAST;
+    const odsHeldCells = collectAllNodes(odsHeldAst).filter(n => n.type === 'cell').map(c => [c.text, (c.metadata as any).valueType, (c.metadata as any).value]);
+    assert.deepStrictEqual(odsHeldCells, [['10.46', 'number', '10.456'], ['1.23E+05', 'number', '123456'], ['03/15/2023 12:00', 'date', '45000.5'], ['30:00:00', 'time', '1.25'],
+        ['TRUE', 'boolean', 'true'], ['#DIV/0!', 'error', undefined], ['1E5', 'text', undefined]], 'ODS: each cell holds its value and says its kind');
+    const odsHeldXlsx = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(odsHeldAst, 'xlsx')).value as Uint8Array))['xl/worksheets/sheet1.xml']);
+    for (const held of ['<v>10.456</v>', '<v>123456</v>', '<v>45000.5</v>', '<v>1.25</v>']) assert.ok(odsHeldXlsx.includes(held), `XLSX output of an ODS writes the value it holds (${held}); got ${odsHeldXlsx.slice(0, 1500)}`);
+    assert.ok(/t="b"[^>]*><v>1<\/v>/.test(odsHeldXlsx) && /t="e"/.test(odsHeldXlsx), 'XLSX output of an ODS writes a truth value and an error as such');
+    // A format whose integer part ends in commas shows the number scaled by a thousand for each (`#,##0,,"M"`: 1M).
+    const scaled = { type: 'xlsx', metadata: {}, attachments: [], content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [{ type: 'row', children: [{ type: 'cell', text: '1234567', children: [{ type: 'text', text: '1234567' }], metadata: { row: 0, col: 0, valueType: 'number', numberFormat: '#,##0,,"M"', shownText: '1M' } }] }] }] } as any;
+    const scaledOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(scaled, 'ods')).value as Uint8Array))['content.xml']);
+    assert.ok(/number:display-factor="1000000"/.test(scaledOds), `ODS: a format's scaling commas are a display factor; got ${scaledOds.match(/<number:number-style[\s\S]*?<\/number:number-style>/)?.[0]}`);
+    // (Commas after the decimals scale too; a currency's code is its style too; a code of a negative section
+    // maps negative values to it.)
+    const scaledCell = (code: string, valueType = 'number') => ({ type: 'row', children: [{ type: 'cell', text: '1234567', children: [{ type: 'text', text: '1234567' }], metadata: { row: 0, col: 0, valueType, numberFormat: code } }] });
+    const moreScaled = { ...scaled, content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [scaledCell('0.0,"K"'), scaledCell('#,##0.0,,;(#,##0.0,,)')].map((r, i) => ({ ...r, children: r.children.map(c => ({ ...c, metadata: { ...c.metadata, row: i } })) })) }] } as any;
+    const moreOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(moreScaled, 'ods')).value as Uint8Array))['content.xml']);
+    assert.ok(/number:decimal-places="1"[^>]*number:display-factor="1000"/.test(moreOds) && /<number:text>\(<\/number:text><number:number[^>]*number:display-factor="1000000"\/><number:text>\)<\/number:text><style:map style:condition="value\(\)&gt;=0"/.test(moreOds),
+        `ODS: commas after the decimals scale, and a negative section maps negative values; got ${(moreOds.match(/<number:number-style[\s\S]*?<\/number:number-style>/g) || []).join(' ')}`);
+    // (A zero's section, an empty one hiding its numbers, a colour, padding and fill: Excel's comma style.)
+    const sectioned = { ...scaled, content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [scaledCell('_(* #,##0_);[Red]_(* (#,##0);_(* "-"_);_(@_)'), scaledCell('0;-0;;@')].map((r, i) => ({ ...r, children: r.children.map(c => ({ ...c, metadata: { ...c.metadata, row: i } })) })) }] } as any;
+    const sectionedOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(sectioned, 'ods')).value as Uint8Array))['content.xml']);
+    assert.ok(/<number:number-style[^>]*><style:text-properties fo:color="#FF0000"\/><number:text> \(<\/number:text><number:number[^>]*\/><number:text>\)<\/number:text><style:map style:condition="value\(\)&gt;0" style:apply-style-name="[^"]+"\/><style:map style:condition="value\(\)=0"/.test(sectionedOds)
+        && /<number:number-style style:name="[^"]+"><number:text><\/number:text><\/number:number-style>/.test(sectionedOds),
+        `ODS: a format's zero section, colour and padding are written, and an empty section hides its numbers; got ${(sectionedOds.match(/<number:number-style[\s\S]*?<\/number:number-style>/g) || []).join(' ')}`);
+    // A format read from what a cell showed is kept only where it shows the value held: a percent sign written in
+    // (`12.5 %` for 12.5), a decimal comma (`1,234` for 1.234), a scale (`€1,235` for 1234567) showed 1250%, 1 and
+    // €1,234,568. A locale's currency in a code (`[$€-407]#,##0,`) is its symbol.
+    const shownCell = (value: string, shownText: string, row: number, numberFormat?: string) => ({ type: 'row', children: [{ type: 'cell', text: value, children: [{ type: 'text', text: value }], metadata: { row, col: 0, valueType: 'number', value, shownText, ...(numberFormat ? { numberFormat } : {}) } }] });
+    const looks = { ...scaled, content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [shownCell('12.5', '12.5 %', 0), shownCell('1.234', '1,234', 1), shownCell('1234567.891', '€1,235', 2, '[$€-407]#,##0,'),
+        // (A negative shown without its sign, its colour carrying it, or in brackets, is that value: its format kept.)
+        shownCell('-1234.5', '$1,234.50', 3), shownCell('-1234.5', '(1,234.50)', 4)] }] } as any;
+    const looksOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(looks, 'ods')).value as Uint8Array))['content.xml']);
+    assert.ok(!/office:value-type="percentage"/.test(looksOds) && /office:value-type="float" office:value="12\.5"/.test(looksOds) && /office:value="1\.234"/.test(looksOds)
+        && /<number:text>€<\/number:text><number:number[^>]*number:display-factor="1000"/.test(looksOds)
+        && /office:value-type="currency" office:value="-1234\.5"/.test(looksOds) && /table:style-name="[^"]+" office:value-type="float" office:value="-1234\.5"/.test(looksOds), `ODS: a format is kept only where it shows the value; got ${looksOds.slice(looksOds.indexOf('<office:automatic-styles>'), looksOds.indexOf('<office:automatic-styles>') + 1200)}`);
+    // (In linear time: a shown text of a bracket and a long run of blanks, a sheet named in a long run of apostrophes.)
+    const longShown = await withinTime(5_000, () => OfficeGenerator.generate({ ...scaled, content: [{ type: 'sheet', metadata: { sheetName: `a${"'".repeat(40_000)}b` }, children: [shownCell('1', `(${' '.repeat(10_000)}x`, 0)] }] } as any, 'xlsx'));
+    assert.ok(longShown.within, `a long shown text and sheet name are read quickly; took ${longShown.ms}ms`);
+
+    // A cell onNode gives text for is that text alone: the value it replaced is not written.
+    const redacted = await OfficeGenerator.generate(odsHeldAst, 'xlsx', { onNode: (n: OfficeContentNode) => n.type === 'cell' ? 'REDACTED' : undefined } as any);
+    const redactedSheet = strFromU8(unzipSync(new Uint8Array(redacted.value as Uint8Array))['xl/worksheets/sheet1.xml']);
+    assert.ok(!/<v>/.test(redactedSheet) && /REDACTED/.test(redactedSheet), `XLSX: a cell onNode replaced holds its new text alone; got ${redactedSheet.slice(0, 600)}`);
+
+    // A 1904 workbook's times and durations are their own counts of days; a time of day on a day is a date shown as its time.
+    const miniXlsx = (sheetData: string, numFmts: string, xfs: string, date1904 = false, extra = '') => Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        '_rels/.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'),
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}>${date1904 ? '<workbookPr date1904="1"/>' : ''}<sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'),
+        'xl/styles.xml': strToU8(`<?xml version="1.0"?><styleSheet ${ns}>${numFmts}<cellXfs>${xfs}</cellXfs></styleSheet>`),
+        'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData>${sheetData}</sheetData>${extra}</worksheet>`),
+    }));
+    const times = await OfficeParser.parseOffice(miniXlsx('<row r="1"><c r="A1" s="1"><v>0.25</v></c><c r="B1" s="2"><v>1.5</v></c><c r="C1" s="1"><v>45000.25</v></c><c r="D1" s="3"><v>2.5</v></c></row>',
+        '<numFmts count="2"><numFmt numFmtId="164" formatCode="hh:mm"/><numFmt numFmtId="165" formatCode="[h]:mm"/></numFmts>', '<xf numFmtId="0"/><xf numFmtId="164"/><xf numFmtId="165"/><xf numFmtId="11"/>', true), { fileType: 'xlsx' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(collectAllNodes(times).filter(n => n.type === 'cell').map(c => [(c.metadata as any).valueType, (c.metadata as any).value, (c.metadata as any).numberFormat]),
+        [['time', '0.25', 'hh:mm'], ['time', '1.5', '[h]:mm'], ['date', String(45000.25 + 1462), 'hh:mm'], ['number', undefined, '0.00E+00']], 'XLSX: a 1904 workbook\'s times are no dates; a time of day on a day is one; a built-in format is kept');
+    const timesXlsx = unzipSync(new Uint8Array((await OfficeGenerator.generate(times, 'xlsx')).value as Uint8Array));
+    const timesSheet = strFromU8(timesXlsx['xl/worksheets/sheet1.xml']);
+    assert.ok(timesSheet.includes('<v>0.25</v>') && timesSheet.includes('<v>1.5</v>') && /numFmtId="11"/.test(strFromU8(timesXlsx['xl/styles.xml'])), `XLSX: times keep their counts of days, a built-in format its id; got ${timesSheet}`);
+    const timesOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(times, 'ods')).value as Uint8Array))['content.xml']);
+    assert.ok(/office:time-value="PT6H0M0S"/.test(timesOds) && /office:time-value="PT36H0M0S"/.test(timesOds) && /office:date-value="2027-03-16T06:00:00"/.test(timesOds) && !/PT\d{4,}H/.test(timesOds) && /<number:scientific-number/.test(timesOds),
+        `ODS: a time of day on a day is a date shown as its time, no duration of all its days; a format in scientific notation kept; got ${timesOds.slice(0, 2500)}`);
+
+    // A value under a merge (a spreadsheet keeps one there, hidden) moves no cell after it; a sheet's cells far apart stand where they are.
+    const placedCell = (text: string, row: number, col: number, more: object = {}) => ({ type: 'cell', text, children: [{ type: 'text', text }], metadata: { row, col, ...more } });
+    const covered = { type: 'xlsx', metadata: {}, attachments: [], content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [
+        { type: 'row', children: [placedCell('Title', 0, 0, { colSpan: 3 }), placedCell('hidden', 0, 1), placedCell('4', 0, 3), placedCell('5', 0, 4)] },
+        { type: 'row', children: [placedCell('far', 1048575, 16383)] }] }] } as any;
+    const coveredOut = await OfficeGenerator.generate(covered, 'xlsx');
+    const coveredSheet = strFromU8(unzipSync(new Uint8Array(coveredOut.value as Uint8Array))['xl/worksheets/sheet1.xml']);
+    assert.ok(/<c r="B1"[^>]*><is><t[^>]*>hidden</.test(coveredSheet) && /<c r="D1"[^>]*><v>4<\/v>/.test(coveredSheet) && /<c r="XFD1048576"/.test(coveredSheet) && /<mergeCell ref="A1:C1"\/>/.test(coveredSheet) && !coveredOut.messages.length,
+        `XLSX: a value under a merge stays in its column, those after it in theirs, and a far cell where it stands; got ${coveredSheet.slice(0, 900)} ${JSON.stringify(coveredOut.messages)}`);
+    const coveredBack = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(covered, 'ods')).value as Uint8Array), { fileType: 'ods' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(collectAllNodes(coveredBack).filter(n => n.type === 'cell').map(c => [c.text, (c.metadata as any).row, (c.metadata as any).col]),
+        [['Title', 0, 0], ['hidden', 0, 1], ['4', 0, 3], ['5', 0, 4], ['far', 1048575, 16383]], 'ODS: so does it, and a value under a merge is read at its place');
+    const bigMerge = { ...covered, content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [{ type: 'row', children: [placedCell('x', 0, 0, { rowSpan: 3000, colSpan: 1000 })] }, { type: 'row', children: [placedCell('y', 2999, 1001)] }] }] } as any;
+    assert.ok((await OfficeGenerator.generate(bigMerge, 'xlsx')).messages.some(m => /merged cells past/.test(JSON.stringify(m))), 'XLSX: a merge past the positions a workbook merges is reported');
+
+    // A cell's comments are on it (they lost their cell on the Notes sheet); a CSV's `#` line is a row of its sheet.
+    const commented = { ...covered, content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [{ type: 'row', children: [{ ...placedCell('1.5', 1, 1), comments: [{ type: 'comment', text: 'check this price', metadata: { author: 'Ann' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'check this price' }] }] }] }] }] }] } as any;
+    const commentedXlsx = unzipSync(new Uint8Array((await OfficeGenerator.generate(commented, 'xlsx')).value as Uint8Array));
+    assert.ok(/<comment ref="B2" authorId="0">/.test(strFromU8(commentedXlsx['xl/comments1.xml'] ?? new Uint8Array())) && /<author>Ann<\/author>/.test(strFromU8(commentedXlsx['xl/comments1.xml'] ?? new Uint8Array()))
+        && /<legacyDrawing r:id=/.test(strFromU8(commentedXlsx['xl/worksheets/sheet1.xml'])) && !!commentedXlsx['xl/drawings/vmlDrawing1.vml'] && !/Notes/.test(strFromU8(commentedXlsx['xl/workbook.xml'])), 'XLSX: a cell\'s comment is a note on it, not a Notes sheet\'s row');
+    const commentedOds = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(commented, 'ods')).value as Uint8Array))['content.xml']);
+    assert.ok(/<office:annotation><dc:creator>Ann<\/dc:creator><text:p>check this price<\/text:p><\/office:annotation><text:p>1.5<\/text:p>/.test(commentedOds), 'ODS: a cell\'s comment is its annotation');
+    const hashCsv = await OfficeParser.parseOffice(Buffer.from('color\n#FF0000\n#00FF00\n'), { fileType: 'csv' } as any) as OfficeParserAST;
+    const hashXlsx = unzipSync(new Uint8Array((await OfficeGenerator.generate(hashCsv, 'xlsx')).value as Uint8Array));
+    assert.ok(/#FF0000/.test(strFromU8(hashXlsx['xl/worksheets/sheet1.xml'])) && /#00FF00/.test(strFromU8(hashXlsx['xl/worksheets/sheet1.xml'])) && !hashXlsx['xl/worksheets/sheet2.xml'], 'XLSX: a CSV\'s `#` lines are rows of its sheet, as CSV output writes them');
+}
+
+/**
+ * A PDF's invisible text (TextFormatting.invisible: a scan's recognised words over its picture): fully
+ * transparent in PPTX and ODP, drawn in text rendering mode 3 by the native PDF engine and transparent by the
+ * 'html' one, and plain text everywhere else; in each, still there to read back.
+ */
+async function testInvisibleTextWriters(): Promise<void> {
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    const run = (text: string, x: number, baseline: number, invisible: boolean, more: object = {}) => ({ type: 'text', text, formatting: { size: '12pt', ...(invisible ? { invisible: true } : {}) }, bounds: { x, y: baseline - 9.6, width: text.length * 6, height: 12, baseline }, ...more });
+    const cell = (text: string, x: number) => ({ type: 'cell', text, children: [run(text, x, 330, true)], bounds: { x, y: 318, width: 80, height: 16 } });
+    const scan = { type: 'pdf', metadata: {}, attachments: [{ type: 'image', name: 'scan.png', mimeType: 'image/png', extension: 'png', data: png }], content: [{ type: 'page', metadata: { pageWidth: 612, pageHeight: 792 }, children: [
+        { type: 'image', bounds: { x: 0, y: 0, width: 612, height: 792 }, metadata: { attachmentName: 'scan.png' } },
+        { type: 'paragraph', text: 'Invisibleword alpha', bounds: { x: 72, y: 90.4, width: 120, height: 12 }, children: [run('Invisibleword alpha', 72, 100, true)] },
+        { type: 'paragraph', text: 'Shownword Invisiblegamma', bounds: { x: 72, y: 150.4, width: 150, height: 12 }, children: [run('Shownword', 72, 160, false), run(' Invisiblegamma', 126, 160, true)] },
+        { type: 'list', text: 'Invisibleitem', bounds: { x: 90, y: 200.4, width: 90, height: 12 }, metadata: { listType: 'unordered', indentation: 0 }, children: [run('Invisibleitem', 90, 210, true)] },
+        { type: 'paragraph', text: 'Invisiblelink', bounds: { x: 72, y: 250.4, width: 80, height: 12 }, children: [run('Invisiblelink', 72, 260, true, { metadata: { link: 'https://example.com/' } })] },
+        { type: 'table', bounds: { x: 72, y: 318, width: 160, height: 16 }, children: [{ type: 'row', children: [cell('Invisiblecell', 72), cell('Invisibleother', 152)] }] },
+    ] }] } as any;
+    const words = ['Invisibleword', 'Invisiblegamma', 'Invisibleitem', 'Invisiblelink', 'Invisiblecell', 'Shownword'];
+    const parts = (bytes: Uint8Array) => Object.entries(unzipSync(bytes)).filter(([k]) => /\.(xml|x?html|rels)$/.test(k)).map(([, v]) => strFromU8(v)).join('\n');
+    const readBack = async (bytes: Uint8Array, fileType: string) => JSON.stringify(await OfficeParser.parseOffice(Buffer.from(bytes), { fileType, ocr: false, pdfParserConfig: { separateProcess: false } } as any));
+
+    // PPTX: each invisible run (and an invisible item's bullet, written as text) transparent; the shown one not.
+    const pptx = unzipSync(new Uint8Array((await OfficeGenerator.generate(scan, 'pptx')).value as Uint8Array));
+    const slide = strFromU8(pptx['ppt/slides/slide1.xml']);
+    const runOf = (xml: string, text: string) => [...xml.matchAll(/<a:r>([\s\S]*?)<\/a:r>/g)].map(m => m[1]).find(r => r.includes(`<a:t>${text}`)) ?? '';
+    for (const text of ['Invisibleword alpha', ' Invisiblegamma', 'Invisibleitem', 'Invisiblelink', 'Invisiblecell', '•\t']) assert.ok(/<a:solidFill><a:srgbClr val="000000"><a:alpha val="0"\/><\/a:srgbClr><\/a:solidFill>/.test(runOf(slide, text)), `PPTX: "${text}" is fully transparent; got ${runOf(slide, text)}`);
+    assert.ok(!/alpha/.test(runOf(slide, 'Shownword')), 'PPTX: shown text keeps its colour');
+    assert.ok(!/<a:buChar/.test(slide) && /hlinkClr[^>]*val="tx"/.test(runOf(slide, 'Invisiblelink')), 'PPTX: an invisible item has no bullet a reader draws in its own colour; an invisible link keeps its transparent colour');
+    // A scan's table, all of it invisible, is its cells' text in their places: no table, so no rules over the scan.
+    assert.ok(!/<a:tbl>/.test(slide), 'PPTX: a table of invisible text over a scan is no table of rules');
+    const pptxBack = await readBack((await OfficeGenerator.generate(scan, 'pptx')).value as Uint8Array, 'pptx');
+    assert.ok(words.every(w => pptxBack.includes(w)), 'PPTX: the invisible text reads back');
+    // ODP: a transparent span, in the namespace LibreOffice reads it in.
+    const odp = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(scan, 'odp')).value as Uint8Array))['content.xml']);
+    const styleOf = (text: string) => { const name = new RegExp(`<text:span text:style-name="([^"]+)">${text}`).exec(odp)?.[1]; return new RegExp(`<style:style style:name="${name}"[^>]*><style:text-properties([^>]*)/>`).exec(odp)?.[1] ?? ''; };
+    for (const text of ['Invisibleword alpha', ' Invisiblegamma', 'Invisibleitem', 'Invisiblecell', '•<text:tab/>']) assert.ok(/fo:color="#000000" loext:opacity="0%"/.test(styleOf(text)), `ODP: "${text}" is fully transparent; got ${styleOf(text)}`);
+    assert.ok(!/opacity/.test(styleOf('Shownword')) && /xmlns:loext="urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0"/.test(odp), 'ODP: shown text is not transparent; the opacity\'s namespace is declared');
+    assert.ok(words.every(w => odp.includes(w)), 'ODP: the invisible text is written');
+    // Native PDF: drawn in rendering mode 3, still read back; the shown word not.
+    const native = (await OfficeGenerator.generate(scan, 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const loaded = await PDFDocument.load(native);
+    let ops = '';
+    for (const [, obj] of loaded.context.enumerateIndirectObjects()) if (obj instanceof PDFRawStream) { try { ops += strFromU8(unzlibSync(obj.contents)); } catch { /* not Flate */ } }
+    assert.strictEqual((ops.match(/\b3 Tr\b/g) ?? []).length >= 6, true, `native PDF: each invisible run, the invisible item's marker and cells drawn in mode 3; got ${(ops.match(/\b3 Tr\b/g) ?? []).length}`);
+    const nativeBack = await readBack(native, 'pdf');
+    assert.ok(words.every(w => nativeBack.includes(w)), 'native PDF: the invisible text reads back');
+    // The 'html' engine's page: invisible text (and an invisible item's marker) transparent; HTML output shows it.
+    const { HtmlGenerator } = await import('../src/generators/HtmlGenerator');
+    const printed = (await new HtmlGenerator(scan, { htmlConfig: { standalone: true } } as any, { drawsInvisibleText: true }).generate()).value as string;
+    assert.ok(/<span class="op-invisible-text">(?:<span[^>]*>)?Invisibleword alpha</.test(printed) && /<li[^>]*class="op-invisible-marker"/.test(printed) && /\.op-invisible-marker::marker \{ color: transparent !important/.test(printed) && !/op-invisible-text">Shownword/.test(printed),
+        `html engine: invisible text and an invisible item's marker are drawn transparent; got ${printed.match(/<style>\.op[^<]*<\/style>|<li[^>]*>.{0,80}|<p[^>]*>.{0,80}/g)}`);
+    // An invisible item's marker alone is unseen: its nested items, which its <li> holds, stay seen.
+    const item = (text: string, invisible: boolean, indentation: number, listType = 'unordered') => ({ type: 'list', text, metadata: { listType, indentation }, children: [{ type: 'text', text, formatting: invisible ? { invisible: true } : {} }] });
+    const nested = { type: 'pdf', metadata: {}, attachments: [], content: [item('Hiddenparent', true, 0), item('Seenchild', false, 1), item('Hiddennumber', true, 0, 'ordered'), item('Seennumbered', false, 1, 'ordered')] } as any;
+    const nestedPrinted = (await new HtmlGenerator(nested, { htmlConfig: { standalone: true } } as any, { drawsInvisibleText: true }).generate()).value as string;
+    const carriers = [...nestedPrinted.matchAll(/<(\w+)[^>]*class="[^"]*\bop-invisible-text\b/g)].map(m => m[1]);
+    assert.ok(carriers.length > 0 && carriers.every(t => t === 'span') && /<li>Seenchild/.test(nestedPrinted) && /<li>Seennumbered/.test(nestedPrinted) && !/op-invisible-text::marker/.test(nestedPrinted),
+        `html engine: an invisible item hides its own text and marker, not its nested items; got ${carriers} ${nestedPrinted.match(/<li[^>]*>[^<]*/g)}`);
+    // PPTX: an item of some invisible text and some shown keeps its bullet, whichever comes first.
+    for (const runs of [[['Hiddenlead', true], [' Shown rest', false]], [['Shownlead', false], [' hidden rest', true]]] as [string, boolean][][]) {
+        const mixed = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'list', metadata: { listType: 'unordered', indentation: 0 }, children: runs.map(([text, invisible]) => ({ type: 'text', text, formatting: invisible ? { invisible: true } : {} })) }] } as any;
+        const deck = parts((await OfficeGenerator.generate(mixed, 'pptx')).value as Uint8Array);
+        assert.ok(/<a:buChar/.test(deck), `PPTX: an item of shown and invisible text keeps its bullet (${runs[0][0]} first)`);
+    }
+    // A table whose text is all invisible draws no rules in any writer that draws them; one shown cell keeps them.
+    const tableOf = (shown: boolean) => ({ type: 'docx', metadata: {}, attachments: [], content: [
+        { type: 'heading', metadata: { level: 1 }, children: [{ type: 'text', text: 'Invisibletitle', formatting: { invisible: true } }] },
+        { type: 'table', children: [{ type: 'row', children: ['Cellone', 'Celltwo'].map((text, i) => ({ type: 'cell', children: [{ type: 'paragraph', children: [{ type: 'text', text, formatting: shown && i === 0 ? {} : { invisible: true } }] }] })) }] },
+    ] }) as any;
+    for (const shown of [false, true]) {
+        const pptxTable = parts((await OfficeGenerator.generate(tableOf(shown), 'pptx')).value as Uint8Array);
+        const odpTable = parts((await OfficeGenerator.generate(tableOf(shown), 'odp')).value as Uint8Array);
+        assert.strictEqual(/BFBFBF/.test(pptxTable), shown, `PPTX: a table's rules ${shown ? 'kept for a shown cell' : 'left out where all its text is invisible'}`);
+        if (!shown) assert.ok(/<a:lnL w="9525"><a:noFill\/>/.test(pptxTable) && /fo:border="none"/.test(odpTable) && !/BFBFBF/.test(odpTable), 'PPTX and ODP: an invisible table\'s rules are none');
+        else assert.ok(/BFBFBF/.test(odpTable), 'ODP: a table with a shown cell keeps its rules');
+        const nativeTable = await PDFDocument.load((await OfficeGenerator.generate(tableOf(shown), 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array);
+        let tableOps = '';
+        for (const [, obj] of nativeTable.context.enumerateIndirectObjects()) if (obj instanceof PDFRawStream) { try { tableOps += strFromU8(unzlibSync(obj.contents)); } catch { /* not Flate */ } }
+        assert.strictEqual(/ RG\b/.test(tableOps), shown, `native PDF: a table's rules ${shown ? 'drawn for a shown cell' : 'left out where all its text is invisible'}`);
+        const htmlTable = (await new HtmlGenerator(tableOf(shown), { htmlConfig: { standalone: true } } as any, { drawsInvisibleText: true }).generate()).value as string;
+        assert.strictEqual(/class="table-container op-invisible-block"/.test(htmlTable), !shown, `html engine: a table's rules ${shown ? 'kept' : 'unseen'}`);
+        if (!shown) assert.ok(/<h1[^>]*class="[^"]*op-invisible-block/.test(htmlTable), "html engine: an invisible heading's rule is unseen");
+    }
+    // Every other writer: the invisible text is its content, written as text.
+    for (const format of ['html', 'md', 'text', 'rtf', 'csv', 'chunks', 'epub', 'docx', 'odt', 'tex', 'xlsx', 'ods'] as const) {
+        const value = (await OfficeGenerator.generate(scan, format)).value as unknown;
+        const out = value instanceof Uint8Array ? parts(value) : typeof value === 'string' ? value : JSON.stringify(value);
+        const expected = format === 'csv' ? ['Invisiblecell'] : words;
+        assert.ok(expected.every(w => out.includes(w)) && !/op-invisible-text|transparent|w:vanish|text:display="none"/.test(out.replace(/background(-color)?: ?transparent/g, '')), `${format}: invisible text is written as text; missing ${expected.filter(w => !out.includes(w))}`);
+    }
+}
+
+/**
+ * A PDF page's paragraph on slides, where its runs have their baselines (NodeBounds.baseline): its lines spaced
+ * from baseline to baseline, its box's top the spacing above its first baseline less a fifth of its size (where
+ * LibreOffice's font-independent spacing then sets that baseline), and an ODP frame asking for that spacing.
+ * Without baselines a paragraph's box is where its bounds put it, as before.
+ */
+async function testSlideBaselines(): Promise<void> {
+    const line = (text: string, baseline: number, size: number) => ({ type: 'text', text, formatting: { size: `${size}pt` }, bounds: { x: 72, y: baseline - 0.72 * size, width: text.length * size / 2, height: 0.93 * size, baseline } });
+    const page = (withBaselines: boolean) => ({ type: 'pdf', metadata: {}, attachments: [], content: [{ type: 'page', metadata: { pageWidth: 612, pageHeight: 792 }, children: [
+        { type: 'paragraph', bounds: { x: 72, y: 91.36, width: 300, height: 40 }, children: [line('First line of three', 100, 12), line(' second line', 114.4, 12), line(' third line', 128.8, 12)] },
+        { type: 'paragraph', bounds: { x: 72, y: 282.72, width: 300, height: 22.32 }, children: [line('A single line', 300, 24)] },
+    ].map(p => withBaselines ? p : { ...p, children: p.children.map(r => ({ ...r, bounds: { ...r.bounds, baseline: undefined } })) }) }] }) as any;
+    const pptx = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(page(true), 'pptx')).value as Uint8Array))['ppt/slides/slide1.xml']);
+    const boxes = pptx.split('<p:sp>').slice(1).map(sp => [Number(/<a:off x="\d+" y="(\d+)"\/>/.exec(sp)?.[1]) / 12700, Number(/<a:spcPts val="(\d+)"\/>/.exec(sp)?.[1]) / 100]);
+    // Three lines 14.4 apart: the top 14.4 above the first baseline, less 2.4; one line of 24pt at 1.2 times its size.
+    assert.deepStrictEqual(boxes.map(([y, s]) => [Math.round(y * 100) / 100, s]), [[100 - 14.4 + 2.4, 14.4], [300 - 28.8 + 4.8, 28.8]], `PPTX: a paragraph is placed on its baselines; got ${JSON.stringify(boxes)}`);
+    const odp = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(page(true), 'odp')).value as Uint8Array))['content.xml']);
+    const frames = [...odp.matchAll(/<draw:frame draw:style-name="(gr\d+)" svg:x="[^"]+" svg:y="([\d.]+)pt"[^>]*><draw:text-box><text:p text:style-name="(P\d+)"/g)];
+    assert.deepStrictEqual(frames.map(f => Number(f[2])), [88, 276], `ODP: a paragraph is placed on its baselines; got ${frames.map(f => f[2])}`);
+    for (const [, graphic, , paragraph] of frames) {
+        assert.ok(new RegExp(`<style:style style:name="${graphic}"[^>]*><style:graphic-properties[^>]*/><style:paragraph-properties style:font-independent-line-spacing="true"/>`).test(odp), 'ODP: its frame spaces its lines independently of the font\'s metrics');
+        assert.ok(new RegExp(`<style:style style:name="${paragraph}"[^>]*><style:paragraph-properties fo:line-height="(14.4|28.8)pt"`).test(odp), 'ODP: its lines are as far apart as the page set them');
+    }
+    // Without baselines: placed from its bounds, spaced as its lines' boxes are, its frame spaced by its font.
+    const before = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(page(false), 'pptx')).value as Uint8Array))['ppt/slides/slide1.xml']);
+    assert.deepStrictEqual([...before.matchAll(/<a:off x="\d+" y="(\d+)"\/>/g)].slice(1).map(m => Math.round(Number(m[1]) / 127) / 100), [91.36, 282.72], 'PPTX: without baselines a paragraph is placed by its bounds');
+    const odpBefore = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(page(false), 'odp')).value as Uint8Array))['content.xml']);
+    assert.ok(!odpBefore.includes('font-independent-line-spacing') && /svg:y="91.36pt"/.test(odpBefore), 'ODP: without baselines a paragraph is placed by its bounds, its lines by its font');
+    // A line stands on its body's baseline, not a superscript's whose box is taller (another font's).
+    const body = (text: string, x: number) => ({ type: 'text', text, formatting: { size: '14pt' }, bounds: { x, y: 180.39, width: 60, height: 17.16, baseline: 192.91 } });
+    const raised = { type: 'text', text: '2 ', formatting: { size: '11.5pt', superscript: true }, bounds: { x: 140, y: 177.06, width: 9.63, height: 20.48, baseline: 187.5 } };
+    const supLine = { type: 'pdf', metadata: {}, attachments: [], content: [{ type: 'page', metadata: { pageWidth: 612, pageHeight: 792 }, children: [{ type: 'paragraph', bounds: { x: 72, y: 177.06, width: 140, height: 20.48 }, children: [body('Hello world', 72), raised, body('here', 150)] }] }] } as any;
+    for (const includeFormatting of [true, false]) {
+        const supPptx = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(supLine, 'pptx', { includeFormatting } as any)).value as Uint8Array))['ppt/slides/slide1.xml']);
+        const supOdp = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(supLine, 'odp', { includeFormatting } as any)).value as Uint8Array))['content.xml']);
+        const top = Math.round(Number(/<p:sp>[\s\S]*?<a:off x="\d+" y="(\d+)"/.exec(supPptx)?.[1]) / 127) / 100;
+        assert.ok(top === 178.91 && /draw:frame[^>]*svg:y="178.91pt"/.test(supOdp), `PPTX and ODP: a line with a superscript stands on its body's baseline (includeFormatting ${includeFormatting}); got ${top}, ${/draw:frame[^>]*svg:y="([^"]+)"/.exec(supOdp)?.[1]}`);
+    }
+    // A baseline outside its run's box, or a box that is no numbers, places the paragraph by its bounds.
+    const odd = (run: object) => ({ type: 'pdf', metadata: {}, attachments: [], content: [{ type: 'page', metadata: { pageWidth: 612, pageHeight: 792 }, children: [{ type: 'paragraph', bounds: { x: 72, y: 90, width: 300, height: 30 }, children: [{ type: 'text', text: 'Line one', ...run }] }] }] }) as any;
+    for (const [what, run] of [['a baseline far outside its box', { formatting: { size: '12pt' }, bounds: { x: 72, y: 90, width: 60, height: 12, baseline: 1e12 } }], ['a height that is text', { formatting: {}, bounds: { x: 72, y: 90, width: 60, height: '12', baseline: 99 } }]] as [string, object][]) {
+        const oddPptx = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(odd(run), 'pptx')).value as Uint8Array))['ppt/slides/slide1.xml']);
+        const oddOdp = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(odd(run), 'odp')).value as Uint8Array))['content.xml']);
+        const [, y, h] = /<p:sp>[\s\S]*?<a:off x="\d+" y="(\d+)"\/><a:ext cx="\d+" cy="(\d+)"/.exec(oddPptx) ?? [];
+        assert.ok(Number(y) / 12700 === 90 && Number(h) / 12700 === 30 && /svg:y="90pt" svg:width="[^"]+" svg:height="30pt"/.test(oddOdp), `PPTX and ODP: ${what} is placed by its paragraph's bounds; got ${Number(y) / 12700}, ${Number(h) / 12700}, ${/svg:y="[^"]+" svg:width="[^"]+" svg:height="[^"]+"/.exec(oddOdp)?.[0]}`);
+    }
+}
+
+/**
+ * PPTX and ODP output: a deck written as a deck (its slides, notes and charts, as tables of their data),
+ * a PDF's pages as slides with their text where the page set it (lines kept, a paragraph beside a floating
+ * table in two boxes, a shaded header cell's colour), a document flowed onto slides (a slide a section,
+ * long tables cut with their header repeated, merged cells kept), and pictures behind slides.
+ */
+async function testPresentationWriters(): Promise<void> {
+    const textOf = (n: OfficeContentNode): string => n.type === 'text' ? n.text || '' : (n.children ?? []).map(textOf).join(' ');
+    const slideTexts = (ast: OfficeParserAST) => ast.content.filter(n => n.type === 'slide').map(s => textOf(s).replace(/\s+/g, ' ').trim());
+    const deck = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.pptx')), { fileType: 'pptx', extractAttachments: true } as any) as OfficeParserAST;
+    const notesOf = (ast: OfficeParserAST) => JSON.stringify(ast.content.map(s => s.notes ?? []));
+    for (const format of ['pptx', 'odp'] as const) {
+        const out = await OfficeGenerator.generate(deck, format);
+        const back = await OfficeParser.parseOffice(Buffer.from(out.value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+        const before = slideTexts(deck), after = slideTexts(back);
+        assert.strictEqual(after.length, before.length, `${format}: a deck keeps its slides`);
+        const words = (t: string) => t.split(' ').filter(w => /^[A-Za-z]{4,}$/.test(w));
+        before.forEach((text, i) => { const missing = words(text).filter(w => !after[i].includes(w)); assert.ok(missing.length <= words(text).length * 0.1, `${format}: slide ${i + 1} keeps its text; missing ${missing.join(' ')}`); });
+        assert.ok(notesOf(back).includes('Slide Note 1'), `${format}: speaker notes are kept`);
+        assert.ok(!(out.messages || []).some((m: any) => m.code === 'CONTENT_NOT_REPRESENTABLE'), `${format}: nothing in the sample deck is reported lost`);
+    }
+
+    // A PDF's pages: the text in its lines, the floating table's neighbour in two boxes, the green header.
+    const pdf = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.pdf')), { fileType: 'pdf', extractAttachments: true, ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const item = collectAllNodes(pdf).find(n => n.type === 'cell' && n.text === 'ITEM');
+    assert.strictEqual((item?.metadata as any)?.backgroundColor, '#9bbb59', 'a PDF table\'s shaded header cell is read with its colour');
+    const unplaced = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.pdf')), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false, includeBounds: false } } as any) as OfficeParserAST;
+    assert.strictEqual((collectAllNodes(unplaced).find(n => n.type === 'cell' && n.text === 'ITEM')?.metadata as any)?.backgroundColor, '#9bbb59', 'the shading is read without bounds too');
+    const pptx = unzipSync(new Uint8Array((await OfficeGenerator.generate(pdf, 'pptx')).value as Uint8Array));
+    const slideXml = (n: number) => strFromU8(pptx[`ppt/slides/slide${n}.xml`]);
+    assert.strictEqual(Object.keys(pptx).filter(k => /^ppt\/slides\/slide\d+\.xml$/.test(k)).length, pdf.content.length, 'a PDF\'s pages are its slides');
+    assert.ok(/Demonstration of DOCX support in<\/a:t><\/a:r><a:br\b[^]*?<a:t>calibre<\/a:t>/.test(slideXml(1)) && slideXml(1).includes('wrap="none"'), 'a page\'s heading keeps its line break, unwrapped');
+    const tables = slideXml(3);
+    assert.ok(/<a:t>ITEM<\/a:t>[\s\S]*?<a:srgbClr val="9BBB59"\/>/i.test(tables), 'the shaded header is written with its colour');
+    assert.ok(/<a:lnSpc><a:spcPts val="\d+"\/><\/a:lnSpc>/.test(slideXml(2)), 'a page\'s paragraph keeps its lines as far apart as they were');
+    const cedar = collectAllNodes(pdf).find(n => n.type === 'cell' && n.text === 'Cedar University')!.bounds!, number = collectAllNodes(pdf).find(n => n.type === 'cell' && n.text === '110')!.bounds!;
+    assert.ok(number.x > cedar.x + cedar.width + 10, `a cell's text is where it was drawn, not where the blank before it began; got ${number.x}`);
+    // A page drawn behind its slide: the tables' rules are in the picture, their cells' text over it in place.
+    const drawn = unzipSync(new Uint8Array((await OfficeGenerator.generate(pdf, 'pptx', { pptxConfig: { backgrounds: pdf.content.map(() => new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64'))) } } as any)).value as Uint8Array));
+    const drawnTables = strFromU8(drawn['ppt/slides/slide3.xml']);
+    assert.ok(!drawnTables.includes('<a:tbl>') && /<a:t>Books<\/a:t>/.test(drawnTables) && /<a:t>110<\/a:t>/.test(drawnTables) && /<p:bg><p:bgPr><a:blipFill/.test(drawnTables), 'over a page\'s picture, a table is its cells\' text in place');
+    const beside = tables.split('<p:sp>').filter(sp => /Tables in Word|optimum results/.test(sp)).map(sp => Number(/<a:off x="(\d+)"/.exec(sp)![1]));
+    assert.ok(beside.length === 2 && beside[0] > beside[1] + 12700 * 100, `the paragraph beside the floating table is set beside it, then under it; got ${beside}`);
+
+    // A document on slides: a slide a section, a table of 25 rows on three (its header on each), merges kept.
+    const rows = Array.from({ length: 25 }, (_, i) => `<tr><td>Row ${i + 1}</td><td>${i}</td></tr>`).join('');
+    const html = '<h1>Deck title</h1><p>Opening words.</p><h2>First section</h2>' + Array.from({ length: 30 }, (_, i) => `<p>Point ${i + 1} of a long section.</p>`).join('')
+        + `<h2>Data</h2><table><tr><th>Name</th><th>Value</th></tr>${rows}</table>`
+        + '<h2>Merged</h2><table><tr><td colspan="2">Across</td><td rowspan="2">Down</td></tr><tr><td>a</td><td>b</td></tr></table>';
+    const doc = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' } as any) as OfficeParserAST;
+    for (const format of ['pptx', 'odp'] as const) {
+        const out = await OfficeGenerator.generate(doc, format);
+        const back = await OfficeParser.parseOffice(Buffer.from(out.value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+        const texts = slideTexts(back);
+        assert.ok(texts[0].startsWith('Deck title') && texts[0].includes('Opening words'), `${format}: the title slide; got ${texts[0]}`);
+        const section = texts.filter(t => t.startsWith('First section'));
+        assert.ok(section.length >= 2 && section.join(' ').includes('Point 1 ') && section.join(' ').includes('Point 30 '), `${format}: a long section runs on to more slides, all of it kept`);
+        const data = texts.filter(t => t.startsWith('Data'));
+        assert.ok(data.length === 3 && data.every(t => t.includes('Name') && t.includes('Value')) && data[2].includes('Row 25'), `${format}: a long table is cut, its header on each slide`);
+        const merged = collectAllNodes(back).filter(n => n.type === 'cell' && (n.text === 'Across' || n.text === 'Down'));
+        assert.deepStrictEqual(merged.map(c => [c.text, (c.metadata as any)?.colSpan ?? 1, (c.metadata as any)?.rowSpan ?? 1]), [['Across', 2, 1], ['Down', 1, 2]], `${format}: merged cells keep their spans`);
+    }
+
+    // A workbook: each sheet's rows a table under the sheet's name.
+    const book = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.xlsx')), { fileType: 'xlsx' } as any) as OfficeParserAST;
+    const values = collectAllNodes(book).filter(n => n.type === 'cell' && /^[A-Za-z]{4,}$/.test((n.text || '').trim())).map(n => n.text!.trim());
+    for (const format of ['pptx', 'odp'] as const) {
+        const back = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(book, format)).value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+        const all = slideTexts(back).join(' ');
+        assert.ok(values.length > 0 && values.every(v => all.includes(v)) && all.startsWith('Sheet1'), `${format}: a workbook's sheets are tables under their names, every cell kept`);
+    }
+
+    // A chart is a table of its data; a picture is put behind a slide (backgrounds).
+    const chart = { type: 'pptx', metadata: { pageSetup: { width: 720, height: 405 } }, content: [{ type: 'slide', metadata: { slideNumber: 1 }, children: [{ type: 'chart', text: 'Sales', bounds: { x: 40, y: 40, width: 400, height: 200 }, metadata: { attachmentName: 'c' } }] }],
+        attachments: [{ type: 'chart', name: 'c', mimeType: 'application/xml', extension: 'xml', data: '', chartData: { labels: ['North', 'South'], dataSets: [{ name: 'Units', values: ['12', '30'], pointLabels: [] }], rawTexts: [] } }] } as any;
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+    for (const format of ['pptx', 'odp'] as const) {
+        const out = await OfficeGenerator.generate(chart, format, { [`${format}Config`]: { backgrounds: [new Uint8Array(png)] } } as any);
+        const back = await OfficeParser.parseOffice(Buffer.from(out.value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+        const cells = collectAllNodes(back).filter(n => n.type === 'cell').map(n => n.text);
+        assert.ok(['North', 'South', '12', '30'].every(v => cells.includes(v)), `${format}: a chart is a table of its data; got ${cells}`);
+        const parts = unzipSync(new Uint8Array(out.value as unknown as Uint8Array));
+        const media = Object.keys(parts).filter(k => /media\/|Pictures\//.test(k));
+        assert.ok(media.length === 1 && Buffer.from(parts[media[0]]).equals(png), `${format}: the background picture is in the package`);
+        const slide = format === 'pptx' ? strFromU8(parts['ppt/slides/slide1.xml']) : strFromU8(parts['content.xml']);
+        assert.ok(format === 'pptx' ? /<p:bg><p:bgPr><a:blipFill/.test(slide) : slide.includes(media[0]), `${format}: the slide is drawn on the picture`);
+    }
+    // onNode is asked once a node; charts left out (includeCharts: false) are not reported; custom properties kept.
+    for (const format of ['pptx', 'odp'] as const) {
+        const asked = new Map<OfficeContentNode, number>();
+        const out = await OfficeGenerator.generate(deck, format, { onNode: (n: OfficeContentNode) => { asked.set(n, (asked.get(n) ?? 0) + 1); return undefined; },
+            includeCharts: false, metadataOverrides: { keywords: 'alpha, beta', custom: { Project: 'Atlas' } } } as any);
+        assert.strictEqual([...asked.values()].filter(v => v > 1).length, 0, `${format}: onNode is asked once for each node`);
+        assert.ok(!(out.messages || []).some((m: any) => /chart/.test(m.details?.feature ?? '')), `${format}: charts left out are not reported`);
+        const parts = unzipSync(new Uint8Array(out.value as unknown as Uint8Array));
+        const props = format === 'pptx' ? strFromU8(parts['docProps/custom.xml'] ?? new Uint8Array()) : strFromU8(parts['meta.xml']);
+        assert.ok(props.includes('Atlas') && (format === 'pptx' || props.includes('<meta:keyword>beta</meta:keyword>')), `${format}: custom properties and keywords are kept`);
+        const back = await OfficeParser.parseOffice(Buffer.from(out.value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+        assert.strictEqual((back.metadata.customProperties as any)?.Project, 'Atlas', `${format}: a custom property reads back`);
+    }
+    // A deck read without its geometry flows onto slides, its speaker notes kept; pictures behind flowing slides.
+    const flowing = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.pptx')), { fileType: 'pptx', ignorePageGeometry: true } as any) as OfficeParserAST;
+    for (const format of ['pptx', 'odp'] as const) {
+        const out = await OfficeGenerator.generate(flowing, format, { [`${format}Config`]: { backgrounds: [new Uint8Array(png)] } } as any);
+        const back = await OfficeParser.parseOffice(Buffer.from(out.value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+        assert.ok(notesOf(back).includes('Slide Note 1'), `${format}: a flowing deck keeps its speaker notes`);
+        const parts = unzipSync(new Uint8Array(out.value as unknown as Uint8Array));
+        assert.ok(Object.keys(parts).some(k => /media\/|Pictures\//.test(k)), `${format}: a flowing deck takes its backgrounds`);
+    }
+    // ODF shapes are written as DrawingML presets; a PDF's numbered list keeps its numbers; a page's notes are kept.
+    const odpDeck = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.odp')), { fileType: 'odp', extractAttachments: true } as any) as OfficeParserAST;
+    const fromOdp = unzipSync(new Uint8Array((await OfficeGenerator.generate(odpDeck, 'pptx')).value as unknown as Uint8Array));
+    const presets = Object.keys(fromOdp).filter(k => /^ppt\/slides\/slide\d+\.xml$/.test(k)).flatMap(k => [...strFromU8(fromOdp[k]).matchAll(/prst="([^"]+)"/g)].map(m => m[1]));
+    assert.ok(presets.length > 0 && presets.every(p => /^[a-zA-Z0-9]+$/.test(p) && p !== 'non') && !presets.includes('non-primitive'), `an ODP's shapes are DrawingML presets; got ${[...new Set(presets)]}`);
+    const pdfDeck = unzipSync(new Uint8Array((await OfficeGenerator.generate(pdf, 'pptx')).value as Uint8Array));
+    const allPdfText = Object.keys(pdfDeck).filter(k => /^ppt\/slides\/slide\d+\.xml$/.test(k)).map(k => strFromU8(pdfDeck[k])).join('');
+    assert.ok(/<a:t>1\.1\.\t<\/a:t>/.test(allPdfText) && /<a:t>ii\.\t<\/a:t>/.test(allPdfText), 'a PDF\'s numbered items keep their own numbers');
+    assert.ok(allPdfText.includes('Endnotes are typically used'), 'a page\'s notes are written in their place');
+    // A numbered list's numbers, a picture's alternative text, a merge across a slide break, a tiny size.
+    const listDoc = await OfficeParser.parseOffice(Buffer.from('<h2>List</h2><ol><li>first</li><li>second</li></ol><p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" alt="A red dot"></p>'
+        + '<h2>Spans</h2><table><tr><th>Group</th><th>Item</th></tr>' + Array.from({ length: 12 }, (_, i) => i === 9 ? '<tr><td rowspan="3">G</td><td>item10</td></tr>' : i === 10 || i === 11 ? `<tr><td>item${i + 1}</td></tr>` : `<tr><td>g${i + 1}</td><td>item${i + 1}</td></tr>`).join('') + '</table><p style="font-size:0.5pt">tiny</p>'), { fileType: 'html', extractAttachments: true } as any) as OfficeParserAST;
+    for (const format of ['pptx', 'odp'] as const) {
+        const out = await OfficeGenerator.generate(listDoc, format);
+        const parts = unzipSync(new Uint8Array(out.value as unknown as Uint8Array));
+        const xml = format === 'pptx' ? Object.keys(parts).filter(k => /^ppt\/slides\/slide\d+\.xml$/.test(k)).map(k => strFromU8(parts[k])).join('') : strFromU8(parts['content.xml']);
+        assert.ok(/2\.(\t|<text:tab\/>)/.test(xml), `${format}: a numbered list's numbers are written`);
+        assert.ok(format === 'pptx' ? xml.includes('descr="A red dot"') : xml.includes('<svg:desc>A red dot</svg:desc>'), `${format}: a picture keeps its alternative text`);
+        if (format === 'pptx') assert.ok(![...xml.matchAll(/ sz="(\d+)"/g)].some(m => Number(m[1]) < 100), 'pptx: no text size under a point');
+        const back = await OfficeParser.parseOffice(Buffer.from(out.value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+        const item11 = collectAllNodes(back).find(n => n.type === 'cell' && n.text === 'item11');
+        assert.strictEqual((item11?.metadata as any)?.col, 1, `${format}: a merge running past a slide's end keeps the cells after it in their columns`);
+    }
+
+    // includeImages and includeFormatting: a picture, its recognized text, both or neither; plain runs.
+    const scanned = { type: 'docx', metadata: {}, attachments: [{ type: 'image', name: 'scan.png', mimeType: 'image/png', extension: 'png', data: png.toString('base64') }], content: [
+        { type: 'heading', metadata: { level: 2 }, children: [{ type: 'text', text: 'Scan' }] },
+        { type: 'paragraph', children: [{ type: 'text', text: 'Bold words', formatting: { bold: true } }, { type: 'image', metadata: { attachmentName: 'scan.png', ocrText: 'RECOGNISED TEXT' } }] },
+        { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'Head', formatting: { bold: true } }] }] }] }] },
+    ] } as any;
+    for (const format of ['pptx', 'odp', 'xlsx', 'ods'] as const) {
+        const textAndMedia = async (config: any) => {
+            const out = await OfficeGenerator.generate(scanned, format, config);
+            const parts = unzipSync(new Uint8Array(out.value as unknown as Uint8Array));
+            const xml = Object.keys(parts).filter(k => /\.xml$/.test(k)).map(k => strFromU8(parts[k])).join('');
+            return { xml, media: Object.keys(parts).some(k => /media\/|Pictures\//.test(k)), lost: (out.messages || []).some((m: any) => m.details?.feature === 'pictures') };
+        };
+        const none = await textAndMedia({ includeImages: 'none' });
+        assert.ok(!none.media && !none.lost && !none.xml.includes('RECOGNISED'), `${format}: includeImages 'none' leaves pictures out, unreported`);
+        const ocr = await textAndMedia({ includeImages: 'ocr-text-only' });
+        assert.ok(!ocr.media && !ocr.lost && ocr.xml.includes('RECOGNISED TEXT'), `${format}: includeImages 'ocr-text-only' writes the picture's recognized text instead`);
+        if (format === 'pptx' || format === 'odp') {
+            const both = await textAndMedia({ includeImages: 'image+ocr-text' });
+            assert.ok(both.media && both.xml.includes('RECOGNISED TEXT'), `${format}: includeImages 'image+ocr-text' writes both`);
+        }
+        // The document's own runs (a slide's title is bold by the slide's design, not the document's).
+        const plain = await textAndMedia({ includeFormatting: false });
+        // A workbook's bold, read back.
+        const boldRead = new Set<string>();
+        if (format === 'xlsx' || format === 'ods') {
+            const back = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(scanned, format, { includeFormatting: false } as any)).value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+            for (const n of collectAllNodes(back)) if (n.type === 'text' && n.formatting?.bold) boldRead.add((n.text || '').trim());
+        }
+        const boldRun = (xml: string, text: string) => format === 'pptx' ? xml.split('<a:r>').some(r => r.includes(`<a:t>${text}</a:t>`) && / b="1"/.test(r))
+            : format === 'odp' ? [...xml.matchAll(new RegExp(`<text:span text:style-name="([^"]+)">${text}<`, 'g'))].some(m => new RegExp(`style:name="${m[1]}"[^>]*>[^<]*<style:text-properties[^>]*fo:font-weight="bold"`).test(xml))
+            : boldRead.has(text);
+        assert.ok(!boldRun(plain.xml, 'Bold words') && !boldRun(plain.xml, 'Head'), `${format}: includeFormatting false writes the document's runs plain`);
+        if (format === 'pptx') assert.ok(boldRun((await textAndMedia({})).xml, 'Bold words'), 'pptx: a bold run is bold by default');
+        if (format === 'xlsx' || format === 'ods') {
+            const back = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(scanned, format)).value as unknown as Uint8Array), { fileType: format } as any) as OfficeParserAST;
+            assert.ok(collectAllNodes(back).some(n => n.type === 'text' && (n.text || '').trim() === 'Head' && n.formatting?.bold), `${format}: a bold cell reads back bold (a cell style's looks are its runs')`);
+        }
+    }
+
+    // Nothing a writer cannot hold goes silently: code blocks, comments, embeds, pictures known by address,
+    // list markers and note citations, charts (as sheets of their data), a merge within its table.
+    const t0 = (text: string, extra: any = {}) => ({ type: 'text', text, ...extra });
+    const mixed = { type: 'md', metadata: {}, attachments: [{ type: 'chart', name: 'c1', mimeType: 'application/xml', extension: 'xml', data: '', chartData: { labels: ['North', 'South'], dataSets: [{ name: 'Units', values: ['12', '30'], pointLabels: [] }], rawTexts: [] } }], content: [
+        { type: 'heading', metadata: { level: 2 }, children: [t0('Mixed')] },
+        { type: 'paragraph', children: [t0('Commented words', { comments: [{ type: 'comment', metadata: { author: 'Ana' }, children: [{ type: 'paragraph', children: [t0('COMMENTBODY')] }] }], notes: [{ type: 'note', metadata: { noteType: 'footnote' }, children: [{ type: 'paragraph', children: [t0('NOTEBODY')] }] }] })] },
+        { type: 'code', text: 'CODELINE one\nCODELINE two' },
+        { type: 'embed', text: '', metadata: { embedType: 'youtube', url: 'https://www.youtube.com/watch?v=EMBEDID' } },
+        { type: 'image', metadata: { url: 'https://example.com/x.png', altText: 'URLALT' } },
+        { type: 'list', metadata: { listType: 'ordered', listId: 'l', itemIndex: 2, indentation: 0, marker: 'iii.' }, children: [t0('Third item')] },
+        { type: 'chart', text: 'Units', metadata: { attachmentName: 'c1' } },
+        { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', metadata: { rowSpan: 3 }, children: [t0('Tall')] }, { type: 'cell', children: [t0('B')] }] }] },
+        { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', metadata: { colSpan: 2 }, children: [t0('Next')] }] }] },
+    ] } as any;
+    for (const format of ['pptx', 'odp', 'xlsx', 'ods'] as const) {
+        const out = await OfficeGenerator.generate(mixed, format, { xlsxConfig: { sheetPerTable: false }, odsConfig: { sheetPerTable: false } } as any);
+        const parts = unzipSync(new Uint8Array(out.value as unknown as Uint8Array));
+        const xml = Object.keys(parts).filter(k => /\.xml$/.test(k)).map(k => strFromU8(parts[k])).join('\n');
+        for (const needle of ['COMMENTBODY', 'NOTEBODY', 'CODELINE one', 'CODELINE two', 'EMBEDID', 'URLALT', 'iii.', 'North', 'South']) assert.ok(xml.includes(needle), `${format}: ${needle} is written`);
+        if (format === 'xlsx') assert.ok(!/<mergeCell ref="A1:A3"/.test(xml), 'xlsx: a merge stays within its table (it reached into the next on the sheet)');
+        if (format === 'xlsx' || format === 'ods') assert.ok(xml.includes('[Footnote 1]'), `${format}: the text cites its note by its number on the Notes sheet`);
+    }
+    // A PDF page shown turned: its text turned with it, in place.
+    const turnedPdf = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'rotated.pdf')), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const turnedXml = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(turnedPdf, 'pptx')).value as Uint8Array))['ppt/slides/slide1.xml']);
+    const alpha = turnedXml.split('<p:sp>').find(sp => sp.includes('LEFT COLUMN ALPHA'))!;
+    assert.ok(/<a:xfrm rot="5400000">/.test(alpha) && Number(/<a:ext cx="(\d+)" cy="(\d+)"/.exec(alpha)![1]) > Number(/<a:ext cx="(\d+)" cy="(\d+)"/.exec(alpha)![2]), 'a turned page\'s text is turned with it, its frame unturned');
+
+    // Third review: onNode verdicts at every branch, media in cells, links, chart titles, bounds, properties.
+    const PNG1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    const atts3 = [{ type: 'image', name: 'p.png', mimeType: 'image/png', data: PNG1 }, { type: 'chart', name: 'c1', mimeType: 'application/xml', data: '', chartData: { title: 'CHARTTITLE', labels: ['L1'], dataSets: [{ name: 'S1', values: ['1'] }] } }];
+    const t3 = (text: string, extra: any = {}) => ({ type: 'text', text, ...extra });
+    for (const kind of ['table', 'image', 'chart', 'slide', 'sheet'] as const) {
+        const target: any = kind === 'table' ? { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [t3('SECRETCELL')] }] }] }
+            : kind === 'image' ? { type: 'image', metadata: { attachmentName: 'p.png', altText: 'SECRETALT' } }
+            : kind === 'chart' ? { type: 'chart', metadata: { attachmentName: 'c1' } }
+            : kind === 'sheet' ? { type: 'sheet', metadata: { sheetName: 'SECRETSHEET' }, children: [{ type: 'row', children: [{ type: 'cell', metadata: { row: 0, col: 0 }, children: [t3('SECRETCELL')] }] }] }
+            : { type: 'slide', metadata: {}, children: [{ type: 'paragraph', bounds: { x: 1, y: 1, width: 100, height: 20 }, children: [t3('SECRETSLIDE')] }] };
+        const ast: any = { type: 'docx', metadata: {}, attachments: atts3, content: kind === 'sheet' || kind === 'slide' ? [target] : [{ type: 'paragraph', children: [t3('intro')] }, target] };
+        for (const format of ['pptx', 'odp', 'xlsx', 'ods'] as const) {
+            const parts = unzipSync(new Uint8Array((await OfficeGenerator.generate(ast, format, { onNode: (n: any) => n === target ? 'REPLACEMENT' : undefined } as any)).value as unknown as Uint8Array));
+            const all = Object.values(parts).map(v => strFromU8(v)).join('\n');
+            assert.ok(all.includes('REPLACEMENT') && !/SECRET|CHARTTITLE/.test(all), `${format}: a string onNode gives for a ${kind} is its output`);
+        }
+    }
+    // false leaves out a picture in a paragraph or a cell, and a cited note (neither listed nor cited).
+    const dropPic = { type: 'image', metadata: { attachmentName: 'p.png', altText: 'DROPALT' } }, dropNote = { type: 'note', metadata: { noteType: 'footnote' }, children: [{ type: 'paragraph', children: [t3('DROPNOTE')] }] };
+    const keptNote = { type: 'note', metadata: { noteType: 'footnote' }, children: [{ type: 'paragraph', children: [t3('KEPTNOTE')] }] };
+    const dropping: any = { type: 'docx', metadata: {}, attachments: atts3, content: [{ type: 'heading', metadata: { level: 2 }, children: [t3('H')] },
+        { type: 'paragraph', children: [t3('a', { notes: [dropNote] }), t3('b', { notes: [keptNote] }), dropPic] },
+        { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [{ type: 'paragraph', children: [t3('cell'), dropPic] }] }] }] }] };
+    for (const format of ['pptx', 'odp', 'xlsx', 'ods'] as const) {
+        const out = await OfficeGenerator.generate(dropping, format, { onNode: (n: any) => n === dropPic || n === dropNote ? false : undefined } as any);
+        const parts = unzipSync(new Uint8Array(out.value as unknown as Uint8Array));
+        const all = Object.values(parts).map(v => strFromU8(v)).join('\n');
+        assert.ok(!Object.keys(parts).some(k => /media\/|Pictures\//.test(k)) && !/DROPALT|DROPNOTE/.test(all) && all.includes('KEPTNOTE'), `${format}: what onNode leaves out stays out`);
+        assert.ok(!(out.messages || []).some((m: any) => m.details?.feature === 'pictures'), `${format}: no picture reported lost where onNode left them out`);
+        if (format === 'xlsx' || format === 'ods') assert.ok(all.includes('[Footnote 1]') && !all.includes('[Footnote 2]'), `${format}: notes are numbered and cited among those kept`);
+    }
+    // Pictures and charts in cells: charts written as their data (with their titles), pictures reported.
+    const celled: any = { type: 'docx', metadata: {}, attachments: atts3, content: [{ type: 'table', children: [{ type: 'row', children: [
+        { type: 'cell', children: [{ type: 'paragraph', children: [t3('pic:'), { type: 'image', metadata: { attachmentName: 'p.png' } }] }] }, { type: 'cell', children: [{ type: 'chart', metadata: { attachmentName: 'c1' } }] }] }] }] };
+    for (const format of ['xlsx', 'ods'] as const) {
+        const out = await OfficeGenerator.generate(celled, format);
+        const all = Object.values(unzipSync(new Uint8Array(out.value as unknown as Uint8Array))).map(v => strFromU8(v)).join('\n');
+        assert.ok(all.includes('>L1<') && all.includes('CHARTTITLE') && (out.messages || []).some((m: any) => m.details?.feature === 'pictures'), `${format}: a chart in a cell is a sheet of its data, a picture in one reported`);
+    }
+    for (const format of ['pptx', 'odp'] as const) {
+        const all = Object.values(unzipSync(new Uint8Array((await OfficeGenerator.generate(celled, format)).value as unknown as Uint8Array))).map(v => strFromU8(v)).join('\n');
+        assert.ok(all.includes('>L1<') && all.includes('CHARTTITLE'), `${format}: a chart in a cell is a table of its data after the table, under its title`);
+    }
+    // Workbooks' links; slides' link targets encoded; coordinates finite and whole.
+    const linked = await OfficeParser.parseOffice(Buffer.from('<p>See <a href="https://example.com/My Report.pdf">report</a></p><table><tr><td><a href="mailto:a@b.c">mail</a></td></tr></table>'), { fileType: 'html' } as any) as OfficeParserAST;
+    const xlsxLinks = unzipSync(new Uint8Array((await OfficeGenerator.generate(linked, 'xlsx')).value as Uint8Array));
+    assert.ok(Object.keys(xlsxLinks).some(k => /worksheets\/_rels\//.test(k)) && Object.keys(xlsxLinks).filter(k => /worksheets\/_rels\//.test(k)).map(k => strFromU8(xlsxLinks[k])).join('').includes('Target="https://example.com/My%20Report.pdf" TargetMode="External"')
+        && Object.keys(xlsxLinks).map(k => strFromU8(xlsxLinks[k])).join('').includes('<hyperlink ref="A1"'), 'xlsx: a cell keeps its link');
+    const odsBack = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(linked, 'ods')).value as unknown as Uint8Array), { fileType: 'ods' } as any) as OfficeParserAST;
+    assert.ok(collectAllNodes(odsBack).some(n => (n.metadata as any)?.link === 'mailto:a@b.c'), 'ods: a cell keeps its link');
+    const pptxRels = unzipSync(new Uint8Array((await OfficeGenerator.generate(linked, 'pptx')).value as Uint8Array));
+    assert.ok(Object.keys(pptxRels).filter(k => k.endsWith('.rels')).map(k => strFromU8(pptxRels[k])).join('').includes('Target="https://example.com/My%20Report.pdf"'), 'pptx: a link target is encoded');
+    const far: any = { type: 'pdf', metadata: {}, attachments: [], content: [{ type: 'page', metadata: { pageWidth: 612, pageHeight: 792 }, children: [{ type: 'paragraph', bounds: { x: 1e300, y: -1e21, width: 1e300, height: 12 }, children: [t3('FAR')] }] }] };
+    for (const format of ['pptx', 'odp'] as const) {
+        const all = Object.values(unzipSync(new Uint8Array((await OfficeGenerator.generate(far, format)).value as unknown as Uint8Array))).map(v => strFromU8(v)).join('\n');
+        assert.ok(!/e\+\d|Infinity|NaN/.test(all.replace(/<a:t>[^<]*<\/a:t>/g, '')), `${format}: every coordinate is finite and written in full`);
+    }
+    // Custom properties: one a name as Office compares them, dates the same on every machine.
+    const props = unzipSync(new Uint8Array((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [] } as any, 'pptx', { metadataOverrides: { custom: { K: 'first', ' k': 'second', far: new Date(8.64e15), bad: new Date(NaN) } } } as any)).value as Uint8Array));
+    const customXml = strFromU8(props['docProps/custom.xml']);
+    assert.ok((customXml.match(/name="K"|name="k"/gi) || []).length === 1 && customXml.includes('+275760-09-13T00:00:00.000Z') && customXml.includes('Invalid Date') && !/GMT/.test(customXml), 'custom properties: deduplicated, dates written alike everywhere');
+    // ODP: a shape name no preset has is a rectangle, reported once; a prototype key is no shape.
+    const shapes: any = { type: 'pptx', metadata: { pageSetup: { width: 720, height: 405 } }, attachments: [], content: [{ type: 'slide', metadata: {}, children: [
+        { type: 'drawing', bounds: { x: 1, y: 1, width: 10, height: 10 }, metadata: { geometry: 'constructor', fill: '#FF0000' } },
+        { type: 'drawing', bounds: { x: 20, y: 1, width: 10, height: 10 }, metadata: { geometry: 'constructor', fill: '#FF0000' } }] }] };
+    const odpShapes = await OfficeGenerator.generate(shapes, 'odp');
+    const shapesXml = strFromU8(unzipSync(new Uint8Array(odpShapes.value as unknown as Uint8Array))['content.xml']);
+    assert.ok(!shapesXml.includes('function') && (shapesXml.match(/draw:type="rectangle"/g) || []).length === 2 && (odpShapes.messages || []).filter((m: any) => /constructor/.test(m.details?.feature ?? '')).length === 1, 'odp: a shape name no preset has is a rectangle, reported once');
+
+    // onNode's string for a cell is that cell's text whatever it holds; a comment's string its text, without
+    // its author; a nested table's cells are asked too.
+    const verdicts = { type: 'docx', metadata: {}, attachments: [], content: [
+        { type: 'heading', metadata: { level: 2 }, children: [{ type: 'text', text: 'Cells' }] },
+        { type: 'table', children: [{ type: 'row', children: [
+            { type: 'cell', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'SECRET CELL' }] }] },
+            { type: 'cell', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'outer' }] }, { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', text: 'SECRET NESTED', children: [{ type: 'text', text: 'SECRET NESTED' }] }] }] }] },
+        ] }] },
+        { type: 'paragraph', children: [{ type: 'text', text: 'note me', comments: [{ type: 'comment', metadata: { author: 'SECRET AUTHOR' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'SECRET COMMENT' }] }] }] }] },
+    ] } as any;
+    for (const format of ['pptx', 'odp'] as const) {
+        const parts = unzipSync(new Uint8Array((await OfficeGenerator.generate(verdicts, format, { onNode: (n: OfficeContentNode) => {
+            if (n.type === 'cell' && JSON.stringify(n).includes('SECRET CELL')) return 'CELL REPLACED';
+            if (n.type === 'cell' && n.text === 'SECRET NESTED') return false;
+            if (n.type === 'comment') return 'COMMENT REPLACED';
+            return undefined;
+        } } as any)).value as unknown as Uint8Array));
+        const all = Object.values(parts).map(v => strFromU8(v)).join('\n');
+        assert.ok(all.includes('CELL REPLACED') && all.includes('COMMENT REPLACED') && !/SECRET/.test(all), `${format}: onNode's strings and false hold for cells, nested cells and comments`);
+    }
+    // ODP writes text sizes for every script (CJK, Arabic and Indic text kept the default's alone).
+    const sized = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', children: [{ type: 'text', text: '中文 العربية', formatting: { size: '11pt', bold: true } }] }] } as any, 'odp')).value as unknown as Uint8Array))['content.xml']);
+    assert.ok(/style:font-size-asian="11pt"/.test(sized) && /style:font-size-complex="11pt"/.test(sized) && /style:font-weight-complex="bold"/.test(sized), 'odp: sizes and weights are written for Asian and complex scripts');
+    // A link to a place in the document, which a slide's text cannot open, is reported.
+    const placeLink = await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', children: [{ type: 'text', text: 'see', metadata: { link: '#intro', linkType: 'internal' } }] }] } as any, 'pptx');
+    assert.ok((placeLink.messages || []).some((m: any) => m.details?.feature === 'links to places in the document'), 'pptx: a link to a place in the document is reported');
+
+    // A footnote's, a comment's and a speaker note's links are kept on the notes they go to.
+    const tinyPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    const linkedNotes = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', children: [{ type: 'text', text: 'Body',
+        notes: [{ type: 'note', metadata: { noteType: 'footnote' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'note', metadata: { link: 'https://footnote.example/' } }] }] }],
+        comments: [{ type: 'comment', metadata: { author: 'A' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'see', metadata: { link: 'https://comment.example/' } }] }] }] }] }] } as any;
+    for (const format of ['pptx', 'odp'] as const) {
+        const parts = unzipSync(new Uint8Array((await OfficeGenerator.generate(linkedNotes, format)).value as unknown as Uint8Array));
+        const all = Object.values(parts).map(v => strFromU8(v)).join('\n');
+        assert.ok(/footnote\.example/.test(all) && /comment\.example/.test(all), `${format}: links in footnotes and comments are kept`);
+    }
+    // A heading's picture is written (a logo in a title was left out); one whose type is a name every object has is none.
+    const headed = { type: 'html', metadata: {}, attachments: [{ type: 'image', name: 'logo.png', mimeType: 'image/png', extension: 'png', data: tinyPng }, { type: 'image', name: 'odd', mimeType: 'constructor', extension: 'x', data: Buffer.from('not a picture').toString('base64') }],
+        content: [{ type: 'heading', metadata: { level: 1 }, children: [{ type: 'text', text: 'Title' }, { type: 'image', metadata: { attachmentName: 'logo.png', altText: 'Company logo' } }] },
+            { type: 'paragraph', children: [{ type: 'image', metadata: { attachmentName: 'odd', altText: 'Odd' } }] }] } as any;
+    const headedOut = await OfficeGenerator.generate(headed, 'pptx');
+    const headedParts = Object.keys(unzipSync(new Uint8Array(headedOut.value as Uint8Array)));
+    assert.ok(headedParts.includes('ppt/media/image1.png') && headedParts.filter(p => p.startsWith('ppt/media/')).every(p => /^ppt\/media\/image\d+\.[a-z]+$/.test(p)) && headedOut.messages.some((m: any) => /kind PPTX output does not hold/.test(m.details?.reason ?? '')), `pptx: a heading's picture is written, a type no picture has reported; got ${headedParts}`);
+    // EMF and WMF pictures are held, with their content types.
+    const emf = new Uint8Array(88); emf[0] = 1; emf.set([0x20, 0x45, 0x4d, 0x46], 40);
+    const emfOut = unzipSync(new Uint8Array((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [{ type: 'image', name: 'a.emf', mimeType: 'image/x-emf', extension: 'emf', data: Buffer.from(emf).toString('base64') }], content: [{ type: 'image', metadata: { attachmentName: 'a.emf' } }] } as any, 'pptx')).value as Uint8Array));
+    assert.ok(emfOut['ppt/media/image1.emf'] && /Extension="emf" ContentType="image\/x-emf"/.test(strFromU8(emfOut['[Content_Types].xml'])), 'pptx: an EMF picture is held');
+    // A cell spanning across columns an earlier row's merge holds stops before them: merges never overlap.
+    const crossed = await OfficeParser.parseOffice(Buffer.from('<table><tr><td>A</td><td rowspan="3">B</td><td>C</td></tr><tr><td colspan="3">D wide</td></tr><tr><td>E</td><td>F</td></tr></table>'), { fileType: 'html' } as any) as OfficeParserAST;
+    const crossedSlide = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(crossed, 'pptx')).value as Uint8Array))['ppt/slides/slide1.xml']);
+    assert.ok(!/gridSpan="3"/.test(crossedSlide) && /D wide/.test(crossedSlide), `pptx: a span stops before a merge from above; got ${crossedSlide.slice(0, 2000)}`);
+
+    // ODP holds EMF and SVG pictures (it held PNG, JPEG, GIF and BMP alone, and left the others out with their
+    // alternative text); one of a kind it does not hold is its alternative text.
+    const pictured = (name: string, mimeType: string, data: Uint8Array, alt: string) => ({ type: 'docx', metadata: {}, attachments: [{ type: 'image', name, mimeType, extension: name.split('.').pop(), data: Buffer.from(data).toString('base64') }],
+        content: [{ type: 'image', metadata: { attachmentName: name, altText: alt } }] }) as any;
+    const odpEmf = unzipSync(new Uint8Array((await OfficeGenerator.generate(pictured('a.emf', 'image/x-emf', emf, 'An EMF'), 'odp')).value as Uint8Array));
+    const odpSvg = unzipSync(new Uint8Array((await OfficeGenerator.generate(pictured('a.svg', 'image/svg+xml', strToU8('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>'), 'An SVG'), 'odp')).value as Uint8Array));
+    assert.ok(odpEmf['Pictures/image1.emf'] && odpSvg['Pictures/image1.svg'] && /image\/svg\+xml/.test(strFromU8(odpSvg['META-INF/manifest.xml'])), 'odp: EMF and SVG pictures are held');
+    const odpOther = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(pictured('a.xyz', 'image/x-unknown', new Uint8Array([1, 2, 3, 4]), 'Something else'), 'odp')).value as Uint8Array))['content.xml']);
+    assert.ok(/Something else/.test(odpOther), 'odp: a picture it cannot hold is its alternative text');
+
+    // A sheet's own picture is on one slide, not two; a marker of more than one character (`.1`) is written whole.
+    const sheetPicture = { type: 'xlsx', metadata: {}, attachments: [{ type: 'image', name: 'p.png', mimeType: 'image/png', extension: 'png', data: TINY_PNG_B64 }], content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [
+        { type: 'row', children: [{ type: 'cell', text: 'a', children: [{ type: 'text', text: 'a' }], metadata: { row: 0, col: 0 } }] }, { type: 'image', metadata: { attachmentName: 'p.png' } }] }] } as any;
+    const sheetDeck = unzipSync(new Uint8Array((await OfficeGenerator.generate(sheetPicture, 'pptx')).value as Uint8Array));
+    const picCount = Object.entries(sheetDeck).filter(([k]) => /slides\/slide\d+\.xml$/.test(k)).reduce((n, [, v]) => n + (strFromU8(v).match(/<p:pic>/g) || []).length, 0);
+    assert.strictEqual(picCount, 1, 'pptx: a sheet\'s picture is on one slide');
+    const marked = { type: 'docx', metadata: {}, attachments: [], content: ['first', 'second'].map((t, i) => ({ type: 'list', text: t, metadata: { listType: 'unordered', listId: 'l', itemIndex: i, indentation: 0, marker: `.${i + 1}` }, children: [{ type: 'text', text: t }] })) } as any;
+    const markedPptx = Object.entries(unzipSync(new Uint8Array((await OfficeGenerator.generate(marked, 'pptx')).value as Uint8Array))).filter(([k]) => /slides\/slide\d+\.xml$/.test(k)).map(([, v]) => strFromU8(v)).join('');
+    const markedOdp = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(marked, 'odp')).value as Uint8Array))['content.xml']);
+    assert.ok(/<a:t>\.1\t<\/a:t>/.test(markedPptx) && /<a:t>\.2\t<\/a:t>/.test(markedPptx) && />\.1<text:tab\/>/.test(markedOdp), `pptx, odp: a marker of more than one character is written whole; got ${markedPptx.slice(0, 1500)}`);
+}
+
+async function testNativePdfFurnitureLimits(): Promise<void> {
+    const t = (text: string, more: any = {}) => ({ type: 'text', text, ...more });
+    const p = (...children: any[]) => ({ type: 'paragraph', children });
+    const docOf = (content: any[], extra: any = {}) => ({ type: 'docx', metadata: extra.metadata ?? {}, attachments: extra.attachments ?? [], content, auxiliary: extra.auxiliary }) as any;
+    const pdfOf = async (ast: any, pdfConfig: any = {}) => (await OfficeGenerator.generate(ast, 'pdf', { pdfConfig: { engine: 'native', ...pdfConfig } } as any)).value as Uint8Array;
+    const read = async (pdf: Uint8Array) => OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as Promise<OfficeParserAST>;
+    const texts = (ast: OfficeParserAST) => collectAllNodes(ast).filter(n => n.type === 'text' && n.bounds);
+
+    // Twenty long footnotes cited in one paragraph: every one printed whole, inside its page.
+    const long = Array.from({ length: 150 }, (_, i) => `w${i}`).join(' ');
+    const notes = Array.from({ length: 20 }, (_, i) => t(`cite${i} `, { notes: [{ type: 'note', metadata: { noteType: 'footnote' }, children: [p(t(`N${i}START ${long} N${i}END`))] }] }));
+    const carried = await read(await pdfOf(docOf([p(...notes), { type: 'break', metadata: { breakType: 'page' } }, p(t('after'))])));
+    const all = String((await carried.to('text')).value);
+    assert.deepStrictEqual(Array.from({ length: 20 }, (_, i) => all.includes(`N${i}END`)).filter(x => !x).length, 0, 'every carried footnote is printed');
+    assert.ok(texts(carried).every(n => n.bounds!.y >= 0 && n.bounds!.y + n.bounds!.height <= 842), 'nothing is drawn off its page');
+
+    // A header and a footer of four lines each: the body below the one, every footer line on the page.
+    const lines = (word: string) => Array.from({ length: 4 }, (_, i) => p(t(`${word}${i}`)));
+    const furnished = await read(await pdfOf(docOf([p(t('Body first line'))], { auxiliary: { headers: [{ type: 'header', metadata: { type: 'default' }, children: lines('HEAD') }], footers: [{ type: 'footer', metadata: { type: 'default' }, children: lines('FOOT') }] } })));
+    const at = (word: string) => texts(furnished).find(n => (n.text || '').includes(word))?.bounds;
+    assert.ok(at('HEAD3')!.y + at('HEAD3')!.height <= at('Body first')!.y, 'the body starts below a tall header');
+    assert.ok([0, 1, 2, 3].every(i => at(`FOOT${i}`) && at(`FOOT${i}`)!.y + at(`FOOT${i}`)!.height <= 842), 'a tall footer is on its page');
+
+    // A footnote cited in a table cell: raised in the cell, at the foot of its page.
+    const cellNote = { type: 'note', metadata: { noteType: 'footnote' }, children: [p(t('CELL-NOTE-TEXT'))] };
+    const table = await read(await pdfOf(docOf([{ type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [p(t('100', { notes: [cellNote] }))] }] }] }, p(t('After the table'))])));
+    const tableText = String((await table.to('text')).value);
+    assert.ok(!tableText.includes('1001') && tableText.indexOf('CELL-NOTE-TEXT') > tableText.indexOf('After the table'), `the cell's footnote is raised, at the page's foot; got ${JSON.stringify(tableText)}`);
+
+    // Extreme chart values are written as the chart's text; a slide after other content has its own page.
+    const chart = { type: 'docx', metadata: {}, content: [{ type: 'chart', text: 'CHART-TEXT', metadata: { attachmentName: 'c' } }], attachments: [{ type: 'chart', name: 'c', mimeType: 'application/xml', extension: 'xml', data: '', chartData: { labels: ['a', 'b'], dataSets: [{ values: ['1.7e308', '-1.7e308'], pointLabels: [] }], rawTexts: [] } }] } as any;
+    assert.ok(String((await (await read(await pdfOf(chart))).to('text')).value).includes('CHART-TEXT'), 'a chart no axis can hold is written as its text');
+    const slide = { type: 'slide', metadata: { slideNumber: 1 }, children: [{ ...p(t('SLIDE-ONE')), bounds: { x: 40, y: 40, width: 400, height: 40 } }] };
+    const mixed = await read(await pdfOf(docOf([p(t('INTRO')), slide], { metadata: { pageSetup: { width: 960, height: 540 } } })));
+    assert.strictEqual(mixed.content.length, 2, 'a slide after a paragraph starts a page of its own');
+
+    // A deck's titles make its outline (pdfConfig.outline).
+    const deck = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.pptx')), { fileType: 'pptx' } as any) as OfficeParserAST;
+    const outlined = await read(await pdfOf(deck, { outline: true }));
+    assert.ok((outlined.auxiliary?.outline?.length ?? 0) > 0, 'a deck drawn as laid out still has its outline');
+}
+
+/**
+ * The native PDF engine draws GIF (its first frame) and uncompressed BMP pictures, turned into PNG: a PDF
+ * holds neither, and both were dropped with IMAGE_PROCESSING_FAILED.
+ */
+async function testNativePdfGifAndBmp(): Promise<void> {
+    const sample = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.docx')), { fileType: 'docx', extractAttachments: true } as any) as OfficeParserAST;
+    const gif = sample.attachments.find(a => a.mimeType === 'image/gif')!;
+    const gifBytes = Buffer.from(gif.data, 'base64');
+    const raster = decodeGif(gifBytes, 40_000_000)!;
+    assert.ok(raster && raster.width === (gifBytes[6] | (gifBytes[7] << 8)) && raster.rgba.some((v, i) => i % 4 === 3 && v === 255), 'the sample GIF decodes to its size, with opaque pixels');
+    // A 2 x 2 BMP of 24 bits a pixel, bottom row first: red, green / blue, white.
+    const bmp = (topDown: boolean) => {
+        const b = Buffer.alloc(54 + 16);
+        b.write('BM', 0); b.writeUInt32LE(b.length, 2); b.writeUInt32LE(54, 10); b.writeUInt32LE(40, 14);
+        b.writeInt32LE(2, 18); b.writeInt32LE(topDown ? -2 : 2, 22); b.writeUInt16LE(1, 26); b.writeUInt16LE(24, 28);
+        const rows = topDown ? [[[255, 0, 0], [0, 255, 0]], [[0, 0, 255], [255, 255, 255]]] : [[[0, 0, 255], [255, 255, 255]], [[255, 0, 0], [0, 255, 0]]];
+        rows.forEach((row, y) => row.forEach(([r, g, bl], x) => { const o = 54 + y * 8 + x * 3; b[o] = bl; b[o + 1] = g; b[o + 2] = r; }));
+        return b;
+    };
+    for (const topDown of [false, true]) {
+        const decoded = decodeBmp(bmp(topDown), 40_000_000)!;
+        assert.deepStrictEqual([...decoded.rgba], [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255], `a BMP (${topDown ? 'top down' : 'bottom up'}) reads red, green / blue, white`);
+    }
+    assert.strictEqual(decodeBmp(bmp(false), 3), null, 'a BMP past the pixel budget is not decoded');
+    for (const [name, mimeType, data] of [['picture.gif', 'image/gif', gif.data], ['picture.bmp', 'image/bmp', bmp(false).toString('base64')]] as const) {
+        const ast = { type: 'docx', metadata: {}, content: [{ type: 'paragraph', children: [{ type: 'image', metadata: { attachmentName: name } }] }],
+            attachments: [{ type: 'image', name, mimeType, extension: name.split('.')[1], data }] } as any;
+        const result = await OfficeGenerator.generate(ast, 'pdf', { pdfConfig: { engine: 'native' }, onWarning: () => { } } as any);
+        assert.ok(!(result.messages || []).some((m: any) => m.code === 'IMAGE_PROCESSING_FAILED') && Buffer.from(result.value as Uint8Array).toString('latin1').includes('/Subtype /Image'), `the native PDF engine draws a ${mimeType} picture`);
+    }
+}
+
+/**
+ * A PDF of slides leaves their speaker notes out, as PowerPoint's and LibreOffice's do: they were printed,
+ * and at the end of the document, on the last slide's page. pdfConfig.printSpeakerNotes prints each
+ * under its own slide; every other format keeps them.
+ */
+async function testSpeakerNotesInPdf(): Promise<void> {
+    for (const file of ['test.pptx', 'test.odp']) {
+        const ast = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', file)), { fileType: file.split('.')[1] } as any) as OfficeParserAST;
+        const pagesOf = async (printSpeakerNotes: boolean) => {
+            const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native', printSpeakerNotes } } as any)).value as Uint8Array;
+            const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+            return back.content.map(page => JSON.stringify(page));
+        };
+        const without = (await pagesOf(false)).join('\n');
+        assert.ok(!without.includes('Slide Note 1') && !without.includes('Slide Note 2'), `${file}: speaker notes are not printed by default`);
+        const withNotes = await pagesOf(true);
+        const notePage = withNotes.findIndex(p => p.includes('Slide Note 2'));
+        const slidePage = withNotes.findIndex(p => p.includes('Slide Note 1'));
+        assert.ok(slidePage >= 0 && notePage >= slidePage && notePage < withNotes.length - 1, `${file}: kept, each note is drawn under its own slide, not at the end (pages ${slidePage}, ${notePage} of ${withNotes.length})`);
+        assert.ok(String((await ast.to('text')).value).includes('Slide Note 1'), `${file}: text output keeps the speaker notes`);
+    }
+}
+
+/**
+ * A spreadsheet's hidden columns, rows and sheets are read and marked, kept as data by every output, and
+ * left out of PDF output, as a spreadsheet's printout leaves them (pdfConfig.printHidden prints them).
+ */
+async function testHiddenSheetContent(): Promise<void> {
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const sheetXml = (cols: string, rows: string) => `<?xml version="1.0"?><worksheet ${ns}>${cols}<sheetData>${rows}</sheetData></worksheet>`;
+    const cell = (ref: string, text: string) => `<c r="${ref}" t="inlineStr"><is><t>${text}</t></is></c>`;
+    const xlsx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="Shown" sheetId="1" r:id="rId1"/><sheet name="Secret sheet" sheetId="2" state="hidden" r:id="rId2"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/><Relationship Id="rId2" Target="worksheets/sheet2.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+        'xl/worksheets/sheet1.xml': strToU8(sheetXml('<cols><col min="2" max="2" hidden="1"/></cols>',
+            `<row r="1">${cell('A1', 'Name')}${cell('B1', 'HIDDENCOL')}${cell('C1', 'Amount')}</row><row r="2" hidden="1">${cell('A2', 'HIDDENROW')}${cell('C2', '1')}</row><row r="3">${cell('A3', 'Ada')}${cell('B3', 'HIDDENCELL')}${cell('C3', '7')}</row>`)),
+        'xl/worksheets/sheet2.xml': strToU8(sheetXml('', `<row r="1">${cell('A1', 'HIDDENSHEET')}</row>`)),
+    }));
+    const odsNs = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"';
+    const odsCell = (text: string) => `<table:table-cell office:value-type="string"><text:p>${text}</text:p></table:table-cell>`;
+    const ods = Buffer.from(zipSync({
+        mimetype: strToU8('application/vnd.oasis.opendocument.spreadsheet'),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${odsNs}><office:automatic-styles><style:style style:name="ta2" style:family="table"><style:table-properties table:display="false"/></style:style></office:automatic-styles><office:body><office:spreadsheet>`
+            + `<table:table table:name="Shown"><table:table-column/><table:table-column table:visibility="collapse"/><table:table-column/>`
+            + `<table:table-row>${odsCell('Name')}${odsCell('HIDDENCOL')}${odsCell('Amount')}</table:table-row>`
+            + `<table:table-row table:visibility="collapse">${odsCell('HIDDENROW')}${odsCell('x')}${odsCell('1')}</table:table-row>`
+            + `<table:table-row>${odsCell('Ada')}${odsCell('HIDDENCELL')}${odsCell('7')}</table:table-row></table:table>`
+            + `<table:table table:name="Secret sheet" table:style-name="ta2"><table:table-row>${odsCell('HIDDENSHEET')}</table:table-row></table:table>`
+            + `</office:spreadsheet></office:body></office:document-content>`),
+    }));
+    for (const [label, bytes, fileType] of [['XLSX', xlsx, 'xlsx'], ['ODS', ods, 'ods']] as const) {
+        const ast = await OfficeParser.parseOffice(bytes, { fileType } as any) as OfficeParserAST;
+        const sheets = ast.content.filter(n => n.type === 'sheet');
+        assert.deepStrictEqual(sheets.map(s => !!(s.metadata as any)?.hidden), [false, true], `${label}: the hidden sheet is marked`);
+        const marked = sheets[0].children!.flatMap(r => (r.children || []).filter(c => (c.metadata as any)?.hidden).map(c => c.text));
+        assert.deepStrictEqual(marked.sort(), ['1', 'HIDDENCELL', 'HIDDENCOL', 'HIDDENROW', ...(fileType === 'ods' ? ['x'] : [])].sort(), `${label}: the hidden column's and row's cells are marked; got ${marked}`);
+        const csv = String((await ast.to('csv')).value);
+        assert.ok(csv.includes('HIDDENCOL') && csv.includes('HIDDENROW'), `${label}: CSV keeps hidden content as data`);
+        for (const printHidden of [false, true]) {
+            const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native', printHidden } } as any)).value as Uint8Array;
+            const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+            const text = String((await back.to('text')).value);
+            const hiddenShown = ['HIDDENCOL', 'HIDDENROW', 'HIDDENCELL', 'HIDDENSHEET'].filter(w => text.includes(w));
+            assert.ok(text.includes('Ada') && text.includes('Amount'), `${label}: the shown cells are printed`);
+            assert.deepStrictEqual(hiddenShown, printHidden ? ['HIDDENCOL', 'HIDDENROW', 'HIDDENCELL', 'HIDDENSHEET'] : [], `${label}: printHidden ${printHidden}; got ${hiddenShown} in ${JSON.stringify(text)}`);
+        }
+    }
+}
+
+/**
+ * A CSV file's delimiter is read from it by default: European spreadsheets write `;` with decimal commas,
+ * which a comma split (`Müller;1.234,56` came out as `Müller;1.234 | 56`). An explicit one is used as
+ * given, CSV output keeps the one read, and a byte order mark is no text of the first cell.
+ */
+async function testCsvDelimiterDetection(): Promise<void> {
+    const csv = async (text: string, cfg: any = {}) => OfficeParser.parseOffice(Buffer.from(text), { fileType: 'csv', ...cfg } as any) as Promise<OfficeParserAST>;
+    const cells = (ast: OfficeParserAST) => ast.content[0].children!.filter(r => r.type === 'row').map(r => r.children!.map(c => c.text));
+    const german = await csv('\uFEFFName;Betrag;Datum\nMüller;1.234,56;01.10.2026\n"Schmidt; Anna";99,90;02.10.2026\n');
+    assert.deepStrictEqual(cells(german), [['Name', 'Betrag', 'Datum'], ['Müller', '1.234,56', '01.10.2026'], ['Schmidt; Anna', '99,90', '02.10.2026']], 'a semicolon file is read with semicolons, its BOM dropped');
+    assert.strictEqual(german.config.csvDelimiter, ';', 'the parse says which delimiter it read');
+    assert.ok(String((await german.to('csv')).value).startsWith('Name;Betrag;Datum'), 'CSV output keeps the delimiter read');
+    assert.deepStrictEqual(cells(await csv('a\tb\tc\n1\t2\t3\n')), [['a', 'b', 'c'], ['1', '2', '3']], 'a tab file is read with tabs');
+    assert.deepStrictEqual(cells(await csv('a|b\n1|2\n')), [['a', 'b'], ['1', '2']], 'a pipe file is read with pipes');
+    assert.deepStrictEqual(cells(await csv('name,note\nAda,"x; y; z"\nBo,"p; q"\n')), [['name', 'note'], ['Ada', 'x; y; z'], ['Bo', 'p; q']], 'semicolons inside quotes do not count');
+    assert.deepStrictEqual(cells(await csv('a;b\n1;2\n', { csvDelimiter: ',' })), [['a;b'], ['1;2']], 'an explicit delimiter is used as given');
+    assert.deepStrictEqual(cells(await csv('just one column\nof text\n')), [['just one column'], ['of text']], 'a file of one column is one column');
+    const fromMarkdown = await OfficeParser.parseOffice(Buffer.from('| a | b |\n|---|---|\n| 1 | 2 |\n'), { fileType: 'md' } as any) as OfficeParserAST;
+    assert.ok(String((await fromMarkdown.to('csv')).value).startsWith('a,b'), 'CSV written from another format uses commas, not "auto"');
+}
+
+/**
+ * Plain text of a PDF page sets the runs of two table cells apart even where their boxes touch, as a
+ * tight table's do in Chromium's PDFs: "DescriptionQuantityUnit price" was one word.
+ */
+async function testTextTableCellsApart(): Promise<void> {
+    const run = (text: string, x: number, width: number, y: number) => ({ type: 'text', text, bounds: { x, y, width, height: 12 } });
+    const cell = (text: string, x: number, width: number, y: number) => ({ type: 'cell', text, children: [run(text, x, width, y)] });
+    const row = (y: number, cells: [string, number, number][]) => ({ type: 'row', children: cells.map(([t, x, w]) => cell(t, x, w, y)) });
+    const ast = {
+        type: 'pdf', metadata: {}, attachments: [],
+        content: [{ type: 'page', metadata: { pageNumber: 1, pageWidth: 300, pageHeight: 200 }, children: [{ type: 'table', children: [
+            row(20, [['Description', 66, 59], ['Quantity', 125, 48], ['Unit price', 173, 54]]),
+            row(40, [['Consulting', 63, 55], ['1', 118, 15], ['40.00', 176, 27]]),
+        ] }] }],
+    } as any;
+    const text = String((await OfficeGenerator.generate(ast, 'text', { onWarning: () => { } } as any)).value);
+    assert.ok(/Description Quantity Unit price/.test(text) && /Consulting 1\s+40\.00/.test(text), `cells whose boxes touch are set apart; got ${JSON.stringify(text)}`);
+}
+
+/**
+ * A composite font that says nothing of its codes is read by pdf.js as its glyph ids, which look like text.
+ * The warning goes by the control characters taken out of the text that stays, where every glyph of the font
+ * read as its own code: nothing else parts glyph ids from codes that are the characters, and a caller may
+ * drop the text on it. It is judged after the pages, so it can take nothing from their text.
+ */
+async function testPdfUnmappedFont(): Promise<void> {
+    const garbage = '<0175000301760003015D>';
+    interface Shape { type0?: string; cid?: string; baseFont?: string; encoding?: string; fonts?: (page: number) => string; resources?: string; extra?: (string | Buffer)[]; noPageFonts?: boolean; inherited?: boolean; contents?: (content: string) => string | Buffer }
+    const type0Of = (baseFont: string, descendant: number, more = '', encoding = '/Identity-H') => `<< /Type /Font /Subtype /Type0 /BaseFont /${baseFont} /Encoding ${encoding} /DescendantFonts [${descendant} 0 R] ${more} >>`;
+    const cidOf = (baseFont: string, ordering = 'Identity', more = '') => `<< /Type /Font /Subtype /CIDFontType2 /BaseFont /${baseFont} /CIDSystemInfo << /Registry (Adobe) /Ordering (${ordering}) /Supplement 0 >> /DW 1000 ${more} >>`;
+    const pdfOf = (pages: string[], o: Shape = {}): Buffer => {
+        const baseFont = o.baseFont ?? 'NoSuchFont';
+        const start = 6 + (o.extra?.length ?? 0);
+        const shared = `/Font << /F1 3 0 R /F2 5 0 R >> ${o.resources ?? ''}`;
+        const objects: (string | Buffer)[] = [
+            '<< /Type /Catalog /Pages 2 0 R >>',
+            `<< /Type /Pages /Kids [${pages.map((_, i) => `${start + i * 2} 0 R`).join(' ')}] /Count ${pages.length} ${o.inherited ? `/Resources << ${shared} >>` : ''} >>`,
+            type0Of(baseFont, 4, o.type0 ?? '', o.encoding),
+            cidOf(baseFont, /Japan1/.test(o.cid ?? '') ? 'Japan1' : 'Identity', (o.cid ?? '').replace('Japan1', '')),
+            '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+            ...(o.extra ?? []),
+        ];
+        pages.forEach((content, i) => {
+            const resources = o.inherited ? '' : `/Resources << ${o.noPageFonts ? o.resources ?? '' : `/Font << /F1 3 0 R /F2 5 0 R ${o.fonts?.(i) ?? ''} >> ${o.resources ?? ''}`} >>`;
+            objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ${resources} /Contents ${start + i * 2 + 1} 0 R >>`, o.contents?.(content) ?? `<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
+        });
+        const parts: Buffer[] = [Buffer.from('%PDF-1.7\n')];
+        const offsets: number[] = [];
+        let at = parts[0].length;
+        objects.forEach((body, i) => {
+            const b = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), typeof body === 'string' ? Buffer.from(body, 'latin1') : body, Buffer.from('\nendobj\n')]);
+            offsets.push(at); at += b.length; parts.push(b);
+        });
+        parts.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(n => `${String(n).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+        return Buffer.concat(parts);
+    };
+    const read = async (pdf: Buffer | Uint8Array, config: object = {}) => {
+        const found: any[] = [];
+        const ast = await OfficeParser.parseOffice(pdf as Buffer, { fileType: 'pdf', ocr: false, onWarning: (issue: any) => found.push(issue), ...config } as any) as OfficeParserAST;
+        return { ast, found, unmapped: found.filter(i => i.code === 'PDF_FONT_UNMAPPED'), suspect: found.filter(i => i.code === 'PDF_TEXT_ENCODING_SUSPECT') };
+    };
+    const warned = async (pdf: Buffer | Uint8Array, config: object = {}) => (await read(pdf, config)).unmapped.map(i => i.details);
+    const plain = 'BT /F2 12 Tf 72 720 Td (A line that decodes) Tj ET';
+    const drawn = (hex: string) => `${plain}\nBT /F1 12 Tf 72 700 Td ${hex} Tj ET`;
+    const one = { font: 'NoSuchFont', pages: [1] };
+
+    // The report's file: the warning names the font and page, and the text is as it was.
+    const report = await read(pdfOf([drawn(garbage)]));
+    assert.deepStrictEqual(report.unmapped.map(i => i.details), [one], `a font read as glyph ids is reported, with its name and pages; got ${JSON.stringify(report.found.map(i => i.code))}`);
+    assert.strictEqual(report.unmapped[0].page, 1, 'and its first page');
+    assert.ok(/NoSuchFont/.test(report.unmapped[0].message) && /page 1/.test(report.unmapped[0].message), `the message says so; got ${report.unmapped[0].message}`);
+    assert.strictEqual((await report.ast.to('text')).value, 'A line that decodes\nŵŶŝ', 'the warning leaves the text alone');
+
+    // With no control character there is nothing to part glyph ids from codes that are the characters.
+    assert.deepStrictEqual(await warned(pdfOf([drawn('<01750176015D>')])), [], 'text with no control character says nothing');
+    assert.deepStrictEqual(await warned(pdfOf([drawn('<00480069>')])), [], 'nor do codes that are the characters');
+    // One page's control characters speak for the font's other pages.
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage), drawn('<0175>')])), [{ font: 'NoSuchFont', pages: [1, 2] }], 'every page with text in the font is listed');
+    // In separate shows too.
+    assert.deepStrictEqual(await warned(pdfOf([`BT /F1 12 Tf 72 700 Td <0175> Tj <0003> Tj <0176> Tj ET`])), [one], 'control characters and text apart are one font');
+
+    // An ActualText stands for its glyphs, and what it replaces is not in the text.
+    const span = (text: string) => `/Span << /ActualText (${text}) >> BDC BT /F1 12 Tf 72 700 Td ${garbage} Tj ET EMC`;
+    const spanned = await read(pdfOf([span('Hello world')]));
+    assert.ok(/Hello world/.test(String((await spanned.ast.to('text')).value)) && !spanned.unmapped.length, `text all in ActualText says nothing; got ${JSON.stringify(spanned.found.map(i => i.code))}`);
+    assert.deepStrictEqual(await warned(pdfOf([`${span('Hello world')}\nBT /F1 12 Tf 72 680 Td ${garbage} Tj ET`])), [one], 'text beside it does');
+
+    // Nothing to read: blanks, marks that show nothing, and what pdf.js leaves off the page.
+    assert.deepStrictEqual(await warned(pdfOf([drawn('<00030003>')])), [], 'a font drawing only blanks says nothing');
+    assert.deepStrictEqual(await warned(pdfOf([drawn('<0003200D200B>')])), [], 'nor one drawing only format characters');
+
+    // An embedded font is no help: pdf.js reads none of its tables for a composite font's text.
+    const ttf = fs.readFileSync(path.join(__dirname, '..', 'docs', 'vendor', 'katex-0.19.0', 'fonts', 'KaTeX_Main-Regular.ttf'));
+    const embedded = pdfOf([drawn('<002B0003004C>')], {
+        cid: '/FontDescriptor 6 0 R',
+        baseFont: 'ABCDEF+KaTeX',
+        extra: ['<< /Type /FontDescriptor /FontName /ABCDEF+KaTeX /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 7 0 R >>', Buffer.concat([Buffer.from(`<< /Length ${ttf.length} >>\nstream\n`), ttf, Buffer.from('\nendstream')])],
+    });
+    assert.deepStrictEqual(await warned(embedded), [{ font: 'KaTeX', pages: [1] }], 'an embedded font with no map is reported');
+
+    // Fonts pdf.js reads characters from: a standard font not embedded, by its name; a collection, by its map.
+    const arialDrawn = '<002B0001004C>';
+    const arial = await read(pdfOf([drawn(arialDrawn)], { baseFont: 'Arial' }));
+    assert.ok(/Hi$/.test(String((await arial.ast.to('text')).value)) && !arial.unmapped.length, `a standard font not embedded is mapped by its name; got ${JSON.stringify((await arial.ast.to('text')).value)}, ${arial.unmapped.length} warnings`);
+    assert.deepStrictEqual(await warned(pdfOf([`BT /F1 12 Tf 72 700 Td <00220003004C> Tj ET`], { cid: 'Japan1' })), [], 'a font of an Adobe character collection is not reported');
+    // That is told font by font.
+    assert.deepStrictEqual(await warned(pdfOf([`${drawn(garbage)}\nBT /F3 12 Tf 72 680 Td ${arialDrawn} Tj ET`], { fonts: () => '/F3 6 0 R', extra: [type0Of('Arial', 7), cidOf('Arial')] })), [one], 'a font mapped beside one that is not says nothing of it');
+
+    // A font that says what its codes are.
+    const stream = (body: string) => `<< /Length ${body.length} >>\nstream\n${body}\nendstream`;
+    const bfrange = '/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /T def 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfrange <0000> <FFFF> <0000> endbfrange endcmap end end';
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { type0: '/ToUnicode 6 0 R', extra: [stream(bfrange)] })), [], 'a /ToUnicode stream, identity or not, is not reported');
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { type0: '/ToUnicode /UniGB-UCS2-H' })), [], 'nor one naming a CMap');
+    for (const none of ['/Identity-H', 'null', '(x)']) assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { type0: `/ToUnicode ${none}` })), [one], `a /ToUnicode of ${none} says nothing`);
+    const cmap = '/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /T def 1 begincodespacerange <00> <FF> endcodespacerange 1 begincidrange <00> <FF> 0 endcidrange endcmap end end';
+    assert.deepStrictEqual(await warned(pdfOf(['BT /F1 12 Tf 72 700 Td (\\003Hello) Tj ET'], { encoding: '6 0 R', extra: [stream(cmap)] })), [], 'an embedded CMap defines its own codes');
+    // Control characters from a simple font are its own matter.
+    assert.deepStrictEqual(await warned(pdfOf([`BT /F2 12 Tf 72 720 Td (Hello\\003\\013world) Tj ET\nBT /F1 12 Tf 72 700 Td <0175> Tj ET`])), [], 'a simple font is not reported');
+
+    // Fonts of one name that differ settle nothing on a page, and another page may.
+    const twin = { baseFont: 'Twin', fonts: (i: number) => i === 0 ? '/F3 6 0 R' : '', extra: [type0Of('Twin', 7, '/ToUnicode 8 0 R'), cidOf('Twin'), stream(bfrange)] };
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], twin)), [], 'two fonts of a name, one with a map, say nothing');
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage), drawn('<0175>')], twin)), [{ font: 'Twin', pages: [1, 2] }], 'until a page has only the one');
+
+    // Wherever the font is found.
+    const form = (more: string, content = `BT /F1 12 Tf 10 10 Td ${garbage} Tj ET`) => `<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << ${more} >> /Length ${content.length} >>\nstream\n${content}\nendstream`;
+    assert.deepStrictEqual(await warned(pdfOf(['/Fm Do'], { noPageFonts: true, resources: '/XObject << /Fm 6 0 R >>', extra: [form('/Font << /F1 3 0 R >>')] })), [one], 'a font drawn in a form is reported');
+    assert.deepStrictEqual(await warned(pdfOf(['/Fm Do'], { noPageFonts: true, resources: '/XObject << /Fm 6 0 R >>', extra: [form('/XObject << /Fm 7 0 R >>', '/Fm Do'), form('/XObject << /Fm 6 0 R >> /Font << /F1 3 0 R >>')] })), [one], 'and in forms that reach each other');
+    const chain = Array.from({ length: 12 }, (_, i) => form(i < 11 ? `/XObject << /Fm ${7 + i} 0 R >>` : '/Font << /F1 3 0 R >>', i < 11 ? '/Fm Do' : undefined));
+    assert.deepStrictEqual(await warned(pdfOf(['/Fm Do'], { noPageFonts: true, resources: '/XObject << /Fm 6 0 R >>', extra: chain })), [one], 'and forms twelve deep');
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { inherited: true })), [one], 'and resources a page inherits');
+    assert.deepStrictEqual(await warned(pdfOf([`q BT /F1 12 Tf 72 700 Td ${garbage} Tj ET Q ${plain}`])), [one], 'and inside q and Q');
+    const doc = await PDFDocument.create();
+    const context = doc.context;
+    const descendant = context.register(context.obj({ Type: 'Font', Subtype: 'CIDFontType2', BaseFont: 'NoSuchFont', CIDSystemInfo: { Registry: PDFHexString.fromText('Adobe'), Ordering: PDFHexString.fromText('Identity'), Supplement: 0 }, DW: 1000 }));
+    const type0 = context.register(context.obj({ Type: 'Font', Subtype: 'Type0', BaseFont: 'NoSuchFont', Encoding: 'Identity-H', DescendantFonts: [descendant] }));
+    const page = doc.addPage([612, 792]);
+    page.node.set(PDFName.of('Resources'), context.obj({ Font: { F1: type0 } }));
+    page.node.set(PDFName.of('Contents'), context.register(context.flateStream(`BT /F1 12 Tf 72 700 Td ${garbage} Tj ET`)));
+    assert.deepStrictEqual(await warned(await doc.save({ useObjectStreams: true })), [one], 'and in an object stream');
+    // A font only a `gs` sets is not among the page's fonts.
+    assert.deepStrictEqual(await warned(pdfOf([`BT /G1 gs 72 700 Td ${garbage} Tj ET`], { noPageFonts: true, resources: '/ExtGState << /G1 << /Font [3 0 R 12] >> >>' })), [], 'a font only a gs sets says nothing');
+
+    // One warning for a name: a font's subsets, inline dictionaries, and pages asked for.
+    assert.deepStrictEqual(await warned(pdfOf([`${drawn(garbage)}\nBT /F3 12 Tf 72 680 Td ${garbage} Tj ET`], { baseFont: 'ABCDEF+Foo', fonts: () => '/F3 6 0 R', extra: [type0Of('GHIJKL+Foo', 7), cidOf('GHIJKL+Foo')] })), [{ font: 'Foo', pages: [1] }], 'two subsets of a font are one warning');
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage), drawn(garbage), drawn(garbage)], { baseFont: 'Inline', noPageFonts: true, resources: `/Font << /F1 ${type0Of('Inline', 4)} /F2 5 0 R >>` })), [{ font: 'Inline', pages: [1, 2, 3] }], 'an inline font on three pages is one warning');
+    const three = pdfOf([drawn(garbage), plain, drawn(garbage)]);
+    assert.deepStrictEqual((await read(three)).unmapped.map(i => [i.page, i.details.pages]), [[1, [1, 3]]], 'only pages with its text are listed');
+    assert.deepStrictEqual((await read(three, { pdfParserConfig: { pageRange: '2-3' } })).unmapped.map(i => [i.page, i.details.pages]), [[3, [3]]], 'of those read');
+
+    // A name is the file's: of no control characters, short, and however many fonts share it, one message.
+    const named = await warned(pdfOf([drawn(garbage)], { baseFont: `A#0A#00${'B'.repeat(200)}` }));
+    assert.ok(named.length === 1 && named[0].font.length <= 128 && !/[\u0000-\u001f]/.test(named[0].font), `a name in a warning is clean and short; got ${JSON.stringify(named)}`);
+    const longName = 'L'.repeat(200);
+    const many = Array.from({ length: 100 }, () => type0Of(longName, 4));
+    const crowd = await read(pdfOf([many.map((_, i) => `BT /X${i} 12 Tf 72 ${700 - i} Td ${garbage} Tj ET`).join('\n')], { baseFont: longName, noPageFonts: true, resources: `/Font << ${many.map((_, i) => `/X${i} ${6 + i} 0 R`).join(' ')} >>`, extra: many }));
+    assert.ok(crowd.unmapped.length === 1 && crowd.unmapped[0].message.length < 500, `fonts sharing a long name are one short message; got ${crowd.unmapped.length}, ${crowd.unmapped[0]?.message.length}`);
+
+    // A file's bounds spent on its pages' content are the text's: the judgement reads no content, and
+    // comes after the pages, so a late ActualText still reads and every page is still listed.
+    const { deflateSync } = await import('zlib');
+    const compressed = (content: string) => { const z = deflateSync(Buffer.from(content, 'latin1'), { level: 9 }); return Buffer.concat([Buffer.from(`<< /Filter /FlateDecode /Length ${z.length} >>\nstream\n`), z, Buffer.from('\nendstream')]); };
+    const pad = ' '.repeat(1024 * 1024);
+    const budget = await read(pdfOf([...Array.from({ length: 70 }, () => `BT /F1 12 Tf 72 700 Td ${garbage} Tj ET\n${pad}\n${plain}`), '/Span << /ActualText (RIGHT) >> BDC BT /F1 12 Tf 72 700 Td <0175> Tj ET EMC'], { contents: compressed }));
+    assert.ok(String((await budget.ast.to('text')).value).endsWith('RIGHT'), `a late ActualText still reads; got ${JSON.stringify(String((await budget.ast.to('text')).value).slice(-30))}`);
+    assert.deepStrictEqual(budget.unmapped.map(i => i.details.pages.length), [71], 'and all the pages are listed');
+
+    // The share of unmappable characters is as it was: a control character taken out counts for nothing there.
+    const lines = (draw: (y: number) => string) => Array.from({ length: 12 }, (_, i) => draw(720 - i * 20)).join('\n');
+    const twelve = await read(pdfOf([lines(y => `BT /F1 12 Tf 72 ${y} Td ${garbage} Tj ET`)]));
+    assert.ok(!twelve.suspect.length && twelve.unmapped.length === 1, `twelve lines are this font's warning alone; got ${JSON.stringify(twelve.found.map(i => i.code))}`);
+    assert.ok(!/\u0003/.test(String((await twelve.ast.to('text')).value)), 'and control characters stay out of the text');
+
+    const via = (id: string, hex: string) => `BT /${id} 12 Tf 72 700 Td ${hex} Tj ET`;
+    const descriptorOf = (name: string) => `<< /Type /FontDescriptor /FontName /${name} /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 >>`;
+    // The names a composite font has: its descendant's, its descriptor's, a direct descendant's.
+    assert.deepStrictEqual(await warned(pdfOf([via('F3', garbage)], { fonts: () => '/F3 6 0 R', extra: [type0Of('Outer', 7), cidOf('Inner')] })), [{ font: 'Inner', pages: [1] }], 'a composite font is named by its descendant');
+    assert.deepStrictEqual(await warned(pdfOf([via('F3', garbage)], { fonts: () => '/F3 6 0 R', extra: [type0Of('Outer', 7), cidOf('Outer', 'Identity', '/FontDescriptor 8 0 R'), descriptorOf('Described')] })), [{ font: 'Described', pages: [1] }], 'or by its descriptor');
+    assert.deepStrictEqual(await warned(pdfOf([via('F3', garbage)], { fonts: () => '/F3 6 0 R', extra: [`<< /Type /Font /Subtype /Type0 /BaseFont /Outer /Encoding /Identity-H /DescendantFonts ${cidOf('Inner')} >>`] })), [{ font: 'Inner', pages: [1] }], 'or by a descendant written in place');
+    // Only a composite font on an Identity CMap says nothing, of either direction.
+    const described2 = (more: string) => ['<< /Type /Font /Subtype /TrueType /BaseFont /Twin /FontDescriptor 9 0 R ' + more + ' >>', descriptorOf('Twin')];
+    assert.deepStrictEqual(await warned(pdfOf([`BT /F4 12 Tf 72 700 Td (Hello\\001 there) Tj ET`], { fonts: () => '/F3 6 0 R /F4 8 0 R', extra: [type0Of('Twin', 7), cidOf('Twin'), ...described2('/Encoding /Identity-H')] })), [], 'a simple font on /Identity-H is not a composite one');
+    // A name pdf.js writes without its underscores (a simple font with no descriptor) is another font's than a composite font's of the dashed name.
+    assert.deepStrictEqual(await warned(pdfOf([`BT /F4 12 Tf 72 700 Td (Hello\\001 there) Tj ET`], { fonts: () => '/F3 6 0 R /F4 8 0 R', extra: [type0Of('Twin-A', 7), cidOf('Twin-A'), '<< /Type /Font /Subtype /TrueType /BaseFont /Twin_A /Encoding /Identity-H >>'] })), [], 'a simple font of an underscored name is not a composite font of the dashed one');
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { encoding: '/Identity-V' })), [one], 'a vertical identity CMap says nothing too');
+    const vertical = await read(pdfOf([drawn(arialDrawn)], { baseFont: 'Arial', encoding: '/Identity-V' }));
+    assert.ok(/Hi$/.test(String((await vertical.ast.to('text')).value)) && !vertical.unmapped.length, 'and a vertical font pdf.js maps is mapped');
+    // What is left of a font's text must be readable: not a delete, a C1 control or a zero-width space.
+    for (const left of ['<0003007F>', '<00030085>', '<0003200B>']) assert.deepStrictEqual(await warned(pdfOf([drawn(left)])), [], `text of ${left} is nothing but what shows nothing`);
+    // Every page of every id of a name, in page order.
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage), plain, `${plain}\n${via('F3', garbage)}`, plain, drawn(garbage)], { baseFont: 'ABCDEF+Foo', fonts: () => '/F3 6 0 R', extra: [type0Of('GHIJKL+Foo', 7), cidOf('GHIJKL+Foo')] })), [{ font: 'Foo', pages: [1, 3, 5] }], 'the pages of two subsets are listed in order');
+    // A name is the file's: cleaned of every control character, and said when nothing is left.
+    const unnamed = await read(pdfOf([drawn(garbage)], { baseFont: '#01' }));
+    assert.ok(unnamed.unmapped.length === 1 && unnamed.unmapped[0].details.font === '' && /PDF font \(unnamed\) /.test(unnamed.unmapped[0].message), `a font with no printable name is unnamed; got ${JSON.stringify(unnamed.unmapped.map(i => i.message.slice(0, 40)))}`);
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { baseFont: 'A#85#ADB' })), [{ font: 'AB', pages: [1] }], 'C1 controls and format characters are cleaned from a name');
+    // A name past what a name can be (127 bytes, by the specification; 256 here) joins nothing, and is not copied.
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { baseFont: 'N'.repeat(256) })), [{ font: 'N'.repeat(128), pages: [1] }], 'a name of 256 characters finds its font');
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { baseFont: 'N'.repeat(257) })), [], 'one of 257 does not');
+    // Names pdf.js gives that the dictionary does not: a Type 3 font's, a string /FontName.
+    const type3 = '<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /A 7 0 R /B 7 0 R >> /Encoding << /Type /Encoding /Differences [65 /A /B] >> /FirstChar 65 /LastChar 66 /Widths [1000 1000] >>';
+    assert.deepStrictEqual(await warned(pdfOf([`BT /F9 12 Tf 72 700 Td (A\\001B) Tj ET`], { baseFont: 'Type3', fonts: () => '/F9 6 0 R', extra: [type3, stream('1000 0 d0')] })), [], 'a Type 3 font is not a composite font named Type3');
+    assert.deepStrictEqual(await warned(pdfOf([`BT /F9 12 Tf 72 700 Td (Hello\\001 there) Tj ET`], { baseFont: 'Stringy', fonts: () => '/F9 6 0 R', extra: ['<< /Type /Font /Subtype /TrueType /BaseFont /Other /FontDescriptor 7 0 R >>', '<< /Type /FontDescriptor /FontName (Stringy) /Flags 32 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 >>'] })), [], 'a font named by a string is found by it');
+    // pdf.js reads /ToUnicode from the descendant first.
+    const bfrangeOf = '/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /T def 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfrange <0000> <FFFF> <0000> endbfrange endcmap end end';
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { cid: '/ToUnicode 6 0 R', extra: [stream(bfrangeOf)] })), [], 'a /ToUnicode on the descendant is a map');
+    assert.deepStrictEqual(await warned(pdfOf([drawn(garbage)], { type0: '/ToUnicode 6 0 R', cid: '/ToUnicode ()', extra: [stream(bfrangeOf)] })), [], 'and an empty string there is none, the font\'s own is the map');
+    // A font set by a `gs` is the page's font for what is drawn after it.
+    const gs = '/ExtGState << /G1 << /Font [3 0 R 12] >> >>';
+    const set = await read(pdfOf([`BT /G1 gs 72 700 Td ${arialDrawn} Tj ET`], { baseFont: 'Arial', resources: gs }));
+    assert.ok(/Hi$/.test(String((await set.ast.to('text')).value)) && !set.unmapped.length, 'a font a gs sets, and pdf.js maps, is mapped');
+    assert.deepStrictEqual(await warned(pdfOf([`BT /G1 gs 72 700 Td ${garbage} Tj ET`], { resources: gs })), [one], 'and one it does not map is reported');
+    // A page whose operators were cut short says nothing of its fonts, however they were cut.
+    const filler = (n: number) => 'q Q '.repeat(n);
+    const small = { pdfParserConfig: { maxOperators: 100 } };
+    const cut = await read(pdfOf([`BT /F1 12 Tf 72 700 Td ${filler(20000)} ${arialDrawn} Tj ET`], { baseFont: 'Arial', contents: compressed }), small);
+    assert.ok(/Hi$/.test(String((await cut.ast.to('text')).value)) && cut.found.some(i => i.code === 'PDF_CONTENT_LIMIT_EXCEEDED') && !cut.unmapped.length, `a list cut by the operator budget says nothing; got ${JSON.stringify(cut.found.map(i => i.code))}`);
+    const seenThenCut = await read(pdfOf([`BT /F1 12 Tf 72 700 Td <0001> Tj ${filler(20000)} ${arialDrawn} Tj ET`], { baseFont: 'Arial', contents: compressed }), small);
+    assert.ok(/Hi$/.test(String((await seenThenCut.ast.to('text')).value)) && !seenThenCut.unmapped.length, `and so does one cut after a glyph of the font that reads as its code; got ${JSON.stringify(seenThenCut.found.map(i => i.code))}`);
+    assert.deepStrictEqual(await warned(pdfOf([`BT /F1 12 Tf 72 700 Td ${filler(1000)} ${garbage} Tj ET`], { contents: compressed }), small), [one], 'one within the budget is read');
+    const shapes = await read(pdfOf([`BT /F1 12 Tf 72 700 Td ${filler(120000)} ${arialDrawn} Tj ET`], { baseFont: 'Arial', contents: compressed }), { extractAttachments: false, pdfParserConfig: { extractTextColor: false } });
+    assert.ok(/Hi$/.test(String((await shapes.ast.to('text')).value)) && !shapes.unmapped.length, 'and so does one cut where only shapes are read');
+    // A page after the budget has no list at all: a font the page before it loaded, whose glyphs were not reached there, is not judged by it.
+    const reached = `BT /F1 12 Tf 72 700 Td ${'1 0 0 1 72 700 Tm '.repeat(20000)} <0003> Tj ET`;
+    const after = await read(pdfOf([reached, drawn(arialDrawn)], { baseFont: 'Arial', contents: compressed }), small);
+    assert.ok(/Hi$/.test(String((await after.ast.to('text')).value)) && after.found.some(i => i.code === 'PDF_CONTENT_LIMIT_EXCEEDED') && !after.unmapped.length, `and a page after the budget has no list at all; got ${JSON.stringify(after.found.map(i => i.code))}`);
+    // pdf.js ends a list quietly where it cannot read an operator (a pattern the page does not have), and the text after it is still read: its glyphs are not seen.
+    const quiet = await read(pdfOf([`BT /F1 12 Tf ET\n/Pattern cs /Nope scn\nBT /F1 12 Tf 72 700 Td ${arialDrawn} Tj ET`], { baseFont: 'Arial' }));
+    assert.ok(/Hi$/.test(String((await quiet.ast.to('text')).value)) && !quiet.unmapped.length, `a font whose glyphs the list ends before says nothing; got ${JSON.stringify(quiet.found.map(i => i.code))}`);
+    // A Q the form did not push for is not read as another font's (pdf.js gives a form a stack of its own): the glyphs are the form's font's.
+    const extraQ = await read(pdfOf(['BT /F1 12 Tf ET /Fm Do'], { noPageFonts: true, resources: '/Font << /F1 3 0 R /F3 6 0 R >> /XObject << /Fm 8 0 R >>', extra: [type0Of('Arial', 7), cidOf('Arial'), form('/Font << /F3 6 0 R >>', `BT /F3 12 Tf 72 700 Td Q ${arialDrawn} Tj ET`)] }));
+    assert.ok(/Hi$/.test(String((await extraQ.ast.to('text')).value)) && !extraQ.unmapped.length, `a Q in a form does not give its glyphs to the page's font; got ${JSON.stringify(extraQ.found.map(i => i.code))}`);
+    // The walk of resources is bounded: sixty forms each reaching a font table of 4,000 entries are too much to look through, forty are not.
+    const table = `<< ${Array.from({ length: 4000 }, (_, i) => `/K${i} 3 0 R`).join(' ')} >>`;
+    const walked = (forms: number) => pdfOf([drawn(garbage)], { resources: `/XObject << ${Array.from({ length: forms }, (_, i) => `/Fm${i} ${7 + i} 0 R`).join(' ')} >>`, extra: [table, ...Array.from({ length: forms }, () => `<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /Font 6 0 R >> /Length 0 >>\nstream\n\nendstream`)] });
+    assert.deepStrictEqual(await warned(walked(40)), [one], 'forty forms of a large font table are looked through');
+    assert.deepStrictEqual(await warned(walked(60)), [], 'sixty are not');
+}
+
+/**
+ * A PDF's running lines stay out of its text where they repeat, and print on the right pages in the writers
+ * that print them: one blank page or a line alternating by page does not put them back, numbers restart as
+ * they do, and a line whose text really changes stays in its page, where nothing is lost.
+ */
+async function testPdfRunningLinesAsParts(): Promise<void> {
+    const pdfOf = (pages: string[][], labels = '') => {
+        const objects: string[] = [`<< /Type /Catalog /Pages 2 0 R ${labels} >>`, `<< /Type /Pages /Kids [${pages.map((_, i) => `${4 + i * 2} 0 R`).join(' ')}] /Count ${pages.length} >>`, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+        pages.forEach((lines, i) => {
+            const content = lines.length ? `BT /F1 11 Tf ${lines.map(l => { const [y, text] = l.split('|'); return `1 0 0 1 72 ${y} Tm (${text}) Tj`; }).join(' ')} ET` : '';
+            objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + i * 2} 0 R >>`, `<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
+        });
+        let pdf = '%PDF-1.4\n';
+        const offsets: number[] = [];
+        objects.forEach((o, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+        const xref = pdf.length;
+        pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+        return Buffer.from(pdf, 'latin1');
+    };
+    const read = (pages: string[][], more: object = {}, labels = '') => OfficeParser.parseOffice(pdfOf(pages, labels), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false, includeBounds: true }, onWarning: () => { }, ...more } as any) as Promise<OfficeParserAST>;
+    const body = (n: number) => `500|Body text of page number ${['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'][n - 1]} goes here for the reader.`;
+    const mdOf = async (ast: OfficeParserAST) => String((await ast.to('md')).value);
+    const partsOf = (list: any[] | undefined) => (list ?? []).map(n => `${n.metadata.page}:${n.metadata.type}:${n.metadata.section ?? '-'}`);
+    const fieldTexts = (ast: OfficeParserAST) => ((ast.auxiliary?.footers ?? []) as any[]).flatMap(n => (n.children ?? []).flatMap((c: any) => c.children ?? [c])).filter((c: any) => c.metadata?.field === 'page').map((c: any) => c.text);
+    const sections = (ast: OfficeParserAST) => (ast.content as any[]).filter(n => n.type === 'break' && typeof n.metadata?.section === 'number').map(n => [n.metadata.section, n.metadata.pageSetup?.pageNumberStart, n.metadata.pageSetup?.pageNumberFormat]);
+
+    // A blank page among them says nothing of the lines of the others.
+    const blank = await read([1, 2, 3, 4, 5].map(n => n === 3 ? [] : [`750|Annual Report`, body(n), `40|Page ${n}`]));
+    assert.ok(!(await mdOf(blank)).includes('Annual Report') && !(await mdOf(blank)).includes('Page 4'), `one blank page leaves the lines out of the text; got ${await mdOf(blank)}`);
+    assert.strictEqual(blank.auxiliary?.headers?.length, 4, 'and they are the headers');
+
+    // Alternating lines are a default and an even part, one section.
+    const alternating = await read([1, 2, 3, 4, 5, 6].map(n => [`750|${n % 2 ? 'Odd running title' : 'Even running title'}`, body(n), `40|${n}`]));
+    assert.ok(!(await mdOf(alternating)).includes('running title'), 'alternating lines stay out of the text');
+    assert.deepStrictEqual(partsOf(alternating.auxiliary?.headers), ['1:default:0', '2:even:0', '3:default:0', '4:even:0', '5:default:0', '6:even:0'], `and are a default part and an even part; got ${partsOf(alternating.auxiliary?.headers)}`);
+    assert.deepStrictEqual(sections(alternating), [], 'in one section');
+    const altDocx = unzipSync(new Uint8Array((await OfficeGenerator.generate(alternating, 'docx')).value as any));
+    assert.ok(Object.keys(altDocx).some(n => /header\d*\.xml$/.test(n) && strFromU8(altDocx[n]).includes('Even running title')) && strFromU8(altDocx['word/settings.xml'] ?? new Uint8Array()).includes('evenAndOddHeaders'), 'DOCX prints them on even and odd pages');
+
+    // Text that really changes stays in its pages; the line that does not stays out.
+    const letters = await read([1, 2, 3, 4].map(n => [`750|Customer: ${n <= 2 ? 'Alice Ltd' : 'Bob GmbH'}`, body(n), `40|Acme Letters page ${n}`]));
+    const lettersMd = await mdOf(letters);
+    assert.ok(lettersMd.includes('Customer: Alice Ltd') && lettersMd.includes('Customer: Bob GmbH'), `text that changes stays in the text; got ${lettersMd}`);
+    assert.ok(!lettersMd.includes('Acme Letters') && letters.auxiliary?.footers?.length === 4, 'and the line beside it that does not stays out');
+
+    // Roman numerals, then a body's own 1: two sections, numbered as the pages print.
+    const printed = (n: number) => n <= 3 ? ['i', 'ii', 'iii'][n - 1] : String(n - 3);
+    const romanThenDigits = '/PageLabels << /Nums [0 << /S /r >> 3 << /S /D >>] >>';
+    const front = await read([1, 2, 3, 4, 5, 6].map(n => ['750|The Manual', body(n), `40|${printed(n)}`]), {}, romanThenDigits);
+    assert.ok(!/^(i|ii|iii|1|2|3)$/m.test(await mdOf(front)), `the numbers stay out of the text; got ${await mdOf(front)}`);
+    assert.strictEqual((front.metadata as any).pageSetup?.pageNumberFormat, 'lowerRoman', 'the first section numbers in roman');
+    assert.deepStrictEqual(sections(front), [[1, 1, 'decimal']], `the body restarts at 1, in digits again; got ${JSON.stringify(sections(front))}`);
+    const frontDocx = unzipSync(new Uint8Array((await OfficeGenerator.generate(front, 'docx')).value as any));
+    assert.ok(/<w:pgNumType w:start="1"\/>/.test(strFromU8(frontDocx['word/document.xml'])) || /w:start="1"/.test(strFromU8(frontDocx['word/document.xml'])), 'DOCX restarts its numbers');
+    const frontOdt = unzipSync(new Uint8Array((await OfficeGenerator.generate(front, 'odt')).value as any));
+    assert.ok(/style:page-number="1"/.test(strFromU8(frontOdt['content.xml'])), 'ODT restarts its numbers');
+    assert.ok(/\\pgnstarts1\\pgnrestart/.test(String((await OfficeGenerator.generate(front, 'rtf')).value)), 'RTF restarts its numbers');
+    assert.ok(/\\setcounter\{page\}\{1\}/.test(String((await OfficeGenerator.generate(front, 'tex')).value)), 'LaTeX restarts its numbers');
+    const frontPdf = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(front, 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false }, onWarning: () => { } } as any) as OfficeParserAST;
+    const frontPages = (frontPdf.content as any[]).filter(n => n.type === 'page').map((p, i) => `${i + 1}:${[...(p.children ?? []).map((c: any) => c.text), ...(frontPdf.auxiliary?.footers ?? []).filter(f => (f.metadata as any).page === i + 1).map(f => f.text)].filter(t => /^[ivx\d]+$/.test((t ?? '').trim())).join()}`);
+    assert.deepStrictEqual(frontPages, ['1:i', '2:ii', '3:iii', '4:1', '5:2', '6:3'], `the native PDF writer prints them so; got ${JSON.stringify(frontPages)}`);
+
+    // A range reads as the whole file does.
+    const range = await read([1, 2, 3, 4, 5, 6].map(n => ['750|The Manual', body(n), `40|${printed(n)}`]), { pdfParserConfig: { separateProcess: false, includeBounds: true, pageRange: '3-6' } }, romanThenDigits);
+    assert.ok(!(await mdOf(range)).includes('The Manual'), 'a range leaves them out of the text as the whole file does');
+
+    // On a few pages only, it is no running line: it is the page's.
+    const sparse = await read([1, 2, 3, 4, 5, 6].map(n => n === 2 || n === 3 ? ['750|Only on some pages', body(n)] : [body(n)]));
+    assert.ok((await mdOf(sparse)).includes('Only on some pages') && !sparse.auxiliary?.headers?.length, 'a line on few pages stays in them');
+
+    // Many changes are lines of their pages, past what a document's parts should be.
+    const many = await read(Array.from({ length: 80 }, (_, i) => [`750|Chapter ${'abcdefghijklmnopqrstuvwxyz'[i % 26]}${'abcdefghijklmnopqrstuvwxyz'[(i / 26) | 0]} head`, `500|Body text of this page goes here for the reader.`, `40|${i + 1}`]));
+    assert.ok(many.content.filter(n => n.type === 'break').length <= 64, 'sections stay few');
+
+    // Tagged lines, as a marked PDF's artifacts are (none of them read by comparing pages).
+    const taggedPdf = (pages: string[][]) => {
+        const marked = (l: string) => { const artifact = l.startsWith('a:'); const [y, text] = l.replace(/^a:/, '').split('|'); const t = `BT /F1 11 Tf 1 0 0 1 72 ${y} Tm (${text}) Tj ET`; return artifact ? `/Artifact BMC ${t} EMC` : t; };
+        {
+            const objects: string[] = ['<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot << /Type /StructTreeRoot >> >>', `<< /Type /Pages /Kids [${pages.map((_, i) => `${4 + i * 2} 0 R`).join(' ')}] /Count ${pages.length} >>`, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+            pages.forEach((lines, i) => {
+                const content = lines.map(marked).join('\n');
+                objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + i * 2} 0 R >>`, `<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
+            });
+            let pdf = '%PDF-1.4\n';
+            const offsets: number[] = [];
+            objects.forEach((o, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+            const xref = pdf.length;
+            pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+            return Buffer.from(pdf, 'latin1');
+        }
+    };
+    const readTagged = (pages: string[][]) => OfficeParser.parseOffice(taggedPdf(pages), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false }, onWarning: () => { } } as any) as Promise<OfficeParserAST>;
+    const pageRange = [1, 2, 3, 4, 5, 6, 7, 8];
+    const types = (list: any[] | undefined) => (list ?? []).map(n => n.metadata.type).join();
+
+    // A first or even part of one kind is the whole document's in a writer: every kind has them.
+    const evenHeads = await read([1, 2, 3, 4, 5, 6].map(n => [`750|${n % 2 ? 'Odd head' : 'Even head'}`, body(n), '40|Acme Footer']));
+    assert.strictEqual(types(evenHeads.auxiliary?.footers), 'default,even,default,even,default,even', 'a footer alike on all pages has even parts beside an alternating header');
+    const evenDocx = Object.entries(unzipSync((await evenHeads.to('docx')).value as Uint8Array)).filter(([k]) => /word\/footer/.test(k)).map(([, v]) => strFromU8(v));
+    assert.ok(evenDocx.filter(x => x.includes('Acme Footer')).length >= 2, 'DOCX has the footer for odd and even pages');
+    const coverHead = await readTagged([1, 2, 3, 4, 5].map(n => [`a:750|${n === 1 ? 'Cover head' : 'Report'}`, body(n), 'a:40|Acme Footer']));
+    assert.strictEqual(types(coverHead.auxiliary?.footers), 'first,default,default,default,default', 'a footer on a cover beside a cover\'s own header is a first part too');
+
+    // A cover's own footer leaves the others' numbers as they print.
+    const coverFoot = await readTagged([1, 2, 3, 4].map(n => ['a:750|Report', body(n), n === 1 ? 'a:40|Copyright notice' : `a:40|Page ${n + 50}`]));
+    assert.strictEqual(coverFoot.metadata?.pageSetup?.pageNumberStart, 51, 'numbers after a cover: the pages go on from the second page\'s');
+    const coverOne = await readTagged([1, 2, 3, 4].map(n => ['a:750|Report', body(n), n === 1 ? 'a:40|Copyright notice' : `a:40|Page ${n - 1}`]));
+    assert.deepStrictEqual(sections(coverOne).map(([, setup]: any) => setup.pageNumberStart ?? setup), [1], `numbers from 1 after a cover restart at the second page; got ${JSON.stringify(sections(coverOne))}`);
+
+    // A header's section at the page the footer restarts on keeps the restart; going back to the earlier numbers restarts too.
+    const roman = ['', 'i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii'];
+    const restarted = await readTagged([1, 2, 3, 4, 5, 6, 7].map(n => [`a:750|${n <= 3 ? 'Front Matter' : 'Main Body'}`, body(n), `a:40|${n <= 3 ? roman[n] : n - 3}`]));
+    assert.strictEqual((restarted.content as any[]).find(n => n.type === 'break').metadata.pageSetup.pageNumberStart, 1, 'a header changing where the footer restarts leaves the restart');
+    const returned = await readTagged([1, 2, 3, 4, 5, 6, 7].map(n => [body(n), `a:40|${n <= 3 ? roman[n] : n <= 6 ? n - 3 : 'vii'}`]));
+    const returnBreaks = (returned.content as any[]).filter(n => n.type === 'break').map(n => n.metadata.pageSetup);
+    assert.ok(returnBreaks.length === 2 && returnBreaks[1].pageNumberStart === 7 && returnBreaks[1].pageNumberFormat === 'lowerRoman', `numbers going back to the page's own place restart; got ${JSON.stringify(returnBreaks)}`);
+
+    // Pages read apart: each prints the number it has in the file. Even parts go by the numbers printed.
+    const apart = await read(pageRange.map(n => ['750|Manual', body(n), `40|Page ${n}`]), { pdfParserConfig: { separateProcess: false, pageRange: '2,4,6,7' } });
+    assert.deepStrictEqual([apart.metadata?.pageSetup?.pageNumberStart, ...(apart.content as any[]).filter(n => n.type === 'break').map(n => n.metadata.pageSetup.pageNumberStart)], [2, 4, 6], 'a range with gaps restarts at each gap');
+    const rangeFacing = await read(pageRange.map(n => [`750|${n % 2 ? 'Odd title' : 'Even title'}`, body(n)]), { pdfParserConfig: { separateProcess: false, pageRange: '2-7' } });
+    assert.strictEqual((rangeFacing.auxiliary?.headers as any[]).find(n => n.metadata.type === 'even').text, 'Odd title', 'the file\'s page 3 prints second, an even page');
+
+    // Lines whose number is their own, and lines missing from pages with text between, stay in the text.
+    const account = await read([1, 2, 3, 4].map(n => [`750|Account 10${n <= 2 ? 1 : 2}0${n <= 2 ? 1 : 2}`, body(n)]));
+    assert.ok((await mdOf(account)).includes('Account 10101') && !account.auxiliary?.headers?.length, 'a number that counts no pages is the line\'s own');
+
+    // Pages before a kind's first line are a section without it, in which a writer prints none of it.
+    const late = await read(pageRange.map(n => [...(n > 1 ? ['750|Late head'] : []), body(n)]));
+    const lateDocx = (await late.to('docx')).value as Uint8Array;
+    assert.strictEqual((late.auxiliary?.headers as any[])[0].metadata.section, 1, 'a head starting on page 2 is the second section\'s');
+    const lateBack = await OfficeParser.parseOffice(Buffer.from(lateDocx), { fileType: 'docx', onWarning: () => { } } as any) as OfficeParserAST;
+    assert.ok((lateBack.auxiliary?.headers ?? []).every(h => (h.metadata as any)?.section === 1), `DOCX: only the second section has the head; got ${JSON.stringify((lateBack.auxiliary?.headers ?? []).map(h => h.metadata))}`);
+
+    // A blank page before a section's start stays a page in DOCX.
+    const blankBefore = await readTagged([1, 2, 3, 4, 5, 6].map(n => n === 3 ? [] : [`a:750|${n < 3 ? 'A head' : 'B head'}`, body(n)]));
+    const blankDocx = strFromU8(unzipSync((await blankBefore.to('docx')).value as Uint8Array)['word/document.xml']);
+    const sectionEndAt = blankDocx.indexOf('</w:p>', blankDocx.indexOf('<w:sectPr'));
+    assert.strictEqual((blankDocx.slice(0, sectionEndAt).match(/<w:br w:type="page"\/>/g) ?? []).length, 2, 'DOCX: the section ends after the blank page\'s break');
+
+
+    // A table of layouts: every page prints what it had, in the native PDF's own pages and in the parts and
+    // numbers a word processor would print them from. (Where a line is drawn is the file's: `a:` an artifact.)
+    const romanOf = (n: number) => ['', 'i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii', 'viii', 'ix', 'x'][n];
+    const pagesN = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
+    const layouts: [string, () => Promise<OfficeParserAST>, string[][]][] = (() => {
+        const tagged = (name: string, pages: string[][]): [string, () => Promise<OfficeParserAST>, string[][]] => [name, () => readTagged(pages), pages];
+        const plain = (name: string, pages: string[][], more: object = {}): [string, () => Promise<OfficeParserAST>, string[][]] => [name, () => read(pages, more), pages];
+        return [
+            plain('one kind alternating', pagesN(6).map(n => [`750|${n % 2 ? 'Odd head' : 'Even head'}`, body(n), '40|Acme Footer'])),
+            plain('the other kind alternating', pagesN(6).map(n => ['750|Acme Head', body(n), `40|${n % 2 ? 'Odd foot' : 'Even foot'}`])),
+            tagged('a cover head', pagesN(5).map(n => [`a:750|${n === 1 ? 'Cover Head' : 'Report'}`, body(n), 'a:40|Acme Footer'])),
+            tagged('a cover foot, numbers from 52', pagesN(5).map(n => ['a:750|Report', body(n), n === 1 ? 'a:40|Copyright' : `a:40|Page ${n + 50}`])),
+            tagged('a cover foot, numbers from 1', pagesN(5).map(n => ['a:750|Report', body(n), n === 1 ? 'a:40|Copyright' : `a:40|Page ${n - 1}`])),
+            tagged('front matter then body', pagesN(7).map(n => [`a:750|${n <= 3 ? 'Front Matter' : 'Main Body'}`, body(n), `a:40|${n <= 3 ? romanOf(n) : n - 3}`])),
+            tagged('numbers going back', pagesN(7).map(n => [body(n), `a:40|${n <= 3 ? romanOf(n) : n <= 6 ? n - 3 : 'vii'}`])),
+            tagged('from a later number', pagesN(4).map(n => ['a:750|Report', body(n), `a:40|${n + 146}`])),
+            tagged('heads starting late', pagesN(8).map(n => [...(n > 2 ? ['a:750|Late Head'] : []), body(n)])),
+        ];
+    })();
+    for (const [name, make, source] of layouts) {
+        const ast = await make();
+        const lines = (page: string[], y: (n: number) => boolean) => page.map(l => l.replace(/^a:/, '')).filter(l => y(Number(l.split('|')[0]))).map(l => l.split('|')[1]).sort();
+        // The native engine's pages, read back with their lines kept in them.
+        const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+        const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false, keepHeadersAndFootersInPages: true }, onWarning: () => { } } as any) as OfficeParserAST;
+        const backPages = (back.content as any[]).filter(n => n.type === 'page').map(n => String(n.text ?? (n.children ?? []).map((c: any) => c.text).join('\n')));
+        assert.strictEqual(backPages.length, source.length, `${name}: as many pages`);
+        source.forEach((page, i) => {
+            for (const l of page) {
+                const text = l.replace(/^a:/, '').split('|')[1];
+                assert.ok(backPages[i].split('\n').some(line => line.includes(text)), `${name}: page ${i + 1} prints "${text}"; got ${JSON.stringify(backPages[i])}`);
+            }
+        });
+        // The parts: each page's kind prints what it had, taken as a word processor takes it.
+        const setup = (ast.metadata as any).pageSetup ?? {};
+        const everyPart = (kind: 'headers' | 'footers') => ((ast.auxiliary as any)?.[kind] ?? []) as any[];
+        const anyEven = [...everyPart('headers'), ...everyPart('footers')].some(n => n.metadata.type === 'even');
+        let number = setup.pageNumberStart ?? 1, section = 0, format = setup.pageNumberFormat as string | undefined, at = 0;
+        const shown = (value: number, f: string | undefined) => f === 'lowerRoman' ? romanOf(value) : String(value);
+        for (const node of ast.content as any[]) {
+            if (node.type === 'break' && typeof node.metadata?.section === 'number') {
+                section = node.metadata.section;
+                if (node.metadata.pageSetup?.pageNumberStart !== undefined) number = node.metadata.pageSetup.pageNumberStart;
+                if (node.metadata.pageSetup?.pageNumberFormat) format = node.metadata.pageSetup.pageNumberFormat === 'decimal' ? undefined : node.metadata.pageSetup.pageNumberFormat;
+            }
+            if (node.type !== 'page') continue;
+            const page = source[at];
+            for (const [kind, inBand] of [['headers', (y: number) => y > 400], ['footers', (y: number) => y < 400]] as const) {
+                const parts = everyPart(kind);
+                const type = at === 0 && setup.differentFirstPage ? 'first' : anyEven && number % 2 === 0 ? 'even' : 'default';
+                const ofType = parts.filter(n => (n.metadata.type ?? 'default') === type && (n.metadata.section ?? 0) <= section);
+                const latest = ofType.reduce((m: number, n: any) => Math.max(m, n.metadata.section ?? 0), -1);
+                const part = ofType.filter(n => (n.metadata.section ?? 0) === latest);
+                const printed = part.length ? part.filter(n => n.metadata.page === part[0].metadata.page).map(n => (n.children ?? []).flatMap((c: any) => c.children ?? [c]).map((c: any) => c.metadata?.field === 'page' ? shown(number, format) : c.text).join('')).sort() : [];
+                const had = lines(page.filter(l => !/Body text/.test(l)), inBand);
+                assert.deepStrictEqual(printed, had, `${name}: the ${kind} on page ${at + 1} as a word processor prints it`);
+            }
+            number++;
+            at++;
+        }
+    }
+
+    // Numbers past one stray among them, or starting over, are still fields.
+    const stray = await readTagged(pagesN(9).map(n => [body(n), `a:40|${n === 5 ? 560 : n}`]));
+    assert.ok(fieldTexts(stray).length === 8, `a stray number leaves the others fields; got ${JSON.stringify(fieldTexts(stray))}`);
+    const twice = await readTagged(pagesN(8).map(n => [body(n), `a:40|${n <= 4 ? n : n - 4}`]));
+    assert.ok(fieldTexts(twice).length === 8 && sections(twice).length === 1, 'numbers starting over are fields, a section at the restart');
+
+    // Few pages by those with text: blank, leading and trailing ones say nothing.
+    const everyOther = await read(pagesN(9).map(n => n % 2 ? [`750|The Title`, body(n)] : []));
+    assert.ok(!(await mdOf(everyOther)).includes('The Title'), 'blank pages between leave the line running');
+    const leading = await read(pagesN(9).map(n => [...(n > 3 ? ['750|The Title'] : []), body(n)]));
+    assert.ok(!(await mdOf(leading)).includes('The Title'), 'pages leading without the line leave it running');
+    const sheetName = await read(pagesN(6).map(n => [...(n <= 3 ? ['750|The Title'] : []), body(n)]));
+    assert.ok((await mdOf(sheetName)).includes('The Title'), 'half the pages is no running line');
+
+    // Many numbers in one line cost as much as a line: a footer of thousands is the page's.
+    const longLine = await read(pagesN(4).map(n => [body(n), `40|${Array.from({ length: 6000 }, (_, i) => i).join(' ')}`]));
+    assert.ok(longLine.content.length === 4, 'a line of many numbers is read');
+
+    // A writer's page numbers are numbers.
+    const hostileStart = { type: 'docx', metadata: { pageSetup: { pageNumberStart: '3"><evil a="' } }, attachments: [], content: [{ type: 'paragraph', text: 'x', children: [{ type: 'text', text: 'x' }] }] } as any;
+    const odtHostile = strFromU8(unzipSync((await OfficeGenerator.generate(hostileStart, 'odt', {} as any)).value as Uint8Array)['content.xml']);
+    assert.ok(!odtHostile.includes('<evil'), 'ODT: a page number is a number');
+
+
+    // Kept in their pages, numbers that are no running line are plain text.
+    const keptLines = await read(pagesN(12).map(n => [body(n), ...(n <= 8 ? [`40|${n}`] : [])]), { pdfParserConfig: { separateProcess: false, keepHeadersAndFootersInPages: true, pageRange: '7-12' } });
+    assert.ok(!JSON.stringify(keptLines.content).includes('"field"'), 'fields of lines that stay in the pages are text again');
+
+
+    // A number of its own on the page number's own line stays in the text.
+    const accounts = [10101, 48213, 20977, 73120, 55512, 90233];
+    const ownOnLine = await read(pagesN(6).map(n => [body(n), `40|Account ${accounts[n - 1]} Page ${n}`]));
+    assert.ok((await mdOf(ownOnLine)).includes('Account 48213') && !(ownOnLine.auxiliary?.footers ?? []).some(n => /Account/.test(n.text ?? '')), 'a number of its own on the page number\'s line stays in the text');
+
+
+    // Beside the page's number, or stepping with it, a number of its own is the document's.
+    const row = (y: number, x: number, text: string) => `BT /F1 11 Tf 1 0 0 1 ${x} ${y} Tm (${text}) Tj ET`;
+    const rowsPdf = (pages: string[]) => {
+        const objects: string[] = ['<< /Type /Catalog /Pages 2 0 R >>', `<< /Type /Pages /Kids [${pages.map((_, i) => `${4 + i * 2} 0 R`).join(' ')}] /Count ${pages.length} >>`, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+        pages.forEach((content, i) => objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + i * 2} 0 R >>`, `<< /Length ${content.length} >>\nstream\n${content}\nendstream`));
+        let pdf = '%PDF-1.4\n';
+        const offsets: number[] = [];
+        objects.forEach((o, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+        const xref = pdf.length;
+        pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+        return Buffer.from(pdf, 'latin1');
+    };
+    const bodyAt = (n: number) => row(500, 72, `Body text of page ${n} goes here for the reader.`);
+    const beside = async (name: string, left: (n: number) => string, right: (n: number) => string, wanted: string) => {
+        const ast = await OfficeParser.parseOffice(rowsPdf(pagesN(6).map(n => [row(750, 72, left(n)), row(750, 500, right(n)), bodyAt(n)].join('\n'))), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false }, onWarning: () => { } } as any) as OfficeParserAST;
+        assert.ok((await mdOf(ast)).includes(wanted), `${name} stays in the text`);
+    };
+    await beside('an account per statement, numbers restarting', n => `Account 10${Math.ceil(n / 2)}01`, n => `Page ${(n - 1) % 2 + 1}`, 'Account 10201');
+    await beside('a signed date beside a bare number', n => `Signed 0${n}/01/2024`, n => String(n), 'Signed 03/01/2024');
+    const balances = [100, 200, 300, 400, 400, 300];
+    await beside('a balance beside the number', n => `Balance ${balances[n - 1]}`, n => `Page ${n}`, 'Balance 200');
+    for (const [name, line, wanted] of [
+        ['a question stepping on the page number\'s line', (n: number) => `Question ${n + 2} Page ${n}`, 'Question 4'],
+        ['a date stepping on the page number\'s line', (n: number) => `Log for 2024-01-0${n + 3} Page ${n}`, '2024-01-05'],
+    ] as [string, (n: number) => string, string][]) {
+        const ast = await read(pagesN(6).map(n => [body(n), `40|${line(n)}`]));
+        assert.ok((await mdOf(ast)).includes(wanted), `${name} stays in the text`);
+    }
+
+
+    // After a cover, a page's number is not its own place: a line with another number changing in it stays.
+    for (const [name, line, wanted] of [
+        ['an account', (p: number) => `Account ${10000 + p * 37} Page ${p}`, 'Account 10074'],
+        ['a question', (p: number) => `Question ${p + 2} Page ${p}`, 'Question 4'],
+        ['a sheet', (p: number) => `Account ${10000 + p * 37} Sheet ${p} of 6`, 'Account 10074'],
+    ] as [string, (p: number) => string, string][]) {
+        const ast = await read(pagesN(7).map(n => [body(n), ...(n > 1 ? [`750|${line(n - 1)}`] : [])]));
+        assert.ok((await mdOf(ast)).includes(wanted) && !ast.auxiliary?.headers?.length, `${name} after a cover stays in the text`);
+    }
+
+}
+
+/**
+ * A letter or numeral list marker is read with the markers around it, not as a numeral first: `(l)` after
+ * `(k)` is 12, and `c.` 3. A word (Ill., Mix., Mild.) is no marker. Markdown keeps a label it cannot write
+ * as a number, as every other writer shows it.
+ */
+async function testListMarkerReading(): Promise<void> {
+    const seq = (labels: string[]) => readMarkerLabels(labels);
+    assert.deepStrictEqual(seq(['(h)', '(i)', '(j)', '(k)', '(l)', '(m)']), [8, 9, 10, 11, 12, 13], 'letters in a row read as letters');
+    assert.deepStrictEqual(seq(['i.', 'ii.', 'iii.', 'iv.', 'v.', 'vi.']), [1, 2, 3, 4, 5, 6], 'numerals in a row read as numerals');
+    assert.deepStrictEqual(seq(['a.', 'b.', 'c.', 'd.']), [1, 2, 3, 4], 'c. and d. after letters are 3 and 4');
+    assert.deepStrictEqual(seq(['(u)', '(v)', '(w)', '(x)', '(y)']), [21, 22, 23, 24, 25], 'v and x among letters');
+    assert.deepStrictEqual(seq(['(z)', '(aa)', '(bb)', '(cc)', '(dd)']), [26, 27, 28, 29, 30], 'repeated letters go on from z, cc among them');
+    assert.deepStrictEqual(seq(['xlix)', 'l)', 'li)']), [49, 50, 51], 'l among numerals is 50');
+    assert.deepStrictEqual(seq(['(h)', '(i)', '(ii)', '(j)']), [8, 1, 2, 10], 'numerals under a letter, and the letters going on after them');
+    assert.deepStrictEqual(seq(['(c)']), [3], 'a lone c is a letter');
+    assert.deepStrictEqual(seq(['(i)']), [1], 'a lone i starts numerals');
+    assert.deepStrictEqual(seq(['A.', 'b.', 'B.', 'c.']), [1, 2, 2, 3], 'each case is a run of its own');
+    assert.deepStrictEqual(seq(['Ill.', 'Mix.', 'mi.', 'cc.', 'aa.']), [null, null, null, null, null], 'words and numerals with nothing to say so are not numbers');
+
+    const pdfOf = (lines: string[]) => {
+        const content = `BT /F1 11 Tf ${lines.map((l, i) => `1 0 0 1 72 ${700 - i * 14} Tm (${l.replace(/[()]/g, '\\$&')}) Tj`).join(' ')} ET`;
+        const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>', '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>', `<< /Length ${content.length} >>\nstream\n${content}\nendstream`, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+        let pdf = '%PDF-1.4\n';
+        const offsets: number[] = [];
+        objects.forEach((o, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+        const xref = pdf.length;
+        pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+        return Buffer.from(pdf, 'latin1');
+    };
+    const read = (lines: string[]) => OfficeParser.parseOffice(pdfOf(lines), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false }, onWarning: () => { } } as any) as Promise<OfficeParserAST>;
+    const items = (ast: OfficeParserAST) => collectAllNodes(ast).filter(n => n.type === 'list').map(n => [(n.metadata as any).marker, (n.metadata as any).itemIndex + 1]);
+    const letters = await read(['(k) Keep the reports for one year.', '(l) Annual reports are sent out.', '(m) Separate funds stay apart.']);
+    assert.deepStrictEqual(items(letters), [['(k)', 11], ['(l)', 12], ['(m)', 13]], 'lines: letters read in a row');
+    assert.ok(String((await letters.to('md')).value).includes('- (k) Keep the reports for one year.\n- (l) Annual reports are sent out.\n- (m) Separate funds stay apart.'), 'Markdown keeps the labels');
+    assert.ok(/^12\. Annual reports/m.test(String((await OfficeGenerator.generate(letters, 'md', { mdConfig: { listMarkers: 'numbers' } } as any)).value)), 'listMarkers: numbers writes the numbers');
+    const chunks = (await OfficeGenerator.generate(letters, 'chunks', { onWarning: () => { } } as any)).value as any;
+    assert.ok(JSON.stringify(chunks).includes('(l) Annual reports'), 'chunks keep the label');
+    const numbering = strFromU8(unzipSync(new Uint8Array((await OfficeGenerator.generate(letters, 'docx')).value as any))['word/numbering.xml']);
+    assert.ok(/w:startOverride w:val="11"/.test(numbering) && /w:numFmt w:val="lowerLetter"/.test(numbering) && /w:lvlText w:val="\(%1\)"/.test(numbering), `DOCX numbers them as letters from k; got ${numbering.slice(0, 500)}`);
+    const prose = await read(['Ill. in the morning, the patient rested.', 'Mix. the two parts well before use.', 'Mild. weather is expected for a week.']);
+    assert.deepStrictEqual(items(prose), [], 'words before a full stop are no markers');
+    const paired = await read(['(aa) The first of the second run.', '(bb) The next of the second run.']);
+    assert.deepStrictEqual(items(paired), [['(aa)', 27], ['(bb)', 28]], 'repeated letters with a neighbour are items');
+    assert.deepStrictEqual(items(await read(['(cc) One line with the rest of it.', 'And a plain line after that one.'])), [], 'a repeated letter alone is text');
+
+    const cellItem = (marker: string, itemIndex: number) => ({ type: 'list', text: 'x', children: [{ type: 'text', text: 'x' }], metadata: { listType: 'ordered', itemIndex, marker, indentation: 0, listId: 'c' } });
+    const cellMd = String((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [
+        { type: 'row', children: [{ type: 'cell', children: [{ type: 'paragraph', text: 'h', children: [{ type: 'text', text: 'h' }] }], metadata: { row: 0, col: 0, colSpan: 2 } }] },
+        { type: 'row', children: [{ type: 'cell', children: [cellItem('(l)', 11)], metadata: { row: 1, col: 0 } }, { type: 'cell', children: [{ type: 'paragraph', text: 'z', children: [{ type: 'text', text: 'z' }] }], metadata: { row: 1, col: 1 } }] },
+    ] }] } as any, 'md')).value);
+    assert.ok(cellMd.includes('<ol start="12" style="list-style-type:') && !cellMd.includes('<ol><li'), `a list item in an HTML cell keeps its number and label; got ${cellMd}`);
+    assert.ok(collectAllNodes(await OfficeParser.parseOffice(Buffer.from(cellMd), { fileType: 'md' } as any) as OfficeParserAST).some(n => n.type === 'list' && (n.metadata as any).marker === '(l)'), 'and it reads back');
+
+    // A marker set apart from its line that reads as nothing goes back to the line's front, not away.
+    const raised = (rows: [string, string][]) => {
+        const content = `BT /F1 11 Tf ${rows.map(([m, t], i) => { const y = 700 - i * 14; return `${m ? `1 0 0 1 72 ${y + 4} Tm (${m}) Tj ` : ''}1 0 0 1 92 ${y} Tm (${t}) Tj`; }).join(' ')} ET`;
+        const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>', '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>', `<< /Length ${content.length} >>\nstream\n${content}\nendstream`, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+        let pdf = '%PDF-1.4\n';
+        const offsets: number[] = [];
+        objects.forEach((o, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+        const xref = pdf.length;
+        pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+        return OfficeParser.parseOffice(Buffer.from(pdf, 'latin1'), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false }, onWarning: () => { } } as any) as Promise<OfficeParserAST>;
+    };
+    for (const word of ['cc.', 'mm.', 'cd.']) {
+        const text = String((await (await raised([[word, 'Alice Bob went home.'], ['', 'Plain line here.']])).to('text')).value);
+        assert.ok(text.includes(word), `a marker that reads as nothing stays in the text: ${word}; got ${JSON.stringify(text)}`);
+    }
+
+    // Markdown: a number is Markdown's own, a label beside a bullet, once escaped.
+    const listAst = (items: [string, number, string | undefined, string][]) => ({ type: 'docx', metadata: {}, attachments: [], content: items.map(([t, itemIndex, marker, listType]) => ({ type: 'list', text: t, children: [{ type: 'text', text: t }], metadata: { listType, indentation: 0, itemIndex, listId: 'a', alignment: 'left', ...(marker === undefined ? {} : { marker }) } })) }) as any;
+    const md = async (ast: any, mdConfig: object = {}) => String((await OfficeGenerator.generate(ast, 'md', { mdConfig } as any)).value);
+    assert.ok((await md(listAst([['one', 0, '1', 'ordered'], ['two', 1, '2', 'ordered'], ['five', 4, '5', 'ordered']]))).includes('1. one\n2. two\n5. five'), 'a bare number is Markdown\'s');
+    assert.ok((await md(listAst([['five', 0, '5.', 'ordered']]))).includes('5. five'), 'a label of a number other than the index is Markdown\'s');
+    const definition = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'definitionList', children: [{ type: 'definitionTerm', text: 't', children: [{ type: 'text', text: 't' }] }, { type: 'definitionDescription', children: listAst([['body', 12, '[m]', 'ordered']]).content }] }] };
+    assert.ok((await md(definition, { dialect: 'extended' })).includes('\\- \\[m\\] body'), `a label in a definition is escaped once; got ${await md(definition, { dialect: 'extended' })}`);
+}
+
+/**
+ * A Markdown HTML table cell keeps the options the writer keeps elsewhere: colour and size only with
+ * `inlineFormatting`, underline and sub/superscript only with `textFormatting`, and runs that differ only in
+ * a colour it does not write read as one run with none (one of them was written with its colour over both).
+ */
+async function testMarkdownHtmlCellFormatting(): Promise<void> {
+    const run = (text: string, formatting: object) => ({ type: 'text', text, formatting });
+    const cell = (children: any[], metadata: object = {}) => ({ type: 'cell', children, metadata: { row: 0, col: 0, ...metadata } });
+    const astOf = (children: any[]) => ({ type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [
+        { type: 'row', children: [cell([{ type: 'paragraph', text: 'h', children: [run('h', {})] }], { colSpan: 2 })] },
+        { type: 'row', children: [cell([{ type: 'paragraph', text: 'x', children }]), cell([{ type: 'paragraph', text: 'z', children: [run('z', {})] }])] },
+    ] }] }) as any;
+    const md = async (children: any[], mdConfig: object = {}) => String((await OfficeGenerator.generate(astOf(children), 'md', { mdConfig } as any)).value);
+
+    const styled = [run('C', { color: '#ff0000', size: '10pt' })];
+    assert.ok(!(await md(styled)).includes('<span'), 'cell: no colour or size span by default');
+    assert.ok((await md(styled, { fallbackToHtml: { inlineFormatting: true } })).includes('<span style="color: #ff0000; font-size: 10pt">C</span>'), 'cell: the span when opted in');
+
+    const twoColours = [run('R', { color: '#ff0000' }), run('G', { color: '#00ff00' })];
+    assert.ok(/<p>RG<\/p>/.test(await md(twoColours)), `cell: runs differing only in a colour not written are one plain run; got ${await md(twoColours)}`);
+    const kept = await md(twoColours, { fallbackToHtml: { inlineFormatting: true } });
+    assert.ok(kept.includes('color: #ff0000">R<') && kept.includes('color: #00ff00">G<'), `cell: each run keeps its own colour when opted in; got ${kept}`);
+
+    const wrapped = [run('U', { underline: true }), run('S', { subscript: true }), run('P', { superscript: true }), run('B', { bold: true })];
+    assert.ok(/<u>U<\/u><sub>S<\/sub><sup>P<\/sup>/.test(await md(wrapped)), 'cell: underline and sub/superscript by default');
+    const off = await md(wrapped, { fallbackToHtml: { textFormatting: false } });
+    assert.ok(!/<(u|sub|sup)>/.test(off) && off.includes('<b>B</b>'), `cell: textFormatting off drops those elements, not bold; got ${off}`);
+
+    const specific = [run('H', { backgroundColor: '#00ff00' })];
+    assert.ok((await md(specific, { dialect: 'extended' })).includes('<mark>H</mark>'), 'cell: a coloured highlight stays a highlight in a dialect with highlights');
+    const github = await md(specific, { dialect: 'github' });
+    assert.ok(!github.includes('H</mark>') && !github.includes('<span'), 'cell: nothing to hold a coloured highlight where the dialect has none, as outside a table');
+    assert.ok((await md([run('Y', { backgroundColor: '#ffff00' })])).includes('<mark>Y</mark>'), 'cell: a plain highlight is a mark');
+    assert.ok((await md(specific, { fallbackToHtml: { inlineFormatting: true } })).includes('<span style="background-color: #00ff00">H</span>'), 'cell: a coloured highlight keeps its colour when opted in');
+
+    const cm = await md(styled, { dialect: 'commonmark' });
+    assert.ok(!cm.includes('<span') && cm.includes('<table'), 'CommonMark tables, always HTML, take the same options');
+
+    const parts = [run('U', { underline: true }), run(' ', {}), run('S', { subscript: true }), run(' ', {}), run('P', { superscript: true })];
+    assert.ok(/<u>U<\/u> <sub>S<\/sub> <sup>P<\/sup>/.test(await md(parts)) && !/<(u|sub|sup)>/.test(await md(parts, { fallbackToHtml: { textFormatting: false } })), 'cell: textFormatting says for each of them');
+    assert.ok(String((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [{ type: 'row', children: [cell([{ type: 'paragraph', text: ' ', children: [run(' ', {})] }], { colSpan: 2 })] }] }] } as any, 'md', {} as any)).value).includes('<td colspan="2"><p></p></td>'), 'cell: spaces alone are an empty paragraph');
+
+    // Nothing in a cell can end the block: a lone carriage return is a line end to Markdown.
+    const bad = 'a\r\r![t](http://evil/t.png)\n\n![u](http://evil/u.png)';
+    const hostile = await md([run(bad, { color: `red${bad}` }), { type: 'text', text: 'l', metadata: { link: `http://x/${bad}`, title: bad, linkType: 'external' } }, { type: 'comment', text: bad, metadata: { source: 'html' } }], { fallbackToHtml: { inlineFormatting: true } });
+    const block = hostile.slice(hostile.indexOf('<table'), hostile.indexOf('</table>'));
+    assert.ok(!/\r/.test(block) && !/\n[ \t]*\n/.test(block), `cell: no line end ends the block; got ${JSON.stringify(block)}`);
+
+    // A cell's blocks have no blank line between them, and an onNode string does not end the block.
+    const items = await OfficeParser.parseOffice(Buffer.from('<table><tr><td colspan=2><ul><li><p>one</p><p>two</p></li></ul></td></tr></table>'), { fileType: 'html', onWarning: () => { } } as any) as OfficeParserAST;
+    assert.ok(!/\n[ \t]*\n/.test(String((await items.to('md')).value)), 'cell: no blank line between an item\'s paragraphs');
+    const given = String((await OfficeGenerator.generate(astOf([run('x', {})]), 'md', { onNode: (n: any) => n.type === 'text' && n.text === 'x' ? 'C1\n\n# live' : undefined } as any)).value);
+    assert.ok(!/\n[ \t]*\n# live/.test(given), `cell: an onNode string does not end the block; got ${given}`);
+
+    // A label is written whole, up to a bound: one label on every item of a large list is no larger for it.
+    const longLabel = 'Part 12 of the regulation, chapter seven, item:';
+    const labelled = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [{ type: 'row', children: [cell([{ type: 'list', text: 'x', children: [run('x', {})], metadata: { listType: 'ordered', indentation: 0, itemIndex: 0, listId: 'n', alignment: 'left', marker: longLabel } }], { colSpan: 2 })] }] }] } as any;
+    const labelBack = await OfficeParser.parseOffice(Buffer.from(String((await OfficeGenerator.generate(labelled, 'md', {} as any)).value)), { fileType: 'md', onWarning: () => { } } as any) as OfficeParserAST;
+    assert.strictEqual((collectAllNodes(labelBack).find(n => n.type === 'list')!.metadata as any).marker, longLabel, 'cell: a long label stays whole');
+    const manyLabels = { type: 'docx', metadata: {}, attachments: [], content: Array.from({ length: 1000 }, (_, i) => ({ type: 'list', text: 'x', children: [run('x', {})], metadata: { listType: 'ordered', indentation: 0, itemIndex: i, listId: 'n', alignment: 'left', marker: 'L'.repeat(20000) } })) } as any;
+    for (const format of ['md', 'chunks']) {
+        const size = JSON.stringify((await OfficeGenerator.generate(manyLabels, format as any, {} as any)).value).length;
+        assert.ok(size < 2_000_000, `${format}: a long label on every item is bounded; got ${size}`);
+    }
+
+}
+
+/**
+ * An item of a PDF is matched to its own first glyph, not the first within a hair of its place: a run in a
+ * font a hundredth of a point tall packs its glyphs that close, so a word after it was matched to the run's
+ * glyph, the blank between them was left out and "560 Retirement" read as one word (tagged forms print
+ * their numbers so). A hidden run after a tiny visible copy keeps being hidden, and faked bold still reads once.
+ */
+async function testPdfItemsMatchTheirOwnGlyphs(): Promise<void> {
+    const pdfOf = (content: string) => {
+        const objects = [
+            '<< /Type /Catalog /Pages 2 0 R >>',
+            '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+            '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+            `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+            `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar 32 /LastChar 122 /Widths [244 ${Array(90).fill(556).join(' ')}] >>`,
+        ];
+        let pdf = '%PDF-1.4\n';
+        const offsets: number[] = [];
+        objects.forEach((o, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+        const xref = pdf.length;
+        pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+        return Buffer.from(pdf, 'latin1');
+    };
+    const read = (content: string) => OfficeParser.parseOffice(pdfOf(content), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false }, onWarning: () => { } } as any) as Promise<OfficeParserAST>;
+    const textOf = (ast: OfficeParserAST) => collectAllNodes(ast).filter(n => n.type === 'text').map(n => n.text).join('');
+
+    const body = 'BT /F1 11 Tf 1 0 0 1 72 500 Tm (Body text so the page has a normal size of words here.) Tj ET\n';
+    for (const size of [0.01, 0.03, 0.05, 0.1]) {
+        const ast = await read(`${body}BT /F1 ${size} Tf 1 0 0 1 72 600 Tm (560) Tj ( ) Tj /F1 10 Tf (Retirement Plans) Tj ET`);
+        assert.ok(textOf(ast).includes('560 Retirement Plans'), `a word after a run ${size} pt tall keeps the blank before it; got ${JSON.stringify(textOf(ast))}`);
+    }
+
+    const hidden = await read(`${body}BT /F1 0.01 Tf 1 0 0 1 72 600 Tm (Sec) Tj /F1 10 Tf 3 Tr (Secret words) Tj 0 Tr ET`);
+    const secret = collectAllNodes(hidden).filter(n => n.type === 'text' && /Secret/.test(n.text ?? ''));
+    assert.ok(secret.length && secret.every(n => (n.formatting as any)?.invisible), `a hidden run after a tiny visible copy stays hidden; got ${JSON.stringify(secret.map(n => [n.text, n.formatting]))}`);
+
+    const bold = await read(`${body}BT /F1 10 Tf 1 0 0 1 72 600 Tm (Bold words) Tj 1 0 0 1 72.02 600 Tm (Bold words) Tj ET`);
+    assert.strictEqual(textOf(bold).match(/Bold words/g)?.length, 2, `an overprint matches its own glyphs, each copy kept as the file draws it; got ${JSON.stringify(textOf(bold))}`);
+
+    // Many glyphs drawn at one place: each item looks at a bounded number of them.
+    const many = Array.from({ length: 4000 }, () => '(x) Tj 1 0 0 1 72 600 Tm').join(' ');
+    const { result: crowded, within, ms } = await withinTime(10_000, () => read(`BT /F1 10 Tf 1 0 0 1 72 600 Tm ${many} ET`));
+    assert.ok(within && textOf(crowded).includes('x'), `4000 glyphs at one place read in time; took ${ms} ms`);
+
+    // Right-to-left text starts its item at its last letter: a hidden copy at the same place stays the hidden one.
+    const cmap = `/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapName /X def\n/CMapType 2 def\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n4 beginbfchar\n<41> <05D0>\n<42> <05D1>\n<43> <05D2>\n<44> <05D3>\nendbfchar\nendcmap\nend\nend`;
+    const hebrewMarked = (content: string) => hebrew(content, `/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapName /X def\n/CMapType 2 def\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n6 beginbfchar\n<4D> <05DE05B8>\n<55> <05D105B8>\n<41> <05D0>\n<42> <05D1>\n<43> <05D2>\n<44> <05D3>\nendbfchar\nendcmap\nend\nend`);
+    const hebrew = (content: string, map = cmap) => {
+        const objects = [
+            '<< /Type /Catalog /Pages 2 0 R >>',
+            '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+            '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R /H 6 0 R >> >> /Contents 4 0 R >>',
+            `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+            `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar 32 /LastChar 122 /Widths [244 ${Array(90).fill(556).join(' ')}] >>`,
+            `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar 32 /LastChar 122 /Widths [244 ${Array(90).fill(556).join(' ')}] /ToUnicode 7 0 R >>`,
+            `<< /Length ${map.length} >>\nstream\n${map}\nendstream`,
+        ];
+        let pdf = '%PDF-1.4\n';
+        const offsets: number[] = [];
+        objects.forEach((o, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+        const xref = pdf.length;
+        pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+        return OfficeParser.parseOffice(Buffer.from(pdf, 'latin1'), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false }, onWarning: () => { } } as any) as Promise<OfficeParserAST>;
+    };
+    for (const draw of ['(DCBA) Tj 3 Tr 1 0 0 1 72 600 Tm (ABCD) Tj 0 Tr', '3 Tr (ABCD) Tj 0 Tr 1 0 0 1 72 600 Tm (DCBA) Tj']) {
+        const ast = await hebrew(`${body}BT /H 10 Tf 1 0 0 1 72 600 Tm ${draw} ET`);
+        const shown = collectAllNodes(ast).filter(n => n.type === 'text' && /[\u05D0-\u05D3]/.test(n.text ?? '') && !(n.formatting as any)?.invisible).map(n => n.text);
+        assert.deepStrictEqual(shown, ['\u05D0\u05D1\u05D2\u05D3'], `the drawn right-to-left word is the visible one; got ${JSON.stringify(shown)}`);
+    }
+
+    // A base letter and its mark in one glyph, read backwards by pdf.js; and a mixed item, read from its start.
+    const marks = await hebrewMarked('BT /H 10 Tf 1 0 0 1 72 600 Tm (MDCB) Tj 3 Tr 1 0 0 1 72 600 Tm (MDCB) Tj 0 Tr ET');
+    const hiddenRuns = collectAllNodes(marks).filter(n => n.type === 'text' && /[\u05D0-\u05EA]/.test(n.text ?? ''));
+    assert.ok(hiddenRuns.some(n => !(n.formatting as any)?.invisible), `a glyph of a letter and its mark stays visible; got ${JSON.stringify(hiddenRuns.map(n => [n.text, n.formatting]))}`);
+    const mixedTiny = await hebrew(`${body}BT /F1 0.01 Tf 1 0 0 1 72 600 Tm (abc ) Tj 3 Tr /H 10 Tf (A) Tj 0 Tr ET`);
+    assert.ok(collectAllNodes(mixedTiny).some(n => n.type === 'text' && /abc/.test(n.text ?? '') && !(n.formatting as any)?.invisible), 'a mixed item keeps its visible text');
+
+
+    // A glyph with no place of its own opening a word the page moved to: the words stay apart.
+    const apart = await hebrewMarked(`${body}BT /H 10 Tf 1 0 0 1 72 600 Tm (DC) Tj 40 0 Td (UBAC) Tj ET`);
+    const apartText = String((await apart.to('text')).value).split('\n').filter(l => /[\u05D0-\u05EA]/.test(l));
+    assert.ok(apartText.length === 2 || /\s/.test(apartText[0].trim()), `words apart on a line stay apart; got ${JSON.stringify(apartText)}`);
+
+}
+
+/**
+ * Text a PDF's font maps to look-alikes of CJK ideographs (Kangxi radicals, compatibility ideographs),
+ * as Chromium's PDFs of Chinese and Japanese do, reads as the unified ideographs: ⽇本語 was the text.
+ */
+async function testPdfIdeographLookalikes(): Promise<void> {
+    const objects = [
+        '<< /Type /Catalog /Pages 2 0 R >>',
+        '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+        '<< /Length 41 >>\nstream\nBT /F1 24 Tf 20 100 Td (ABCD) Tj ET\nendstream',
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 6 0 R >>',
+    ];
+    // A becomes the Kangxi radical for 日, D the compatibility ideograph for 豈; B and C are 本 and 語.
+    const cmap = '/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /T def 1 begincodespacerange <00> <FF> endcodespacerange 4 beginbfchar <41> <2F47> <42> <672C> <43> <8A9E> <44> <F900> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end';
+    objects.push(`<< /Length ${cmap.length} >>\nstream\n${cmap}\nendstream`);
+    let pdf = '%PDF-1.7\n';
+    const offsets: number[] = [];
+    objects.forEach((o, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+    const xref = pdf.length;
+    pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+    const ast = await OfficeParser.parseOffice(Buffer.from(pdf, 'latin1'), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false }, onWarning: () => { } } as any) as OfficeParserAST;
+    const text = String((await ast.to('text')).value).trim();
+    assert.strictEqual(text, '\u65E5\u672C\u8A9E\u8C48', `look-alike ideographs read as the unified ones; got ${JSON.stringify(text)}`);
+}
+
+/**
+ * A PDF warning about a page says which (`OfficeIssue.page`), so a caller acts on it without reading the
+ * message: a picture pdf.js could not decode (which was dropped with no warning at all), a page that
+ * could not be loaded, links past the annotation budget and a page past the operator budget. A warning
+ * about the whole document has no page.
+ */
+async function testPdfWarningPages(): Promise<void> {
+    const { deflateSync } = await import('zlib');
+    const pdfFrom = (objects: (string | Buffer)[]): Buffer => {
+        const parts: Buffer[] = [Buffer.from('%PDF-1.7\n')];
+        const offsets: number[] = [];
+        let at = parts[0].length;
+        objects.forEach((o, i) => { const b = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), typeof o === 'string' ? Buffer.from(o, 'latin1') : o, Buffer.from('\nendobj\n')]); offsets.push(at); at += b.length; parts.push(b); });
+        parts.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+        return Buffer.concat(parts);
+    };
+    const stream = (content: Buffer, dict = '') => Buffer.concat([Buffer.from(`<< /Length ${content.length} ${dict} >>\nstream\n`), content, Buffer.from('\nendstream')]);
+    const flate = (content: Buffer, dict = '') => stream(deflateSync(content), `/Filter /FlateDecode ${dict}`);
+    const issues = async (pdf: Buffer, config: object = {}) => {
+        const found: any[] = [];
+        const ast = await OfficeParser.parseOffice(pdf, { fileType: 'pdf', onWarning: (issue: any) => found.push(issue), ...config } as any) as OfficeParserAST;
+        return { ast, found };
+    };
+    const blank = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>';
+
+    // A JPEG pdf.js cannot decode, drawn twice on page 2 beside one it can: reported once, with its page.
+    const pictures = pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>', blank,
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Bad 6 0 R /Good 7 0 R >> >> /Contents 5 0 R >>',
+        stream(Buffer.from('q 50 0 0 50 0 0 cm /Bad Do Q q 50 0 0 50 50 0 cm /Bad Do Q q 50 0 0 50 0 50 cm /Good Do Q')),
+        stream(Buffer.from('not a JPEG'), '/Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode'),
+        stream(Buffer.alloc(48, 0x80), '/Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceRGB /BitsPerComponent 8'),
+    ]);
+    const read = await issues(pictures, { extractAttachments: true });
+    const lost = read.found.filter(issue => issue.code === 'IMAGE_EXTRACTION_FAILED');
+    assert.strictEqual(lost.length, 1, `an undecodable picture is reported once; got ${JSON.stringify(read.found.map(i => i.code))}`);
+    assert.strictEqual(lost[0].page, 2, `an undecodable picture's warning names its page; got ${lost[0].page}`);
+    assert.ok(/page 2/.test(lost[0].message) && /could not decode/.test(String(lost[0].details)), `the warning says where and why; got ${lost[0].message} ${lost[0].details}`);
+    assert.strictEqual(read.ast.attachments.length, 1, 'the picture pdf.js decodes is still extracted');
+    const whole = read.found.find(issue => issue.code === 'PDF_NO_TEXT_EXTRACTED');
+    assert.ok(whole && !('page' in whole), 'a warning about the whole document has no page');
+    const withoutPictures = await issues(pictures);
+    assert.ok(!withoutPictures.found.some(issue => issue.code === 'IMAGE_EXTRACTION_FAILED'), 'pictures not asked for are not reported');
+
+    // Page 2 is not in the file.
+    const missing = await issues(pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R 9 0 R] /Count 2 >>', blank,
+    ]));
+    const notLoaded = missing.found.find(issue => issue.code === 'PAGE_LOAD_FAILED');
+    assert.strictEqual(notLoaded?.page, 2, `a page that cannot be loaded is named; got ${JSON.stringify(missing.found.map(i => [i.code, i.page]))}`);
+
+    // Ten pages sharing a hundred links, past a budget of 50 (plus one per 32 bytes of the file).
+    const links = await issues(pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', `<< /Type /Pages /Kids [${Array.from({ length: 10 }, (_, i) => `${5 + i} 0 R`).join(' ')}] /Count 10 >>`,
+        '<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (https://example.com/) >> >>', `[${'3 0 R '.repeat(100)}]`,
+        ...Array.from({ length: 10 }, () => '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots 4 0 R >>'),
+    ]), { pdfParserConfig: { maxAnnotations: 50 } });
+    const capped = links.found.find(issue => issue.code === 'ANNOTATION_EXTRACTION_FAILED');
+    assert.ok(capped && Number.isInteger(capped.page) && capped.page > 1 && capped.message.includes(`page ${capped.page}`), `the page the link budget ran out on is named; got ${JSON.stringify(capped)}`);
+
+    // Page 2 sets its text colour far more often than the operator budget allows.
+    const colours = await issues(pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>', blank,
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 5 0 R >>',
+        flate(Buffer.from('0 0 0 rg 1 0 0 rg '.repeat(20_000))),
+    ]), { pdfParserConfig: { maxOperators: 0 } });
+    const budget = colours.found.find(issue => issue.code === 'PDF_CONTENT_LIMIT_EXCEEDED');
+    assert.strictEqual(budget?.page, 2, `the page the operator budget ran out on is named; got ${JSON.stringify(colours.found.map(i => [i.code, i.page]))}`);
+    // Page 2 draws a 1 MB string through a form two hundred times, past a 100 ms time budget.
+    const long = Buffer.concat([Buffer.from('BT /F1 10 Tf 0 50 Td ('), Buffer.alloc(1_000_000, 'a'), Buffer.from(') Tj ET')]);
+    const slow = await issues(pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>', blank,
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 6 0 R >> /XObject << /X 7 0 R >> >> /Contents 5 0 R >>',
+        flate(Buffer.from('q /X Do Q\n'.repeat(200))), '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+        flate(long, '/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << /Font << /F1 6 0 R >> >>'),
+    ]), { pdfParserConfig: { maxTimeMs: 100, separateProcess: true } });
+    const timed = slow.found.find(issue => issue.code === 'PDF_CONTENT_LIMIT_EXCEEDED');
+    assert.strictEqual(timed?.page, 2, `the page the time budget ran out on is named; got ${JSON.stringify(slow.found.map(i => [i.code, i.page]))}`);
+    console.log('  PDF warning pages: All assertions passed ✓');
+}
+
+/**
+ * The pictures pdf.js leaves out without drawing them are reported, with their page: one larger than
+ * `pdfParserConfig.maxImagePixels` (named, and extracted when the option is raised) and a small inline
+ * picture pdf.js cannot decode, in a separate process and in this one. pdf.js says so only in its
+ * worker's warnings, whose wording a test checks is still in the installed worker. Two PDFs read at once
+ * in this process keep their pictures (pdf.js's decoders followed the document opened last, so one
+ * closing left the other's waiting on it), checked in a fresh process, where no decoder is loaded yet.
+ */
+async function testPdfPicturesLeftOut(): Promise<void> {
+    const { deflateSync } = await import('zlib');
+    const pdfFrom = (objects: (string | Buffer)[]): Buffer => {
+        const parts: Buffer[] = [Buffer.from('%PDF-1.7\n')];
+        const offsets: number[] = [];
+        let at = parts[0].length;
+        objects.forEach((o, i) => { const b = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), typeof o === 'string' ? Buffer.from(o, 'latin1') : o, Buffer.from('\nendobj\n')]); offsets.push(at); at += b.length; parts.push(b); });
+        parts.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+        return Buffer.concat(parts);
+    };
+    const stream = (content: Buffer, dict = '') => Buffer.concat([Buffer.from(`<< /Length ${content.length} ${dict} >>\nstream\n`), content, Buffer.from('\nendstream')]);
+    // An A3 page scanned at 600 dpi, one bit a pixel (69.6 million pixels), and an inline JPEG that is not one.
+    const [width, height] = [7016, 9921];
+    const scan = pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im1 5 0 R >> /Font << /F1 6 0 R >> >> /Contents 4 0 R >>',
+        stream(Buffer.from('q 400 0 0 560 100 100 cm /Im1 Do Q\nq 20 0 0 20 50 50 cm BI /W 10 /H 10 /BPC 8 /CS /RGB /F /DCT ID \xff\xd8\xff\xe0garbagegarbage\xff\xd9 EI Q\nBT /F1 12 Tf 72 40 Td (A scanned page.) Tj ET', 'latin1')),
+        stream(deflateSync(Buffer.alloc(Math.ceil(width / 8) * height, 0xff), { level: 9 }), `/Type /XObject /Subtype /Image /Width ${width} /Height ${height} /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /FlateDecode`),
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    ]);
+    const read = async (config: object) => {
+        const found: any[] = [];
+        const ast = await OfficeParser.parseOffice(scan, { fileType: 'pdf', extractAttachments: true, onWarning: (issue: any) => found.push(issue), ...config } as any) as OfficeParserAST;
+        return { ast, lost: found.filter(issue => issue.code === 'IMAGE_EXTRACTION_FAILED') };
+    };
+    for (const separateProcess of [true, false]) {
+        const { ast, lost } = await read({ pdfParserConfig: { separateProcess } });
+        const where = separateProcess ? 'in a separate process' : 'in this process';
+        assert.strictEqual(ast.attachments.length, 0, `${where}: neither picture is extracted`);
+        assert.ok(lost.length === 2 && lost.every(issue => issue.page === 1), `${where}: both pictures are reported, with their page; got ${JSON.stringify(lost.map(i => [i.page, String(i.details)]))}`);
+        assert.ok(lost.some(issue => /pdfParserConfig\.maxImagePixels \(40000000 pixels\)/.test(String(issue.details))), `${where}: the large picture's warning names the option`);
+        assert.ok(lost.some(issue => /inline picture/.test(String(issue.details))), `${where}: the inline picture's warning says what it was`);
+    }
+    const raised = await read({ pdfParserConfig: { maxImagePixels: 80e6 } });
+    assert.strictEqual(raised.ast.attachments.length, 1, 'with maxImagePixels raised, the large picture is extracted');
+    assert.ok(raised.lost.length === 1 && !/maxImagePixels/.test(String(raised.lost[0].details)), `and only the inline picture is reported; got ${JSON.stringify(raised.lost.map(i => String(i.details)))}`);
+    const untold = await OfficeParser.parseOffice(scan, { fileType: 'pdf', onWarning: (issue: any) => assert.notStrictEqual(issue.code, 'IMAGE_EXTRACTION_FAILED', 'pictures not asked for are not reported') } as any) as OfficeParserAST;
+    assert.strictEqual(untold.attachments.length, 0);
+    const invalid: any[] = [];
+    await OfficeParser.parseOffice(scan, { fileType: 'pdf', onWarning: (issue: any) => invalid.push(issue), pdfParserConfig: { maxImagePixels: -1 } } as any);
+    assert.ok(invalid.some(issue => issue.code === 'INVALID_CONFIG_VALUE' && /maxImagePixels/.test(issue.message)), 'a negative maxImagePixels is reported');
+
+    // pdf.js's own words for what it leaves out, in each worker the library runs.
+    const { PDFJS_WARNINGS } = await import('../src/parsers/pdf/pdfAssets');
+    const pdfjsRoot = path.dirname(path.dirname(path.dirname(require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs'))));
+    for (const worker of ['legacy/build/pdf.worker.mjs', 'build/pdf.worker.mjs', 'build/pdf.worker.min.mjs']) {
+        const source = fs.readFileSync(path.join(pdfjsRoot, worker), 'utf8');
+        for (const [name, words] of Object.entries(PDFJS_WARNINGS)) {
+            assert.ok(source.includes(words), `pdf.js's ${worker} still words its ${name} warning ${JSON.stringify(words)}`);
+        }
+    }
+
+    // Two at once in a fresh process: the pictures' document opened first, a text one second and done first.
+    const os = await import('os');
+    const childProcess = await import('child_process');
+    const script = path.join(os.tmpdir(), `officeparser-pdf-together-${process.pid}.ts`);
+    fs.writeFileSync(script, [
+        `const { OfficeParser } = require(${JSON.stringify(path.join(__dirname, '..', 'src', 'OfficeParser'))});`,
+        `const config = { extractAttachments: true, onWarning: () => {}, pdfParserConfig: { separateProcess: false } };`,
+        `Promise.all([`,
+        `    OfficeParser.parseOffice(${JSON.stringify(path.join(__dirname, 'files', 'pdf', 'cjk_ccitt_jpx.pdf'))}, config),`,
+        `    OfficeParser.parseOffice(${JSON.stringify(path.join(__dirname, 'files', 'pdf', 'columns_untagged.pdf'))}, config),`,
+        `]).then(([pictures, text]) => { console.log('PICTURES ' + pictures.attachments.length + ' ' + text.attachments.length); process.exit(0); });`,
+    ].join('\n'));
+    let out = '';
+    try {
+        out = childProcess.execFileSync(process.execPath, [...process.execArgv, script], { encoding: 'utf8', timeout: 60_000 });
+    } finally {
+        fs.rmSync(script, { force: true });
+    }
+    assert.ok(/PICTURES 2 0/.test(out), `two PDFs read at once in one process keep their pictures; got ${JSON.stringify(out.trim())}`);
+    console.log('  PDF pictures left out: All assertions passed ✓');
+}
+
+/**
+ * pdf.js in this process has one document open at a time (see takeInProcessTurn in PdfParser), and a
+ * turn is never held while code of the caller's is waited on: an `onPassword` that parses another PDF
+ * first, an `onWarning` that starts one, and OCR (here a worker that parses one before it answers) each
+ * finished, where they waited on themselves for ever; a parse waiting on its `onPassword` held up no
+ * other, and an abort ends that wait. pdf.js's notes about pictures it was told to leave out (every one
+ * when pictures are not extracted) use up no part of the warnings a document may send before one it
+ * reports, in a separate process and in this one. A caller's own "Warning: " lines reach its console
+ * while a PDF is read, and pdf.js's lines do not.
+ */
+/**
+ * A PDF's metadata is what its author set, a form field's value is its widget's, and HTML output writes
+ * no file name as a caption and pads a table's shorter rows to its width.
+ */
+async function testPdfFormMetadataAndHtml(): Promise<void> {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([400, 400]);
+    doc.setTitle('Bescheinigung');
+    // A key of the Info dictionary beyond the standard ones is the document's own property.
+    (doc as any).getInfoDict().set(PDFName.of('Reviewer'), PDFHexString.fromText('Grace Hopper'));
+    const form = doc.getForm();
+    const name = form.createTextField('name');
+    name.setText('Mustermann');
+    name.addToPage(page, { x: 50, y: 300, width: 150, height: 20 });
+    const box = form.createCheckBox('agree');
+    box.addToPage(page, { x: 50, y: 250, width: 12, height: 12 });
+    box.check();
+    const ast = await OfficeParser.parseOffice(Buffer.from(await doc.save()), { fileType: 'pdf' } as any);
+    assert.deepStrictEqual(ast.metadata.customProperties, { Reviewer: 'Grace Hopper' }, 'PDF metadata: the Info dictionary\'s own keys, not pdf.js\'s structural flags (IsLinearized, IsAcroFormPresent, Language)');
+    const fields = ast.metadata.nativeProperties?.formFields as any;
+    assert.deepStrictEqual([fields?.name?.type, fields?.name?.value, fields?.agree?.type, fields?.agree?.value], ['text', 'Mustermann', 'checkbox', 'Yes'], `PDF metadata: a form field's type and value are its widget's (${JSON.stringify(fields)})`);
+    const markdown = String((await ast.to('md')).value);
+    assert.ok(!/IsLinearized|IsAcroFormPresent/.test(markdown), 'PDF metadata: no structural flag in the front matter');
+
+    // HTML: no caption of a picture's file name; a table's shorter rows padded to its width.
+    const pictured = await OfficeParser.parseOffice(Buffer.from('<p>x</p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" alt="">'), { fileType: 'html', extractAttachments: true } as any);
+    const pictureHtml = String((await pictured.to('html')).value);
+    assert.ok(pictureHtml.includes('<img') && !pictureHtml.includes('class="caption"'), 'HTML: a picture has no file name under it');
+    const table = await OfficeParser.parseOffice(Buffer.from('<table><tr><td>a</td><td>b</td><td>c</td><td>d</td></tr><tr><td>x</td><td>y</td></tr><tr><td colspan="2">w</td><td>z</td></tr></table>'), { fileType: 'html' } as any);
+    const rows = String((await table.to('html')).value).replace(/<\/?p>|\s+/g, '').match(/<tr>.*?<\/tr>/g) ?? [];
+    assert.deepStrictEqual(rows.map(r => (r.match(/<td/g) ?? []).length + [...r.matchAll(/colspan="(\d+)"/g)].reduce((n, m) => n + Number(m[1]) - 1, 0)), [4, 4, 4], `HTML: each row of a table reaches its width (${rows.join(' ')})`);
+    const spanned = await OfficeParser.parseOffice(Buffer.from('<table><tr><td>A</td><td>B</td><td>C</td></tr><tr><td rowspan="2">r</td><td>1</td></tr><tr><td>2</td><td>3</td></tr></table>'), { fileType: 'html' } as any);
+    const spannedRows = String((await spanned.to('html')).value).replace(/<\/?p>|\s+/g, '').match(/<tr>.*?<\/tr>/g) ?? [];
+    assert.deepStrictEqual(spannedRows.map(r => (r.match(/<t[dh]/g) ?? []).length), [3, 3, 2], `HTML: a row under a row span is padded to the width it does not reach (${spannedRows.join(' ')})`);
+}
+
+async function testPdfFormValuesAsText(): Promise<void> {
+    const inProcess = { pdfParserConfig: { separateProcess: false } };
+    const textOf = (ast: OfficeParserAST): string => ast.content.map(n => n.text).join('\n');
+    const all = (ast: OfficeParserAST): OfficeContentNode[] => { const out: OfficeContentNode[] = []; const stack = [...ast.content]; while (stack.length) { const n = stack.pop()!; out.push(n); stack.push(...(n.children ?? [])); } return out; };
+    const paragraphs = (ast: OfficeParserAST): string[] => all(ast).filter(n => n.type === 'paragraph' || n.type === 'heading').map(n => (n.text ?? '').trim()).reverse();
+
+    // A form of every kind of field, filled, beside its labels, the page asking its viewer to draw the fields.
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const page = doc.addPage([500, 700]);
+    const label = (t: string, x: number, y: number) => page.drawText(t, { x, y, size: 11, font });
+    const form = doc.getForm();
+    label('Nachname', 50, 640);
+    const name = form.createTextField('name');
+    name.setText('Mustermann');
+    // Set larger than its label (a form generator sizes a value to its box), in red.
+    name.addToPage(page, { x: 160, y: 632, width: 200, height: 26, textColor: rgb(1, 0, 0) });
+    name.setFontSize(20);
+    label('Geburtsdatum (TT MM JJJJ)', 50, 600);
+    const date = form.createTextField('date');
+    date.setMaxLength(8);
+    date.enableCombing();
+    date.setText('01052026');
+    date.addToPage(page, { x: 230, y: 594, width: 160, height: 21 });
+    const no = form.createCheckBox('no');
+    no.addToPage(page, { x: 50, y: 558, width: 12, height: 12 });
+    no.check();
+    label('Nein, trifft nicht zu.', 70, 560);
+    const yes = form.createCheckBox('yes');
+    yes.addToPage(page, { x: 50, y: 538, width: 12, height: 12 });
+    label('Ja, trifft zu.', 70, 540);
+    const choice = form.createRadioGroup('choice');
+    choice.addOptionToPage('a', page, { x: 50, y: 508, width: 12, height: 12 });
+    label('Option A', 70, 510);
+    choice.addOptionToPage('b', page, { x: 50, y: 488, width: 12, height: 12 });
+    label('Option B', 70, 490);
+    choice.select('b');
+    label('Stadt', 50, 460);
+    const city = form.createDropdown('city');
+    city.setOptions(['Berlin', 'Hamburg']);
+    city.addToPage(page, { x: 160, y: 454, width: 120, height: 20 });
+    // Its options' values other than the text they show: the value is shown as its option's text.
+    city.acroField.dict.set(PDFName.of('Opt'), doc.context.obj([[PDFHexString.fromText('B'), PDFHexString.fromText('Berlin')], [PDFHexString.fromText('HH'), PDFHexString.fromText('Hamburg')]]));
+    city.acroField.dict.set(PDFName.of('V'), PDFHexString.fromText('HH'));
+    label('Bemerkung', 50, 420);
+    const note = form.createTextField('note');
+    note.enableMultiline();
+    note.setText('Zeile eins\nZeile zwei');
+    note.addToPage(page, { x: 160, y: 380, width: 200, height: 50 });
+    label('Kennwort', 50, 340);
+    const secret = form.createTextField('secret');
+    secret.setText('geheim');
+    secret.enablePassword();
+    secret.addToPage(page, { x: 160, y: 334, width: 120, height: 20 });
+    label('Intern', 50, 300);
+    const hidden = form.createTextField('hidden');
+    hidden.setText('Verborgen');
+    hidden.addToPage(page, { x: 160, y: 294, width: 120, height: 20, hidden: true });
+    // Two fields side by side, their boxes meeting: their borders are no table.
+    label('Von', 50, 260);
+    const from = form.createTextField('from');
+    from.setText('Montag');
+    from.addToPage(page, { x: 160, y: 254, width: 100, height: 20 });
+    const to = form.createTextField('to');
+    to.setText('Freitag');
+    to.addToPage(page, { x: 260, y: 254, width: 100, height: 20 });
+    form.acroForm.dict.set(PDFName.of('NeedAppearances'), doc.context.obj(true));
+    const bytes = Buffer.from(await doc.save());
+
+    for (const config of [{ fileType: 'pdf' }, { fileType: 'pdf', extractAttachments: true, ...inProcess, pdfParserConfig: { separateProcess: false, extractTextColor: true } }]) {
+        const ast = await OfficeParser.parseOffice(bytes, config as any) as OfficeParserAST;
+        const read = paragraphs(ast);
+        const said = `(${JSON.stringify(read)})`;
+        assert.ok(read.includes('Nachname Mustermann'), `PDF form: a text field's value is read with its label ${said}`);
+        assert.ok(read.includes('Geburtsdatum (TT MM JJJJ) 01052026'), `PDF form: a comb field's value is read whole with its label ${said}`);
+        assert.ok(read.includes('☒ Nein, trifft nicht zu.') && read.includes('☐ Ja, trifft zu.'), `PDF form: a check box reads as ticked or not, before its label ${said}`);
+        assert.ok(read.includes('☐ Option A') && read.includes('☒ Option B'), `PDF form: a radio group's selected button reads as ticked ${said}`);
+        assert.ok(read.includes('Stadt Hamburg'), `PDF form: a choice field reads as the text of its selected option ${said}`);
+        const text = textOf(ast);
+        assert.ok(/Bemerkung Zeile eins\s+Zeile zwei/.test(text), `PDF form: a field of several lines reads line by line with its label ${said}`);
+        assert.ok(read.includes('Kennwort ••••••') && !text.includes('geheim'), `PDF form: a password field reads as the bullets the page shows ${said}`);
+        assert.ok(!text.includes('Verborgen'), `PDF form: a hidden field's value is not read ${said}`);
+        assert.ok(read.includes('Von Montag Freitag'), `PDF form: fields side by side read in order with their label ${said}`);
+        assert.strictEqual(text.split('Mustermann').length - 1, 1, `PDF form: a value is read once, not again from its drawing ${said}`);
+        assert.ok(!all(ast).some(n => n.type === 'heading' || n.type === 'table'), `PDF form: no value is a heading, and no field's border a table ${said}`);
+        const value = all(ast).find(n => n.type === 'text' && /Mustermann/.test(n.text ?? ''));
+        assert.strictEqual(value?.formatting?.size, '20pt', 'PDF form: a value keeps its field\'s size');
+        if ((config as any).pdfParserConfig?.extractTextColor) assert.strictEqual(value?.formatting?.color, '#ff0000', 'PDF form: a value keeps its field\'s colour under extractTextColor');
+        const markdown = String((await ast.to('md')).value);
+        assert.ok(markdown.includes('Nachname Mustermann') && markdown.includes('☒ Nein, trifft nicht zu.'), 'PDF form: the values reach Markdown');
+    }
+
+    // Widgets no viewer shows: a calculation field of no size ([0 0 0 0]), one off the page, and one on the
+    // page's media but outside its crop box. Not read as the page's text; their values stay in the form's
+    // fields.
+    const unseen = await PDFDocument.create();
+    const ufont = await unseen.embedFont(StandardFonts.Helvetica);
+    const upage = unseen.addPage([400, 400]);
+    upage.setCropBox(0, 100, 400, 200);
+    upage.drawText('Shown on the page', { x: 50, y: 200, size: 11, font: ufont });
+    const uform = unseen.getForm();
+    for (const [name, value, at] of [['calc', 'NO-SIZE-VALUE', { x: 0, y: 0, width: 0, height: 0 }], ['away', 'OFF-PAGE-VALUE', { x: 500, y: 600, width: 100, height: 20 }],
+        ['cropped', 'CROPPED-VALUE', { x: 50, y: 330, width: 100, height: 20 }], ['seen', 'SEEN-VALUE', { x: 200, y: 194, width: 100, height: 20 }]] as const) {
+        const field = uform.createTextField(name);
+        field.setText(value);
+        field.addToPage(upage, { ...at, font: ufont });
+    }
+    uform.updateFieldAppearances(ufont);
+    const unseenAst = await OfficeParser.parseOffice(Buffer.from(await unseen.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
+    const unseenText = textOf(unseenAst);
+    assert.ok(unseenText.includes('SEEN-VALUE') && !/NO-SIZE|OFF-PAGE|CROPPED/.test(unseenText), `PDF form: a widget of no size, or off the page as shown, is not read (${JSON.stringify(unseenText)})`);
+    const formFields = (unseenAst.metadata as any)?.nativeProperties?.formFields ?? {};
+    assert.deepStrictEqual(['calc', 'away', 'cropped'].map(n => formFields[n]?.value), ['NO-SIZE-VALUE', 'OFF-PAGE-VALUE', 'CROPPED-VALUE'], `PDF form: their values stay in the form's fields (${JSON.stringify(formFields)})`);
+
+    // An order form laid out as a table, its quantities and prices fields under the columns' heads, a check
+    // box under another: read as the table it is when printed, its values its cells, not joined to the item
+    // before them.
+    const order = await PDFDocument.create();
+    const ofont = await order.embedFont(StandardFonts.Helvetica);
+    const opage = order.addPage([612, 792]);
+    const oform = order.getForm();
+    const oput = (t: string, x: number, y: number) => opage.drawText(t, { x, y, size: 11, font: ofont });
+    oput('Item', 72, 700); oput('Quantity', 260, 700); oput('Price', 380, 700); oput('Gift', 494, 700);
+    ['Apples', 'Bananas', 'Cherries'].forEach((item, i) => {
+        const y = 676 - i * 24;
+        oput(item, 72, y);
+        const quantity = oform.createTextField(`quantity${i}`);
+        quantity.setText(String(i + 2));
+        quantity.addToPage(opage, { x: 260, y: y - 5, width: 80, height: 18, font: ofont });
+        const price = oform.createTextField(`price${i}`);
+        price.setText(`${(i + 1) * 1.25}`);
+        price.addToPage(opage, { x: 380, y: y - 5, width: 80, height: 18, font: ofont });
+        const gift = oform.createCheckBox(`gift${i}`);
+        gift.addToPage(opage, { x: 494, y: y - 2, width: 12, height: 12 });
+        if (i === 1) gift.check();
+    });
+    oput('Thank you for your order.', 72, 580);
+    oform.updateFieldAppearances(ofont);
+    const orderAst = await OfficeParser.parseOffice(Buffer.from(await order.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
+    const orderTables = all(orderAst).filter(n => n.type === 'table').map(t => t.children!.map(r => r.children!.map(c => (c.text ?? '').trim())));
+    assert.deepStrictEqual(orderTables, [[['Item', 'Quantity', 'Price', 'Gift'], ['Apples', '2', '1.25', '☐'], ['Bananas', '3', '2.5', '☒'], ['Cherries', '4', '3.75', '☐']]],
+        `PDF form: values under a table's heads are its cells (${JSON.stringify([orderTables, paragraphs(orderAst)])})`);
+    // The same form's quantities centred in their boxes and its amounts set right, under heads set from the
+    // left: each box's left edge is under its head's, so they are its cells still.
+    for (const set of ['centred', 'right', 'both'] as const) {
+        const aligned = await PDFDocument.create();
+        const afont = await aligned.embedFont(StandardFonts.Helvetica);
+        const apage = aligned.addPage([612, 792]);
+        const aform = aligned.getForm();
+        const aput = (t: string, x: number, y: number) => apage.drawText(t, { x, y, size: 11, font: afont });
+        aput('Item', 72, 700); aput('Qty', 300, 700); aput('Amount', 420, 700);
+        [['Widget', '5', '12.00'], ['Gadget', '10', '7.50'], ['Doohickey', '2', '99.95']].forEach(([item, quantity, amount], i) => {
+            const y = 670 - i * 26;
+            aput(item, 72, y);
+            const q = aform.createTextField(`qty${i}`);
+            q.setText(quantity);
+            if (set !== 'right') q.setAlignment(TextAlignment.Center);
+            q.addToPage(apage, { x: 300, y: y - 5, width: 60, height: 18, font: afont });
+            const a = aform.createTextField(`amount${i}`);
+            a.setText(amount);
+            if (set !== 'centred') a.setAlignment(TextAlignment.Right);
+            a.addToPage(apage, { x: 420, y: y - 5, width: 100, height: 18, font: afont });
+        });
+        aput('Thank you for your order.', 72, 560);
+        aform.updateFieldAppearances(afont);
+        const alignedAst = await OfficeParser.parseOffice(Buffer.from(await aligned.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
+        const alignedTables = all(alignedAst).filter(n => n.type === 'table').map(t => t.children!.map(r => r.children!.map(c => (c.text ?? '').trim())));
+        assert.deepStrictEqual(alignedTables, [[['Item', 'Qty', 'Amount'], ['Widget', '5', '12.00'], ['Gadget', '10', '7.50'], ['Doohickey', '2', '99.95']]],
+            `PDF form: values ${set} in their boxes under heads set from the left are the table's cells (${JSON.stringify([alignedTables, paragraphs(alignedAst)])})`);
+    }
+    // A form of labels and values under a line of two cells that is no table's head: a title on the left and
+    // one set right at the margin the boxes end at, then the same form with a form's number and its revision
+    // over it and a line between them and the form. Each value is read with its label.
+    for (const shape of ['title', 'revision'] as const) {
+        const plain = await PDFDocument.create();
+        const pfont = await plain.embedFont(StandardFonts.Helvetica);
+        const ppage = plain.addPage([612, 792]);
+        const pform = plain.getForm();
+        const pput = (t: string, x: number, y: number) => ppage.drawText(t, { x, y, size: 11, font: pfont });
+        const [left, right] = shape === 'title' ? ['ACME Insurance', 'Claim Form'] : ['Form W-123', 'Rev. 01/2026'];
+        pput(left, 72, 740); pput(right, 540 - pfont.widthOfTextAtSize(right, 11), 740);
+        if (shape === 'revision') pput('Part I. Applicant', 72, 712);
+        const rows = [['Name:', 'John Smith'], ['Address:', '1 Main Street'], ['Policy number:', 'PN-12345']];
+        rows.forEach(([label, value], i) => {
+            const y = 680 - i * 30;
+            pput(label, 72, y);
+            const field = pform.createTextField(`field${i}`);
+            field.setText(value);
+            field.addToPage(ppage, { x: 200, y: y - 5, width: 340, height: 18, font: pfont });
+        });
+        pform.updateFieldAppearances(pfont);
+        const plainAst = await OfficeParser.parseOffice(Buffer.from(await plain.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
+        const read = paragraphs(plainAst);
+        assert.ok(!all(plainAst).some(n => n.type === 'table') && rows.every(([label, value]) => read.includes(`${label} ${value}`)),
+            `PDF form: a line over a form that is not its table's head leaves each value with its label (${shape}: ${JSON.stringify(read)})`);
+    }
+    // A page of two columns with a field in the left one whose box reaches across the gutter, and one over
+    // both columns: the columns are read one after the other, each value with its label, however far its box
+    // reaches. (A box is no text: a line reaching as far as its values' boxes ran through the gutter and read
+    // the columns row by row.)
+    for (const [where, row, x, width] of [['across the gutter', 10, 140, 170], ['over both columns', 0, 72, 468]] as const) {
+        const cols = await PDFDocument.create();
+        const cfont = await cols.embedFont(StandardFonts.Helvetica);
+        const cpage = cols.addPage([612, 792]);
+        for (let k = 0; k < 20; k++) {
+            cpage.drawText(k === row ? `L${k} Answer:` : `L${k} left column words of text here`, { x: 72, y: 700 - k * 14, size: 10, font: cfont });
+            cpage.drawText(`R${k} right column words of text here`, { x: 322, y: 700 - k * 14, size: 10, font: cfont });
+        }
+        const field = cols.getForm().createTextField('answer');
+        field.setText('Yes');
+        field.addToPage(cpage, { x, y: 700 - row * 14 - 3, width, height: 13, font: cfont, borderWidth: 0 });
+        cols.getForm().updateFieldAppearances(cfont);
+        const colsAst = await OfficeParser.parseOffice(Buffer.from(await cols.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
+        const order = textOf(colsAst).match(/\b[LR]\d+\b/g) ?? [];
+        const columns = [...Array.from({ length: 20 }, (_, k) => `L${k}`), ...Array.from({ length: 20 }, (_, k) => `R${k}`)];
+        assert.deepStrictEqual(order, columns, `PDF form: a field's box ${where} leaves a page's columns one after the other (${JSON.stringify(order)})`);
+        assert.ok(/Answer: ?Yes/.test(textOf(colsAst)), `PDF form: and its value with its label (${where})`);
+    }
+
+    // A comb the page draws itself: a date's digits one to a box, in boxes of a day, a month and a year, with
+    // what each group is under it. Beside it, what is no comb: a grid of two rows of letters, a row of words
+    // in like boxes, and a scale of numbers set apart with no boxes.
+    const drawn = await PDFDocument.create();
+    const dfont = await drawn.embedFont(StandardFonts.Helvetica);
+    const dpage = drawn.addPage([500, 500]);
+    const black = rgb(0, 0, 0);
+    const box = (x: number, y: number, w: number, h: number) => dpage.drawRectangle({ x, y, width: w, height: h, borderColor: black, borderWidth: 0.5 });
+    const put = (t: string, x: number, y: number, size = 11) => dpage.drawText(t, { x, y, size, font: dfont });
+    put('Geburtsdatum', 50, 446);
+    const groups = [{ at: 230, digits: '01' }, { at: 280, digits: '05' }, { at: 330, digits: '2026' }];
+    for (const g of groups) [...g.digits].forEach((d, k) => { box(g.at + 18 * k, 440, 18, 18); put(d, g.at + 18 * k + 5, 444, 14); });
+    put('Tag', 230, 430, 7); put('Monat', 280, 430, 7); put('Jahr', 330, 430, 7);
+    put('Raster', 50, 376);
+    for (const [row, letters] of [[0, 'ABCD'], [1, 'EFGH']] as [number, string][]) [...letters].forEach((c, k) => { box(230 + 18 * k, 380 - 18 * row, 18, 18); put(c, 235 + 18 * k, 384 - 18 * row); });
+    put('Antwort', 50, 306);
+    ['Ja', 'Nein', 'Vielleicht'].forEach((word, k) => { box(230 + 40 * k, 300, 40, 24); put(word, 233 + 40 * k, 308, 8); });
+    // A comb inside a table's cell, beside its label's cell: the cell's.
+    for (const y of [220, 200, 170]) dpage.drawLine({ start: { x: 50, y }, end: { x: 400, y }, thickness: 0.75, color: black });
+    for (const x of [50, 180, 400]) dpage.drawLine({ start: { x, y: 170 }, end: { x, y: 220 }, thickness: 0.75, color: black });
+    put('Name', 55, 206); put('Erika', 185, 206); put('Geboren', 55, 180);
+    [...'01052026'].forEach((d, k) => { box(190 + 18 * k, 175, 18, 18); put(d, 195 + 18 * k, 179, 14); });
+    put('Bewertung', 50, 250);
+    ['1', '2', '3', '4', '5'].forEach((n, k) => put(n, 130 + 14 * k, 250));
+    // A scale ruled into boxes wide apart for its numbers (boxes of 30 points, numbers of 11): a table.
+    put('Zufriedenheit', 50, 106);
+    ['1', '2', '3', '4', '5'].forEach((n, k) => { box(230 + 30 * k, 100, 30, 24); put(n, 242 + 30 * k, 108); });
+    // A comb of small digits (8 points in boxes of 18), a date: one value. Grades in boxes as tight (11 points
+    // in boxes of 18): a scale's choices, a table.
+    put('Geburtstag', 50, 66);
+    [...'15041985'].forEach((d, k) => { box(230 + 18 * k, 60, 18, 18); put(d, 237 + 18 * k, 65, 8); });
+    put('Note', 50, 26);
+    ['A', 'B', 'C', 'D', 'F'].forEach((g, k) => { box(230 + 18 * k, 20, 18, 18); put(g, 235 + 18 * k, 24); });
+    const drawnAst = await OfficeParser.parseOffice(Buffer.from(await drawn.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
+    const drawnRead = paragraphs(drawnAst);
+    const drawnSaid = `(${JSON.stringify(drawnRead)})`;
+    assert.ok(drawnRead.includes('Geburtsdatum 01 05 2026'), `PDF comb: a date drawn a digit to a box reads as its groups, with its label ${drawnSaid}`);
+    assert.ok(drawnRead.indexOf('Geburtsdatum 01 05 2026') < drawnRead.findIndex(t => /^Tag/.test(t)), `PDF comb: and before what is under it ${drawnSaid}`);
+    assert.ok(!all(drawnAst).some(n => n.type === 'heading'), `PDF comb: its digits are no heading ${drawnSaid}`);
+    const drawnTables = all(drawnAst).filter(n => n.type === 'table').reverse();
+    const cells = (t: OfficeContentNode) => t.children!.map(r => r.children!.map(c => c.text));
+    assert.deepStrictEqual(drawnTables.map(cells), [[['A', 'B', 'C', 'D'], ['E', 'F', 'G', 'H']], [['Ja', 'Nein', 'Vielleicht']], [['Name', 'Erika'], ['Geboren', '01052026']], [['1', '2', '3', '4', '5']], [['A', 'B', 'C', 'D', 'F']]], `PDF comb: a grid of two rows of letters, a row of words in like boxes, a scale's numbers and grades in boxes, are tables; a comb in a table's cell is the cell's (${JSON.stringify(drawnTables.map(cells))})`);
+    assert.ok(drawnRead.includes('Geburtstag 15041985'), `PDF comb: a comb of small digits is one value ${drawnSaid}`);
+    assert.ok(drawnRead.some(t => /(^| )1 2 3 4 5$/.test(t)) && !textOf(drawnAst).includes('12345'), `PDF comb: numbers set apart with no boxes stay apart ${drawnSaid}`);
+    // Rows of letters and of numbers in boxes wider than tall (30 by 18, characters of 11 points): a week's
+    // days, a yes and a no, odd numbers to pick from, each a table. A scale's numbers and letters of 14 points
+    // in square boxes of 18, as tight as a comb's, are tables too: a row of characters that count one after
+    // another may as well be a scale's choices, and as a table keeps every character, each in its cell. A
+    // date's digits in boxes a little wider than tall (20 by 15, 16 by 12) are a comb, one value.
+    const ruled = await PDFDocument.create();
+    const rfont = await ruled.embedFont(StandardFonts.Helvetica);
+    const rpage = ruled.addPage([500, 500]);
+    const rrow = (label: string, chars: string, y: number, w: number, h: number, size: number) => {
+        rpage.drawText(label, { x: 50, y: y + 4, size: 11, font: rfont });
+        [...chars].forEach((c, k) => {
+            rpage.drawRectangle({ x: 200 + w * k, y, width: w, height: h, borderColor: black, borderWidth: 0.5 });
+            rpage.drawText(c, { x: 200 + w * k + (w - rfont.widthOfTextAtSize(c, size)) / 2, y: y + (h - size) / 2 + 1, size, font: rfont });
+        });
+    };
+    rrow('Days', 'MTWTFSS', 440, 30, 18, 11); rrow('Answer', 'YN', 400, 30, 18, 11); rrow('Pick', '13579', 360, 30, 18, 11);
+    rrow('Code', '12345', 300, 18, 18, 14); rrow('Letters', 'ABCDE', 260, 18, 18, 14); rrow('Short', '123', 220, 18, 18, 14);
+    rrow('Born', '15041985', 180, 20, 15, 11); rrow('Signed', '01052026', 140, 16, 12, 9);
+    // (Boxes half again as wide as tall, 26 or 27 by 18: a date's digits are a comb; a week's letters, and odd
+    // numbers that count by twos, are choices.)
+    rrow('Weekdays', 'MTWTFSS', 100, 26, 18, 11); rrow('Odd', '13579', 60, 26, 18, 11); rrow('Due', '15041985', 20, 27, 18, 11);
+    const ruledAst = await OfficeParser.parseOffice(Buffer.from(await ruled.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
+    const ruledRead = paragraphs(ruledAst);
+    const ruledTables = all(ruledAst).filter(n => n.type === 'table').reverse().map(cells);
+    assert.deepStrictEqual(ruledTables, [[[...'MTWTFSS']], [['Y', 'N']], [[...'13579']], [[...'12345']], [[...'ABCDE']], [[...'123']], [[...'MTWTFSS']], [[...'13579']]],
+        `PDF comb: letters and numbers in boxes wider than tall are tables, and a scale's characters in boxes as tight as a comb's (${JSON.stringify([ruledTables, ruledRead])})`);
+    assert.ok(['Born 15041985', 'Signed 01052026', 'Due 15041985'].every(t => ruledRead.includes(t)), `PDF comb: a date's digits in boxes a little wider than tall are one value (${JSON.stringify(ruledRead)})`);
+    // Fewer than five digits counting by more than one, in square boxes, are a value: a PIN's "2468".
+    const pin = await PDFDocument.create();
+    const pinFont = await pin.embedFont(StandardFonts.Helvetica);
+    const pinPage = pin.addPage([500, 200]);
+    pinPage.drawText('PIN', { x: 50, y: 104, size: 11, font: pinFont });
+    [...'2468'].forEach((c, k) => {
+        pinPage.drawRectangle({ x: 200 + 18 * k, y: 100, width: 18, height: 18, borderColor: black, borderWidth: 0.5 });
+        pinPage.drawText(c, { x: 200 + 18 * k + (18 - pinFont.widthOfTextAtSize(c, 14)) / 2, y: 103, size: 14, font: pinFont });
+    });
+    const pinAst = await OfficeParser.parseOffice(Buffer.from(await pin.save()), { fileType: 'pdf', ...inProcess } as any) as OfficeParserAST;
+    assert.ok(paragraphs(pinAst).includes('PIN 2468') && !all(pinAst).some(n => n.type === 'table'), `PDF comb: four even digits in square boxes are a value (${JSON.stringify(paragraphs(pinAst))})`);
+
+    // A tagged form: a field's widget tagged as a /Form element (its OBJR) reads its value there, and a
+    // field the tags leave out reads by its place, neither making the tags look unreliable.
+    const tagged = await PDFDocument.create();
+    const tfont = await tagged.embedFont(StandardFonts.Helvetica);
+    const tpage = tagged.addPage([400, 300]);
+    const ctx = tagged.context;
+    tpage.pushOperators(PDFOperator.of('BDC' as any, [PDFName.of('P'), ctx.obj({ MCID: 0 }) as any]));
+    tpage.drawText('Wohnort', { x: 50, y: 250, size: 11, font: tfont });
+    tpage.pushOperators(PDFOperator.of('EMC' as any));
+    tpage.pushOperators(PDFOperator.of('BDC' as any, [PDFName.of('P'), ctx.obj({ MCID: 1 }) as any]));
+    tpage.drawText('Postleitzahl', { x: 50, y: 200, size: 11, font: tfont });
+    tpage.pushOperators(PDFOperator.of('EMC' as any));
+    const tform = tagged.getForm();
+    const town = tform.createTextField('town');
+    town.setText('Leipzig');
+    town.addToPage(tpage, { x: 150, y: 244, width: 150, height: 20 });
+    const zip = tform.createTextField('zip');
+    zip.setText('04109');
+    zip.addToPage(tpage, { x: 150, y: 194, width: 150, height: 20 });
+    const pageRef = tpage.ref;
+    const townWidget = town.acroField.getWidgets()[0];
+    const townRef = ctx.getObjectRef(townWidget.dict)!;
+    townWidget.dict.set(PDFName.of('StructParent'), ctx.obj(1));
+    tpage.node.set(PDFName.of('StructParents'), ctx.obj(0));
+    const rootRef = ctx.nextRef(), docRef = ctx.nextRef(), p0 = ctx.nextRef(), p1 = ctx.nextRef(), formRef = ctx.nextRef();
+    ctx.assign(p0, ctx.obj({ Type: 'StructElem', S: 'P', P: docRef, Pg: pageRef, K: 0 }));
+    ctx.assign(formRef, ctx.obj({ Type: 'StructElem', S: 'Form', P: docRef, Pg: pageRef, K: ctx.obj({ Type: 'OBJR', Obj: townRef, Pg: pageRef }) }));
+    ctx.assign(p1, ctx.obj({ Type: 'StructElem', S: 'P', P: docRef, Pg: pageRef, K: 1 }));
+    ctx.assign(docRef, ctx.obj({ Type: 'StructElem', S: 'Document', P: rootRef, K: [p0, formRef, p1] }));
+    ctx.assign(rootRef, ctx.obj({ Type: 'StructTreeRoot', K: docRef, ParentTree: ctx.obj({ Nums: [0, ctx.obj([p0, p1]), 1, formRef] }), ParentTreeNextKey: 2 }));
+    tagged.catalog.set(PDFName.of('StructTreeRoot'), rootRef);
+    tagged.catalog.set(PDFName.of('MarkInfo'), ctx.obj({ Marked: true }));
+    const taggedWarnings: string[] = [];
+    const taggedAst = await OfficeParser.parseOffice(Buffer.from(await tagged.save()), { fileType: 'pdf', ...inProcess, onWarning: (w: any) => taggedWarnings.push(String(w?.code)) } as any) as OfficeParserAST;
+    const taggedRead = paragraphs(taggedAst);
+    const taggedText = textOf(taggedAst);
+    assert.ok(taggedRead.indexOf('Wohnort') >= 0 && taggedRead.indexOf('Wohnort') < taggedRead.indexOf('Leipzig') && taggedRead.indexOf('Leipzig') < taggedRead.findIndex(t => t.startsWith('Postleitzahl')), `PDF tagged form: a value is read at its /Form element (${JSON.stringify(taggedRead)})`);
+    assert.ok(taggedText.includes('04109') && taggedText.split('Leipzig').length === 2, `PDF tagged form: an untagged field's value is read too, and each once (${JSON.stringify(taggedRead)})`);
+    assert.ok(!taggedWarnings.includes('PDF_STRUCT_TREE_UNRELIABLE'), `PDF tagged form: field values do not make the tags look unreliable (${taggedWarnings.join(', ')})`);
+
+    // An annotation's appearance is drawn in its own place on the page: a stamp's picture is read where the
+    // stamp is, not at the page's corner.
+    const stamped = await PDFDocument.create();
+    const spage = stamped.addPage([400, 700]);
+    spage.drawText('Stamped page', { x: 50, y: 650, size: 11, font: await stamped.embedFont(StandardFonts.Helvetica) });
+    const picture = await stamped.embedPng(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
+    const sctx = stamped.context;
+    const appearance = sctx.register(sctx.flateStream('q 100 0 0 50 0 0 cm /Im0 Do Q', { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 100, 50], Resources: { XObject: { Im0: picture.ref } } }));
+    spage.node.set(PDFName.of('Annots'), sctx.obj([sctx.register(sctx.obj({ Type: 'Annot', Subtype: 'Stamp', Rect: [200, 500, 300, 550], AP: { N: appearance } }))]));
+    const stampedAst = await OfficeParser.parseOffice(Buffer.from(await stamped.save()), { fileType: 'pdf', extractAttachments: true, ...inProcess } as any) as OfficeParserAST;
+    const stampImage = all(stampedAst).find(n => n.type === 'image');
+    assert.deepStrictEqual(stampImage?.bounds && [stampImage.bounds.x, stampImage.bounds.y, stampImage.bounds.width, stampImage.bounds.height], [200, 150, 100, 50], `PDF annotation: a stamp's picture is where the stamp is (${JSON.stringify(stampImage?.bounds)})`);
+}
+
+/**
+ * A simple font's code whose `/Differences` name pdf.js cannot read ("c.sc", a small capital), and whose
+ * `/ToUnicode` CMap has no entry for it, is read by its glyph's name (see glyphNames): pdf.js read it as the
+ * code's own character, "ni!ht" for "nicht", as a government form's subset font has it. A code the CMap
+ * maps, a font with no such name at the code, and a composite font are read as pdf.js reads them.
+ */
+async function testPdfGlyphNames(): Promise<void> {
+    const pdfFrom = (objects: (string | Buffer)[]): Buffer => {
+        const parts: Buffer[] = [Buffer.from('%PDF-1.7\n')];
+        const offsets: number[] = [];
+        let at = parts[0].length;
+        objects.forEach((o, i) => { const b = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), typeof o === 'string' ? Buffer.from(o, 'latin1') : o, Buffer.from('\nendobj\n')]); offsets.push(at); at += b.length; parts.push(b); });
+        parts.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+        return Buffer.concat(parts);
+    };
+    const stream = (content: string, dict = '') => { const data = Buffer.from(content, 'latin1'); return Buffer.concat([Buffer.from(`<< /Length ${data.length} ${dict} >>\nstream\n`), data, Buffer.from('\nendstream')]); };
+    const cmap = (entries: string) => stream(`/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Sub def 1 begincodespacerange <00> <FF> endcodespacerange\n${entries}\nendcmap CMapName currentdict /CMap defineresource pop end end`);
+    /** A ToUnicode CMap mapping the printable ASCII codes to themselves, but those in `lacking`. */
+    const identity = (lacking: number[]) => {
+        const codes = Array.from({ length: 95 }, (_, i) => 32 + i).filter(c => !lacking.includes(c));
+        return cmap(`${codes.length} beginbfchar\n${codes.map(c => `<${c.toString(16)}> <00${c.toString(16)}>`).join('\n')}\nendbfchar`);
+    };
+    const differences = '/Differences [33 /c.sc 34 /Euro 35 /f_l 36 /f_i]';
+    const subsetFont = (encoding: string, toUnicode: boolean) => `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Type /Encoding /BaseEncoding /WinAnsiEncoding ${encoding} >>${toUnicode ? ' /ToUnicode 6 0 R' : ''} >>`;
+    /**
+     * A page of a plain Helvetica (F1, its "!" a real one) and a font of the same name with names in its
+     * encoding (F2, object 5, its CMap object 6), and `more` objects from 8 on (F3 is object 8).
+     */
+    const page = (font: string, toUnicode: Buffer | string, content: string, more: (string | Buffer)[] = []) => pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 7 0 R /F2 5 0 R /F3 8 0 R >> /XObject << /X 8 0 R >> >> /Contents 4 0 R >>',
+        stream(`BT /F1 11 Tf 50 760 Td (Plain Helvetica!) Tj ET\n${content}`), font, toUnicode,
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>', ...more]);
+    const read = async (pdf: Buffer, pdfParserConfig: object = {}) => String((await (await OfficeParser.parseOffice(pdf, { fileType: 'pdf', pdfParserConfig } as any)).to('text')).value);
+    const words = 'BT /F2 11 Tf 50 710 Td (Trifft ni!ht zu, au#erdem $nden) Tj ET';
+
+    // The form's font: its CMap lacks code 33 alone, and maps 35 and 36 to "#" and "$", which stand.
+    const form = page(subsetFont(differences, true), identity([33]), words);
+    for (const config of [{ separateProcess: false }, { separateProcess: true }, { separateProcess: false, normalizeText: false }]) {
+        const text = await read(form, config);
+        assert.ok(text.includes('Trifft nicht zu, au#erdem $nden'), `PDF glyph names: a code its CMap lacks is read by its name, a code it maps as mapped (${JSON.stringify(config)}: ${JSON.stringify(text)})`);
+        assert.ok(text.includes('Plain Helvetica!'), `PDF glyph names: a real "!" of another font of the same name stands (${JSON.stringify(config)}: ${JSON.stringify(text)})`);
+    }
+    // Its CMap mapping code 33 to "!": the "!" stands.
+    const mapped = await read(page(subsetFont(differences, true), identity([]), words));
+    assert.ok(mapped.includes('Trifft ni!ht zu'), `PDF glyph names: a code the CMap maps is read as it maps it (${JSON.stringify(mapped)})`);
+    // No name at the code: the "!" stands.
+    const unnamed = await read(page(subsetFont('', true), identity([33]), words));
+    assert.ok(unnamed.includes('Trifft ni!ht zu'), `PDF glyph names: a code with no name in the encoding is read as pdf.js reads it (${JSON.stringify(unnamed)})`);
+    // No CMap at all: pdf.js reads "f_l" and "f_i" by its own list, and code 33 as "!"; read by its name here.
+    const noCmap = await read(page(subsetFont(differences, false), '<< >>', words));
+    assert.ok(noCmap.includes('Trifft nicht zu, auflerdem finden'), `PDF glyph names: with no CMap, a name pdf.js cannot read is read here, those it can as it reads them (${JSON.stringify(noCmap)})`);
+    // The ligatures' codes lacking from the CMap: read as their components.
+    const ligatures = await read(page(subsetFont(differences, true), identity([33, 35, 36]), words));
+    assert.ok(ligatures.includes('Trifft nicht zu, auflerdem finden'), `PDF glyph names: "f_l" and "f_i" are read as "fl" and "fi" (${JSON.stringify(ligatures)})`);
+    // Names pdf.js cannot read, by the Adobe Glyph List's rules: a suffix left out, an underscore's components
+    // joined, `uniXXXX` read; a control code (pdf.js's own character for it is taken out of the text) too.
+    const rules = await read(page(subsetFont('/Differences [1 /c.sc 37 /f_k 38 /uni00E9.sc 39 /one.osf 40 /T_h.alt]', false), '<< >>',
+        'BT /F2 11 Tf 50 710 Td (ni\\001ht Au\\045 caf\\046 Zimmer \\047 \\050e end) Tj ET'));
+    assert.ok(rules.includes('nicht Aufk café Zimmer 1 The end'), `PDF glyph names: suffixes, ligatures, uniXXXX and control codes are read by their names (${JSON.stringify(rules)})`);
+    // A form drawn with `Do` sets the font in its own resources: its glyphs are read by their names too.
+    const drawn = await read(page(subsetFont(differences, true), identity([33]), 'q /X Do Q', [
+        stream('BT /G 11 Tf 50 710 Td (Formular: ni!ht) Tj ET', '/Type /XObject /Subtype /Form /BBox [0 0 595 842] /Resources << /Font << /G 5 0 R >> >>')]));
+    assert.ok(drawn.includes('Formular: nicht'), `PDF glyph names: a font a form sets is read by its names (${JSON.stringify(drawn)})`);
+    // A composite font is read as pdf.js reads it, whatever the simple fonts beside it are read as.
+    const cid = (simple: string) => page(simple, identity([33]), 'BT /F2 11 Tf 50 710 Td (ni!ht) Tj ET BT /F3 11 Tf 50 690 Td <0048002100690021> Tj ET', [
+        '<< /Type /Font /Subtype /Type0 /BaseFont /Helvetica /Encoding /Identity-H /DescendantFonts [9 0 R] /ToUnicode 10 0 R >>',
+        '<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Helvetica /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 600 >>',
+        cmap('2 beginbfchar\n<0048> <0048>\n<0069> <0069>\nendbfchar')]);
+    const cidRead = (await read(cid(subsetFont(differences, true)))).split('\n');
+    const cidAsRead = (await read(cid(subsetFont('', true)))).split('\n');
+    assert.ok(cidRead.includes('nicht') && cidAsRead.includes('ni!ht'), `PDF glyph names: the simple font beside a composite one is read by its names (${JSON.stringify(cidRead)})`);
+    assert.strictEqual(cidRead[cidRead.length - 1], cidAsRead[cidAsRead.length - 1], `PDF glyph names: a composite font's text is pdf.js's (${JSON.stringify(cidRead)} ${JSON.stringify(cidAsRead)})`);
+    console.log('  PDF glyph names: All assertions passed ✓');
+}
+
+/**
+ * A picture the PDF stores as a JPEG (DCTDecode) is kept as that JPEG, byte for byte, named `.jpg` and
+ * typed `image/jpeg`, where its bytes show what pdf.js's pixels do (see pdfJpeg): 8-bit gray or RGB (or
+ * ICCBased of one or three components), no `/Decode`, mask or soft mask, no colour transform of its own,
+ * a header that says what the dictionary says, no EXIF orientation. Any other stays the PNG of its pixels,
+ * as does an inline picture. Every writer carries the JPEG, OCR reads it, and `maxImagePixels` holds.
+ */
+async function testPdfKeptJpegs(): Promise<void> {
+    const { deflateSync } = await import('zlib');
+    // 16 x 16 pictures made by Pillow: RGB, gray, CMYK (an Adobe marker), and RGB with EXIF orientation 6.
+    const jpeg = {
+        rgb: Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikxMC4pLSwzOko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//2wBDAQ4ODhMREyYVFSZPNS01T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0//wAARCAAQABADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDmLXTuny1r2undPlrXtdO6fLWxa6d0+Wqr47zDKsx21P/Z', 'base64'),
+        gray: Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikxMC4pLSwzOko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//wAALCAAQABABAREA/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/9oACAEBAAA/AOYtdO6fLWva6d0+Wte107p8tbFrp3T5a//Z', 'base64'),
+        cmyk: Buffer.from('/9j/7gAOQWRvYmUAZAAAAAAA/9sAQwANCQoLCggNCwoLDg4NDxMgFRMSEhMnHB4XIC4pMTAuKS0sMzpKPjM2RjcsLUBXQUZMTlJTUjI+WmFaUGBKUVJP/8AAFAgAEAAQBEMRAE0RAFkRAEsRAP/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/aAA4EQwBNAFkASwAAPwDk/D/8Ncn/AGF/sUV6dXp3h/8Aho/sL/YoorzHw/8Aw16d/YX+xRRXp3h/+Gj+wv8AYoor/9k=', 'base64'),
+        rot6: Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/4QAiRXhpZgAATU0AKgAAAAgAAQESAAMAAAABAAYAAAAAAAD/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikxMC4pLSwzOko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//2wBDAQ4ODhMREyYVFSZPNS01T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0//wAARCAAQABADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDmLXTuny1r2undPlrXtdO6fLWxa6d0+Wqr47zDKsx21P/Z', 'base64'),
+    };
+    const inProcess = { pdfParserConfig: { separateProcess: false } };
+    const pdfFrom = (objects: (string | Buffer)[]): Buffer => {
+        const parts: Buffer[] = [Buffer.from('%PDF-1.7\n')];
+        const offsets: number[] = [];
+        let at = parts[0].length;
+        objects.forEach((o, i) => { const b = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), typeof o === 'string' ? Buffer.from(o, 'latin1') : o, Buffer.from('\nendobj\n')]); offsets.push(at); at += b.length; parts.push(b); });
+        parts.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+        return Buffer.concat(parts);
+    };
+    const stream = (content: Buffer, dict = '') => Buffer.concat([Buffer.from(`<< /Length ${content.length} ${dict} >>\nstream\n`), content, Buffer.from('\nendstream')]);
+    const dct = '/Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode';
+    /** A page drawing the picture of object 5 (object 6 a gray soft mask, object 7 an ICC profile) `draws` times, with `inline` beside them. */
+    const pictured = (data: Buffer, dict = dct, draws = 1, inline?: Buffer) => pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>',
+        stream(Buffer.concat([Buffer.from(Array.from({ length: draws }, (_, i) => `q 100 0 0 100 ${20 + i * 10} ${20 + i * 10} cm /Im1 Do Q\n`).join('') + (inline ? 'q 50 0 0 50 200 200 cm BI /W 16 /H 16 /BPC 8 /CS /RGB /F /DCT ID ' : ''), 'latin1'), inline ?? Buffer.alloc(0), Buffer.from(inline ? ' EI Q' : '', 'latin1')])),
+        stream(data, dict),
+        stream(deflateSync(Buffer.alloc(256, 0x80)), '/Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode'),
+        stream(Buffer.alloc(0), '/N 3 /Alternate /DeviceRGB'),
+    ]);
+    const read = async (pdf: Buffer, config: object = {}) => await OfficeParser.parseOffice(pdf, { fileType: 'pdf', extractAttachments: true, ...inProcess, ...config } as any) as OfficeParserAST;
+    const isJpeg = (a: { mimeType?: string; name?: string; data: string }, bytes: Buffer) => a.mimeType === 'image/jpeg' && /^pdf_image_p1_\d+\.jpg$/.test(a.name!) && Buffer.from(a.data, 'base64').equals(bytes);
+    const isPng = (a: { mimeType?: string; name?: string; data: string }) => a.mimeType === 'image/png' && /^pdf_image_p1_\d+\.png$/.test(a.name!) && Buffer.from(a.data, 'base64').subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+    // pdf-lib's embedJpg, a page of one picture: the file's bytes, whatever the process that reads them.
+    for (const [kind, bytes] of [['RGB', jpeg.rgb], ['gray', jpeg.gray]] as const) {
+        const doc = await PDFDocument.create();
+        const embedded = await doc.embedJpg(new Uint8Array(bytes));
+        doc.addPage([300, 300]).drawImage(embedded, { x: 20, y: 20, width: 100, height: 100 });
+        const saved = Buffer.from(await doc.save());
+        for (const separateProcess of [true, false]) {
+            const ast = await read(saved, { pdfParserConfig: { separateProcess } });
+            const node = ast.content.flatMap(n => n.children ?? []).concat(ast.content).find(n => n.type === 'image');
+            assert.ok(ast.attachments.length === 1 && isJpeg(ast.attachments[0], bytes), `PDF kept JPEG: a ${kind} JPEG page keeps its bytes as ${ast.attachments[0]?.name} ${ast.attachments[0]?.mimeType} (${separateProcess ? 'separate process' : 'in process'})`);
+            assert.ok(ast.attachments[0].extension === 'jpg' && (node?.metadata as ImageMetadata | undefined)?.attachmentName === ast.attachments[0].name, 'PDF kept JPEG: the image node names the JPEG attachment');
+        }
+    }
+
+    // The same picture drawn twice, a JPEG each time; an ICCBased space of three components; a JPEG with an
+    // end of line before `endstream` and a length the file gets wrong (the picture is up to its end marker).
+    const twice = await read(pictured(jpeg.rgb, dct, 2));
+    assert.ok(twice.attachments.length === 2 && twice.attachments.every(a => isJpeg(a, jpeg.rgb)), `PDF kept JPEG: a picture drawn twice is two JPEGs (${twice.attachments.map(a => a.name)})`);
+    const icc = await read(pictured(jpeg.rgb, dct.replace('/DeviceRGB', '[/ICCBased 7 0 R]')));
+    assert.ok(icc.attachments.length === 1 && isJpeg(icc.attachments[0], jpeg.rgb), `PDF kept JPEG: an ICCBased picture of three components is kept (${icc.attachments.map(a => a.mimeType)})`);
+    const lying = pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>', stream(Buffer.from('q 100 0 0 100 20 20 cm /Im1 Do Q\n')),
+        Buffer.concat([Buffer.from(`<< /Length 99999999999 ${dct} >>\nstream\n`), jpeg.rgb, Buffer.from('\nendstream')])]);
+    const lied = await read(lying);
+    assert.ok(lied.attachments.length === 1 && isJpeg(lied.attachments[0], jpeg.rgb), `PDF kept JPEG: a length that lies is read to the end of the picture (${lied.attachments.map(a => [a.mimeType, a.data.length])})`);
+
+    // The RGB picture with its markers changed: its JFIF marker taken out, an Adobe marker with its colour
+    // transform put in, its components named otherwise (in its frame and its scan).
+    const remarked = (bytes: Buffer, { jfif = true, adobe, ids }: { jfif?: boolean; adobe?: number; ids?: number[] }): Buffer => {
+        const parts: Buffer[] = [bytes.subarray(0, 2)];
+        if (adobe !== undefined) parts.push(Buffer.concat([Buffer.from([0xff, 0xee, 0x00, 0x0e]), Buffer.from('Adobe', 'latin1'), Buffer.from([0x00, 0x64, 0, 0, 0, 0, adobe])]));
+        let at = 2;
+        while (at + 4 <= bytes.length) {
+            const marker = bytes[at + 1], segment = Buffer.from(bytes.subarray(at, at + 2 + bytes.readUInt16BE(at + 2)));
+            // (A component's identifier: from the frame's tenth byte, three apart; from the scan's fifth, two apart.)
+            if (ids && (marker === 0xc0 || marker === 0xda)) ids.forEach((id, i) => { segment[marker === 0xc0 ? 10 + 3 * i : 5 + 2 * i] = id; });
+            if (marker !== 0xe0 || jfif) parts.push(segment);
+            at += segment.length;
+            if (marker === 0xda) break;
+        }
+        parts.push(bytes.subarray(at));
+        return Buffer.concat(parts);
+    };
+    const RGB_IDS = [0x52, 0x47, 0x42];
+    // Markers that pdf.js and a browser (libjpeg) read the colours of alike: kept.
+    for (const [label, bytes] of [['an Adobe transform 0 and no JFIF marker', remarked(jpeg.rgb, { jfif: false, adobe: 0 })],
+        ['components "R", "G", "B" and no JFIF marker', remarked(jpeg.rgb, { jfif: false, ids: RGB_IDS })],
+        ['a JFIF marker and an Adobe transform 1', remarked(jpeg.rgb, { adobe: 1 })]] as const) {
+        const ast = await read(pictured(bytes));
+        assert.ok(ast.attachments.length === 1 && isJpeg(ast.attachments[0], bytes), `PDF kept JPEG: ${label} is kept (${ast.attachments.map(a => [a.name, a.mimeType])})`);
+    }
+
+    // What stays a PNG: the picture the pixels of pdf.js are, not the JPEG's bytes.
+    const stays: [string, Buffer][] = [
+        // RGB to pdf.js, YCbCr to a browser: the JFIF marker comes first in libjpeg, the Adobe marker or the
+        // components' names in pdf.js.
+        ['a JFIF marker and an Adobe transform 0', pictured(remarked(jpeg.rgb, { adobe: 0 }))],
+        ['a JFIF marker and components "R", "G", "B"', pictured(remarked(jpeg.rgb, { ids: RGB_IDS }))],
+        ['a CMYK JPEG', pictured(jpeg.cmyk, dct.replace('/DeviceRGB', '/DeviceCMYK') + ' /Decode [1 0 1 0 1 0 1 0]')],
+        ['a CMYK JPEG with no /Decode', pictured(jpeg.cmyk, dct.replace('/DeviceRGB', '/DeviceCMYK'))],
+        ['a /Decode', pictured(jpeg.rgb, dct + ' /Decode [1 0 1 0 1 0]')],
+        ['a soft mask', pictured(jpeg.rgb, dct + ' /SMask 6 0 R')],
+        ['a colour-key mask', pictured(jpeg.rgb, dct + ' /Mask [0 10 0 10 0 10]')],
+        ['EXIF orientation 6', pictured(jpeg.rot6)],
+        ['a colour transform of its own', pictured(jpeg.rgb, dct + ' /DecodeParms << /ColorTransform 0 >>')],
+        ['another filter before it', pictured(deflateSync(jpeg.rgb), dct.replace('/Filter /DCTDecode', '/Filter [/FlateDecode /DCTDecode]'))],
+        ['a header of components the colour space does not have', pictured(jpeg.gray, dct)],
+        ['a width the header does not say', pictured(jpeg.rgb, dct.replace('/Width 16', '/Width 15'))],
+        ['a JPEG cut short', pictured(jpeg.rgb.subarray(0, jpeg.rgb.length - 40))],
+        ['bytes that are not a JPEG', pictured(Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(100, 0x41), Buffer.from([0xff, 0xd9])]))],
+    ];
+    for (const [label, pdf] of stays) {
+        const ast = await read(pdf);
+        assert.ok(ast.attachments.every(a => a.mimeType !== 'image/jpeg' && !a.name!.endsWith('.jpg') && isPng(a)), `PDF kept JPEG: ${label} is not kept as a JPEG (${ast.attachments.map(a => [a.name, a.mimeType])})`);
+    }
+    // For those pdf.js reads, a PNG is there (not nothing).
+    for (const [label, pdf] of stays.slice(0, 10)) {
+        assert.strictEqual((await read(pdf)).attachments.length, 1, `PDF kept JPEG: ${label} is still extracted, as a PNG`);
+    }
+    // An inline picture has no object to read: a PNG. A file whose streams cannot be read here (encrypted): no JPEG either.
+    const inlined = await read(pictured(jpeg.rgb, dct, 1, jpeg.rgb));
+    assert.ok(inlined.attachments.length === 2 && inlined.attachments.filter(a => isJpeg(a, jpeg.rgb)).length === 1 && inlined.attachments.filter(isPng).length === 1, `PDF kept JPEG: an inline JPEG is a PNG, beside the XObject's JPEG (${inlined.attachments.map(a => [a.name, a.mimeType])})`);
+    const encryptedBytes = fs.readFileSync(path.join(__dirname, 'files', 'pdf', 'encrypted.pdf'));
+    assert.strictEqual(new PdfFile(new Uint8Array(encryptedBytes), 1).objects(), undefined, 'PDF kept JPEG: the streams of an encrypted file are not read');
+    const readable = new PdfFile(new Uint8Array(pictured(jpeg.rgb)), 1);
+    assert.ok(readable.objects() !== undefined && new KeptJpegs(readable).keep('5R', 16, 16)?.equals(jpeg.rgb) && !new KeptJpegs(readable).keep('5R', 16, 17) && !new KeptJpegs(readable).keep(undefined, 16, 16) && !new KeptJpegs(readable).keep('x5R', 16, 16), 'PDF kept JPEG: a picture is found by its reference, and only with the size pdf.js decoded');
+
+    // The picture limit holds for a JPEG: with maxImagePixels below its pixels, it is left out, with the warning.
+    const warned: string[] = [];
+    const limited = await read(pictured(jpeg.rgb), { pdfParserConfig: { separateProcess: false, maxImagePixels: 100 }, onWarning: (w: any) => warned.push(String(w.code)) });
+    assert.ok(limited.attachments.length === 0 && warned.includes('IMAGE_EXTRACTION_FAILED'), `PDF kept JPEG: maxImagePixels holds for a JPEG (${limited.attachments.length}, ${warned})`);
+    assert.strictEqual((await read(pictured(jpeg.rgb), { extractAttachments: false })).attachments.length, 0, 'PDF kept JPEG: no attachments are made when none are asked for');
+
+    // OCR is given the JPEG.
+    const recognized: Buffer[] = [];
+    ocrTestHooks.createWorker = async () => ({
+        recognize: async (image: any) => { recognized.push(Buffer.from(image)); return { data: { text: 'READ' } }; },
+        reinitialize: async () => { },
+        terminate: async () => { },
+    });
+    try {
+        const ocred = await read(pictured(jpeg.rgb), { ocr: true });
+        assert.ok(recognized.length === 1 && recognized[0].equals(jpeg.rgb) && ocred.attachments[0].ocrText === 'READ' && isJpeg(ocred.attachments[0], jpeg.rgb), `PDF kept JPEG: OCR reads the JPEG (${recognized.map(r => r.length)})`);
+    } finally {
+        ocrTestHooks.createWorker = undefined;
+        await terminateOcr();
+    }
+
+    // Every writer carries the JPEG as it is.
+    const ast = await read(pictured(jpeg.rgb));
+    const within = (files: Record<string, Uint8Array>) => Object.entries(files).filter(([, v]) => Buffer.from(v).equals(jpeg.rgb)).map(([k]) => k);
+    for (const format of ['docx', 'odt', 'epub', 'pptx', 'odp'] as const) {
+        const out = (await ast.to(format as any)).value as unknown as Uint8Array;
+        const carried = within(unzipSync(new Uint8Array(out)));
+        assert.ok(carried.length === 1 && /\.jpe?g$/.test(carried[0]), `PDF kept JPEG: ${format} carries the JPEG as a .jpg/.jpeg file (${carried})`);
+    }
+    const html = String((await ast.to('html')).value);
+    assert.ok(html.includes(`data:image/jpeg;base64,${jpeg.rgb.toString('base64')}`) && !html.includes('data:image/png'), 'PDF kept JPEG: HTML carries the JPEG');
+    const markdown = String((await ast.to('md')).value);
+    assert.ok(markdown.includes('image/jpeg;base64,') || markdown.includes('.jpg'), 'PDF kept JPEG: Markdown names or carries the JPEG');
+    const rtf = String((await ast.to('rtf')).value);
+    assert.ok(rtf.includes('\\jpegblip') && !rtf.includes('\\pngblip') && rtf.replace(/\s/g, '').includes(jpeg.rgb.toString('hex')), 'PDF kept JPEG: RTF carries the JPEG as jpegblip');
+    const nativePdf = Buffer.from((await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array);
+    assert.ok(nativePdf.includes(jpeg.rgb), 'PDF kept JPEG: the native PDF writer embeds the JPEG as it is');
+    console.log('  PDF kept JPEG: All assertions passed ✓');
+}
+
+/**
+ * Text standing on a filled rectangle of its page keeps it as the run's `formatting.backgroundColor` (see
+ * rulings' shadeRuns): white text on a purple bar is read on the bar. The smallest rectangle holding the
+ * run's whole box is the one; text on the paper, a run only partly over a rectangle, a highlight's own
+ * colour and `extractTextColor: false` give none; a shaded table's cell shows its colour and its text
+ * carries none. Every writer that draws a background writes it, and plain text is unchanged.
+ */
+async function testPdfTextOnFills(): Promise<void> {
+    const inProcess = { pdfParserConfig: { separateProcess: false } };
+    const pdfFrom = (objects: (string | Buffer)[]): Buffer => {
+        const parts: Buffer[] = [Buffer.from('%PDF-1.7\n')];
+        const offsets: number[] = [];
+        let at = parts[0].length;
+        objects.forEach((o, i) => { const b = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), typeof o === 'string' ? Buffer.from(o, 'latin1') : o, Buffer.from('\nendobj\n')]); offsets.push(at); at += b.length; parts.push(b); });
+        parts.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+        return Buffer.concat(parts);
+    };
+    const pageOf = (content: string, extra = '', more: string[] = []) => {
+        const data = Buffer.from(content, 'latin1');
+        return pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+            `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 800] /Resources << /Font << /F1 5 0 R >> /ExtGState << /Faint << /ca 0.1 >> >> >> /Contents 4 0 R ${extra} >>`,
+            Buffer.concat([Buffer.from(`<< /Length ${data.length} >>\nstream\n`), data, Buffer.from('\nendstream')]), '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', ...more]);
+    };
+    const read = async (pdf: Buffer, pdfParserConfig: object = {}) => await OfficeParser.parseOffice(pdf, { fileType: 'pdf', pdfParserConfig: { ...inProcess.pdfParserConfig, ...pdfParserConfig } } as any) as OfficeParserAST;
+    const all = (ast: OfficeParserAST): OfficeContentNode[] => { const out: OfficeContentNode[] = []; const stack = [...ast.content]; while (stack.length) { const n = stack.pop()!; out.push(n); stack.push(...(n.children ?? [])); } return out; };
+    const backgrounds = (ast: OfficeParserAST): Record<string, string | undefined> => Object.fromEntries(all(ast).filter(n => n.type === 'text').map(n => [(n.text ?? '').trim(), n.formatting?.backgroundColor]));
+    const text = (ast: OfficeParserAST, word: string) => all(ast).find(n => n.type === 'text' && (n.text ?? '').includes(word));
+    const content = [
+        '0.2 0.4 0.6 rg 40 700 300 30 re f',
+        '1 1 1 rg BT /F1 14 Tf 50 710 Td (White on a bar) Tj ET',
+        '0 g BT /F1 12 Tf 50 650 Td (On white paper) Tj ET',
+        '0.2 0.4 0.6 rg 40 580 100 30 re f',
+        '0 g BT /F1 12 Tf 50 590 Td (Partly over a bar and then beyond it) Tj ET',
+        '0.8 0.8 0.8 rg 30 400 400 120 re f',
+        '0.2 0.4 0.6 rg 50 420 200 30 re f',
+        '1 1 1 rg BT /F1 12 Tf 60 430 Td (Inside the bar) Tj ET',
+        '0 g BT /F1 12 Tf 60 490 Td (On the panel only) Tj ET',
+        '0.2 0.4 0.6 rg 40 300 300 30 re f',
+        '1 1 1 rg BT /F1 14 Tf 50 310 Td (Highlighted on a bar) Tj ET',
+        // A white card on a grey panel; a bar under a larger rectangle drawn after it, which covers it.
+        '0.9 0.9 0.9 rg 30 150 400 120 re f',
+        '1 1 1 rg 50 200 200 50 re f',
+        '0 g BT /F1 12 Tf 60 220 Td (On the white card) Tj ET',
+        '0 g BT /F1 12 Tf 60 170 Td (Beside the card) Tj ET',
+        '0.2 0.4 0.6 rg 300 160 60 30 re f',
+        '1 1 0 rg 290 155 120 40 re f',
+        '0 g BT /F1 10 Tf 305 170 Td (Covered) Tj ET',
+        // A grey card whose left border a browser draws by filling the whole card in the border's colour,
+        // clipped to the border's strip; and text over a faint shadow alone.
+        '0.9 0.9 0.9 rg 30 60 300 60 re f',
+        'q 30 60 4 60 re W n 0.2 0.4 0.6 rg 30 60 300 60 re f Q',
+        '0 g BT /F1 12 Tf 45 85 Td (On the bordered card) Tj ET',
+        'q /Faint gs 0 0 0 rg 340 20 150 40 re f Q',
+        '0 g BT /F1 12 Tf 350 35 Td (Over a shadow) Tj ET',
+    ].join('\n');
+    const highlight = '<< /Type /Annot /Subtype /Highlight /Rect [48 306 200 328] /QuadPoints [48 328 200 328 48 306 200 306] /C [1 1 0] >>';
+    const standing = pageOf(content, '/Annots [6 0 R]', [highlight]);
+    for (const separateProcess of [true, false]) {
+        const ast = await read(standing, { separateProcess });
+        const found = backgrounds(ast);
+        const where = separateProcess ? 'separate process' : 'in process';
+        assert.strictEqual(found['White on a bar'], '#336699', `PDF text on fills: white text on a bar is on the bar (${where}; ${JSON.stringify(found)})`);
+        assert.strictEqual(text(ast, 'White on a bar')?.formatting?.color, '#ffffff', 'PDF text on fills: the white of the text is kept');
+        assert.strictEqual(found['On white paper'], undefined, 'PDF text on fills: text on the paper has no background');
+        assert.strictEqual(found['Partly over a bar and then beyond it'], undefined, 'PDF text on fills: a run only partly over a rectangle has none');
+        assert.strictEqual(found['Inside the bar'], '#336699', 'PDF text on fills: the rectangle drawn last holding the run is the one');
+        assert.strictEqual(found['On the panel only'], '#cccccc', 'PDF text on fills: text on a larger panel alone has the panel');
+        assert.strictEqual(found['Highlighted on a bar'], '#ffff00', `PDF text on fills: a highlight's colour is left as it is (${JSON.stringify(found)})`);
+        assert.strictEqual(found['On the white card'], undefined, `PDF text on fills: text on a white card inside a grey panel is on white (${JSON.stringify(found)})`);
+        assert.strictEqual(found['Beside the card'], '#e6e6e6', 'PDF text on fills: text beside the card is on the panel');
+        assert.strictEqual(found['Covered'], '#ffff00', 'PDF text on fills: a rectangle drawn after another covers it');
+        assert.strictEqual(found['On the bordered card'], '#e6e6e6', `PDF text on fills: a fill clipped to a border's strip covers only the strip (${JSON.stringify(found)})`);
+        assert.strictEqual(found['Over a shadow'], undefined, 'PDF text on fills: a see-through fill is no background');
+    }
+    const without = backgrounds(await read(standing, { extractTextColor: false }));
+    assert.deepStrictEqual(Object.entries(without).filter(([, bg]) => bg).map(([t]) => t), ['Highlighted on a bar'], `PDF text on fills: with extractTextColor off only the highlight has a background (${JSON.stringify(without)})`);
+
+    // A page turned a quarter: the bar and the text turn together.
+    const turned = pageOf(content, '/Rotate 90 /Annots [6 0 R]', [highlight]);
+    const turnedFound = backgrounds(await read(turned));
+    assert.ok(turnedFound['White on a bar'] === '#336699' && turnedFound['On white paper'] === undefined && turnedFound['Inside the bar'] === '#336699', `PDF text on fills: on a turned page too (${JSON.stringify(turnedFound)})`);
+
+    // A logo painted through a soft mask on a panel, the mask's group form black around a white square and
+    // holding a picture: the mask shapes the logo and paints nothing, so the text stays on the panel and
+    // the mask's picture is none of the page's.
+    const streamOf = (dict: string, body: string) => `<< ${dict} /Length ${Buffer.byteLength(body, 'latin1')} >>\nstream\n${body}\nendstream`;
+    const maskedLogo = pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> /ExtGState << /GS1 << /SMask << /S /Luminosity /G 6 0 R >> >> >> >> /Contents 4 0 R >>',
+        streamOf('', '0.2 0.4 0.6 rg 60 560 400 150 re f 1 1 1 rg BT /F1 14 Tf 90 640 Td (White on the panel) Tj ET q /GS1 gs 0.9 0.5 0.1 rg 380 580 60 60 re f Q'),
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+        streamOf('/Type /XObject /Subtype /Form /BBox [40 540 480 730] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << /XObject << /Im 7 0 R >> >>',
+            '0 0 0 rg 40 540 440 190 re f q 60 0 0 60 380 580 cm /Im Do Q 1 1 1 rg 380 580 60 60 re f'),
+        streamOf('/Type /XObject /Subtype /Image /Width 64 /Height 64 /ColorSpace /DeviceRGB /BitsPerComponent 8', Buffer.alloc(64 * 64 * 3, 0x80).toString('latin1'))]);
+    const maskedAst = await OfficeParser.parseOffice(maskedLogo, { fileType: 'pdf', extractAttachments: true, ...inProcess } as any) as OfficeParserAST;
+    assert.ok(backgrounds(maskedAst)['White on the panel'] === '#336699' && !all(maskedAst).some(n => n.type === 'image') && !maskedAst.attachments?.length,
+        `PDF text on fills: a soft mask's contents paint nothing (${JSON.stringify([backgrounds(maskedAst), all(maskedAst).filter(n => n.type === 'image').length])})`);
+
+    // A transparency group's form whose box is the top half of the panel its contents fill: only that half
+    // shows, so text in the lower half is on the paper, as it is under a form of no group.
+    for (const group of ['', '/Group << /S /Transparency /CS /DeviceRGB >>']) {
+        const boxed = pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+            '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> /XObject << /Fm 6 0 R >> >> /Contents 4 0 R >>',
+            streamOf('', '/Fm Do 0 g BT /F1 14 Tf 90 580 Td (Below the form box) Tj ET BT /F1 14 Tf 90 680 Td (Inside the form box) Tj ET'),
+            '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+            streamOf(`/Type /XObject /Subtype /Form /BBox [60 640 460 720] ${group}`, '0.8 0.9 1 rg 60 560 400 160 re f')]);
+        const boxedFound = backgrounds(await read(boxed));
+        assert.ok(boxedFound['Inside the form box'] === '#cce6ff' && boxedFound['Below the form box'] === undefined,
+            `PDF text on fills: a form paints only inside its box${group ? ', a transparency group\'s too' : ''} (${JSON.stringify(boxedFound)})`);
+    }
+
+    // A page that clips each small thing it draws to itself, as Skia does, fifteen thousand of them (thirty
+    // thousand paths, fewer than a page keeps), then a bar with white text on it: the clips take none of the
+    // paths' room, so the bar is still read.
+    const clipped = Array.from({ length: 15_000 }, (_, i) => { const x = 20 + (i % 100) * 5, y = 700 + Math.floor(i / 100) % 60; return `q ${x} ${y} 2 1 re W n 0.9 0.9 0.9 rg ${x} ${y} 2 1 re f Q`; });
+    const clippedPage = pdfFrom(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+        streamOf('', [...clipped, '0.2 0.4 0.6 rg 40 300 300 30 re f 1 1 1 rg BT /F1 14 Tf 50 310 Td (White on a bar) Tj ET'].join('\n')),
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>']);
+    const clippedFound = backgrounds(await read(clippedPage));
+    assert.strictEqual(clippedFound['White on a bar'], '#336699', `PDF text on fills: a page's clips leave room for its paths (${JSON.stringify(clippedFound)})`);
+
+    // A table ruled and shaded: its head cell shows the colour and its text carries none, a coloured bar inside a plain cell still does.
+    // Over a grey panel, one cell of it a white card.
+    const table = pageOf([
+        '0.9 0.9 0.9 rg 90 140 180 60 re f',
+        '1 1 1 rg 180 170 80 20 re f',
+        '0.2 0.4 0.6 rg 100 170 80 20 re f',
+        '0 G 0.5 w 100 150 m 260 150 l S 100 170 m 260 170 l S 100 190 m 260 190 l S 100 150 m 100 190 l S 180 150 m 180 190 l S 260 150 m 260 190 l S',
+        '1 1 1 rg BT /F1 10 Tf 105 176 Td (Head) Tj ET',
+        '0 g BT /F1 10 Tf 185 176 Td (Plain) Tj ET BT /F1 10 Tf 105 156 Td (Left) Tj ET BT /F1 10 Tf 185 156 Td (Right) Tj ET',
+        '0.2 0.4 0.6 rg 40 100 300 20 re f 1 1 1 rg BT /F1 10 Tf 50 105 Td (Below the table) Tj ET',
+    ].join('\n'));
+    const tabled = await read(table);
+    const cells = all(tabled).filter(n => n.type === 'cell');
+    const head = cells.find(c => (c.text ?? '').includes('Head'));
+    assert.ok(cells.length === 4 && (head?.metadata as { backgroundColor?: string } | undefined)?.backgroundColor === '#336699', `PDF text on fills: a shaded ruled table's cell keeps its shading (${cells.map(c => JSON.stringify(c.metadata))})`);
+    assert.strictEqual(all({ content: head!.children ?? [] } as OfficeParserAST).filter(n => n.type === 'text').map(n => n.formatting?.backgroundColor).filter(Boolean).length, 0, 'PDF text on fills: and its text has no background of its own');
+    assert.strictEqual(backgrounds(tabled)['Below the table'], '#336699', 'PDF text on fills: text beside the table on a bar has it');
+    assert.strictEqual(backgrounds(tabled)['Plain'], undefined, 'PDF text on fills: an unshaded cell holds unshaded text');
+    const shadeOf = (word: string) => (cells.find(c => (c.text ?? '').includes(word))?.metadata as { backgroundColor?: string } | undefined)?.backgroundColor;
+    assert.deepStrictEqual([shadeOf('Plain'), shadeOf('Left'), shadeOf('Right')], [undefined, '#e6e6e6', '#e6e6e6'], `PDF text on fills: a cell on a white card has no shading, those on the panel the panel's (${cells.map(c => JSON.stringify(c.metadata))})`);
+
+    // Writers: a background behind the white text; plain text unchanged.
+    const ast = await read(standing);
+    const html = String((await ast.to('html')).value);
+    assert.ok(/<mark[^>]*background-color: #336699[^>]*><span style="color: #ffffff[^"]*">White on a bar/.test(html), `PDF text on fills: HTML writes the background behind the white text (${html.match(/.{80}White on a bar/)?.[0]})`);
+    const docx = unzipSync(new Uint8Array((await ast.to('docx')).value as unknown as Uint8Array));
+    assert.ok(/<w:color w:val="FFFFFF"\/>[^]*?<w:shd [^>]*w:fill="336699"\/>[^]*?White on a bar/.test(strFromU8(docx['word/document.xml'])), 'PDF text on fills: DOCX shades the white run');
+    const odt = unzipSync(new Uint8Array((await ast.to('odt')).value as unknown as Uint8Array));
+    assert.ok(/fo:background-color="#336699"/.test(strFromU8(odt['content.xml'])), 'PDF text on fills: ODT gives the run its background');
+    const rtf = String((await ast.to('rtf')).value);
+    assert.ok(/\\highlight\d+[^]*?White on a bar/.test(rtf) && /\\red51\\green102\\blue153/.test(rtf), 'PDF text on fills: RTF highlights the run in the colour of the bar');
+    const plain = await read(standing, { extractTextColor: false });
+    assert.strictEqual(String((await ast.to('text')).value), String((await plain.to('text')).value), 'PDF text on fills: plain text is unchanged');
+    assert.strictEqual(String((await ast.to('md')).value).replace(/==/g, ''), String((await plain.to('md')).value).replace(/==/g, ''), 'PDF text on fills: Markdown differs by its highlight marks alone');
+    console.log('  PDF text on fills: All assertions passed ✓');
+}
+
+async function testPdfRunningHeadersFooters(): Promise<void> {
+    // Pages of 500 x 800 points: the top and bottom bands, where a running header and footer are read, are
+    // the 120 points at each edge.
+    // (The font's own entries, and objects after the pages', numbered from 4 + 2 * pages.)
+    const pdfOf = (pages: string[], catalog = '', fontEntries = '', extra: string[] = []): Buffer => {
+        const objects: string[] = [`<< /Type /Catalog /Pages 2 0 R ${catalog} >>`, `<< /Type /Pages /Kids [${pages.map((_, i) => `${4 + 2 * i} 0 R`).join(' ')}] /Count ${pages.length} >>`,
+            `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica ${fontEntries} >>`];
+        pages.forEach((content, i) => {
+            objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 800] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + 2 * i} 0 R >>`);
+            objects.push(`<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`);
+        });
+        objects.push(...extra);
+        const parts: Buffer[] = [Buffer.from('%PDF-1.7\n')];
+        const offsets: number[] = [];
+        let at = parts[0].length;
+        objects.forEach((o, i) => { const b = Buffer.from(`${i + 1} 0 obj\n${o}\nendobj\n`, 'latin1'); offsets.push(at); at += b.length; parts.push(b); });
+        parts.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+        return Buffer.concat(parts);
+    };
+    const line = (x: number, y: number, size: number, text: string) => `BT /F1 ${size} Tf ${x} ${y} Td (${text}) Tj ET`;
+    /** A page's body: lines of 12 point text, from 640 down. */
+    const body = (page: number, lines = 20) => Array.from({ length: lines }, (_, i) => line(50, 640 - i * 20, 12, `Page ${page} body line ${i + 1} of the text.`)).join('\n');
+    const read = async (pdf: Buffer, pdfParserConfig: object = {}, extra: object = {}) => await OfficeParser.parseOffice(pdf, { fileType: 'pdf', ocr: false, ...extra, pdfParserConfig: { separateProcess: false, ...pdfParserConfig } } as any) as OfficeParserAST;
+    const md = async (ast: OfficeParserAST) => String((await ast.to('md')).value);
+    const texts = (nodes: OfficeContentNode[] | undefined) => (nodes ?? []).map(n => `${(n.metadata as { page?: number } | undefined)?.page}:${n.text}`);
+    // (A header's line is a paragraph in it, its runs in that.)
+    const fieldsOf = (nodes: OfficeContentNode[] | undefined) => (nodes ?? []).flatMap(n => (n.children ?? []).flatMap(c => [c, ...(c.children ?? [])]).filter(c => (c.metadata as any)?.field).map(c => `${(n.metadata as { page?: number } | undefined)?.page}:${(c.metadata as any).field}=${c.text}`));
+    const count = (s: string, part: string) => s.split(part).length - 1;
+
+    // A form of four pages, untagged: its footer, a line and "n/4", the same on every page; a heading
+    // larger than its text at the top of every page; and a line at the foot of the first page alone.
+    const form = pdfOf([1, 2, 3, 4].map(p => [
+        line(50, 740, 14, 'Angaben zum Elternteil'),
+        body(p),
+        p === 1 ? line(50, 52, 8, 'Nur auf der ersten Seite') : '',
+        line(50, 30, 8, 'Anlage Formular zu Antragsversion April 2025'),
+        line(440, 30, 8, `${p}/4`),
+    ].join('\n')));
+    const ast = await read(form);
+    assert.deepStrictEqual(texts(ast.auxiliary?.footers), ['1:Anlage Formular zu Antragsversion April 2025', '1:1/4', '2:Anlage Formular zu Antragsversion April 2025', '2:2/4', '3:Anlage Formular zu Antragsversion April 2025', '3:3/4', '4:Anlage Formular zu Antragsversion April 2025', '4:4/4'],
+        `Running footers: an untagged form's footer, the same on every page, is each page's footer (${JSON.stringify(texts(ast.auxiliary?.footers))})`);
+    assert.strictEqual(ast.auxiliary?.headers, undefined, 'Running footers: a heading larger than the text, repeated at the top of every page, is no header');
+    assert.deepStrictEqual(fieldsOf(ast.auxiliary?.footers), ['1:page=1', '1:pages=4', '2:page=2', '2:pages=4', '3:page=3', '3:pages=4', '4:page=4', '4:pages=4'],
+        `Running footers: "n/4" is the page's number and the document's pages (${JSON.stringify(fieldsOf(ast.auxiliary?.footers))})`);
+    const formMd = await md(ast);
+    assert.ok(!formMd.includes('Anlage') && !/\d\/4/.test(formMd), `Running footers: the footer leaves the Markdown, as a tagged PDF's does (${formMd.slice(-300)})`);
+    assert.strictEqual(count(formMd, 'Angaben zum Elternteil'), 4, 'Running footers: the repeated heading stays on every page');
+    assert.strictEqual(count(formMd, 'Nur auf der ersten Seite'), 1, 'Running footers: a line at the foot of the first page alone stays the page\'s');
+    assert.ok(!String((await ast.to('text')).value).includes('Anlage'), 'Running footers: and leaves the plain text');
+    // Writers that lay out pages write the page fields, so each page shows its own.
+    const docx = unzipSync((await ast.to('docx')).value as Uint8Array);
+    const footerXml = Object.keys(docx).filter(k => /^word\/footer\d*\.xml$/.test(k)).map(k => strFromU8(docx[k])).join('');
+    assert.ok(/<w:fldSimple w:instr=" PAGE "><w:r>[^]*?<w:t[^>]*>1<\/w:t><\/w:r><\/w:fldSimple>/.test(footerXml) && /<w:fldSimple w:instr=" NUMPAGES ">[^]*?>4<\/w:t>/.test(footerXml) && footerXml.includes('Anlage Formular'),
+        `Running footers: DOCX writes PAGE and NUMPAGES fields in the footer (${footerXml.slice(0, 600)})`);
+    assert.ok(/<w:p>(?:(?!<\/w:p>)[^])*PAGE(?:(?!<\/w:p>)[^])*>\/<(?:(?!<\/w:p>)[^])*NUMPAGES(?:(?!<\/w:p>)[^])*<\/w:p>/.test(footerXml), 'Running footers: "n/N" is one paragraph in DOCX');
+    const back = await OfficeParser.parseOffice(Buffer.from((await ast.to('docx')).value as Uint8Array), { fileType: 'docx' } as any) as OfficeParserAST;
+    assert.ok(['page', 'pages'].every(f => (back.auxiliary?.footers ?? []).some(n => JSON.stringify(n).includes(`"field":"${f}"`))), 'Running footers: and Word reads them back as page fields');
+    const odt = unzipSync((await ast.to('odt')).value as Uint8Array);
+    const odtStyles = strFromU8(odt['styles.xml']);
+    assert.ok(/<text:page-number text:select-page="current">1<\/text:page-number>/.test(odtStyles) && /<text:page-count>4<\/text:page-count>/.test(odtStyles), `Running footers: ODT writes the page number and count fields (${odtStyles.match(/<style:footer>.*?<\/style:footer>/s)?.[0]})`);
+    const rtf = String((await ast.to('rtf')).value);
+    assert.ok(/\{\\field\{\\\*\\fldinst PAGE\}\{\\fldrslt [^]*?1\}\}/.test(rtf) && /\\fldinst NUMPAGES\}/.test(rtf), 'Running footers: RTF writes PAGE and NUMPAGES fields');
+    assert.ok(/Antragsversion April 2025\}\\par/.test(rtf), 'Running footers: and RTF ends the footer\'s first line before its second');
+    // Kept in the pages, as they were read before.
+    const kept = await read(form, { keepHeadersAndFootersInPages: true });
+    const keptMd = await md(kept);
+    assert.ok(kept.auxiliary?.footers === undefined && count(keptMd, 'Anlage Formular') === 4 && ['1/4', '2/4', '3/4', '4/4'].every(t => keptMd.includes(t)), `Running footers: keepHeadersAndFootersInPages keeps them in their pages (${keptMd.slice(-200)})`);
+    assert.ok(collectAllNodes(kept).some(n => (n.metadata as any)?.field === 'pages' && n.text === '4'), 'Running footers: kept in the page, the page numbers are fields still');
+    const lastKept = kept.content[3].children ?? [];
+    assert.ok(lastKept[lastKept.length - 1]?.text === '4/4', 'Running footers: kept, the footer is last on its page');
+    // A range of the pages: the output numbers its own pages from one, so a range from a later page says where
+    // it starts. "2/4" on its first page is still its number; from the first, too, but "of 4" is not the
+    // output's count.
+    const later = await read(form, { pageRange: '2-4' });
+    const laterMd = await md(later);
+    assert.deepStrictEqual(fieldsOf(later.auxiliary?.footers), ['2:page=2', '3:page=3', '4:page=4'], `Running footers: a range from a later page keeps its footers out of its text (${JSON.stringify(texts(later.auxiliary?.footers))})`);
+    assert.ok(!['2/4', '3/4', '4/4'].some(t => laterMd.includes(t)) && (later.metadata as any).pageSetup?.pageNumberStart === 2, `Running footers: and its numbering starts at its first page's (${JSON.stringify((later.metadata as any).pageSetup)})`);
+    const first = await read(form, { pageRange: '1-3' });
+    assert.deepStrictEqual(fieldsOf(first.auxiliary?.footers), ['1:page=1', '2:page=2', '3:page=3'], `Running footers: a range from the first page marks its pages' numbers, not the document's count (${JSON.stringify(fieldsOf(first.auxiliary?.footers))})`);
+    const dropped = await read(form, {}, { ignoreHeadersAndFooters: true });
+    assert.ok(dropped.auxiliary?.footers === undefined && !(await md(dropped)).includes('Anlage'), 'Running footers: ignoreHeadersAndFooters drops them');
+
+    // Two pages numbered alone: a page's own number is running on two pages, however close under the line
+    // above it; that line, on both pages but not a page number, is not (two pages tell nothing more of it).
+    const two = await read(pdfOf([1, 2].map(p => [body(p), line(50, 42, 9, 'Vertraulich'), line(245, 30, 10, String(p))].join('\n'))));
+    assert.deepStrictEqual([texts(two.auxiliary?.footers), fieldsOf(two.auxiliary?.footers)], [['1:1', '2:2'], ['1:page=1', '2:page=2']], `Running footers: two pages' bare numbers are their footers (${JSON.stringify(texts(two.auxiliary?.footers))})`);
+    const twoMd = await md(two);
+    assert.ok(count(twoMd, 'Vertraulich') === 2 && !/^[12]$/m.test(twoMd), 'Running footers: the line above them stays');
+
+    // A front matter's pages numbered in roman numerals, as its page labels say: running on two pages, and
+    // the page's number in its numerals.
+    const roman = await read(pdfOf(['i', 'ii'].map((n, i) => [body(i + 1), line(245, 30, 10, n)].join('\n')), '/PageLabels << /Nums [0 << /S /r >>] >>'));
+    const romanFields = (roman.auxiliary?.footers ?? []).flatMap(n => (n.children ?? []).flatMap(c => c.children ?? []).map(c => `${c.text}:${(c.metadata as any)?.field}:${(c.metadata as any)?.fieldFormat}`));
+    assert.deepStrictEqual(romanFields, ['i:page:lowerRoman', 'ii:page:lowerRoman'], `Running footers: roman page numbers the labels give are footers and fields (${JSON.stringify(texts(roman.auxiliary?.footers))})`);
+    // A page labelled "1", then one labelled "II" (a section numbered anew in roman numerals): each its label.
+    const relabelled = await read(pdfOf(['1', 'II'].map((n, i) => [body(i + 1), line(245, 30, 10, n)].join('\n')), '/PageLabels << /Nums [0 << /S /D >> 1 << /S /R /St 2 >>] >>'));
+    // (Fields of two formats: a section for each, so each page prints its own.)
+    const relabelledMd = await md(relabelled);
+    assert.ok(!/^1$/m.test(relabelledMd) && !/^II$/m.test(relabelledMd) && relabelled.auxiliary?.footers?.length === 2 && (relabelled.content as any[]).some(n => n.type === 'break' && n.metadata?.pageSetup?.pageNumberFormat === 'upperRoman'), `Running footers: page numbers as their labels give them, digits then roman, are footers of two sections (${JSON.stringify(texts(relabelled.auxiliary?.footers))})`);
+    assert.ok(/<w:fldSimple w:instr=" PAGE \\\* roman ">/.test(Object.entries(unzipSync((await roman.to('docx')).value as Uint8Array)).filter(([k]) => /footer/.test(k)).map(([, v]) => strFromU8(v)).join('')), 'Running footers: DOCX writes the field in roman numerals');
+
+    // A form placed after another page (a scan before it): its "n/4" runs, but is not the page's number, so it
+    // is no field: sections of its pages' footers, so each prints its own.
+    const stitched = await read(pdfOf([body(1), ...[1, 2, 3, 4].map(p => [body(p + 1), line(440, 30, 8, `${p}/4`)].join('\n'))]));
+    const stitchedMd = await md(stitched);
+    assert.ok(stitched.auxiliary?.footers?.length === 4 && !fieldsOf(stitched.auxiliary?.footers).length && !['1/4', '2/4', '3/4', '4/4'].some(t => stitchedMd.includes(t))
+        && (stitched.auxiliary!.footers as any[]).map(n => n.metadata.section).join() === '1,1,2,2',
+        `Running footers: another document's page numbers print on their own pages (${JSON.stringify([texts(stitched.auxiliary?.footers), fieldsOf(stitched.auxiliary?.footers)])})`);
+
+    // A table going on over four pages, its head row repeated at the top of each, at the text's size: the
+    // head reads with the rows under it, close under it or far.
+    for (const [what, pitch] of [['close', 16], ['far apart', 40]] as const) {
+        let item = 0;
+        const pages = [1, 2, 3, 4].map(() => {
+            const rows = [line(50, 740, 12, 'Item'), line(200, 740, 12, 'Quantity'), line(350, 740, 12, 'Price')];
+            for (let y = 740 - pitch; y > 40; y -= pitch, item++) rows.push(line(50, y, 12, `Item ${item}`), line(200, y, 12, String(item * 3)), line(350, y, 12, `${item}.00 EUR`));
+            return rows.join('\n');
+        });
+        const tabled = await read(pdfOf(pages));
+        assert.ok(tabled.auxiliary?.headers === undefined && tabled.auxiliary?.footers === undefined, `Running footers: a table's head row repeated on each page, its rows ${what}, is the table's (${JSON.stringify([texts(tabled.auxiliary?.headers), texts(tabled.auxiliary?.footers)])})`);
+        assert.strictEqual(count(await md(tabled), 'Quantity'), 4, `Running footers: and stays on each page (${what})`);
+    }
+    // A table of one column, its head close over its rows: the head is the table's.
+    const names = ['Alice', 'Bruno', 'Chen', 'Dara', 'Emil', 'Farah', 'Goran', 'Hana', 'Ivo', 'Jana'];
+    const column = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 740, 12, 'Name'), ...names.map((name, i) => line(50, 724 - i * 16, 12, `${name} ${String.fromCharCode(64 + p)}`)), body(p)].join('\n'))));
+    assert.strictEqual(column.auxiliary?.headers, undefined, `Running headers: a one-column table's head, close over its rows, is the table's (${JSON.stringify(texts(column.auxiliary?.headers))})`);
+    // Entries numbered down each page, far apart: an entry is not a header for being like the one under it.
+    let entry = 0;
+    const entries = await read(pdfOf([1, 2, 3, 4].map(() => Array.from({ length: 24 }, () => line(50, 760 - (entry % 24) * 30, 12, `Entry ${++entry}`)).join('\n'))));
+    assert.ok(entries.auxiliary?.headers === undefined && entries.auxiliary?.footers === undefined, `Running headers: entries numbered down the pages are no header or footer (${JSON.stringify([texts(entries.auxiliary?.headers), texts(entries.auxiliary?.footers)])})`);
+    // A question at the text's size at the top of each page, numbered as the pages are but no page number: each
+    // is its page's, and stays in the text.
+    for (const word of ['Question', 'Day', 'Exhibit', 'Step', 'Fig.']) {
+        const numbered = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 12, `${word} ${p}`), body(p)].join('\n'))));
+        const numberedMd = await md(numbered);
+        assert.ok(numbered.auxiliary?.headers === undefined && [1, 2, 3, 4].every(p => numberedMd.includes(`${word} ${p}`)), `Running headers: "${word} N" at the top of each page is the page's (${JSON.stringify(texts(numbered.auxiliary?.headers))})`);
+    }
+    // A line at the top of each page whose number climbs one a page but names its own, not the page: a log's
+    // dates, a ticket's or an invoice's number, a section, an exercise, a question's label, an entry's time,
+    // a list's or a bibliography's numbers. Each stays its page's text. (\247 is the font's section sign.)
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const ownNumbers: [string, (p: number) => string][] = [['date', p => `2024-03-${pad(p + 3)}`], ['dotted date', p => `Date: ${pad(p + 4)}.03.2024`],
+        ['ticket', p => `Ticket #${4000 + p}`], ['section', p => `\\247 ${p + 2}`], ['exercise', p => `Exercise 3.${p}`], ['dotted section', p => `Section 2.${p} Overview`],
+        ['invoice', p => `Invoice INV-${1000 + p}`], ['question sign', p => `Question #${p}`], ['label', p => `Question: ${p}`], ['time', p => `Entry 2024/03/${pad(p)} 09:00`],
+        ['list', p => `\\(${p}\\) Widget`], ['bibliography', p => `[${p + 10}] Smith, J. A study.`], ['day of', p => `Day ${p} of 30`], ['question of', p => `Question ${p} of 10`],
+        ['slide', p => `Slide ${p}`], ['sheet word', p => `List ${p}`],
+        // (A serial's number, a day's month and day, a padded ticket's: no chapter's page "2-5" is written so.)
+        ['serial', p => `2024-${152 + p}`], ['month and day', p => `03-${pad(p)}`], ['padded ticket', p => `0042-${100 + p}`],
+        // (A number at the line's start before its words, with no separator between, is a date's or a count's:
+        // "4 May 2024", "5 mars 2024", "1 apples left". So is a journal's page printed so, "147 Journal of
+        // Things": its head stays each page's text, which repeats it, rather than a date's leaving the text.)
+        ['day first', p => `${p + 3} May 2024 Board meeting minutes`], ['day first, French', p => `${p} mars 2024`], ['count', p => `${p} apples left in the basket`],
+        ['journal page first', p => `${p + 146} Journal of Things`],
+        // (A number after a slash or in brackets after the line's words, or before a point, is no page's either.)
+        // (Nor is one after a dash joined to it, "Report -5", as "INV-1001" is to its letters.)
+        ['dash joined', p => `Report -${p}`], ['slash', p => `Annual Report / ${p}`], ['in brackets', p => `Annual Report \\(${p}\\)`], ['point', p => `${p}.`]];
+    for (const [name, head] of ownNumbers) {
+        const own = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, head(p)), body(p)].join('\n'))));
+        const ownText = String((await own.to('text')).value);
+        assert.ok(own.auxiliary?.headers === undefined && [1, 2, 3, 4].every(p => ownText.includes(head(p).replace(/\\247/, '\u00a7').replace(/\\/g, ''))),
+            `Running headers: "${head(3)}" (${name}) at the top of each page is the page's text (${JSON.stringify(texts(own.auxiliary?.headers))})`);
+    }
+    // A run of letters merged from one template: the company's name on the left, the invoice's number, one up
+    // a letter, on the right of the same row. Both stay each letter's.
+    const letters = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, 'ACME Supplies Ltd'), line(380, 760, 10, `Invoice #${1040 + p}`), body(p)].join('\n'))));
+    const lettersText = String((await letters.to('text')).value);
+    assert.ok(letters.auxiliary?.headers === undefined && count(lettersText, 'ACME Supplies Ltd') === 4 && [1, 2, 3, 4].every(p => lettersText.includes(`Invoice #${1040 + p}`)),
+        `Running headers: a merged letter's number beside its company's name is the letter's (${JSON.stringify(texts(letters.auxiliary?.headers))})`);
+    // A sheet's or a slide's number with the pages' after it is the page's ("Sheet 3 of 4", "Hoja 3 de 4").
+    for (const head of [(p: number) => `Sheet ${p} of 4`, (p: number) => `Slide ${p} of 4`, (p: number) => `Hoja ${p} de 4`, (p: number) => `Feuille ${p}/4`]) {
+        const sheets = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, head(p)), body(p)].join('\n'))));
+        assert.strictEqual(texts(sheets.auxiliary?.headers).length, 4, `Running headers: "${head(3)}" makes its line a header (${JSON.stringify(texts(sheets.auxiliary?.headers))})`);
+    }
+    // A header whose page number is printed in other ways than "Page 3": after a separator, before one, in
+    // brackets, after a page word other than "Page" or before "Page", as a journal numbers its pages, and as
+    // its page label in its text. (\320 in a PDF string is the font's emdash, in its StandardEncoding.)
+    const shapes: [string, (p: number) => string][] = [['bar', p => `Acme Corp Annual Report 2024 | ${p}`], ['lead', p => `${p} | Acme Corp Annual Report`],
+        ['after', p => `${p} | Page`], ['before', p => `Page | ${p}`], ['pg', p => `Pg. ${p}`], ['dash', p => `Report \\320 ${p}`], ['comma', p => `Report, ${p}`],
+        ['brackets', p => `[${p}]`],
+        // (A page numbered within its chapter or appendix, the line its number alone: \261 is the font's en dash.)
+        ['chapter', p => `2-${p}`], ['chapter point', p => `2.${p}`], ['chapter colon', p => `2:${p}`], ['chapter en dash', p => `2\\261${p}`],
+        ['appendix', p => `A-${p}`], ['chapter page', p => `Page 2-${p}`],
+        // (Framed by an ornament a space either side, the whole line, at its end or between its parts: \264 is
+        // the font's middle dot, \267 its bullet.)
+        ['framed by bars', p => `| ${p} |`], ['framed by tildes', p => `~ ${p} ~`], ['framed by angles', p => `< ${p} >`],
+        ['framed by bullets', p => `\\267 ${p} \\267`], ['framed at the end', p => `Annual Report | ${p} |`], ['framed between', p => `Acme Corp \\264 ${p} \\264 Confidential`]];
+    for (const [name, head] of shapes) {
+        const shaped = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, head(p)), body(p)].join('\n'))));
+        assert.strictEqual(texts(shaped.auxiliary?.headers).length, 4, `Running headers: a page number printed as "${head(3)}" (${name}) makes its line a header (${JSON.stringify(texts(shaped.auxiliary?.headers))})`);
+    }
+    // A journal's numbering of its pages, from 101: running, differing in a number alone, so out of the text;
+    // no page field of the PDF's own, so each page's prints on it, in sections.
+    const journal = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, `J. Appl. Things 12 \\(2024\\) ${p + 100}`), body(p)].join('\n'))));
+    const journalText = String((await journal.to('text')).value);
+    assert.ok(journal.auxiliary?.headers?.length === 4 && ![101, 102, 103, 104].some(n => journalText.includes(`J. Appl. Things 12 (2024) ${n}`)) && journal.content.some(n => n.type === 'break'), `Running headers: a journal's page numbers are its headers (${JSON.stringify(texts(journal.auxiliary?.headers))})`);
+    // A footer framed by bullets keeps them both: read as a list's item, it was its text after the first.
+    const bullets = await read(pdfOf([1, 2, 3, 4].map(p => [body(p), line(240, 30, 10, `\\267 ${p} \\267`)].join('\n'))));
+    assert.deepStrictEqual(texts(bullets.auxiliary?.footers), [1, 2, 3, 4].map(p => `${p}:\u2022 ${p} \u2022`), `Running footers: a footer framed by bullets keeps its text (${JSON.stringify(texts(bullets.auxiliary?.footers))})`);
+    // Its number is the page's field, as "- 3 -"'s is: taken out of the page as text, Word, ODT and RTF printed
+    // the first page's number on every page. So is a footer's after a separator, and a chapter's page's.
+    assert.deepStrictEqual(fieldsOf(bullets.auxiliary?.footers), [1, 2, 3, 4].map(p => `${p}:page=${p}`), `Running footers: a framed page number is a page field (${JSON.stringify(fieldsOf(bullets.auxiliary?.footers))})`);
+    for (const foot of [(p: number) => `Annual Report | ${p}`, (p: number) => `2-${p}`, (p: number) => `Acme Corp \\264 ${p} \\264 Confidential`]) {
+        const fielded = await read(pdfOf([1, 2, 3, 4].map(p => [body(p), line(240, 30, 10, foot(p))].join('\n'))));
+        assert.deepStrictEqual(fieldsOf(fielded.auxiliary?.footers), [1, 2, 3, 4].map(p => `${p}:page=${p}`), `Running footers: "${foot(3)}" has its page number as a field (${JSON.stringify(fieldsOf(fielded.auxiliary?.footers))})`);
+    }
+    // A manual's footer: its number on the left, the page's within its chapter on the right of the same row.
+    const manual = await read(pdfOf([1, 2, 3, 4].map(p => [body(p), line(50, 30, 10, 'FM 3-21.8'), line(430, 30, 10, `2-${p}`)].join('\n'))));
+    assert.deepStrictEqual(texts(manual.auxiliary?.footers), ['1:FM 3-21.8', '1:2-1', '2:FM 3-21.8', '2:2-2', '3:FM 3-21.8', '3:2-3', '4:FM 3-21.8', '4:2-4'],
+        `Running footers: a manual's number beside the page's within its chapter (${JSON.stringify(texts(manual.auxiliary?.footers))})`);
+    const preface = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, `Preface ${formatListNumber(p, 'lowerRoman')}`), body(p)].join('\n')), '/PageLabels << /Nums [0 << /S /r >>] >>'));
+    assert.deepStrictEqual(texts(preface.auxiliary?.headers), ['1:Preface i', '2:Preface ii', '3:Preface iii', '4:Preface iv'], `Running headers: a page label in a header's text numbers it (${JSON.stringify(texts(preface.auxiliary?.headers))})`);
+    assert.deepStrictEqual(fieldsOf(preface.auxiliary?.headers), ['1:page=i', '2:page=ii', '3:page=iii', '4:page=iv'], 'Running headers: and the label is the page\'s field');
+    // A Chinese header, "第3页" (page 3), its characters drawn as X and Y the font's ToUnicode reads so.
+    const toUnicode = '/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /XY def /CMapType 2 def 1 begincodespacerange <00> <FF> endcodespacerange '
+        + '2 beginbfchar <58> <7B2C> <59> <9875> endbfchar 2 beginbfrange <20> <57> <0020> <5A> <7E> <005A> endbfrange endcmap CMapName currentdict /CMap defineresource pop end end';
+    const chinese = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, `Acme X${p}Y`), body(p)].join('\n')), '', '/ToUnicode 12 0 R', [`<< /Length ${toUnicode.length} >>\nstream\n${toUnicode}\nendstream`]));
+    assert.strictEqual(texts(chinese.auxiliary?.headers).length, 4, `Running headers: a Chinese page number makes its line a header (${JSON.stringify(texts(chinese.auxiliary?.headers))})`);
+    // "第3条" (article 3) at the top of each page, Z drawn as 条: 第 before a number is the page's only with the
+    // page's word after it, so this is each page's text.
+    const articleMap = toUnicode.replace('2 beginbfchar <58> <7B2C> <59> <9875> endbfchar', '3 beginbfchar <58> <7B2C> <59> <9875> <5A> <6761> endbfchar').replace('<5A> <7E> <005A>', '<5B> <7E> <005B>');
+    const articles = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, `Acme X${p}Z`), body(p)].join('\n')), '', '/ToUnicode 12 0 R', [`<< /Length ${articleMap.length} >>\nstream\n${articleMap}\nendstream`]));
+    const articlesText = String((await articles.to('text')).value);
+    assert.ok(articles.auxiliary?.headers === undefined && [1, 2, 3, 4].every(p => articlesText.includes(`Acme \u7B2C${p}\u6761`)), `Running headers: a Chinese article's number is its page's text (${JSON.stringify(texts(articles.auxiliary?.headers))})`);
+    // A header whose page number is in Arabic-Indic digits, the font's digits read so: its number counts as
+    // ASCII digits do.
+    const indicMap = toUnicode.replace('2 beginbfrange <20> <57> <0020> <5A> <7E> <005A> endbfrange', '3 beginbfrange <20> <2F> <0020> <30> <39> <0660> <3A> <7E> <003A> endbfrange');
+    const indic = await read(pdfOf([1, 2, 3, 4].map(p => [line(50, 760, 10, `Acme Corp | ${p}`), body(p)].join('\n')), '', '/ToUnicode 12 0 R', [`<< /Length ${indicMap.length} >>\nstream\n${indicMap}\nendstream`]));
+    assert.strictEqual(texts(indic.auxiliary?.headers).length, 4, `Running headers: a page number in Arabic-Indic digits makes its line a header (${JSON.stringify(texts(indic.auxiliary?.headers))})`);
+    // And two pages numbered alone in them: each the page's own number, running on two pages as ASCII digits are.
+    // (The map is the object after two pages', the 8th.)
+    const indicTwo = await read(pdfOf([1, 2].map(p => [body(p), line(245, 30, 10, String(p))].join('\n')), '', '/ToUnicode 8 0 R', [`<< /Length ${indicMap.length} >>\nstream\n${indicMap}\nendstream`]));
+    assert.deepStrictEqual(texts(indicTwo.auxiliary?.footers), ['1:\u0661', '2:\u0662'], `Running footers: two pages' numbers alone in Arabic-Indic digits are their footers (${JSON.stringify(texts(indicTwo.auxiliary?.footers))})`);
+    // A chapter's head on each of its pages, the next chapter's on its: its number is its own, not one that
+    // counts pages, so it may be the document's ("Account 10101"), and it stays in the text.
+    const chapters = await read(pdfOf([1, 2, 3, 4, 5, 6].map(p => [line(50, 760, 10, `Chapter ${p <= 3 ? 1 : p === 4 ? 2 : 3}`), body(p)].join('\n'))));
+    const chaptersMd = await md(chapters);
+    assert.ok(!chapters.auxiliary?.headers?.length && chaptersMd.includes('Chapter 2'),
+        `Running headers: a head whose number is its own stays in the text (${JSON.stringify([texts(chapters.auxiliary?.headers), chaptersMd.slice(0, 200)])})`);
+    // A line signed on most pages but not all with text between its first and last stays too; a book's title,
+    // missing from a chapter's opening alone, is a running line.
+    const signed = await read(pdfOf([1, 2, 3, 4, 5, 6, 7, 8].map(p => [body(p), ...(p === 3 || p === 6 ? [] : [line(50, 30, 10, 'Sign here please')])].join('\n'))));
+    assert.ok(!signed.auxiliary?.footers?.length && (await md(signed)).includes('Sign here please'), 'Running footers: a line missing from pages with text between stays in the text');
+    const openings = await read(pdfOf(Array.from({ length: 20 }, (_, i) => i + 1).map(p => [...(p === 1 || p === 11 ? [] : [line(50, 760, 10, 'Book Title')]), body(p)].join('\n'))));
+    assert.ok(openings.auxiliary?.headers?.length === 18 && !(await md(openings)).includes('Book Title'), 'Running headers: a chapter opening without the line leaves it running');
+    // An article numbered as in its journal, from 147: its numbers run with the pages, so they are its fields,
+    // the first page's 147 where the writers start.
+    const article = await read(pdfOf([1, 2, 3, 4].map(p => [body(p), line(245, 30, 10, String(146 + p))].join('\n'))));
+    const articleMd = await md(article);
+    assert.ok(article.auxiliary?.footers?.length === 4 && !['147', '148', '149', '150'].some(n => articleMd.includes(n)) && (article.metadata as any).pageSetup?.pageNumberStart === 147,
+        `Running footers: numbers that run with the pages from elsewhere start there (${JSON.stringify([texts(article.auxiliary?.footers), articleMd.slice(-200)])})`);
+
+    // A book's heads, one on the left of even pages and another on the right of odd ones, its first page
+    // without: three odd pages of eight are too few of all the pages, enough of the odd ones.
+    const book = await read(pdfOf([1, 2, 3, 4, 5, 6, 7, 8].map(p => [
+        p === 1 ? line(150, 500, 20, 'A Book of Examples') : p % 2 ? line(330, 760, 10, 'Chapter One: Beginnings') : line(50, 760, 10, 'A Book of Examples'),
+        body(p),
+        p === 1 ? '' : line(p % 2 ? 440 : 50, 30, 10, String(p)),
+    ].join('\n'))));
+    // (Its heads alternate, so they are a default part and an even part; its page numbers, the same field on
+    // every page, are its footer.)
+    const bookMd = await md(book);
+    assert.ok(book.auxiliary?.headers?.length === 7 && !bookMd.includes('Chapter One') && count(bookMd, 'A Book of Examples') === 1,
+        `Running headers: a book's even and odd pages' heads are its parts (${JSON.stringify(texts(book.auxiliary?.headers))})`);
+    assert.deepStrictEqual(fieldsOf(book.auxiliary?.footers), ['2:page=2', '3:page=3', '4:page=4', '5:page=5', '6:page=6', '7:page=7', '8:page=8'], 'Running headers: and its page numbers, left and right, are its footer');
+
+    // A tagged PDF's page numbers, in its pagination artifacts, are page fields too.
+    const tagged = await read(pdfOf([1, 2, 3].map(p => [body(p), `/Artifact << /Type /Pagination >> BDC ${line(200, 30, 9, `Page ${p} of 3`)} EMC`].join('\n')), '/MarkInfo << /Marked true >>'));
+    assert.deepStrictEqual(fieldsOf(tagged.auxiliary?.footers), ['1:page=1', '1:pages=3', '2:page=2', '2:pages=3', '3:page=3', '3:pages=3'], `Running footers: a tagged footer's page numbers are fields (${JSON.stringify(texts(tagged.auxiliary?.footers))})`);
+
+    // LaTeX writes the page fields as the page's number and the last page's, a footer's line on one line.
+    const tex = String((await ast.to('tex')).value);
+    const texFooter = tex.match(/\\fancyfoot\[[LCR]\]\{.*\}/)?.[0] ?? '';
+    const between = texFooter.slice(texFooter.indexOf('\\thepage{}'), texFooter.indexOf('\\pageref*{LastPage}'));
+    assert.ok(texFooter.includes('\\thepage{}') && texFooter.includes('\\pageref*{LastPage}') && between.includes('/') && !between.includes('\\\\') && tex.includes('\\usepackage{lastpage}'),
+        `Running footers: LaTeX writes \\thepage and the last page's number, on one line (${texFooter})`);
+    // A front matter's roman numbers after its title ("Preface | i"), as the page labels number its pages, are
+    // page fields in roman numerals.
+    const prefaceBar = await read(pdfOf([1, 2, 3, 4].map(p => [body(p), line(200, 30, 10, `Preface | ${['i', 'ii', 'iii', 'iv'][p - 1]}`)].join('\n')), '/PageLabels << /Nums [0 << /S /r >>] >>'));
+    const formats = (prefaceBar.auxiliary?.footers ?? []).flatMap(n => (n.children ?? []).flatMap(c => c.children ?? [])).filter(c => (c.metadata as any)?.field).map(c => `${c.text}:${(c.metadata as any).fieldFormat}`);
+    assert.deepStrictEqual(formats, ['i:lowerRoman', 'ii:lowerRoman', 'iii:lowerRoman', 'iv:lowerRoman'], `Running footers: "Preface | i" is a page field in roman numerals (${JSON.stringify([texts(prefaceBar.auxiliary?.footers), formats])})`);
+    assert.ok(String((await prefaceBar.to('tex')).value).includes('\\roman{page}'), 'Running footers: which LaTeX writes in roman numerals');
+    // Arabic-Indic page numbers are fields in their digits, which ODT writes them in.
+    const indicFormat = (indicTwo.auxiliary?.footers ?? []).flatMap(n => (n.children ?? []).flatMap(c => [c, ...(c.children ?? [])])).map(c => (c.metadata as any)?.fieldFormat).filter(Boolean);
+    assert.deepStrictEqual(indicFormat, ['decimalArabicIndic', 'decimalArabicIndic'], `Running footers: Arabic-Indic page numbers are fields in their digits (${JSON.stringify(indicFormat)})`);
+    const indicOdt = strFromU8(unzipSync((await indicTwo.to('odt')).value as Uint8Array)['styles.xml']);
+    assert.ok(indicOdt.includes('style:num-format="\u0661"'), 'Running footers: ODT writes them in Arabic-Indic digits');
+    // A header the PDF marks as its artifact is a header, what it says changing or not: a section at each change,
+    // so Word prints each page's. One on half the pages only, marked or found, is no running line.
+    const artifactHead = (p: number) => `/Artifact << /Type /Pagination >> BDC ${line(50, 760, 10, p <= 3 ? 'Acme Annual Report' : 'Appendix: Raw Tables')} EMC`;
+    const marked = await read(pdfOf([1, 2, 3, 4, 5, 6].map(p => [artifactHead(p), body(p)].join('\n'))));
+    const markedDocx = Object.entries(unzipSync((await marked.to('docx')).value as Uint8Array)).filter(([k]) => /word\/header/.test(k)).map(([, v]) => strFromU8(v)).join('');
+    assert.ok(marked.auxiliary?.headers?.length === 6 && markedDocx.includes('Appendix: Raw Tables') && markedDocx.includes('Acme Annual Report') && !(await md(marked)).includes('Acme Annual Report'), `Running headers: an artifact header that changes is a section's (${JSON.stringify(texts(marked.auxiliary?.headers))})`);
+    const half = await read(pdfOf([1, 2, 3, 4, 5, 6].map(p => [p <= 3 ? artifactHead(p) : line(50, 760, 10, 'Appendix: Raw Tables'), body(p)].join('\n'))));
+    assert.ok(half.auxiliary?.headers === undefined && /Appendix: Raw Tables/.test(await md(half)), `Running headers: an artifact header and a found one that differ stay in their pages (${JSON.stringify(texts(half.auxiliary?.headers))})`);
+    // A cover's own header, the first page's alone that differs, is the first page's part; the others' the document's.
+    const covered = await read(pdfOf([1, 2, 3, 4, 5].map(p => [`/Artifact << /Type /Pagination >> BDC ${line(50, 760, 10, p === 1 ? 'Confidential' : 'Acme Annual Report')} EMC`, body(p)].join('\n'))));
+    const coveredMd = await md(covered);
+    assert.ok((covered.auxiliary?.headers as any[]).map(n => `${n.metadata.page}:${n.metadata.type}`).join() === '1:first,2:default,3:default,4:default,5:default' && !coveredMd.includes('Confidential') && !coveredMd.includes('Acme Annual Report') && (covered.metadata as any).pageSetup?.differentFirstPage === true,
+        `Running headers: a cover's own header is the first page's part (${JSON.stringify([texts(covered.auxiliary?.headers), coveredMd.slice(0, 120)])})`);
+    // Only the first page read, every other page having the same header: a header first found on page 2 is no
+    // cover's, so a section starts after it.
+    const laterCover = await read(pdfOf([1, 2, 3, 4, 5].map(p => [p === 1 ? '' : `/Artifact << /Type /Pagination >> BDC ${line(50, 760, 10, p === 2 ? 'Cover' : 'Acme Annual Report')} EMC`, body(p)].join('\n'))));
+    assert.ok(laterCover.auxiliary?.headers?.length === 4 && laterCover.content.some(n => n.type === 'break'), `Running headers: a differing header on a later first page is no cover's (${JSON.stringify(texts(laterCover.auxiliary?.headers))})`);
+    // A cover numbered "i" before pages numbered 2, 3, 4: a section for each format, so each prints its number.
+    const romanCover = await read(pdfOf([1, 2, 3, 4].map(p => [body(p), line(245, 30, 10, p === 1 ? 'i' : String(p))].join('\n')), '/PageLabels << /Nums [0 << /S /r >> 1 << /S /D /St 2 >>] >>'));
+    const romanCoverMd = await md(romanCover);
+    assert.ok(romanCover.auxiliary?.footers?.length === 4 && !/^i$/m.test(romanCoverMd) && !/^4$/m.test(romanCoverMd) && (romanCover.metadata as any).pageSetup?.pageNumberFormat === 'lowerRoman', `Running footers: a cover numbered in another format is a section's (${JSON.stringify(texts(romanCover.auxiliary?.footers))})`);
+    // A sheet's name at the top of its sheet's pages alone, 3 to 6 of 8: a header Word would print on every page,
+    // so it stays on its pages.
+    const sheetName = await read(pdfOf([1, 2, 3, 4, 5, 6, 7, 8].map(p => [p >= 3 && p <= 6 ? line(50, 760, 10, 'Text') : '', body(p)].join('\n'))));
+    const sheetDocx = unzipSync((await sheetName.to('docx')).value as Uint8Array);
+    assert.ok(sheetName.auxiliary?.headers === undefined && !Object.keys(sheetDocx).some(k => /header\d*\.xml$/.test(k) && strFromU8(sheetDocx[k]).includes('>Text<')) && /^Text$/m.test(await md(sheetName)),
+        `Running headers: a header on some pages alone stays on them (${JSON.stringify(texts(sheetName.auxiliary?.headers))})`);
+    // Two pages, the header on the second alone: no cover, so it stays on its page (Word printed it on both).
+    const secondOnly = await read(pdfOf([1, 2].map(p => [p === 2 ? `/Artifact << /Type /Pagination >> BDC ${line(50, 760, 10, 'Acme Annual Report')} EMC` : '', body(p)].join('\n'))));
+    assert.ok(secondOnly.auxiliary?.headers === undefined && count(await md(secondOnly), 'Acme Annual Report') === 1, `Running headers: a second page's alone of two stays on it (${JSON.stringify(texts(secondOnly.auxiliary?.headers))})`);
+    // A header larger than the text, the same on every page, is a paragraph of the header, not a heading: it took
+    // the body's heading's anchor in DOCX.
+    const bigSame = await read(pdfOf([1, 2, 3].map(p => [`/Artifact << /Type /Pagination >> BDC ${line(50, 760, 20, 'Acme Report')} EMC`, body(p)].join('\n'))));
+    const bigHeader = strFromU8(unzipSync((await bigSame.to('docx')).value as Uint8Array)['word/header1.xml']);
+    assert.ok((bigSame.auxiliary?.headers ?? []).every(n => n.children?.[0]?.type === 'paragraph') && !bigHeader.includes('Heading1') && bigHeader.includes('Acme Report'), `Running headers: a large header is a paragraph of it (${bigHeader.slice(0, 300)})`);
+    // A header larger than the text, put back in its pages, is a line of its page, not a heading of its own.
+    const bigHead = await read(pdfOf([1, 2, 3, 4].map(p => [p <= 2 ? `/Artifact << /Type /Pagination >> BDC ${line(50, 760, 20, 'Chapter One')} EMC` : '', body(p)].join('\n'))));
+    const bigMd = await md(bigHead);
+    assert.ok(!/^#+ Chapter/m.test(bigMd) && count(bigMd, 'Chapter One') === 2, `Running headers: a large header put back is no heading (${JSON.stringify(bigMd.slice(0, 200))})`);
+    // Put back in its page, a header stands where it is: after a logo drawn above it.
+    const logo = 'q 40 0 0 40 50 745 cm BI /W 2 /H 2 /CS /G /BPC 8 ID \xff\x00\x00\xff EI Q';
+    const withLogo = await read(pdfOf([1, 2, 3, 4].map(p => [logo, line(200, 760, 9, p <= 2 ? 'Preface pages' : 'Main matter'), body(p)].join('\n'))), {}, { extractAttachments: true });
+    const firstPage = withLogo.content.find(n => n.type === 'page')?.children ?? [];
+    assert.ok(firstPage[0]?.type === 'image' && firstPage[1]?.text === 'Preface pages', `Running headers: a header put back stands after the logo above it (${JSON.stringify(firstPage.slice(0, 3).map(n => `${n.type}:${n.text}`))})`);
+    console.log('  PDF running headers and footers: All assertions passed ✓');
+}
+
+async function testPdfInProcessTurns(): Promise<void> {
+    const { deflateSync } = await import('zlib');
+    const pdfFrom = (objects: (string | Buffer)[]): Buffer => {
+        const parts: Buffer[] = [Buffer.from('%PDF-1.7\n')];
+        const offsets: number[] = [];
+        let at = parts[0].length;
+        objects.forEach((o, i) => { const b = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), typeof o === 'string' ? Buffer.from(o, 'latin1') : o, Buffer.from('\nendobj\n')]); offsets.push(at); at += b.length; parts.push(b); });
+        parts.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+        return Buffer.concat(parts);
+    };
+    const stream = (content: Buffer, dict = '') => Buffer.concat([Buffer.from(`<< /Length ${content.length} ${dict} >>\nstream\n`), content, Buffer.from('\nendstream')]);
+    // Page 1 draws one picture `draws` times; page 2 draws a form XObject that is not a stream, which pdf.js cannot read.
+    const drawnOften = (draws: number) => pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> /XObject << /I 8 0 R >> >> /Contents 5 0 R >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> /XObject << /Bad 9 0 R >> >> /Contents 6 0 R >>',
+        stream(deflateSync(Buffer.from('BT /F1 12 Tf 72 700 Td (Page one text) Tj ET\n' + 'q 10 0 0 10 72 500 cm /I Do Q\n'.repeat(draws))), '/Filter /FlateDecode'),
+        stream(Buffer.from('BT /F1 12 Tf 72 700 Td (Page two text) Tj ET\n/Bad Do\n')),
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+        stream(deflateSync(Buffer.alloc(16 * 16 * 3, 0x40)), '/Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode'),
+        '<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] >>',
+    ]);
+    const inProcess = { pdfParserConfig: { separateProcess: false } };
+    const plain = path.join(__dirname, 'files', 'pdf', 'columns_untagged.pdf');
+    const encrypted = path.join(__dirname, 'files', 'pdf', 'encrypted.pdf');
+    const readPlain = async () => (await OfficeParser.parseOffice(plain, { ...inProcess, onWarning: () => { } } as any) as OfficeParserAST).content.length;
+    // `run`'s outcome, or 'HUNG' after `ms`.
+    const settled = async <T>(ms: number, run: Promise<T>): Promise<T | 'HUNG'> => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try { return await Promise.race([run, new Promise<'HUNG'>(resolve => { timer = setTimeout(() => resolve('HUNG'), ms); })]); } finally { clearTimeout(timer); }
+    };
+    const textOf = (ast: OfficeParserAST) => ast.content.map(n => n.text).join('\n');
+
+    // onPassword parses another PDF in this process before it answers.
+    let innerPages = 0;
+    const nested = await settled(20_000, OfficeParser.parseOffice(encrypted, { ...inProcess, onPassword: async () => { innerPages = await readPlain(); return 'test123'; } } as any)
+        .then(ast => textOf(ast as OfficeParserAST), (e: any) => `rejected ${e?.message}`));
+    assert.ok(innerPages > 0 && typeof nested === 'string' && nested.includes('SECRET CONTENT'), `an onPassword parsing a PDF in this process does not wait on itself; got ${String(nested).slice(0, 80)}, inner ${innerPages}`);
+
+    // While one parse waits on its onPassword, another is read.
+    let answer: ((password: string) => void) | undefined;
+    const waiting = OfficeParser.parseOffice(encrypted, { ...inProcess, onPassword: () => new Promise<string>(resolve => { answer = resolve; }) } as any);
+    for (let i = 0; i < 200 && !answer; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    const beside = await settled(10_000, readPlain());
+    answer?.('test123');
+    assert.ok(typeof beside === 'number' && beside > 0, `a parse waiting on its onPassword holds up no other parse in this process; got ${beside}`);
+    assert.ok(textOf(await waiting as OfficeParserAST).includes('SECRET CONTENT'), 'and the waiting parse goes on with the password given');
+
+    // An abort ends a wait on an onPassword that never answers.
+    const unanswered = await settled(5_000, OfficeParser.parseOffice(encrypted, { ...inProcess, abortSignal: AbortSignal.timeout(300), onPassword: () => new Promise(() => { }) } as any).then(() => 'parsed', (e: any) => String(e?.name)));
+    assert.strictEqual(unanswered, 'AbortError', 'an abort ends a parse waiting on its onPassword');
+
+    // onWarning starts a parse of another PDF in this process at each warning.
+    const started: Promise<number>[] = [];
+    const warned = await settled(20_000, OfficeParser.parseOffice(drawnOften(3), { fileType: 'pdf', ...inProcess, onWarning: () => { started.push(readPlain()); } } as any).then(() => 'parsed', (e: any) => `rejected ${e?.message}`));
+    const fromWarnings = await settled(20_000, Promise.all(started));
+    assert.ok(warned === 'parsed' && started.length > 0 && Array.isArray(fromWarnings) && fromWarnings.every(pages => pages > 0), `parses an onWarning starts in this process are read; got ${warned}, ${started.length} started, ${JSON.stringify(fromWarnings)}`);
+
+    // OCR, by a worker that parses a PDF in this process before it answers.
+    let ocrInner = 0;
+    ocrTestHooks.createWorker = async () => ({
+        recognize: async () => { ocrInner = await readPlain(); return { data: { text: 'RECOGNIZED' } }; },
+        reinitialize: async () => { },
+        terminate: async () => { },
+    });
+    try {
+        const ocred = await settled(20_000, OfficeParser.parseOffice(drawnOften(1), { fileType: 'pdf', ...inProcess, ocr: true, extractAttachments: true, onWarning: () => { } } as any)
+            .then(ast => (ast as OfficeParserAST).attachments.map(a => a.ocrText).join(), (e: any) => `rejected ${e?.message}`));
+        assert.ok(ocrInner > 0 && ocred === 'RECOGNIZED', `OCR that parses a PDF in this process does not wait on its own parse; got ${ocred}, inner ${ocrInner}`);
+    } finally {
+        ocrTestHooks.createWorker = undefined;
+        await terminateOcr();
+    }
+
+    // 1,100 pictures pdf.js is told to leave out (pictures are not extracted), then an XObject it cannot read.
+    const many = drawnOften(1100);
+    for (const separateProcess of [true, false]) {
+        const found: any[] = [];
+        await OfficeParser.parseOffice(many, { fileType: 'pdf', onWarning: (issue: any) => found.push(issue), pdfParserConfig: { separateProcess } } as any);
+        const notRead = found.filter(issue => issue.code === 'CONTENT_PART_NOT_READ');
+        assert.ok(notRead.length === 1 && notRead[0].page === 2, `${separateProcess ? 'in a separate process' : 'in this process'}: an XObject not read after 1,100 pictures left out is reported; got ${JSON.stringify(found.map(i => [i.code, i.page]))}`);
+    }
+
+    // The caller's own "Warning: " lines while a PDF is read in this process, from a timer and from its onWarning.
+    const original = console.warn;
+    const printed: string[] = [];
+    let sent = 0;
+    let sentDuring = 0;
+    let reading = false;
+    const own = "Warning: getTextContent - ignoring XObject: the caller's own line";
+    console.warn = (...args: unknown[]) => { printed.push(String(args[0])); };
+    const timer = setInterval(() => { sent++; if (reading) sentDuring++; console.warn(own); }, 1);
+    const found: any[] = [];
+    try {
+        reading = true;
+        await OfficeParser.parseOffice(many, { fileType: 'pdf', ...inProcess, onWarning: (issue: any) => { found.push(issue); console.warn(`Warning: the caller's onWarning saw ${issue.code}`); } } as any);
+        reading = false;
+    } finally {
+        clearInterval(timer);
+        console.warn = original;
+    }
+    const notOwn = printed.filter(line => line !== own && !line.startsWith("Warning: the caller's onWarning saw"));
+    assert.ok(sentDuring > 0, 'the caller wrote its own lines while the PDF was read');
+    assert.deepStrictEqual(notOwn, [], 'none of pdf.js\'s lines reach the caller\'s console');
+    assert.strictEqual(printed.filter(line => line === own).length, sent, 'every line the caller wrote reached its console');
+    assert.ok(printed.some(line => line === "Warning: the caller's onWarning saw CONTENT_PART_NOT_READ"), 'a line the caller\'s onWarning writes while pdf.js\'s is reported reaches its console');
+    assert.ok(found.filter(issue => issue.code === 'CONTENT_PART_NOT_READ').length === 1 && !found.some(issue => /the caller's own line/.test(issue.message)), `only pdf.js's own line is reported; got ${JSON.stringify(found.map(i => i.message))}`);
+    console.log('  PDF in-process turns: All assertions passed ✓');
+}
+
+/**
+ * RTF's symbol control words and control symbols are the characters they stand for: \emdash and the
+ * rest were dropped, and \~ was read as a tilde.
+ */
+async function testRtfSymbols(): Promise<void> {
+    const rtf = String.raw`{\rtf1 a\emdash b\endash c\bullet d\~e f\_g h\-i \lquote j\rquote \ldblquote k\rdblquote l\emspace m\enspace n}`;
+    const ast = await OfficeParser.parseOffice(Buffer.from(rtf), { fileType: 'rtf' } as any) as OfficeParserAST;
+    // A space after a control word is its delimiter, not text: `\\rquote \\ldblquote k` is ’“k.
+    const text = String((await ast.to('text')).value).trim();
+    assert.strictEqual(text, 'a\u2014b\u2013c\u2022d\u00A0e f\u2011g h\u00ADi \u2018j\u2019\u201Ck\u201Dl\u2003m\u2002n', `RTF symbol words are their characters; got ${JSON.stringify(text)}`);
+    const sample = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.rtf')), { fileType: 'rtf' } as any) as OfficeParserAST;
+    assert.ok(JSON.stringify(sample.content).includes('\u2014'), 'the sample RTF keeps its em dashes');
+}
+
+/**
  * A line break alone in a Markdown table cell, or at its edge, survives.
  */
 async function testMarkdownCellBreaks(): Promise<void> {
@@ -4652,8 +10121,8 @@ async function testConfigConsistency(): Promise<void> {
     const tex = await run('tex', { texConfig: { documentClass: 'reprot', format: 'A44', margin: { top: '1 inch', left: '2cm' } } });
     assert.deepStrictEqual(tex.seen.filter(w => w.code === 'INVALID_CONFIG_VALUE').map(w => w.message), [
         'Invalid texConfig.documentClass: "reprot". Expected one of auto, article, report, book, beamer; the default ("auto") is used instead.',
-        'Invalid texConfig.format: "A44". Expected one of letter, legal, tabloid, ledger, a0, a1, a2, a3, a4, a5, a6; the default ("A4") is used instead.',
-        'Invalid texConfig.margin.top: "1 inch". Expected a number of points or a length such as \'1in\', \'2cm\', \'36pt\'; the default (72) is used instead.',
+        'Invalid texConfig.format: "A44". Expected one of letter, legal, tabloid, ledger, a0, a1, a2, a3, a4, a5, a6, auto; the default ("auto") is used instead.',
+        'Invalid texConfig.margin.top: "1 inch". Expected a number of points or a length such as \'1in\', \'2cm\', \'36pt\'; the default is used instead.',
     ], 'Config: invalid texConfig values are reported with what the option accepts');
     const texOut = String(tex.result.value);
     assert.ok(texOut.includes('\\documentclass[\\officeparserdriver 11pt]{article}') && texOut.includes('[a4paper,top=1in,bottom=1in,left=20mm,right=1in]{geometry}'), 'Config: the defaults replace invalid values; valid ones are kept');
@@ -4725,7 +10194,9 @@ async function testConfigConsistency(): Promise<void> {
     assert.strictEqual((await OfficeParser.parseOffice(Buffer.from((await german.to('epub')).value as Uint8Array), { fileType: 'epub' } as any)).metadata.language, 'de', 'Language: the EPUB parser puts it in metadata.language');
     const overridden = String((await german.to('html', { metadataOverrides: { language: 'fr-CA' } } as any)).value);
     assert.ok(overridden.includes('<html lang="fr-CA">'), 'Language: metadataOverrides.language wins');
-    assert.ok(String((await md.to('html')).value).includes('<html lang="en">'), 'Language: English when the source states none');
+    // A document that states no language gets no lang, as DOCX, ODT and PDF output write none: "en" told a
+    // screen reader to read a German form as English.
+    assert.ok(String((await md.to('html')).value).includes('<html>'), 'Language: none when the source states none');
     // maxPasswordAttempts that is not a whole number of 0 or more is reported, by the parser and by templates.
     {
         const agile = path.join(__dirname, 'files', 'encrypted', 'agile.docx');
@@ -5635,9 +11106,9 @@ async function testSecondReview(): Promise<void> {
 
     // A cell two million rows from the others lays out close, in no time.
     const far = doc([{ type: 'sheet', metadata: { sheetName: 'S' }, children: [{ type: 'row', children: [{ type: 'cell', metadata: { row: 1999999, col: 0 }, children: [T('far')] }] }, { type: 'row', children: Array.from({ length: 40 }, (_, i) => ({ type: 'cell', children: [T('c' + i)] })) }] }], 'xlsx');
-    const started = Date.now();
-    const farHtml = await write(far, 'html');
-    assert.ok(Date.now() - started < 3000 && farHtml.length < 100_000 && farHtml.includes('far') && farHtml.includes('c39'), `HTML: a far cell (${Date.now() - started}ms, ${farHtml.length} chars)`);
+    const farRun = await withinTime(3000, () => write(far, 'html'));
+    const farHtml = farRun.result;
+    assert.ok(farRun.within && farHtml.length < 100_000 && farHtml.includes('far') && farHtml.includes('c39'), `HTML: a far cell (${farRun.ms}ms, ${farHtml.length} chars)`);
     console.log('  Second review: All assertions passed ✓');
 }
 
@@ -5777,7 +11248,7 @@ async function testDocxReadingReview(): Promise<void> {
     assert.deepStrictEqual(texts(footnote.children!), [['paragraph', 'FN link'], ['paragraph', 'CHUNK IN FOOTNOTE']], 'DOCX: a chunk in a footnote is read');
     assert.strictEqual((footnote.children![0].children![1].metadata as any)?.link, 'https://footnote.example/', 'DOCX: a footnote\'s link is its part\'s relationship, not the document\'s');
     assert.deepStrictEqual(texts(comment.children!), [['paragraph', 'CM'], ['paragraph', 'CHUNK IN COMMENT']], 'DOCX: a chunk in a comment is read');
-    const header = parts.ast.auxiliary!.headers!;
+    const header = parts.ast.auxiliary!.headers![0].children!;
     assert.deepStrictEqual([(header[0].children![0].metadata as any)?.attachmentName, header[1].text], ['logo.png', 'CHUNK IN HEADER'], 'DOCX: a header\'s picture and chunk are read through its own relationships');
     assert.deepStrictEqual(parts.issues, [], 'DOCX: chunks in every part read without a warning');
     const embeddedObject = zipSync({ 'word/document.xml': strToU8('<w:document/>'), 'big.bin': new Uint8Array(3_000_000) }, { level: 0 });
@@ -6214,7 +11685,7 @@ async function runTests(): Promise<void> {
         ['AttributeRoundtrip', testAttributeRoundtrip],
         ['BlobInput', testBlobInput],
         ['WordParagraphMark', testWordParagraphMarkFormatting],
-        ['WordPlaceholders', testWordPlaceholders],
+        ['WordRunCharacters', testWordRunCharacters],
         ['ExcelDates', testExcelDates],
         ['GeneratedOutput', testGeneratedOutput],
         ['ODG', testOdg],
@@ -6236,8 +11707,65 @@ async function runTests(): Promise<void> {
         ['Chart scripts', testChartScripts],
         ['Markdown header rows', testMarkdownHeaderRows],
         ['RTF header rows', testRtfHeaderRows],
+        ['RTF symbol words', testRtfSymbols],
+        ['PDF ideograph look-alikes', testPdfIdeographLookalikes],
+        ['Text table cells apart', testTextTableCellsApart],
+        ['CSV delimiter detection', testCsvDelimiterDetection],
+        ['Hidden sheet content', testHiddenSheetContent],
+        ['Speaker notes in PDF', testSpeakerNotesInPdf],
+        ['Native PDF GIF and BMP', testNativePdfGifAndBmp],
+        ['XLSX shown text', testXlsxShownText],
+        ['Sheet tables in PDF', testSheetTablesInPdf],
+        ['Native PDF links', testNativePdfLinks],
+        ['Paragraph layout', testParagraphLayout],
+        ['Paragraph spacing', testParagraphSpacing],
+        ['Native PDF font kinds', testNativePdfFontKinds],
+        ['List markers', testListMarkers],
+        ['HTML stylesheet and shading', testHtmlStylesheetAndShading],
+        ['Native PDF footnotes', testNativePdfFootnotes],
+        ['DOCX sections in PDF', testDocxSectionsInPdf],
+        ['Title and even pages as Word shows them', testTitleAndEvenPagesAsWordShows],
+        ['ODT master pages in PDF', testOdtMasterPagesInPdf],
+        ['Sheet and slide pages', testSheetAndSlidePages],
+        ['Native PDF charts and cell pictures', testNativePdfChartsAndCellPictures],
+        ['Native PDF inline pictures', testNativePdfInlinePictures],
+        ['Slides drawn as laid out', testSlidesDrawnAsLaidOut],
+        ['Native PDF furniture limits', testNativePdfFurnitureLimits],
+        ['Formats read as they show', testFormatsReadAsTheyShow],
+        ['Writers hold up', testWritersHoldUp],
+        ['Native PDF SVG pictures', testNativePdfSvgPictures],
+        ['Floating frames', testFloatingFrames],
+        ['Native PDF shaped text', testNativePdfShapedText],
+        ['Page number formats', testPageNumberFormats],
+        ['Sections saved again', testSectionRoundTrips],
+        ['PDF lists read whole', testPdfListsReadWhole],
+        ['PDF headings by size and weight', testPdfHeadingsBySizeAndWeight],
+        ['PDF ruled tables', testPdfRuledTables],
+        ['PDF scripts, columns and lists', testPdfScriptsColumnsAndLists],
+        ['Columns', testColumns],
+        ['PDF ActualText', testPdfActualText],
+        ['Spreadsheet writers', testSpreadsheetWriters],
+        ['Presentation writers', testPresentationWriters],
+        ['Invisible text in writers', testInvisibleTextWriters],
+        ['Slide text on its baselines', testSlideBaselines],
         ['Markdown cell breaks', testMarkdownCellBreaks],
         ['Markdown attributes', testMarkdownAttributes],
+        ['PDF warning pages', testPdfWarningPages],
+        ['PDF pictures left out', testPdfPicturesLeftOut],
+        ['PDF in-process turns', testPdfInProcessTurns],
+        ['PDF form metadata and HTML details', testPdfFormMetadataAndHtml],
+        ['PDF form values as text', testPdfFormValuesAsText],
+        ['PDF glyph names', testPdfGlyphNames],
+        ['PDF kept JPEGs', testPdfKeptJpegs],
+        ['PDF text on fills', testPdfTextOnFills],
+        ['PDF running headers and footers', testPdfRunningHeadersFooters],
+        ['Unicode chunk boundaries', testUnicodeChunks],
+        ['Brotli decoder with a known flaw avoided', testBrotliGuard],
+        ['PDF items match their own glyphs', testPdfItemsMatchTheirOwnGlyphs],
+        ['Markdown HTML cell formatting', testMarkdownHtmlCellFormatting],
+        ['List marker reading', testListMarkerReading],
+        ['PDF running lines as parts', testPdfRunningLinesAsParts],
+        ['PDF font with no map from glyphs to characters', testPdfUnmappedFont],
         ['Cancellation', testCancellation],
     ];
 

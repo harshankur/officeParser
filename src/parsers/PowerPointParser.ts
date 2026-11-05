@@ -23,7 +23,8 @@
  */
 
 import { attachmentLookup } from '../utils/repeatUtils.js';
-import { BreakMetadata, ChartMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, SlideMetadata, TextFormatting } from '../types.js';
+import { BreakMetadata, ChartMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, ShapeMetadata, SlideMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { groupTransform, IDENTITY, rgbOf, roundBox, shapeLook, textFrameOf, themeColors, Transform, xfrmOf } from '../utils/drawingmlUtils.js';
 import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
@@ -106,6 +107,12 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     const commentAuthorsRegex = /ppt\/(?:commentAuthors|authors)\.xml/;
     const slideMastersRegex = /ppt\/slideMasters\/slideMaster\d+\.xml/;
     const presentationFileRegex = /ppt\/presentation\.xml/;
+    // A slide's layout and master (and their relationships), and the theme: where a placeholder that
+    // gives no place of its own is, the background a slide takes on, and the theme's colours.
+    const slideLayoutRegex = /ppt\/slideLayouts\/(?:_rels\/)?slideLayout\d+\.xml(?:\.rels)?$/;
+    const themeRegex = /ppt\/theme\/theme\d+\.xml$/;
+    // A notes master and its relationships: its colour map and theme give the notes' colours.
+    const notesMasterRegex = /ppt\/notesMasters\/(?:_rels\/)?notesMaster\d+\.xml(?:\.rels)?$/;
     const diagramDataRegex = /ppt\/diagrams\/data\d+\.xml/;
 
     const files = await extractFiles(
@@ -118,7 +125,9 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             !!x.match(slideRelsRegex) ||
             (!config.ignoreNotes && !!x.match(notesRelsRegex)) ||
             (!config.ignoreComments && (!!x.match(commentsFileRegex) || !!x.match(commentAuthorsRegex))) ||
-            (!config.ignoreSlideMasters && (!!x.match(slideMastersRegex) || !!x.match(slideMasterRelsRegex))) ||
+            // (The masters, layouts and themes give the slides' places and their text's colours.)
+            !!x.match(slideMastersRegex) || !!x.match(slideMasterRelsRegex) || slideLayoutRegex.test(x) || themeRegex.test(x) ||
+            (!config.ignoreNotes && notesMasterRegex.test(x)) ||
             !!x.match(presentationFileRegex) ||
             !!x.match(presentationRelsRegex) ||
             !!x.match(diagramDataRegex) ||
@@ -143,6 +152,14 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     if (customPropsFile) {
         const customProperties = parseOOXMLCustomProperties(customPropsFile.content.toString(), config);
         if (Object.keys(customProperties).length > 0) metadata.customProperties = customProperties;
+    }
+    // The slides' size (`p:sldSz`, in EMU) is the presentation's page: its slides print one to a page of it.
+    if (!config.ignorePageGeometry) {
+        const presentation = files.find(f => f.path.match(presentationFileRegex))?.content.toString() ?? '';
+        const size = /<p:sldSz\b[^>]*>/.exec(presentation)?.[0] ?? '';
+        const emu = (name: string) => Number(new RegExp(`\\b${name}="(\\d{1,12})"`).exec(size)?.[1]);
+        const width = emu('cx') / 12700, height = emu('cy') / 12700;
+        if (width > 0 && height > 0 && width <= 4032 && height <= 4032) metadata.pageSetup = { width: Math.round(width * 100) / 100, height: Math.round(height * 100) / 100 };
     }
     const appPropsFile = files.find(f => f.path.match(appPropsFileRegex));
     if (appPropsFile) {
@@ -294,6 +311,11 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
 
             for (let cIndex = 0; cIndex < tcNodes.length; cIndex++) {
                 const tcNode = tcNodes[cIndex];
+                // A position a merged cell covers (merged across or down into) is that cell's, not one of its own.
+                const flag = (name: string) => { const v = tcNode.getAttribute(name); return v === '1' || v === 'true'; };
+                if (flag('hMerge') || flag('vMerge')) continue;
+                const span = (name: string) => { const v = parseInt(tcNode.getAttribute(name) || '', 10); return Number.isFinite(v) && v > 1 ? v : undefined; };
+                const colSpan = span('gridSpan'), rowSpan = span('rowSpan');
                 const cellChildren: OfficeContentNode[] = [];
                 let cellText = '';
 
@@ -332,14 +354,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                                     const sz = rPr.getAttribute("sz");
                                     if (sz) formatting.size = (parseInt(sz) / 100).toString() + 'pt';
 
-                                    const solidFill = getFirstElementByTagName(rPr, "a:solidFill");
-                                    if (solidFill) {
-                                        const srgbClr = getFirstElementByTagName(solidFill, "a:srgbClr");
-                                        if (srgbClr) {
-                                            const val = srgbClr.getAttribute("val");
-                                            if (val) formatting.color = '#' + val;
-                                        }
-                                    }
+                                    const color = runColor(rPr);
+                                    if (color) formatting.color = color;
 
                                     const latin = getFirstElementByTagName(rPr, "a:latin");
                                     if (latin) {
@@ -380,7 +396,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                     type: 'cell',
                     text: cellText,
                     children: cellChildren,
-                    metadata: { row: rIndex, col: cIndex, ...(backgroundColor ? { backgroundColor } : {}) }
+                    metadata: { row: rIndex, col: cIndex, ...(colSpan ? { colSpan } : {}), ...(rowSpan ? { rowSpan } : {}), ...(backgroundColor ? { backgroundColor } : {}) }
                 };
                 cells.push(cellNode);
             }
@@ -542,6 +558,185 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         return diagramList(readDiagram(file.content.toString(), config), `smartart-${++diagramCount}`);
     };
 
+    // ── Where a slide's shapes are, and what they look like ─────────────────────────────────────────
+    // (Unless ignorePageGeometry.) Each shape's paragraphs, pictures, tables and charts get its box on the
+    // slide (`bounds`), a shape with a fill, a line, a turn or its text set off its top a `drawing` node
+    // (ShapeMetadata) before them, and the slide its background: a deck was laid out as flowing text.
+
+    /** A slide layout's or master's placeholders (by `idx` and by type), background, text styles and part. */
+    interface TemplatePart { byIdx: Map<string, Element>; byType: Map<string, Element>; background?: Element; txStyles?: Element; colorMap?: Element; path: string }
+    const templateParts = new Map<string, TemplatePart | null>();
+    const templatePart = (path: string | undefined): TemplatePart | undefined => {
+        if (!path) return undefined;
+        if (templateParts.has(path)) return templateParts.get(path) ?? undefined;
+        let part: TemplatePart | null = null;
+        const file = fileByPath.get(path);
+        const doc = file ? readDispensablePart(file, 'the places and look its slides take from it are not known') : undefined;
+        if (doc) {
+            part = { byIdx: new Map(), byType: new Map(), path, txStyles: getFirstElementByTagName(doc, "p:txStyles") ?? undefined };
+            const spTree = getFirstElementByTagName(doc, "p:spTree");
+            for (const sp of spTree ? getElementsByTagName(spTree, "p:sp") : []) {
+                const ph = getFirstElementByTagName(getDirectChildren(sp, "p:nvSpPr")[0] ?? sp, "p:ph");
+                if (!ph) continue;
+                const idx = ph.getAttribute("idx"), type = ph.getAttribute("type") || 'body';
+                if (idx && !part.byIdx.has(idx)) part.byIdx.set(idx, sp);
+                if (!part.byType.has(type)) part.byType.set(type, sp);
+            }
+            part.background = getFirstElementByTagName(doc, "p:bg") ?? undefined;
+            part.colorMap = colorMapOf(doc);
+        }
+        templateParts.set(path, part);
+        return part ?? undefined;
+    };
+    /** The part a slide's or layout's relationships name as its layout or master. */
+    const templateOf = (path: string, kind: 'layout' | 'master' | 'theme' | 'notesMaster'): string | undefined =>
+        Object.values(relsByPart.get(path) ?? {}).find(rel => rel.type === kind)?.path;
+    /** Each master's theme's colours, read once. */
+    const themes = new Map<string, Map<string, string>>();
+    const themeOf = (masterPath: string | undefined): Map<string, string> => {
+        if (!masterPath) return new Map();
+        let colors = themes.get(masterPath);
+        if (!colors) {
+            const themePath = templateOf(masterPath, 'theme');
+            const file = themePath ? fileByPath.get(themePath) : undefined;
+            const doc = file ? readDispensablePart(file, 'its colours are not known') : undefined;
+            themes.set(masterPath, colors = themeColors(doc));
+        }
+        return colors;
+    };
+    /**
+     * A master's (`p:clrMap`), or a layout's or slide's overriding (`p:clrMapOvr`), colour map: which of
+     * the theme's colours a shape's `bg1`, `tx1`, `bg2` and `tx2` are. A dark master maps the text to the
+     * light colour, which read as the dark one drew its text in the background's colour.
+     */
+    function colorMapOf(doc: Document): Element | undefined {
+        const root = doc.documentElement;
+        const own = root ? getDirectChildren(root, "p:clrMap")[0] : undefined;
+        if (own) return own;
+        const override = root ? getDirectChildren(root, "p:clrMapOvr")[0] : undefined;
+        return override ? getDirectChildren(override, "a:overrideClrMapping")[0] : undefined;
+    }
+    /** The theme's colours under the colour maps given (the last given that has one is used). */
+    const mappedThemes = new Map<string, Map<string, string>>();
+    function mappedTheme(theme: Map<string, string>, themeKey: string, maps: (Element | undefined)[]): Map<string, string> {
+        const map = [...maps].reverse().find(Boolean);
+        if (!map) return theme;
+        const pairs = Array.from(map.attributes).map(a => [a.name, a.value] as const).filter(([name]) => /^[a-zA-Z0-9]+$/.test(name));
+        const key = `${themeKey}\u0000${pairs.map(([n, v]) => `${n}=${v}`).join(';')}`;
+        let mapped = mappedThemes.get(key);
+        if (!mapped) {
+            mapped = new Map(theme);
+            for (const [name, value] of pairs) { const color = theme.get(value); if (color) mapped.set(name, color); }
+            mappedThemes.set(key, mapped);
+        }
+        return mapped;
+    }
+    /** A slide's, layout's or master's background colour (its `p:bg`), in the theme's colours. */
+    function backgroundOf(bg: Element | undefined, theme: Map<string, string>): string | undefined {
+        if (!bg) return undefined;
+        const bgPr = getDirectChildren(bg, "p:bgPr")[0];
+        const solid = bgPr ? getDirectChildren(bgPr, "a:solidFill")[0] : undefined;
+        const gradientStop = bgPr ? getFirstElementByTagName(bgPr, "a:gs") : undefined;
+        const ref = getDirectChildren(bg, "p:bgRef")[0];
+        const colorHolder = solid ?? gradientStop ?? ref;
+        const hex = colorHolder ? rgbOf(Array.from(colorHolder.childNodes).filter(isElement)[0], theme) : undefined;
+        return hex ? `#${hex}` : undefined;
+    }
+
+    /** The slide being read: its layout, its master and their theme (see placeShape); undefined elsewhere. */
+    let placing: { layout?: TemplatePart; master?: TemplatePart; theme: Map<string, string> } | undefined;
+    /** The theme's colours, under its colour maps, of the slide or master being read (empty elsewhere). */
+    let partTheme = new Map<string, string>();
+    /**
+     * A run's own colour (`a:solidFill`): a colour of its own, or one of its theme's (`a:schemeClr`, as
+     * its colour map maps it), with its shades and tints. A theme's colour was not read.
+     */
+    function runColor(rPr: Element): string | undefined {
+        const fill = getDirectChildren(rPr, "a:solidFill")[0];
+        const hex = fill ? rgbOf(Array.from(fill.childNodes).filter(isElement)[0], placing?.theme ?? partTheme) : undefined;
+        return hex ? `#${hex}` : undefined;
+    }
+
+    /** The placeholder of the layout and of the master a slide's placeholder takes what it does not say from. */
+    const placeholderChain = (sp: Element): Element[] => {
+        const ph = getFirstElementByTagName(getDirectChildren(sp, "p:nvSpPr")[0] ?? sp, "p:ph");
+        if (!ph || !placing) return [];
+        const idx = ph.getAttribute("idx"), type = ph.getAttribute("type") || 'body';
+        const masterType = type === 'ctrTitle' ? 'title' : type === 'subTitle' || type === 'obj' ? 'body' : type;
+        const fromLayout = placing.layout ? ((idx ? placing.layout.byIdx.get(idx) : undefined) ?? placing.layout.byType.get(type)) : undefined;
+        const fromMaster = placing.master ? (placing.master.byType.get(masterType) ?? placing.master.byType.get(type)) : undefined;
+        return [fromLayout, fromMaster].filter((el): el is Element => !!el);
+    };
+
+    /**
+     * The size and colour a shape's text is at each level where its runs give none: its own list style's,
+     * its placeholder's in the layout and master, the master's text styles for its kind (title, body,
+     * other), then the presentation's default. Titles printed at body size, and a master's white text on
+     * a dark slide in the reader's default colour.
+     */
+    /** The presentation's default text style (`p:defaultTextStyle`), read with its slide list. */
+    let presentationTextStyle: Element | null | undefined;
+    const textDefaults = (sp: Element): ((level: number) => { size?: string; color?: string }) => {
+        const ph = getFirstElementByTagName(getDirectChildren(sp, "p:nvSpPr")[0] ?? sp, "p:ph");
+        const type = ph ? ph.getAttribute("type") || 'body' : undefined;
+        const kind = !ph ? 'p:otherStyle' : type === 'title' || type === 'ctrTitle' ? 'p:titleStyle' : 'p:bodyStyle';
+        const chain = [sp, ...placeholderChain(sp)];
+        const styles = placing?.master?.txStyles ? getDirectChildren(placing.master.txStyles, kind)[0] : undefined;
+        const theme = placing?.theme ?? new Map<string, string>();
+        const runDefaults = (list: Element | null | undefined, level: number) => {
+            const lvl = list ? getDirectChildren(list, `a:lvl${level + 1}pPr`)[0] : undefined;
+            return lvl ? getDirectChildren(lvl, "a:defRPr")[0] : undefined;
+        };
+        const sizeOf = (defRPr: Element | undefined) => { const sz = Number(defRPr?.getAttribute("sz")); return Number.isFinite(sz) && sz >= 100 && sz <= 400000 ? `${sz / 100}pt` : undefined; };
+        const colorOf = (defRPr: Element | undefined) => { const fill = defRPr ? getDirectChildren(defRPr, "a:solidFill")[0] : undefined; const hex = fill ? rgbOf(Array.from(fill.childNodes).filter(isElement)[0], theme) : undefined; return hex ? `#${hex}` : undefined; };
+        const lists = (level: number) => [
+            ...chain.map(shape => { const txBody = getDirectChildren(shape, "p:txBody")[0]; return runDefaults(txBody ? getDirectChildren(txBody, "a:lstStyle")[0] : undefined, level); }),
+            runDefaults(styles, level),
+            ...(!ph ? [runDefaults(presentationTextStyle, level)] : []),
+        ];
+        return level => {
+            const found = lists(level);
+            return { size: found.map(sizeOf).find(Boolean), color: found.map(colorOf).find(Boolean) };
+        };
+    };
+
+    /**
+     * Places a shape's nodes on the slide: its box (its own, else its placeholder's in the layout or
+     * master, through the groups it is in) on each, and before them a `drawing` node where it has a fill,
+     * a line or a turn, or sets its text off its top (see ShapeMetadata).
+     */
+    const placeShape = (sp: Element, nodes: OfficeContentNode[], transform: Transform): OfficeContentNode[] => {
+        if (!placing) return nodes;
+        const chain = placeholderChain(sp);
+        const xfrm = [sp, ...chain].map(el => xfrmOf(getDirectChildren(el, "p:spPr")[0])).find(Boolean);
+        if (!xfrm) return nodes;
+        const bounds = roundBox(transform(xfrm));
+        for (const node of nodes) node.bounds = bounds;
+        const look = shapeLook(sp, placing.theme);
+        const bodyPrs = [sp, ...chain].map(el => getDirectChildren(getDirectChildren(el, "p:txBody")[0] ?? el, "a:bodyPr")[0]).filter(Boolean);
+        const frame = textFrameOf(bodyPrs.find(b => b.getAttribute("anchor")) ?? bodyPrs[0]);
+        // Something to draw (a fill, a line), or text that is turned or set off the top of its box.
+        const turned = !!(xfrm.rotation || xfrm.flipH || xfrm.flipV);
+        if (!look.fill && !look.line && !(nodes.length && (turned || (frame.anchor && frame.anchor !== 'top')))) return nodes;
+        const metadata: ShapeMetadata = {
+            ...look,
+            ...(xfrm.rotation ? { rotation: Math.round(xfrm.rotation * 100) / 100 } : {}),
+            ...(xfrm.flipH ? { flipH: true } : {}),
+            ...(xfrm.flipV ? { flipV: true } : {}),
+            ...(nodes.length && frame.anchor && frame.anchor !== 'top' ? { textAnchor: frame.anchor } : {}),
+            ...(nodes.length ? { textInsets: frame.insets } : {}),
+        };
+        return [{ type: 'drawing', text: '', bounds, metadata }, ...nodes];
+    };
+
+    /** Places a picture's, table's or chart's nodes at their frame's box (`p:spPr` or `p:xfrm`). */
+    const placeFrame = (holder: Element | undefined, nodes: OfficeContentNode[], transform: Transform): OfficeContentNode[] => {
+        if (!placing) return nodes;
+        const xfrm = xfrmOf(holder);
+        if (xfrm) { const bounds = roundBox(transform(xfrm)); for (const node of nodes) node.bounds = bounds; }
+        return nodes;
+    };
+
     /** Extract text and hyperlinks from a p:sp shape. */
     const extractShapeNodes = (spNode: Element, rels: PartRelationships | undefined, xmlContentString: string): OfficeContentNode[] => {
         const nodes: OfficeContentNode[] = [];
@@ -552,6 +747,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         const type = ph ? ph.getAttribute("type") : "body";
 
         const isTitle = type === "title" || type === "ctrTitle";
+        // The sizes its text takes where its runs give none (on a slide, where its layout is known).
+        const defaults = placing ? textDefaults(spNode) : undefined;
 
         const txBody = getChildElements(spNode, "p:txBody")[0];
         if (txBody) {
@@ -728,15 +925,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                                 const sz = rPr.getAttribute("sz");
                                 if (sz) formatting.size = (parseInt(sz) / 100).toString() + "pt";
 
-                                // Color extraction
-                                const solidFill = getFirstElementByTagName(rPr, "a:solidFill");
-                                if (solidFill) {
-                                    const srgbClr = getFirstElementByTagName(solidFill, "a:srgbClr");
-                                    if (srgbClr) {
-                                        const val = srgbClr.getAttribute("val");
-                                        if (val) formatting.color = "#" + val;
-                                    }
-                                }
+                                const color = runColor(rPr);
+                                if (color) formatting.color = color;
 
                                 // Highlight extraction
                                 const highlight = getFirstElementByTagName(rPr, "a:highlight");
@@ -764,6 +954,11 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                                 }
                             }
 
+                            if (defaults && (!formatting.size || !formatting.color)) {
+                                const inherited = defaults(lvl);
+                                if (!formatting.size && inherited.size) formatting.size = inherited.size;
+                                if (!formatting.color && inherited.color) formatting.color = inherited.color;
+                            }
                             const textNode: OfficeContentNode = {
                                 type: 'text',
                                 text: textContent,
@@ -775,6 +970,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                             if (link) {
                                 textNode.metadata = link;
                             }
+                            // A slide number: the number of the page it is printed on (TextMetadata.field).
+                            if (tag === "a:fld" && element.getAttribute("type") === "slidenum") textNode.metadata = { ...(textNode.metadata as object), field: 'page' } as TextMetadata;
 
                             activeNode.children?.push(textNode);
                         }
@@ -841,7 +1038,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
      * @param rels The relationships of the part the tree is in, which its `r:id`s are looked up in
      * @param xmlContentString The source XML string for raw content extraction
      */
-    function traverseSpTree(treeNode: Element, rels: PartRelationships | undefined, xmlContentString: string): OfficeContentNode[] {
+    function traverseSpTree(treeNode: Element, rels: PartRelationships | undefined, xmlContentString: string, transform: Transform = IDENTITY): OfficeContentNode[] {
         const nodes: OfficeContentNode[] = [];
         // Process children in XML order (this preserves Z-order), a branch of mc:AlternateContent in its place
         const pending: Node[] = [];
@@ -858,12 +1055,13 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
 
             // Case 1: Normal shape
             if (tag === "p:sp") {
-                appendAll(nodes, extractShapeNodes(element, rels, xmlContentString));
+                appendAll(nodes, placeShape(element, extractShapeNodes(element, rels, xmlContentString), transform));
             }
             // Case 2: Inline picture
             else if (tag === "p:pic") {
                 const imageNode = extractImageNode(element, rels, xmlContentString);
                 if (imageNode) {
+                    placeFrame(getDirectChildren(element, "p:spPr")[0], [imageNode], transform);
                     nodes.push(imageNode);
                 }
             }
@@ -871,18 +1069,19 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             else if (tag === "p:graphicFrame") {
                 const diagram = extractDiagramNodes(element, rels);
                 if (diagram) {
-                    appendAll(nodes, diagram);
+                    appendAll(nodes, placeFrame(element, diagram, transform));
                 } else {
                     const tableNode = extractGraphicFrameNode(element, rels, xmlContentString);
                     if (tableNode) {
+                        placeFrame(element, [tableNode], transform);
                         nodes.push(tableNode);
                     }
                 }
             }
             // Case 4: Grouped shape (recursive!)
             else if (tag === "p:grpSp") {
-                // Recurse into the group element itself which holds the child shapes
-                appendAll(nodes, traverseSpTree(element, rels, xmlContentString));
+                // Recurse into the group element itself which holds the child shapes, placed by its transform
+                appendAll(nodes, traverseSpTree(element, rels, xmlContentString, placing ? groupTransform(getDirectChildren(element, "p:grpSpPr")[0], transform) : transform));
             }
             // Case 5: Shapes written for newer readers (an equation, a 3D model, a chart of a newer kind)
             // beside a fallback for older ones: the branch this reader understands (see
@@ -949,6 +1148,10 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             if (typeAttr.includes("relationships/image")) simplifiedType = "image";
             else if (typeAttr.includes("relationships/hyperlink")) simplifiedType = "hyperlink";
             else if (typeAttr.includes("relationships/chart")) simplifiedType = "chart";
+            else if (typeAttr.endsWith("relationships/slideLayout")) simplifiedType = "layout";
+            else if (typeAttr.endsWith("relationships/slideMaster")) simplifiedType = "master";
+            else if (typeAttr.endsWith("relationships/theme")) simplifiedType = "theme";
+            else if (typeAttr.endsWith("relationships/notesMaster")) simplifiedType = "notesMaster";
             else if (typeAttr.includes("relationships/slide")) simplifiedType = "slide";
             else if (typeAttr.includes("relationships/notesSlide")) simplifiedType = "notes";
             else if (typeAttr.includes("relationships/comments")) simplifiedType = "comments";
@@ -978,6 +1181,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     if (presentationFile) {
         // A presentation part that cannot be read names no slides.
         const presentationXml = readDispensablePart(presentationFile, 'the slides are read in the order of their file numbers');
+        presentationTextStyle = presentationXml ? getFirstElementByTagName(presentationXml, "p:defaultTextStyle") : null;
         const slideList = presentationXml ? getFirstElementByTagName(presentationXml, "p:sldIdLst") : undefined;
         const presentationRels = relsByPart.get(presentationFile.path);
         for (const entry of slideList ? getChildElements(slideList, "p:sldId") : []) {
@@ -993,9 +1197,10 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
      * Fills the node of a slide, a notes page or a slide master from its part: what the part's shape
      * tree holds, read with the part's own relationships.
      */
-    const readPart = (file: PackageFile, node: OfficeContentNode): OfficeContentNode => {
+    const readPart = (file: PackageFile, node: OfficeContentNode, withXml?: (xml: Document) => void): OfficeContentNode => {
         const xmlContentString = file.content.toString();
         const xml = parseXmlString(xmlContentString, { config, locator: config.includeRawContent });
+        withXml?.(xml);
         if (config.includeRawContent) {
             node.rawContent = getRawContent(xml, xmlContentString, config);
         }
@@ -1005,10 +1210,11 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     };
 
     const slideMasters: OfficeContentNode[] = [];
-    for (const file of files) {
+    for (const file of config.ignoreSlideMasters ? [] : files) {
         if (!file.path.match(slideMastersRegex)) continue;
         checkAbortSignal(config.abortSignal);
         const masterMatch = file.path.match(/slideMaster(\d+)\.xml/);
+        partTheme = mappedTheme(themeOf(file.path), file.path, [templatePart(file.path)?.colorMap]);
         const master = readPart(file, { type: 'slideMaster', children: [], metadata: { slideNumber: masterMatch ? parseInt(masterMatch[1]) : 0 } });
         if (master.children!.length > 0) slideMasters.push(master);
     }
@@ -1021,7 +1227,33 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         const file = deck[index];
         // A slide's number is its place in the presentation, as PowerPoint numbers it.
         const slideNumber = index + 1;
-        const slideNode = readPart(file, { type: 'slide', children: [], metadata: { slideNumber } });
+        {
+            const layout = templatePart(templateOf(file.path, 'layout'));
+            const master = layout ? templatePart(templateOf(layout.path, 'master')) : undefined;
+            const masterPath = master?.path;
+            partTheme = mappedTheme(themeOf(masterPath), masterPath ?? '', [master?.colorMap, layout?.colorMap]);
+            if (!config.ignorePageGeometry) placing = { layout, master, theme: partTheme };
+        }
+        let slideNode: OfficeContentNode;
+        try {
+            const metadata: SlideMetadata = { slideNumber };
+            slideNode = readPart(file, { type: 'slide', children: [], metadata }, xml => {
+                // A slide's own colour map, over its layout's and master's.
+                const slideMap = colorMapOf(xml);
+                if (slideMap) {
+                    const layout = templatePart(templateOf(file.path, 'layout'));
+                    const master = layout ? templatePart(templateOf(layout.path, 'master')) : undefined;
+                    partTheme = mappedTheme(themeOf(master?.path), master?.path ?? '', [master?.colorMap, layout?.colorMap, slideMap]);
+                    if (placing) placing.theme = partTheme;
+                }
+                if (!placing) return;
+                const background = backgroundOf(getFirstElementByTagName(xml, "p:bg") ?? undefined, placing.theme)
+                    ?? backgroundOf(placing.layout?.background, placing.theme) ?? backgroundOf(placing.master?.background, placing.theme);
+                if (background) metadata.background = background;
+            });
+        } finally {
+            placing = undefined;
+        }
         const slideRels = relsByPart.get(file.path);
         const relationships = slideRels ? Object.values(slideRels) : [];
 
@@ -1049,7 +1281,15 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             const notesFile = rel.type === "notes" && rel.path ? fileByPath.get(rel.path) : undefined;
             if (!notesFile || readNotesPages.has(notesFile)) continue;
             readNotesPages.add(notesFile);
-            const note = readPart(notesFile, { type: 'note', children: [], metadata: { slideNumber, noteId: `slide-note-${slideNumber}` } });
+            // In its notes master's colours, not the slide's: a dark slide master's light text is no
+            // colour for notes on a white page.
+            const notesMaster = templatePart(templateOf(notesFile.path, 'notesMaster'));
+            const notesTheme = (own?: Element) => mappedTheme(themeOf(notesMaster?.path), notesMaster?.path ?? '', [notesMaster?.colorMap, own]);
+            partTheme = notesTheme();
+            const note = readPart(notesFile, { type: 'note', children: [], metadata: { slideNumber, noteId: `slide-note-${slideNumber}` } }, xml => {
+                const own = colorMapOf(xml);
+                if (own) partTheme = notesTheme(own);
+            });
             if (note.children!.length > 0) (slideNode.notes ??= []).push(note);
         }
 

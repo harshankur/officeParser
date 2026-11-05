@@ -22,7 +22,7 @@
  * @see https://www.ecma-international.org/publications-and-standards/standards/ecma-376/
  */
 
-import { ChartMetadata, FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
+import { CellMetadata, ChartMetadata, FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
@@ -31,7 +31,10 @@ import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { attachmentLookup, repeatPreview, takeRepeats, valuesLength } from '../utils/repeatUtils.js';
 import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
 import { chargeRawContent, decodeXmlEntities, getChildElements, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, takeNodes } from '../utils/xmlUtils.js';
+import { MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
+import { BUILTIN_NUMBER_FORMATS, BUILTIN_OTHER_FORMATS, excelShownText } from '../utils/excelFormat.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
+import { inRanges } from '../utils/sheetUtils.js';
 
 /** Whether the character at `at` of `xml` can continue a tag name (so `<c` there opens `<col`, not `<c`). */
 const continuesName = (xml: string, at: number): boolean => /[\w:.-]/.test(xml[at] ?? '');
@@ -84,6 +87,129 @@ const attributeOf = (attrs: string, name: 'val' | 'rgb'): string | undefined => 
     const match = (name === 'val' ? /(?:^|\s)val\s*=\s*(?:"([^"]*)"|'([^']*)')/ : /(?:^|\s)rgb\s*=\s*(?:"([^"]*)"|'([^']*)')/).exec(attrs);
     return match ? decodeXmlEntities(match[1] ?? match[2]) : undefined;
 };
+
+/** An attribute's value by its (plain, unprefixed) name in the attributes of an element, or undefined. */
+const attributeNamed = (attrs: string, name: string): string | undefined => {
+    const match = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(attrs);
+    return match ? (match[1] ?? match[2]) : undefined;
+};
+
+/** Whether a boolean attribute's value is true (`1` or `true`, as the schema's xsd:boolean has it). */
+const isTrue = (value: string | undefined): boolean => value === '1' || value === 'true';
+
+/** A cell reference's 0-based column and row (`B3` is 1, 2), or null. */
+function cellAt(ref: string): { col: number; row: number } | null {
+    const match = /^\$?([A-Z]{1,3})\$?(\d{1,7})$/.exec(ref.trim());
+    if (!match) return null;
+    let col = 0;
+    for (const ch of match[1]) col = col * 26 + (ch.charCodeAt(0) - 64);
+    return { col: col - 1, row: Number(match[2]) - 1 };
+}
+
+/**
+ * A sheet's merged ranges (`<mergeCell ref="A1:F1"/>`) as the spans of their top-left cells, by `row:col`.
+ * The cells a merge covers are left as read (a writer sets an empty one under the span).
+ */
+function mergeSpans(sheetXml: string): Map<string, { colSpan: number; rowSpan: number }> {
+    const spans = new Map<string, { colSpan: number; rowSpan: number }>();
+    const merges = firstElementContent(sheetXml, 'mergeCells');
+    if (!merges) return spans;
+    for (const merge of xmlElements(merges, 'mergeCell')) {
+        const ref = /(?:^|\s)ref\s*=\s*["']([^"']*)["']/.exec(merge.attrs)?.[1];
+        const [from, to] = (ref ?? '').split(':').map(cellAt);
+        if (!from || !to || to.col < from.col || to.row < from.row) continue;
+        spans.set(`${from.row}:${from.col}`, {
+            colSpan: Math.min(to.col - from.col + 1, MAX_COL_SPAN),
+            rowSpan: Math.min(to.row - from.row + 1, MAX_ROW_SPAN),
+        });
+    }
+    return spans;
+}
+
+/**
+ * A sheet's hyperlinks (`<hyperlink ref="A1" r:id="rId1"/>`, or `location="Sheet2!A1"` for a place in
+ * the workbook) as the link of each cell their range covers, by `row:col`; at most MAX_LINKED_CELLS cells.
+ */
+function cellLinks(sheetXml: string, targets: Map<string, string>): Map<string, { link: string; linkType: 'internal' | 'external' }> {
+    const links = new Map<string, { link: string; linkType: 'internal' | 'external' }>();
+    const block = firstElementContent(sheetXml, 'hyperlinks');
+    if (!block) return links;
+    // (Its quotes matched: a place on a sheet whose name has a space is quoted itself, `location="'Q1 Sales'!B3"`.)
+    const attr = (attrs: string, name: string) => { const m = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(attrs); return m ? m[1] ?? m[2] : undefined; };
+    let visited = 0;
+    for (const h of xmlElements(block, 'hyperlink')) {
+        const id = attr(h.attrs, 'r:id'), location = attr(h.attrs, 'location');
+        const target = id ? targets.get(id) : undefined;
+        // (A relationship's target is read decoded already; an attribute of the sheet's text is not.)
+        // (A web address's place in its page is its `location`, as Excel writes it: `#section-2` after the address.)
+        const value = target ? { link: location && !target.includes('#') ? `${target}#${decodeXmlEntities(location)}` : target, linkType: 'external' as const }
+            : location ? { link: `#${decodeXmlEntities(location)}`, linkType: 'internal' as const } : undefined;
+        const [from, to] = (attr(h.attrs, 'ref') ?? '').split(':').map(cellAt);
+        if (!value || !from) continue;
+        const last = to ?? from;
+        // Bounded by the positions visited, not the cells marked: a range repeated a thousand times marks
+        // nothing new and visited its hundred thousand cells each time.
+        for (let r = from.row; r <= last.row && visited < MAX_LINKED_CELLS; r++) {
+            for (let c = from.col; c <= last.col && visited < MAX_LINKED_CELLS; c++, visited++) if (!links.has(`${r}:${c}`)) links.set(`${r}:${c}`, value);
+        }
+        if (visited >= MAX_LINKED_CELLS) break;
+    }
+    return links;
+}
+
+/** The most cell positions a sheet's hyperlinks visit (a range of a million cells is one link, not a million). */
+const MAX_LINKED_CELLS = 100_000;
+
+/** Excel's paper sizes (`pageSetup paperSize`) in points, upright: the common ones. */
+const PAPER_SIZES: Record<string, [number, number]> = {
+    '1': [612, 792], '3': [792, 1224], '4': [1224, 792], '5': [612, 1008], '8': [841.89, 1190.55], '9': [595.28, 841.89], '11': [419.53, 595.28], '70': [297.64, 419.53],
+};
+
+/**
+ * How a sheet prints (see SheetMetadata.pageSetup): its `pageSetup`'s paper (Letter when it names none,
+ * as Excel's default is) turned by its orientation, and its `pageMargins` (inches). Undefined for a
+ * sheet that sets neither.
+ */
+function sheetPageSetup(sheetXml: string): PageSetup | undefined {
+    // A custom view's own print setup (`customSheetViews`) is no part of the sheet's.
+    const views = sheetXml.indexOf('<customSheetViews');
+    if (views >= 0) {
+        const close = sheetXml.indexOf('</customSheetViews>', views);
+        sheetXml = sheetXml.slice(0, views) + (close >= 0 ? sheetXml.slice(close + '</customSheetViews>'.length) : '');
+    }
+    const setup = /<pageSetup\b[^>]*>/.exec(sheetXml)?.[0];
+    const margins = /<pageMargins\b[^>]*>/.exec(sheetXml)?.[0];
+    if (!setup && !margins) return undefined;
+    const paper = PAPER_SIZES[setup ? attributeNamed(setup.slice(10), 'paperSize') ?? '1' : '1'] ?? PAPER_SIZES['1'];
+    const landscape = setup ? attributeNamed(setup.slice(10), 'orientation') === 'landscape' : false;
+    const [w, h] = landscape ? [Math.max(...paper), Math.min(...paper)] : [Math.min(...paper), Math.max(...paper)];
+    const result: PageSetup = { width: w, height: h };
+    if (margins) {
+        const inch = (name: string) => { const v = Number(attributeNamed(margins.slice(12), name)); return Number.isFinite(v) && v >= 0 && v < 22 ? Math.round(v * 7200) / 100 : undefined; };
+        const [top, right, bottom, left] = ['top', 'right', 'bottom', 'left'].map(inch);
+        if (top !== undefined && right !== undefined && bottom !== undefined && left !== undefined) result.margin = { top, right, bottom, left };
+        const header = inch('header'), footer = inch('footer');
+        if (header !== undefined) result.headerDistance = header;
+        if (footer !== undefined) result.footerDistance = footer;
+    }
+    return result;
+}
+
+/**
+ * The 0-based columns a sheet hides, as ranges [first, last]: its `<cols>`'s `<col>` elements with
+ * `hidden`, each covering `min` to `max` (1-based).
+ */
+function hiddenColumnRanges(sheetXml: string): [number, number][] {
+    const cols = firstElementContent(sheetXml, 'cols');
+    if (!cols) return [];
+    const ranges: [number, number][] = [];
+    for (const col of xmlElements(cols, 'col')) {
+        if (!isTrue(attributeNamed(col.attrs, 'hidden'))) continue;
+        const min = Number(attributeNamed(col.attrs, 'min')), max = Number(attributeNamed(col.attrs, 'max'));
+        if (Number.isInteger(min) && min >= 1) ranges.push([min - 1, (Number.isInteger(max) && max >= min ? max : min) - 1]);
+    }
+    return ranges;
+}
 
 /**
  * The text an element's XML content holds, as an XML reader gives it: references decoded, line breaks
@@ -275,7 +401,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             !!x.match(customPropsFileRegex) ||
             !!x.match(appPropsFileRegex) ||
             (!!config.extractAttachments && (!!x.match(mediaFileRegex) || !!x.match(drawingRelsRegex))) ||
-            ((!!config.extractAttachments || !config.ignoreComments) && !!x.match(relsRegex)),
+            !!x.match(relsRegex),
         config.decompressionLimits,
         config
     );
@@ -351,6 +477,10 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     const cellFormatMap: Record<number, TextFormatting> = {};
     // A date or a time is stored as a day count and shown through its style's number format
     const cellDateFormatMap: Record<number, DateFormatKind> = {};
+    // Each cell style's number format code, which writes the text the sheet shows (see excelShownText).
+    const cellNumberFormatMap: Record<number, string> = {};
+    // A built-in format's code a cell keeps (CellMetadata.numberFormat) where its shown text is not read through it.
+    const cellBuiltinFormatMap: Record<number, string> = {};
 
     if (stylesFile) {
         const xml = parseXmlString(stylesFile.content.toString(), { config });
@@ -358,12 +488,13 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         // Parse custom number formats (numFmtId -> format code)
         // Classified once per number format, however many cell formats share it.
         const numFmtKinds = new Map<string, DateFormatKind | undefined>();
+        const numFmtCodes = new Map<string, string>(BUILTIN_NUMBER_FORMATS);
         const numFmtsNode = getElementsByTagName(xml, "numFmts")[0];
         if (numFmtsNode) {
             for (const numFmt of getChildElements(numFmtsNode, "numFmt")) {
                 const id = numFmt.getAttribute("numFmtId");
                 const code = numFmt.getAttribute("formatCode");
-                if (id && code !== null) numFmtKinds.set(id, getDateFormatKind(code));
+                if (id && code !== null) { numFmtKinds.set(id, getDateFormatKind(code)); numFmtCodes.set(id, code); }
             }
         }
 
@@ -453,6 +584,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     ? numFmtKinds.get(numFmtId)
                     : BUILTIN_DATE_FORMATS.get(numFmtId);
                 if (dateFormatKind) cellDateFormatMap[i] = dateFormatKind;
+                const formatCode = numFmtCodes.get(numFmtId);
+                if (formatCode !== undefined) cellNumberFormatMap[i] = formatCode;
+                else if (BUILTIN_OTHER_FORMATS.has(numFmtId)) cellBuiltinFormatMap[i] = BUILTIN_OTHER_FORMATS.get(numFmtId)!;
 
                 const fontId = xf.getAttribute("fontId");
                 if (fontId) {
@@ -626,6 +760,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     // Parse workbook.xml to get sheet names and map them to sheet files
     // Null-prototype, as every map keyed by the document's own names and ids is here.
     const sheetNameMap: Record<string, string> = Object.create(null);
+    // The sheets the workbook hides (`state="hidden"` or `"veryHidden"`), by file.
+    const hiddenSheets = new Set<string>();
     const workbookRelsFile = files.find(f => f.path === 'xl/_rels/workbook.xml.rels');
 
     if (workbookRelsFile) {
@@ -654,6 +790,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             const rId = sheet.getAttribute("r:id");
             if (name && rId && rIdToFile[rId]) {
                 sheetNameMap[rIdToFile[rId]] = name;
+                const state = sheet.getAttribute("state");
+                if (state === 'hidden' || state === 'veryHidden') hiddenSheets.add(rIdToFile[rId]);
             }
         }
     }
@@ -685,6 +823,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             // Null-prototype: keyed by the document-derived cell ref, so a crafted ref of `__proto__`
             // creates an own entry instead of throwing on `Object.prototype.push`.
             const sheetCommentsMap: Record<string, OfficeContentNode[]> = Object.create(null);
+            // The sheet's hyperlinks' targets by relationship id (see cellLinks).
+            const hyperlinkTargets = new Map<string, string>();
 
             if (relsFile) {
                 const relsXml = parseXmlString(relsFile.content.toString(), { config });
@@ -695,7 +835,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     const type = rel.getAttribute("Type");
                     
                     if (id && target && type) {
-                        if (config.extractAttachments && type.includes('drawing')) {
+                        if (type.endsWith('/hyperlink')) hyperlinkTargets.set(id, target);
+                        else if (config.extractAttachments && type.includes('drawing')) {
                             drawingMap[id] = 'xl/drawings/' + target.replace('../drawings/', '');
                         } else if (!config.ignoreComments && type.includes('comments')) {
                             const commentsPath = 'xl/' + target.replace('../', '');
@@ -736,6 +877,14 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             // The <row> elements as they stand, rather than a walk over the (possibly vast, sparse)
             // row range the sheet's dimensions declare.
             const rowElements = xmlElements(sheetXml, 'row');
+            // Hidden columns and rows are read, and marked (CellMetadata.hidden): a printout leaves them
+            // out, as the PDF writer does, and every other output keeps them as data.
+            const hiddenColumns = hiddenColumnRanges(sheetXml);
+            // Merged ranges, as the spans of their first cells: a merged title was one narrow cell.
+            const merged = mergeSpans(sheetXml);
+            // Its cells' hyperlinks (a web or mail address, or a place in the workbook), by `row:col`.
+            const links = cellLinks(sheetXml, hyperlinkTargets);
+            const columnHidden = inRanges(hiddenColumns);
 
             /** Helper to convert Excel column string (A, B, AA, etc.) to 0-based index */
             const colToNumber = (col: string): number => {
@@ -766,6 +915,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                 // The row's <c> (cell) elements: attributes (r="A1", t="s") and content (<v>, <is>).
                 const cellElements = xmlElements(rowContent, 'c');
 
+                const rowHidden = isTrue(attributeNamed(rowAttrs, 'hidden'));
                 const rMatch = rowAttrs.match(/r="(\d+)"/);
                 const rowIndex = rMatch ? parseInt(rMatch[1]) - 1 : lastRowIndex + 1;
                 lastRowIndex = rowIndex;
@@ -796,6 +946,12 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     const isContent = type === 'inlineStr' ? firstElementContent(cContent, 'is') : undefined;
 
                     let text = '';
+                    // What the sheet shows for a number, through its style's number format, where that
+                    // differs from the value read (see CellMetadata.shownText).
+                    let shownText: string | undefined;
+                    // The kind of value it holds, and the value where the text is another (see CellMetadata.valueType).
+                    let valueType: CellMetadata['valueType'] = type === 's' || type === 'inlineStr' || type === 'str' ? 'text' : type === 'e' ? 'error' : undefined;
+                    let value: string | undefined, numberFormat: string | undefined;
                     let cellNodes: OfficeContentNode[] = [];
 
                     // Shared rich-text runs, merged with this cell's style below (the runs themselves are shared).
@@ -836,11 +992,39 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     } else if (type === 'b' && vContent !== undefined) {
                         // A boolean is stored as 1 or 0 and shown as TRUE or FALSE.
                         text = vContent.trim() === '1' ? 'TRUE' : vContent.trim() === '0' ? 'FALSE' : vContent.trim();
+                        if (text === 'TRUE' || text === 'FALSE') { valueType = 'boolean'; value = text === 'TRUE' ? 'true' : 'false'; } else valueType = 'text';
                     } else if (vContent !== undefined) {
                         text = vContent.trim();
                         // A number in a date or time style is a day count: show the date or time instead
                         const dateFormatKind = type === 'n' && styleIdx !== undefined ? cellDateFormatMap[styleIdx] : undefined;
-                        if (dateFormatKind) text = formatDateSerial(text, dateFormatKind, date1904) ?? text;
+                        if (dateFormatKind) {
+                            const shown = formatDateSerial(text, dateFormatKind, date1904);
+                            // (A date's day count in the 1900 date system, as a spreadsheet writer holds it: a 1904
+                            // workbook's counts 1,462 days fewer. A time of day on a day (=NOW() shown as a time) is
+                            // a date and time; a time or a duration alone is a count of days of its own, which no
+                            // date system moves.)
+                            if (shown !== undefined) {
+                                const serial = Number(text);
+                                const instant = dateFormatKind === 'date' || dateFormatKind === 'datetime' || (dateFormatKind === 'time' && serial >= 1);
+                                valueType = instant ? 'date' : 'time';
+                                value = String(instant && date1904 ? serial + 1462 : serial);
+                                text = shown;
+                            }
+                        }
+                        if (type === 'd') {
+                            // An ISO date cell (`t="d"`): its day count from the date.
+                            const at = Date.parse(/[zZ]|[+-]\d{2}:?\d{2}$/.test(text) ? text : `${text}${text.includes('T') ? 'Z' : 'T00:00:00Z'}`);
+                            if (Number.isFinite(at)) { valueType = 'date'; value = String((at - Date.UTC(1899, 11, 30)) / 86_400_000); } else valueType = 'text';
+                        } else if (!valueType) valueType = type === 'n' && Number.isFinite(Number(text)) && text !== '' ? 'number' : 'text';
+                        const formatCode = type === 'n' && styleIdx !== undefined ? cellNumberFormatMap[styleIdx] : undefined;
+                        // (Its format as Excel writes it, for a spreadsheet writer to keep, a built-in one's too; Excel
+                        // holds 255 characters of one.)
+                        const keptCode = formatCode ?? (type === 'n' && styleIdx !== undefined ? cellBuiltinFormatMap[styleIdx] : undefined);
+                        if (keptCode !== undefined && keptCode.trim() && keptCode !== 'General' && keptCode.length <= 255) numberFormat = keptCode;
+                        if (formatCode !== undefined) {
+                            const shown = excelShownText(vContent.trim(), formatCode, date1904);
+                            if (shown !== undefined && shown !== text) shownText = shown;
+                        }
                     }
 
                     // Parse cell coordinate
@@ -886,14 +1070,28 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                             });
                         }
 
+                        // The cell's hyperlink on its runs, as a document's links are on theirs.
+                        const link = links.get(`${rowIndex}:${colIndex}`);
+                        if (link) cellNodes = cellNodes.map(run => run.type === 'text' ? { ...run, metadata: { ...(run.metadata as TextMetadata | undefined), ...link } as TextMetadata } : run);
+
                         const commentsNodeList = (ref && sheetCommentsMap[ref]) ? sheetCommentsMap[ref] : undefined;
 
+                        const span = merged.get(`${rowIndex}:${colIndex}`);
                         const cellNode: OfficeContentNode = {
                             type: 'cell',
                             text: text,
                             children: cellNodes,
                             comments: commentsNodeList,
-                            metadata: { row: rowIndex, col: colIndex }
+                            metadata: {
+                                row: rowIndex, col: colIndex,
+                                ...(span && span.colSpan > 1 ? { colSpan: span.colSpan } : {}),
+                                ...(span && span.rowSpan > 1 ? { rowSpan: span.rowSpan } : {}),
+                                ...(shownText !== undefined ? { shownText } : {}),
+                                ...(valueType ? { valueType } : {}),
+                                ...(value !== undefined ? { value } : {}),
+                                ...(numberFormat !== undefined ? { numberFormat } : {}),
+                                ...(rowHidden || columnHidden(colIndex) ? { hidden: true } : {}),
+                            }
                         };
                         if (config.includeRawContent) {
                             cellNode.rawContent = chargeRawContent(cXml, config);
@@ -906,7 +1104,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     const rowNode: OfficeContentNode = {
                         type: 'row',
                         children: cells,
-                        metadata: undefined
+                        metadata: rowHidden ? { hidden: true } : undefined
                     };
                     if (config.includeRawContent) {
                         rowNode.rawContent = chargeRawContent(rowXml, config);
@@ -979,10 +1177,11 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             const sheetFileName = file.path.split('/').pop() || 'Sheet';
             const sheetName = sheetNameMap[sheetFileName] || sheetFileName;
 
+            const pageSetup = config.ignorePageGeometry ? undefined : sheetPageSetup(sheetXml);
             content.push({
                 type: 'sheet',
                 children: rows,
-                metadata: { sheetName },
+                metadata: { sheetName, ...(hiddenSheets.has(sheetFileName) ? { hidden: true } : {}), ...(pageSetup ? { pageSetup } : {}) },
                 rawContent: config.includeRawContent ? chargeRawContent(file.content.toString(), config) : undefined
             });
         }

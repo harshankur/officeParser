@@ -481,28 +481,28 @@
     }
   },
   {
-    "text": "Two",
+    "text": "1.1. Two",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Multi-level Lists"
     }
   },
   {
-    "text": "Three",
+    "text": "1.1.1. Three",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Multi-level Lists"
     }
   },
   {
-    "text": "Four with a very long line to demonstrate that the hanging indent for the list is working correctly.",
+    "text": "1.1.2. Four with a very long line to demonstrate that the hanging indent for the list is working correctly.",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Multi-level Lists"
     }
   },
   {
-    "text": "Five",
+    "text": "1.1.3. Five",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Multi-level Lists"
@@ -565,14 +565,14 @@
     }
   },
   {
-    "text": "One",
+    "text": "i. One",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Continued Lists"
     }
   },
   {
-    "text": "Two",
+    "text": "ii. Two",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Continued Lists"
@@ -586,14 +586,14 @@
     }
   },
   {
-    "text": "We now resume our normal programming",
+    "text": "iii. We now resume our normal programming",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Continued Lists"
     }
   },
   {
-    "text": "Four",
+    "text": "iv. Four",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Continued Lists"

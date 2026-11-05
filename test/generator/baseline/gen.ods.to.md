@@ -30,15 +30,15 @@ TestBool: true
 
 | Text Formatting  |
 | --- |
-| Inline formatting  |
+| **Inline formatting**  |
 | Here, we demonstrate various types of inline text formatting and the use of embedded fonts.  |
 | Here is some **bold,** *italic,* ***bold-italic,*** <u>underlined </u>and ~~struck out~~  text. Then, we have a superscript and a subscript. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in  |
 | inverse video |
 | . |
 | A paragraph with styled text: *subtle emphasis*  followed by **strong text** and ***intense emphasis***. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.  |
-| Fun with fonts  |
+| **Fun with fonts**  |
 | This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m. Every embedded font will automatically be embedded in the output ebook during conversion.   |
-| Paragraph level formatting  |
+| **Paragraph level formatting**  |
 | You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.  |
 | For the lovers of poetry amongst you, paragraphs with hanging indents, like this often<br>come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph.  |
 
@@ -46,7 +46,7 @@ TestBool: true
 
 | Tables  |  |  |  |  |  |
 | --- | --- | --- | --- | --- | --- |
-| ITEM  | NEEDED  |  |  |  |  |
+| **ITEM**  | **NEEDED**  |  |  |  |  |
 | Books  | 1  |  |  |  |  |
 | Pens  | 3  |  |  |  |  |
 | Pencils  | 2  |  |  |  |  |
@@ -65,15 +65,15 @@ TestBool: true
 
 | Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved.  |  |  |  |
 | --- | --- | --- | --- |
-| College  | New students  | Graduating students  | Change  |
-|  | Undergraduate  |  |  |
+| **College**  | **New students**  | **Graduating students**  | **Change**  |
+|  | *Undergraduate*  |  |  |
 | Cedar University  | 110  | 103  | +7  |
 | Oak Institute  | 202  | 210  | -8  |
-|  | Graduate  |  |  |
+|  | *Graduate*  |  |  |
 | Cedar University  | 24  | 20  | +4  |
 | Elm College  | 43  | 53  | -10  |
 | Total  | 998  | 908  | 90  |
-| Source: Fictitious data, for illustration purposes only  |  |  |  |
+| *Source:* Fictitious data, for illustration purposes only  |  |  |  |
 | Next, we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged. The table is displayed horizontally centered.  |  |  |  |
 | One  | Two  | To the left is a table inside a table, with some cells merged.  |  |
 | Three  |  |  |  |
@@ -276,12 +276,12 @@ TestBool: true
 | Structural Elements  |
 | --- |
 | Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like.   |
-| Footnotes & Endnotes  |
+| **Footnotes & Endnotes**  |
 | Footnotes1 and endnotesi are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.  |
-| Dropcaps  |
+| **Dropcaps**  |
 | D  |
 | rop caps are used to emphasize the leading paragraph at the start of a section. In Word it is possible to specify how many lines of text a drop-cap should use.  |
-| Links  |
+| **Links**  |
 | Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the <u>calibre download page</u>. Then we have a link that points back to the section on <u>paragraph level formatting</u> in this document.  |
 
 ---
@@ -297,13 +297,13 @@ TestBool: true
 | Lists  |  |
 | --- | --- |
 | All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets.  |  |
-| Bulleted List  |  |
+| **Bulleted List**  |  |
 | One  |  |
 | Two  |  |
-| Numbered List  |  |
+| **Numbered List**  |  |
 | 1 | One, with a very long line to demonstrate that the hanging indent for the list is working correctly  |
 | 2 | Two  |
-| Multi-level Lists  |  |
+| **Multi-level Lists**  |  |
 | 1 | One  |
 | 1 | Two  |
 | 1 | Three  |
@@ -316,7 +316,7 @@ TestBool: true
 | This bullet uses an image as the bullet item  |  |
 | Four  |  |
 | Five  |  |
-| Continued Lists  |  |
+| **Continued Lists**  |  |
 | i | One  |
 | ii | Two  |
 | An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.  |  |

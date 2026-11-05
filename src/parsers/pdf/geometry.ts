@@ -35,15 +35,29 @@ export function toMatrix6(m: any): number[] | null {
     return [+m[0], +m[1], +m[2], +m[3], +m[4], +m[5]];
 }
 
+/**
+ * The matrix an annotation's appearance is drawn under, from `beginAnnotation`'s operands (its id, its
+ * rectangle, the matrix placing its appearance in that rectangle, and its rotation's): pdf.js draws it
+ * from the page's own space, whatever the page's content left in force. Read as the page's content,
+ * a widget's box and a stamp's picture were drawn at the page's corner.
+ */
+export function annotationMatrix(args: any): number[] {
+    let m = identityMatrix();
+    for (const part of [toMatrix6(args?.[2]), toMatrix6(args?.[3])]) if (part && part.every(Number.isFinite)) m = mulMatrix(m, part);
+    return m;
+}
+
 /** Rounds to 2 decimals, collapsing -0 to 0. */
 export function round2(n: number): number {
     const r = Math.round(n * 100) / 100;
     return r === 0 ? 0 : r;
 }
 
-/** Returns a copy of the box with all fields rounded to 2 decimals. */
+/** Returns a copy of the box with all fields rounded to 2 decimals (its baseline too, where it has one). */
 export function roundBounds(b: NodeBounds): NodeBounds {
-    return { x: round2(b.x), y: round2(b.y), width: round2(b.width), height: round2(b.height) };
+    const out: NodeBounds = { x: round2(b.x), y: round2(b.y), width: round2(b.width), height: round2(b.height) };
+    if (b.baseline !== undefined && Number.isFinite(b.baseline)) out.baseline = round2(b.baseline);
+    return out;
 }
 
 /** Smallest box containing both inputs. */
@@ -55,23 +69,28 @@ export function unionBounds(a: NodeBounds, b: NodeBounds): NodeBounds {
     return { x, y, width: right - x, height: bottom - y };
 }
 
-/** Smallest box containing every input, or undefined for an empty list. */
+/** Smallest box containing every input, or undefined for an empty list (a box of boxes: no baseline, see NodeBounds). */
 export function unionAll(boxes: (NodeBounds | undefined)[]): NodeBounds | undefined {
     let acc: NodeBounds | undefined;
     for (const b of boxes) {
         if (!b) continue;
-        acc = acc ? unionBounds(acc, b) : b;
+        acc = acc ? unionBounds(acc, b) : { x: b.x, y: b.y, width: b.width, height: b.height };
     }
     return acc;
 }
 
-/** Snaps an angle in radians to the nearest quarter turn when within ~0.5 degrees, else -1. */
+/**
+ * Snaps an angle in radians to the nearest quarter turn when within ~0.5 degrees, else -1; text within
+ * 15 degrees of level (a scan's skewed text layer, a stamp's slight tilt) is level text, read in its
+ * lines: read apart as turned text, it was taken out of the paragraphs it is part of.
+ */
 export function snapAngle(radians: number): RunAngle | -1 {
     let deg = (radians * 180) / Math.PI;
     deg = ((deg % 360) + 360) % 360;
     for (const cand of [0, 90, 180, 270] as const) {
         if (Math.abs(deg - cand) <= 0.5 || Math.abs(deg - (cand + 360)) <= 0.5) return cand;
     }
+    if (deg <= 15 || deg >= 345) return 0;
     return -1;
 }
 
@@ -95,11 +114,17 @@ export interface RunBox {
  * @param descent - font descent as a fraction of font size (negative)
  */
 export function computeRunBox(m: number[], itemWidth: number, ascent: number, descent: number): RunBox {
+    // Numbers a box can be made of: a font's metrics and an advance that are none (NaN, infinities) are a
+    // font's usual ones and no advance.
+    if (!Number.isFinite(ascent) || ascent <= 0) ascent = 0.8;
+    if (!Number.isFinite(descent) || descent > 0) descent = -0.2;
+    if (!Number.isFinite(itemWidth) || itemWidth < 0) itemWidth = 0;
     // Clamp to a sane maximum: the size comes from the document's own (untrusted) text matrix, and a
     // pathological `Tf`/scale can make `hypot(m2,m3)` astronomically large, which would then drive a
     // huge box height and, via the color lookup's y-window, an unbounded loop. No real font is anywhere
     // near this cap, so clamping never affects a genuine document.
-    const fontSize = Math.min(Math.hypot(m[2], m[3]) || Math.abs(m[3]) || 12, MAX_FONT_SIZE_PT);
+    const size = Math.hypot(m[2], m[3]) || Math.abs(m[3]);
+    const fontSize = Math.min(Number.isFinite(size) && size > 0 ? size : 12, MAX_FONT_SIZE_PT);
     const angle = snapAngle(Math.atan2(m[1], m[0]));
     const originX = m[4];
     const yBaseline = m[5];
@@ -129,7 +154,8 @@ export function computeRunBox(m: number[], itemWidth: number, ascent: number, de
 /**
  * Maps a box from authored (rotation-0) page space into the page's rendered space for a given
  * `/Rotate`. Reading order is computed in authored space; this is applied only at emit time so the
- * public `NodeBounds` match what pdf.js renders. For rotation 0 it is the identity.
+ * public `NodeBounds` match what pdf.js renders. For rotation 0 it is the identity; on a turned page the
+ * box keeps no baseline (its text is turned on the page as it is seen, see NodeBounds.baseline).
  *
  * @param authoredW - authored page width (rotation-0 viewport width)
  * @param authoredH - authored page height

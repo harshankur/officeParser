@@ -306,7 +306,7 @@ const { value: chunks } = await ast.to('chunks');</code></pre>
         <code>rowSpan</code> and <code>colSpan</code> worked out from <code>vMerge</code> and
         <code>gridSpan</code>. A cell can hold another table.</li>
     <li><strong>Text boxes, content controls, and SmartArt</strong> are read where they stand, after the
-        paragraph that draws them. Of the two copies in an <code>AlternateContent</code>, one is read.</li>
+        paragraph that draws them<ins data-revision="floating-box">, but a floating text box comes just before it, so a writer can place the box first</ins>. Of the two copies in an <code>AlternateContent</code>, one is read.</li>
     <li><strong>Headings</strong> come from the paragraph style (<code>Heading1</code>,
         <code>Title</code>, and so on).</li>
     <li><strong>Tracked changes:</strong> inserted text is read, text deleted or moved away is not.</li>

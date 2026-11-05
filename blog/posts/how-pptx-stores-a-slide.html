@@ -223,7 +223,7 @@ const { value: markdown } = await ast.to('markdown');</code></pre>
         whose shape tree is out of visual order comes out in that order.
     </p>
     <p>
-        <strong>Inherited formatting is not resolved.</strong> Formatting comes from the slide's own XML.
-        A font size or colour that a slide inherits from its layout, master, or theme is not filled in.
+        <del data-revision="inherited-sizes"><strong>Inherited formatting is not resolved.</strong> Formatting comes from the slide's own XML.
+        A font size or colour that a slide inherits from its layout, master, or theme is not filled in.</del><ins data-revision="inherited-sizes"><strong>Inherited formatting is resolved only in part.</strong> A font size or colour that a slide inherits from its layout, master, or theme is filled in, but other formatting, such as the font family, comes from the slide's own XML.</ins>
     </p>
 </div>

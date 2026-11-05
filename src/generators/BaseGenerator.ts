@@ -1,7 +1,7 @@
 import { ChartData, OfficeAttachment, OfficeIssue, ConversionResult, FullGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, StructuredStyleMapping, UniversalGeneratorFormat } from '../types.js';
 import { resolveGeneratorConfig } from '../utils/configUtils.js';
 import { checkAbortSignal, getWarningMessage } from '../utils/errorUtils.js';
-import { resolveImageMode } from '../utils/officeGenUtils.js';
+import { forgetFurniture, resolveImageMode } from '../utils/officeGenUtils.js';
 import { StyleMapper } from '../utils/styleMapper.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { gridPositionsFor } from '../utils/sheetGridUtils.js';
@@ -37,7 +37,7 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
      * (see padWithinBudget) and at most MAX_CHART_TABLE_CELLS cells: at most MAX_LAYOUT_COLUMNS - 1 series,
      * and the rows those hold. What is left out is reported (CONTENT_NOT_REPRESENTABLE).
      */
-    protected chartTable(data: ChartData, cellOf: (text: string) => OfficeContentNode): OfficeContentNode {
+    protected chartTable(data: ChartData, cellOf: (text: string) => OfficeContentNode, caption = false): OfficeContentNode {
         const dataSets = Array.isArray(data.dataSets) ? data.dataSets : [];
         const labels = Array.isArray(data.labels) ? data.labels : [];
         const series = dataSets.slice(0, MAX_LAYOUT_COLUMNS - 1);
@@ -48,6 +48,13 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
             this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'chart data past the table limit', format: this.destination });
         }
         const rows: OfficeContentNode[] = [];
+        // Its title, where asked (a writer that writes no title of its own beside the table): a row across it.
+        const title = caption && typeof data.title === 'string' ? data.title.trim() : '';
+        if (title) {
+            const cell = cellOf(title);
+            cell.metadata = { ...(cell.metadata ?? {}), colSpan: width, style: 'header' } as OfficeContentNode['metadata'];
+            rows.push({ type: 'row', children: [cell] } as OfficeContentNode);
+        }
         if (allowed > 0) rows.push({ type: 'row', children: [cellOf(''), ...series.map(d => cellOf(d?.name || ''))] } as OfficeContentNode);
         for (let i = 0; i < allowed - 1; i++) {
             rows.push({ type: 'row', children: [cellOf(String(labels[i] ?? '')), ...series.map(d => cellOf(String(d?.values?.[i] ?? '')))] } as OfficeContentNode);
@@ -138,6 +145,8 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
         // Problems with the configuration itself are among the result's messages too.
         this.config = resolveGeneratorConfig(destination, ast.config, config, issue => this.messages.push(issue));
         this.ast = ast;
+        // (A header list edited in place since the last generation is read afresh.)
+        forgetFurniture(ast.auxiliary?.headers, ast.auxiliary?.footers);
         this.styleMapper = new StyleMapper(this.config.styleMap, this.config.ignoreDefaultStyleMap, this.config);
         this.paddingCellsLeft = this.paddingLimit = gridPositionsFor(ast);
     }
@@ -299,6 +308,9 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
 
         if (override === false) return '';
         if (typeof override === 'string') return override;
+        // A shape drawn on a slide (ShapeMetadata) writes nothing: its text is in the nodes after it. (One
+        // holding nodes, as a drawing could before, writes them.)
+        if (node.type === 'drawing' && !node.children?.length) return '';
 
         let childrenOutput = '';
         if (node.children && !this.walkedByProcessor(node)) {

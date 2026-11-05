@@ -9,6 +9,7 @@
   \usepackage[utf8]{inputenc}
   \usepackage{lmodern}
 \fi
+\usepackage{amsmath,amssymb}
 \usepackage{newunicodechar}
 \usepackage{array,multirow}
 \usepackage[normalem]{ulem}
@@ -37,8 +38,12 @@
 \definecolor{hexFFFFFF}{HTML}{FFFFFF}
 \iftutex
   \newunicodechar{ }{\quad}
+  \newunicodechar{▪}{\ensuremath{\blacksquare}}
+  \newunicodechar{○}{\ensuremath{\circ}}
 \else
   \DeclareUnicodeCharacter{2003}{\quad}
+  \DeclareUnicodeCharacter{25AA}{\ensuremath{\blacksquare}}
+  \DeclareUnicodeCharacter{25CB}{\ensuremath{\circ}}
 \fi
 
 % The images, carried in this file: each block writes one, as a small PDF, beside the .tex when it
@@ -491,7 +496,7 @@ Three~} & Two~ \\
 
 \begin{frame}[allowframebreaks]
 \relax
-\textcolor{hex000000}{ We~end~with a~fancy~calendar, note how~much of the original formatting is preserved.~Note that this table will only display correctly on~relatively wide~screens. In general, very wide tables or tables whose cells have fixed width requirements~don’t~fare well in~ebooks.}
+{\leftskip=18bp\hangindent=18bp\hangafter=1 \textcolor{hex000000}{ We~end~with a~fancy~calendar, note how~much of the original formatting is preserved.~Note that this table will only display correctly on~relatively wide~screens. In general, very wide tables or tables whose cells have fixed width requirements~don’t~fare well in~ebooks.}\par}
 
 {\scriptsize\setlength{\tabcolsep}{2pt}
 \begin{tabular}{|*{14}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)/14\relax}|}}
@@ -539,29 +544,29 @@ Three~} & Two~ \\
 \begin{frame}[allowframebreaks]
 \frametitle{\protect\textcolor{hex365F91}{Structural Elements}}
 \phantomsection\label{structural-elements}
-\textcolor{hex000000}{Miscellaneous structural elements you can add to your document, like footnotes, endnotes,~dropcaps~and the like.~}
+{\leftskip=18bp\hangindent=18bp\hangafter=1 \textcolor{hex000000}{Miscellaneous structural elements you can add to your document, like footnotes, endnotes,~dropcaps~and the like.~}\par}
 
-\textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Footnotes \& Endnotes}}}
+{\leftskip=18bp\hangindent=18bp\hangafter=1 \textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Footnotes \& Endnotes}}}\par}
 
-\textcolor{hex000000}{Footnotes1~and endnotesi~are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in~ebook~devices.}
+{\leftskip=18bp\hangindent=18bp\hangafter=1 \textcolor{hex000000}{Footnotes1~and endnotesi~are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in~ebook~devices.}\par}
 
-\textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Dropcaps}}}
+{\leftskip=18bp\hangindent=18bp\hangafter=1 \textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Dropcaps}}}\par}
 
-\textcolor{hex000000}{{\fontsize{59pt}{70.8pt}\selectfont D}}
+{\leftskip=18bp\hangindent=18bp\hangafter=1 \textcolor{hex000000}{{\fontsize{59pt}{70.8pt}\selectfont D}}\par}
 
-\textcolor{hex000000}{rop~caps are used to emphasize the leading paragraph at the start of a section. In~Word~it is possible to specify how many lines of text a drop-cap should use. }
+{\leftskip=18bp\hangindent=18bp\hangafter=1 \textcolor{hex000000}{rop~caps are used to emphasize the leading paragraph at the start of a section. In~Word~it is possible to specify how many lines of text a drop-cap should use. }\par}
 
-\textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Links}}}
+{\leftskip=18bp\hangindent=18bp\hangafter=1 \textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Links}}}\par}
 
-\textcolor{hex000000}{Two kinds of links are possible, those that refer to an external~website~and those that refer to~locations~inside the document itself. Both are supported by~calibre. For example, here is a link pointing to the~}\href{http://calibre-ebook.com/download}{\textcolor{hex000000}{\uline{calibre download page}}}\textcolor{hex000000}{.~Then we have a link that points back to the section on~}\textcolor{hex000000}{\uline{paragraph level formatting}}\textcolor{hex000000}{~in this document.}
+{\leftskip=18bp\hangindent=18bp\hangafter=1 \textcolor{hex000000}{Two kinds of links are possible, those that refer to an external~website~and those that refer to~locations~inside the document itself. Both are supported by~calibre. For example, here is a link pointing to the~}\href{http://calibre-ebook.com/download}{\textcolor{hex000000}{\uline{calibre download page}}}\textcolor{hex000000}{.~Then we have a link that points back to the section on~}\textcolor{hex000000}{\uline{paragraph level formatting}}\textcolor{hex000000}{~in this document.}\par}
 \end{frame}
 
 \begin{frame}[allowframebreaks]
 \frametitle{\protect\textcolor{hex365F91}{Images}}
 \phantomsection\label{images}
-\textcolor{hex000000}{Centered images like this are useful for large pictures that should be a focus of attention.~}
+{\leftskip=18bp\hangindent=18bp\hangafter=1 \textcolor{hex000000}{Centered images like this are useful for large pictures that should be a focus of attention.~}\par}
 
-\includegraphics[bb=0 0 810 810,width={\ifdim 810bp>\linewidth\linewidth\else 810bp\fi},height={\ifdim 810bp>0.75\textheight0.75\textheight\else 810bp\fi},keepaspectratio,alt={165 Inspirational Quotes To Keep You Motivated In Life}]{image7-1087d9ea.pdf}
+\includegraphics[bb=0 0 810 810,width={\ifdim 281.46bp>\linewidth\linewidth\else 281.46bp\fi},height={\ifdim 283.9bp>0.75\textheight0.75\textheight\else 283.9bp\fi},keepaspectratio,alt={165 Inspirational Quotes To Keep You Motivated In Life}]{image7-1087d9ea.pdf}
 
 \textcolor{hex000000}{There is no analogous technology in~ebooks, so~theconversion~will usually end up placingthe image either centered or floating close to the point in the text where itwas~}\textcolor{hex808080}{\textit{inserted}}\textcolor{hex000000}{,~notnecessarily~where it appears on the page in Word.}
 \end{frame}
@@ -570,9 +575,9 @@ Three~} & Two~ \\
 \relax
 {\centering \textcolor{hex365F91}{\textbf{{\fontsize{14pt}{16.8pt}\selectfont Lists}}}\par}
 
-\textcolor{hex365F91}{All types of lists are supported by the conversion,~with the exception of~lists that use fancy~bullets,~these get converted to regular bullets.}
+{\leftskip=18bp\hangindent=18bp\hangafter=1 \textcolor{hex365F91}{All types of lists are supported by the conversion,~with the exception of~lists that use fancy~bullets,~these get converted to regular bullets.}\par}
 
-\textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Bulleted List}}}
+{\leftskip=18bp\hangindent=18bp\hangafter=1 \textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Bulleted List}}}\par}
 
 \begin{itemize}
 \item \textcolor{hex000000}{One}
@@ -604,30 +609,30 @@ Three~} & Two~ \\
 \textcolor{hex000000}{A~Multi-level~list with bullets:}
 
 \begin{itemize}
-\item \textcolor{hex000000}{One}
+\item[{▪}] \textcolor{hex000000}{One}
 \begin{itemize}
 \item \textcolor{hex000000}{Two}
 \begin{itemize}
 \item \textcolor{hex000000}{This bullet uses an image as the bullet item}
-\item \textcolor{hex000000}{Four}
+\item[{○}] \textcolor{hex000000}{Four}
 \end{itemize}
 \end{itemize}
-\item \textcolor{hex000000}{Five}
+\item[{▪}] \textcolor{hex000000}{Five}
 \end{itemize}
 
 \textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Continued Lists}}}
 
 \begin{enumerate}
-\item \textcolor{hex000000}{One}
-\item \textcolor{hex000000}{Two}
+\item[{i.}] \textcolor{hex000000}{One}
+\item[{ii.}] \textcolor{hex000000}{Two}
 \end{enumerate}
 
 \textcolor{hex000000}{An interruption in our regularly scheduled listing, for this essential and~very relevant~public service announcement.}
 
 \begin{enumerate}
 \setcounter{enumi}{2}
-\item \textcolor{hex000000}{We now resume our normal programming}
-\item \textcolor{hex000000}{Four}
+\item[{iii.}] \textcolor{hex000000}{We now resume our normal programming}
+\item[{iv.}] \textcolor{hex000000}{Four}
 \end{enumerate}
 \end{frame}
 

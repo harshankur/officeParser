@@ -1,9 +1,12 @@
 import { zipSync, Zippable } from 'fflate';
 import { UniqueNames } from '../utils/uniqueNames.js';
 import { trimEndChars } from '../utils/textUtils.js';
-import { AdmonitionMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TexDocumentClass, TextFormatting, TextMetadata } from '../types.js';
+import type { PageNumberFormat } from '../types.js';
+import { AdmonitionMetadata, BreakMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, PageSetup, OfficeWarningType, ParagraphMetadata, TexDocumentClass, TextFormatting, TextMetadata } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
+import { onDocumentPage } from '../utils/pageLimits.js';
+import { clampInt } from '../utils/numberUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { LatexMathPlan, LatexScripts, LatexUnicodePlan, LISTINGS_LANGUAGES, mathCommandsOf, planLatexMath, planLatexUnicode, withLatexMathMacros } from '../utils/latexUtils.js';
 import { escapeLatex, latexComment, latexSourceComment, sanitizeLatexImagePath, sanitizeLatexMath, sanitizeLatexUrl } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
@@ -167,6 +170,7 @@ type TableSlot =
 interface PackageUse {
     math: boolean; amssymb: boolean; graphics: boolean; tables: boolean; longtable: boolean; multirow: boolean;
     ulem: boolean; xcolor: boolean; colortbl: boolean; listings: boolean; endnotes: boolean; paragraphFix: boolean; captionof: boolean;
+    multicol: boolean; landscape: boolean; lastpage: boolean;
 }
 
 /**
@@ -284,8 +288,61 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
 
     private readonly uses: PackageUse = {
         math: false, amssymb: false, graphics: false, tables: false, longtable: false, multirow: false,
-        ulem: false, xcolor: false, colortbl: false, listings: false, endnotes: false, paragraphFix: false, captionof: false,
+        ulem: false, xcolor: false, colortbl: false, listings: false, endnotes: false, paragraphFix: false, captionof: false, multicol: false, landscape: false, lastpage: false,
     };
+    /** Whether a `landscape` environment (a section turned from the document's pages) is open in the body. */
+    private openLandscape = false;
+
+    /**
+     * A section's pages turned from the document's (a landscape section after portrait ones, or the other way):
+     * its body in a `landscape` environment (pdflscape: turned, its PDF pages shown turned), opened or closed
+     * at its page break; they were every one the document's first page's. A section on paper of another size
+     * is set on the document's, and reported (`geometry` sets one paper for a document).
+     */
+    private orientationSwitch(given: PageSetup | undefined): { close: string; open: string } {
+        // (A section that sets no page is on the document's: an open landscape ends.)
+        const setup = onDocumentPage(given, this.ast.metadata?.pageSetup);
+        const turned = this.turnedOf(setup);
+        if (turned === undefined) return { close: '', open: '' };
+        const cfg = this.config.texConfig;
+        const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup, cfg.margin);
+        const [long, short] = setup?.width && setup.height ? [Math.max(setup.width, setup.height), Math.min(setup.width, setup.height)] : [Math.max(paper.w, paper.h), Math.min(paper.w, paper.h)];
+        if (Math.abs(long - Math.max(paper.w, paper.h)) > 2 || Math.abs(short - Math.min(paper.w, paper.h)) > 2) {
+            this.warnOnce('section-paper', OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'a section on paper of another size (set on the document\'s)', format: 'tex' });
+        }
+        const close = this.openLandscape && !turned ? '\\end{landscape}' : '';
+        const open = turned && !this.openLandscape ? '\\begin{landscape}' : '';
+        if (turned) this.uses.landscape = true;
+        this.openLandscape = turned;
+        return { close, open };
+    }
+    /** Whether a section's pages are turned from the document's (see orientationSwitch), or undefined where none can be. */
+    private turnedOf(given: PageSetup | undefined): boolean | undefined {
+        if (this.beamer || !given) return undefined;
+        const cfg = this.config.texConfig;
+        if (String(cfg.format ?? 'auto').toLowerCase() !== 'auto') return undefined;
+        // (A section that sets no page is on the document's: not turned.)
+        const setup = onDocumentPage(given, this.ast.metadata?.pageSetup);
+        if (!setup?.width || !setup.height) return false;
+        return (setup.width > setup.height) !== resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup, cfg.margin).landscape;
+    }
+
+    /** Whether a `multicols` environment (a section's columns) is open in the body, and its columns. */
+    private openColumns = false;
+    private openColumnsSetup: PageSetup['columns'] | undefined;
+
+    /** Opens a section's columns (`multicols`), closing the open one first; none for one column. */
+    private columnsSwitch(columns: PageSetup['columns'] | undefined): string {
+        // (Each in a group of its own, which keeps its column gap and rule to it.)
+        let out = this.openColumns ? '\\end{multicols}}' : '';
+        this.openColumns = !this.beamer && !!columns && columns.count > 1;
+        this.openColumnsSetup = this.openColumns ? columns : undefined;
+        if (this.openColumns) {
+            this.uses.multicol = true;
+            out += `${out ? '\n' : ''}{\\setlength{\\columnsep}{${fmtPt(columns!.gap)}}${columns!.separator ? '\\setlength{\\columnseprule}{0.4pt}' : ''}\\begin{multicols}{${Math.min(columns!.count, 10)}}`;
+        }
+        return out;
+    }
 
     /** Image files the output refers to by path (written into a bundle); `includable` when `\includegraphics` draws one. */
     private readonly media: { path: string; bytes: Uint8Array; includable: boolean }[] = [];
@@ -364,8 +421,19 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         this.titleNodes = this.findTitleBlock();
         if (this.titleNodes) this.titleFields = await this.renderTitleFields(this.titleNodes);
 
-        const body = this.beamer ? await this.renderBeamerBody(this.ast.content) : await this.renderFlow(this.ast.content);
-        const headerSetup = this.beamer ? this.warnBeamerHeaders() : await this.pageHeaderSetup();
+        // The document's columns, from its first section's page (multicols), closed at its end.
+        const opening = this.beamer ? '' : this.columnsSwitch(this.ast.metadata?.pageSetup?.columns);
+        // The first section's own first page's and even pages' header and footer, from the start.
+        this.firstSectionSwitch = this.beamer ? '' : this.numberingTex(this.ast.metadata?.pageSetup?.pageNumberFormat) + this.pageStartTex(this.ast.metadata?.pageSetup?.pageNumberStart) + this.sectionStyleSwitch(0, this.ast.metadata?.pageSetup);
+        let body = this.beamer ? await this.renderBeamerBody(this.ast.content) : await this.renderFlow(this.ast.content);
+        if (opening) body = `${opening}\n${body}`;
+        if (this.firstSectionSwitch) body = `${this.firstSectionSwitch}\n${body}`;
+        if (this.openColumns) { body += '\n\\end{multicols}}'; this.openColumns = false; }
+        if (this.openLandscape) { body += '\n\\end{landscape}'; this.openLandscape = false; }
+        const running = this.beamer ? this.warnBeamerHeaders() : await this.pageHeaderSetup();
+        // The sections' own page styles, with the running one (fancyhdr loaded for them where it has none).
+        const sectionStyles = this.beamer ? '' : await this.sectionStyleSetup();
+        const headerSetup = [running, sectionStyles].filter(Boolean).join('\n');
         const endnotes = this.uses.endnotes
             ? (this.beamer ? '\\begin{frame}[allowframebreaks]\n\\theendnotes\n\\end{frame}' : '\\theendnotes')
             : '';
@@ -599,7 +667,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                 if (node !== this.titleNodes.title) continue;
                 const override = await this.handleOnNode(node);
                 if (override === false) continue;
-                blocks.push(typeof override === 'string' ? override : `${this.commentsBefore(node)}${this.anchorsFor(node, true)}\\maketitle`);
+                // (A title's page is `plain`: the first section's first page style is set again after it.)
+                blocks.push(typeof override === 'string' ? override : `${this.commentsBefore(node)}${this.anchorsFor(node, true)}\\maketitle${this.firstSectionSwitch.includes('thispagestyle') ? `\\thispagestyle{osec0first}` : ''}`);
                 prevPaginated = null;
                 continue;
             }
@@ -860,6 +929,12 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                 continue;
             }
             const meta = node.metadata as TextMetadata | undefined;
+            if (node.type === 'text' && (meta?.field === 'page' || meta?.field === 'pages') && !this.ctx.moving) {
+                flushRuns();
+                await flushGroup();
+                write(this.pageField(node));
+                continue;
+            }
             if (node.type === 'text' && !meta?.citationKey) {
                 if (meta?.link) {
                     flushRuns();
@@ -925,9 +1000,29 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         const t = (node.metadata as any)?.breakType;
         if (this.ctx.moving) return ' ';
         if (t === 'page') return '\\newpage{}';
-        if (t === 'lastRenderedPage') return '';
+        if (t === 'lastRenderedPage' || t === 'section') return '';
         if (t === 'column' || t === 'thematic') return ' ';
         return LINE_BREAK;
+    }
+
+    /**
+     * A page field (TextMetadata.field) as the number LaTeX prints on the page it is set on: the page's
+     * (`\\thepage`, or in the field's own format where LaTeX has one), or the document's last page's
+     * (`lastpage`), in the field's text's formatting. In a moving argument (a title's bookmark) its text.
+     */
+    private pageField(node: OfficeContentNode): string {
+        const meta = node.metadata as TextMetadata;
+        const raw = node.text || '';
+        let command: string;
+        if (meta.field === 'pages') {
+            this.uses.lastpage = true;
+            // (Starred, as no link: hyperref is loaded.)
+            command = '\\pageref*{LastPage}';
+        } else {
+            const format = meta.fieldFormat;
+            command = format === 'lowerRoman' ? '\\roman{page}' : format === 'upperRoman' ? '\\Roman{page}' : format === 'decimal' ? '\\arabic{page}' : '\\thepage{}';
+        }
+        return this.formatRun(command, raw.trim() ? raw : '0', node.formatting);
     }
 
     private textRun(node: OfficeContentNode): string {
@@ -1213,6 +1308,9 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                 this.uses.math = true;
                 this.uses.amssymb = true;
                 label = meta.checked ? '[$\\boxtimes$]' : '[$\\square$]';
+            } else if (typeof meta?.marker === 'string') {
+                // The document's own marker (`a)`, `iv.`, `◦`), braced so a `]` in it does not end the label.
+                label = `[{${escapeLatex(meta.marker)}}]`;
             }
             const comments = this.commentsBefore(item);
             const anchors = this.anchorsFor(item, true);
@@ -1413,6 +1511,16 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     private async table(node: OfficeContentNode, rowsOverride?: OfficeContentNode[]): Promise<string> {
         const rows = (rowsOverride ?? (node.children || [])).filter(r => r.type === 'row');
         if (rows.length === 0) return '';
+        // In a section's columns a table would be a tabular, which no column or page breaks: one taller
+        // than what is left of a column (a long one, or one of tall rows) ran off the page and its rows
+        // were lost, and how tall a table is cannot be told before TeX sets it. So where a longtable may
+        // stand, the columns close for every table, it runs across the page, and they open again after it.
+        if (this.openColumns && this.ctx.longtable) {
+            const columns = this.openColumnsSetup;
+            const close = this.columnsSwitch(undefined);
+            const table = await this.table(node, rowsOverride);
+            return `${close}\n${table}\n${this.columnsSwitch(columns)}`;
+        }
         this.uses.tables = true;
         const { cols, grid } = this.layoutTable(rows);
         // The row callback runs once per row, however many column bands the row is split over.
@@ -1463,7 +1571,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
 
     /** One `longtable`/`tabular` holding a band of at most {@link MAX_TABLE_BAND_COLUMNS} columns. */
     private async tableBand(rows: OfficeContentNode[], rowOverrides: (string | false | void)[], grid: TableSlot[][], cols: number, firstBand: boolean): Promise<string> {
-        const longtable = this.ctx.longtable;
+        // (multicols takes no longtable: a table in columns is a tabular, as one in a cell is.)
+        const longtable = this.ctx.longtable && !this.openColumns;
         if (longtable) this.uses.longtable = true;
         // Where footnotes are written in place (the body, a longtable's cell), a tabular's notes are
         // marks whose texts it writes after itself; in a tabular within a tabular, the outer one
@@ -1894,6 +2003,35 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
 
     private blockBreak(node: OfficeContentNode): string {
         const t = (node.metadata as any)?.breakType;
+        // Columns change only in the body itself: a section break inside a table cell, a list item or a
+        // note opened a multicols there, which LaTeX cannot set.
+        const body = this.ctx.sections;
+        // A section starting on this page, in its own columns.
+        if (t === 'section') {
+            if (!body) return '';
+            const meta = node.metadata as BreakMetadata | undefined;
+            // (One on pages turned from those before starts on a page of its own, as a word processor sets it.)
+            const turned = this.turnedOf(meta?.pageSetup);
+            if (typeof meta?.section === 'number' && turned !== undefined && turned !== this.openLandscape) return this.blockBreak({ ...node, metadata: { ...meta, breakType: 'page' } } as OfficeContentNode);
+            // (Its own header and footer from the next page on.)
+            const style = !this.beamer && typeof meta?.section === 'number' ? this.sectionStyleSwitch(meta.section, meta.pageSetup, true) : '';
+            // (Its numbering from the next page, as its page style.)
+            // (Defined globally there: \\globaldefs made \\renewcommand's own settings global, \\escapechar among them, which broke every \\write after it.)
+            const numbering = this.beamer ? '' : this.numberingTex(meta?.pageSetup?.pageNumberFormat, true);
+            const numberingNext = numbering ? `\\AddToHookNext{shipout/after}{${numbering}}` : '';
+            return [style, numberingNext, this.columnsSwitch(meta?.pageSetup?.columns)].filter(Boolean).join('\n');
+        }
+        // A section starting on a new page, in its own columns: the columns before end, the page breaks.
+        if (t === 'page' && !this.beamer && body && typeof (node.metadata as BreakMetadata | undefined)?.section === 'number') {
+            const setup = (node.metadata as BreakMetadata).pageSetup;
+            const columnsEnd = this.columnsSwitch(undefined), turn = this.orientationSwitch(setup);
+            return [columnsEnd, turn.close, '\\clearpage', this.numberingTex(setup?.pageNumberFormat), this.pageStartTex(setup?.pageNumberStart), this.sectionStyleSwitch((node.metadata as BreakMetadata).section!, setup), turn.open, this.columnsSwitch(setup?.columns)].filter(Boolean).join('\n');
+        }
+        // A page break in columns: they end on the page, and go on, the same, on the next.
+        if (t === 'page' && !this.beamer && body && this.openColumns) {
+            const columns = this.openColumnsSetup;
+            return [this.columnsSwitch(undefined), '\\clearpage', this.columnsSwitch(columns)].filter(Boolean).join('\n');
+        }
         if (t === 'page') return this.beamer ? '' : '\\clearpage';
         if (t === 'thematic') return '\\begin{center}\\rule{0.5\\linewidth}{0.5pt}\\end{center}';
         return '';
@@ -2061,10 +2199,24 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
 
     // ── page headers & footers ───────────────────────────────────────────────────────────────────
 
-    private pickHeaderFooter(nodes: OfficeContentNode[] | undefined): OfficeContentNode | undefined {
-        if (!nodes || nodes.length === 0) return undefined;
-        return nodes.find(n => (n.metadata as any)?.type === 'default') ?? nodes[0];
+    private pickHeaderFooter(nodes: OfficeContentNode[] | undefined, kind: 'header' | 'footer'): OfficeContentNode | undefined {
+        const picked = runningFurniture(nodes, kind);
+        return picked.length > 1 ? { type: kind, children: picked } as OfficeContentNode : picked[0];
     }
+
+    /** A field's text on the pages its part is on: the first page alone, or the even pages alone. */
+    private onItsPages(text: string, nodes: OfficeContentNode[] | undefined, kind: 'header' | 'footer'): string {
+        const on = furnitureKind(runningFurniture(nodes, kind), kind);
+        // (Every page's where the document has even pages' parts: on odd pages alone, as Word shows a kind with no even part.)
+        return on === 'first' ? `\\ifnum\\value{page}=1 {${text}}\\fi` : on === 'even' || this.facing() ? `\\ifodd\\value{page}${on === 'even' ? '\\else ' : ' '}{${text}}\\fi` : text;
+    }
+
+    /** Whether the document has even pages' parts of their own anywhere (Word's even and odd pages' headers). */
+    private facing(): boolean {
+        return this.facingKnown ??= [...(this.ast.auxiliary?.headers ?? []), ...(this.ast.auxiliary?.footers ?? [])]
+            .some(n => (n.metadata as { type?: string; hidden?: boolean } | undefined)?.type === 'even' && !(n.metadata as { hidden?: boolean } | undefined)?.hidden);
+    }
+    private facingKnown: boolean | undefined;
 
     /** One header/footer's content as the lines of a `fancyhdr` field, plus its horizontal position. */
     private async headerFieldContent(node: OfficeContentNode): Promise<{ text: string; lines: number; position: 'L' | 'C' | 'R' }> {
@@ -2100,14 +2252,121 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             for (const c of n.children || []) await collect(c);
         };
         await this.withCtx({ sections: false, verbatim: false, longtable: false, display: false, notes: 'omit', labels: false, imageMaxHeight: IMAGE_MAX_HEIGHT_HEADER },
-            async () => { for (const c of node.children || []) await collect(c); });
+            async () => {
+                // (Text set straight in the part, not in a paragraph, is one line: a line's runs are its words.)
+                let inline: OfficeContentNode[] = [];
+                const flush = async () => {
+                    const t = inline.length ? (await this.renderInline(inline)).trim() : '';
+                    if (t) lines.push(t);
+                    inline = [];
+                };
+                for (const c of node.children || []) {
+                    if (c.type === 'text') { inline.push(c); continue; }
+                    await flush();
+                    await collect(c);
+                }
+                await flush();
+            });
         return { text: lines.join(' \\\\ '), lines: Math.max(1, lines.length), position: position ?? 'L' };
+    }
+
+    /** The sections whose own headers and footers have a page style of their own (see sectionStyleSwitch), and whether they have a first page's. */
+    private readonly sectionStyles = new Map<number, { every: boolean; first: boolean }>();
+
+    /**
+     * A section's own header and footer from its start: a page style of its own (`\\pagestyle`) where it
+     * has its own every page's or even pages' part, and its first page's (`\\thispagestyle`) where it has
+     * a title page (its own first page's part, or its page's `differentFirstPage`); nothing where it has
+     * neither, which keeps the one before it, as Word gives it. The first section's (section 0) where the
+     * running part is every page's, at the document's start. A section starting on the same page
+     * (`continuous`) takes its style from the next page on (after its page is shipped out), as Word shows
+     * it, and no title page. The styles are set up with the running one (see sectionStyleSetup).
+     */
+    private sectionStyleSwitch(section: number, setup: PageSetup | undefined, continuous = false): string {
+        const lists = { header: this.ast.auxiliary?.headers, footer: this.ast.auxiliary?.footers };
+        // (The first section's first page's and even pages' parts include the running one where it is of that type.)
+        const own = (type: 'default' | 'first' | 'even') => (['header', 'footer'] as const).some(kind => !!(section === 0 && type !== 'default'
+            ? this.partInForce(kind, 0, type) : sectionFurniture(lists[kind], kind, section, type)));
+        const every = (section > 0 && own('default')) || own('even'), first = !continuous && (own('first') || !!setup?.differentFirstPage);
+        if (!every && !first) return '';
+        this.sectionStyles.set(section, { every: every || (this.sectionStyles.get(section)?.every ?? false), first: first || (this.sectionStyles.get(section)?.first ?? false) });
+        // (After the page it starts on is shipped out, globally: an output routine's assignments are its own,
+        // and `\\afterpage` next to multicols never ran.)
+        if (continuous) return `\\AddToHookNext{shipout/after}{{\\globaldefs=1 \\pagestyle{osec${section}}}}`;
+        return `${every ? `\\pagestyle{osec${section}}` : ''}${first ? `\\thispagestyle{osec${section}first}` : ''}`;
+    }
+    /**
+     * How a section numbers its pages, as `\\thepage` (`\\roman{page}`), where it is not what is in force:
+     * the counter goes on, as the document's pages do. A format LaTeX has none of (letters, which `\\alph`
+     * cannot write past 26, words) is in digits, and reported.
+     */
+    /** The number a section's pages start from (see PageSetup.pageNumberStart). */
+    private pageStartTex(start: number | undefined): string {
+        return start === undefined ? '' : `\\setcounter{page}{${clampInt(start, 0, 2_147_483_647, 1)}}`;
+    }
+
+    private numberingTex(format: PageNumberFormat | undefined, global = false): string {
+        if (!format) return '';
+        const command = format === 'decimal' ? 'arabic' : format === 'lowerRoman' ? 'roman' : format === 'upperRoman' ? 'Roman' : undefined;
+        if (!command) this.warnOnce(`numbering:${format}`, OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'tex', feature: `page numbers in ${format} (written in digits)` });
+        const numbering = command ?? 'arabic';
+        if (numbering === this.pageNumbering) return '';
+        this.pageNumbering = numbering;
+        return global ? `\\gdef\\thepage{\\${numbering}{page}}` : `\\renewcommand{\\thepage}{\\${numbering}{page}}`;
+    }
+    /** The `\\thepage` numbering in force. */
+    private pageNumbering = 'arabic';
+    /** The first section's own page style switch (see sectionStyleSwitch), written at the body's start and again after a title on the first page. */
+    private firstSectionSwitch = '';
+
+    /**
+     * A kind's part of a type in force in a section: its own, else the latest section's before it, else the
+     * running one where it is of that type (every page's: the running every-page one).
+     */
+    private partInForce(kind: 'header' | 'footer', section: number, type: 'default' | 'first' | 'even'): OfficeContentNode | undefined {
+        const nodes = kind === 'header' ? this.ast.auxiliary?.headers : this.ast.auxiliary?.footers;
+        if (!nodes?.length) return undefined;
+        const { bySection, sections } = sectionFurnitureIndex(nodes, kind, type);
+        let lo = 0, hi = sections.length - 1, found = -1;
+        while (lo <= hi) { const mid = (lo + hi) >> 1; if (sections[mid] <= section) { found = sections[mid]; lo = mid + 1; } else hi = mid - 1; }
+        if (found >= 0) return bySection.get(found);
+        return furnitureKind(runningFurniture(nodes, kind), kind) === type ? this.pickHeaderFooter(nodes, kind) : undefined;
+    }
+
+    /** The page styles of the sections that have their own headers and footers (`\fancypagestyle`). */
+    private async sectionStyleSetup(): Promise<string> {
+        const out: string[] = [];
+        const field = async (node: OfficeContentNode | undefined) => node ? await this.headerFieldContent(node) : null;
+        for (const [section, own] of this.sectionStyles) {
+            const fields = async (type: 'every' | 'first') => {
+                const parts: string[] = ['\\fancyhf{}'];
+                for (const kind of ['header', 'footer'] as const) {
+                    const lists = kind === 'header' ? this.ast.auxiliary?.headers : this.ast.auxiliary?.footers;
+                    // (A title page shows the first page's part in force, and none of a kind with none, as Word does.)
+                    const every = await field(this.partInForce(kind, section, type === 'first' ? 'first' : 'default'));
+                    const even = type === 'every' ? await field(this.partInForce(kind, section, 'even')) : null;
+                    const command = kind === 'header' ? 'fancyhead' : 'fancyfoot';
+                    // (Even pages' own where the section has them: on the even pages, every page's on the odd ones;
+                    // one field where both are on one side, as a second field there takes the first's place.)
+                    if (even?.text && every?.text && even.position === every.position) parts.push(`\\${command}[${every.position}]{\\ifodd\\value{page} {${every.text}}\\else {${even.text}}\\fi}`);
+                    else {
+                        if (even?.text) parts.push(`\\${command}[${even.position}]{\\ifodd\\value{page}\\else {${even.text}}\\fi}`);
+                        if (every?.text) parts.push(`\\${command}[${every.position}]{${even?.text || (type === 'every' && this.facing()) ? `\\ifodd\\value{page} {${every.text}}\\fi` : every.text}}`);
+                        else if (kind === 'footer' && !even?.text && type === 'every') parts.push('\\fancyfoot[C]{\\thepage}');
+                    }
+                }
+                return parts.join('');
+            };
+            if (own.every) out.push(`\\fancypagestyle{osec${section}}{${await fields('every')}}`);
+            if (own.first) out.push(`\\fancypagestyle{osec${section}first}{${await fields('first')}}`);
+        }
+        return out.join('\n');
     }
 
     /** `fancyhdr` setup reproducing the document's running header and footer, or '' when it has none. */
     private async pageHeaderSetup(): Promise<string> {
-        const header = this.pickHeaderFooter(this.ast.auxiliary?.headers);
-        const footer = this.pickHeaderFooter(this.ast.auxiliary?.footers);
+        const header = this.pickHeaderFooter(this.ast.auxiliary?.headers, 'header');
+        const footer = this.pickHeaderFooter(this.ast.auxiliary?.footers, 'footer');
         if (!header && !footer) return '';
         const head = header ? await this.headerFieldContent(header) : null;
         const foot = footer ? await this.headerFieldContent(footer) : null;
@@ -2118,10 +2377,10 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             '\\renewcommand{\\headrulewidth}{0pt}',
         ];
         if (head?.text) {
-            lines.push(`\\fancyhead[${head.position}]{${head.text}}`);
+            lines.push(`\\fancyhead[${head.position}]{${this.onItsPages(head.text, this.ast.auxiliary?.headers, 'header')}}`);
             lines.push(`\\setlength{\\headheight}{${fmtPt(head.lines * HEADER_LINE_HEIGHT_PT + (/\\includegraphics/.test(head.text) ? HEADER_IMAGE_HEIGHT_PT : 0))}}`);
         }
-        lines.push(foot?.text ? `\\fancyfoot[${foot.position}]{${foot.text}}` : '\\fancyfoot[C]{\\thepage}');
+        lines.push(foot?.text ? `\\fancyfoot[${foot.position}]{${this.onItsPages(foot.text, this.ast.auxiliary?.footers, 'footer')}}` : '\\fancyfoot[C]{\\thepage}');
         // \maketitle and \chapter switch their page to the `plain` style, which would drop the
         // document's running header there; make `plain` the same as the header/footer set up here.
         lines.push('\\fancypagestyle{plain}[fancy]{}');
@@ -2236,7 +2495,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         // A title block in the content is typeset where it stands.
         if (this.titleNodes) return '';
         if (!this.config.renderMetadata || !this.effectiveMetadata.title) return '';
-        return this.beamer ? '\\begin{frame}\n\\titlepage\n\\end{frame}' : '\\maketitle';
+        return this.beamer ? '\\begin{frame}\n\\titlepage\n\\end{frame}' : `\\maketitle${this.firstSectionSwitch.includes('thispagestyle') ? '\\thispagestyle{osec0first}' : ''}`;
     }
 
     /**
@@ -2276,6 +2535,9 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         if (u.listings) lines.push('\\usepackage{listings}');
         if (u.endnotes) lines.push('\\usepackage{endnotes}');
         if (u.captionof) lines.push('\\usepackage{capt-of}');
+        if (u.multicol) lines.push('\\usepackage{multicol}');
+        if (u.landscape) lines.push('\\usepackage{pdflscape}');
+        if (u.lastpage) lines.push('\\usepackage{lastpage}');
         return lines;
     }
 
@@ -2303,14 +2565,12 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             // The page as a person asks `geometry` for it: the paper by its name, and one `margin` when
             // the four are the same (`a4paper,margin=1in`).
             const cfg = this.config.texConfig;
-            const format = (cfg.format || 'a4').toLowerCase();
-            const paper = paperSizePt(format);
-            const named = GEOMETRY_PAPER[format] ?? (paper === paperSizePt(undefined) ? GEOMETRY_PAPER.a4 : undefined);
-            const margin = { top: marginPt(cfg.margin?.top), bottom: marginPt(cfg.margin?.bottom), left: marginPt(cfg.margin?.left), right: marginPt(cfg.margin?.right) };
+            const paper = resolvePaper(cfg.format, cfg.landscape, this.ast.metadata?.pageSetup, cfg.margin);
+            const named = paper.name ? GEOMETRY_PAPER[paper.name] : undefined;
+            const margin = paper.margin;
             const sides = (['top', 'bottom', 'left', 'right'] as const).map(side => `${side}=${pageLength(margin[side])}`);
             const geometry = [
-                ...(named ? [named] : [`paperwidth=${pageLength(paper.w)}`, `paperheight=${pageLength(paper.h)}`]),
-                ...(cfg.landscape ? ['landscape'] : []),
+                ...(named ? [named, ...(paper.landscape ? ['landscape'] : [])] : [`paperwidth=${pageLength(paper.w)}`, `paperheight=${pageLength(paper.h)}`]),
                 ...(new Set(sides.map(side => side.split('=')[1])).size === 1 ? [`margin=${pageLength(margin.top)}`] : sides),
             ];
             lines.push(`\\usepackage[${geometry.join(',')}]{geometry}`);

@@ -34,7 +34,7 @@
                         <p class="card-match" hidden></p>
                     </div>
                     <div class="card-footer">
-                        <span><time datetime="{{published}}">{{dateShort}}</time> · {{minutes}} min read</span>
+                        <span><time datetime="{{published}}">{{dateShort}}</time> · {{minutes}} min read{{#updatedShort}}<span class="card-updated">Updated <time datetime="{{updated}}">{{updatedShort}}</time></span>{{/updatedShort}}</span>
                         <span class="read-more">Read article &rarr;</span>
                     </div>
                 </a>

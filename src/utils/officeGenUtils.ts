@@ -9,9 +9,11 @@
  * @module officeGenUtils
  */
 
-import { EmbedMetadata, ImageMode, OfficeContentNode } from '../types.js';
+import { CellMetadata, EmbedMetadata, HeaderFooterMetadata, ImageMode, OfficeContentNode, OfficeParserAST, PageSetup, ParagraphSpacing, RowMetadata, SheetMetadata } from '../types.js';
 import { cssColorHex } from './colorUtils.js';
+import { escapeXml, stripInvalidXmlChars } from './sanitize.js';
 import { lookupTable } from './lookupUtils.js';
+import { hasPageSize } from './pageLimits.js';
 
 /**
  * Resolves `config.includeImages` - a boolean, a CLI-provided `'true'`/`'false'` string, or an
@@ -119,7 +121,21 @@ export function fillSheetRowGaps(rows: OfficeContentNode[], take: (positions: nu
  * Target with an "unreadable content" dialog. Falls back to the raw string if encoding throws.
  */
 export function encUrl(url: string): string {
-    try { return encodeURI(url); } catch { return url; }
+    // Only what a URL cannot hold is encoded (spaces, quotes, angle brackets, control and non-ASCII
+    // characters, a `%` that starts no escape): an address already encoded (`a%20b`) was encoded again
+    // (`a%2520b`), and opened another address.
+    let out = '';
+    for (let i = 0; i < url.length; i++) {
+        const ch = url[i], code = url.charCodeAt(i);
+        if (ch === '%') { out += /^[0-9a-fA-F]{2}$/.test(url.slice(i + 1, i + 3)) ? '%' : '%25'; continue; }
+        if (code > 0x20 && code < 0x7f && !'"<>\\^`{|}'.includes(ch)) { out += ch; continue; }
+        // A character beyond ASCII as its UTF-8 bytes (a surrogate pair as one character, a lone half as U+FFFD).
+        const pair = code >= 0xd800 && code <= 0xdbff && i + 1 < url.length && url.charCodeAt(i + 1) >= 0xdc00 && url.charCodeAt(i + 1) <= 0xdfff;
+        const whole = pair ? url.slice(i, i + 2) : code >= 0xd800 && code <= 0xdfff ? '�' : ch;
+        if (pair) i++;
+        out += encodeURIComponent(whole);
+    }
+    return out;
 }
 
 /** Decodes a base64 string to raw bytes, cross-env (atob exists in Node 16+ and browsers). */
@@ -184,7 +200,173 @@ export function documentLanguage(metadata: { language?: string; nativeProperties
 }
 
 /** Every {@link PaperFormat} name, lowercased: the page sizes a `format` option accepts. */
-export const PAPER_FORMAT_NAMES: readonly string[] = Object.keys(PAPER_SIZES_PT);
+export const PAPER_FORMAT_NAMES: readonly string[] = [...Object.keys(PAPER_SIZES_PT), 'auto'];
+
+/**
+ * The header or footer a writer with one for the whole document writes (DOCX, ODT, RTF, LaTeX): the
+ * first section's default one, shown, once; else the first shown one. A reader that gives loose blocks
+ * (no header or footer node) gives them all. Every part's and every page's copy were written into the
+ * one header: a Word document's three parts, a PDF's header on each of its pages.
+ */
+export function runningFurniture(nodes: OfficeContentNode[] | undefined, kind: 'header' | 'footer'): OfficeContentNode[] {
+    if (!nodes?.length) return [];
+    // Found once a list (writers ask for it at every section of thousands).
+    let byKind = runningByList.get(nodes);
+    if (!byKind) runningByList.set(nodes, byKind = new Map());
+    const known = byKind.get(kind);
+    if (known) return known;
+    const found = findRunningFurniture(nodes, kind);
+    byKind.set(kind, found);
+    return found;
+}
+const runningByList = new WeakMap<OfficeContentNode[], Map<string, OfficeContentNode[]>>();
+
+/**
+ * The furniture found for these lists forgotten (see runningFurniture, sectionFurnitureIndex): asked
+ * at the start of each generation, so a list edited in place since the last is read afresh.
+ */
+export function forgetFurniture(...lists: (OfficeContentNode[] | undefined)[]): void {
+    for (const nodes of lists) if (nodes) { runningByList.delete(nodes); furnitureIndexes.delete(nodes); }
+}
+
+function findRunningFurniture(nodes: OfficeContentNode[], kind: 'header' | 'footer'): OfficeContentNode[] {
+    const loose = nodes.filter(n => n.type !== kind);
+    if (loose.length) return loose;
+    const meta = (n: OfficeContentNode) => n.metadata as { type?: string; section?: number; hidden?: boolean; page?: number } | undefined;
+    // One with something in it: an empty default header did not stand for a first page's letterhead.
+    const filled = (n: OfficeContentNode, depth = 0): boolean => !!(n.text || '').trim() || (depth < 8 && (n.children || []).some(c => c.type === 'image' || c.type === 'chart' || filled(c, depth + 1)));
+    const shown = nodes.filter(n => !meta(n)?.hidden && filled(n));
+    const first = shown.filter(n => (meta(n)?.section ?? 0) === 0);
+    // (A document of sections whose first has none of its own has none on its first pages: a later
+    // section's is that section's, not the first's.)
+    const sectioned = nodes.some(n => typeof meta(n)?.section === 'number' && meta(n)!.section! > 0);
+    const pick = first.find(n => (meta(n)?.type ?? 'default') === 'default') ?? first[0] ?? (sectioned ? undefined : shown[0]);
+    if (!pick) return [];
+    // A header read from a page (a PDF's) is that page's paragraphs, each a node: all of them.
+    const page = meta(pick)?.page;
+    return page === undefined ? [pick] : shown.filter(n => meta(n)?.page === page && (meta(n)?.type ?? 'default') === (meta(pick)?.type ?? 'default'));
+}
+
+/**
+ * A later section's own header or footer (its every-page part, `section` counted from 0, the first
+ * section's being {@link runningFurniture}'s): the part a Word section has of its own, an empty one
+ * included (its pages have none); undefined where the section has none of its own, and takes on the one
+ * before it, as a word processor's section does. A reader that gives loose blocks, or a page's (a
+ * PDF's), gives none.
+ */
+export function sectionFurniture(nodes: OfficeContentNode[] | undefined, kind: 'header' | 'footer', section: number, type: 'default' | 'first' | 'even' = 'default'): OfficeContentNode[] | undefined {
+    if (!nodes?.length || section < (type === 'default' ? 1 : 0)) return undefined;
+    const own = sectionFurnitureIndex(nodes, kind, type).bySection.get(section);
+    return own ? [own] : undefined;
+}
+
+/**
+ * Sections' own parts of a kind and type, by section, and their sections in order: read once a list (see
+ * sectionFurniture). Every-page parts are later sections' (the first section's is runningFurniture's);
+ * a first page's or even pages' are the first section's too, but for the one runningFurniture picked.
+ */
+const furnitureIndexes = new WeakMap<OfficeContentNode[], Map<string, { bySection: Map<number, OfficeContentNode>; sections: number[] }>>();
+export function sectionFurnitureIndex(nodes: OfficeContentNode[], kind: 'header' | 'footer', type: 'default' | 'first' | 'even' = 'default'): { bySection: Map<number, OfficeContentNode>; sections: number[] } {
+    let byKind = furnitureIndexes.get(nodes);
+    if (!byKind) furnitureIndexes.set(nodes, byKind = new Map());
+    let index = byKind.get(`${kind}|${type}`);
+    if (!index) {
+        const bySection = new Map<number, OfficeContentNode>();
+        const linesOfPart = new Map<number, OfficeContentNode[]>();
+        const running = type === 'default' ? undefined : runningFurniture(nodes, kind)[0];
+        for (const n of nodes) {
+            const m = n.metadata as { type?: string; section?: number; hidden?: boolean; page?: number } | undefined;
+            if (n.type !== kind || n === running || m?.hidden || (m?.type ?? 'default') !== type) continue;
+            const section = typeof m?.section === 'number' ? m.section : type === 'default' ? -1 : 0;
+            if (section < (type === 'default' ? 1 : 0)) continue;
+            const own = bySection.get(section);
+            if (!own) bySection.set(section, n);
+            // A part read from a page (a PDF's) is that page's lines, each a node: all of them.
+            else if (m?.page !== undefined && (own.metadata as { page?: number } | undefined)?.page === m.page) {
+                let lines = linesOfPart.get(section);
+                if (!lines) linesOfPart.set(section, lines = [own]);
+                lines.push(n);
+            }
+        }
+        for (const [section, lines] of linesOfPart) {
+            bySection.set(section, { ...lines[0], children: lines.flatMap(line => line.children ?? []), text: lines.map(line => line.text).filter(Boolean).join('\n') });
+        }
+        index = { bySection, sections: [...bySection.keys()].sort((a, b) => a - b) };
+        byKind.set(`${kind}|${type}`, index);
+    }
+    return index;
+}
+
+/**
+ * A title page's first page's parts where its section has none of its own: the latest earlier section's,
+ * shown or not (one a section without a title page has, kept hidden, is still the one a later title page
+ * takes on, as Word gives it), as a part of the titled section's own where that one is hidden: the later
+ * title page showed none, or an older section's. `titled` says whether each section has a title page;
+ * a reader of sections calls it once its parts are read, for each kind.
+ */
+export function titlePagesTakeHiddenFirsts(parts: OfficeContentNode[], kind: 'header' | 'footer', titled: readonly boolean[]): void {
+    const meta = (n: OfficeContentNode) => n.metadata as { type?: string; section?: number; hidden?: boolean } | undefined;
+    const bySection = new Map<number, OfficeContentNode>();
+    for (const n of parts) if (n.type === kind && meta(n)?.type === 'first' && typeof meta(n)?.section === 'number' && !bySection.has(meta(n)!.section!)) bySection.set(meta(n)!.section!, n);
+    let latest: OfficeContentNode | undefined;
+    for (let section = 0; section < titled.length; section++) {
+        const own = bySection.get(section);
+        if (own) { latest = own; continue; }
+        if (titled[section] && latest && meta(latest)?.hidden) {
+            // (Its blocks shared with the part it copies: copied, a large part made a copy for each such section.)
+            const copy: OfficeContentNode = { type: kind, text: latest.text, children: latest.children ?? [], metadata: { type: 'first', section } as HeaderFooterMetadata };
+            parts.push(latest = copy);
+        }
+    }
+}
+
+/**
+ * Which pages the running header or footer {@link runningFurniture} picked is on: every page
+ * (`default`), the first alone (`first`: a letterhead, where the default one is empty) or the even pages
+ * alone (`even`). A writer writes it as that kind, never as every page's.
+ */
+export function furnitureKind(nodes: OfficeContentNode[], kind: 'header' | 'footer'): 'default' | 'first' | 'even' {
+    const type = nodes[0]?.type === kind ? (nodes[0].metadata as { type?: string } | undefined)?.type : undefined;
+    return type === 'first' || type === 'even' ? type : 'default';
+}
+
+/**
+ * The paper a writer lays its pages on, in points: the format's, turned by `landscape`; under 'auto' the
+ * document's own first page (OfficeMetadata.pageSetup, turned by `landscape` when it is upright), else
+ * A4. `name` is the format whose paper it is, upright, where it is one (for writers that name paper).
+ * `margin` is the configured margins, a side left unset (`''`) being the document's own under 'auto',
+ * else an inch; a page too small for them keeps half an inch of text room each way, its margins made
+ * smaller to fit.
+ */
+export function resolvePaper(format: string | undefined, landscape: boolean | undefined, setup: PageSetup | undefined,
+    margin?: { top?: number | string; right?: number | string; bottom?: number | string; left?: number | string }): { w: number; h: number; landscape: boolean; name?: string; margin: { top: number; right: number; bottom: number; left: number }; headerDistance?: number; footerDistance?: number } {
+    const key = String(format ?? 'auto').toLowerCase();
+    let w: number, h: number;
+    // (A document's page between an inch and two hundred inches each way (see isPageSize); another is A4.)
+    const own = key === 'auto' && hasPageSize(setup);
+    if (own) {
+        [w, h] = landscape && setup.width < setup.height ? [setup.height, setup.width] : [setup.width, setup.height];
+    } else {
+        const paper = PAPER_SIZES_PT[key] ?? PAPER_SIZES_PT.a4;
+        [w, h] = landscape ? [paper.h, paper.w] : [paper.w, paper.h];
+    }
+    const upright = [Math.min(w, h), Math.max(w, h)];
+    const name = Object.keys(PAPER_SIZES_PT).find(n => Math.abs(PAPER_SIZES_PT[n].w - upright[0]) < 1.5 && Math.abs(PAPER_SIZES_PT[n].h - upright[1]) < 1.5);
+    const side = (value: number | string | undefined, document: number | undefined) =>
+        (value === undefined || value === null || value === '') && own && document !== undefined && Number.isFinite(document) ? Math.max(0, document) : Math.max(0, marginPt(value === '' ? undefined : value));
+    const m = { top: side(margin?.top, setup?.margin?.top), right: side(margin?.right, setup?.margin?.right), bottom: side(margin?.bottom, setup?.margin?.bottom), left: side(margin?.left, setup?.margin?.left) };
+    // Half an inch of text room each way at least: margins wider than the page leaves are made smaller.
+    const fit = (a: 'top' | 'left', b: 'bottom' | 'right', room: number) => {
+        const total = m[a] + m[b], most = Math.max(0, room - 36);
+        if (total > most) { const scale = total ? most / total : 0; m[a] = Math.round(m[a] * scale * 100) / 100; m[b] = Math.round(m[b] * scale * 100) / 100; }
+    };
+    fit('left', 'right', w);
+    fit('top', 'bottom', h);
+    // The header's and footer's distances from the edges, the document's under 'auto'.
+    const distance = (value: number | undefined) => own && value !== undefined && Number.isFinite(value) && value > 0 ? value : undefined;
+    const headerDistance = distance(setup?.headerDistance), footerDistance = distance(setup?.footerDistance);
+    return { w, h, landscape: w > h, ...(name ? { name } : {}), margin: m, ...(headerDistance !== undefined ? { headerDistance } : {}), ...(footerDistance !== undefined ? { footerDistance } : {}) };
+}
 
 /** Portrait `{ w, h }` page size in points for a {@link PaperFormat} name (case-insensitive), defaulting to A4. */
 export function paperSizePt(format: string | undefined): { w: number; h: number } {
@@ -216,6 +398,26 @@ export const MIME_EXT: Record<string, string> = lookupTable({
 export const ADMONITION_COLOR: Record<string, string> = lookupTable({
     note: '0969DA', tip: '1A7F37', important: '8250DF', warning: '9A6700', caution: 'CF222E',
 });
+
+/**
+ * A paragraph's or heading's spacing (ParagraphSpacing) fit to write: each value a finite number within
+ * what a word processor takes (space and a fixed line height up to 1584pt, Word's 22 inches; a line
+ * multiple up to 132), others dropped. Undefined when nothing is left.
+ */
+export function writableSpacing(meta: unknown): ParagraphSpacing | undefined {
+    const spacing = (meta as { spacing?: unknown } | undefined)?.spacing as Record<string, unknown> | undefined;
+    if (!spacing || typeof spacing !== 'object') return undefined;
+    const within = (v: unknown, max: number, least: number) => typeof v === 'number' && Number.isFinite(v) && v >= least ? Math.min(v, max) : undefined;
+    const out: ParagraphSpacing = {};
+    // No space is a setting (a word processor's own default is some); a line distance of none is not.
+    const before = within(spacing.before, 1584, 0), after = within(spacing.after, 1584, 0);
+    const lineMultiple = within(spacing.lineMultiple, 132, 0.01), lineHeight = within(spacing.lineHeight, 1584, 0.01);
+    if (before !== undefined) out.before = before;
+    if (after !== undefined) out.after = after;
+    if (lineMultiple !== undefined) out.lineMultiple = lineMultiple;
+    else if (lineHeight !== undefined) { out.lineHeight = lineHeight; if (spacing.lineAtLeast === true) out.lineAtLeast = true; }
+    return Object.keys(out).length ? out : undefined;
+}
 
 /** Parses a CSS-ish length ('12pt', '1in', '2cm', '10mm', '96px', or a bare number = px) to points. */
 export function lengthToPt(value: string | number | undefined): number | null {
@@ -253,6 +455,12 @@ export function sniffImageSize(bytes: Uint8Array): { w: number; h: number } | nu
     if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
         const w = bytes[6] | (bytes[7] << 8);
         const h = bytes[8] | (bytes[9] << 8);
+        if (w > 0 && h > 0) return { w, h };
+    }
+    // BMP: width and height (signed, a negative height for rows stored top down) at offsets 18 and 22.
+    if (bytes[0] === 0x42 && bytes[1] === 0x4D && bytes.length >= 26) {
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        const w = view.getInt32(18, true), h = Math.abs(view.getInt32(22, true));
         if (w > 0 && h > 0) return { w, h };
     }
     // JPEG: scan segments for a SOF marker carrying height/width.
@@ -363,4 +571,148 @@ export function embedUrl(meta: EmbedMetadata | undefined): string {
     if (meta?.url) return meta.url;
     const embed = resolveEmbed(meta);
     return embed?.kind === 'youtube' ? `https://www.youtube.com/watch?v=${embed.videoId}` : '';
+}
+
+/**
+ * A spreadsheet as its printout shows it: each cell whose number the sheet shows through its number
+ * format (CellMetadata.shownText) written as that text, `19%` rather than `0.19`. The AST as given when no
+ * cell has one; otherwise a copy, sharing every node it does not change.
+ */
+export function withShownCellText(ast: OfficeParserAST): OfficeParserAST {
+    const shown = (c: OfficeContentNode) => c.type === 'cell' && typeof (c.metadata as CellMetadata | undefined)?.shownText === 'string';
+    if (!ast.content.some(n => n.type === 'sheet' && (n.children || []).some(r => (r.children || []).some(shown)))) return ast;
+    return {
+        ...ast,
+        content: ast.content.map(n => n.type !== 'sheet' ? n : {
+            ...n,
+            children: (n.children || []).map(r => r.type !== 'row' || !(r.children || []).some(shown) ? r : {
+                ...r,
+                children: (r.children || []).map(c => {
+                    if (!shown(c)) return c;
+                    const text = (c.metadata as CellMetadata).shownText!;
+                    // The cell's text, in its first run's formatting.
+                    const run = (c.children || []).find(k => k.type === 'text');
+                    return { ...c, text, children: [{ type: 'text', text, ...(run?.formatting ? { formatting: run.formatting } : {}) } as OfficeContentNode] } as OfficeContentNode;
+                }),
+            }),
+        }),
+    };
+}
+
+/**
+ * A presentation as its printout shows it: the slides without their speaker notes (a slide's own
+ * `notes`). The AST as given when no slide has any; otherwise a copy, sharing every other node.
+ */
+export function withoutSpeakerNotes(ast: OfficeParserAST): OfficeParserAST {
+    if (!ast.content.some(n => n.type === 'slide' && n.notes?.length)) return ast;
+    return { ...ast, content: ast.content.map(n => n.type === 'slide' && n.notes?.length ? { ...n, notes: undefined } : n) };
+}
+
+/**
+ * A spreadsheet's content as a printout shows it: hidden sheets, rows and cells (SheetMetadata.hidden,
+ * RowMetadata.hidden, CellMetadata.hidden) left out, and the rows and columns that remain numbered
+ * without the gaps, a span across hidden columns shortened by them. The AST as given when nothing in
+ * it is hidden; otherwise a copy, sharing the nodes it does not change.
+ */
+export function withoutHiddenSheetContent(ast: OfficeParserAST): OfficeParserAST {
+    let changed = false;
+    const isHiddenCell = (c: OfficeContentNode) => c.type === 'cell' && !!(c.metadata as CellMetadata | undefined)?.hidden;
+    const content = ast.content.flatMap((node): OfficeContentNode[] => {
+        if (node.type !== 'sheet') return [node];
+        if ((node.metadata as SheetMetadata | undefined)?.hidden) { changed = true; return []; }
+        const children = node.children || [];
+        const isHiddenRow = (r: OfficeContentNode) => r.type === 'row' && !!(r.metadata as RowMetadata | undefined)?.hidden;
+        if (!children.some(r => isHiddenRow(r) || (r.type === 'row' && (r.children || []).some(isHiddenCell)))) return [node];
+        changed = true;
+        // A column is hidden where a shown row's cell in it is; a row by its own mark.
+        const hiddenCols = new Set<number>();
+        const hiddenRows = new Set<number>();
+        for (const r of children) {
+            if (r.type !== 'row') continue;
+            for (const c of r.children || []) {
+                const m = c.metadata as CellMetadata | undefined;
+                if (c.type !== 'cell' || !m?.hidden) continue;
+                if (isHiddenRow(r)) { if (typeof m.row === 'number') hiddenRows.add(m.row); }
+                else if (typeof m.col === 'number') hiddenCols.add(m.col);
+            }
+        }
+        const cols = [...hiddenCols].sort((a, b) => a - b);
+        const rowsHidden = [...hiddenRows].sort((a, b) => a - b);
+        // How many of `sorted` are below `at` (a binary search).
+        const below = (sorted: number[], at: number) => { let lo = 0, hi = sorted.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] < at) lo = mid + 1; else hi = mid; } return lo; };
+        const kept: OfficeContentNode[] = [];
+        for (const child of children) {
+            if (child.type !== 'row') { kept.push(child); continue; }
+            if (isHiddenRow(child)) continue;
+            const cells = (child.children || []).filter(c => !isHiddenCell(c)).map(c => {
+                const m = c.metadata as CellMetadata | undefined;
+                if (c.type !== 'cell' || !m || (typeof m.col !== 'number' && typeof m.row !== 'number')) return c;
+                const next: CellMetadata = { ...m };
+                if (typeof m.col === 'number') {
+                    next.col = m.col - below(cols, m.col);
+                    if (m.colSpan && m.colSpan > 1) {
+                        const span = m.colSpan - (below(cols, m.col + m.colSpan) - below(cols, m.col));
+                        if (span > 1) next.colSpan = span; else delete next.colSpan;
+                    }
+                }
+                if (typeof m.row === 'number') next.row = m.row - below(rowsHidden, m.row);
+                return { ...c, metadata: next } as OfficeContentNode;
+            });
+            kept.push({ ...child, children: cells });
+        }
+        return [{ ...node, children: kept }];
+    });
+    return changed ? { ...ast, content } : ast;
+}
+
+const propText = (s: string): string => escapeXml(stripInvalidXmlChars(s));
+
+/**
+ * A document's custom properties as a package holds them: each a name (not blank, at most 255 characters,
+ * as Office takes) and a value of its kind, a flag, a number, a date (between the years 1601 and 9999, as
+ * a file time holds one), else text; an object or list as its JSON, not `[object Object]`.
+ */
+function customEntries(props: Record<string, unknown> | undefined): { name: string; kind: 'bool' | 'number' | 'date' | 'text'; value: string }[] {
+    const out: { name: string; kind: 'bool' | 'number' | 'date' | 'text'; value: string }[] = [];
+    // One property a name as Office compares them (trimmed, case aside): the first.
+    const names = new Set<string>();
+    for (const [key, value] of Object.entries(props || {})) {
+        const name = key.trim().slice(0, 255);
+        if (!name || value === undefined || names.has(name.toLowerCase())) continue;
+        names.add(name.toLowerCase());
+        const time = value instanceof Date ? value.getTime() : NaN;
+        const year = Number.isFinite(time) ? (value as Date).getUTCFullYear() : NaN;
+        if (typeof value === 'boolean') out.push({ name, kind: 'bool', value: value ? 'true' : 'false' });
+        else if (typeof value === 'number' && Number.isFinite(value)) out.push({ name, kind: 'number', value: String(value) });
+        else if (value instanceof Date && year >= 1601 && year <= 9999) out.push({ name, kind: 'date', value: value.toISOString().replace(/\.\d+Z$/, 'Z') });
+        // A date no file time holds: its ISO text (the same on every machine), or 'Invalid Date'.
+        else if (value instanceof Date) out.push({ name, kind: 'text', value: Number.isFinite(time) ? value.toISOString() : 'Invalid Date' });
+        else {
+            let text: string;
+            if (value !== null && typeof value === 'object' && !(value instanceof Date)) { try { text = JSON.stringify(value) ?? String(value); } catch { text = String(value); } }
+            else text = String(value);
+            out.push({ name, kind: 'text', value: text });
+        }
+    }
+    return out;
+}
+
+/**
+ * A document's custom properties as an OOXML package's `docProps/custom.xml` (DOCX, XLSX, PPTX), each typed
+ * as it is held (see customEntries); null where there are none.
+ */
+export function ooxmlCustomPropertiesXml(props: Record<string, unknown> | undefined): string | null {
+    const entries = customEntries(props);
+    if (!entries.length) return null;
+    const tag = { bool: 'vt:bool', number: 'vt:r8', date: 'vt:filetime', text: 'vt:lpwstr' } as const;
+    const xml = entries.map((e, i) => `<property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="${i + 2}" name="${propText(e.name)}"><${tag[e.kind]}>${propText(e.value)}</${tag[e.kind]}></property>`).join('');
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n`
+        + `<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" `
+        + `xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">${xml}</Properties>`;
+}
+
+/** A document's custom properties as ODF `meta:user-defined` elements (ODT, ODS, ODP), each typed as it is held (see customEntries). */
+export function odfUserDefinedXml(props: Record<string, unknown> | undefined): string {
+    const type = { bool: 'boolean', number: 'float', date: 'date', text: 'string' } as const;
+    return customEntries(props).map(e => `<meta:user-defined meta:name="${propText(e.name)}" meta:value-type="${type[e.kind]}">${propText(e.value)}</meta:user-defined>`).join('');
 }

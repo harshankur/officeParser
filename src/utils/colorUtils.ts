@@ -73,7 +73,7 @@ export function isDefaultHighlight(color: unknown): boolean {
  * none, NaN for an alpha that is not a number or a percentage). Null for what is not a colour (see
  * cssColorHex).
  */
-function parseCssColor(value: unknown): { hex: string, alpha: number } | null {
+export function parseCssColor(value: unknown): { hex: string, alpha: number } | null {
     if (typeof value !== 'string') return null;
     const v = value.trim().toLowerCase();
     // Longer than any colour: not read, so a hostile value costs nothing.

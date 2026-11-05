@@ -1,12 +1,14 @@
 import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
-import { base64ByteLength, documentLanguage, isHeaderRow, resolveEmbed } from '../utils/officeGenUtils.js';
+import { base64ByteLength, documentLanguage, isHeaderRow, resolveEmbed, writableSpacing } from '../utils/officeGenUtils.js';
 import { escapeHtml, isSafeHtmlAttributeName, isSafeStyleMapTag, sanitizeCommentText, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
 import { isDefaultHighlight } from '../utils/colorUtils.js';
+import { cssListMarker } from '../utils/listMarkers.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { clampInt } from '../utils/numberUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
+import { MAX_LAYOUT_COLUMNS } from '../utils/tableLayout.js';
 
 /** Node types written as block elements (a <div>, <table>, <ul>, <dl>, <section>...), which a <p> cannot hold. */
 const BLOCK_TYPES = new Set<string>(['paragraph', 'heading', 'list', 'table', 'sheet', 'row', 'cell', 'chart', 'embed', 'admonition',
@@ -224,8 +226,17 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         return this._standaloneDoc;
     }
 
-    constructor(ast: OfficeParserAST, config?: GeneratorConfig<'html'>) {
+    /**
+     * Whether invisible text (TextFormatting.invisible) is drawn unseen, for a printout (PDF output's 'html' engine):
+     * transparent, in its place, there to select and search. HTML output itself shows it, as the content it is.
+     */
+    private readonly drawsInvisibleText: boolean;
+    /** Whether invisible text was drawn unseen, so the page needs the rule that hides it. */
+    private invisibleTextDrawn = false;
+
+    constructor(ast: OfficeParserAST, config?: GeneratorConfig<'html'>, options: { drawsInvisibleText?: boolean } = {}) {
         super('html', ast, config);
+        this.drawsInvisibleText = !!options.drawsInvisibleText;
     }
 
 
@@ -468,7 +479,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             metaTags = this.renderMetaTags();
         }
 
-        const styleBlock = sa.styles === 'none' ? '' : `<style>${
+        // Marked as the writer's own defaults, which a reader leaves out of the document's look.
+        const styleBlock = sa.styles === 'none' ? '' : `<style data-default-styles>${
             sa.styles === 'scoped'
                 ? this.getScopedPremiumStyles(this.isSpreadsheetMode, isPresentation, isPdf)
                 : this.getPremiumStyles(this.isSpreadsheetMode, isPresentation, isPdf)
@@ -480,14 +492,21 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         const scopeOpen = sa.styles === 'scoped' ? '<div class="op-html-scope">' : '';
         const scopeClose = sa.styles === 'scoped' ? '</div>' : '';
 
+        // The rule invisible text is drawn unseen by (see drawsInvisibleText): whatever the stylesheet, its colour,
+        // its lines' and its background's, inside a link too.
+        const invisibleRule = this.invisibleTextDrawn ? '<style>.op-invisible-text, .op-invisible-text * { color: transparent !important; text-decoration-color: transparent !important; background: transparent !important; } .op-invisible-marker::marker { color: transparent !important; } .op-invisible-block, .op-invisible-block :is(table, tr, th, td) { border-color: transparent !important; box-shadow: none !important; background-color: transparent; }</style>' : '';
+
         const inj = this.config.htmlConfig.injections;
         const headInjectionsOn = sa.document && sa.headInjections;
         // Chart.js is loaded only for a page that draws a chart: one without fetches and runs no script.
         const chartScriptTag = (sa.scripts && this.config.includeCharts && this.chartsDrawn > 0) ? `<script src="${this.config.htmlConfig.chartJsSrc}"></script>` : '';
         const spreadsheetScriptOut = sa.scripts ? spreadsheetScript : '';
 
+        // The document's language where it has one; none where it is unknown, as DOCX, ODT and PDF output write
+        // it, rather than English for a document in any language.
+        const htmlLang = documentLanguage(this.effectiveMetadata, '');
         const value = sa.document ? `<!DOCTYPE html>
-<html lang="${documentLanguage(this.effectiveMetadata)}">
+<html${htmlLang ? ` lang="${htmlLang}"` : ''}>
 <head>
     ${headInjectionsOn ? inj.headStart : ''}
     <meta charset="UTF-8">
@@ -495,7 +514,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
     <title>${this.escape(title)}</title>
     ${metaTags}
     ${chartScriptTag}
-    ${styleBlock}
+    ${styleBlock}${invisibleRule}
     ${headInjectionsOn ? inj.headEnd : ''}
 </head>
 <body>
@@ -512,7 +531,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
     ${spreadsheetScriptOut}
     ${sa.bodyInjections ? inj.bodyEnd : ''}
 </body>
-</html>` : `${styleBlock}${sa.bodyInjections ? inj.bodyStart : ''}${scopeOpen}<div class="${containerClass}">${metadataBlock}${bodyContent}${spreadsheetTabs}</div>${scopeClose}${spreadsheetScriptOut}${sa.bodyInjections ? inj.bodyEnd : ''}`;
+</html>` : `${styleBlock}${invisibleRule}${sa.bodyInjections ? inj.bodyStart : ''}${scopeOpen}<div class="${containerClass}">${metadataBlock}${bodyContent}${spreadsheetTabs}</div>${scopeClose}${spreadsheetScriptOut}${sa.bodyInjections ? inj.bodyEnd : ''}`;
 
         return {
             value,
@@ -584,6 +603,33 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
      * Processes an array of nodes, handling list grouping and nesting.
      */
     /**
+     * The table's width, and the empty cells each shorter row ends with (rowPadding), for a table without
+     * row spans: each cell at its column (`col`, for a sparse row) or after the one before, as wide as it
+     * spans, the width capped at MAX_LAYOUT_COLUMNS.
+     */
+    private planRowPadding(table: OfficeContentNode): void {
+        const rows = (table.children || []).filter(r => r.type === 'row');
+        const extents = rows.map(row => {
+            let width = 0;
+            for (const cell of row.children || []) {
+                if (cell.type !== 'cell') continue;
+                const m = cell.metadata as CellMetadata | undefined;
+                const start = typeof m?.col === 'number' && m.col >= 0 ? Math.max(width, m.col) : width;
+                width = Math.min(MAX_LAYOUT_COLUMNS, start + clampInt(m?.colSpan, 1, MAX_LAYOUT_COLUMNS, 1));
+            }
+            return width;
+        });
+        const width = Math.max(0, ...extents);
+        rows.forEach((row, i) => { if (extents[i] > 0 && extents[i] < width) this.rowPadding.set(row, width - extents[i]); });
+    }
+
+    /** The empty cells (`<td></td>`, or `<th></th>` in a header row) a row ends with to reach its table's width. */
+    private rowPaddingCells(row: OfficeContentNode, tag: 'td' | 'th' = 'td'): string {
+        const missing = this.rowPadding.get(row);
+        return missing ? `<${tag}></${tag}>`.repeat(this.padWithinBudget(missing)) : '';
+    }
+
+    /**
      * Renders a table's rows with an HTML grid-occupancy model, so a cell's `rowSpan` reserves its
      * column in the rows below rather than letting the plain per-row gap-filler shift the cells that
      * sit under it. Returns one `<tr>…</tr>` string per row (row 0's `<td>`s are promoted to `<th>`
@@ -596,6 +642,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         let headerRowEmitted = false;
         // grid column -> number of rows it stays occupied by a rowspan started above this row.
         const carry = new Map<number, number>();
+        // Each row as written and the columns it reaches (its cells, and cells spanned into it from above),
+        // so a shorter row ends in empty cells at the table's width.
+        const built: { tr: string; reach: number; header: boolean; at: number }[] = [];
         for (let r = 0; r < rows.length; r++) {
             // This path builds each <tr> itself rather than recursing into the row node, so the row
             // has to be offered to `onNode` here or it would be the one node type the hook never saw
@@ -630,11 +679,19 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 col += cSpan;
                 ci++;
             }
+            let reach = col;
+            for (const c of carry.keys()) reach = Math.max(reach, c + 1);
             // Age existing carries by one row, then fold in rowspans this row started.
             for (const [c, v] of [...carry.entries()]) { if (v > 1) carry.set(c, v - 1); else carry.delete(c); }
             for (const [c, v] of newCarry) carry.set(c, v);
-            out.push(`<tr>${tr}</tr>`);
+            built.push({ tr, reach, header: headerFirst && r === 0, at: out.length });
+            out.push('');
             if (r === 0) headerRowEmitted = true;
+        }
+        const width = Math.min(MAX_LAYOUT_COLUMNS, Math.max(0, ...built.map(b => b.reach)));
+        for (const { tr, reach, header, at } of built) {
+            const tag = header ? 'th' : 'td';
+            out[at] = `<tr>${tr}${`<${tag}></${tag}>`.repeat(reach > 0 && reach < width ? this.padWithinBudget(width - reach) : 0)}</tr>`;
         }
         return { trs: out, headerRowEmitted };
     }
@@ -643,6 +700,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         // Whether these siblings form a run of text (a paragraph's children) rather than a list of blocks.
         const runHasText = nodes.some(n => n.type === 'text');
         let html = '';
+        // The node written before this one (see afterPage).
+        let previous: OfficeContentNode | undefined;
         // Stack to track active lists. `liClose` is the currently-open item's deferred closing
         // suffix (`</li>`, or `</div></li>` for a task item): a list item is rendered WITHOUT its
         // close so a deeper list can land inside it (spec-valid `<li>a<ul>...</ul></li>` rather
@@ -674,6 +733,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 this.onNodeSkipped.add(node);
                 continue;
             }
+            // A shape drawn on a slide (ShapeMetadata) writes nothing, and no gap around it either.
+            if (node.type === 'drawing' && !node.children?.length && typeof override !== 'string') continue;
 
             // A top-level footnote/endnote note is an orphan definition (the MarkdownParser
             // recovers unreferenced `[^id]: ...` defs as trailing note nodes). Route it into the
@@ -696,6 +757,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 continue;
             }
 
+            this.afterPage = previous?.type === 'page';
+            previous = node;
             if (node.type === 'list') {
                 const meta = node.metadata as ListMetadata;
                 const type = meta?.listType === 'ordered' ? 'ordered' : 'unordered';
@@ -736,6 +799,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // Non-list node closes all active lists
                 closeListsToLevel(-1);
                 let result = await this.processNodeRecursive(node, this.boundNodeProcessor, { value: override });
+                // (A section's start after a page writes nothing, and no gap either.)
+                if (!result && this.afterPage && node.type === 'break') continue;
 
                 // Add a blank line after BLOCK nodes for readable HTML source. Inline nodes (a
                 // paragraph's text/link runs) must concatenate with no separator: adding `\n\n`
@@ -816,8 +881,17 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
      * Overridden to handle children using processNodeArray for list grouping.
      */
     private tableNestingLevel = 0;
+    /**
+     * The empty cells each row of a table without row spans ends with, to reach the table's width: a row
+     * shorter than the others (a form's row of two labels beside a row of four) left its table's columns
+     * out of line, where Markdown, CSV and LaTeX output pad it. Taken from the document's budget when
+     * written (see padWithinBudget).
+     */
+    private readonly rowPadding = new WeakMap<OfficeContentNode, number>();
     /** How many paragraphs or headings are being written: a picture in one is written inline. */
     private inlineDepth = 0;
+    /** Whether the node being written comes right after a page (a PDF's), which breaks the page after it itself. */
+    private afterPage = false;
 
     protected override async processNodeRecursive(
         node: OfficeContentNode,
@@ -857,6 +931,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         if (actualOverride === false) {
             return '';
         }
+        // A shape drawn on a slide (ShapeMetadata) writes nothing: its text is in the nodes after it.
+        if (node.type === 'drawing' && !node.children?.length && typeof actualOverride !== 'string') return '';
 
         // Returning a string overrides default rendering and recursion
         if (typeof actualOverride === 'string') {
@@ -865,6 +941,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
         const isTable = node.type === 'table' || node.type === 'sheet';
         if (isTable) this.tableNestingLevel++;
+        if (node.type === 'table' && !this.tableHasRowSpan(node)) this.planRowPadding(node);
 
         // A paragraph holding a block (a code block's <pre>, a display equation's <div>) is written as
         // its parts, since HTML cannot nest a block in a <p>: a DOM parser closes the paragraph at it,
@@ -1065,6 +1142,12 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 if (!classes.includes(c)) classes.push(c);
             }
         }
+        // A list item whose text is all invisible, in a printout: its marker unseen with it.
+        // (Its marker alone: the class's rule reached its nested items, which the item's <li> holds, and hid them.)
+        if (this.drawsInvisibleText && node.type === 'list' && this.allInvisible(node)) { this.invisibleTextDrawn = true; classes.push('op-invisible-marker'); }
+        // A table or heading whose text is all invisible (a scan's recognised table or title), in a printout: the rules
+        // the page's stylesheet draws around it (a table's grid, a heading's rule) unseen with it.
+        if (this.drawsInvisibleText && (node.type === 'table' || node.type === 'heading') && this.allInvisible(node, false)) { this.invisibleTextDrawn = true; classes.push('op-invisible-block'); }
         const className = classes.length > 0 ? ` class="${this.escape(classes.join(' '))}"` : '';
 
         // Handle ID and Anchors
@@ -1195,7 +1278,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // Among the blocks too its id is on the <img>, after the anchors of its other ids, as they
                 // are read back: on the wrapper it was read after them, and the order flipped each save.
                 const img = imgWithId(idAttr);
-                let content = this.config.includeFormatting ? `<div class="image-container">${img}<div class="caption">${this.escape(attachmentName || '')}</div></div>` : img;
+                // No caption under it: its file name is not one, and no other writer shows it.
+                let content = this.config.includeFormatting ? `<div class="image-container">${img}</div>` : img;
                 // image+ocr-text: the image, then its recognized text (a <pre> keeps the 2-D layout).
                 if (mode === 'image+ocr-text' && ocr) content += `<pre class="ocr-text">${this.escape(ocr)}</pre>`;
                 return `${extraAnchors}<div>${content}</div>`;
@@ -1302,9 +1386,17 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
             case 'break': {
                 const breakType = (node.metadata as any)?.breakType;
+                // A section starting on a new page: a page break, as the HTML reader reads it and print breaks
+                // the page, but no rule on screen (it is the document's structure, not a break the author typed).
+                // (Styled in place too: without this writer's stylesheet, in EPUB or a fragment, it was a rule.)
+                // Right after a page (a PDF's page of another size), whose own break ends it, it breaks
+                // nothing more: a second break printed a blank page.
+                if (breakType === 'page' && typeof (node.metadata as any)?.section === 'number') return this.afterPage ? `${extraAnchors}${idAttr ? `<a${idAttr}></a>` : ''}` : `${extraAnchors}<hr class="page-break section-start"${idAttr} style="border:none;height:0;margin:0;break-after:page">`;
                 if (breakType === 'page') return `${extraAnchors}<hr class="page-break"${idAttr}>`;
                 // A thematic break is a plain rule; the parser reads a bare <hr> back as one.
                 if (breakType === 'thematic') return `${extraAnchors}<hr${idAttr}>`;
+                // A section starting on the same page (its columns) breaks no text.
+                if (breakType === 'section') return extraAnchors;
                 return '<br>';
             }
 
@@ -1410,7 +1502,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                                     cellHtml = cellHtml.replace(/<td/, '<th').replace(/<\/td>$/, '</th>');
                                     tr += cellHtml;
                                 }
-                                headInner = `<tr>${tr}</tr>`;
+                                headInner = `<tr>${tr}${this.rowPaddingCells(firstRow, 'th')}</tr>`;
                             }
                             const bodyOutput = await this.processNodeArray(rows.slice(1));
                             finalChildren = `<thead>${headInner}</thead><tbody>${bodyOutput}</tbody>`;
@@ -1432,7 +1524,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                         : ` style="${marginStyle}"`;
                 }
                 const tableHtml = `<table${idAttr}${className}${mappedAttrs}${tableDataAttrs}${tableStyleAttr}>${finalChildren}</table>`;
-                const result = this.tableNestingLevel > 1 ? tableHtml : `<div class="table-container">${tableHtml}</div>`;
+                const result = this.tableNestingLevel > 1 ? tableHtml : `<div class="table-container${classes.includes('op-invisible-block') ? ' op-invisible-block' : ''}">${tableHtml}</div>`;
                 return `${extraAnchors}${result}`;
             }
 
@@ -1456,10 +1548,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                             const colSpan = (cell.metadata as any)?.colSpan || 1;
                             lastCol = currentCol + colSpan - 1;
                         }
-                        return `<tr${idAttr}${className}${mappedAttrs}${styleAttr}>${sparseChildren}</tr>`;
+                        return `<tr${idAttr}${className}${mappedAttrs}${styleAttr}>${sparseChildren}${this.rowPaddingCells(node)}</tr>`;
                     }
                 }
-                return `<tr${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</tr>`;
+                return `<tr${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}${this.rowPaddingCells(node)}</tr>`;
             }
 
             case 'cell': {
@@ -1894,8 +1986,27 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // Default emission: a <cite> carrying the bare key, matching Pandoc's [@citekey].
                 : `<cite data-citation-key="${this.escape(meta.citationKey)}">[@${this.escape(meta.citationKey)}]</cite>`;
         }
+        // Invisible text in a printout: outside its link and highlight, so neither is seen either.
+        if (this.drawsInvisibleText && f?.invisible) {
+            this.invisibleTextDrawn = true;
+            result = `<span class="op-invisible-text">${result}</span>`;
+        }
 
         return result;
+    }
+
+    /** Whether a block's own text (not its nested lists') is there and all invisible. */
+    private allInvisible(node: OfficeContentNode, ownTextOnly = true): boolean {
+        let seen = false;
+        const walk = (n: OfficeContentNode, depth: number): boolean => {
+            for (const c of n.children || []) {
+                if (ownTextOnly && c.type === 'list') continue;
+                if (c.type === 'text' && (c.text || '').trim()) { if (!c.formatting?.invisible) return false; seen = true; }
+                else if (depth < 16 && !walk(c, depth + 1)) return false;
+            }
+            return true;
+        };
+        return walk(node, 0) && seen;
     }
 
     private getInlineStyles(node: OfficeContentNode, options: { skipFontSize?: boolean, skipBackgroundColor?: boolean } = {}): string {
@@ -1917,6 +2028,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             // so `HtmlParser` reads it back and the pipe-table markers survive AST -> HTML -> AST.
             // An unaligned cell (no `align`) adds nothing, keeping its HTML byte-identical.
             if (node.type === 'cell' && meta.align) pushSafe('text-align', meta.align);
+            // A list item's own marker (`a)`, `iv.`, `◦`) as a CSS string, every character but a letter,
+            // a digit or a space escaped, so nothing in it can end the string or the attribute.
+            if (node.type === 'list' && typeof meta.marker === 'string' && !meta.isTask) {
+                styles.push(`list-style-type: ${cssListMarker(meta.marker)}`);
+            }
             if (meta.backgroundColor) pushSafe('background-color', meta.backgroundColor);
             if (meta.verticalAlign) pushSafe('vertical-align', meta.verticalAlign);
             if (meta.paragraphIndentation) {
@@ -1924,6 +2040,14 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 if (ind.left) styles.push(`margin-left: ${ind.left / 20}pt`);
                 if (ind.right) styles.push(`margin-right: ${ind.right / 20}pt`);
                 if (ind.firstLine) styles.push(`text-indent: ${ind.firstLine / 20}pt`);
+            }
+            const spacing = writableSpacing(meta);
+            if (spacing) {
+                if (spacing.before !== undefined) styles.push(`margin-top: ${+spacing.before.toFixed(2)}pt`);
+                if (spacing.after !== undefined) styles.push(`margin-bottom: ${+spacing.after.toFixed(2)}pt`);
+                // A fixed line height is written as one; CSS has no least height for a line.
+                if (spacing.lineMultiple) styles.push(`line-height: ${+spacing.lineMultiple.toFixed(3)}`);
+                else if (spacing.lineHeight) styles.push(`line-height: ${+spacing.lineHeight.toFixed(2)}pt`);
             }
         }
 
@@ -2398,13 +2522,14 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             }
 
             .image-container { text-align: center; margin: 30px 0; }
-            .caption { font-size: 0.8em; color: #636e72; margin-top: 8px; font-style: italic; }
             .ocr-text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85em; line-height: 1.4; white-space: pre; overflow-x: auto; margin: 8px 0; color: #2d3436; }
             
             body { margin: 0; padding: 0; }
             
             .page-break { border: none; border-top: 2px dashed var(--border-color); margin: 40px 0; position: relative; }
             .page-break::after { content: 'PAGE BREAK'; position: absolute; top: -10px; left: 50%; transform: translateX(-50%); background: white; padding: 0 15px; font-size: 10px; color: #b2bec3; font-weight: bold; letter-spacing: 1px; }
+            .page-break.section-start { border: none; height: 0; margin: 0; }
+            .page-break.section-start::after { content: none; }
 
             /* Metadata Styles */
             .metadata-summary { 

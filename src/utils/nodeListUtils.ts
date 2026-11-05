@@ -302,3 +302,52 @@ function flatWeight(record: object): number {
 export function appendAll<T>(target: T[], items: readonly T[]): void {
     for (const item of items) target.push(item);
 }
+
+/** A frame floating beside a document's text (see ShapeMetadata.float). */
+export const isFloatingFrame = (node: OfficeContentNode | undefined): boolean =>
+    node?.type === 'drawing' && !!(node.metadata as { float?: unknown } | undefined)?.float;
+
+/**
+ * Moves each frame floating beside a block's text (a `drawing` node with `float` that a reader left
+ * among a paragraph's, heading's or list item's children, where its anchor stands) out of that block,
+ * to just before it in the same list: the block's text goes beside the frame, and a writer places the
+ * frame before laying that text out. Every list under `roots` is visited once; a frame's own blocks too.
+ */
+export function liftFloatingFrames(roots: OfficeContentNode[]): void {
+    const lists: OfficeContentNode[][] = [roots];
+    const seen = new Set<OfficeContentNode[]>();
+    while (lists.length) {
+        const list = lists.pop()!;
+        if (seen.has(list)) continue;
+        seen.add(list);
+        if (list.some(n => n && n.type !== 'drawing' && n.children?.some(isFloatingFrame))) {
+            const out: OfficeContentNode[] = [];
+            for (const node of list) {
+                if (node && node.type !== 'drawing' && node.children?.some(isFloatingFrame)) {
+                    for (const c of node.children) if (isFloatingFrame(c)) out.push(c);
+                    node.children = node.children.filter(c => !isFloatingFrame(c));
+                }
+                out.push(node);
+            }
+            list.length = 0;
+            appendAll(list, out);
+        }
+        for (const node of list) if (node?.children?.length) lists.push(node.children);
+    }
+}
+
+/**
+ * Takes off the section starts that end a document's body (a break with BreakMetadata.section, or one
+ * starting a section on the same page): a section with nothing in it after the last text starts no page
+ * (RTF writers end every section with `\sect`; a section's columns ending the document give back the
+ * page's to nothing). Its header and footer parts stay in `auxiliary`. A page break the author typed
+ * there stays: a word processor shows that page.
+ */
+export function dropTrailingSectionStarts(content: OfficeContentNode[]): void {
+    while (content.length) {
+        const last = content[content.length - 1];
+        const meta = last.type === 'break' ? last.metadata as { breakType?: string; section?: unknown } | undefined : undefined;
+        if (!meta || !(meta.breakType === 'section' || typeof meta.section === 'number')) return;
+        content.pop();
+    }
+}

@@ -7,14 +7,16 @@
  *
  * @module parsers/pdf/pdfTypes
  */
-
 import { NodeBounds, TextFormatting, TextMetadata } from '../../types.js';
+import type { PdfShape } from './pdfShapes.js';
 
-/** A run's writing angle after snapping to the nearest quarter turn. */
-export type RunAngle = 0 | 90 | 180 | 270;
+/** A run's writing angle after snapping to the nearest quarter turn, or -1 for one between them. */
+export type RunAngle = 0 | 90 | 180 | 270 | -1;
 
 /** Resolved font attributes for one pdf.js font id, looked up once per document. */
 export interface ResolvedFont {
+    /** The name as pdf.js gives it, by which the font is found in the file (see GlyphNames.readsGlyphIds). */
+    rawName?: string;
     /** Human-readable family name with any subset prefix stripped (e.g. "Ubuntu Mono"). */
     name?: string;
     bold: boolean;
@@ -43,6 +45,8 @@ export interface RawRun {
     dir: 'ltr' | 'rtl' | 'ttb';
     /** Snapped writing angle. Only 0 goes through the normal flow; others are appended after. */
     angle: RunAngle;
+    /** The angle the run is turned at on the page, in whole degrees clockwise (0 for level text). */
+    turn: number;
     /** Marked-content id for the tagged path, or null. */
     mcid: string | null;
     /** True when the run sits inside an Artifact scope (running header/footer, decoration). */
@@ -50,6 +54,15 @@ export interface RawRun {
     formatting: TextFormatting;
     /** Hyperlink metadata resolved from annotations, if any. */
     link?: TextMetadata;
+    /**
+     * A form field's value, not the page's own text: a text or choice field's value, or the characters of
+     * a row of boxes drawn one to a character (a comb, see rulings), as 'text'; a check box's or radio
+     * button's state as 'box'. Its size does not count towards the page's sizes, it is never a heading,
+     * and it is read on the line of the label beside it (see textLayout).
+     */
+    formField?: 'text' | 'box';
+    /** A form field's value's box across the page (its widget's), where it is not the run's own (see textLayout's headedValues). */
+    fieldBox?: { x: number; width: number };
 }
 
 /** A contiguous span of text on a single visual line, with its own box and formatting. */
@@ -75,6 +88,12 @@ export interface PdfLine {
     /** True when the line's visible text ends in a hyphen (candidate for de-hyphenation). */
     endsWithHyphen: boolean;
     dir: 'ltr' | 'rtl';
+    /** True when the line reads right to left, as its paragraph does (see textLayout's directionsOf). */
+    rtl?: boolean;
+    /** The x of a column gutter the line was cut at, beside it (see textLayout's columnGutters). */
+    gutter?: number;
+    /** True when the line's text is form field values alone (see RawRun.formField): it is never a heading. */
+    formField?: boolean;
 }
 
 /** An image placed on a page, in viewport space. */
@@ -82,11 +101,13 @@ export interface PdfImage {
     name: string;
     bounds: NodeBounds;
     /**
-     * PNG-encoded pixels. Encoded at collection time (not at emit) so the raw uncompressed RGBA
-     * buffer, which is many times larger, is released as soon as its page is done rather than being
-     * held for every page at once until the emit pass.
+     * The picture's file: PNG-encoded pixels, or the JPEG the PDF stores where that shows what the pixels
+     * do (see pdfJpeg). Made at collection time (not at emit) so the raw uncompressed RGBA buffer, which
+     * is many times larger, is released as soon as its page is done rather than being held for every
+     * page at once until the emit pass.
      */
-    png: Buffer;
+    data: Buffer;
+    format: 'png' | 'jpeg';
     pixelWidth: number;
     pixelHeight: number;
 }
@@ -111,6 +132,8 @@ export interface PageExtract {
     images: PdfImage[];
     /** Raw pdf.js struct tree for the tagged path; null when untagged/unavailable. */
     structTree: unknown | null;
+    /** The shapes the page draws (see pdfShapes): bullets drawn as shapes, tables' ruling lines. */
+    shapes?: PdfShape[];
 }
 
 /** Resolved PDF-specific knobs, read from `config.pdfParserConfig` with numeric coercion done. */
@@ -124,6 +147,8 @@ export interface PdfLayoutConfig {
     normalizeText: boolean;
     /** Extract per-run fill color from the operator list into `formatting.color` (costs an op-list fetch per page). */
     extractTextColor: boolean;
+    /** Running headers and footers stay in their page's content instead of `auxiliary`. */
+    keepHeadersAndFootersInPages: boolean;
     /** When false, geometry is not written onto emitted nodes. */
     includeBounds: boolean;
     /** Run pdf.js's worker in a separate process (Node), under `processMemoryMb` of heap. */
@@ -134,4 +159,6 @@ export interface PdfLayoutConfig {
     maxOperators: number;
     maxAnnotations: number;
     maxTimeMs: number;
+    /** The most pixels a picture may have to be extracted (`pdfParserConfig.maxImagePixels`): at least 0, Infinity for no limit. */
+    maxImagePixels: number;
 }

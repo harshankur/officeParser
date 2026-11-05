@@ -1,10 +1,15 @@
 import { zipSync, Zippable } from 'fflate';
 import { UniqueNames } from '../utils/uniqueNames.js';
 import { layoutTableRows } from '../utils/tableLayout.js';
-import { ConversionResult, DocxGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
+import { BreakMetadata, ConversionResult, DocxGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting, TextMetadata } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF } from '../utils/officeGenUtils.js';
+import { heldColumns } from '../utils/columnUtils.js';
+import { onDocumentPage } from '../utils/pageLimits.js';
+import { pageFieldInstruction, wordFmtOf } from '../utils/pageNumbers.js';
+import { clampInt } from '../utils/numberUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, ooxmlCustomPropertiesXml, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
+import { markerPattern, MarkerPattern } from '../utils/listMarkers.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 
@@ -77,7 +82,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     private endnotes: NoteEntry[] = [];
     private comments: CommentEntry[] = [];
     private commentCounter = 0;
-    private numbering: { listId: string; numId: number; levels: Map<number, 'ordered' | 'unordered'>; startAt: Map<number, number> }[] = [];
+    private numbering: { listId: string; numId: number; levels: Map<number, MarkerPattern>; startAt: Map<number, number> }[] = [];
     private numByListId = new Map<string, number>();
     private needsNumbering = false;
     private syntheticListRun = 0; // per-run id counter for lists that carry no listId
@@ -173,19 +178,33 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         this.warnUnrepresentableCustomMetadata('docx');
         const { iso, mtime } = this.resolveModified();
 
+        // The running header and footer, and the first section's first page's and even pages' own, first:
+        // a later section without its own of a type takes them on, as Word gives it (see sectionReferences).
+        const headers = runningFurniture(this.ast.auxiliary?.headers, 'header'), footers = runningFurniture(this.ast.auxiliary?.footers, 'footer');
+        const hasHeader = headers.length > 0;
+        const hasFooter = footers.length > 0;
+        const headerXml = hasHeader ? await this.withRelOwner('word/header1.xml', () => this.renderHdrFtr('hdr', headers)) : '';
+        const footerXml = hasFooter ? await this.withRelOwner('word/footer1.xml', () => this.renderHdrFtr('ftr', footers)) : '';
+        const headerRid = hasHeader ? this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/header', 'header1.xml') : '';
+        const footerRid = hasFooter ? this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer', 'footer1.xml') : '';
+        // A first page's own (a letterhead) or even pages' own is written as that kind: on the title
+        // page (`w:titlePg`), or on even pages with the settings' `w:evenAndOddHeaders`.
+        const headerKind = hasHeader ? furnitureKind(headers, 'header') : 'default', footerKind = hasFooter ? furnitureKind(footers, 'footer') : 'default';
+        // Even pages' own parts anywhere: then the document has even and odd pages' parts (`w:evenAndOddHeaders`).
+        const evenAnywhere = (['header', 'footer'] as const).some(kind => { const list = kind === 'header' ? this.ast.auxiliary?.headers : this.ast.auxiliary?.footers; return !!list?.length && sectionFurnitureIndex(list, kind, 'even').sections.length > 0; });
+        this.evenPages = headerKind === 'even' || footerKind === 'even' || evenAnywhere;
+        const firstOwn = await this.sectionReferences(0, false);
+        const furniture = { headerKind, footerKind, titlePage: headerKind === 'first' || footerKind === 'first', evenPages: this.evenPages, firstOwn };
+        if (furniture.evenPages) this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings', 'settings.xml');
+
         // Render body blocks (this also populates rels, media, notes, comments, bookmarks, numbering).
         const metaBlock = this.config.renderMetadata ? this.renderMetadataBlock() : '';
         const body = await this.renderBlocks(this.ast.content);
 
-        const hasHeader = !!(this.ast.auxiliary?.headers?.length);
-        const hasFooter = !!(this.ast.auxiliary?.footers?.length);
-        const headerXml = hasHeader ? await this.withRelOwner('word/header1.xml', () => this.renderHdrFtr('hdr', this.ast.auxiliary!.headers!)) : '';
-        const footerXml = hasFooter ? await this.withRelOwner('word/footer1.xml', () => this.renderHdrFtr('ftr', this.ast.auxiliary!.footers!)) : '';
-        const headerRid = hasHeader ? this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/header', 'header1.xml') : '';
-        const footerRid = hasFooter ? this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer', 'footer1.xml') : '';
-
-        const documentXml = this.buildDocumentXml(metaBlock + body, headerRid, footerRid);
+        const lastRefs = this.sectionsEnded > 0 ? await this.ownReferences() : { refs: '', titlePage: false };
+        const documentXml = this.buildDocumentXml(metaBlock + body, headerRid, footerRid, furniture, lastRefs);
         const parts = this.assembleParts({ documentXml, iso, hasHeader, hasFooter, headerXml, footerXml });
+        if (furniture.evenPages) parts['word/settings.xml'] = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:settings ${WML_NS}><w:evenAndOddHeaders/></w:settings>`;
 
         const zipFiles: Zippable = {};
         for (const [path, content] of Object.entries(parts)) zipFiles[path] = new TextEncoder().encode(content);
@@ -198,28 +217,49 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     // ── block / inline traversal ─────────────────────────────────────────────────
 
     private async renderBlocks(nodes: OfficeContentNode[] | undefined): Promise<string> {
-        let out = '';
+        // The blocks' XML in order, joined at the end: a section's end goes into the last block's (see
+        // withSectionEnd), and rewriting the whole of what was written for each one took time in the square of it.
+        const out: string[] = [];
+        // Where in `out` the last block that wrote anything is (-1: none yet).
+        let lastBlockAt = -1;
         let prevPaginated: string | null = null;
         let prevBareList = false; // previous block was a list carrying no listId
         for (const node of nodes || []) {
             checkAbortSignal(this.config.abortSignal);
             const override = await this.handleOnNode(node);
             if (override === false) { prevBareList = false; continue; }
-            if (typeof override === 'string') { out += override; prevPaginated = null; prevBareList = false; continue; }
+            // (A block an onNode string gives is the last block too: a section's end may go in its paragraph.)
+            if (typeof override === 'string') { if (override) lastBlockAt = out.length; out.push(override); prevPaginated = null; prevBareList = false; continue; }
             // Preserve source pagination: a page break between consecutive page (or slide) nodes.
             if ((node.type === 'page' || node.type === 'slide') && prevPaginated === node.type) {
-                out += '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+                // (A section ending on a blank page ends after this break, in a paragraph of its own there: in
+                // the paragraph before the break, the blank page was lost.)
+                lastBlockAt = -1;
+                out.push('<w:p><w:r><w:br w:type="page"/></w:r></w:p>');
             }
             // A run of consecutive lists that carry no listId of their own gets one synthetic id, so a
             // later separate list starts fresh instead of continuing the first one's numbering.
             const isBareList = node.type === 'list' && !(node.metadata as any)?.listId;
             if (isBareList && !prevBareList) this.syntheticListRun++;
-            if (!OWN_BOOKMARKS.has(node.type)) out += this.pointBookmarks(node);
-            out += await this.renderBlockNode(node, isBareList ? `__run${this.syntheticListRun}` : undefined);
+            if (!OWN_BOOKMARKS.has(node.type)) out.push(this.pointBookmarks(node));
+            const at = out.length;
+            const block = await this.renderBlockNode(node, isBareList ? `__run${this.syntheticListRun}` : undefined);
+            // A section ends in its last paragraph's properties, as Word keeps it: a paragraph of its own
+            // for them was one more empty paragraph on every save. (After a table, or a paragraph ending a
+            // section already, there is no paragraph to hold them: one of their own, as Word has it.)
+            const sectionEnd = this.sectionEndXml;
+            this.sectionEndXml = undefined;
+            const held = sectionEnd !== undefined && lastBlockAt >= 0 ? withSectionEnd(out.slice(lastBlockAt).join(''), 0, sectionEnd) : undefined;
+            if (held !== undefined) out.splice(lastBlockAt, out.length - lastBlockAt, held);
+            else out.push(block);
+            if (block && held === undefined) lastBlockAt = at;
+            // (A paragraph on a blank page, for a section ending there: LibreOffice leaves out a section's
+            // last paragraph where it is empty, and the page with it.)
+            if (!block && node.type === 'page' && prevPaginated === 'page') out.push('<w:p/>');
             prevPaginated = (node.type === 'page' || node.type === 'slide') ? node.type : null;
             prevBareList = isBareList;
         }
-        return out;
+        return out.join('');
     }
 
     private async renderBlockNode(node: OfficeContentNode, bareListId?: string): Promise<string> {
@@ -238,7 +278,10 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
             case 'embed': return this.embed(node);
             case 'definitionTerm': return this.paragraph(node, 'DefinitionTerm');
             case 'definitionDescription': return this.paragraphIndented(node, 720);
-            case 'header': case 'footer': return this.renderBlocks(node.children); // inline page furniture
+            case 'header': case 'footer':
+                // Page furniture of runs alone (a PDF's header is a line's runs) is one paragraph, not one a run.
+                if (node.children?.length && node.children.every(c => c.type === 'text' || c.type === 'break')) return this.wrapP(await this.renderInline(node.children));
+                return this.renderBlocks(node.children); // inline page furniture
             case 'sheet': return this.sheet(node);
             case 'row': case 'cell': case 'text': // stray inline/table-part at block level: wrap
                 return this.wrapP(await this.renderInline([node]));
@@ -287,6 +330,17 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         if (numPr) s += numPr;
         if (extra) s += extra;
         if (this.config.includeFormatting !== false && meta) {
+            // Space in twips; a line multiple in 240ths of a line (auto), a fixed line in twips.
+            const spacing = writableSpacing(meta);
+            if (spacing) {
+                const attrs = [
+                    spacing.before !== undefined ? `w:before="${Math.round(spacing.before * 20)}"` : '',
+                    spacing.after !== undefined ? `w:after="${Math.round(spacing.after * 20)}"` : '',
+                    spacing.lineMultiple ? `w:line="${Math.round(spacing.lineMultiple * 240)}" w:lineRule="auto"`
+                        : spacing.lineHeight ? `w:line="${Math.round(spacing.lineHeight * 20)}" w:lineRule="${spacing.lineAtLeast ? 'atLeast' : 'exact'}"` : '',
+                ].filter(Boolean).join(' ');
+                if (attrs) s += `<w:spacing ${attrs}/>`;
+            }
             const ind = meta.paragraphIndentation;
             if (ind && (ind.left || ind.right || ind.firstLine || ind.hanging)) {
                 const attrs = [
@@ -413,6 +467,12 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     }
 
     private textRuns(node: OfficeContentNode): string {
+        // A page field (the page's number, the document's pages) as the field, its saved number its result:
+        // Word shows each page its own.
+        const meta = node.metadata as TextMetadata | undefined;
+        if (meta?.field === 'page' || meta?.field === 'pages') {
+            return `<w:fldSimple w:instr=" ${escapeXml(pageFieldInstruction(meta.field, meta.fieldFormat))} ">${this.run(node.text || '', node.formatting)}</w:fldSimple>`;
+        }
         return this.run(node.text || '', node.formatting);
     }
 
@@ -528,8 +588,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     }
 
     private styleNoteBody(body: string): string {
-        // Give each top-level body paragraph the FootnoteText style (only when it has no pPr already).
-        return body.replace(/<w:p>(?!<w:pPr>)/g, '<w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>');
+        // Give each body paragraph the FootnoteText style, where it has no style of its own.
+        return withParagraphProperties(body, { style: 'FootnoteText' });
     }
 
     /**
@@ -597,7 +657,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     private ensureNumbering(meta: any, bareListId?: string): number {
         const listId = String(meta?.listId ?? bareListId ?? 'pdf-list');
         let numId = this.numByListId.get(listId);
-        let entry: { listId: string; numId: number; levels: Map<number, 'ordered' | 'unordered'>; startAt: Map<number, number> };
+        let entry: { listId: string; numId: number; levels: Map<number, MarkerPattern>; startAt: Map<number, number> };
         if (numId === undefined) {
             numId = this.numbering.length + 1;
             entry = { listId, numId, levels: new Map(), startAt: new Map() };
@@ -610,7 +670,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         }
         const lvl = Math.max(0, Math.min(8, meta?.indentation | 0));
         if (!entry.levels.has(lvl)) {
-            entry.levels.set(lvl, meta?.listType === 'ordered' ? 'ordered' : 'unordered');
+            // The level numbers or bullets as its first item's marker does (`a)`, `1.1.`, `▪`).
+            entry.levels.set(lvl, markerPattern(meta, lvl));
             if (typeof meta?.itemIndex === 'number') entry.startAt.set(lvl, meta.itemIndex + 1);
         }
         return numId;
@@ -637,25 +698,32 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         const abstractIds = new Map<string, number>();
         let abstracts = '', nums = '';
         for (const entry of this.numbering) {
-            const types = Array.from({ length: 9 }, (_, l) => entry.levels.get(l) ?? entry.levels.get(0) ?? 'unordered');
-            const signature = types.join(',');
+            const unordered = markerPattern(undefined, 0);
+            const types = Array.from({ length: 9 }, (_, l) => entry.levels.get(l) ?? entry.levels.get(0) ?? unordered);
+            // A level shows its parents' numbers as fields where those levels are numbered in this list;
+            // where they are not (a PDF's levels, each a list of its own), as the text its marker shows.
+            const parentsNumbered = types.map((_, l) => Array.from({ length: l }, (_, k) => k).every(k => entry.levels.get(k)?.kind === 'ordered'));
+            const signature = JSON.stringify([types, types.map((type, l) => type.withParents && parentsNumbered[l])]);
             let aId = abstractIds.get(signature);
             if (aId === undefined) {
                 aId = abstractIds.size;
                 abstractIds.set(signature, aId);
                 let levels = '';
                 types.forEach((type, l) => {
-                    const fmt = type === 'ordered' ? 'decimal' : 'bullet';
-                    const text = type === 'ordered' ? `%${l + 1}.` : '•';
+                    const fmt = type.kind === 'ordered' ? type.format : 'bullet';
+                    // A literal `%` in Word's level text would read as a field: it is left out.
+                    const literal = (t: string) => t.replace(/%/g, '');
+                    const parents = !type.withParents ? '' : parentsNumbered[l] ? Array.from({ length: l }, (_, k) => `%${k + 1}.`).join('') : literal(type.parentText ?? '');
+                    const text = type.kind === 'ordered' ? `${literal(type.prefix)}${parents}${type.format === 'none' ? '' : `%${l + 1}`}${literal(type.suffix)}` : literal(type.bullet);
                     levels += `<w:lvl w:ilvl="${l}"><w:start w:val="1"/><w:numFmt w:val="${fmt}"/>`
-                        + `<w:lvlText w:val="${escapeXml(text)}"/><w:lvlJc w:val="left"/>`
+                        + `<w:lvlText w:val="${xmlText(text)}"/><w:lvlJc w:val="left"/>`
                         + `<w:pPr><w:ind w:left="${720 * (l + 1)}" w:hanging="360"/></w:pPr></w:lvl>`;
                 });
                 abstracts += `<w:abstractNum w:abstractNumId="${aId}"><w:multiLevelType w:val="multilevel"/>${levels}</w:abstractNum>`;
             }
             let overrides = '';
             for (const lvl of [...entry.levels.keys()].sort((a, b) => a - b)) {
-                if (types[lvl] !== 'ordered') continue;
+                if (types[lvl].kind !== 'ordered') continue;
                 overrides += `<w:lvlOverride w:ilvl="${lvl}"><w:startOverride w:val="${Math.max(1, entry.startAt.get(lvl) ?? 1)}"/></w:lvlOverride>`;
             }
             nums += `<w:num w:numId="${entry.numId}"><w:abstractNumId w:val="${aId}"/>${overrides}</w:num>`;
@@ -809,17 +877,123 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
 
     private contentWidthTwips(): number {
         const cfg = this.config.docxConfig;
-        const size = paperSizePt(cfg.format);
-        const w = Math.round((cfg.landscape ? size.h : size.w) * TWIPS_PER_PT);
-        const left = Math.round(marginPt(cfg.margin.left) * TWIPS_PER_PT);
-        const right = Math.round(marginPt(cfg.margin.right) * TWIPS_PER_PT);
+        const paper = resolvePaper(cfg.format, cfg.landscape, this.sectionSetup ?? this.ast.metadata?.pageSetup, cfg.margin);
+        const w = Math.round(paper.w * TWIPS_PER_PT);
+        const left = Math.round(paper.margin.left * TWIPS_PER_PT);
+        const right = Math.round(paper.margin.right * TWIPS_PER_PT);
         return Math.max(720, w - left - right);
     }
 
     // ── breaks / code / admonition / chart / embed ────────────────────────────────
 
-    private blockBreak(node: OfficeContentNode): string {
-        const t = (node.metadata as any)?.breakType;
+    /** The properties of the section a break just ended, for renderBlocks to put in the paragraph before. */
+    private sectionEndXml: string | undefined;
+    /** The section being written: its pages (BreakMetadata.pageSetup), how it starts, and how many have ended. */
+    private sectionSetup: PageSetup | undefined;
+    private sectionStart: 'nextPage' | 'continuous' = 'nextPage';
+    private sectionsEnded = 0;
+    /** The section being written (counted from 0, as BreakMetadata.section counts), and later sections' own header and footer parts. */
+    private currentSection = 0;
+    private referencedSection = 0;
+    private readonly sectionParts: { path: string; kind: 'header' | 'footer'; xml: string }[] = [];
+    /** Section parts written, by kind and content, to the relationship naming each (see sectionReferences). */
+    private readonly writtenParts = new Map<string, string>();
+
+    /** The current section's own header and footer references, written once (its later properties take them on). */
+    private async ownReferences(): Promise<{ refs: string; titlePage: boolean }> {
+        if (this.currentSection === this.referencedSection) return { refs: '', titlePage: !!this.sectionSetup?.differentFirstPage };
+        this.referencedSection = this.currentSection;
+        return this.sectionReferences(this.currentSection);
+    }
+
+    /** Whether the document has even pages' own parts (`w:evenAndOddHeaders`). */
+    private evenPages = false;
+
+    /**
+     * A section's own header and footer, as parts of their own and references in its properties: its every
+     * page's, its first page's and its even pages', each only where the section has its own (Word gives a
+     * section without one of a type the one before it of that type, as Word reading reads it); and whether
+     * it has a title page (`w:titlePg`: its own first page's part, or its page's `differentFirstPage`). The
+     * first section's every-page parts are written apart (runningFurniture), so `withDefault` is false for it.
+     */
+    private async sectionReferences(section: number, withDefault = true): Promise<{ refs: string; titlePage: boolean }> {
+        const lists = { header: this.ast.auxiliary?.headers, footer: this.ast.auxiliary?.footers };
+        const own = (kind: 'header' | 'footer', type: 'default' | 'first' | 'even') => sectionFurniture(lists[kind], kind, section, type);
+        const titlePage = !!(own('header', 'first') || own('footer', 'first') || this.sectionSetup?.differentFirstPage);
+        let refs = '';
+        for (const kind of ['header', 'footer'] as const) {
+            const write = async (nodes: OfficeContentNode[]) => {
+                const name = `${kind}${this.sectionParts.length + 2}.xml`;
+                const xml = await this.withRelOwner(`word/${name}`, () => this.renderHdrFtr(kind === 'header' ? 'hdr' : 'ftr', nodes));
+                // A part the same as one written before (and naming nothing of its own: no picture, no link) is
+                // that one: thousands of sections of one header were each a part of their own.
+                const same = !this.partRels.get(`word/${name}`)?.length ? this.writtenParts.get(`${kind}:${xml}`) : undefined;
+                if (same) { this.partRels.delete(`word/${name}`); return same; }
+                this.sectionParts.push({ path: `word/${name}`, kind, xml });
+                const rid = this.addRel(`http://schemas.openxmlformats.org/officeDocument/2006/relationships/${kind}`, name);
+                if (!this.partRels.get(`word/${name}`)?.length) this.writtenParts.set(`${kind}:${xml}`, rid);
+                return rid;
+            };
+            const every = withDefault ? own(kind, 'default') : undefined;
+            if (every) refs += `<w:${kind}Reference w:type="default" r:id="${await write(every)}"/>`;
+            const first = own(kind, 'first'), even = own(kind, 'even');
+            if (first) refs += `<w:${kind}Reference w:type="first" r:id="${await write(first)}"/>`;
+            if (even) refs += `<w:${kind}Reference w:type="even" r:id="${await write(even)}"/>`;
+        }
+        return { refs, titlePage };
+    }
+
+    /**
+     * A section's properties (`w:sectPr`): its page's size and margins (under format 'auto' the
+     * section's own, else the format's), its columns, how it starts, and `refs` (its header and footer).
+     */
+    private sectionProperties(setup: PageSetup | undefined, sectionStart: 'nextPage' | 'continuous', refs: string, titlePage: boolean | string): string {
+        const cfg = this.config.docxConfig;
+        const paper = resolvePaper(cfg.format, cfg.landscape, setup, cfg.margin);
+        const twips = (pt: number) => Math.round(pt * TWIPS_PER_PT);
+        const orient = paper.landscape ? ' w:orient="landscape"' : '';
+        const mar = paper.margin;
+        const pgMar = `<w:pgMar w:top="${twips(mar.top)}" w:right="${twips(mar.right)}" w:bottom="${twips(mar.bottom)}" w:left="${twips(mar.left)}" `
+            + `w:header="${paper.headerDistance !== undefined ? twips(paper.headerDistance) : 708}" w:footer="${paper.footerDistance !== undefined ? twips(paper.footerDistance) : 708}" w:gutter="0"/>`;
+        // (Held to the page: a gap of millions made a file an office suite would not open, see heldColumns.)
+        const columns = heldColumns(setup?.columns, paper.w, paper.w - mar.left - mar.right);
+        const cols = columns && columns.count > 1
+            ? `<w:cols w:num="${columns.count}" w:space="${twips(columns.gap)}"${columns.separator ? ' w:sep="1"' : ''}${columns.widths?.length === columns.count
+                ? ` w:equalWidth="0">${columns.widths.map((w, i) => `<w:col w:w="${twips(w)}"${i < columns.count - 1 ? ` w:space="${twips(columns.gap)}"` : ''}/>`).join('')}</w:cols>` : '/>'}`
+            : '';
+        const title = typeof titlePage === 'string' ? titlePage : titlePage ? '<w:titlePg/>' : '';
+        // How it numbers its pages (decimal, Word's own, is written as nothing).
+        const format = setup?.pageNumberFormat, fmt = format && format !== 'decimal' ? wordFmtOf(format) : undefined;
+        if (format && format !== 'decimal' && !fmt && !this.unwrittenNumbering.has(format)) {
+            this.unwrittenNumbering.add(format);
+            this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'docx', feature: `page numbers in ${format} (written in digits)` });
+        }
+        const start = setup?.pageNumberStart;
+        const pgNumType = fmt || start !== undefined ? `<w:pgNumType${fmt ? ` w:fmt="${fmt}"` : ''}${start !== undefined ? ` w:start="${clampInt(start, 0, 2_147_483_647, 1)}"` : ''}/>` : '';
+        return `<w:sectPr>${refs}${sectionStart === 'continuous' ? '<w:type w:val="continuous"/>' : ''}<w:pgSz w:w="${twips(paper.w)}" w:h="${twips(paper.h)}"${orient}/>${pgMar}${pgNumType}${cols}${title}</w:sectPr>`;
+    }
+    /** The page number formats a section had that Word has none of, each reported once. */
+    private unwrittenNumbering = new Set<string>();
+
+    private async blockBreak(node: OfficeContentNode): Promise<string> {
+        const meta = node.metadata as BreakMetadata | undefined;
+        const t = meta?.breakType;
+        // A section ends here: a paragraph holding its properties (Word's way), and the next one starts,
+        // on a new page or on this one ('section'). The first section's carry the header and footer; a
+        // later one's, its own (if it has them).
+        if (t === 'section' || (t === 'page' && typeof meta?.section === 'number')) {
+            const first = this.sectionsEnded++ === 0;
+            const own = first ? { refs: FIRST_SECTION, titlePage: false } : await this.ownReferences();
+            // The section the break starts, as it numbers it (a reader numbering only some breaks leaves the
+            // others in the section before, whose header and footer they keep).
+            if (typeof meta?.section === 'number') this.currentSection = meta.section;
+            const ended = this.sectionProperties(this.sectionSetup ?? this.ast.metadata?.pageSetup, this.sectionStart, own.refs, first ? FIRST_SECTION_TITLE : own.titlePage);
+            // (One that sets no page is on the document's, with its own columns and numbering.)
+            this.sectionSetup = onDocumentPage(meta?.pageSetup, this.ast.metadata?.pageSetup) ?? this.sectionSetup;
+            this.sectionStart = t === 'section' ? 'continuous' : 'nextPage';
+            this.sectionEndXml = ended;
+            return `<w:p><w:pPr>${ended}</w:pPr></w:p>`;
+        }
         if (t === 'page') return `<w:p><w:r><w:br w:type="page"/></w:r></w:p>`;
         if (t === 'column') return `<w:p><w:r><w:br w:type="column"/></w:r></w:p>`;
         if (t === 'thematic') return `<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="auto"/></w:pBdr></w:pPr></w:p>`;
@@ -831,6 +1005,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         if (t === 'page') return `<w:r><w:br w:type="page"/></w:r>`;
         if (t === 'column') return `<w:r><w:br w:type="column"/></w:r>`;
         if (t === 'carriageReturn') return `<w:r><w:cr/></w:r>`;
+        if (t === 'section') return '';
         return `<w:r><w:br/></w:r>`;
     }
 
@@ -852,7 +1027,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         const titleP = `<w:p><w:pPr><w:pBdr><w:left w:val="single" w:sz="18" w:space="4" w:color="${color}"/></w:pBdr><w:ind w:left="360"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="${color}"/></w:rPr><w:t xml:space="preserve">${xmlText(title)}</w:t></w:r></w:p>`;
         const body = await this.renderBlocks(node.children);
         // Indent the body paragraphs with a left border to visually box the admonition.
-        const boxed = body.replace(/<w:p>(?!<w:pPr>)/g, `<w:p><w:pPr><w:pBdr><w:left w:val="single" w:sz="18" w:space="4" w:color="${color}"/></w:pBdr><w:ind w:left="360"/></w:pPr>`);
+        const boxed = withParagraphProperties(body, { border: `<w:pBdr><w:left w:val="single" w:sz="18" w:space="4" w:color="${color}"/></w:pBdr>`, indentLeft: 360 });
         return titleP + boxed;
     }
 
@@ -917,19 +1092,20 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
 
     // ── part assembly ─────────────────────────────────────────────────────────────
 
-    private buildDocumentXml(body: string, headerRid: string, footerRid: string): string {
-        const cfg = this.config.docxConfig;
-        const size = paperSizePt(cfg.format);
-        const pw = Math.round((cfg.landscape ? size.h : size.w) * TWIPS_PER_PT);
-        const ph = Math.round((cfg.landscape ? size.w : size.h) * TWIPS_PER_PT);
-        const orient = cfg.landscape ? ' w:orient="landscape"' : '';
-        const mar = cfg.margin;
-        const pgMar = `<w:pgMar w:top="${Math.round(marginPt(mar.top) * TWIPS_PER_PT)}" w:right="${Math.round(marginPt(mar.right) * TWIPS_PER_PT)}" `
-            + `w:bottom="${Math.round(marginPt(mar.bottom) * TWIPS_PER_PT)}" w:left="${Math.round(marginPt(mar.left) * TWIPS_PER_PT)}" w:header="708" w:footer="708" w:gutter="0"/>`;
-        const sectPr = `<w:sectPr>`
-            + (headerRid ? `<w:headerReference w:type="default" r:id="${headerRid}"/>` : '')
-            + (footerRid ? `<w:footerReference w:type="default" r:id="${footerRid}"/>` : '')
-            + `<w:pgSz w:w="${pw}" w:h="${ph}"${orient}/>${pgMar}</w:sectPr>`;
+    private buildDocumentXml(body: string, headerRid: string, footerRid: string,
+        furniture: { headerKind: string; footerKind: string; titlePage: boolean; evenPages: boolean; firstOwn?: { refs: string; titlePage: boolean } } = { headerKind: 'default', footerKind: 'default', titlePage: false, evenPages: false },
+        lastRefs: { refs: string; titlePage: boolean } = { refs: '', titlePage: false }): string {
+        // A part on the pages of its kind alone: a title page that a first page's part of the other kind made
+        // shows none of this kind, as Word shows it (the first section's own first and even pages' parts are in firstOwn).
+        const ownTitle = !!furniture.firstOwn?.titlePage;
+        const references = (tag: 'header' | 'footer', rid: string, kind: string) => rid ? `<w:${tag}Reference w:type="${kind}" r:id="${rid}"/>` : '';
+        // The header and footer are the first section's (a later one takes them on), with its title page.
+        const first = references('header', headerRid, furniture.headerKind) + references('footer', footerRid, furniture.footerKind) + (furniture.firstOwn?.refs ?? '');
+        const firstTitle = furniture.titlePage || ownTitle || !!this.ast.metadata?.pageSetup?.differentFirstPage;
+        const sectioned = body.includes(FIRST_SECTION);
+        if (sectioned) body = body.replace(FIRST_SECTION, first).replace(FIRST_SECTION_TITLE, firstTitle ? '<w:titlePg/>' : '');
+        // The last section's properties close the body.
+        const sectPr = this.sectionProperties(this.sectionSetup ?? this.ast.metadata?.pageSetup, this.sectionStart, sectioned ? lastRefs.refs : first, sectioned ? lastRefs.titlePage : firstTitle);
         const bodyContent = body.trim() ? body : '<w:p/>';
         return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n`
             + `<w:document ${WML_NS}>`
@@ -960,6 +1136,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         if (hasComments) parts['word/comments.xml'] = this.buildCommentsXml();
         if (o.hasHeader) parts['word/header1.xml'] = o.headerXml;
         if (o.hasFooter) parts['word/footer1.xml'] = o.footerXml;
+        for (const part of this.sectionParts) parts[part.path] = part.xml;
         parts['docProps/core.xml'] = this.coreProps(o.iso);
         parts['docProps/app.xml'] = APP_XML;
         if (custom) parts['docProps/custom.xml'] = custom;
@@ -1005,8 +1182,11 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         if (o.hasFootnotes) overrides += `<Override PartName="/word/footnotes.xml" ContentType="${wml}.footnotes+xml"/>`;
         if (o.hasEndnotes) overrides += `<Override PartName="/word/endnotes.xml" ContentType="${wml}.endnotes+xml"/>`;
         if (o.hasComments) overrides += `<Override PartName="/word/comments.xml" ContentType="${wml}.comments+xml"/>`;
-        if (this.ast.auxiliary?.headers?.length) overrides += `<Override PartName="/word/header1.xml" ContentType="${wml}.header+xml"/>`;
-        if (this.ast.auxiliary?.footers?.length) overrides += `<Override PartName="/word/footer1.xml" ContentType="${wml}.footer+xml"/>`;
+        if (runningFurniture(this.ast.auxiliary?.headers, 'header').length) overrides += `<Override PartName="/word/header1.xml" ContentType="${wml}.header+xml"/>`;
+        if (runningFurniture(this.ast.auxiliary?.footers, 'footer').length) overrides += `<Override PartName="/word/footer1.xml" ContentType="${wml}.footer+xml"/>`;
+        for (const part of this.sectionParts) overrides += `<Override PartName="/${part.path}" ContentType="${wml}.${part.kind}+xml"/>`;
+        const headers = runningFurniture(this.ast.auxiliary?.headers, 'header'), footers = runningFurniture(this.ast.auxiliary?.footers, 'footer');
+        if ((headers.length && furnitureKind(headers, 'header') === 'even') || (footers.length && furnitureKind(footers, 'footer') === 'even')) overrides += `<Override PartName="/word/settings.xml" ContentType="${wml}.settings+xml"/>`;
         overrides += `<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>`
             + `<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>`;
         if (o.hasCustom) overrides += `<Override PartName="/docProps/custom.xml" ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml"/>`;
@@ -1060,20 +1240,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     }
 
     private customProps(): string | null {
-        const props = this.effectiveMetadata.customProperties;
-        if (!props || !Object.keys(props).length) return null;
-        let entries = '', pid = 2;
-        for (const [key, value] of Object.entries(props)) {
-            let v: string;
-            if (typeof value === 'boolean') v = `<vt:bool>${value ? 'true' : 'false'}</vt:bool>`;
-            else if (typeof value === 'number') v = `<vt:r8>${value}</vt:r8>`;
-            else if (value instanceof Date) v = `<vt:filetime>${value.toISOString().replace(/\.\d+Z$/, 'Z')}</vt:filetime>`;
-            else v = `<vt:lpwstr>${xmlText(String(value))}</vt:lpwstr>`;
-            entries += `<property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="${pid++}" name="${xmlText(key)}">${v}</property>`;
-        }
-        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n`
-            + `<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" `
-            + `xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">${entries}</Properties>`;
+        return ooxmlCustomPropertiesXml(this.effectiveMetadata.customProperties);
     }
 }
 
@@ -1104,4 +1271,79 @@ function buildStyles(): string {
         + `<w:style w:type="paragraph" w:styleId="FootnoteText"><w:name w:val="Footnote Text"/><w:basedOn w:val="Normal"/></w:style>`
         + `<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:left w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:right w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="auto"/></w:tblBorders></w:tblPr></w:style>`
         + `</w:styles>`;
+}
+
+/** Where the first section's header and footer references, and its title page, go once they are known. */
+const FIRST_SECTION = '\u0000first-section-references\u0000';
+const FIRST_SECTION_TITLE = '\u0000first-section-title-page\u0000';
+
+/** A paragraph's properties in the order WordprocessingML lists them, which Word requires. */
+const PPR_ORDER = ['pStyle', 'keepNext', 'keepLines', 'pageBreakBefore', 'framePr', 'widowControl', 'numPr', 'suppressLineNumbers', 'pBdr', 'shd', 'tabs', 'suppressAutoHyphens', 'kinsoku', 'wordWrap', 'overflowPunct', 'topLinePunct', 'autoSpaceDE', 'autoSpaceDN', 'bidi', 'adjustRightInd', 'snapToGrid', 'spacing', 'ind', 'contextualSpacing', 'mirrorIndents', 'suppressOverlap', 'jc', 'textDirection', 'textAlignment', 'textboxTightWrap', 'outlineLvl', 'divId', 'cnfStyle', 'rPr', 'sectPr', 'pPrChange'];
+
+/**
+ * `out` with a section's properties (`sectPr`) in the last paragraph of the block starting at `from`, where
+ * that block ends in a paragraph of the body (not in a table, or a text box's) holding none yet; undefined
+ * where it does not.
+ */
+function withSectionEnd(out: string, from: number, sectPr: string): string | undefined {
+    if (from < 0 || !out.endsWith('</w:p>')) return undefined;
+    // The last paragraph at the block's own level: paragraphs nest in text boxes, and tables hold them.
+    let depth = 0, start = -1;
+    const tags = /<(\/?)w:(p|tbl|txbxContent)([\s>/])/g;
+    tags.lastIndex = from;
+    for (let m = tags.exec(out); m; m = tags.exec(out)) {
+        const closing = m[1] === '/', selfClosing = !closing && out.startsWith('/>', out.indexOf('>', m.index) - 1);
+        if (closing) depth--;
+        else if (!selfClosing) {
+            if (depth === 0 && m[2] === 'p') start = m.index;
+            depth++;
+        }
+        if (depth < 0) return undefined;
+    }
+    if (start < 0 || depth !== 0) return undefined;
+    const open = out.indexOf('>', start) + 1;
+    // Its own properties, the paragraph's first child (after any space between, as XML written by hand has it).
+    const first = /^\s*<w:pPr(\s*\/>|\s*>)?/.exec(out.slice(open, open + 256));
+    if (!first?.[1]) return `${out.slice(0, open)}<w:pPr>${sectPr}</w:pPr>${out.slice(open)}`;
+    const propsAt = open + first[0].length;
+    // (Empty: `<w:pPr/>`, the section's properties its one child.)
+    if (first[1].includes('/')) return `${out.slice(0, open + first[0].length - first[1].length)}>${sectPr}</w:pPr>${out.slice(propsAt)}`;
+    // They end at their matching close (a revision's record of the old ones holds a pPr too).
+    let level = 1, close = -1;
+    const props = /<(\/?)w:pPr(\s*\/)?\s*>/g;
+    props.lastIndex = propsAt;
+    for (let m = props.exec(out); m; m = props.exec(out)) {
+        if (m[2]) continue;
+        level += m[1] ? -1 : 1;
+        if (level === 0) { close = m.index; break; }
+    }
+    if (close < 0) return undefined;
+    const inner = out.slice(propsAt, close);
+    if (/<w:sectPr[\s>/]/.test(inner.replace(/<w:pPrChange[\s\S]*<\/w:pPrChange>/, ''))) return undefined;
+    const change = inner.indexOf('<w:pPrChange');
+    const at = change >= 0 ? propsAt + change : close;
+    return `${out.slice(0, at)}${sectPr}${out.slice(at)}`;
+}
+
+/**
+ * Gives every paragraph of `body` a style where it has none, a border where it has none, or `indentLeft`
+ * more of left indent, merged into the properties it already has (its spacing, its list, its alignment).
+ */
+function withParagraphProperties(body: string, add: { style?: string; border?: string; indentLeft?: number }): string {
+    return body.replace(/<w:p>(<w:pPr>([\s\S]*?)<\/w:pPr>)?/g, (_m, _whole, inner: string | undefined) => {
+        const parts = new Map<string, string>();
+        for (const el of (inner || '').match(/<w:(\w+)\b[^>]*?(?:\/>|>[\s\S]*?<\/w:\1>)/g) || []) parts.set(/^<w:(\w+)/.exec(el)![1], el);
+        if (add.style && !parts.has('pStyle')) parts.set('pStyle', `<w:pStyle w:val="${add.style}"/>`);
+        if (add.border && !parts.has('pBdr')) parts.set('pBdr', add.border);
+        // (A list item's own indent, from its numbering, is past the box's already.)
+        if (add.indentLeft && (parts.has('ind') || !parts.has('numPr'))) {
+            const ind = parts.get('ind');
+            const left = ind ? Number(/w:(?:left|start)="(-?\d+)"/.exec(ind)?.[1] ?? 0) : 0;
+            parts.set('ind', ind
+                ? (/w:(?:left|start)="/.test(ind) ? ind.replace(/w:(left|start)="-?\d+"/, `w:$1="${left + add.indentLeft}"`) : ind.replace('<w:ind', `<w:ind w:left="${add.indentLeft}"`))
+                : `<w:ind w:left="${add.indentLeft}"/>`);
+        }
+        const ordered = [...parts.entries()].sort((a, b) => (PPR_ORDER.indexOf(a[0]) + 1 || 99) - (PPR_ORDER.indexOf(b[0]) + 1 || 99)).map(([, el]) => el);
+        return `<w:p><w:pPr>${ordered.join('')}</w:pPr>`;
+    });
 }

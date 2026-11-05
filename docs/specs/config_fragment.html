@@ -133,13 +133,39 @@
                     browser.</td>
             </tr>
             <tr>
+                <td><code>pdfCMapUrl</code></td>
+                <td><code>string</code></td>
+                <td>pdfjs-dist's <code>cmaps/</code> (Node); CDN (browser); <code>''</code> (slim)</td>
+                <td><strong>PDF CJK text</strong>: the folder (ending in <code>/</code>) of pdf.js's packed CMaps, through
+                    which pdf.js reads the text of a font a PDF does not embed when it names a predefined CJK encoding
+                    (<code>UniJIS-UTF16-H</code>, <code>90ms-RKSJ-H</code>...). Only the files a document needs are read,
+                    each at most 4 MB and 15 s, and a folder that keeps a document waiting 15 s in all is asked nothing
+                    more for it; one that cannot be had raises <code>PDF_ASSET_UNAVAILABLE</code> (once,
+                    with the first page that needed it) and the rest of the document is read.</td>
+            </tr>
+            <tr>
+                <td><code>pdfDecoderUrl</code></td>
+                <td><code>string</code></td>
+                <td>pdfjs-dist's <code>wasm/</code> (Node); CDN (browser); <code>''</code> (slim)</td>
+                <td><strong>PDF pictures</strong>: the folder (ending in <code>/</code>) of pdf.js's image decoders,
+                    <code>jbig2.wasm</code> (JBIG2 and CCITT fax) and <code>openjpeg.wasm</code> (JPEG 2000), with their
+                    JavaScript fallbacks (<code>*_nowasm_fallback.js</code>). Read as <code>pdfCMapUrl</code> is; one
+                    that cannot be had raises <code>PDF_ASSET_UNAVAILABLE</code>, and each picture then not decoded
+                    <code>IMAGE_EXTRACTION_FAILED</code>. To host both yourself, copy <code>cmaps/</code> and
+                    <code>wasm/</code> from <code>node_modules/pdfjs-dist</code> and allow their address in
+                    <code>connect-src</code>.</td>
+            </tr>
+            <tr>
                 <td><code>allowRemoteAssets</code></td>
                 <td><code>boolean</code></td>
                 <td><code>true</code></td>
                 <td><strong>No third-party requests</strong>: <code>false</code> stops the library falling back to its
-                    built-in CDN addresses for the pdf.js worker and Tesseract's worker, core and language data. A parse
-                    that would use one rejects with <code>REMOTE_ASSET_BLOCKED</code>, naming the option to set
-                    (<code>pdfWorkerSrc</code>, <code>ocrConfig.workerPath</code>/<code>corePath</code>/<code>langPath</code>).
+                    built-in CDN addresses for the pdf.js worker, pdf.js's CMaps and image decoders, and Tesseract's
+                    worker, core and language data. A parse that would use the worker's or Tesseract's default rejects
+                    with <code>REMOTE_ASSET_BLOCKED</code>, naming the option to set (<code>pdfWorkerSrc</code>,
+                    <code>ocrConfig.workerPath</code>/<code>corePath</code>/<code>langPath</code>); a CMap or decoder a
+                    document needs is not fetched from its default, and the parse goes on with
+                    <code>PDF_ASSET_UNAVAILABLE</code> naming <code>pdfCMapUrl</code> or <code>pdfDecoderUrl</code>.
                     An address you pass yourself is used as given. HTML and PDF written from such a parse name no chart
                     script address either, unless <code>htmlConfig.chartJsSrc</code> is set: a chart is written as its
                     data table.</td>
@@ -212,7 +238,10 @@
                 <td><code>includeBreakNodes</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Layout Break Parsing</strong>: Page, column and last-rendered-page breaks. A line break the author
+                <td><strong>Layout Break Parsing</strong>: Page, column and last-rendered-page breaks.
+                    The break that starts a Word, RTF or ODT section, or a PDF's page of another size (with <code>metadata.section</code> and the section's
+                    <code>pageSetup</code>), and the <code>'section'</code> breaks around an ODF section set in columns of its
+                    own, are the document's structure and always nodes. A line break the author
                     typed (DOCX <code>w:br</code>/<code>w:cr</code>, LaTeX <code>\\</code>, HTML <code>&lt;br&gt;</code>) is
                     always a <code>break</code> node, and a DOCX tab a <code>\t</code> in the text, whatever this says.
                     Supported for Word (DOCX), OpenDocument (ODT/ODP/ODS)
@@ -238,8 +267,10 @@
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
                 <td><strong>Page Geometry</strong>: When true, the geometric layout data (each node's <code>bounds</code> box,
-                    its <code>{ x, y, width, height }</code> on the page, plus page dimensions) is omitted.
-                    Currently produced by the PDF parser; page geometry is emitted by default
+                    its <code>{ x, y, width, height }</code> on the page or slide, plus page dimensions, page setups
+                    and slides' <code>drawing</code> nodes and backgrounds) is omitted. A text document's page setup keeps
+                    what is no geometry: how each section numbers its pages and whether its first page has a header of
+                    its own. Produced by the PDF, PPTX, ODP, DOCX, ODT, RTF and XLSX parsers; page geometry is emitted by default
                     (<code>ignorePageGeometry</code> defaults to false).</td>
             </tr>
             <tr>
@@ -281,8 +312,14 @@
                     only the headings the document itself tags, and a PDF heading says what decided it in
                     <code>metadata.levelSource</code>),
                     <code>pageRange</code> (e.g. <code>1-3,7</code>), <code>normalizeText</code>, and
-                    <code>extractTextColor</code> (per-run fill color into <code>formatting.color</code>; on by default,
+                    <code>extractTextColor</code> (per-run fill color into <code>formatting.color</code>, and the colour of the filled
+                    rectangle a run stands on into <code>formatting.backgroundColor</code>; on by default,
                     set <code>false</code> to skip the per-page operator-list fetch on a throughput-focused text path),
+                    <code>keepHeadersAndFootersInPages</code> (default <code>false</code>: a PDF's running headers and footers, marked as
+                    artifacts in a tagged PDF and found as the lines repeated at the top and bottom of its pages in an untagged one,
+                    are read into <code>auxiliary</code>, their page numbers as page fields. A marked line goes there whatever it says, a found one where it is the same, its page numbers as one, on every page that has any, on all odd or even ones, or but for the first page, and missing from no more than one page in five with text between its first and last (one whose words or own number change, or a kind on fewer than two of three pages with text, stays in its pages). Where they differ they are parts as a word processor's are: a first page's, even pages', or a section at each change or restart of the numbers, numbered where it restarts; pages before a kind's first line are a section without it; a line larger than the text is a paragraph of it);
+                    on, each page keeps its own in its content, the header before the page's text and the
+                    footer after it, for a page-faithful result such as a slide per page; <code>ignoreHeadersAndFooters</code> still drops them),
                     <code>maxTextItems</code> (default <code>20000</code>; an item counts once more per 64 characters), <code>maxOperators</code>
                     (default <code>250000</code>; only the operators kept count, not paths) and <code>maxTimeMs</code> (default <code>5000</code>): the bases of
                     the text items, drawing operators and CPU time of the separate pdf.js process one PDF may take, each plus an allowance for the file's
@@ -290,7 +327,9 @@
                     of work; past the text or time limit the rest of the document is not read, past the operator limit its images, text colours and font
                     styles are not (its text is), and <code>PDF_CONTENT_LIMIT_EXCEEDED</code> names the limit. Being CPU time, the time limit is not
                     spent by a busy host or machine; pdf.js in the host has none. <code>maxAnnotations</code> (default <code>10000</code>, plus one per
-                    32 bytes) bounds the links and highlights read. <code>Infinity</code> is no limit. <code>separateProcess</code> (default
+                    32 bytes) bounds the links and highlights read. <code>maxImagePixels</code> (default <code>40000000</code>)
+                    is the most pixels a picture may have to be extracted: pdf.js leaves out a larger one, reported with
+                    <code>IMAGE_EXTRACTION_FAILED</code> naming the option. <code>Infinity</code> is no limit. <code>separateProcess</code> (default
                     <code>true</code>) runs pdf.js in separate Node processes, at most one per CPU, under <code>processMemoryMb</code> (default
                     <code>1024</code>), so a PDF that inflates into gigabytes inside pdf.js rejects with <code>PDF_PROCESS_FAILED</code> instead of ending
                     the host, and <code>abortSignal</code> can stop it mid-stream; where one cannot start, pdf.js runs in the host with
@@ -312,9 +351,10 @@
             <tr>
                 <td><code>csvDelimiter</code></td>
                 <td><code>string</code></td>
-                <td><code>,</code></td>
-                <td><strong>Data Parsing</strong>: Custom delimiter for CSV files (e.g., <code>;</code> or
-                    <code>\t</code>).</td>
+                <td><code>'auto'</code></td>
+                <td><strong>Data Parsing</strong>: Delimiter of CSV files. <code>'auto'</code> reads it from the file
+                    (comma, semicolon, tab or bar, counted outside quotes); any other value (e.g., <code>;</code> or
+                    <code>\t</code>) is used as given.</td>
             </tr>
             <tr>
                 <td><code>decompressionLimits</code></td>

@@ -133,8 +133,21 @@ function rewrite(node: OfficeContentNode, rewritten: Map<OfficeContentNode, Reco
     };
 }
 
-/** The empty positions a document's grids may still fill, and how many of its tables were laid out closer to fit. */
-interface GridBudget { left: number; laidOut: number }
+/**
+ * The empty positions a document's grids may still fill, how many of its tables were laid out closer to
+ * fit, and whether a sheet whose every cell names its column is left where its cells stand (a writer
+ * that holds a sheet's cells by their places, XLSX's and ODS's, fills no empty position).
+ */
+interface GridBudget { left: number; laidOut: number; keepPlacedSheets?: boolean }
+
+/** Whether every cell of a sheet names its column (a spreadsheet's, as XLSX, ODS and CSV read them). */
+function placesItsCells(node: OfficeContentNode): boolean {
+    for (const row of node.children ?? []) {
+        if (row.type !== 'row') continue;
+        for (const cell of row.children ?? []) if (cell.type === 'cell' && coordinate((cell.metadata as { col?: unknown } | undefined)?.col) === undefined) return false;
+    }
+    return true;
+}
 
 /** `nodes` with every table and sheet among them, or in them, bounded (see boundGrid); `nodes` when none changed. */
 function boundGrids(nodes: OfficeContentNode[], budget: GridBudget, done: NodeMemo<OfficeContentNode>, filled?: Map<OfficeContentNode, number>): OfficeContentNode[] {
@@ -154,7 +167,7 @@ function boundGrids(nodes: OfficeContentNode[], budget: GridBudget, done: NodeMe
                 const bounded = boundGrids(list, budget, done, filled);
                 if (bounded !== list) next = { ...next, [key]: bounded };
             }
-            if (next.type === 'table' || next.type === 'sheet') next = boundGrid(next, budget, filled);
+            if (next.type === 'table' || (next.type === 'sheet' && !(budget.keepPlacedSheets && placesItsCells(next)))) next = boundGrid(next, budget, filled);
             done.set(node, next);
         }
         if (next !== node) out ??= nodes.slice(0, i);
@@ -179,11 +192,13 @@ export const gridPositionsFor = (ast: OfficeParserAST): number => MAX_SHEET_GRID
  * each resulting table or sheet fills: the budget is charged once for a table the AST shares, which
  * writers write along every path to it (sharedNodeVisits weighs them there). `onLaidOut` is told how
  * many tables were laid out closer, when any were: their cells no longer stand where the document put
- * them, which is reported. A `tree` (see sharedNodeVisits) is read without a memo.
+ * them, which is reported. A `tree` (see sharedNodeVisits) is read without a memo. `keepPlacedSheets`
+ * leaves a sheet whose every cell names its column where its cells stand, for a writer that fills no
+ * empty position (XLSX's, ODS's).
  */
-export function withBoundedSheetGrids<T extends OfficeParserAST>(ast: T, filled?: Map<OfficeContentNode, number>, options: { tree?: boolean; onLaidOut?: (tables: number) => void } = {}): T {
+export function withBoundedSheetGrids<T extends OfficeParserAST>(ast: T, filled?: Map<OfficeContentNode, number>, options: { tree?: boolean; onLaidOut?: (tables: number) => void; keepPlacedSheets?: boolean } = {}): T {
     // One budget for the document's content and its headers, footers, slide masters and outline.
-    const budget: GridBudget = { left: gridPositionsFor(ast), laidOut: 0 };
+    const budget: GridBudget = { left: gridPositionsFor(ast), laidOut: 0, ...(options.keepPlacedSheets ? { keepPlacedSheets: true } : {}) };
     const done = nodeMemo<OfficeContentNode>(options.tree);
     const bounded = mapNodeLists(ast, nodes => boundGrids(nodes, budget, done, filled));
     if (budget.laidOut) options.onLaidOut?.(budget.laidOut);

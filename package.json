@@ -1,7 +1,7 @@
 {
   "name": "officeparser",
-  "version": "8.2.0",
-  "description": "A robust, strictly-typed Node.js and Browser library for parsing office files (.docx, .pptx, .xlsx, .odt, .odp, .ods, .odg, .pdf, .rtf, .csv, .md, .html, .epub, .tex) and generating high-fidelity outputs in DOCX, ODT, LaTeX, Markdown, HTML, CSV, RTF, PDF, EPUB, and RAG-focused chunks.",
+  "version": "8.5.0",
+  "description": "A robust, strictly-typed Node.js and Browser library for parsing office files (.docx, .pptx, .xlsx, .odt, .odp, .ods, .odg, .pdf, .rtf, .csv, .md, .html, .epub, .tex) and generating high-fidelity outputs in DOCX, ODT, XLSX, ODS, PPTX, ODP, LaTeX, Markdown, HTML, CSV, RTF, PDF, EPUB, and RAG-focused chunks.",
   "funding": "https://github.com/sponsors/harshankur",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -29,7 +29,7 @@
   },
   "sideEffects": false,
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.23.4 <23 || >=24.22.1 <25 || >=26.12.1"
   },
   "files": [
     "dist"
@@ -42,12 +42,12 @@
     "build:browser": "node build_browser.js && npm run sync:docs",
     "build:blog": "node scripts/build-blog.js",
     "sync:versions": "node scripts/sync-pdfjs-versions.js",
-    "sync:site": "node scripts/sync-site-version.js",
+    "sync:site": "node scripts/sync-site-version.js && node scripts/sync-site-documents.js",
     "sync:docs": "node -e \"const fs=require('fs');fs.mkdirSync('docs/dist',{recursive:true});for(const f of ['officeparser.browser.iife.js','officeparser.browser.mjs','officeparser.browser.slim.iife.js','officeparser.browser.slim.mjs'])fs.copyFileSync('dist/'+f,'docs/dist/'+f);fs.mkdirSync('docs/test/files',{recursive:true});fs.cpSync('test/files','docs/test/files',{recursive:true})\"",
     "lint": "eslint src",
     "test:types": "tsc --project test/tsconfig.json",
     "test:blog": "node test/testBlog.js",
-    "test:site": "node scripts/sync-site-version.js --check && node test/testSite.js",
+    "test:site": "node scripts/sync-site-version.js --check && node scripts/sync-site-documents.js --check && node test/testSite.js",
     "test": "npm run lint && npm run test:types && npm run test:blog && npm run test:site && npm run test:clean && npm run build && npm run test:license && npm run test:artifacts && npm run test:parser && npm run test:exhaustive && npm run test:generator && npm run test:security && npm run test:cli",
     "test:fast": "npm run lint && npm run test:types && npm run test:blog && npm run test:site && npm run test:parser:fast && npm run test:exhaustive && npm run test:generator:fast && npm run test:security && npm run test:cli:fast",
     "test:exhaustive": "npx tsx test/testExhaustive.ts",

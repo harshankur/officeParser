@@ -116,6 +116,9 @@ const FULL_CONFIG: DeepRequired<OfficeParserConfig> = {
     ignoreNotes: false,
     newlineDelimiter: '\n',
     pdfWorkerSrc: '',
+    // '' in Node is pdfjs-dist's own folders.
+    pdfCMapUrl: '',
+    pdfDecoderUrl: '',
     serializeRawContent: true,
     preserveXmlWhitespace: false,
     includeBreakNodes: true,
@@ -153,10 +156,13 @@ const FULL_CONFIG: DeepRequired<OfficeParserConfig> = {
         pageRange: '',
         normalizeText: true,
         extractTextColor: true,
+        // In auxiliary, as headers and footers: the most the AST says of them.
+        keepHeadersAndFootersInPages: false,
         maxTextItems: 20_000,
         maxOperators: 250_000,
         maxAnnotations: 10_000,
         maxTimeMs: 5_000,
+        maxImagePixels: 40_000_000,
         // pdf.js in a process of its own, as it runs by default in Node.
         separateProcess: true,
         processMemoryMb: 1024,
@@ -592,7 +598,7 @@ function applyOdpParityAdjustments(
 ): { adjusted: FeatureMetrics, notes: Record<string, string> } {
     const adjusted = { ...actual, lists: { ...actual.lists }, tables: { ...actual.tables }, attachments: { ...actual.attachments } };
     const notes: Record<string, string> = {};
-    const { emptyLists, tablePadding, mergedCells, splitLists, layoutLists, referencedAttachments } = getOdpVirtualDiscrepancies(ast);
+    const { emptyLists, tablePadding, splitLists, layoutLists, referencedAttachments } = getOdpVirtualDiscrepancies(ast);
 
     // 1. Attachments: Filter unused media
     const actualAttachments = ast.attachments || [];
@@ -603,10 +609,10 @@ function applyOdpParityAdjustments(
         adjusted.attachments.withOCR = actualAttachments.filter(a => referencedAttachments.has(a.name || '') && a.ocrText !== undefined).length;
     }
 
-    // 2. Tables: Account for merged cells and padding
-    if (mergedCells > 0 || tablePadding > 0) {
-        notes['Tables - Cells'] = `ODP table cells adjusted. Adjusted for ${tablePadding} implicit empty trailing cells, ${mergedCells} merged/spanned cells`;
-        adjusted.tables.cells += (mergedCells + tablePadding);
+    // 2. Tables: Account for padding (positions a merged cell covers are no cells in either format)
+    if (tablePadding > 0) {
+        notes['Tables - Cells'] = `ODP table cells adjusted. Adjusted for ${tablePadding} implicit empty trailing cells`;
+        adjusted.tables.cells += tablePadding;
     }
 
     // 3. Lists: Exclude placeholders and layout-wrap lists
@@ -3395,13 +3401,17 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
         const fsH = collectHeadings(await OfficeParser.parseOffice(getFilePath('pdf'), { ocr: false, pdfParserConfig: { headingDetection: 'font-size' } }));
         // 'auto' trusts the tags: the calibre fixture tags many body-sized headings (e.g. "Text Formatting").
         add("headingDetection:'auto' trusts tagged headings", isH(autoH, 'Text Formatting'), '"Text Formatting" is a heading', isH(autoH, 'Text Formatting') ? 'heading' : 'not heading');
-        // 'font-size' ignores the tag levels and applies the size/weight heuristic instead, so a body-sized
-        // tagged heading is demoted and the count drops below 'auto'. Before the option was wired up, this
-        // produced the identical result to 'auto' (the option did nothing).
+        // 'font-size' ignores the tag levels and applies the size/weight heuristic instead: the fixture's
+        // headings are a point or two larger than its text and bold (14pt and 13pt over 12pt), so it finds
+        // the same ones, levelled by their sizes (the 26pt title first), not by the tags (which make the
+        // title and "Text Formatting" both level 1). Before the option was wired up, this produced the
+        // identical result to 'auto' (the option did nothing).
+        const levelOf = (hs: any[], t: string) => hs.find((h: any) => String(h.text || '').startsWith(t))?.metadata?.level;
+        const fsLevels = [levelOf(fsH, 'Demonstration'), levelOf(fsH, 'Text Formatting'), levelOf(fsH, 'Inline formatting')];
         add("headingDetection:'font-size' overrides tags via size heuristic",
-            fsH.length > 0 && fsH.length < autoH.length && !isH(fsH, 'Text Formatting'),
-            `fewer than ${autoH.length} headings, "Text Formatting" demoted`,
-            `${fsH.length} headings, "Text Formatting" heading=${isH(fsH, 'Text Formatting')}`);
+            fsH.length === autoH.length && JSON.stringify(fsLevels) === '[1,2,3]' && levelOf(autoH, 'Text Formatting') === 1 && fsH.every((h: any) => h.metadata?.levelSource === 'font-size'),
+            `${autoH.length} headings, levelled 1, 2, 3 by size`,
+            `${fsH.length} headings, levels ${JSON.stringify(fsLevels)}`);
     } catch (e: any) {
         add("headingDetection font-size", false, 'ran', e?.message || String(e));
     }
@@ -3497,6 +3507,26 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
         add('ignoreInternalLinks parse', false, 'parsed', e?.message || String(e));
     }
 
+    // --- cjk_ccitt_jpx fixture: what pdf.js reads only with the files it loads on demand ---
+    // Japanese text in a font the file does not embed (read through the CMap UniJIS-UTF16-H), a CCITT
+    // Group 4 picture (jbig2.wasm) and a JPEG 2000 picture (openjpeg.wasm): lost, all three, while pdf.js
+    // was given none of its folders. The same in a separate process and in this one.
+    for (const separateProcess of [true, false]) {
+        try {
+            const issues: any[] = [];
+            const ast = await OfficeParser.parseOffice(path.join(pdfDir, 'cjk_ccitt_jpx.pdf'), { ocr: false, extractAttachments: true, onWarning: (issue: any) => issues.push(issue), pdfParserConfig: { separateProcess } });
+            const where = separateProcess ? 'separate process' : 'in process';
+            const text = textOf(ast);
+            add(`CJK text of a CMap read (${where})`, text.includes('日本語テキスト'), '日本語テキスト', text);
+            const pngs = ast.attachments.filter((a: any) => a.mimeType === 'image/png');
+            add(`CCITT and JPEG 2000 pictures decoded (${where})`, pngs.length === 2, 2, pngs.length);
+            const lost = issues.filter(i => i.code === 'PDF_ASSET_UNAVAILABLE' || i.code === 'IMAGE_EXTRACTION_FAILED');
+            add(`No CMap or decoder missing (${where})`, lost.length === 0, 'none', lost.map(i => i.code).join(', '));
+        } catch (e: any) {
+            add(`cjk_ccitt_jpx parse (separateProcess ${separateProcess})`, false, 'parsed', e?.message || String(e));
+        }
+    }
+
     // --- columns_untagged fixture: reading order left column before right column ---
     try {
         const ast = await OfficeParser.parseOffice(path.join(pdfDir, 'columns_untagged.pdf'), { ocr: false });
@@ -3522,6 +3552,37 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
         add('Rotated rotation metadata', page1?.metadata?.rotation === 90, 90, page1?.metadata?.rotation);
     } catch (e: any) {
         add('rotated parse', false, 'parsed', e?.message || String(e));
+    }
+
+    // --- page_sizes fixture: a page of another size or turned starts a section of the pages from it ---
+    // Letter, Letter, landscape, an upright page shown landscape (/Rotate 90: the same page as it is seen,
+    // so no section), Letter, A4. Each section's start is a page break with its number and its size alone.
+    try {
+        const shape = (a: any) => a.content.map((n: any) => n.type === 'page' ? `p${n.metadata?.pageNumber}`
+            : n.type === 'break' ? `${n.metadata?.breakType}(${n.metadata?.section}:${n.metadata?.pageSetup?.width}x${n.metadata?.pageSetup?.height})` : n.type).join(' ');
+        const ast = await OfficeParser.parseOffice(path.join(pdfDir, 'page_sizes.pdf'), { ocr: false });
+        const want = 'p1 p2 page(1:792x612) p3 p4 page(2:612x792) p5 page(3:595x842) p6';
+        add('A page of another size starts a section', shape(ast) === want, want, shape(ast));
+        add('The document page is the first page', JSON.stringify(ast.metadata.pageSetup) === '{"width":612,"height":792}', '{"width":612,"height":792}', JSON.stringify(ast.metadata.pageSetup));
+        const starts = ast.content.filter((n: any) => n.type === 'break');
+        add('A section of PDF pages sets no margins', starts.every((n: any) => Object.keys(n.metadata.pageSetup).join() === 'width,height'), 'width,height', starts.map((n: any) => Object.keys(n.metadata.pageSetup).join()).join(' | '));
+        // A section's start is the document's structure: a node whatever includeBreakNodes says.
+        const withBreaks = await OfficeParser.parseOffice(path.join(pdfDir, 'page_sizes.pdf'), { ocr: false, includeBreakNodes: true });
+        add('PDF section starts whatever includeBreakNodes says', shape(withBreaks) === want, want, shape(withBreaks));
+        // Under ignorePageGeometry the pages' sizes are left out, and with them the sections they make.
+        const flat = await OfficeParser.parseOffice(path.join(pdfDir, 'page_sizes.pdf'), { ocr: false, ignorePageGeometry: true });
+        add('No PDF section starts under ignorePageGeometry', shape(flat) === 'p1 p2 p3 p4 p5 p6' && !flat.metadata.pageSetup, 'p1 p2 p3 p4 p5 p6, no pageSetup', `${shape(flat)}, ${JSON.stringify(flat.metadata.pageSetup)}`);
+        // A page range: the first page read is the document's page, and a section starts against the page before it read.
+        const range = await OfficeParser.parseOffice(path.join(pdfDir, 'page_sizes.pdf'), { ocr: false, pdfParserConfig: { pageRange: '3-5' } });
+        const wantRange = 'p3 p4 page(1:612x792) p5';
+        add('PDF sections of a page range', shape(range) === wantRange && range.metadata.pageSetup?.width === 792, `${wantRange}, document 792 wide`, `${shape(range)}, document ${range.metadata.pageSetup?.width} wide`);
+        // Text shows nothing for a section's start, and HTML no second break after a page (a blank page in print).
+        const text = (await ast.to('text')).value;
+        add('PDF section start in text output', !/\n{3,}/.test(text) && text.includes('Turned page four'), 'no gap at a section start', JSON.stringify(text.slice(0, 200)));
+        const html = (await ast.to('html')).value;
+        add('PDF section start writes no break in HTML', !html.includes('<hr class="page-break section-start"') && (html.match(/<section class="page"/g) || []).length === 6, 'six pages, no section-start rule', `${(html.match(/<hr class="page-break section-start"/g) || []).length} section-start, ${(html.match(/<section class="page"/g) || []).length} pages`);
+    } catch (e: any) {
+        add('page_sizes parse', false, 'parsed', e?.message || String(e));
     }
 
     // --- cm_transform fixture: a page that opens with the Chrome/Skia y-flipping `cm` ---
@@ -3588,6 +3649,18 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
                 !(dropped.auxiliary as any)?.headers && !(dropped.auxiliary as any)?.footers && droppedText.includes('WATERMARK DRAFT'),
                 'no headers/footers, watermark kept',
                 `headers=${((dropped.auxiliary as any)?.headers || []).length} watermark=${droppedText.includes('WATERMARK DRAFT')}`);
+            // Kept in the page on request: the header before the page's text, the footer after it, and in
+            // a writer that writes no running headers (a slide per page) too.
+            const kept = await OfficeParser.parseOffice(path.join(pdfDir, `${name}.pdf`), { ocr: false, pdfParserConfig: { keepHeadersAndFootersInPages: true } });
+            const keptText = textOf(kept).replace(/\s+/g, ' ');
+            const order = ['RUNNING HEADER', 'FIRST BODY PARAGRAPH', 'WATERMARK DRAFT', 'SECOND BODY PARAGRAPH', 'RUNNING FOOTER'].map(t => keptText.indexOf(t));
+            add(`${name}: keepHeadersAndFootersInPages keeps them in the page, in place`,
+                !(kept.auxiliary as any)?.headers && !(kept.auxiliary as any)?.footers && order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1])),
+                'header, body, footer in page order', `${JSON.stringify(order)} ${keptText.slice(0, 120)}`);
+            const slide = String((await kept.to('text')).value);
+            add(`${name}: a kept header reaches a writer of no running headers`, slide.includes('RUNNING HEADER') && slide.includes('RUNNING FOOTER'), 'both in the text output', slide.replace(/\s+/g, ' ').slice(0, 120));
+            const keptDropped = await OfficeParser.parseOffice(path.join(pdfDir, `${name}.pdf`), { ocr: false, ignoreHeadersAndFooters: true, pdfParserConfig: { keepHeadersAndFootersInPages: true } });
+            add(`${name}: ignoreHeadersAndFooters still drops kept headers`, !textOf(keptDropped).includes('RUNNING HEADER') && textOf(keptDropped).includes('WATERMARK DRAFT'), 'no header text', textOf(keptDropped).replace(/\s+/g, ' ').slice(0, 120));
         } catch (e: any) {
             add(`${name} parse`, false, 'parsed', e?.message || String(e));
         }
@@ -3642,6 +3715,88 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
         add('tagged_lists parse', false, 'parsed', e?.message || String(e));
     }
 
+    // --- invisible_text fixture: rendering modes 3 and 7, a Type 3 font's line and Helvetica's, beside
+    // and among visible text; the mode is graphics state, restored with it ---
+    try {
+        const ast = await OfficeParser.parseOffice(path.join(pdfDir, 'invisible_text.pdf'), { ocr: false });
+        const runs: any[] = [];
+        ast.content.forEach((p: any) => walk(p, n => { if (n.type === 'text' && (n.text || '').trim()) runs.push(n); }));
+        const run = (text: string) => runs.find(r => r.text.trim() === text);
+        const invisible = (text: string) => run(text)?.formatting?.invisible === true;
+        add('Mode 3 Type 3 line is invisible', invisible('Scanned words of a page'), true, run('Scanned words of a page')?.formatting);
+        add('Mode 7 line is invisible', invisible('Clipped and unseen words.'), true, run('Clipped and unseen words.')?.formatting);
+        add('Mode restored with the graphics state', !!run('Visible again after the state is restored.') && !invisible('Visible again after the state is restored.'), 'visible', run('Visible again after the state is restored.')?.formatting);
+        add('Invisible text parted from visible text on its line', !!run('Seen words then') && !invisible('Seen words then') && invisible('unseen words.'), '"Seen words then" seen, "unseen words." invisible', runs.map(r => `${r.text}${r.formatting?.invisible ? ' (invisible)' : ''}`).join(' | '));
+        add('Invisible text is read as content', textOf(ast).includes('Large unseen line') && invisible('Large unseen line'), 'read, invisible', textOf(ast));
+        add('Turned invisible text is invisible, apart from turned visible text', invisible('Scanned sideways words') && !!run('Visible sideways label') && !invisible('Visible sideways label'), '"Scanned sideways words" invisible, "Visible sideways label" seen', runs.filter(r => /sideways/.test(r.text)).map(r => `${r.text}${r.formatting?.invisible ? ' (invisible)' : ''}`).join(' | '));
+        const visible = runs.filter(r => !r.formatting?.invisible).map(r => r.text.trim());
+        add('Visible runs stay visible', ['Visible first line of the page.', 'A visible body line of ordinary text.', 'Another visible body line of ordinary text.'].every(t => visible.includes(t)), 'visible', visible.join(' | '));
+        // A Type 3 font has no typeface: pdf.js names it "Type3", and the styles' family is a CSS generic one.
+        const fonts = [...new Set(runs.map(r => r.formatting?.font).filter(Boolean))];
+        add('Type 3 font leaves the typeface unset', run('Scanned words of a page')?.formatting?.font === undefined && fonts.every(f => !/^(Type3|serif|sans-serif|monospace|cursive|fantasy)$/.test(f)), 'no Type3 or generic family', fonts.join(', '));
+    } catch (e: any) {
+        add('invisible_text parse', false, 'parsed', e?.message || String(e));
+    }
+
+    // --- tesseract_text_layer fixture: Tesseract's text-only PDF of a page (its words in mode 3, in its
+    // GlyphLessFont), as a scan's recognised text is laid over it ---
+    try {
+        const ast = await OfficeParser.parseOffice(path.join(pdfDir, 'tesseract_text_layer.pdf'), { ocr: false });
+        const runs: any[] = [];
+        ast.content.forEach((p: any) => walk(p, n => { if (n.type === 'text' && (n.text || '').trim()) runs.push(n); }));
+        add('A text layer\'s words are invisible', runs.length > 50 && runs.every(r => r.formatting?.invisible === true), 'every word invisible', `${runs.filter(r => r.formatting?.invisible).length}/${runs.length}`);
+        add('GlyphLessFont is no typeface', runs.every(r => r.formatting?.font === undefined), 'no font', [...new Set(runs.map(r => r.formatting?.font))].join(', '));
+        add('A text layer is read as content', textOf(ast).includes('ACME Corporation') && textOf(ast).includes('Layout features'), 'read', textOf(ast).slice(0, 120));
+    } catch (e: any) {
+        add('tesseract_text_layer parse', false, 'parsed', e?.message || String(e));
+    }
+
+    // --- mixed_size_line fixture: one line in three sizes; each run's baseline is the line's, its box its font's ---
+    try {
+        const runsOf = (ast: any) => { const out: any[] = []; ast.content.forEach((p: any) => walk(p, n => { if (n.type === 'text' && (n.text || '').trim()) out.push(n); })); return out; };
+        const runs = runsOf(await OfficeParser.parseOffice(path.join(pdfDir, 'mixed_size_line.pdf'), { ocr: false }));
+        const line = runs.filter(r => ['Large', 'small', 'middle'].includes(r.text.trim()));
+        const baselines = line.map(r => r.bounds?.baseline);
+        add('Runs of one line share a baseline', line.length === 3 && baselines.every(b => b === 92), '92 for each (792 - 700)', JSON.stringify(baselines));
+        add('Runs of one line have their own boxes', new Set(line.map(r => r.bounds?.y)).size === 3 && line.every(r => r.bounds.y < r.bounds.baseline && r.bounds.y + r.bounds.height > r.bounds.baseline), 'ascent above, descent below', JSON.stringify(line.map(r => r.bounds)));
+        add('Every level run has a baseline', runs.every(r => typeof r.bounds?.baseline === 'number'), `${runs.length}/${runs.length}`, `${runs.filter(r => typeof r.bounds?.baseline === 'number').length}/${runs.length}`);
+        const containers: any[] = [];
+        (await OfficeParser.parseOffice(path.join(pdfDir, 'mixed_size_line.pdf'), { ocr: false })).content.forEach((p: any) => walk(p, n => { if (n.type !== 'text' && n.bounds) containers.push(n); }));
+        add('Container nodes carry no baseline', containers.length > 0 && containers.every(n => n.bounds.baseline === undefined), 'none', containers.map(n => n.bounds.baseline).join(','));
+        const bare = runsOf(await OfficeParser.parseOffice(path.join(pdfDir, 'mixed_size_line.pdf'), { ocr: false, ignorePageGeometry: true }));
+        add('ignorePageGeometry drops baselines with bounds', bare.length > 0 && bare.every(r => r.bounds === undefined), 'no bounds', bare.filter(r => r.bounds).length);
+        const turned = runsOf(await OfficeParser.parseOffice(path.join(pdfDir, 'rotated.pdf'), { ocr: false }));
+        add('Text of a turned page has no baseline', turned.length > 0 && turned.every(r => r.bounds && r.bounds.baseline === undefined), 'none', turned.filter(r => r.bounds?.baseline !== undefined).length);
+    } catch (e: any) {
+        add('mixed_size_line parse', false, 'parsed', e?.message || String(e));
+    }
+
+    // --- LibreOffice's PDFs of Indic and Thai text: each cluster placed on its own and wrapped in an
+    // ActualText, its glyphs given no advance by pdf.js; read word for word as pdftotext reads them ---
+    try {
+        const blockText = (ast: any) => { const out: string[] = []; ast.content.forEach((p: any) => walk(p, n => { if (['paragraph', 'heading', 'list', 'cell'].includes(n.type)) out.push(n.text || ''); })); return out.join('\n'); };
+        const indic = blockText(await OfficeParser.parseOffice(path.join(pdfDir, 'indic_words_libreoffice.pdf'), { ocr: false }));
+        const lines = [
+            'Hindi: नमस्ते दुनिया, यह हिंदी पाठ है। क्षत्रिय श्री कृष्ण न्याय विद्या।',
+            'Marathi: महाराष्ट्र राज्याची राजधानी मुंबई आहे.',
+            'Bengali: নমস্কার বিশ্ব, এটি বাংলা লেখা।',
+            'Gujarati: નમસ્તે દુનિયા, આ ગુજરાતી લખાણ છે.',
+            'Punjabi: ਸਤ ਸ੍ਰੀ ਅਕਾਲ ਦੁਨੀਆ, ਇਹ ਪੰਜਾਬੀ ਹੈ।',
+            'Tamil: வணக்கம் உலகம், இது தமிழ் உரை.',
+            'Telugu: నమస్కారం ప్రపంచం, ఇది తెలుగు పాఠ్యం.',
+            'Kannada: ನಮಸ್ಕಾರ ಜಗತ್ತು, ಇದು ಕನ್ನಡ ಪಠ್ಯ.',
+            'Malayalam: നമസ്കാരം ലോകം, ഇത് മലയാളം ആണ്.',
+            'Odia: ନମସ୍କାର ବିଶ୍ୱ, ଏହା ଓଡ଼ିଆ ଲେଖା।',
+            'Thai: สวัสดีชาวโลก นี่คือข้อความภาษาไทย',
+        ];
+        const missing = lines.filter(l => !indic.includes(l));
+        add('LibreOffice Indic and Thai words read whole', missing.length === 0, `${lines.length} lines word for word`, missing.length ? JSON.stringify(indic) : `${lines.length} lines`);
+        const hindi = blockText(await OfficeParser.parseOffice(path.join(pdfDir, 'hindi_tables_libreoffice.pdf'), { ocr: false }));
+        add('LibreOffice Hindi beside a table reads whole', hindi.includes('हिन्दी भाषा क्षत्रिय श्री कृष्ण न्याय विद्या शिक्षा'), 'हिन्दी भाषा क्षत्रिय श्री कृष्ण न्याय विद्या शिक्षा', hindi.split('\n')[0]);
+    } catch (e: any) {
+        add('LibreOffice Indic words', false, 'parsed', e?.message || String(e));
+    }
+
     // --- pdf.js in a separate process and in this one read the same AST, fixture by fixture ---
     try {
         const differ: string[] = [];
@@ -3682,6 +3837,103 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
         add('Encrypted parses via onPassword callback', textOf(ast).includes('SECRET CONTENT'), 'SECRET CONTENT', textOf(ast).trim().slice(0, 30));
     } catch (e: any) {
         add('Encrypted parses via onPassword callback', false, 'SECRET CONTENT', e?.officeIssue?.code || e?.message);
+    }
+
+    // --- tables as a browser and LibreOffice print them (scripts/generate-table-pdf-fixtures.mjs) ---
+    // Each table read as its grid: every row's cells in their columns ('' where none is, or a merged cell
+    // covers it), and the merged cells' spans as "row,col:colSpan x rowSpan".
+    {
+        const gridOf = (t: any) => {
+            const grid: string[][] = [], spans: string[] = [];
+            (t.children || []).forEach((row: any, r: number) => {
+                for (const c of row.children || []) {
+                    const m = c.metadata || {}, cs = m.colSpan || 1, rs = m.rowSpan || 1;
+                    for (let a = 0; a < rs; a++) for (let b = 0; b < cs; b++) (grid[r + a] ??= [])[m.col + b] = a || b ? '' : String(c.text || '').replace(/\s+/g, ' ').trim();
+                    if (cs > 1 || rs > 1) spans.push(`${r},${m.col}:${cs}x${rs}`);
+                }
+            });
+            const width = Math.max(0, ...grid.map(r => r.length));
+            return { rows: grid.map(r => Array.from({ length: width }, (_, k) => r[k] ?? '')), spans };
+        };
+        const tablesIn = async (file: string) => {
+            const ast = await OfficeParser.parseOffice(path.join(pdfDir, file), { ocr: false, pdfParserConfig: { separateProcess: false } } as any);
+            // (In the order they are read: a producer that does not break the page before each table, as LibreOffice
+            // opening HTML does not, sets two on a page.)
+            const found: any[] = [];
+            for (const p of ast.content) walk(p, (n: any) => { if (n.type === 'table') found.push(n); });
+            return found.map(gridOf);
+        };
+        const invoice = [['Date', 'Description', 'Quantity', 'Unit price', 'Amount'], ...Array.from({ length: 6 }, (_, i) => [`2026-10-0${i + 1}`, ['Consulting', 'Travel', 'Licence', 'Hosting'][i % 4], String(i % 5 + 1), (40 + i * 2.5).toFixed(2), ((i % 5 + 1) * (40 + i * 2.5)).toFixed(2)])];
+        const twoLine = [['Item code', 'Quantity ordered', 'Unit price (EUR)', 'Delivery date'], ['A-100', '12', '4.50', '2026-11-02'], ['B-220', '3', '19.99', '2026-11-05'], ['C-310', '40', '0.75', '2026-11-09']];
+        const labels = [['Name', 'Harriet Example'], ['Date of birth', '1984-03-12'], ['Address', '12 High Street, Springfield'], ['Phone', '+44 20 7946 0000'], ['Membership', 'Gold']];
+        const calendar = [['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], ...Array.from({ length: 5 }, (_, w) => Array.from({ length: 7 }, (_, d) => { const day = w * 7 + d - 2; return day >= 1 && day <= 31 ? String(day) : ''; }))];
+        const spans = [['Region', 'Sales', '', 'Cost', ''], ['', 'Q1', 'Q2', 'Q1', 'Q2'], ['North', '120', '130', '80', '85'], ['', '140', '150', '90', '95'], ['South', '95', '100', '70', '72']];
+        const allSpans = '0,0:1x2 0,1:2x1 0,3:2x1 2,0:1x2';
+        const expect = async (file: string, pages: { name: string; rows: string[][]; spans?: string }[]) => {
+            try {
+                const found = await tablesIn(file);
+                add(`${file}: a table each`, found.length === pages.length, `${pages.length} tables`, `${found.length} tables`);
+                pages.forEach((want, k) => {
+                    const got = found[k];
+                    const ok = !!got && JSON.stringify(got.rows) === JSON.stringify(want.rows) && (want.spans === undefined || got.spans.join(' ') === want.spans);
+                    add(`${file}: ${want.name}`, ok, `${JSON.stringify(want.rows).slice(0, 80)}${want.spans !== undefined ? `, spans ${want.spans || 'none'}` : ''}`,
+                        got ? `${JSON.stringify(got.rows).slice(0, 160)}, spans ${got.spans.join(' ') || 'none'}` : 'no table');
+                });
+            } catch (e: any) {
+                add(`${file} parse`, false, 'parsed', e?.message || String(e));
+            }
+        };
+        // Untagged, set by spacing alone: cells set closer than a wide gap (the invoice's header, the calendar's
+        // days) are cut where the table's other rows part them; a header over two lines is one row. (Labels and
+        // their values set closer than a wide gap on every row, and a header over sub-columns, are read as text:
+        // no row parts them, and cutting lines where no table was found read justified columns as tables.)
+        await expect('tables_borderless_chrome.pdf', [
+            { name: 'cells set close are read apart', rows: invoice },
+            { name: 'a header over two lines is one row', rows: twoLine },
+            { name: 'a calendar\'s days set close stand in their columns', rows: calendar },
+        ]);
+        // Tagged: a row's cells left out of the tags (a calendar's empty days, the cells merged ones cover) stand in
+        // their columns, a ruled table's merged cells keep their spans from its rules, and labels and values a
+        // browser tags as no table are a table of two columns.
+        await expect('tables_tagged_chrome.pdf', [
+            { name: 'a tagged calendar\'s days stand in their columns', rows: calendar },
+            { name: 'a tagged ruled table keeps its merged cells', rows: spans, spans: allSpans },
+            { name: 'labels and values tagged as no table are a table', rows: labels },
+        ]);
+        await expect('tables_tagged_libreoffice.pdf', [{ name: 'a tagged ruled table keeps its merged cells', rows: spans, spans: allSpans }]);
+        // LibreOffice sets a merged cell's text in the middle of the rows it covers: it is a cell of them all.
+        await expect('tables_borderless_libreoffice.pdf', [
+            { name: 'a header over two lines is one row', rows: twoLine },
+            { name: 'a cell set midway between two rows spans them', rows: spans, spans: '0,0:1x2 2,0:1x2' },
+            { name: 'labels and values are a two-column table', rows: labels },
+        ]);
+        // Two lists side by side, code and its comments in a monospaced font, and a bulleted list are no tables.
+        try {
+            const found = await tablesIn('two_columns_not_tables_chrome.pdf');
+            add('Side-by-side lists, code and a list are not tables', found.length === 0, 'no table', `${found.length} table(s): ${JSON.stringify(found.map(t => t.rows)).slice(0, 160)}`);
+        } catch (e: any) {
+            add('two_columns_not_tables_chrome.pdf parse', false, 'parsed', e?.message || String(e));
+        }
+        // Names in two columns, two poems and two addresses side by side, and justified articles in three narrow
+        // columns are prose, read column by column: they were read as tables, row by row across the columns.
+        try {
+            const found = await tablesIn('prose_not_tables_chrome.pdf');
+            // (The AST's reading order: text output lays the page out, the two columns on the same lines.)
+            const prose = textOf(await OfficeParser.parseOffice(path.join(pdfDir, 'prose_not_tables_chrome.pdf'), { ocr: false }));
+            add('Columns of prose and short lines are not tables', found.length === 0 && prose.indexOf('Bob Carter') < prose.indexOf('Frank Green'), 'no table; a column read before the next',
+                `${found.length} table(s); Bob at ${prose.indexOf('Bob Carter')}, Frank at ${prose.indexOf('Frank Green')}`);
+        } catch (e: any) {
+            add('prose_not_tables_chrome.pdf parse', false, 'parsed', e?.message || String(e));
+        }
+        // Chrome on macOS writes system fonts as Type 3 fonts named in their descriptors: the names are typefaces.
+        try {
+            const ast = await OfficeParser.parseOffice(path.join(pdfDir, 'cjk_wrapped_chrome.pdf'), { ocr: false });
+            const fonts = new Set<string>();
+            for (const p of ast.content) walk(p, (n: any) => { if (n.type === 'text' && n.formatting?.font) fonts.add(n.formatting.font); });
+            add('A Type 3 font named in its descriptor keeps its name', fonts.has('HiraKakuProN-W3') && !fonts.has('Type3'), 'HiraKakuProN-W3, no Type3', [...fonts].join(', '));
+        } catch (e: any) {
+            add('cjk_wrapped_chrome.pdf fonts', false, 'parsed', e?.message || String(e));
+        }
     }
 
     return results;

@@ -1,3 +1,4 @@
+import { writtenMarkerLabel } from '../utils/listMarkers.js';
 import {
     DEFAULT_DOCUMENT_STRUCTURE_CHUNKING_CONFIG,
     DEFAULT_FIXED_SIZE_CHUNKING_CONFIG,
@@ -20,7 +21,8 @@ import {
     PageMetadata,
     SemanticChunkingConfig,
     SheetMetadata,
-    SlideMetadata
+    SlideMetadata,
+    ListMetadata,
 } from '../types.js';
 import { getOfficeError, checkAbortSignal } from '../utils/errorUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
@@ -43,6 +45,13 @@ function contextLabel(text: string | undefined): string | undefined {
     if (text === undefined || text.length <= CONTEXT_LABEL_LENGTH) return text;
     const code = text.charCodeAt(CONTEXT_LABEL_LENGTH - 1);
     return text.slice(0, code >= 0xD800 && code <= 0xDBFF ? CONTEXT_LABEL_LENGTH - 1 : CONTEXT_LABEL_LENGTH) + '…';
+}
+
+/** Move a UTF-16 offset off the middle of a surrogate pair. */
+function characterBoundary(text: string, offset: number): number {
+    const before = text.charCodeAt(offset - 1);
+    const after = text.charCodeAt(offset);
+    return before >= 0xD800 && before <= 0xDBFF && after >= 0xDC00 && after <= 0xDFFF ? offset - 1 : offset;
 }
 
 /**
@@ -87,6 +96,11 @@ function collectNodeText(node: OfficeContentNode, context: ChunkTextContext): st
             out += collectNodeText(child, context);
             afterBlock = block;
         }
+    }
+    // A numbered item's label is its text to a reader ("see (l)"), as the text generator writes it.
+    const meta = node.metadata as ListMetadata | undefined;
+    if (node.type === 'list' && meta?.listType === 'ordered' && typeof meta.marker === 'string' && meta.marker.trim() && out.trim()) {
+        out = `${writtenMarkerLabel(meta.marker)} ${out}`;
     }
     if (node.notes && node.notes.length > 0) {
         for (const note of node.notes) {
@@ -263,13 +277,18 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
         }
 
         if (chosenSep === undefined) {
-            // Last resort: hard cut
+            // Last resort: hard cut, in whole characters (a size under one cut pieces of none, and a fraction
+            // repeated a character from one piece to the next).
             const results: { text: string; start: number; end: number }[] = [];
+            const width = Math.max(1, Math.floor(chunkSize));
+            const step = Math.max(1, width - Math.max(0, Math.floor(chunkOverlap)));
             let offset = 0;
             while (offset < text.length) {
-                const slice = text.slice(offset, offset + chunkSize);
-                results.push({ text: slice, start: offset, end: offset + slice.length });
-                offset += Math.max(1, chunkSize - chunkOverlap);
+                const nextCharacter = offset + ((text.codePointAt(offset) ?? 0) > 0xFFFF ? 2 : 1);
+                const end = Math.max(nextCharacter, characterBoundary(text, Math.min(text.length, offset + width)));
+                const slice = text.slice(offset, end);
+                results.push({ text: slice, start: offset, end });
+                offset = Math.max(nextCharacter, characterBoundary(text, Math.min(end, offset + step)));
             }
             return results;
         }
@@ -299,9 +318,11 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
                 }
 
                 // Start next chunk
-                if (chunkOverlap > 0 && currentChunk.length > chunkOverlap && measure(currentChunk) <= chunkSize) {
-                    const overlapText = currentChunk.slice(-chunkOverlap);
-                    currentStart = absoluteOffset - chunkOverlap;
+                const overlapLength = Math.max(0, Math.floor(chunkOverlap));
+                if (overlapLength > 0 && currentChunk.length > overlapLength && measure(currentChunk) <= chunkSize) {
+                    const overlapStart = characterBoundary(currentChunk, currentChunk.length - overlapLength);
+                    const overlapText = currentChunk.slice(overlapStart);
+                    currentStart += overlapStart;
                     currentChunk = overlapText + actualSep + part;
                 } else {
                     currentStart = absoluteOffset;
@@ -513,69 +534,62 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             isTableChunk: true,
         };
 
-        // Whether a chunk holds the header: a table of one row (its header alone) made none, and its
-        // text reached no chunk.
-        let emitted = false;
-        // The header heads every chunk of the table only when it takes at most half a chunk: larger, each
-        // data row became a chunk of its own under the whole header, and one 100 KB header over 2,000
-        // rows made 213 MB of chunks from 1.6 KB. It is then a chunk (or chunks) of its own, once.
-        const repeatedHeader = headerText && measure(headerText) <= maxChunkSize / 2 ? headerText : '';
-        if (headerText.trim() && !repeatedHeader) {
-            for (const sub of this.splitTextRecursively(headerText, maxChunkSize, 0, ['\n', ' ', ''], measure)) chunks.push({ text: sub.text, metadata: { ...baseMetadata } });
-            emitted = true;
-        }
-
-        // Group data rows into chunks
-        let currentRows: string[] = [];
-        let currentSize = repeatedHeader ? measure(repeatedHeader) : 0;
-
-        const flushCurrentRows = async () => {
-            if (currentRows.length === 0) return;
-            const rowText = currentRows.join('\n');
-            const chunkText = repeatedHeader ? `${repeatedHeader}\n${rowText}` : rowText;
-            if (chunkText.trim()) {
-                emitted = true;
-                if (measure(chunkText) > maxChunkSize) {
-                    // Fallback to recursive splitting for oversized table chunks
-                    const subChunks = this.splitTextRecursively(chunkText, maxChunkSize, 0, ['\n', ' ', ''], measure);
-                    for (const sub of subChunks) {
-                        chunks.push({ text: sub.text, metadata: { ...baseMetadata } });
-                    }
-                } else {
-                    chunks.push({ text: chunkText, metadata: { ...baseMetadata } });
-                }
-            }
-            currentRows = [];
-            currentSize = repeatedHeader ? measure(repeatedHeader) : 0;
-        };
-
+        // Each data row's text, made once (onNode asked once), and its size.
+        const rowItems: { text: string; size: number; replaced: boolean }[] = [];
+        let rowsSize = 0;
         for (const row of dataRows) {
             const override = await this.handleOnNode(row);
             if (override === false) continue;
-
-            const rowText = typeof override === 'string' ? override : this.rowText(row);
-            const rowSize = measure(rowText);
-            if (currentSize + rowSize > maxChunkSize && currentRows.length > 0) {
-                await flushCurrentRows();
-            }
-            if (typeof override === 'string') {
-                // If row was overridden, we flush current, then add the override as a chunk.
-                await flushCurrentRows();
-                const chunkText = repeatedHeader ? `${repeatedHeader}\n${override}` : override;
-                chunks.push({ text: chunkText, metadata: { ...baseMetadata } });
-                emitted = true;
-                continue;
-            }
-            currentRows.push(rowText);
-            currentSize += rowSize;
+            const text = typeof override === 'string' ? override : this.rowText(row);
+            const size = measure(text);
+            rowItems.push({ text, size, replaced: typeof override === 'string' });
+            rowsSize += size;
         }
-        await flushCurrentRows();
-        if (!emitted && headerText.trim()) {
-            if (measure(headerText) > maxChunkSize) {
-                for (const sub of this.splitTextRecursively(headerText, maxChunkSize, 0, ['\n', ' ', ''], measure)) chunks.push({ text: sub.text, metadata: { ...baseMetadata } });
-            } else {
-                chunks.push({ text: headerText, metadata: { ...baseMetadata } });
+
+        /**
+         * The rows grouped into chunks' bodies of at most `room` each: as many rows as fit, at least one; a row
+         * longer than a whole chunk cut into pieces of `room`, each a body of its own (one that fits a chunk is
+         * kept whole: cut, its first cell named the rest in no piece); a row onNode replaced, a body of its own.
+         */
+        const bodiesOf = (room: number): string[] => {
+            const out: string[] = [];
+            let current: string[] = [], size = 0;
+            const flush = () => { if (current.length) out.push(current.join('\n')); current = []; size = 0; };
+            for (const item of rowItems) {
+                if (item.replaced) { flush(); out.push(item.text); continue; }
+                if (item.size > Math.max(room, maxChunkSize)) {
+                    flush();
+                    for (const sub of this.splitTextRecursively(item.text, room, 0, ['\n', ' ', ''], measure)) if (sub.text.trim()) out.push(sub.text);
+                    continue;
+                }
+                if (current.length && size + item.size > room) flush();
+                current.push(item.text);
+                size += item.size;
             }
+            flush();
+            return out;
+        };
+
+        // The header heads every chunk of the table, its rows' columns named in each: beside as many rows as
+        // fit in the rest of a chunk, and beside one row (or a piece of one, at least half a chunk) where it
+        // leaves less (or a header longer than a chunk), so a chunk can run past maxChunkSize by what the
+        // header takes. (A header taking more than half a chunk was a chunk of its own, cut where it ran past
+        // one, and the chunks after it had rows with no column names.) A header repeated past twice the
+        // table's own size (a long header over many short rows: one of 100 KB over 2,000 rows made 213 MB of
+        // chunks from 1.6 KB) is written once, as chunks of its own, and the rows after it.
+        const headerSize = headerText.trim() ? measure(headerText) : 0;
+        let header = headerSize > 0 ? headerText : '';
+        let bodies = bodiesOf(header ? Math.max(maxChunkSize - headerSize, maxChunkSize / 2) : maxChunkSize);
+        if (header && bodies.length > 1 && headerSize * bodies.length > 2 * (headerSize + rowsSize) + 8 * maxChunkSize) {
+            header = '';
+            bodies = bodiesOf(maxChunkSize);
+        }
+        if (headerSize > 0 && (!header || bodies.length === 0)) {
+            for (const sub of this.splitTextRecursively(headerText, maxChunkSize, 0, ['\n', ' ', ''], measure)) chunks.push({ text: sub.text, metadata: { ...baseMetadata } });
+        }
+        for (const body of bodies) {
+            const text = header ? `${header}\n${body}` : body;
+            if (text.trim()) chunks.push({ text, metadata: { ...baseMetadata } });
         }
     }
 

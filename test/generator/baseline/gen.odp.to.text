@@ -107,17 +107,17 @@ Multi-level Lists
         3. Five
 2. Six
 A Multi-level list with bullets:
-- One
+▪ One
     - Two
         - This bullet uses an image as the bullet item
-            - Four
-- Five
+            ○ Four
+▪ Five
 Continued Lists
-1. One
-2. Two
+i. One
+ii. Two
 An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.
-3. We now resume our normal programming
-4. Four
+iii. We now resume our normal programming
+iv. Four
 Charts
 Chart Title
 Category 1

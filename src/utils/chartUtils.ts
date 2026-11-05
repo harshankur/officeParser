@@ -79,7 +79,10 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
     const root = dom.documentElement as Element;
     if (!root) return { title: undefined, xAxisTitle: undefined, yAxisTitle: undefined, dataSets: [], labels: [], rawTexts: [] };
 
-    const title = extractOpenXmlRichText(root, "c:title");
+    // The chart's own title (`c:chart`'s), not the first anywhere: a chart of none took an axis's.
+    const chartEl = getDirectChildren(root, "c:chart")[0] ?? root;
+    const titleEl = getDirectChildren(chartEl, "c:title")[0];
+    let title = titleEl ? extractOpenXmlRichText(titleEl, "c:title") : undefined;
 
     // Axis titles
     let xAxisTitle: string | undefined = undefined;
@@ -141,6 +144,10 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
         dataSets.push({ name, values, pointLabels });
     }
 
+    // A title of no text of its own is the one Office draws for it: a chart of one series its name, else "Chart
+    // Title" (as PowerPoint, Excel and LibreOffice show it; it was left out).
+    if (titleEl && title === undefined && !getDirectChildren(titleEl, "c:tx").length) title = dataSets.length === 1 && dataSets[0].name ? dataSets[0].name : "Chart Title";
+
     const rawTexts = chartRawTexts(undefined, dataSets, sharedLabels);
 
     return {
@@ -192,7 +199,8 @@ const extractOdfChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig): Ch
     const dom = parseXmlString(xml, { config });
 
     const chart = getElementsByTagName(dom, "chart:chart")[0] || dom.documentElement;
-    const titleNode = getElementsByTagName(chart, "chart:title")[0];
+    // (The chart's own title, not the first anywhere: a chart of none took an axis's.)
+    const titleNode = getDirectChildren(chart as Element, "chart:title")[0];
     const title = titleNode ? getElementsByTagName(titleNode, "text:p")[0]?.textContent || undefined : undefined;
 
     const table = getElementsByTagName(chart, "table:table")[0];

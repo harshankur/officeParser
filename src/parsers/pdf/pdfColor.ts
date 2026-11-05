@@ -4,27 +4,16 @@
  * pdf.js's worker normalizes every fill-color operator into a single `OPS.setFillRGBColor` whose one
  * argument is an already-computed lowercase `#rrggbb` string (gray, CMYK, indexed, ICC and separation
  * spaces are all pre-converted for us), and every text-show operator into `OPS.showText`. So we never
- * touch color spaces or glyphs: we track the current fill color and, by mirroring exactly the text
- * matrix that `getTextContent` uses, compute each show's start point in the same viewport space as a
- * text item's `transform`. That lets a run look up its color by position.
- *
- * `getTextContent` derives an item's `transform` from `ctm ∘ textMatrix`, where its `ctm` is the full
- * graphics-state matrix: `q`/`Q` save and restore it, every page `cm` multiplies into it, and a form
- * XObject's `/Matrix` composes on entry. We mirror all four here, so both share one frame and their
- * coordinates coincide. That matters because most producers open the page with a `cm` - Chrome/Skia
- * flips with `1 0 0 -1 0 H cm`, Ghostscript scales with `0.1 0 0 0.1 0 0 cm`, Cairo flips too - and
- * a cm-less frame would put every mark somewhere the runs never are. Pattern/shading/transparent
- * fills yield no color, so a run over them simply keeps its default (never a wrong color).
+ * touch color spaces: the page's shows, each with the colour it paints in and its start point in user
+ * space (see textGlyphs, which mirrors the graphics and text state as `getTextContent` does, so both
+ * share one frame), are taken into viewport space here, where a run looks up its color by position.
+ * Pattern/shading/transparent fills yield no color, so a run over them simply keeps its default (never
+ * a wrong color).
  *
  * @module parsers/pdf/pdfColor
  */
 
-import { identityMatrix, mulMatrix as mul, toMatrix6 as toMat6 } from './geometry.js';
-
-/** Applies the text-move translation `[x, y]` to a matrix, as pdf.js's `TextState` does. */
-function translate(m: number[], x: number, y: number): number[] {
-    return [m[0], m[1], m[2], m[3], m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
-}
+import { TextShow } from './textGlyphs.js';
 
 /** One text-show occurrence: its start point in viewport space plus the active fill color. */
 export interface ColorMark {
@@ -34,94 +23,19 @@ export interface ColorMark {
 }
 
 /**
- * Walks an already-fetched operator list and returns, in paint order, the viewport-space start point
- * and fill color of every text-show. Mirrors `getTextContent`'s matrix bookkeeping (text matrix plus
- * the full CTM: `q`/`Q`, page `cm` and form-XObject matrices). Marks are skipped when the active fill
- * is a pattern, shading or transparent, or when the text is invisible (render modes 3/7);
- * stroke-render text (modes 1/5) uses the stroke color.
+ * The viewport-space start point and fill color of every show of a page, in paint order. A show is
+ * left out when its fill is a pattern, shading or transparent, or when the text is invisible (render
+ * modes 3/7); stroke-render text (modes 1/5) has the stroke color.
  *
  * @param viewportTransform - `viewport.transform` for the page (scale-1 layout viewport).
  */
-export function collectColorMarks(ops: any, viewportTransform: number[], OPS: any): ColorMark[] {
+export function collectColorMarks(shows: readonly TextShow[], viewportTransform: number[]): ColorMark[] {
     const marks: ColorMark[] = [];
-    const fnArray: number[] | undefined = ops?.fnArray;
-    const argsArray: any[] | undefined = ops?.argsArray;
-    if (!fnArray || !argsArray) return marks;
-
-    let ctm = identityMatrix();
-    const ctmStack: number[][] = [];
-    let tm = identityMatrix();
-    let tlm = identityMatrix();
-    let leading = 0, rise = 0, renderMode = 0;
-    let fill: string | undefined;   // current fill color hex, or undefined for pattern/unknown
-    let stroke: string | undefined;
-    // The CTM and the fill/stroke color are both graphics state, so both are saved and restored
-    // together across q/Q (and form XObjects). Without the color half, a color set inside a
-    // `q ... Q` bracket (a border, a background, a logo) would leak onto all following text; without
-    // the CTM half, every mark on a page that opens with a `cm` lands in the wrong place.
-    const colorStack: { fill: string | undefined; stroke: string | undefined }[] = [];
-
-    for (let i = 0; i < fnArray.length; i++) {
-        const a = argsArray[i];
-        switch (fnArray[i]) {
-            // Graphics-state save/restore: CTM and color together, exactly as pdf.js's StateManager.
-            case OPS.save: ctmStack.push(ctm); colorStack.push({ fill, stroke }); break;
-            case OPS.restore: {
-                if (ctmStack.length) ctm = ctmStack.pop()!;
-                const s = colorStack.pop(); if (s) { fill = s.fill; stroke = s.stroke; }
-                break;
-            }
-
-            // Page `cm`: composes into the CTM, as getTextContent's Util.transform(ctm, args) does.
-            case OPS.transform: { const cm = toMat6(a); if (cm) ctm = mul(ctm, cm); break; }
-
-            // A form XObject composes its /Matrix and localizes graphics state, colors included.
-            case OPS.paintFormXObjectBegin: {
-                ctmStack.push(ctm);
-                colorStack.push({ fill, stroke });
-                const fm = toMat6(a?.[0]);
-                if (fm) ctm = mul(ctm, fm);
-                break;
-            }
-            case OPS.paintFormXObjectEnd: {
-                if (ctmStack.length) ctm = ctmStack.pop()!;
-                const s = colorStack.pop(); if (s) { fill = s.fill; stroke = s.stroke; }
-                break;
-            }
-
-            // Fill / stroke color: all spaces arrive pre-normalized to an *RGBColor hex string.
-            case OPS.setFillRGBColor: fill = typeof a?.[0] === 'string' ? a[0] : undefined; break;
-            case OPS.setFillColorN:
-            case OPS.setFillTransparent: fill = undefined; break;
-            case OPS.setStrokeRGBColor: stroke = typeof a?.[0] === 'string' ? a[0] : undefined; break;
-            case OPS.setStrokeColorN:
-            case OPS.setStrokeTransparent: stroke = undefined; break;
-
-            // Text matrix (mirror of pdf.js TextState).
-            case OPS.beginText: tm = identityMatrix(); tlm = identityMatrix(); break;
-            case OPS.setTextMatrix: { const tmx = toMat6(a?.[0]); if (tmx) { tm = tmx; tlm = tmx.slice(); } break; }
-            case OPS.moveText: tlm = translate(tlm, +a[0], +a[1]); tm = tlm.slice(); break;
-            case OPS.setLeadingMoveText: leading = -(+a[1]); tlm = translate(tlm, +a[0], +a[1]); tm = tlm.slice(); break;
-            case OPS.setLeading: leading = +a[0]; break;
-            case OPS.nextLine: tlm = translate(tlm, 0, -leading); tm = tlm.slice(); break;
-            case OPS.setTextRise: rise = +a[0]; break;
-            case OPS.setTextRenderingMode: renderMode = +a[0]; break;
-
-            case OPS.showText: {
-                if (renderMode === 3 || renderMode === 7) break;               // invisible text
-                const color = (renderMode === 1 || renderMode === 5) ? stroke : fill;
-                if (!color) break;                                             // pattern / transparent
-                // Start point = (ctm ∘ tm) applied to (0, rise), then into viewport space.
-                const ux = tm[2] * rise + tm[4];
-                const uy = tm[3] * rise + tm[5];
-                const wx = ctm[0] * ux + ctm[2] * uy + ctm[4];
-                const wy = ctm[1] * ux + ctm[3] * uy + ctm[5];
-                const vx = viewportTransform[0] * wx + viewportTransform[2] * wy + viewportTransform[4];
-                const vy = viewportTransform[1] * wx + viewportTransform[3] * wy + viewportTransform[5];
-                marks.push({ x: vx, y: vy, color });
-                break;
-            }
-        }
+    for (const show of shows) {
+        if (show.mode === 3 || show.mode === 7 || !show.color) continue;
+        const vx = viewportTransform[0] * show.x + viewportTransform[2] * show.y + viewportTransform[4];
+        const vy = viewportTransform[1] * show.x + viewportTransform[3] * show.y + viewportTransform[5];
+        marks.push({ x: vx, y: vy, color: show.color });
     }
     return marks;
 }

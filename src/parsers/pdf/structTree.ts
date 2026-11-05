@@ -3,19 +3,23 @@
  *
  * pdf.js hands back a per-page tree of `{ role, children }` internal nodes and
  * `{ type: 'content', id }` leaves, where `id` is a marked-content id. Every text run collected in
- * the main pass already carries its `mcid`, so joining a leaf to its runs is a map lookup. Block
+ * the main pass already carries its `mcid`, so joining a leaf to its runs is a map lookup. A form
+ * field's widget is an `{ type: 'annotation', id }` leaf, its id the one its value's runs carry (see
+ * PdfParser's fieldRuns): read as content, its value is read at its /Form element. Block
  * text (P, Hn, list items, cells) is rebuilt with the same line/spacing/bounds logic as the
  * geometric path via {@link runsToParagraph}, so both paths produce identical run shapes.
  *
  * @module parsers/pdf/structTree
  */
 
-import { CellMetadata, ListMetadata, NoteMetadata, OfficeContentNode } from '../../types.js';
+import { CellMetadata, ListMetadata, NodeBounds, NoteMetadata, OfficeContentNode } from '../../types.js';
 import { unionAll } from './geometry.js';
+import type { RuledFrame } from './rulings.js';
 import { RawRun } from './pdfTypes.js';
 import { median } from '../../utils/numberUtils.js';
-import { DocContext, PageContext, runsToParagraph } from './textLayout.js';
+import { CELL_PAGE_BOX, DocContext, PageContext, rightToLeftLean, runsToParagraph } from './textLayout.js';
 import { appendAll } from '../../utils/nodeListUtils.js';
+import { markerLabelWord, markerWord, readMarkerLabels } from '../../utils/listMarkers.js';
 
 interface StructNode {
     role?: string;
@@ -34,6 +38,8 @@ export interface TaggedOptions {
      * make a generator continue page 2's list from page 1's. The geometric path counts the same way.
      */
     listCounter: { n: number };
+    /** The page's ruled frames (see rulings), read when a table needs them: they place a tagged table's cells. */
+    frames?: () => readonly RuledFrame[];
 }
 
 /** Result of walking one page's structure tree. */
@@ -54,6 +60,8 @@ interface WalkCtx {
 
 const HEADING = /^H([1-6])$/;
 const role = (n: StructNode): string => n.role || n.type || '';
+/** A leaf naming content: marked content, or an annotation (a form field's widget, whose value is text). */
+const isLeaf = (n: StructNode): boolean => n.type === 'content' || n.type === 'annotation';
 
 /**
  * Resolves the heading level to force for a tagged heading node, honoring `headingDetection`:
@@ -112,7 +120,7 @@ function walkChildren(node: StructNode, ctx: WalkCtx, sectionDepth: number): Off
 }
 
 function walkNode(node: StructNode, ctx: WalkCtx, sectionDepth: number): OfficeContentNode[] {
-    if (node.type === 'content') {
+    if (isLeaf(node)) {
         const p = paragraphFrom(node, ctx, 0);
         return p ? [p] : [];
     }
@@ -163,7 +171,7 @@ const ALWAYS_SKIP = new Set(['Note', 'FENote']);
 function collectRuns(node: StructNode, ctx: WalkCtx, skip?: Set<string>): RawRun[] {
     const out: RawRun[] = [];
     const recurse = (n: StructNode) => {
-        if (n.type === 'content' && n.id) {
+        if (isLeaf(n) && n.id) {
             const runs = ctx.runsByMcid.get(n.id);
             if (runs) { appendAll(out, runs); ctx.covered.add(n.id); }
             return;
@@ -224,7 +232,7 @@ function findNotes(node: StructNode, skip?: Set<string>): StructNode[] {
 
 /** Marks every content leaf under a node as covered without emitting it (e.g. ignored notes). */
 function markCovered(node: StructNode, ctx: WalkCtx): void {
-    if (node.type === 'content' && node.id) ctx.covered.add(node.id);
+    if (isLeaf(node) && node.id) ctx.covered.add(node.id);
     for (const c of node.children || []) markCovered(c, ctx);
 }
 
@@ -400,8 +408,125 @@ function inferRowSpans(rows: OfficeContentNode[]): void {
     }
 }
 
+/**
+ * A tagged table's cells in the columns they stand in. A producer leaves out the cells a merged one covers
+ * (Chrome and LibreOffice), and a row's empty cells (Chrome), so a row's n-th cell is not its n-th column:
+ * a calendar's first week (four days, from a Thursday) was read from Monday, and a merged header's next
+ * cell a column early. Where the page rules the table (see rulings), its frame says each cell's column and
+ * spans. Else the columns are the full rows' (those of the most cells), each where its cells start (end,
+ * read right to left), and a shorter row's cells go, in their order, to the columns they start nearest; a
+ * cell whose text runs past the start of a column no cell of its row takes spans it. (A merged cell whose
+ * text does not reach past its first column says nothing of its span without rules: the columns after it
+ * are left empty.) A table whose rows are all full is left as tagged, and so is one whose cells cannot be
+ * placed in order. Returns whether the cells were placed.
+ */
+function placeTaggedCells(rows: OfficeContentNode[], frames: readonly RuledFrame[], rtl: boolean): boolean {
+    const width = Math.max(...rows.map(r => r.children?.length ?? 0));
+    if (rows.every(r => (r.children?.length ?? 0) === width)) return false;
+    const boxOf = (cell: OfficeContentNode) => CELL_PAGE_BOX.get(cell);
+    // Where a cell starts and ends, in the table's reading direction (right to left as negative x).
+    const start = (b: NodeBounds) => rtl ? -(b.x + b.width) : b.x;
+    const end = (b: NodeBounds) => rtl ? -b.x : b.x + b.width;
+    const table = unionAll(rows.flatMap(r => (r.children ?? []).map(boxOf)));
+    if (!table) return false;
+
+    // The ruled frame around the table (the smallest, so a table inside another's cell is its own), with as
+    // many columns as the full rows have cells.
+    const SNAP = 2;
+    const frame = frames
+        .filter(f => f.xs.length - 1 === width && f.ys.length - 1 === rows.length && table.x >= f.box.x - SNAP && table.y >= f.box.y - SNAP
+            && table.x + table.width <= f.box.x + f.box.width + SNAP && table.y + table.height <= f.box.y + f.box.height + SNAP)
+        .sort((a, b) => a.box.width * a.box.height - b.box.width * b.box.height)[0];
+    const places: { col: number; colSpan: number; rowSpan: number }[][] = [];
+    let ok = !!frame;
+    if (frame) {
+        // Each grid position's frame cell, and a frame cell's column in reading order.
+        const owner = Array.from({ length: rows.length }, () => new Array<number>(width).fill(-1));
+        frame.cells.forEach((c, k) => { for (let r = c.row; r < c.row + c.rowSpan; r++) for (let q = c.col; q < c.col + c.colSpan; q++) owner[r][q] = k; });
+        const colOf = (c: RuledFrame['cells'][number]) => rtl ? width - c.col - c.colSpan : c.col;
+        const taken = new Set<number>();
+        for (const [ri, row] of rows.entries()) {
+            const out: { col: number; colSpan: number; rowSpan: number }[] = [];
+            let last = -1;
+            for (const cell of row.children ?? []) {
+                const b = boxOf(cell);
+                let at = -1;
+                if (b) {
+                    // The frame cell its middle is in, starting in its row.
+                    const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+                    let lo = 0, hi = width - 1;
+                    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (frame.xs[mid] <= cx) lo = mid; else hi = mid - 1; }
+                    const k = owner[ri][lo], c = frame.cells[k];
+                    if (c && c.row === ri && cy >= frame.ys[c.row] && cy <= frame.ys[c.row + c.rowSpan]) at = k;
+                } else {
+                    // An empty cell: the row's next frame cell, in reading order.
+                    for (let q = last + 1; q < width && at < 0; q++) {
+                        const k = owner[ri][rtl ? width - 1 - q : q];
+                        if (k >= 0 && frame.cells[k].row === ri && !taken.has(k)) at = k;
+                    }
+                }
+                const fc = frame.cells[at];
+                if (!fc || taken.has(at) || colOf(fc) <= last) { ok = false; break; }
+                taken.add(at);
+                out.push({ col: colOf(fc), colSpan: fc.colSpan, rowSpan: fc.rowSpan });
+                last = colOf(fc) + fc.colSpan - 1;
+            }
+            if (!ok) break;
+            places.push(out);
+        }
+    }
+    if (!ok) {
+        places.length = 0;
+        // The full rows' columns: where each one's cells start.
+        const full = rows.filter(r => r.children!.length === width);
+        const starts: number[] = [];
+        for (let k = 0; k < width; k++) {
+            const at = full.map(r => boxOf(r.children![k])).filter((b): b is NodeBounds => !!b).map(start);
+            if (!at.length) return false;
+            starts.push(median(at));
+            if (k && !(starts[k] > starts[k - 1])) return false;
+        }
+        for (const row of rows) {
+            const cells = row.children ?? [];
+            const cols: number[] = [];
+            let last = -1;
+            for (const [i, cell] of cells.entries()) {
+                const b = boxOf(cell);
+                // (Room left for the row's cells after this one.)
+                const room = width - (cells.length - i);
+                let col = last + 1;
+                if (col > room) return false;
+                if (b && cells.length < width) {
+                    // The column of those it may take (from the one after the last, leaving room) it starts nearest.
+                    let lo = col, hi = room;
+                    while (lo < hi) { const mid = (lo + hi) >> 1; if (starts[mid] < start(b)) lo = mid + 1; else hi = mid; }
+                    col = lo > col && Math.abs(start(b) - starts[lo - 1]) <= Math.abs(start(b) - starts[lo]) ? lo - 1 : lo;
+                }
+                cols.push(col);
+                last = col;
+            }
+            places.push(cols.map((col, i) => {
+                // Spanning the columns its text runs into that no cell of the row takes.
+                const b = boxOf(cells[i]), next = i + 1 < cols.length ? cols[i + 1] : width;
+                let lo = col + 1, hi = next;
+                while (b && lo < hi) { const mid = (lo + hi) >> 1; if (end(b) > starts[mid] + 1) lo = mid + 1; else hi = mid; }
+                return { col, colSpan: b ? lo - col : 1, rowSpan: 1 };
+            }));
+        }
+    }
+    rows.forEach((row, ri) => (row.children ?? []).forEach((cell, i) => {
+        const meta = cell.metadata as CellMetadata;
+        const p = places[ri][i];
+        meta.col = p.col;
+        if (p.colSpan > 1) meta.colSpan = p.colSpan;
+        if (p.rowSpan > 1) meta.rowSpan = p.rowSpan;
+    }));
+    return true;
+}
+
 function buildTable(node: StructNode, ctx: WalkCtx): OfficeContentNode | null {
     const rows: OfficeContentNode[] = [];
+    const tableRuns: RawRun[] = [];
     let rowIdx = 0;
     for (const tr of collectRows(node)) {
         const cells: OfficeContentNode[] = [];
@@ -419,6 +544,11 @@ function buildTable(node: StructNode, ctx: WalkCtx): OfficeContentNode | null {
             };
             const cb = unionAll(cellChildren.map(c => c.bounds));
             if (cb) cell.bounds = cb;
+            const cellRuns = collectRuns(cellNode, ctx);
+            appendAll(tableRuns, cellRuns);
+            // (Its text's box: a blank a producer set after the cell before it, at that cell's end, is not where it stands.)
+            const pageBox = unionAll(cellRuns.filter(r => r.text.trim()).map(r => ({ x: r.x, y: r.yTop, width: r.width, height: r.height })));
+            if (pageBox) CELL_PAGE_BOX.set(cell, pageBox);
             cells.push(cell);
             colIdx++;
         }
@@ -434,7 +564,10 @@ function buildTable(node: StructNode, ctx: WalkCtx): OfficeContentNode | null {
     // run first, on the still-rectangular grid (they use positional indices); row spans run after,
     // keyed by the geometry-stable `col`, so they tolerate the placeholders columns already dropped.
     const totalCells = rows.reduce((s, r) => s + (r.children?.length || 0), 0);
-    if (ctx.doc.cfg.includeBounds && totalCells <= MAX_SPAN_INFERENCE_CELLS) { inferColSpans(rows); inferRowSpans(rows); }
+    // A row with fewer cells than the table's fullest is placed by where its cells stand (see placeTaggedCells);
+    // the placeholder inference below is for a grid the tags kept whole.
+    const placed = totalCells <= MAX_SPAN_INFERENCE_CELLS && placeTaggedCells(rows, ctx.opts.frames?.() ?? [], rightToLeftLean(tableRuns) > 0);
+    if (!placed && ctx.doc.cfg.includeBounds && totalCells <= MAX_SPAN_INFERENCE_CELLS) { inferColSpans(rows); inferRowSpans(rows); }
     const table: OfficeContentNode = { type: 'table', children: rows, text: rows.map(r => r.text || '').join('\n') };
     const tb = unionAll(rows.map(r => r.bounds));
     if (tb) table.bounds = tb;
@@ -444,9 +577,10 @@ function buildTable(node: StructNode, ctx: WalkCtx): OfficeContentNode | null {
 /** Classifies a list marker label into an ordered/unordered list type. */
 function classifyListType(label: string): 'ordered' | 'unordered' {
     const t = label.trim();
-    // Decimal (incl. multilevel "1.1."), single alpha "a.", or roman "iii." markers are ordered.
-    if (/^\(?\d+(\.\d+)*[.)]?$/.test(t) || /^[a-zA-Z][.)]$/.test(t) || /^[ivxlcdmIVXLCDM]+[.)]$/.test(t)) return 'ordered';
-    return 'unordered';
+    // Decimal (incl. multilevel "1.1."), or a letter or numeral in brackets or before one ("a.", "(iv)").
+    if (/^\(?\d+(\.\d+)*[.)]?$/.test(t)) return 'ordered';
+    const word = /[.)]$/.test(t) ? markerLabelWord(t) : null;
+    return word && markerWord(word) ? 'ordered' : 'unordered';
 }
 
 /** Collapses TOC dot-leaders ("Title ...... 3" -> "Title 3") in a node's text and text-run children. */
@@ -462,37 +596,12 @@ function stripDotLeaders(node: OfficeContentNode): void {
     }
 }
 
-/** Converts a roman numeral to its integer value, or 0 if it is not a valid roman numeral. */
-function romanToInt(s: string): number {
-    const map: Record<string, number> = { i: 1, v: 5, x: 10, l: 50, c: 100, d: 500, m: 1000 };
-    const t = s.toLowerCase();
-    let total = 0, prev = 0;
-    for (let i = t.length - 1; i >= 0; i--) {
-        const v = map[t[i]];
-        if (!v) return 0;
-        total += v < prev ? -v : v;
-        prev = v;
-    }
-    return total;
-}
-
-/**
- * Parses the number an ordered-list label represents: decimal ("3."), multi-level decimal ("1.2.",
- * uses the last component), roman ("iii."), or single alpha ("c." -> 3). Returns null when the label
- * carries no recognizable number.
- */
+/** The number a decimal list label represents ("3.", the last part of a multi-level "1.2."), or null. */
 function parseListNumber(label: string): number | null {
     const t = label.trim();
-    if (!t) return null;
-    // All-decimal (possibly multi-level like "1.2."): use the last numeric component.
-    if (/^[\d.()\[\]\s]+$/.test(t)) {
-        const parts = t.match(/\d+/g);
-        if (parts && parts.length) return parseInt(parts[parts.length - 1], 10);
-    }
-    const core = t.replace(/^[(\[]+/, '').replace(/(?<![.)\]\s])[.)\]\s]+$/, '');
-    if (/^[ivxlcdm]+$/i.test(core)) { const n = romanToInt(core); return n > 0 ? n : null; }
-    if (/^[a-z]$/i.test(core)) return core.toLowerCase().charCodeAt(0) - 96; // a -> 1
-    return null;
+    if (!t || !/^[\d.()\[\]\s]+$/.test(t)) return null;
+    const parts = t.match(/\d+/g);
+    return parts && parts.length ? parseInt(parts[parts.length - 1], 10) : null;
 }
 
 /** Roles inside a list body that build their own nodes, so the item must not absorb their content. */
@@ -502,6 +611,8 @@ function buildList(node: StructNode, ctx: WalkCtx, indent: number): OfficeConten
     const items: OfficeContentNode[] = [];
     const listId = `pdf-list-${++ctx.listCounter.n}`;
     let idx = 0;
+    // This list's own items, each with its label: its letters and numerals are read together below.
+    const own: { item: OfficeContentNode; label: string }[] = [];
     for (const li of (node.children || [])) {
         if (role(li) !== 'LI') {
             // Some producers nest content directly; recurse transparently.
@@ -542,10 +653,10 @@ function buildList(node: StructNode, ctx: WalkCtx, indent: number): OfficeConten
             }
         }
         const listType = classifyListType(label);
-        // Number ordered items from the label the PDF actually rendered (decimal "3.", roman "iii.",
-        // or alpha "c.") rather than the positional index, so a list interrupted by a paragraph and
-        // split into two <L> elements resumes its numbering (3, 4) instead of restarting at 1. Falls
-        // back to the position when the label carries no parseable number.
+        // Number ordered items from the label the PDF actually rendered rather than the positional index,
+        // so a list interrupted by a paragraph and split into two <L> elements resumes its numbering (3, 4)
+        // instead of restarting at 1. Falls back to the position when the label carries no parseable number.
+        // (A letter or numeral is read below, with the labels around it.)
         let itemIndex = idx;
         if (listType === 'ordered') {
             const n = parseListNumber(label);
@@ -558,6 +669,9 @@ function buildList(node: StructNode, ctx: WalkCtx, indent: number): OfficeConten
             listId,
             itemIndex,
         };
+        // The label as printed, where it is other than the item's number and a dot or a round bullet.
+        const printed = label.trim();
+        if (printed && printed !== (listType === 'ordered' ? `${itemIndex + 1}.` : '•')) meta.marker = printed;
         const item: OfficeContentNode = {
             type: 'list',
             text: bodyNodes.map(n => n.text || '').join(' ').trim(),
@@ -577,9 +691,15 @@ function buildList(node: StructNode, ctx: WalkCtx, indent: number): OfficeConten
         // list in an LI, or an empty LI): emitting an empty list node just adds a blank bullet and
         // leaves its (uncovered) marker looking like text outside the tag tree. Any nested sublist is
         // still emitted.
-        if (bodyNodes.length || itemNotes.length) { items.push(item); idx++; }
+        if (bodyNodes.length || itemNotes.length) { items.push(item); own.push({ item, label: printed }); idx++; }
         appendAll(items, nested);
     }
+    const read = readMarkerLabels(own.map(o => o.label));
+    own.forEach(({ item }, i) => {
+        const meta = item.metadata as ListMetadata;
+        const n = read[i];
+        if (meta.listType === 'ordered' && n !== null && n >= 1) meta.itemIndex = n - 1;
+    });
     return items;
 }
 

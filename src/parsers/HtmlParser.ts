@@ -1,4 +1,4 @@
-import { AdmonitionMetadata, CellMetadata, CodeMetadata, CommentMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, CellMetadata, CodeMetadata, CommentMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, ParagraphMetadata, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { anchorMark, isAnchorMark, resolveAnchorMarks } from '../utils/anchorUtils.js';
 import { createAST } from '../utils/astUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
@@ -10,6 +10,10 @@ import { setOwn } from '../utils/lookupUtils.js';
 import { cellSpan, MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
 import { textDecoder } from '../utils/encodingUtils.js';
+import { lengthToPt } from '../utils/officeGenUtils.js';
+import { cssColorHex } from '../utils/colorUtils.js';
+import { declarationsFor, isEmptyStylesheet, readDeclarations, readStylesheet, writeDeclarations } from '../utils/cssRules.js';
+import { cssListStyle, formatListNumber, NumberFormat } from '../utils/listMarkers.js';
 
 /**
  * Maximum element nesting depth accepted from an HTML/XHTML source before the parser gives up
@@ -431,6 +435,51 @@ const getDeclaration = (decls: Map<string, string>, prop: string): string | unde
     ?? decls.get(`-moz-${prop}`)
     ?? decls.get(`-ms-${prop}`)
     ?? decls.get(`-o-${prop}`);
+
+/**
+ * The colour a `background` shorthand sets (`yellow`, `#ff0 url(x.png)`, `rgb(1, 2, 3) no-repeat`), or
+ * `transparent`, or undefined when it sets none.
+ */
+const shorthandColor = (value: string | undefined): string | undefined => {
+    if (!value || value.length > 512) return undefined;
+    for (const token of value.match(/[a-z-]+\([^()]*\)|#[0-9a-f]+|[a-z-]+/gi) ?? []) {
+        if (/^url\(/i.test(token)) continue;
+        if (token.toLowerCase() === 'transparent' || cssColorHex(token)) return token;
+    }
+    return undefined;
+};
+
+/**
+ * A paragraph's or heading's own spacing from its inline style (see ParagraphSpacing): `margin-top` and
+ * `margin-bottom` (or the `margin` shorthand's), and `line-height` as a multiple (a number, a percentage)
+ * or a length. An `em` is taken at 12pt, the size of body text.
+ */
+const cssSpacing = (style: string | undefined): ParagraphSpacing | undefined => {
+    if (!style) return undefined;
+    const decls = parseStyleDeclarations(style);
+    const points = (value: string | undefined): number | undefined => {
+        if (!value) return undefined;
+        const em = /^\s*(\d*\.?\d+)\s*r?em\s*$/i.exec(value);
+        const pt = em ? Number(em[1]) * 12 : lengthToPt(value.trim());
+        return pt != null && Number.isFinite(pt) && pt >= 0 ? Math.round(pt * 100) / 100 : undefined;
+    };
+    const margin = (decls.get('margin') || '').trim().split(/\s+/);
+    const spacing: ParagraphSpacing = {};
+    const before = points(decls.get('margin-top') ?? margin[0]);
+    const after = points(decls.get('margin-bottom') ?? margin[2] ?? margin[0]);
+    if (before !== undefined) spacing.before = before;
+    if (after !== undefined) spacing.after = after;
+    const line = (decls.get('line-height') || '').trim().toLowerCase();
+    const multiple = /^(\d*\.?\d+)(%?)$/.exec(line);
+    if (multiple) {
+        const m = Number(multiple[1]) / (multiple[2] ? 100 : 1);
+        if (m > 0 && m !== 1) spacing.lineMultiple = m;
+    } else if (line && line !== 'normal') {
+        const pt = points(line);
+        if (pt) spacing.lineHeight = pt;
+    }
+    return Object.keys(spacing).length ? spacing : undefined;
+};
 
 /**
  * Returns the first family from a `font-family` stack, respecting quotes so a quoted family name
@@ -984,6 +1033,39 @@ const decodeHtmlBytes = (buffer: Buffer): string => {
     return new TextDecoder('utf-8').decode(buffer);
 };
 
+/**
+ * Gives each element what the document's own stylesheet (its `<style>` elements) sets for it, before its
+ * `style` attribute so that its own declarations win (see cssRules). Outside SVG and MathML, whose
+ * `<style>` and classes are their own.
+ */
+const applyDocumentStylesheet = (root: HtmlNode): void => {
+    const texts: string[] = [];
+    const elements: HtmlNode[] = [];
+    const stack: HtmlNode[] = [root];
+    while (stack.length) {
+        const node = stack.pop()!;
+        if (node.type !== 'element' && node !== root) continue;
+        if (node.tagName === 'svg' || node.tagName === 'math') continue;
+        // A writer's own default styles (HTML output marks its stylesheet so) are no part of the document's look.
+        if (node.tagName === 'style') { if (node.attributes?.['data-default-styles'] === undefined) texts.push(rawChildText(node)); continue; }
+        if (node !== root) elements.push(node);
+        for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]);
+    }
+    if (!texts.length) return;
+    const sheet = readStylesheet(texts);
+    if (isEmptyStylesheet(sheet)) return;
+    for (const element of elements) {
+        const { normal, important } = declarationsFor(sheet, element);
+        if (!normal && !important) continue;
+        // The stylesheet's, then the element's own, then the stylesheet's `!important` ones, then the
+        // element's own `!important` ones: each later one wins, as in a browser.
+        const own = element.attributes?.style;
+        const ownImportant = own && important ? writeDeclarations(readDeclarations(own).important) : '';
+        const style = [normal, own, important, ownImportant].filter(Boolean).join('; ');
+        element.attributes = { ...element.attributes, style };
+    }
+};
+
 export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, part: HtmlPartContext = {}): Promise<OfficeParserAST> => {
     // Honour cancellation requests before the HTML tree is built and traversed.
     // The custom recursive HTML parser can be expensive for large documents;
@@ -991,6 +1073,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
     checkAbortSignal(config.abortSignal);
 
     const { root, head, htmlAttributes, bodyAttributes } = parseHtmlTree(decodeHtmlBytes(buffer), config, config.htmlParserConfig?.preserveComments === true);
+    applyDocumentStylesheet(root);
     // What a browser shows: the document, its <head> passed over (the tree builds no <html> or <body>).
     const body = root;
 
@@ -1084,7 +1167,23 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
         level: number;
         counters: Record<number, number>;
         isTask?: boolean;
+        /** How the list numbers or bullets its items, where its `type` or `list-style-type` says. */
+        markerStyle?: { format: NumberFormat } | { bullet: string };
     }
+
+    /** An `<ol>`'s, `<ul>`'s or `<li>`'s marker style: its `list-style-type` (or `list-style`), else its `type`. */
+    const markerStyleOf = (node: HtmlNode): { format: NumberFormat } | { bullet: string } | undefined => {
+        const decls = node.attributes?.style ? parseStyleDeclarations(node.attributes.style) : undefined;
+        // A string (an item's own marker, `'a) '`) is read as written; a keyword in any case.
+        const type = decls?.get('list-style-type')?.trim();
+        const fromType = type ? cssListStyle(type) ?? cssListStyle(type.toLowerCase()) : undefined;
+        if (fromType) return fromType;
+        const fromShorthand = decls?.get('list-style')?.split(/\s+/).map(t => cssListStyle(t.toLowerCase())).find(Boolean);
+        if (fromShorthand) return fromShorthand;
+        // `type` is case-sensitive (`a` and `A` differ), so it is read as written.
+        const attribute = node.attributes?.type?.trim();
+        return attribute ? cssListStyle(attribute) ?? cssListStyle(attribute.toLowerCase()) : undefined;
+    };
 
     // Finds the checked state from a nested <input type="checkbox"> (GFM task-list items
     // nest it inside a <label>, so it isn't a direct child of the <li>).
@@ -1187,6 +1286,12 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
      * Captures the attributes of `node` that `consumed` didn't claim.
      * Returns undefined when nothing survives, so the field stays absent rather than `{}`.
      */
+    /** An element's spacing, as metadata to spread (nothing when it sets none). */
+    const spacingOf = (node: HtmlNode): { spacing?: ParagraphSpacing } => {
+        const spacing = cssSpacing(node.attributes?.style);
+        return spacing ? { spacing } : {};
+    };
+
     const collectHtmlAttributes = (node: HtmlNode, consumed: string[]): Record<string, string> | undefined => {
         if (!preserveAttributes || !node.attributes) return undefined;
         const consumedSet = new Set(consumed.map(c => c.toLowerCase()));
@@ -1306,8 +1411,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 // and `currentcolor` name the colour the text already has, and `initial` and `revert` the
                 // default one: kept as written, `color: inherit` (what an editor adds to a highlight) was a
                 // colour, and the text was written back in a `<span style="color: inherit">`.
+                // A custom property's value (`var(--text)`) is the page's, not known here: no colour of its own.
                 const color = decls.get('color');
-                if (color) {
+                if (color && !/var\(/i.test(color)) {
                     const keyword = color.trim().toLowerCase();
                     if (keyword === 'initial' || keyword === 'revert' || keyword === 'revert-layer') delete newFormatting.color;
                     else if (keyword !== 'inherit' && keyword !== 'unset' && keyword !== 'currentcolor') newFormatting.color = color;
@@ -1315,8 +1421,10 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
 
                 // The same for a background, which is not inherited: every keyword is none, but `inherit`
                 // (the background around it) and `currentcolor` (a background in the text's colour).
-                const background = getDeclaration(decls, 'background-color');
-                if (background) {
+                // `background-color`, or the colour in the `background` shorthand (`background: yellow`,
+                // which editors write for a highlight): read from the longhand alone, it was lost.
+                const background = getDeclaration(decls, 'background-color') ?? shorthandColor(getDeclaration(decls, 'background'));
+                if (background && !/var\(/i.test(background)) {
                     const keyword = background.trim().toLowerCase();
                     if (keyword === 'transparent' || keyword === 'initial' || keyword === 'unset' || keyword === 'revert' || keyword === 'revert-layer') delete newFormatting.backgroundColor;
                     else if (keyword !== 'inherit') newFormatting.backgroundColor = background;
@@ -1745,7 +1853,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
 
                 const pNode: OfficeContentNode = {
                     type: 'paragraph',
-                    metadata: { alignment: newFormatting.alignment, anchorIds: anchorIds.length > 0 ? anchorIds : undefined } as ParagraphMetadata,
+                    metadata: { alignment: newFormatting.alignment, ...spacingOf(node), anchorIds: anchorIds.length > 0 ? anchorIds : undefined } as ParagraphMetadata,
                     children: flattenedChildren,
                     htmlAttributes: collectHtmlAttributes(node, ['align'])
                 };
@@ -1761,7 +1869,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 const level = parseInt(tagName.substring(1));
                 const hNode: OfficeContentNode = {
                     type: 'heading',
-                    metadata: { level, alignment: newFormatting.alignment, anchorIds: anchorIds.length > 0 ? anchorIds : undefined } as HeadingMetadata,
+                    metadata: { level, alignment: newFormatting.alignment, ...spacingOf(node), anchorIds: anchorIds.length > 0 ? anchorIds : undefined } as HeadingMetadata,
                     children: parseChildren(node, newFormatting, listContext),
                     htmlAttributes: collectHtmlAttributes(node, ['align'])
                 };
@@ -1833,7 +1941,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     type: tagName === 'ol' ? 'ordered' : 'unordered',
                     level: isNewTopLevel ? 0 : listContext!.level + 1,
                     counters: isNewTopLevel ? {} : { ...listContext!.counters }, // Clone to avoid side effects on parent levels
-                    isTask: node.attributes?.['data-type'] === 'taskList'
+                    isTask: node.attributes?.['data-type'] === 'taskList',
+                    markerStyle: markerStyleOf(node),
                 };
 
                 // Initialize counter for this level
@@ -1880,6 +1989,15 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     checked = dataChecked !== undefined ? dataChecked === 'true' : (findNestedCheckboxChecked(node) ?? false);
                 }
 
+                // The item's marker, where the list (or the item) styles it as other than `1.` or a disc.
+                let marker: string | undefined;
+                const markerStyle = markerStyleOf(node) ?? listContext?.markerStyle;
+                if (markerStyle && listContext) {
+                    const count = listContext.counters[listContext.level] ?? 1;
+                    marker = 'bullet' in markerStyle ? markerStyle.bullet : `${formatListNumber(count, markerStyle.format)}.`;
+                    if (marker === (listContext.type === 'ordered' ? `${count}.` : '•')) marker = undefined;
+                }
+
                 const selfNode: OfficeContentNode = {
                     type: 'list',
                     text: plainTextOf(selfChildren),
@@ -1889,6 +2007,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         alignment: newFormatting.alignment || 'left',
                         listId: listContext?.listId || 'html-list-none',
                         itemIndex: (listContext?.counters[listContext.level] ?? 1) - 1,
+                        ...(marker !== undefined ? { marker } : {}),
                         anchorIds: anchorIds.length > 0 ? anchorIds : undefined,
                         isTask,
                         checked

@@ -24,7 +24,7 @@
         <tbody>
             <tr>
                 <td><code>--to</code></td>
-                <td><code>json | text | md | html | csv | rtf | pdf | docx | odt | tex | epub | chunks</code></td>
+                <td><code>json | text | md | html | csv | rtf | pdf | docx | odt | xlsx | ods | pptx | odp | tex | epub | chunks</code></td>
                 <td><code>json</code></td>
                 <td>The desired output format for the parsed document (<code>latex</code> is an alias of <code>tex</code>).</td>
             </tr>
@@ -136,19 +136,49 @@
                 <td><code>--allowRemoteAssets</code></td>
                 <td><code>boolean</code></td>
                 <td><code>true</code></td>
-                <td><code>false</code> fails with <code>REMOTE_ASSET_BLOCKED</code> where the pdf.js worker or Tesseract's files would come from the library's default CDN address.</td>
+                <td><code>false</code> fails with <code>REMOTE_ASSET_BLOCKED</code> where the pdf.js worker or Tesseract's files would come from the library's default CDN address, and fetches no pdf.js CMap or image decoder from it (<code>PDF_ASSET_UNAVAILABLE</code>).</td>
+            </tr>
+            <tr>
+                <td><code>--pdfCMapUrl</code></td>
+                <td>string</td>
+                <td>pdfjs-dist's <code>cmaps/</code></td>
+                <td>Folder of pdf.js's CMaps, for the text of fonts a PDF does not embed (Chinese, Japanese, Korean).</td>
+            </tr>
+            <tr>
+                <td><code>--pdfDecoderUrl</code></td>
+                <td>string</td>
+                <td>pdfjs-dist's <code>wasm/</code></td>
+                <td>Folder of pdf.js's image decoders (JBIG2, CCITT fax, JPEG 2000).</td>
             </tr>
             <tr>
                 <td><code>--pdfConfig.fonts.regular</code></td>
                 <td>file path</td>
                 <td>(none)</td>
-                <td>Font file the native PDF engine draws in (also <code>.bold</code>, <code>.italic</code>, <code>.boldItalic</code>, <code>.mono</code>). <code>--pdfConfig.fallbackFonts=a.ttf,b.otf</code> lists more, tried in order for the characters the fonts before them lack.</td>
+                <td>Font file (<code>.ttf</code>, <code>.otf</code>, <code>.woff</code>, <code>.woff2</code>) the native PDF engine draws in (also <code>.bold</code>, <code>.italic</code>, <code>.boldItalic</code>, <code>.mono</code>). <code>--pdfConfig.fallbackFonts=a.ttf,b.otf</code> lists more, tried in order for the characters the fonts before them lack.</td>
             </tr>
             <tr>
                 <td><code>--pdfConfig.outline</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
                 <td>Write a bookmark outline from the headings (both PDF engines).</td>
+            </tr>
+            <tr>
+                <td><code>--pdfConfig.format</code></td>
+                <td><code>auto | A4 | Letter | ...</code></td>
+                <td><code>auto</code></td>
+                <td>Paper format. <code>auto</code> is the document's own pages (each section's, each sheet's, a slide's size), else A4.</td>
+            </tr>
+            <tr>
+                <td><code>--pdfConfig.printHidden</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Print hidden sheets, rows and columns, which a printout leaves out.</td>
+            </tr>
+            <tr>
+                <td><code>--pdfConfig.printSpeakerNotes</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Print each slide's speaker notes after it.</td>
             </tr>
             <tr>
                 <td><code>--pdfConfig.subsetFonts</code></td>
@@ -177,8 +207,8 @@
             <tr>
                 <td><code>--csvDelimiter</code></td>
                 <td>string</td>
-                <td><code>,</code></td>
-                <td>Custom delimiter character for CSV files.</td>
+                <td><code>auto</code></td>
+                <td>Delimiter of CSV files. <code>auto</code> reads it from the file (comma, semicolon, tab or bar).</td>
             </tr>
             <tr>
                 <td><code>--includeRawContent</code></td>
@@ -202,7 +232,7 @@
                 <td><code>--includeBreakNodes</code></td>
                 <td>boolean</td>
                 <td><code>false</code></td>
-                <td>Include explicit page/column break nodes (DOCX, ODF and LaTeX).</td>
+                <td>Include explicit page/column break nodes (DOCX, ODF and LaTeX). A section's start is a node either way.</td>
             </tr>
             <tr>
                 <td><code>--verbose</code></td>
@@ -254,8 +284,17 @@
                 <td><code>--pdfParserConfig.extractTextColor</code></td>
                 <td>boolean</td>
                 <td><code>true</code></td>
-                <td>Record each PDF run's fill colour in <code>formatting.color</code>. On by default; set
-                    <code>false</code> to skip the per-page operator-list fetch on a throughput-focused text path.</td>
+                <td>Record each PDF run's fill colour in <code>formatting.color</code>, and the coloured rectangle it sits on in
+                    <code>formatting.backgroundColor</code>. On by default; set <code>false</code> to skip the per-page operator-list
+                    fetch on a throughput-focused text path.</td>
+            </tr>
+            <tr>
+                <td><code>--pdfParserConfig.keepHeadersAndFootersInPages</code></td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>Keep a PDF's running headers and footers (a tagged PDF's artifacts, or the lines an untagged one repeats at the
+                    top and bottom of its pages) in each page's content, where they stand, instead of
+                    <code>auxiliary</code>: for a page-faithful result such as a slide per page.</td>
             </tr>
             <tr>
                 <td><code>--pdfParserConfig.maxTextItems</code></td>
@@ -280,6 +319,12 @@
                 <td>number</td>
                 <td><code>5000</code></td>
                 <td>Base of the CPU time the separate pdf.js process may spend on one PDF, plus 20 ms per KB of the file. Past it the rest of the document is not read.</td>
+            </tr>
+            <tr>
+                <td><code>--pdfParserConfig.maxImagePixels</code></td>
+                <td>number</td>
+                <td><code>40000000</code></td>
+                <td>The most pixels a PDF picture may have to be extracted; a larger one is left out and reported.</td>
             </tr>
             <tr>
                 <td><code>--pdfParserConfig.separateProcess</code></td>
@@ -319,6 +364,28 @@
                 <td>PDF engine: Puppeteer through generated HTML, or <code>native</code> (pdf-lib, no browser).</td>
             </tr>
             <tr>
+                <td><code>--xlsxConfig.sheetPerTable</code></td>
+                <td>boolean</td>
+                <td><code>true</code></td>
+                <td>XLSX: each of a document's tables on a sheet of its own; <code>false</code> puts them all on one
+                    sheet. <code>--odsConfig.sheetPerTable</code> for ODS.</td>
+            </tr>
+            <tr>
+                <td><code>--xlsxConfig.includeText</code></td>
+                <td>boolean</td>
+                <td><code>true</code></td>
+                <td>XLSX: a document's text outside its tables on a sheet named <code>Text</code>; <code>false</code>
+                    leaves it out. <code>--odsConfig.includeText</code> for ODS.</td>
+            </tr>
+            <tr>
+                <td><code>--pptxConfig.backgrounds</code></td>
+                <td>picture file paths, comma-separated</td>
+                <td>(none)</td>
+                <td>PPTX: a PNG or JPEG file for each page of a PDF (or slide of a presentation), in order, drawn as its
+                    slide's background under its text; an empty entry for a page without one (<code>a.png,,c.png</code>).
+                    A file that cannot be read ends the run. <code>--odpConfig.backgrounds</code> for ODP.</td>
+            </tr>
+            <tr>
                 <td><code>--texConfig.bundle</code></td>
                 <td>boolean</td>
                 <td><code>false</code></td>
@@ -344,7 +411,7 @@
             </tr>
             <tr>
                 <td><code><del>--format</del></code></td>
-                <td><code>json | text | md | html | csv | rtf | pdf | docx | odt | tex | epub | chunks</code></td>
+                <td><code>json | text | md | html | csv | rtf | pdf | docx | odt | xlsx | ods | pptx | odp | tex | epub | chunks</code></td>
                 <td><code>json</code></td>
                 <td><strong>Deprecated.</strong> Use <code>--to</code> instead.</td>
             </tr>
@@ -402,6 +469,13 @@ npx officeparser overleaf-project.zip --extractAttachments --to docx --output pa
         LaTeX output carries its images). Other files it includes or images it shows are reported with the
         <code>LATEX_FILE_NOT_FOUND</code> warning, and images are kept as references to their path. Parse the project
         <code>.zip</code> to include them.</p>
+
+    <h3>Convert to a Workbook or a Presentation</h3>
+    <pre><code># A document's tables, each a sheet, and its text on a sheet named Text
+npx officeparser report.docx --to xlsx --output report.xlsx
+
+# A PDF as slides, each paragraph where the page set it
+npx officeparser slides.pdf --extractAttachments --to pptx --output slides.pptx</code></pre>
 
     <h3>Convert DOCX to EPUB</h3>
     <pre><code>npx officeparser book.docx --extractAttachments --to epub --output book.epub</code></pre>

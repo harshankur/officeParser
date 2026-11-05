@@ -40,14 +40,35 @@
  * @see https://latex2rtf.sourceforge.net/RTF-Spec-1.2.pdf RTF 1.2 Specification
  */
 
-import { CellMetadata, FullOfficeParserConfig, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, TextFormatting } from '../types.js';
+import { BreakMetadata, CellMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, ShapeMetadata, PageNumberFormat, IndentationMetadata, ListMetadata, ParagraphSpacing, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, PageSetup, TextFormatting } from '../types.js';
+import { MAX_PAGE_PT } from '../utils/pageLimits.js';
+import { titlePagesTakeHiddenFirsts } from '../utils/officeGenUtils.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 import { chargeRawContent } from '../utils/xmlUtils.js';
+import { dropTrailingSectionStarts, isFloatingFrame } from '../utils/nodeListUtils.js';
+import { fieldSwitchFormat } from '../utils/pageNumbers.js';
 import { attachmentLookup } from '../utils/repeatUtils.js';
 import { ByteDecoder, textDecoder } from '../utils/encodingUtils.js';
+
+/** The document's page words (twips), and their state keys. */
+const PAGE_WORDS = new Map([['paperw', 'w'], ['paperh', 'h'], ['margl', 'ml'], ['margr', 'mr'], ['margt', 'mt'], ['margb', 'mb']]);
+/**
+ * A section's page number format, by its word: `\pgndec` is decimal, `\pgndecd` full-width digits; a
+ * format word of none of PageNumberFormat's (Hindi and Thai letters, Abjad, the CJK and Korean countings)
+ * is none, the saved number's form kept. (Only the format words: `\pgncont`, `\pgnrestart`, `\pgnstarts`
+ * and the chapter words `\pgnhn...` are none of these.)
+ */
+const RTF_PAGE_NUMBERS: ReadonlyMap<string, PageNumberFormat | undefined> = new Map<string, PageNumberFormat | undefined>([
+    ['pgndec', 'decimal'], ['pgnlcrm', 'lowerRoman'], ['pgnucrm', 'upperRoman'], ['pgnlcltr', 'lowerLetter'], ['pgnucltr', 'upperLetter'], ['pgndecd', 'decimalFullWidth'],
+    ...['pgnid', 'pgnbidia', 'pgnbidib', 'pgnchosung', 'pgncnum', 'pgndbnum', 'pgndbnumd', 'pgndbnumk', 'pgndbnumt', 'pgnganada', 'pgngbnum', 'pgngbnumd', 'pgngbnumk',
+        'pgngbnuml', 'pgnhindia', 'pgnhindib', 'pgnhindic', 'pgnhindid', 'pgnthaia', 'pgnthaib', 'pgnthaic', 'pgnvieta', 'pgnzodiac', 'pgnzodiacd', 'pgnzodiacl',
+        'pgnaiu', 'pgnaiud', 'pgniroha', 'pgnirohad'].map(word => [word, undefined] as [string, undefined]),
+]);
+/** A section's own page and column words, and their state keys. */
+const SECTION_WORDS = new Map([['pgwsxn', 'w'], ['pghsxn', 'h'], ['marglsxn', 'ml'], ['margrsxn', 'mr'], ['margtsxn', 'mt'], ['margbsxn', 'mb'], ['headery', 'hy'], ['footery', 'fy'], ['cols', 'cols'], ['colsx', 'colsx']]);
 
 /**
  * Represents an RTF group (content enclosed in braces).
@@ -126,6 +147,86 @@ export interface RtfControl {
  * Union type representing any RTF parse tree node.
  */
 export type RtfNode = RtfGroup | RtfText | RtfControl;
+
+/** A group's text, a few levels deep (a shape property's name or value). */
+function shapeWords(group: RtfGroup, depth = 0): string {
+    let text = '';
+    for (const item of group.content) {
+        if (item.type === 'text') text += item.value;
+        else if (item.type === 'group' && depth < 4) text += shapeWords(item, depth + 1);
+        if (text.length > 64) break;
+    }
+    return text.trim();
+}
+
+/**
+ * A shape's text box floating beside the text (`\shp`, its `\shpinst`): its look and where it stands
+ * (ShapeMetadata.float), from its box (`\shpleft` .. `\shpbottom`), what that is measured from
+ * (`\shpbx..`, `\shpby..`, or its `posrelh` and `posrelv`), its wrapping (`\shpwr`) and its properties
+ * (`fillColor`, `lineColor`, `lineWidth`, the text's and wrapping's distances). Undefined for a shape
+ * of no width.
+ */
+function rtfShapeFloat(shape: RtfGroup): ShapeMetadata | undefined {
+    const words = new Map<string, number | true>();
+    const props = new Map<string, string>();
+    for (const item of shape.content) {
+        if (item.type === 'control') words.set(item.value, item.param ?? true);
+        else if (item.type === 'group' && item.destination === 'sp' && props.size < 256) {
+            let name = '', value = '';
+            for (const part of item.content) if (part.type === 'group') {
+                if (part.destination === 'sn') name = shapeWords(part);
+                else if (part.destination === 'sv') value = shapeWords(part);
+            }
+            if (name) props.set(name, value);
+        }
+    }
+    const num = (word: string) => { const v = words.get(word); return typeof v === 'number' ? v : undefined; };
+    const prop = (name: string) => { const v = props.get(name); const n = v === undefined || v === '' ? NaN : Number(v); return Number.isFinite(n) ? n : undefined; };
+    const left = num('shpleft') ?? 0, right = num('shpright'), top = num('shptop') ?? 0, bottom = num('shpbottom');
+    if (right === undefined || right <= left) return undefined;
+    const pt = (twips: number) => Math.round(twips / 20 * 100) / 100;
+    const emu = (value: number | undefined, otherwise: number) => value === undefined ? otherwise : Math.round(value / 12700 * 100) / 100;
+    // RTF colours are 0xBBGGRR.
+    const color = (value: number | undefined) => value === undefined || value < 0 ? undefined
+        : '#' + [value & 0xFF, (value >> 8) & 0xFF, (value >> 16) & 0xFF].map(c => c.toString(16).padStart(2, '0')).join('').toUpperCase();
+    const relH = prop('posrelh'), relV = prop('posrelv');
+    const horizontalFrom = words.has('shpbxpage') ? 'page' as const : words.has('shpbxmargin') ? 'margin' as const
+        : words.has('shpbxignore') ? (relH === 1 ? 'page' as const : relH === 0 ? 'margin' as const : 'column' as const) : 'column' as const;
+    const verticalFrom = words.has('shpbypage') ? 'page' as const : words.has('shpbymargin') ? 'margin' as const
+        : words.has('shpbyignore') ? (relV === 1 ? 'page' as const : relV === 0 ? 'margin' as const : 'paragraph' as const) : 'paragraph' as const;
+    const posh = prop('posh');
+    const align = posh === 1 || posh === 4 ? 'left' as const : posh === 3 || posh === 5 ? 'right' as const : posh === 2 ? 'center' as const : undefined;
+    const wr = num('shpwr');
+    const wrap = wr === 1 ? 'aboveBelow' as const : wr === 3 ? 'none' as const : 'beside' as const;
+    const fill = prop('fFilled') === 0 ? undefined : color(prop('fillColor'));
+    const lineColor = prop('fLine') === 0 ? undefined : color(prop('lineColor')) ?? '#000000';
+    const gap = { top: emu(prop('dyWrapDistTop'), 0), right: emu(prop('dxWrapDistRight'), 9), bottom: emu(prop('dyWrapDistBottom'), 0), left: emu(prop('dxWrapDistLeft'), 9) };
+    return {
+        geometry: 'rect',
+        ...(fill ? { fill } : {}),
+        ...(lineColor ? { line: { color: lineColor, width: emu(prop('lineWidth'), 0.75) || 0.75 } } : {}),
+        textInsets: { top: emu(prop('dyTextTop'), 3.6), right: emu(prop('dxTextRight'), 7.2), bottom: emu(prop('dyTextBottom'), 3.6), left: emu(prop('dxTextLeft'), 7.2) },
+        float: {
+            horizontalFrom,
+            verticalFrom,
+            ...(align ? { align } : { x: pt(left) }),
+            y: pt(top),
+            width: pt(right - left),
+            ...(bottom !== undefined && bottom > top ? { height: pt(bottom - top) } : {}),
+            wrap,
+            ...(gap.top || gap.right || gap.bottom || gap.left ? { gap } : {}),
+        },
+    };
+}
+
+/** The characters RTF's symbol control words and control symbols stand for. */
+const RTF_SYMBOLS: ReadonlyMap<string, string> = new Map([
+    ['lquote', '\u2018'], ['rquote', '\u2019'], ['ldblquote', '\u201C'], ['rdblquote', '\u201D'],
+    ['emdash', '\u2014'], ['endash', '\u2013'], ['bullet', '\u2022'],
+    ['emspace', '\u2003'], ['enspace', '\u2002'], ['qmspace', '\u2005'],
+    ['zwj', '\u200D'], ['zwnj', '\u200C'], ['ltrmark', '\u200E'], ['rtlmark', '\u200F'],
+    ['~', '\u00A0'], ['_', '\u2011'], ['-', '\u00AD'],
+]);
 /**
  * Represents every RTF-supported image format that this parser handles.
  * This ensures compile-time safety. Adding a new format forces all maps to be updated.
@@ -362,6 +463,14 @@ export class SimpleRtfParser {
             this.index++;
             if (char === 0x0D && this.buffer[this.index] === 0x0A) this.index++;
             group.content.push({ type: 'control', value: 'par' });
+            return;
+        }
+
+        // The control symbols for characters: \~ a no-break space, \_ a non-breaking hyphen and \- an
+        // optional hyphen. Read as control words of their own, each was the character after it as text.
+        if (char === 0x7E || char === 0x5F || char === 0x2D) {
+            group.content.push({ type: 'control', value: String.fromCharCode(char) });
+            this.index++;
             return;
         }
 
@@ -641,10 +750,28 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     const colorTable = extractColorTable(doc);
 
     const content: OfficeContentNode[] = [];
-    // Headers and footers (`\header`, `\headerl`, `\footerf`, ...), for the AST's auxiliary: skipped,
-    // their text was lost, and the left, right and first-page ones were read into the body.
+    // Headers and footers (`\header`, `\headerl`, `\footerf`, ...), for the AST's auxiliary: one node a
+    // group, of its kind (`f` the first page's, `l` the left, even, pages'), as Word's and ODT's are.
     const headers: OfficeContentNode[] = [];
     const footers: OfficeContentNode[] = [];
+    // A first page's own part is shown under `\titlepg`, a left page's under `\facingp`; without them,
+    // kept and hidden, as Word's are.
+    let titlePage = false, facingPages = false;
+    // The page (`\paperw`, `\margl`, ...) and each section's own (`\pgwsxn`, `\marglsxn`, `\cols`, ...), in
+    // twips: a section's state from its `\sectd` on; and the break each `\sect`
+    // ends one with, given the next section's page once its properties are read (see sectionSetup).
+    const page: Partial<Record<'w' | 'h' | 'ml' | 'mr' | 'mt' | 'mb' | 'hy' | 'fy', number>> & { landscape?: boolean } = {};
+    type SectionState = Partial<Record<'w' | 'h' | 'ml' | 'mr' | 'mt' | 'mb' | 'hy' | 'fy' | 'cols' | 'colsx', number>> & { pageNumbers?: PageNumberFormat; landscape?: boolean; ownLandscape?: boolean; ownSize?: boolean; line?: boolean; start?: 'none' | 'page'; title?: boolean; widths: Map<number, number>; colNo: number };
+    // (A section numbers its pages 1, 2, 3 until it says otherwise, `\sectd` setting it back.)
+    const newSection = (): SectionState => ({ widths: new Map(), colNo: 1, pageNumbers: 'decimal' });
+    let section = newSection();
+    // Each section's state by its number, so a part is shown as its own section says (its `\titlepg`).
+    const sectionStates: SectionState[] = [section];
+    const firstSection = section;
+    let sectionNumber = 0, pageStated = false;
+    const sectionBreaks: { node: OfficeContentNode; state: SectionState }[] = [];
+    // Each header and footer part's section, set once the document is known to have sections.
+    const partSections = new Map<OfficeContentNode, number>();
     // Who wrote the next annotation (`\annotation`), given in the groups before it.
     let annotationAuthor: string | undefined;
     let annotationInitials: string | undefined;
@@ -666,6 +793,26 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // Paragraph-level state
     let paragraphIndent = 0;
     let paragraphAlignment: 'left' | 'center' | 'right' | 'justify' = 'left';
+    /** The paragraph's \li, \ri and \fi, in twips (a negative \fi is a hanging indent). */
+    let paragraphIndentation: IndentationMetadata = {};
+    /** The paragraph's \sb and \sa (twips), and its \sl and \slmult as written (see lineSpacing). */
+    let paragraphSpacing: { before?: number; after?: number; line?: number; multiple?: boolean } = {};
+    /**
+     * The paragraph's spacing as the AST has it: \sb and \sa in points, and \sl as a multiple of single
+     * spacing under \slmult1 (in 240ths), else a least height (positive) or an exact one (negative), in
+     * twips. Single spacing is left out.
+     */
+    const spacingMetadata = (): { spacing?: ParagraphSpacing } => {
+        const out: ParagraphSpacing = {};
+        const { before, after, line, multiple } = paragraphSpacing;
+        if (before !== undefined && before >= 0) out.before = before / 20;
+        if (after !== undefined && after >= 0) out.after = after / 20;
+        if (line) {
+            if (multiple) { if (line > 0 && line !== 240) out.lineMultiple = line / 240; }
+            else { out.lineHeight = Math.abs(line) / 20; if (line > 0) out.lineAtLeast = true; }
+        }
+        return Object.keys(out).length ? { spacing: out } : {};
+    };
     let isListItem = false;
     let listType: 'ordered' | 'unordered' | undefined;
     let headingLevel: number | undefined;
@@ -769,10 +916,16 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // Hyperlink state (RTF uses \field{\*\fldinst HYPERLINK "url"})
     // ═══════════════════════════════════════════════════════════════════
     let currentLinkUrl: string | undefined;
+    // The page field a run is the result of (`{\\field{\\*\\fldinst PAGE}{\\fldrslt 4}}`): its number is that
+    // page's, filled in for each page where printed (TextMetadata.field).
+    let currentPageField: { field: 'page' | 'pages'; format?: PageNumberFormat } | undefined;
 
     // Blocks read from a shape's text box (`\shptxt`), placed after the paragraph anchoring the shape:
     // read in place, the text box's paragraphs split that paragraph and took its first half as theirs.
     let blocksAfterParagraph: OfficeContentNode[] = [];
+    // The shape being read, where its text box floats beside the text (see rtfShapeFloat): the box's blocks
+    // are then a `drawing` node, which stands before the paragraph instead.
+    let currentShapeFloat: ShapeMetadata | undefined;
 
     /**
      * Everything the reading of paragraphs and tables keeps between control words. A destination read
@@ -790,6 +943,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         runTextChunks: string[];
         runFormatting: TextFormatting;
         indent: number;
+        indentation: IndentationMetadata;
+        spacing: typeof paragraphSpacing;
         alignment: 'left' | 'center' | 'right' | 'justify';
         listItem: boolean;
         list: 'ordered' | 'unordered' | undefined;
@@ -817,6 +972,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             runTextChunks: currentRunTextChunks,
             runFormatting: currentFormatting,
             indent: paragraphIndent,
+            indentation: paragraphIndentation,
+            spacing: paragraphSpacing,
             alignment: paragraphAlignment,
             listItem: isListItem,
             list: listType,
@@ -869,6 +1026,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         currentFormatting = saved.runFormatting;
         paragraphIndent = saved.indent;
         paragraphAlignment = saved.alignment;
+        paragraphIndentation = saved.indentation;
+        paragraphSpacing = saved.spacing;
         isListItem = saved.listItem;
         listType = saved.list;
         headingLevel = saved.heading;
@@ -949,6 +1108,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     linkType: classifyLinkType(currentLinkUrl)
                 };
             }
+            if (currentPageField) node.metadata = { ...(node.metadata ?? {}), field: currentPageField.field, ...(currentPageField.format ? { fieldFormat: currentPageField.format } : {}) };
             currentParagraphChildren.push(node);
             currentParagraphTextChunks.push(currentRunText);
             currentRunTextChunks = [];
@@ -991,9 +1151,15 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 }
             }
 
+            // Alignment and indents, which a heading and a paragraph keep (a list item has its own).
+            const layout = {
+                ...(paragraphAlignment !== 'left' ? { alignment: paragraphAlignment } : {}),
+                ...(Object.keys(paragraphIndentation).length ? { paragraphIndentation: { ...paragraphIndentation } } : {}),
+                ...spacingMetadata(),
+            };
             if (headingLevel !== undefined && headingLevel > 0) {
                 nodeType = 'heading';
-                metadata = { level: headingLevel };
+                metadata = { level: headingLevel, ...layout };
                 // Reset list context when we encounter a heading
                 lastKnownListId = undefined;
                 lastKnownListType = undefined;
@@ -1045,6 +1211,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 if (effectiveListType) {
                     lastKnownListType = effectiveListType;
                 }
+            } else if (Object.keys(layout).length) {
+                metadata = layout;
             }
 
             const node: OfficeContentNode = {
@@ -1064,7 +1232,14 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
             // If we're building a table, add to current cell
             // but ONLY if this paragraph was actually marked as in-table
-            blockContainer().push(node);
+            const container = blockContainer();
+            // A text box floating beside the paragraph's text stands before it, where a writer places it
+            // before laying the paragraph out (see liftFloatingFrames).
+            if (blocksAfterParagraph.some(isFloatingFrame)) {
+                for (const block of blocksAfterParagraph) if (isFloatingFrame(block)) container.push(block);
+                blocksAfterParagraph = blocksAfterParagraph.filter(block => !isFloatingFrame(block));
+            }
+            container.push(node);
 
             currentParagraphTextChunks = [];
             currentParagraphChildren = [];
@@ -1253,6 +1428,28 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     };
 
     /**
+     * The page field a field group is (`\\fldinst PAGE`, `NUMPAGES`), from its own instruction's text (a few groups
+     * deep, a few hundred characters at most); undefined for any other field. The Word and ODT readers mark
+     * theirs; RTF's printed the number its file was saved with on every page ("Page 4 of 5").
+     */
+    const pageFieldOf = (group: RtfGroup): { field: 'page' | 'pages'; format?: PageNumberFormat } | undefined => {
+        let text = '';
+        const gather = (g: RtfGroup, depth: number) => {
+            for (const child of g.content) {
+                if (text.length > 200) return;
+                if (child.type === 'text') text += child.value;
+                else if (child.type === 'group' && depth < 4) gather(child, depth + 1);
+            }
+        };
+        for (const child of group.content) if (child.type === 'group' && child.destination === 'fldinst') gather(child, 0);
+        const m = /^\s*(PAGE|NUMPAGES)\b/i.exec(text);
+        if (!m) return undefined;
+        // (With the format its switch writes its number in, `PAGE \* roman`.)
+        const format = fieldSwitchFormat(text);
+        return { field: m[1].toUpperCase() === 'PAGE' ? 'page' : 'pages', ...(format ? { format } : {}) };
+    };
+
+    /**
      * Determines whether a hyperlink URL is internal or external.
      * Internal = bookmark references (no scheme or starts with "#").
      * External = any scheme like http, https, mailto, ftp, file, etc.
@@ -1424,14 +1621,16 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
             let isIgnored = false;
             let isFootnote = false;
-            let isHyperlinkField = false;
+            let isHyperlinkField = false, isPageField = false;
             let isPict = false;
             // Where a header's or footer's paragraphs go, and whether the group is an annotation (a
             // comment), a shape whose text box (`\shptxt`) alone is read, or that text box.
             let redirect: OfficeContentNode[] | undefined;
+            let furniturePart: OfficeContentNode | undefined;
             let isAnnotation = false;
             let isShapeInstance = false;
             let isShapeText = false;
+            let outerShapeFloat: ShapeMetadata | undefined;
 
             // Add group start to raw content
             // Note: We don't add ignored groups to rawContent to keep it clean
@@ -1460,6 +1659,12 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 } else if (node.destination === 'field') {
                     // Check if this is a hyperlink field
                     const url = extractHyperlinkUrl(node);
+                    const page = pageFieldOf(node);
+                    if (page && !currentPageField) {
+                        flushRun();
+                        isPageField = true;
+                        currentPageField = page;
+                    }
                     if (url) {
                         // Flush any pending text before starting the link context
                         // This prevents previous text from inheriting the link
@@ -1489,7 +1694,15 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     }
                 } else if (/^(?:header|footer)[lrf]?$/.test(node.destination)) {
                     if (config.ignoreHeadersAndFooters) isIgnored = true;
-                    else redirect = node.destination.startsWith('header') ? headers : footers;
+                    else {
+                        const kind = node.destination.startsWith('header') ? 'header' : 'footer';
+                        const which = node.destination.slice(kind.length);
+                        const part: OfficeContentNode = { type: kind, text: '', children: [], metadata: { type: which === 'f' ? 'first' : which === 'l' ? 'even' : 'default' } as HeaderFooterMetadata };
+                        (kind === 'header' ? headers : footers).push(part);
+                        partSections.set(part, sectionNumber);
+                        furniturePart = part;
+                        redirect = part.children!;
+                    }
                 } else if (node.destination === 'annotation') {
                     if (config.ignoreComments) isIgnored = true;
                     else isAnnotation = true;
@@ -1499,6 +1712,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     isIgnored = true;
                 } else if (node.destination === 'shpinst') {
                     isShapeInstance = true;
+                    outerShapeFloat = currentShapeFloat;
+                    currentShapeFloat = config.ignorePageGeometry ? undefined : rtfShapeFloat(node);
                 } else if (node.destination === 'shptxt') {
                     isShapeText = true;
                 } else if (ignoreList.includes(node.destination)) {
@@ -1657,21 +1872,11 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 flushRun();
                 currentFootnoteId++;
 
-                // Determine note type based on \fet value
-                let noteType: 'footnote' | 'endnote' = 'footnote';
-                if (fetValue === 1) {
-                    // \fet1 means all notes are endnotes
-                    noteType = 'endnote';
-                } else if (fetValue === 2) {
-                    // \fet2 means both types exist
-                    // Check for \ftnalt marker to distinguish endnotes from footnotes
-                    // \footnote\ftnalt indicates an endnote
-                    const hasFtnalt = node.content.some(child =>
-                        child.type === 'control' && child.value === 'ftnalt'
-                    );
-                    noteType = hasFtnalt ? 'endnote' : 'footnote';
-                }
-                // fetValue === 0 (default) means footnotes only
+                // An endnote where the document's notes all are (\fet1), or where the note says it is one
+                // (\footnote\ftnalt), whatever \fet says: LibreOffice writes \ftnalt without \fet2, and its
+                // endnotes were read as footnotes, printed at the foot of their page.
+                const hasFtnalt = node.content.some(child => child.type === 'control' && child.value === 'ftnalt');
+                const noteType: 'footnote' | 'endnote' = fetValue === 1 || hasFtnalt ? 'endnote' : 'footnote';
 
                 const noteNode: OfficeContentNode = {
                     type: 'note',
@@ -1785,11 +1990,15 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             }
 
             if (savedFlow) leaveDestination(savedFlow);
-            // A text box's blocks follow the paragraph the shape is anchored in.
-            if (shapeBlocks) for (const block of shapeBlocks) blocksAfterParagraph.push(block);
+            // A text box's blocks follow the paragraph the shape is anchored in; a floating one's, in a
+            // `drawing` node, stand before it (see flushParagraph).
+            if (shapeBlocks && currentShapeFloat && shapeBlocks.length) {
+                blocksAfterParagraph.push({ type: 'drawing', text: shapeBlocks.map(b => b.text || '').join('\n'), children: shapeBlocks, metadata: currentShapeFloat });
+            } else if (shapeBlocks) for (const block of shapeBlocks) blocksAfterParagraph.push(block);
+            if (isShapeInstance) currentShapeFloat = outerShapeFloat;
             // A note's or comment's text is its paragraphs' (a final pass meant to give notes theirs did not
             // reach them, on the runs' `notes`).
-            for (const holder of [redirectedComment, footnote]) {
+            for (const holder of [redirectedComment, footnote, furniturePart]) {
                 if (holder) holder.text = (holder.children ?? []).map(n => n.text ?? '').join(' ').trim();
             }
 
@@ -1797,6 +2006,10 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             if (isHyperlinkField) {
                 flushRun();
                 currentLinkUrl = undefined;
+            }
+            if (isPageField) {
+                flushRun();
+                currentPageField = undefined;
             }
 
             // Append group end to raw content
@@ -1846,6 +2059,54 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     currentListOverrideLs = node.param;
                 }
                 return;
+            }
+            // Whether the first page's own header and footer (`\headerf`) and the left pages' (`\headerl`) are shown.
+            if (node.value === 'titlepg') { titlePage = true; section.title = true; }
+            else if (node.value === 'facingp') facingPages = true;
+            // The page and the sections' pages.
+            else if (PAGE_WORDS.has(node.value) && node.param !== undefined && node.param >= 0) { (page as any)[PAGE_WORDS.get(node.value)!] = node.param; pageStated = true; }
+            else if (node.value === 'landscape') { page.landscape = true; pageStated = true; }
+            else if (SECTION_WORDS.has(node.value) && node.param !== undefined && node.param >= 0) {
+                const key = SECTION_WORDS.get(node.value)!;
+                (section as any)[key] = node.param;
+                if (key === 'w' || key === 'h') section.ownSize = true;
+                if (key !== 'cols' && key !== 'colsx') pageStated = true;
+            }
+            else if (node.value === 'lndscpsxn') { section.landscape = section.ownLandscape = true; pageStated = true; }
+            else if (node.value === 'linebetcol') section.line = true;
+            // How the section numbers its pages (`\pgnlcrm`: i, ii, iii).
+            else if (RTF_PAGE_NUMBERS.has(node.value)) section.pageNumbers = RTF_PAGE_NUMBERS.get(node.value);
+            else if (node.value === 'colno' && node.param !== undefined) section.colNo = Math.max(1, Math.min(16, node.param));
+            else if (node.value === 'colw' && node.param !== undefined && node.param > 0) section.widths.set(section.colNo, node.param);
+            else if (node.value === 'sbknone') section.start = 'none';
+            else if (node.value === 'sbkpage' || node.value === 'sbkodd' || node.value === 'sbkeven' || node.value === 'sbkcol') section.start = 'page';
+            else if (node.value === 'sectd') {
+                // Back to the default section, its own properties to follow.
+                const fresh = newSection();
+                for (const k of Object.keys(section) as (keyof SectionState)[]) delete (section as any)[k];
+                Object.assign(section, fresh);
+            }
+            // A section ends: its body's paragraph, then a break the next starts on (its page, read after it).
+            else if (node.value === 'sect' && currentTarget === content && paragraphDepth === 0) {
+                flushRun();
+                flushParagraph();
+                // (A table before it ends there: still open, it came after the break, on the next section's pages.)
+                closeTablesTo(0);
+                sectionNumber++;
+                // (The next section has the one before's properties until its `\\sectd`, as the RTF specification gives it.)
+                section = { ...section, widths: new Map(section.widths), ownLandscape: false, ownSize: false };
+                sectionStates.push(section);
+                // (A section's start is structure, a node whatever includeBreakNodes says.)
+                const brk: OfficeContentNode = { type: 'break', metadata: { breakType: 'page', section: sectionNumber } as BreakMetadata };
+                content.push(brk);
+                sectionBreaks.push({ node: brk, state: section });
+            }
+            // A page break the author typed, with includeBreakNodes.
+            else if (node.value === 'page' && config.includeBreakNodes && currentTarget === content && paragraphDepth === 0) {
+                flushRun();
+                flushParagraph();
+                closeTablesTo(0);
+                content.push({ type: 'break', metadata: { breakType: 'page' } as BreakMetadata });
             }
             // Paragraph control words
             if (node.value === 'par') {
@@ -1910,6 +2171,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 paragraphDepth = 0;
                 // Reset other props...
                 paragraphIndent = 0;
+                paragraphIndentation = {};
+                paragraphSpacing = {};
                 paragraphAlignment = 'left';
                 isListItem = false;
                 listType = undefined;
@@ -1932,35 +2195,14 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 }
                 currentRunTextChunks.push('\n');
             }
-            // Quote characters
-            else if (node.value === 'lquote') {
-                // Left single quotation mark (U+2018)
+            // A character a control word or symbol stands for (quotes, dashes, a bullet, spaces of other
+            // widths, joiners, direction marks). Not read, \emdash and the rest were lost.
+            else if (RTF_SYMBOLS.has(node.value)) {
                 if (formattingChanged(currentFormatting, formatting)) {
                     flushRun();
                     currentFormatting = { ...formatting };
                 }
-                currentRunTextChunks.push('\u2018');
-            } else if (node.value === 'rquote') {
-                // Right single quotation mark (U+2019)
-                if (formattingChanged(currentFormatting, formatting)) {
-                    flushRun();
-                    currentFormatting = { ...formatting };
-                }
-                currentRunTextChunks.push('\u2019');
-            } else if (node.value === 'ldblquote') {
-                // Left double quotation mark (U+201C)
-                if (formattingChanged(currentFormatting, formatting)) {
-                    flushRun();
-                    currentFormatting = { ...formatting };
-                }
-                currentRunTextChunks.push('\u201C');
-            } else if (node.value === 'rdblquote') {
-                // Right double quotation mark (U+201D)
-                if (formattingChanged(currentFormatting, formatting)) {
-                    flushRun();
-                    currentFormatting = { ...formatting };
-                }
-                currentRunTextChunks.push('\u201D');
+                currentRunTextChunks.push(RTF_SYMBOLS.get(node.value)!);
             }
             // Unicode character
             else if (node.value === 'u') {
@@ -2052,8 +2294,20 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             // List control words
             // ═══════════════════════════════════════════════════════════
             // Paragraph indentation (\li - left indent in twips)
+            else if ((node.value === 'sb' || node.value === 'sa' || node.value === 'sl') && node.param !== undefined) {
+                paragraphSpacing = { ...paragraphSpacing, [node.value === 'sb' ? 'before' : node.value === 'sa' ? 'after' : 'line']: node.param };
+            } else if (node.value === 'slmult') {
+                paragraphSpacing = { ...paragraphSpacing, multiple: node.param === 1 };
+            }
+            else if ((node.value === 'ri' || node.value === 'fi') && node.param !== undefined) {
+                paragraphIndentation = { ...paragraphIndentation };
+                if (node.value === 'ri') { if (node.param) paragraphIndentation.right = node.param; else delete paragraphIndentation.right; }
+                else { delete paragraphIndentation.firstLine; delete paragraphIndentation.hanging; if (node.param > 0) paragraphIndentation.firstLine = node.param; else if (node.param < 0) paragraphIndentation.hanging = -node.param; }
+            }
             else if (node.value === 'li') {
                 if (node.param !== undefined) {
+                    paragraphIndentation = { ...paragraphIndentation, left: node.param };
+                    if (!node.param) delete paragraphIndentation.left;
                     // Standard level indent is 720 twips (0.5 inch)
                     // Using a slightly more flexible divisor to account for different generators
                     const level = Math.round(node.param / 720);
@@ -2191,10 +2445,79 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         assignOcr(content);
     }
 
+    for (const part of [...headers, ...footers]) {
+        const meta = part.metadata as HeaderFooterMetadata;
+        // A first page's part shown where its own section has a title page (`\titlepg`), as Word shows it.
+        const own = sectionStates[partSections.get(part) ?? 0];
+        if ((meta.type === 'first' && !(own ? own.title : titlePage)) || (meta.type === 'even' && !facingPages)) meta.hidden = true;
+        // A document of sections gives each part its section, as Word's are.
+        if (sectionNumber > 0) meta.section = partSections.get(part) ?? 0;
+    }
+    // Facing pages (`\\facingp`) with no left pages' part anywhere: even pages show none, as Word shows them
+    // (they showed every page's), an empty even pages' part of each kind the document has.
+    const shownEven = (n: OfficeContentNode) => (n.metadata as HeaderFooterMetadata).type === 'even' && !(n.metadata as HeaderFooterMetadata).hidden;
+    if (facingPages && !headers.some(shownEven) && !footers.some(shownEven)) {
+        for (const [list, kind] of [[headers, 'header'], [footers, 'footer']] as const) {
+            if (list.some(n => !(n.metadata as HeaderFooterMetadata).hidden)) list.push({ type: kind, text: '', children: [], metadata: { type: 'even', ...(sectionNumber > 0 ? { section: 0 } : {}) } as HeaderFooterMetadata });
+        }
+    }
+    // (A later title page takes on a first page's part an earlier section keeps hidden.)
+    if (sectionNumber > 0) {
+        const titled = sectionStates.map(state => !!state.title);
+        titlePagesTakeHiddenFirsts(headers, 'header', titled);
+        titlePagesTakeHiddenFirsts(footers, 'footer', titled);
+    }
+    // A section's setup: how it numbers its pages and whether its first page has a header of its own;
+    // with geometry, its columns, and its page in points where the document states one (its own size and
+    // margins, else the document's, else RTF's defaults: Letter with margins of an inch and a quarter
+    // across). Held as Word's reader holds a page: none where its size is no page (up to two hundred
+    // inches each way), margins at most a third of the page, header and footer distances a third of its
+    // height, the gap a quarter of its width, a column no wider than the page: a page of 2,147,483,647 by
+    // 1 lost its text, and a gap of millions made a file LibreOffice would not open.
+    const sectionSetup = (state: SectionState): PageSetup | undefined => {
+        const setup: PageSetup = {
+            // Its first page with a header and footer of its own (`\titlepg`), as a Word section's `w:titlePg`.
+            ...(state.title ? { differentFirstPage: true } : {}),
+            ...(state.pageNumbers ? { pageNumberFormat: state.pageNumbers } : {}),
+        };
+        if (config.ignorePageGeometry) return Object.keys(setup).length ? setup : undefined;
+        const pt = (twips: number | undefined, fallback: number) => (twips ?? fallback) / 20;
+        let width = pt(state.w ?? page.w, 12240), height = pt(state.h ?? page.h, 15840);
+        const sized = width > 0 && height > 0 && width <= MAX_PAGE_PT && height <= MAX_PAGE_PT;
+        if (pageStated && sized) {
+            // (A landscape page kept from the section before turns a size of its own no more: that size is its page.)
+            const landscape = state.landscape && (state.ownLandscape || !state.ownSize);
+            if ((landscape || (state.w === undefined && page.landscape)) && width < height) [width, height] = [height, width];
+            const margin = (twips: number | undefined, fallback: number) => Math.min(pt(twips, fallback), Math.min(width, height) / 3);
+            Object.assign(setup, {
+                width, height,
+                margin: { top: margin(state.mt ?? page.mt, 1440), right: margin(state.mr ?? page.mr, 1800), bottom: margin(state.mb ?? page.mb, 1440), left: margin(state.ml ?? page.ml, 1800) },
+                headerDistance: Math.min(pt(state.hy ?? page.hy, 720), height / 3), footerDistance: Math.min(pt(state.fy ?? page.fy, 720), height / 3),
+            });
+        }
+        // (Its columns on the page it is set on, RTF's Letter where it states none or none it can be.)
+        const across = pageStated && sized ? width : 612;
+        const count = Math.min(16, state.cols ?? 1);
+        if (count > 1) {
+            const widths = Array.from({ length: count }, (_, i) => state.widths.get(i + 1));
+            setup.columns = { count, gap: Math.min(pt(state.colsx, 720), across / 4), ...(state.line ? { separator: true } : {}), ...(widths.every(w => w !== undefined) ? { widths: widths.map(w => Math.min(w! / 20, across)) } : {}) };
+        }
+        return Object.keys(setup).length ? setup : undefined;
+    };
+    for (const { node, state } of sectionBreaks) {
+        const meta = node.metadata as BreakMetadata;
+        if (state.start === 'none') meta.breakType = 'section';
+        const setup = sectionSetup(state);
+        if (setup) meta.pageSetup = setup;
+    }
+    const firstSetup = sectionSetup(firstSection);
+    // (A section starting after the last text, as writers end every section with `\sect`, starts nothing.)
+    dropTrailingSectionStarts(content);
     const result = createAST(
         'rtf',
         {
             // RTF Limitation: No style map available (RTF uses inline styles)
+            ...(firstSetup ? { pageSetup: firstSetup } : {}),
         },
         content,
         attachments, // PNG and JPEG images extracted from \\pict groups

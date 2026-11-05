@@ -14,11 +14,94 @@
     ],
     "posts": [
         {
+            "slug": "text-that-looks-real-a-pdf-font-with-no-map",
+            "title": "Text That Looks Real: A PDF Font With No Map",
+            "shortTitle": "A PDF Font With No Map",
+            "category": "deep-dive",
+            "published": "2026-11-01",
+            "description": "Why a PDF line that says \"Hi there\" can extract as +LWKHUH with no error, why the file cannot always tell you, and what officeParser's PDF_FONT_UNMAPPED warning reports and misses.",
+            "deck": "A font with no map from its glyphs to characters gives text that looks real. The only evidence is a character that should not be there, which is also the one thing I had started removing."
+        },
+        {
+            "slug": "the-answer-was-in-the-glyph-name",
+            "title": "The Answer Was in the Glyph's Name: When \"nicht\" Reads \"ni!ht\"",
+            "shortTitle": "Reading a Glyph by Its Name",
+            "category": "deep-dive",
+            "published": "2026-11-01",
+            "description": "Why a word a PDF draws correctly can read \"ni!ht\" in pdf.js, what the Adobe Glyph List's rules say a name like c.sc means, how officeParser reads it, and the report I filed with pdf.js.",
+            "deck": "A font's encoding can name a glyph c.sc or T_h.alt, and with no map the text falls back to the code's own character. The name was the answer all along, so I read it, and reported it upstream."
+        },
+        {
+            "slug": "reading-a-filled-pdf-form",
+            "title": "Reading a Filled PDF Form: The Values Are Not in the Page",
+            "shortTitle": "Reading a Filled PDF Form",
+            "category": "deep-dive",
+            "published": "2026-10-29",
+            "description": "Where a filled PDF form keeps its values, how officeParser 8.4.1 reads each one beside its label, and two cases that break the same way: a date one digit to a printed box, and a font that reads \"nicht\" as \"ni!ht\".",
+            "deck": "Extract the text of a filled PDF form and you get the questions without the answers. The values live in widgets laid over the page, not in the page itself, and putting them back beside their labels takes more than reading them."
+        },
+        {
+            "slug": "headers-and-footers-a-pdf-never-marked",
+            "title": "Headers and Footers a PDF Never Marked",
+            "shortTitle": "Running Headers in a PDF",
+            "category": "deep-dive",
+            "published": "2026-10-29",
+            "updated": "2026-11-01",
+            "revisions": [
+                { "id": "ranges", "date": "2026-11-01", "release": "8.5.0", "note": "A range from a later page now keeps its page numbers out of the text, as fields." },
+                { "id": "parts", "date": "2026-11-01", "release": "8.5.0", "note": "Lines that differ are now parts as a word processor's are, and a tagged PDF's artifacts go there whatever they say." },
+                { "id": "book-parts", "date": "2026-11-01", "release": "8.5.0", "note": "Even and odd heads, a cover without a header, roman front matter and an article's numbers are now handled." },
+                { "id": "lines-apart", "date": "2026-11-01", "release": "8.5.0", "note": "Lines are now moved one by one, and to the pages of their part, and a header may be missing from some pages. A number counting from elsewhere is a field too." },
+                { "id": "roman-untagged", "date": "2026-11-01", "note": "This holds for an untagged PDF: a tagged PDF's artifacts in roman numerals are page numbers without page labels too." }
+            ],
+            "description": "How officeParser 8.4.1 finds an untagged PDF's running headers and footers by comparing its pages, turns a printed page number back into a field, and leaves a header in its pages when no single header could hold it.",
+            "deck": "A Word document's header is a part of its own, with a page number field in it. A PDF's is text drawn again on every page. Getting the header back means comparing the pages, and knowing when not to."
+        },
+        {
+            "slug": "laying-out-a-page-around-a-floating-frame",
+            "title": "Laying Out a Page From Scratch: Text Around a Floating Frame",
+            "shortTitle": "Text Around a Floating Frame",
+            "category": "architecture",
+            "published": "2026-10-26",
+            "description": "How ODT, Word and RTF each say where a text box stands, how officeParser reads them into one shape, and how its PDF engine sets lines round the box, with an interactive column to try it.",
+            "deck": "A sidebar in a shaded box, text running down its left: three formats store it three ways, and a layout engine that sets lines once from the top of the page has to decide what to do when a box stands over text it has already set."
+        },
+        {
+            "slug": "reading-the-spreadsheet-you-see",
+            "title": "Reading the Spreadsheet You See, Not the One Stored",
+            "shortTitle": "The Spreadsheet You See",
+            "category": "deep-dive",
+            "published": "2026-10-26",
+            "description": "A cell stores 0.19 and shows 19%. What XLSX keeps, how Excel's number formats work, and how officeParser reads both halves of a cell so a CSV keeps the numbers and a PDF prints what the sheet shows.",
+            "deck": "Type 19% into a cell and the file stores 0.19 and a note on how to show it. Which one is the content? Both, and every writer needs a different half."
+        },
+        {
+            "slug": "drawing-hindi-in-a-pdf",
+            "title": "Drawing Hindi in a PDF: Glyph Positions, Conjuncts and /ActualText",
+            "shortTitle": "Drawing Hindi in a PDF",
+            "category": "architecture",
+            "published": "2026-10-26",
+            "updated": "2026-10-28",
+            "revisions": [
+                { "id": "tm-value", "date": "2026-10-28", "note": "The sample said 765.89 when the post went out. The engine draws this line at 782.89." },
+                { "id": "whole-words", "date": "2026-10-28", "release": "8.4.0", "note": "The reader now reads words whole from PDFs that place each letter cluster apart, as LibreOffice's do." },
+                { "id": "first-font-that-draws", "date": "2026-10-28", "release": "8.4.0", "note": "A font whose glyph for a character draws nothing is now passed over for the next font." },
+                { "id": "web-fonts", "date": "2026-10-28", "release": "8.4.0", "note": "The native engine now takes WOFF and WOFF2 fonts." },
+                { "id": "space-after-conjunct", "date": "2026-10-28", "release": "8.4.0", "note": "The reader now keeps the space after a conjunct, so this is no longer a problem." }
+            ],
+            "description": "Why a Hindi word came apart in officeParser's PDF writer, copied with its letters out of order, or drew the wrong glyphs, and the font and PDF details behind each failure.",
+            "deck": "Hindi broke the native PDF engine in three ways at once. None of them was in the layout code: they were where text becomes glyphs, where glyphs become text again, and where a font is cut down to fit."
+        },
+        {
             "slug": "what-is-actually-inside-a-docx",
             "title": "What is Actually Inside a .docx File? An Architectural Deep Dive",
             "shortTitle": "What is Inside a .docx",
             "category": "deep-dive",
             "published": "2026-10-04",
+            "updated": "2026-11-01",
+            "revisions": [
+                { "id": "floating-box", "date": "2026-11-01", "note": "A floating text box comes just before the paragraph that draws it, where I had written after." }
+            ],
             "description": "A tour of the .docx package: parts and relationships, runs that Word splits mid-word, lists stored in another file, merged cells, text boxes, and field codes, and what officeParser makes of them.",
             "deck": "Most developers assume a Word document is styled text in a zip archive. It is closer to a small database: parts tied together by relationships, text split into runs, lists defined in another file, and text boxes nested inside drawings."
         },
@@ -28,6 +111,10 @@
             "shortTitle": "How PPTX Stores a Slide",
             "category": "deep-dive",
             "published": "2026-10-04",
+            "updated": "2026-11-01",
+            "revisions": [
+                { "id": "inherited-sizes", "date": "2026-11-01", "note": "A size or colour a slide inherits from its layout, master or theme is filled in; I had written that it was not." }
+            ],
             "description": "Why a slide is a canvas and not a text flow: English Metric Units, the theme, master and layout chain, the shape tree, speaker notes, and why reading order is hard.",
             "deck": "A word processing file flows from top to bottom. A presentation is the opposite: a set of separate canvases where shapes sit at coordinates, formatting is inherited through four layers, and every length is a whole number of units, 914,400 to the inch."
         },
@@ -37,6 +124,7 @@
             "shortTitle": "Why PDF Extraction is Hard",
             "category": "deep-dive",
             "published": "2026-10-04",
+            "updated": "2026-10-26",
             "description": "A PDF has no words, paragraphs, or reading order. Positioned glyphs, missing spaces, font encodings, ligatures, multi-column pages, and the XY-cut that rebuilds reading order.",
             "deck": "PDF describes how a page looks, not what it says. It knows how to paint glyphs at coordinates. Getting text back out means reconstructing what a reader's eye does without being told."
         },
@@ -55,6 +143,12 @@
             "shortTitle": "From String Scraping to AST",
             "category": "architecture",
             "published": "2026-10-04",
+            "updated": "2026-10-28",
+            "revisions": [
+                { "id": "more-outputs", "date": "2026-10-28", "release": "8.3.0", "note": "XLSX, ODS, PPTX and ODP output took the outputs from 11 to 15." },
+                { "id": "bundle-size", "date": "2026-10-28", "release": "8.3.0", "note": "The browser bundle was about 5.5 MB when this post went out, and grew to about 6 MB with this release." },
+                { "id": "own-fonts", "date": "2026-10-28", "release": "8.2.0", "note": "The native engine now also draws in TrueType and OpenType fonts you give it, for any script." }
+            ],
             "description": "Why returning one flat string hit a ceiling, and how a typed AST made conversion between Office, Markdown, HTML, and LaTeX possible.",
             "deck": "For more than six years officeParser returned a string. Here is why that stopped being enough, what replaced it, and the rule that has governed every feature since."
         },
@@ -64,7 +158,13 @@
             "shortTitle": "Where officeParser is the Wrong Tool",
             "category": "comparisons",
             "published": "2026-10-04",
-            "description": "The jobs officeParser does not do: PDFs that match Word exactly, formula recalculation, legacy .doc files, writing spreadsheets and slides, macros, and TeX typesetting, and what to use instead.",
+            "updated": "2026-11-01",
+            "revisions": [
+                { "id": "fixed-node-releases", "date": "2026-11-01", "release": "8.5.0", "note": "Earlier Node.js releases have a flaw in their Brotli decoder (CVE-2026-111497), so the package now asks for one with the fix." },
+                { "id": "xlsx-written", "date": "2026-10-28", "release": "8.3.0", "note": "officeParser now writes .xlsx files, with each cell's value and not its formula." },
+                { "id": "spreadsheets-and-slides", "date": "2026-10-26", "release": "8.3.0", "note": "officeParser now writes .xlsx, .ods, .pptx and .odp files, so this section is now about what those files leave out." }
+            ],
+            "description": "The jobs officeParser does not do: PDFs that match Word exactly, formula recalculation, legacy .doc files, formulas and native charts in what it writes, macros, and TeX typesetting, and what to use instead.",
             "deck": "Most documentation reads like a sales pitch, with the drawbacks in the fine print. I would rather be plain: here are the problems officeParser does not solve, and the tools to use instead."
         },
         {
@@ -73,6 +173,7 @@
             "shortTitle": "Chunking for Retrieval",
             "category": "rag",
             "published": "2026-10-04",
+            "updated": "2026-10-26",
             "description": "Why a sliding token window shreds tables and orphans headings, what chunking on document structure fixes, and what officeParser's chunker does and does not do.",
             "deck": "Teams tune embedding models and re-rankers while feeding them chunks that were cut in the wrong places. Here is what a fixed-size splitter does to a real document, and what chunking on the document's structure fixes."
         }

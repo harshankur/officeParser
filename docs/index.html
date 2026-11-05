@@ -24,13 +24,13 @@
         data-operator="Harsh Ankur"></script>
 
     <meta name="description"
-        content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 14 formats (including EPUB and LaTeX) and generate DOCX, ODT, LaTeX, RAG-ready Markdown, HTML, EPUB, and high-fidelity PDF with native document awareness.">
+        content="The industry's first dual-purpose Office Parser & Generator. Read 14 formats (including EPUB and LaTeX) into one structured AST, and write 15: DOCX, XLSX, PPTX, ODT, ODS, ODP, high-fidelity PDF, LaTeX, EPUB, HTML, Markdown, RTF, CSV, plain text and RAG-ready chunks.">
 
     <!-- OpenGraph Metadata -->
     <meta property="og:title"
         content="officeParser | The Most Versatile Office Parser & Generator for Node.js & Browser">
     <meta property="og:description"
-        content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 14 formats (including EPUB and LaTeX) and generate DOCX, ODT, LaTeX, RAG-ready Markdown, HTML, EPUB, and high-fidelity PDF with native document awareness.">
+        content="The industry's first dual-purpose Office Parser & Generator. Read 14 formats (including EPUB and LaTeX) into one structured AST, and write 15: DOCX, XLSX, PPTX, ODT, ODS, ODP, high-fidelity PDF, LaTeX, EPUB, HTML, Markdown, RTF, CSV, plain text and RAG-ready chunks.">
     <meta property="og:image"
         content="https://raw.githubusercontent.com/harshankur/officeParser/master/docs/favicon.png">
     <meta property="og:url" content="https://officeparser.harshankur.com">
@@ -96,6 +96,9 @@
         href="./vendor/highlight.js-11.9.0/styles/atom-one-dark.min.css">
     <script src="./vendor/highlight.js-11.9.0/highlight.min.js"></script>
     <script src="./vendor/highlight.js-11.9.0/languages/latex.min.js"></script>
+    <!-- The repository's documents (readme, changelog, ...) read on the site: a link to one on GitHub opens it here. -->
+    <link href="./site/repo-docs.css" rel="stylesheet">
+    <script defer src="./site/repo-docs.js"></script>
     <script>
         // Pre-load theme to avoid flash
         (function () {
@@ -791,7 +794,7 @@
 
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 2rem;
             width: 100%;
             padding: 2rem;
@@ -865,7 +868,7 @@
 
         .support-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
             gap: 1.5rem;
             max-width: var(--container-width);
             margin: 0 auto;
@@ -883,6 +886,41 @@
 
         .support-card:hover {
             border-color: var(--accent);
+        }
+
+        .support-grid.io-read .support-card:not([data-io*="r"]),
+        .support-grid.io-write .support-card:not([data-io*="w"]) {
+            opacity: 0.3;
+            filter: grayscale(1);
+        }
+
+        .support-grid.io-read .support-card[data-io*="r"],
+        .support-grid.io-write .support-card[data-io*="w"] {
+            border-color: var(--accent);
+        }
+
+        .stat-item[data-io-filter] {
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .stat-item[data-io-filter]:hover,
+        .stat-item[data-io-filter]:focus-visible,
+        .stat-item[data-io-filter][aria-pressed="true"] {
+            background: var(--bg-card-hover);
+        }
+
+        .support-io {
+            display: inline-block;
+            margin-top: 0.75rem;
+            padding: 0.15rem 0.6rem;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            color: var(--text-dim);
+            font-size: 0.7rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
         }
 
         .feature-icon {
@@ -1061,6 +1099,10 @@
         @media (max-width: 1024px) {
             .results-layout {
                 grid-template-columns: 1fr;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
             }
         }
 
@@ -3411,8 +3453,12 @@
          * The copies of the pdf.js worker and of Chart.js this site serves (docs/vendor), by their full
          * address on the site the page is opened from: the pdf.js worker is loaded from it, and a
          * downloaded HTML file names its charts script by it, so the address works outside the site too.
+         * pdf.js's CMaps (the text of fonts a PDF does not embed, as many Chinese, Japanese and Korean
+         * PDFs do) and its image decoders (fax scans, JBIG2, JPEG 2000) are served beside the worker.
          */
         window.SITE_PDF_WORKER_SRC = new URL('vendor/pdfjs-dist-6.2.108/pdf.worker.min.mjs', document.baseURI).href;
+        window.SITE_PDF_CMAP_URL = new URL('vendor/pdfjs-dist-6.2.108/cmaps/', document.baseURI).href;
+        window.SITE_PDF_DECODER_URL = new URL('vendor/pdfjs-dist-6.2.108/wasm/', document.baseURI).href;
         window.SITE_CHART_JS_SRC = new URL('vendor/chart.js-4.5.1/chart.umd.min.js', document.baseURI).href;
         /**
          * OCR's worker and engine, served by this site too (absolute, as Tesseract starts its worker from a
@@ -3467,8 +3513,12 @@
                 { id: 'cfg_pdfMergeHyphenatedWords', label: 'PDF Merge Hyphens', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfNormalizeText', label: 'PDF Normalize Text', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfExtractTextColor', label: 'PDF Extract Text Color', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfKeepHeadersAndFootersInPages', label: 'PDF Headers and Footers in Pages', type: 'switch', default: false, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_ignorePageGeometry', label: 'Ignore Page Geometry', type: 'switch', default: false, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfWorkerSrc', label: 'PDF Worker URL', type: 'text', default: window.SITE_PDF_WORKER_SRC, replaces: /^https:\/\/cdn\.jsdelivr\.net\/npm\/pdfjs-dist@[^/]+\/build\/pdf\.worker\.min\.mjs$/, fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfCMapUrl', label: 'PDF CMaps Folder URL', type: 'text', default: window.SITE_PDF_CMAP_URL, fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfDecoderUrl', label: 'PDF Image Decoders Folder URL', type: 'text', default: window.SITE_PDF_DECODER_URL, fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfMaxImagePixels', label: 'PDF Max Image Pixels', type: 'number', default: 40000000, width: '95px', min: 0, formatGroup: 'pdf', formats: ['pdf'] },
 
                 // HTML / EPUB Options
                 { id: 'cfg_preserveAttributes', label: 'Preserve HTML Attributes', type: 'switch', default: false, formatGroup: 'html', formats: ['html', 'epub', 'md'] },
@@ -3477,7 +3527,7 @@
                 { id: 'cfg_embedFolkForms', label: 'Embed Folk Forms', type: 'switch', default: false, formatGroup: 'html', formats: ['html', 'md'] },
 
                 // CSV Options
-                { id: 'cfg_csvDelimiter', label: 'CSV Delimiter', type: 'text', default: ',', width: '60px', formatGroup: 'csv', formats: ['csv'] },
+                { id: 'cfg_csvDelimiter', label: 'CSV Delimiter', type: 'text', default: 'auto', width: '60px', formatGroup: 'csv', formats: ['csv'] },
 
                 // LaTeX Options
                 { id: 'cfg_texToday', label: 'LaTeX \\today Text', type: 'text', default: '', width: '140px', placeholder: 'date of the parse', formatGroup: 'tex', formats: ['tex'] },
@@ -3771,9 +3821,9 @@
             <div class="hero-container">
                 <div class="hero-badges">
                     <!-- package-version:start (written from package.json by scripts/sync-site-version.js: do not edit) -->
-                    <a class="badge-link" href="https://github.com/harshankur/officeParser/blob/master/CHANGELOG.md" target="_blank"
-                        rel="noopener" aria-label="officeParser version 8.2.0: see what changed">
-                        <div class="badge badge-version" id="version-badge">v8.2.0</div>
+                    <a class="badge-link" href="https://github.com/harshankur/officeParser/blob/master/CHANGELOG.md#850---2026-11-01" target="_blank"
+                        rel="noopener" aria-label="officeParser version 8.5.0: see what changed">
+                        <div class="badge badge-version" id="version-badge">v8.5.0</div>
                     </a>
                     <!-- package-version:end -->
                     <a id="weekly-badge-link"
@@ -3783,9 +3833,10 @@
                     </a>
                 </div>
                 <h1>The Industry's First <span class="gradient-text">Parser & Generator</span></h1>
-                <p>One library, every transformation. Parse complex documents, LaTeX included, into a structured AST
-                    and generate high-fidelity Word, OpenDocument, LaTeX, PDF, EPUB, Markdown, HTML, or RAG-ready
-                    chunks optimized for LLM integration and modern AI workflows.
+                <p>One library, every transformation. <strong>Read 14 formats</strong>, LaTeX included, into one structured
+                    AST, and <strong>write 15</strong>: Word, Excel and PowerPoint, their OpenDocument twins, high-fidelity PDF,
+                    LaTeX, EPUB, HTML, Markdown, RTF, CSV, plain text, and RAG-ready chunks for LLM integration and modern AI
+                    workflows.
                 </p>
                 <div class="cta-group">
                     <a href="#visualizer" class="btn btn-primary">Try Visualizer</a>
@@ -3813,9 +3864,13 @@
                         <p>Total Downloads</p>
                     </a>
                 </div>
-                <div class="stat-item">
+                <div class="stat-item" data-io-filter="read" tabindex="0" role="button" aria-pressed="false" aria-label="14 formats read: show them among the formats below">
                     <h3>14</h3>
-                    <p>Formats Supported</p>
+                    <p>Formats Read</p>
+                </div>
+                <div class="stat-item" data-io-filter="write" tabindex="0" role="button" aria-pressed="false" aria-label="15 formats written: show them among the formats below">
+                    <h3>15</h3>
+                    <p>Formats Written</p>
                 </div>
             </div>
         </section>
@@ -3823,11 +3878,12 @@
         <section id="support" class="support">
             <div class="section-title">
                 <h2>Universal Support</h2>
-                <p>One library to rule them all. Built to handle the complexities of legacy and modern office standards.
+                <p>One library to rule them all: it reads 14 formats and writes 15, built to handle the complexities of
+                    legacy and modern office standards.
                 </p>
             </div>
             <div class="support-grid">
-                <div class="support-card">
+                <div class="support-card" data-io="rw">
                     <span class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
                             style="width:3.5rem;height:3.5rem;">
@@ -3838,8 +3894,9 @@
                     </span>
                     <h3>DOCX</h3>
                     <p>Modern Word</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
-                <div class="support-card">
+                <div class="support-card" data-io="rw">
                     <span class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
                             style="width:3.5rem;height:3.5rem;">
@@ -3850,8 +3907,9 @@
                     </span>
                     <h3>XLSX</h3>
                     <p>Modern Excel</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
-                <div class="support-card">
+                <div class="support-card" data-io="rw">
                     <span class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
                             style="width:3.5rem;height:3.5rem;">
@@ -3862,8 +3920,9 @@
                     </span>
                     <h3>PPTX</h3>
                     <p>Modern Powerpoint</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
-                <div class="support-card">
+                <div class="support-card" data-io="rw">
                     <span class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
                             style="width:3.5rem;height:3.5rem;">
@@ -3874,8 +3933,9 @@
                     </span>
                     <h3>PDF</h3>
                     <p>Documents</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
-                <div class="support-card">
+                <div class="support-card" data-io="rw">
                     <span class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
                             style="width:3.5rem;height:3.5rem;">
@@ -3886,8 +3946,9 @@
                     </span>
                     <h3>ODT</h3>
                     <p>OpenDocument Text</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
-                <div class="support-card">
+                <div class="support-card" data-io="rw">
                     <span class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
                             style="width:3.5rem;height:3.5rem;">
@@ -3898,8 +3959,9 @@
                     </span>
                     <h3>ODS</h3>
                     <p>OpenDocument Spreadsheet</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
-                <div class="support-card">
+                <div class="support-card" data-io="rw">
                     <span class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
                             style="width:3.5rem;height:3.5rem;">
@@ -3910,8 +3972,9 @@
                     </span>
                     <h3>ODP</h3>
                     <p>OpenDocument Presentation</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
-                <div class="support-card">
+                <div class="support-card" data-io="r">
                     <span class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
                             style="width:3.5rem;height:3.5rem;">
@@ -3923,8 +3986,9 @@
                     </span>
                     <h3>ODG</h3>
                     <p>OpenDocument Graphics</p>
+                    <span class="support-io">Read</span>
                 </div>
-                <div class="support-card">
+                <div class="support-card" data-io="rw">
                     <span class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
                             style="width:3.5rem;height:3.5rem;">
@@ -3935,8 +3999,9 @@
                     </span>
                     <h3>RTF</h3>
                     <p>Rich Text</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
-                <div class="support-card">
+                <div class="support-card" data-io="rw">
                     <span class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
                             style="width:3.5rem;height:3.5rem;">
@@ -3947,8 +4012,9 @@
                     </span>
                     <h3>CSV</h3>
                     <p>Spreadsheets</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
-                <div class="support-card">
+                <div class="support-card" data-io="rw">
                     <span class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
                             style="width:3.5rem;height:3.5rem;">
@@ -3959,8 +4025,9 @@
                     </span>
                     <h3>MD</h3>
                     <p>Markdown</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
-                <div class="support-card">
+                <div class="support-card" data-io="rw">
                     <span class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
                             style="width:3.5rem;height:3.5rem;">
@@ -3971,8 +4038,9 @@
                     </span>
                     <h3>HTML</h3>
                     <p>Web Pages</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
-                <div class="support-card">
+                <div class="support-card" data-io="rw">
                     <span class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
                             style="width:3.5rem;height:3.5rem;">
@@ -3983,8 +4051,9 @@
                     </span>
                     <h3>EPUB</h3>
                     <p>eBooks</p>
+                    <span class="support-io">Read &middot; Write</span>
                 </div>
-                <div class="support-card">
+                <div class="support-card" data-io="rw">
                     <span class="feature-icon">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
                             style="width:3.5rem;height:3.5rem;">
@@ -3995,9 +4064,72 @@
                     </span>
                     <h3>TEX</h3>
                     <p>LaTeX &amp; Overleaf Projects</p>
+                    <span class="support-io">Read &middot; Write</span>
+                </div>
+                <div class="support-card" data-io="w">
+                    <span class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                            style="width:3.5rem;height:3.5rem;">
+                            <path d="M4 4V20H20V8L16 4H4Z" fill="#64748B" />
+                            <path d="M16 4V8H20" stroke="white" stroke-width="1.5" /><text x="5.5" y="15.5" fill="white"
+                                font-family="Outfit" font-weight="800" font-size="4.5">TXT</text>
+                        </svg>
+                    </span>
+                    <h3>TXT</h3>
+                    <p>Plain Text</p>
+                    <span class="support-io">Write</span>
+                </div>
+                <div class="support-card" data-io="w">
+                    <span class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                            style="width:3.5rem;height:3.5rem;">
+                            <path d="M4 4V20H20V8L16 4H4Z" fill="#7C3AED" />
+                            <path d="M16 4V8H20" stroke="white" stroke-width="1.5" /><text x="5.5" y="15.5" fill="white"
+                                font-family="Outfit" font-weight="800" font-size="4.5">RAG</text>
+                        </svg>
+                    </span>
+                    <h3>CHUNKS</h3>
+                    <p>RAG-Ready Chunks</p>
+                    <span class="support-io">Write</span>
                 </div>
             </div>
         </section>
+        <script>
+            // A stat of formats read or written lights up those formats in the grid below, and dims the rest:
+            // while it is hovered or focused, and, clicked or tapped (where there is no hover), until it is
+            // clicked again or anything else is, the page scrolled to the grid.
+            (() => {
+                const grid = document.querySelector('#support .support-grid');
+                const stats = document.querySelectorAll('.stat-item[data-io-filter]');
+                let pinned = null;
+                const show = (filter) => {
+                    grid.classList.remove('io-read', 'io-write');
+                    if (filter) grid.classList.add(`io-${filter}`);
+                };
+                stats.forEach(stat => {
+                    const filter = stat.dataset.ioFilter;
+                    stat.addEventListener('mouseenter', () => show(filter));
+                    stat.addEventListener('mouseleave', () => show(pinned));
+                    stat.addEventListener('focus', () => show(filter));
+                    stat.addEventListener('blur', () => show(pinned));
+                    const pin = () => {
+                        pinned = pinned === filter ? null : filter;
+                        stats.forEach(s => s.setAttribute('aria-pressed', String(s.dataset.ioFilter === pinned)));
+                        show(pinned);
+                        if (pinned) document.getElementById('support').scrollIntoView({ behavior: 'smooth' });
+                    };
+                    stat.addEventListener('click', pin);
+                    stat.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pin(); } });
+                });
+                document.addEventListener('click', (e) => {
+                    if (pinned && !e.target.closest('.stat-item[data-io-filter]')) {
+                        pinned = null;
+                        stats.forEach(s => s.setAttribute('aria-pressed', 'false'));
+                        show(null);
+                    }
+                });
+            })();
+        </script>
 
         <section id="features" class="features" style="padding: 6rem 0;">
             <div class="section-title">
@@ -4022,7 +4154,7 @@
                 <div class="feature-card">
                     <span class="feature-icon">🏗️</span>
                     <h3>Native Generation</h3>
-                    <p>Write real <strong>DOCX and ODT</strong> packages, <strong>LaTeX</strong> that compiles with
+                    <p>Write real <strong>DOCX, ODT, XLSX, ODS, PPTX and ODP</strong> packages, <strong>LaTeX</strong> that compiles with
                         pdfLaTeX, XeLaTeX, LuaLaTeX and upLaTeX (CJK included), and PDFs via a native <code>pdf-lib</code> engine that needs
                         <em>no headless browser</em>, running identically in Node and the browser.</p>
                 </div>
@@ -4128,7 +4260,7 @@
                 </div>
                 <div class="spec-card" id="card-generator_config" onclick="location.hash='#spec/generator_config'">
                     <h3>Generator Config</h3>
-                    <p>Complete guide to common and format-specific settings for HTML, Markdown, PDF, DOCX, ODT, LaTeX and more.</p>
+                    <p>Complete guide to common and format-specific settings for HTML, Markdown, PDF, DOCX, ODT, XLSX, ODS, PPTX, ODP, LaTeX and more.</p>
                     <div class="spec-link-hint">Read Config Spec →</div>
                 </div>
                 <div class="spec-card" id="card-generator" onclick="location.hash='#spec/generator'">
@@ -4488,6 +4620,10 @@
                                 <button class="dropdown-menu-item" role="menuitem" data-export-fmt="pdf">PDF (print)</button>
                                 <button class="dropdown-menu-item" role="menuitem" data-export-fmt="docx">DOCX (.docx)</button>
                                 <button class="dropdown-menu-item" role="menuitem" data-export-fmt="odt">ODT (.odt)</button>
+                                <button class="dropdown-menu-item" role="menuitem" data-export-fmt="xlsx">XLSX (.xlsx)</button>
+                                <button class="dropdown-menu-item" role="menuitem" data-export-fmt="ods">ODS (.ods)</button>
+                                <button class="dropdown-menu-item" role="menuitem" data-export-fmt="pptx">PPTX (.pptx)</button>
+                                <button class="dropdown-menu-item" role="menuitem" data-export-fmt="odp">ODP (.odp)</button>
                                 <button class="dropdown-menu-item" role="menuitem" data-export-fmt="epub">EPUB (.epub)</button>
                             </div>
                         </div>
@@ -4814,7 +4950,7 @@
                 <div class="panel-body" id="visual-export">
                     <p class="export-intro">Convert the loaded document to any format officeParser generates. Each
                         download uses the options set in the matching window above (the HTML window's for PDF, EPUB,
-                        DOCX and ODT).</p>
+                        DOCX, ODT, XLSX, ODS, PPTX and ODP).</p>
                     <div class="export-grid" id="export-grid"></div>
                 </div>
             </div>
@@ -5041,6 +5177,10 @@
                 <a href="https://github.com/harshankur/officeParser/blob/master/README.md" target="_blank">Readme</a>
                 <a href="https://github.com/harshankur/officeParser/blob/master/CONTRIBUTING.md"
                     target="_blank">Contributing</a>
+                <a href="https://github.com/harshankur/officeParser/blob/master/SUPPORT.md" target="_blank">Support</a>
+                <a href="https://github.com/harshankur/officeParser/blob/master/SECURITY.md" target="_blank">Security Policy</a>
+                <a href="https://github.com/harshankur/officeParser/blob/master/CODE_OF_CONDUCT.md"
+                    target="_blank">Code of Conduct</a>
             </div>
         </div>
 
@@ -5959,7 +6099,9 @@
                         mergeHyphenatedWords: document.getElementById('cfg_pdfMergeHyphenatedWords').checked,
                         pageRange: document.getElementById('cfg_pdfPageRange').value,
                         normalizeText: document.getElementById('cfg_pdfNormalizeText').checked,
-                        extractTextColor: document.getElementById('cfg_pdfExtractTextColor').checked
+                        extractTextColor: document.getElementById('cfg_pdfExtractTextColor').checked,
+                        keepHeadersAndFootersInPages: document.getElementById('cfg_pdfKeepHeadersAndFootersInPages').checked,
+                        maxImagePixels: ((value) => value.trim() === '' ? undefined : Number(value))(document.getElementById('cfg_pdfMaxImagePixels').value)
                     },
                     htmlParserConfig: {
                         preserveAttributes: document.getElementById('cfg_preserveAttributes').checked,
@@ -5970,6 +6112,9 @@
                     texParserConfig: { today: document.getElementById('cfg_texToday').value },
                     csvDelimiter: document.getElementById('cfg_csvDelimiter').value,
                     pdfWorkerSrc: document.getElementById('cfg_pdfWorkerSrc').value.trim() || window.SITE_PDF_WORKER_SRC,
+                    // Empty is the library's own default, not "none".
+                    pdfCMapUrl: document.getElementById('cfg_pdfCMapUrl').value.trim() || window.SITE_PDF_CMAP_URL,
+                    pdfDecoderUrl: document.getElementById('cfg_pdfDecoderUrl').value.trim() || window.SITE_PDF_DECODER_URL,
                     decompressionLimits: {
                         maxUncompressedBytes: parseInt(document.getElementById('cfg_maxUncompressedBytes').value, 10) * 1024 * 1024,
                         maxZipEntries: parseInt(document.getElementById('cfg_maxZipEntries').value, 10),
@@ -6349,7 +6494,8 @@
             const WARNING_GROUP_LABELS = {
                 parse: 'Parsing', html: 'HTML output', md: 'Markdown output', chunks: 'RAG chunks output',
                 csv: 'CSV output', rtf: 'RTF output', tex: 'LaTeX output', text: 'Plain text output', ast: 'AST download',
-                docx: 'DOCX download', odt: 'ODT download', epub: 'EPUB download', pdf: 'PDF export', texbundle: 'LaTeX + images download'
+                docx: 'DOCX download', odt: 'ODT download', xlsx: 'XLSX download', ods: 'ODS download',
+                pptx: 'PPTX download', odp: 'ODP download', epub: 'EPUB download', pdf: 'PDF export', texbundle: 'LaTeX + images download'
             };
             const warningGroups = new Map();
             /** Messages on screen when the banner was dismissed; the banner returns only for a new one. */
@@ -6391,7 +6537,11 @@
 
             window.recordWarning = (group, issue) => {
                 console.warn(`officeParser warning (${group}):`, issue);
-                const message = (issue && issue.message) || String(issue);
+                // The page a PDF warning is on, and the reason a message that ends in a colon goes on to give.
+                const text = (issue && issue.message) || String(issue);
+                const details = issue && issue.details;
+                const reason = typeof details === 'string' ? details : details instanceof Error ? details.message : '';
+                const message = (issue && Number.isInteger(issue.page) ? `Page ${issue.page}: ` : '') + (reason && text.endsWith(':') ? `${text} ${reason}` : text);
                 const messages = warningGroups.get(group) || [];
                 if (messages.includes(message)) return;
                 messages.push(message);
@@ -7186,7 +7336,7 @@ ${sectioning.filter(Boolean).join('\n')}
                 // A string is the generated source; bytes are a LaTeX bundle (main.tex plus its images).
                 const bytes = typeof source === 'string' ? new TextEncoder().encode(source) : source;
                 // The site's own pdf.js worker, never the library's CDN default (allowRemoteAssets: false).
-                const reparsed = await window.officeParser.parseOffice(bytes, { fileType, extractAttachments: true, pdfWorkerSrc: window.SITE_PDF_WORKER_SRC, allowRemoteAssets: false });
+                const reparsed = await window.officeParser.parseOffice(bytes, { fileType, extractAttachments: true, pdfWorkerSrc: window.SITE_PDF_WORKER_SRC, pdfCMapUrl: window.SITE_PDF_CMAP_URL, pdfDecoderUrl: window.SITE_PDF_DECODER_URL, allowRemoteAssets: false });
                 const layout = typeof tex === 'string' ? texLayoutOf(tex) : null;
                 // Charts from the site's own Chart.js, and embeds as placeholders the preview turns into buttons.
                 const htmlConfig = { chartJsSrc: window.SITE_CHART_JS_SRC, gatedEmbeds: true, ...(layout ? { standalone: { styles: 'none' } } : {}) };
@@ -7962,7 +8112,7 @@ ${sectioning.filter(Boolean).join('\n')}
             };
 
             // Exports with no preview window of their own, keyed by the panel whose options they use and
-            // whose "Download ▾" dropdown lists them (PDF, EPUB, DOCX and ODT take the HTML panel's
+            // whose "Download ▾" dropdown lists them (PDF, EPUB, DOCX, ODT, XLSX, ODS, PPTX and ODP take the HTML panel's
             // options; the LaTeX + images zip takes the LaTeX panel's). The Export panel lists them too.
             const DERIVED_EXPORTS = {
                 html: {
@@ -8014,6 +8164,46 @@ ${sectioning.filter(Boolean).join('\n')}
                             const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.odt';
                             downloadFile(result.value, name, 'application/vnd.oasis.opendocument.text');
                         }
+                    },
+                    xlsx: {
+                        kind: 'binary',
+                        run: async () => {
+                            // XlsxGenerator writes a workbook straight from the AST; it ignores the html-specific keys in the derived config.
+                            const genConfig = htmlDerivedConfig(false);
+                            const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'xlsx', genConfig);
+                            const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.xlsx';
+                            downloadFile(result.value, name, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+                        }
+                    },
+                    ods: {
+                        kind: 'binary',
+                        run: async () => {
+                            // OdsGenerator writes an OpenDocument spreadsheet straight from the AST; it ignores the html-specific keys in the derived config.
+                            const genConfig = htmlDerivedConfig(false);
+                            const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'ods', genConfig);
+                            const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.ods';
+                            downloadFile(result.value, name, 'application/vnd.oasis.opendocument.spreadsheet');
+                        }
+                    },
+                    pptx: {
+                        kind: 'binary',
+                        run: async () => {
+                            // PptxGenerator writes a presentation straight from the AST; it ignores the html-specific keys in the derived config.
+                            const genConfig = htmlDerivedConfig(false);
+                            const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'pptx', genConfig);
+                            const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.pptx';
+                            downloadFile(result.value, name, 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+                        }
+                    },
+                    odp: {
+                        kind: 'binary',
+                        run: async () => {
+                            // OdpGenerator writes an OpenDocument presentation straight from the AST; it ignores the html-specific keys in the derived config.
+                            const genConfig = htmlDerivedConfig(false);
+                            const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'odp', genConfig);
+                            const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.odp';
+                            downloadFile(result.value, name, 'application/vnd.oasis.opendocument.presentation');
+                        }
                     }
                 },
                 tex: {
@@ -8063,6 +8253,10 @@ ${sectioning.filter(Boolean).join('\n')}
             const EXPORT_TARGETS = [
                 { name: 'Word', group: 'docx', ext: '.docx', run: () => DERIVED_EXPORTS.html.docx.run() },
                 { name: 'OpenDocument Text', group: 'odt', ext: '.odt', run: () => DERIVED_EXPORTS.html.odt.run() },
+                { name: 'Excel', group: 'xlsx', ext: '.xlsx', run: () => DERIVED_EXPORTS.html.xlsx.run() },
+                { name: 'OpenDocument Spreadsheet', group: 'ods', ext: '.ods', run: () => DERIVED_EXPORTS.html.ods.run() },
+                { name: 'PowerPoint', group: 'pptx', ext: '.pptx', run: () => DERIVED_EXPORTS.html.pptx.run() },
+                { name: 'OpenDocument Presentation', group: 'odp', ext: '.odp', run: () => DERIVED_EXPORTS.html.odp.run() },
                 { name: 'LaTeX', group: 'tex', ext: '.tex', run: () => downloadHandlers.tex() },
                 { name: 'LaTeX + images', group: 'texbundle', ext: '.zip', run: () => DERIVED_EXPORTS.tex.texbundle.run() },
                 { name: 'EPUB', group: 'epub', ext: '.epub', run: () => DERIVED_EXPORTS.html.epub.run() },
@@ -8118,8 +8312,10 @@ ${sectioning.filter(Boolean).join('\n')}
             // visitor's browser asks no one else for them. `week` is the last week's downloads and `total`
             // every download since the package was first published; either may be missing.
             async function updateDownloadStats() {
+                // Rounded down, as the "+" says: a million to two decimals (1.26M+, as npm's 1,263,321 a week),
+                // a thousand whole (845k+).
                 const formatNumber = (num) => {
-                    if (num >= 1000000) return (Math.floor(num / 100000) / 10) + 'M+';
+                    if (num >= 1000000) return (Math.floor(num / 10000) / 100) + 'M+';
                     if (num >= 1000) return Math.floor(num / 1000) + 'k+';
                     return num;
                 };
@@ -8369,7 +8565,7 @@ ${sectioning.filter(Boolean).join('\n')}
             async function inspect(bytes) {
                 // Any file can be dropped here, a PDF too: the site's own pdf.js worker, never the library's
                 // CDN default (allowRemoteAssets: false), as for every parse on this page.
-                const ast = await window.officeParser.parseOffice(bytes, { onWarning: () => { }, pdfWorkerSrc: window.SITE_PDF_WORKER_SRC, allowRemoteAssets: false });
+                const ast = await window.officeParser.parseOffice(bytes, { onWarning: () => { }, pdfWorkerSrc: window.SITE_PDF_WORKER_SRC, pdfCMapUrl: window.SITE_PDF_CMAP_URL, pdfDecoderUrl: window.SITE_PDF_DECODER_URL, allowRemoteAssets: false });
                 // Gated as the visualizer's previews are: a video or page an uploaded document frames loads only on a click.
                 const html = window.gatePreviewEmbeds((((await ast.to('html', { htmlConfig: { standalone: false, gatedEmbeds: true } })).value) || ''));
                 const text = ((((await ast.to('text')).value) || '')).toString();

@@ -4,6 +4,7 @@ import { getAbortError, getOfficeError } from '../utils/errorUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { HtmlGenerator } from './HtmlGenerator.js';
 import { renderNativePdf } from './pdf/nativePdfEngine.js';
+import { withoutHiddenSheetContent, withoutSpeakerNotes, withShownCellText } from '../utils/officeGenUtils.js';
 
 /**
  * Generates high-fidelity PDF documents using a headless browser engine.
@@ -21,10 +22,16 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
 
         // Native engine: lay the AST out directly with pdf-lib, no browser required (works in Node
         // and the browser alike). The default 'html' engine falls through to the browser path below.
+        // A printout of a spreadsheet leaves its hidden sheets, rows and columns out, and one of slides its
+        // speaker notes (which printed at the end, on the last slide).
+        // Cells print the text the sheet shows for their numbers (`19%`, not 0.19).
+        const visible = this.config.pdfConfig.printHidden ? this.ast : withoutHiddenSheetContent(this.ast);
+        const shown = withShownCellText(visible);
+        const ast = this.config.pdfConfig.printSpeakerNotes ? shown : withoutSpeakerNotes(shown);
         if (this.config.pdfConfig.engine === 'native') {
             if (this.config.abortSignal?.aborted) throw getAbortError();
             try {
-                const value = await renderNativePdf(this.ast, this.config, this.effectiveMetadata, (t, i) => this.warn(t, i));
+                const value = await renderNativePdf(ast, this.config, this.effectiveMetadata, (t, i) => this.warn(t, i));
                 return { value, messages: this.messages };
             } catch (err: any) {
                 if (this.config.abortSignal?.aborted) throw getAbortError();
@@ -35,7 +42,7 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
 
         // Step 1: Generate high-fidelity HTML as the source for PDF rendering
         // We reuse the current configuration but ensure standalone mode is on for HTML
-        const htmlGenerator = new HtmlGenerator(this.ast, {
+        const htmlGenerator = new HtmlGenerator(ast, {
             ...this.config,
             // The HTML is rendered in a real browser (Puppeteer in Node, the print engine in-page), which
             // resolves a data: URI of any size. The maxInlineImageBytes cap exists only to keep a huge
@@ -46,7 +53,8 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
             // structured consumers and change the mermaid shape's rendered appearance, neither of
             // which belongs in a printed PDF.
             htmlConfig: { ...this.config.htmlConfig, standalone: true, sourceAttributes: false },
-        });
+        // Invisible text drawn unseen, as the native engine draws it (a scan's recognised words, there to search).
+        }, { drawsInvisibleText: true });
 
 
         const htmlResult = await htmlGenerator.generate();
@@ -170,11 +178,21 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
             const m = pdfConfig.margin;
             const marginPx = (v: string | number) => (v === '' ? 0 : v);
 
+            // 'auto': the document's own page (its first section's; the browser prints one size), else A4.
+            const setup = this.ast.metadata?.pageSetup;
+            const auto = String(pdfConfig.format ?? 'auto').toLowerCase() === 'auto' && !pdfConfig.width && !pdfConfig.height;
+            let autoSize: { width: string; height: string } | undefined;
+            if (auto && setup?.width && setup.height) {
+                const [w, h] = pdfConfig.landscape && setup.width < setup.height ? [setup.height, setup.width] : [setup.width, setup.height];
+                autoSize = { width: `${+(w / 72).toFixed(4)}in`, height: `${+(h / 72).toFixed(4)}in` };
+            }
             const pdfBuffer = await page.pdf({
-                format: pdfConfig.format,
-                width: pdfConfig.width,
-                height: pdfConfig.height,
-                landscape: pdfConfig.landscape,
+                // ('auto' is the library's, which the browser knows nothing of: with a width or height given
+                // it is no format at all.)
+                format: auto ? (autoSize ? undefined : 'A4') : String(pdfConfig.format ?? '').toLowerCase() === 'auto' ? undefined : pdfConfig.format as any,
+                width: autoSize?.width ?? pdfConfig.width,
+                height: autoSize?.height ?? pdfConfig.height,
+                landscape: autoSize ? false : pdfConfig.landscape,
                 printBackground: pdfConfig.printBackground,
                 scale: pdfConfig.scale,
                 margin: { top: marginPx(m.top), right: marginPx(m.right), bottom: marginPx(m.bottom), left: marginPx(m.left) },

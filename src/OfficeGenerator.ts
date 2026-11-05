@@ -7,6 +7,10 @@ import { EpubGenerator } from './generators/EpubGenerator.js';
 import { HtmlGenerator } from './generators/HtmlGenerator.js';
 import { MarkdownGenerator } from './generators/MarkdownGenerator.js';
 import { OdtGenerator } from './generators/OdtGenerator.js';
+import { OdsGenerator } from './generators/OdsGenerator.js';
+import { XlsxGenerator } from './generators/XlsxGenerator.js';
+import { PptxGenerator } from './generators/PptxGenerator.js';
+import { OdpGenerator } from './generators/OdpGenerator.js';
 import { LatexGenerator } from './generators/LatexGenerator.js';
 import { PdfGenerator } from './generators/PdfGenerator.js';
 import { RtfGenerator } from './generators/RtfGenerator.js';
@@ -109,7 +113,10 @@ export class OfficeGenerator {
             // Grids are bounded last, so the tables they give are the ones writers get; a table laid out
             // closer is reported with the output's messages.
             const gridGaps = new Map<OfficeContentNode, number>();
-            input = withBoundedSheetGrids(keepsComments ? known : withoutSourceComments(known, { tree }), gridGaps, { tree, onLaidOut: tables => { laidOut = tables; } });
+            // (XLSX and ODS output hold a sheet's cells where they stand, filling no empty position: a sheet of
+            // cells far apart is written as it is, not laid out closer.)
+            const keepPlacedSheets = normalizedDestination === 'xlsx' || normalizedDestination === 'ods';
+            input = withBoundedSheetGrids(keepsComments ? known : withoutSourceComments(known, { tree }), gridGaps, { tree, onLaidOut: tables => { laidOut = tables; }, keepPlacedSheets });
             noteDocumentBytes(input, documentBytesOf(ast));
             // A table's grid is held to the grid budget once, and its empty positions are written along
             // every path to it: 1,000 cells along a diagonal, shared 1,000 times, filled a billion. An AST
@@ -152,6 +159,18 @@ export class OfficeGenerator {
                 break;
             case 'tex':
                 generator = new LatexGenerator(input, config as GeneratorConfig<'tex'>);
+                break;
+            case 'xlsx':
+                generator = new XlsxGenerator(input, config as GeneratorConfig<'xlsx'>);
+                break;
+            case 'ods':
+                generator = new OdsGenerator(input, config as GeneratorConfig<'ods'>);
+                break;
+            case 'pptx':
+                generator = new PptxGenerator(input, config as GeneratorConfig<'pptx'>);
+                break;
+            case 'odp':
+                generator = new OdpGenerator(input, config as GeneratorConfig<'odp'>);
                 break;
             default:
                 // Reported where a generator would report it: the caller's handler, else the AST's.

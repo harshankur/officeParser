@@ -1,6 +1,6 @@
 ---
 title: "DOCX Demo"
-author: "Harsh Ankur"
+author: "Kovid Goyal"
 created: 2025-11-29T07:48:00.000Z
 modified: 2025-11-29T07:48:00.000Z
 description: "Demonstration of DOCX support in calibre"
@@ -106,38 +106,23 @@ We end with a fancy calendar, note how much of the original formatting is preser
 
 <table>
   <tr>
-    <td colspan="13"><p><span style="color: #365F91">December 2007</span></p></td>
+    <td colspan="13"><p>December 2007</p></td>
     <td><p></p></td>
   </tr>
   <tr>
-    <td><p><span style="color: #365F91">Sun</span></p></td>
+    <td><p>Sun</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">Mon</span></p></td>
+    <td><p>Mon</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">Tue</span></p></td>
+    <td><p>Tue</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">Wed</span></p></td>
+    <td><p>Wed</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">Thu</span></p></td>
+    <td><p>Thu</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">Fri</span></p></td>
+    <td><p>Fri</p></td>
     <td><p></p></td>
-    <td colspan="2"><p><span style="color: #365F91">Sat</span></p></td>
-  </tr>
-  <tr>
-    <td><p></p></td>
-    <td><p></p></td>
-    <td><p></p></td>
-    <td><p></p></td>
-    <td><p></p></td>
-    <td><p></p></td>
-    <td><p></p></td>
-    <td><p></p></td>
-    <td><p></p></td>
-    <td><p></p></td>
-    <td><p></p></td>
-    <td><p></p></td>
-    <td colspan="2"><p><span style="color: #365F91">1</span></p></td>
+    <td colspan="2"><p>Sat</p></td>
   </tr>
   <tr>
     <td><p></p></td>
@@ -152,22 +137,7 @@ We end with a fancy calendar, note how much of the original formatting is preser
     <td><p></p></td>
     <td><p></p></td>
     <td><p></p></td>
-    <td colspan="2"><p></p></td>
-  </tr>
-  <tr>
-    <td><p><span style="color: #365F91">2</span></p></td>
-    <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">3</span></p></td>
-    <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">4</span></p></td>
-    <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">5</span></p></td>
-    <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">6</span></p></td>
-    <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">7</span></p></td>
-    <td><p></p></td>
-    <td colspan="2"><p><span style="color: #365F91">8</span></p></td>
+    <td colspan="2"><p>1</p></td>
   </tr>
   <tr>
     <td><p></p></td>
@@ -185,19 +155,19 @@ We end with a fancy calendar, note how much of the original formatting is preser
     <td colspan="2"><p></p></td>
   </tr>
   <tr>
-    <td><p><span style="color: #365F91">9</span></p></td>
+    <td><p>2</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">10</span></p></td>
+    <td><p>3</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">11</span></p></td>
+    <td><p>4</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">12</span></p></td>
+    <td><p>5</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">13</span></p></td>
+    <td><p>6</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">14</span></p></td>
+    <td><p>7</p></td>
     <td><p></p></td>
-    <td colspan="2"><p><span style="color: #365F91">15</span></p></td>
+    <td colspan="2"><p>8</p></td>
   </tr>
   <tr>
     <td><p></p></td>
@@ -215,19 +185,19 @@ We end with a fancy calendar, note how much of the original formatting is preser
     <td colspan="2"><p></p></td>
   </tr>
   <tr>
-    <td><p><span style="color: #365F91">16</span></p></td>
+    <td><p>9</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">17</span></p></td>
+    <td><p>10</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">18</span></p></td>
+    <td><p>11</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">19</span></p></td>
+    <td><p>12</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">20</span></p></td>
+    <td><p>13</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">21</span></p></td>
+    <td><p>14</p></td>
     <td><p></p></td>
-    <td colspan="2"><p><span style="color: #365F91">22</span></p></td>
+    <td colspan="2"><p>15</p></td>
   </tr>
   <tr>
     <td><p></p></td>
@@ -245,19 +215,19 @@ We end with a fancy calendar, note how much of the original formatting is preser
     <td colspan="2"><p></p></td>
   </tr>
   <tr>
-    <td><p><span style="color: #365F91">23</span></p></td>
+    <td><p>16</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">24</span></p></td>
+    <td><p>17</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">25</span></p></td>
+    <td><p>18</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">26</span></p></td>
+    <td><p>19</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">27</span></p></td>
+    <td><p>20</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">28</span></p></td>
+    <td><p>21</p></td>
     <td><p></p></td>
-    <td colspan="2"><p><span style="color: #365F91">29</span></p></td>
+    <td colspan="2"><p>22</p></td>
   </tr>
   <tr>
     <td><p></p></td>
@@ -275,9 +245,39 @@ We end with a fancy calendar, note how much of the original formatting is preser
     <td colspan="2"><p></p></td>
   </tr>
   <tr>
-    <td><p><span style="color: #365F91">30</span></p></td>
+    <td><p>23</p></td>
     <td><p></p></td>
-    <td><p><span style="color: #7F7F7F">31</span></p></td>
+    <td><p>24</p></td>
+    <td><p></p></td>
+    <td><p>25</p></td>
+    <td><p></p></td>
+    <td><p>26</p></td>
+    <td><p></p></td>
+    <td><p>27</p></td>
+    <td><p></p></td>
+    <td><p>28</p></td>
+    <td><p></p></td>
+    <td colspan="2"><p>29</p></td>
+  </tr>
+  <tr>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p></p></td>
+  </tr>
+  <tr>
+    <td><p>30</p></td>
+    <td><p></p></td>
+    <td><p>31</p></td>
     <td><p></p></td>
     <td><p></p></td>
     <td><p></p></td>
@@ -382,10 +382,10 @@ All types of lists are supported by the conversion, with the exception of lists 
 ## Multi-level Lists {#toc1093260318}
 
 1. One
-    1. Two
-        1. Three
-        2. Four with a very long line to demonstrate that the hanging indent for the list is working correctly.
-        3. Five
+    - 1.1. Two
+        - 1.1.1. Three
+        - 1.1.2. Four with a very long line to demonstrate that the hanging indent for the list is working correctly.
+        - 1.1.3. Five
 2. Six
 
 A Multi-level list with bullets:
@@ -398,13 +398,13 @@ A Multi-level list with bullets:
 
 ## Continued Lists {#toc1471533984}
 
-1. One
-2. Two
+- i. One
+- ii. Two
 
 An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.
 
-3. We now resume our normal programming
-4. Four
+- iii. We now resume our normal programming
+- iv. Four
 
 [^_ftn0]: In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.
 

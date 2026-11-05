@@ -60,18 +60,22 @@
  * @see https://learn.microsoft.com/en-us/openspecs/office_standards/ms-docx/ [MS-DOCX] Specification
  */
 
-import { attachmentLookup } from '../utils/repeatUtils.js';
-import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { attachmentLookup, takeRepeats } from '../utils/repeatUtils.js';
+import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, ShapeMetadata, PageNumberFormat, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { MAX_PAGE_PT } from '../utils/pageLimits.js';
+import { lengthToPt, titlePagesTakeHiddenFirsts } from '../utils/officeGenUtils.js';
+import { fieldSwitchFormat, wordPageNumberFormat } from '../utils/pageNumbers.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError, logWarning } from '../utils/errorUtils.js';
 import { createAttachment, renameAttachments } from '../utils/imageUtils.js';
 import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { getAllElementsByTagName, getChildElements, getDirectChildren, getElementsByTagName, getOutermostElements, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, takeNodes, takeXmlElements, countByte } from '../utils/xmlUtils.js';
+import { bulletCharacter, formatListNumber, wordNumberFormat } from '../utils/listMarkers.js';
 import { extractFiles, findRequiredPart, maxUncompressedBytesOf, resolvePartPath } from '../utils/zipUtils.js';
 import { lookupTable, plainRecord, setOwn } from '../utils/lookupUtils.js';
 import { cellSpan, MAX_COL_SPAN } from '../utils/numberUtils.js';
-import { appendAll } from '../utils/nodeListUtils.js';
+import { appendAll, dropTrailingSectionStarts, isFloatingFrame } from '../utils/nodeListUtils.js';
 import { diagramList, readDiagram } from '../utils/diagramUtils.js';
 import { UniqueNames } from '../utils/uniqueNames.js';
 import { decodeMarkup, mhtPartText, MhtPart, readMht } from '../utils/mhtUtils.js';
@@ -126,6 +130,117 @@ const noteRefFieldRegex = /^\s*NOTEREF\s+"?([^\s"\\]+)"?([^]*)$/i;
 
 /** A text box's content, which the text box's own blocks are parsed from (see ownFirst). */
 const TEXT_BOX: ReadonlySet<string> = new Set(['w:txbxContent', 'txbxContent']);
+
+/** An element's own child of a local name (`wp:anchor` or `anchor`, whatever its prefix). */
+const childNamed = (el: Element, local: string): Element | undefined => {
+    for (const c of Array.from(el.childNodes)) if (isElement(c) && (c.localName || c.nodeName.replace(/^[^:]*:/, '')) === local) return c;
+    return undefined;
+};
+/** The first element of a local name within `el` (its prefix any), searched to a bounded depth. */
+const firstNamed = (el: Element, local: string, depth = 8): Element | undefined => {
+    for (const c of Array.from(el.childNodes)) {
+        if (!isElement(c)) continue;
+        if ((c.localName || c.nodeName.replace(/^[^:]*:/, '')) === local) return c;
+        const deeper = depth > 0 ? firstNamed(c, local, depth - 1) : undefined;
+        if (deeper) return deeper;
+    }
+    return undefined;
+};
+const emuToPt = (value: string | null | undefined): number | undefined => {
+    const n = value ? Number(value) : NaN;
+    return Number.isFinite(n) && Math.abs(n) < 16128 * 12700 ? Math.round(n / 12700 * 100) / 100 : undefined;
+};
+/** A DrawingML colour given as RGB (`a:srgbClr`) under `el`, `#RRGGBB`; none where it is not filled. */
+const drawingColor = (el: Element | undefined): string | undefined => {
+    if (!el || childNamed(el, 'noFill')) return undefined;
+    const value = firstNamed(childNamed(el, 'solidFill') ?? el, 'srgbClr', 1)?.getAttribute('val');
+    return value && /^[0-9a-f]{6}$/i.test(value) ? `#${value.toUpperCase()}` : undefined;
+};
+
+/**
+ * A text box floating beside the text (a `wp:anchor` drawing, or a VML shape placed absolutely): its look
+ * and where it stands (ShapeMetadata.float). Undefined for one in its line (`wp:inline`). (A drawing of
+ * several text boxes, a group, is not asked: they keep their places in the flow.)
+ */
+function textBoxFloat(drawing: Element): ShapeMetadata | undefined {
+    const anchor = childNamed(drawing, 'anchor');
+    if (anchor) {
+        const extent = childNamed(anchor, 'extent');
+        const width = emuToPt(extent?.getAttribute('cx'));
+        if (!width || width <= 0) return undefined;
+        const height = emuToPt(extent?.getAttribute('cy'));
+        const positionH = childNamed(anchor, 'positionH'), positionV = childNamed(anchor, 'positionV');
+        const fromH = positionH?.getAttribute('relativeFrom'), fromV = positionV?.getAttribute('relativeFrom');
+        const alignH = positionH && childNamed(positionH, 'align')?.textContent?.trim();
+        const align = alignH === 'left' || alignH === 'inside' ? 'left' as const : alignH === 'right' || alignH === 'outside' ? 'right' as const : alignH === 'center' ? 'center' as const : undefined;
+        const x = positionH ? emuToPt(childNamed(positionH, 'posOffset')?.textContent?.trim()) : undefined;
+        const y = positionV ? emuToPt(childNamed(positionV, 'posOffset')?.textContent?.trim()) : undefined;
+        const wrap = childNamed(anchor, 'wrapTopAndBottom') ? 'aboveBelow' as const
+            : childNamed(anchor, 'wrapSquare') || childNamed(anchor, 'wrapTight') || childNamed(anchor, 'wrapThrough') ? 'beside' as const : 'none' as const;
+        const dist = (side: string) => emuToPt(anchor.getAttribute(`dist${side}`)) ?? 0;
+        const gap = { top: dist('T'), right: dist('R'), bottom: dist('B'), left: dist('L') };
+        const spPr = firstNamed(anchor, 'spPr'), bodyPr = firstNamed(anchor, 'bodyPr');
+        const fill = spPr ? drawingColor(spPr) : undefined;
+        const ln = spPr ? childNamed(spPr, 'ln') : undefined;
+        const lineColor = ln ? drawingColor(ln) : undefined;
+        const line = lineColor ? { color: lineColor, width: emuToPt(ln!.getAttribute('w')) || 0.75 } : undefined;
+        const inset = (attr: string, otherwise: number) => emuToPt(bodyPr?.getAttribute(attr)) ?? otherwise;
+        return {
+            ...(fill || line ? { geometry: 'rect' } : {}),
+            ...(fill ? { fill } : {}),
+            ...(line ? { line } : {}),
+            textInsets: { top: inset('tIns', 3.6), right: inset('rIns', 7.2), bottom: inset('bIns', 3.6), left: inset('lIns', 7.2) },
+            float: {
+                horizontalFrom: fromH === 'margin' ? 'margin' : fromH === 'page' || (fromH ?? '').endsWith('Margin') ? 'page' : 'column',
+                verticalFrom: fromV === 'page' || fromV === 'topMargin' || fromV === 'bottomMargin' ? 'page' : fromV === 'margin' ? 'margin' : 'paragraph',
+                ...(align ? { align } : { x: x ?? 0 }),
+                y: y ?? 0,
+                width,
+                ...(height ? { height } : {}),
+                wrap,
+                ...(gap.top || gap.right || gap.bottom || gap.left ? { gap } : {}),
+            },
+        };
+    }
+    // VML (`w:pict`): the shape holding the text box, placed absolutely by its style.
+    const shape = Array.from(drawing.childNodes).find((c): c is Element => isElement(c) && !!c.getAttribute('style'));
+    // `position:absolute;margin-left:302pt;width:158pt;...`: its declarations by name.
+    const style: Record<string, string> | undefined = shape ? Object.create(null) : undefined;
+    if (shape && style) for (const declaration of (shape.getAttribute('style') || '').split(';')) {
+        const colon = declaration.indexOf(':');
+        if (colon > 0) style[declaration.slice(0, colon).trim().toLowerCase()] = declaration.slice(colon + 1);
+    }
+    if (!shape || !style || (style['position'] || '').trim() !== 'absolute') return undefined;
+    const pt = (value: string | undefined) => { const n = value ? lengthToPt(value.trim()) : null; return n != null && Number.isFinite(n) && Math.abs(n) < 16128 ? Math.round(n * 100) / 100 : undefined; };
+    const width = pt(style['width']);
+    if (!width || width <= 0) return undefined;
+    const height = pt(style['height']);
+    const fromH = (style['mso-position-horizontal-relative'] || '').trim(), fromV = (style['mso-position-vertical-relative'] || '').trim();
+    const alignH = (style['mso-position-horizontal'] || '').trim();
+    const align = alignH === 'left' || alignH === 'inside' ? 'left' as const : alignH === 'right' || alignH === 'outside' ? 'right' as const : alignH === 'center' ? 'center' as const : undefined;
+    const wrapType = firstNamed(shape, 'wrap', 1)?.getAttribute('type');
+    const wrap = wrapType === 'topAndBottom' ? 'aboveBelow' as const : wrapType === 'square' || wrapType === 'tight' || wrapType === 'through' ? 'beside' as const : 'none' as const;
+    const fillValue = shape.getAttribute('filled') === 'f' ? undefined : shape.getAttribute('fillcolor');
+    const fill = fillValue && /^#[0-9a-f]{6}$/i.test(fillValue.trim()) ? fillValue.trim().toUpperCase() : undefined;
+    const strokeValue = shape.getAttribute('stroked') === 'f' ? undefined : shape.getAttribute('strokecolor');
+    const line = strokeValue && /^#[0-9a-f]{6}$/i.test(strokeValue.trim()) ? { color: strokeValue.trim().toUpperCase(), width: pt(shape.getAttribute('strokeweight') || undefined) || 0.75 } : undefined;
+    const insets = (firstNamed(shape, 'textbox', 1)?.getAttribute('inset') || '').split(',').map(v => pt(v || undefined));
+    return {
+        ...(fill || line ? { geometry: 'rect' } : {}),
+        ...(fill ? { fill } : {}),
+        ...(line ? { line } : {}),
+        textInsets: { top: insets[1] ?? 3.6, right: insets[2] ?? 7.2, bottom: insets[3] ?? 3.6, left: insets[0] ?? 7.2 },
+        float: {
+            horizontalFrom: fromH === 'margin' ? 'margin' : fromH === 'page' ? 'page' : 'column',
+            verticalFrom: fromV === 'page' ? 'page' : fromV === 'margin' ? 'margin' : 'paragraph',
+            ...(align ? { align } : { x: pt(style['margin-left']) ?? pt(style['left']) ?? 0 }),
+            y: pt(style['margin-top']) ?? pt(style['top']) ?? 0,
+            width,
+            ...(height ? { height } : {}),
+            wrap,
+        },
+    };
+}
 
 /**
  * Parses a Word document (.docx) and extracts content, formatting, and metadata.
@@ -269,6 +384,81 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
     };
 
     // Helper to extract indentation from paragraph properties XML string
+    /**
+     * A paragraph's `w:jc` as an alignment: Word writes a justified paragraph as `both` (and `distribute`
+     * or a kashida or Thai kind for its variants), and newer files `start` and `end` for left and right.
+     * Only `left`, `center`, `right` and a non-schema `justify` were read, so every justified paragraph
+     * read as left-aligned.
+     */
+    const jcAlignment = (val: string | null | undefined): 'left' | 'center' | 'right' | 'justify' | undefined => {
+        switch (val) {
+            case 'left': case 'start': return 'left';
+            case 'right': case 'end': return 'right';
+            case 'center': return 'center';
+            case 'both': case 'justify': case 'distribute': case 'thaiDistribute':
+            case 'lowKashida': case 'mediumKashida': case 'highKashida': return 'justify';
+            default: return undefined;
+        }
+    };
+
+    /**
+     * A paragraph's `w:spacing` (its own, not the `w:rPr`'s letter spacing): before and after in twips,
+     * the line distance in 240ths of a line (`auto`) or in twips (`exact`, `atLeast`).
+     */
+    const extractSpacingFromXml = (pPr: Element): ParagraphSpacing | undefined => {
+        const sp = getDirectChildren(pPr, "w:spacing")[0];
+        if (!sp) return undefined;
+        const num = (name: string) => { const raw = sp.getAttribute(name); const v = raw ? Number(raw) : NaN; return Number.isFinite(v) ? v : undefined; };
+        const spacing: ParagraphSpacing = {};
+        const before = num("w:before"), after = num("w:after"), line = num("w:line");
+        if (before !== undefined && sp.getAttribute("w:beforeAutospacing") !== '1' && sp.getAttribute("w:beforeAutospacing") !== 'true') spacing.before = before / 20;
+        if (after !== undefined && sp.getAttribute("w:afterAutospacing") !== '1' && sp.getAttribute("w:afterAutospacing") !== 'true') spacing.after = after / 20;
+        if (line !== undefined && line > 0) {
+            const rule = sp.getAttribute("w:lineRule");
+            if (rule === 'exact' || rule === 'atLeast') { spacing.lineHeight = line / 20; if (rule === 'atLeast') spacing.lineAtLeast = true; }
+            else spacing.lineMultiple = line / 240;
+        }
+        return Object.keys(spacing).length ? spacing : undefined;
+    };
+
+    /** Spacing set over spacing inherited: a line distance of either kind replaces the other kind. */
+    const overSpacing = (base: ParagraphSpacing | undefined, own: ParagraphSpacing | undefined): ParagraphSpacing | undefined => {
+        if (!own) return base;
+        const merged: ParagraphSpacing = { ...base };
+        if (own.lineMultiple !== undefined || own.lineHeight !== undefined) { delete merged.lineMultiple; delete merged.lineHeight; delete merged.lineAtLeast; }
+        return { ...merged, ...own };
+    };
+
+    /** Spacing as the AST keeps it: without single spacing, which every reader assumes (no space is kept: readers' own differ). */
+    const keptSpacing = (spacing: ParagraphSpacing | undefined): ParagraphSpacing | undefined => {
+        if (!spacing) return undefined;
+        const out: ParagraphSpacing = { ...spacing };
+        if (out.lineMultiple === 1) delete out.lineMultiple;
+        return Object.keys(out).length ? out : undefined;
+    };
+
+    /**
+     * A list item's marker as Word shows it (see ListMetadata.marker): its level's `w:lvlText` with each
+     * `%n` the count of level n in that level's format, or its bullet's character. Undefined when it is
+     * the item's number and a dot, or a round bullet.
+     */
+    const wordListMarker = (numId: string, ilvl: number, listType: 'ordered' | 'unordered'): string | undefined => {
+        const level = numberingMap[numId]?.[String(ilvl)];
+        if (!level) return undefined;
+        let marker: string;
+        if (level.numFmt === 'bullet') marker = bulletCharacter(level.lvlText, level.font);
+        else {
+            marker = level.lvlText.replace(/%([1-9])/g, (whole, n: string) => {
+                const at = Number(n) - 1;
+                const count = listCounters[numId]?.[String(at)];
+                const format = numberingMap[numId][String(at)]?.numFmt;
+                return count === undefined || format === undefined ? '' : formatListNumber(count + 1, wordNumberFormat(format));
+            });
+        }
+        const plain = listType === 'ordered' ? `${(listCounters[numId]?.[String(ilvl)] ?? 0) + 1}.` : '•';
+        return marker === plain ? undefined : marker;
+    };
+
     const extractIndentationFromXml = (pPr: Element): IndentationMetadata | undefined => {
         const ind = getFirstElementByTagName(pPr, "w:ind");
         if (ind) {
@@ -357,7 +547,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
             partRelsRegex.test(x) ||
             !!x.match(stylesFileRegex) ||
             (!config.ignoreComments && !!x.match(commentsFileRegex)) ||
-            (!config.ignoreHeadersAndFooters && (!!x.match(headerFileRegex) || !!x.match(footerFileRegex))) ||
+            // (The settings say whether even pages' headers are shown.)
+            (!config.ignoreHeadersAndFooters && (!!x.match(headerFileRegex) || !!x.match(footerFileRegex) || x === 'word/settings.xml')) ||
             (!!config.extractAttachments && !!x.match(mediaFileRegex)) ||
             diagramDataRegex.test(x),
         // A DOCX read as a chunk inflates within what the enclosing document left.
@@ -659,7 +850,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
     // `numId="__proto__"` read `Object.prototype` (truthy) and, two levels down, write onto it -
     // global prototype pollution from one crafted .docx. With no prototype, `map["__proto__"]` is a
     // normal absent key and the numbering guard simply skips the undefined definition.
-    const numberingMap: { [key: string]: { [key: string]: { numFmt: string, lvlText: string, start: number } } } = Object.create(null);
+    const numberingMap: { [key: string]: { [key: string]: { numFmt: string, lvlText: string, start: number, font?: string } } } = Object.create(null);
 
     if (numberingFile) {
         const numberingXml = parseXmlString(numberingFile.content.toString(), { config });
@@ -677,18 +868,20 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         }
 
         // Each abstract numbering's levels, read once.
-        const abstractLevelTables = new Map<string, { [key: string]: { numFmt: string, lvlText: string, start: number } }>();
+        const abstractLevelTables = new Map<string, { [key: string]: { numFmt: string, lvlText: string, start: number, font?: string } }>();
         const abstractLevels = (abstractNumId: string) => {
             let table = abstractLevelTables.get(abstractNumId);
             if (!table) {
-                table = Object.create(null) as { [key: string]: { numFmt: string, lvlText: string, start: number } };
+                table = Object.create(null) as { [key: string]: { numFmt: string, lvlText: string, start: number, font?: string } };
                 for (const lvl of getChildElements(abstractNumMap[abstractNumId], "w:lvl")) {
                     const ilvl = lvl.getAttribute("w:ilvl");
                     if (!ilvl) continue;
                     setOwn(table, ilvl, {
                         numFmt: getChildElements(lvl, "w:numFmt")[0]?.getAttribute("w:val") || 'decimal',
                         lvlText: getChildElements(lvl, "w:lvlText")[0]?.getAttribute("w:val") || '',
-                        start: parseInt(getChildElements(lvl, "w:start")[0]?.getAttribute("w:val") || '1', 10)
+                        start: parseInt(getChildElements(lvl, "w:start")[0]?.getAttribute("w:val") || '1', 10),
+                        // The bullet's font: a symbol font's bullet is a private-use character in it.
+                        font: getFirstElementByTagName(getChildElements(lvl, "w:rPr")[0] ?? lvl, "w:rFonts")?.getAttribute("w:ascii") || undefined,
                     });
                 }
                 abstractLevelTables.set(abstractNumId, table);
@@ -725,7 +918,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
 
     // Parse Styles
     const stylesFile = files.find(f => f.path.match(stylesFileRegex));
-    const styleMap: { [key: string]: { formatting: TextFormatting, alignment?: 'left' | 'center' | 'right' | 'justify', backgroundColor?: string, paragraphIndentation?: IndentationMetadata } } = Object.create(null);
+    const styleMap: { [key: string]: { formatting: TextFormatting, alignment?: 'left' | 'center' | 'right' | 'justify', backgroundColor?: string, paragraphIndentation?: IndentationMetadata, spacing?: ParagraphSpacing } } = Object.create(null);
 
     if (stylesFile) {
         const stylesXml = parseXmlString(stylesFile.content.toString(), { config });
@@ -741,15 +934,12 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 let alignment: 'left' | 'center' | 'right' | 'justify' | undefined = undefined;
                 let backgroundColor: string | undefined = undefined;
                 let paragraphIndentation: IndentationMetadata | undefined = undefined;
+                let spacing: ParagraphSpacing | undefined = undefined;
 
                 if (pPr) {
-                    const jc = getFirstElementByTagName(pPr, "w:jc");
-                    if (jc) {
-                        const val = jc.getAttribute("w:val");
-                        if (val === 'left' || val === 'center' || val === 'right' || val === 'justify') {
-                            alignment = val;
-                        }
-                    }
+                    spacing = extractSpacingFromXml(pPr);
+                    const jc = jcAlignment(getFirstElementByTagName(pPr, "w:jc")?.getAttribute("w:val"));
+                    if (jc) alignment = jc;
                     const shd = getFirstElementByTagName(pPr, "w:shd");
                     if (shd) {
                         const fill = shd.getAttribute("w:fill");
@@ -760,7 +950,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     if (ind) paragraphIndentation = ind;
                 }
 
-                styleMap[styleId] = { formatting, alignment, backgroundColor, paragraphIndentation };
+                styleMap[styleId] = { formatting, alignment, backgroundColor, paragraphIndentation, spacing };
             }
         }
     }
@@ -855,13 +1045,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         // Extract Alignment
         let alignment = styleProps.alignment;
         if (pPr) {
-            const jc = getFirstElementByTagName(pPr, "w:jc");
-            if (jc) {
-                const val = jc.getAttribute("w:val");
-                if (val === 'left' || val === 'center' || val === 'right' || val === 'justify') {
-                    alignment = val;
-                }
-            }
+            const jc = jcAlignment(getFirstElementByTagName(pPr, "w:jc")?.getAttribute("w:val"));
+            if (jc) alignment = jc;
         }
 
         // Extract Indentation
@@ -872,6 +1057,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 paraIndentation = { ...paraIndentation, ...ind };
             }
         }
+
+        const paraSpacing = keptSpacing(overSpacing(styleProps.spacing, pPr ? extractSpacingFromXml(pPr) : undefined));
 
         // Extract Paragraph Background
         let paraBackgroundColor = styleProps.backgroundColor;
@@ -915,6 +1102,17 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         // (the note's number) is read as a reference to its note, not as text.
         const fields: { instruction: string; resolved: boolean; hidesResult: boolean }[] = [];
         let hiddenResults = 0;
+        // The page fields (PAGE, NUMPAGES) whose results are being read, innermost last: their text is
+        // the number when the file was saved, marked so that each page can show its own.
+        // (With the format the field's switch writes its number in, `PAGE \* roman`.)
+        const pageFields: ({ field: 'page' | 'pages'; format?: PageNumberFormat } | undefined)[] = [];
+        const pageFieldOf = (instruction: string): { field: 'page' | 'pages'; format?: PageNumberFormat } | undefined => {
+            const name = /^\s*([A-Z]+)/i.exec(instruction)?.[1]?.toUpperCase();
+            const field = name === 'PAGE' ? 'page' as const : name === 'NUMPAGES' ? 'pages' as const : undefined;
+            if (!field) return undefined;
+            const format = fieldSwitchFormat(instruction);
+            return format ? { field, format } : { field };
+        };
         const resolveField = (field: { instruction: string; resolved: boolean; hidesResult: boolean }): void => {
             if (field.resolved) return;
             field.resolved = true;
@@ -1007,17 +1205,23 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         if (nodeStyle) {
                             textNode.metadata = { style: nodeStyle };
                         }
+                        const pageField = pageFields[pageFields.length - 1];
+                        if (pageField) textNode.metadata = { ...(textNode.metadata as TextMetadata), field: pageField.field, ...(pageField.format ? { fieldFormat: pageField.format } : {}) };
                         children.push(textNode);
                     }
                     // Complex fields: where one begins, its instruction, where its result begins, where it ends.
                     else if (child.tagName === "w:fldChar") {
                         const kind = child.getAttribute("w:fldCharType");
-                        if (kind === 'begin') fields.push({ instruction: '', resolved: false, hidesResult: false });
-                        else if (kind === 'separate' && fields.length) resolveField(fields[fields.length - 1]);
+                        if (kind === 'begin') { fields.push({ instruction: '', resolved: false, hidesResult: false }); pageFields.push(undefined); }
+                        else if (kind === 'separate' && fields.length) {
+                            resolveField(fields[fields.length - 1]);
+                            pageFields[pageFields.length - 1] = pageFieldOf(fields[fields.length - 1].instruction);
+                        }
                         else if (kind === 'end' && fields.length) {
                             const field = fields[fields.length - 1];
                             resolveField(field);
                             fields.pop();
+                            pageFields.pop();
                             if (field.hidesResult) hiddenResults--;
                         }
                     } else if (child.tagName === "w:instrText") {
@@ -1027,11 +1231,19 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         }
                     }
                     // A tab is a character of the text, whatever column its tab stop sets: left out, "A<tab>B"
-                    // read "AB".
-                    else if (child.tagName === "w:tab" || child.tagName === "tab") {
+                    // read "AB". An absolute-position tab (w:ptab, as in "left<ptab>right" headers) is one too.
+                    else if (child.tagName === "w:tab" || child.tagName === "tab" || child.tagName === "w:ptab") {
                         if (hiddenResults > 0) continue;
                         text += '\t';
                         children.push({ type: 'text', text: '\t', formatting } as OfficeContentNode);
+                    }
+                    // A non-breaking hyphen is Word's own element, not a character of w:t: left out,
+                    // "co<noBreakHyphen/>operate" read "cooperate". A soft hyphen stays out, as Word shows it
+                    // only at a line end.
+                    else if (child.tagName === "w:noBreakHyphen") {
+                        if (hiddenResults > 0) continue;
+                        text += '-';
+                        children.push({ type: 'text', text: '-', formatting } as OfficeContentNode);
                     }
                     // Break nodes
                     else if (child.tagName === "w:br"
@@ -1154,7 +1366,9 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 // is), and text boxes' blocks, read after the paragraph.
                 for (const drawing of runDrawings) {
                     appendAll(lifted, diagramNodes(drawing));
+                    textBoxesFrom.set(drawing, lifted.length);
                     for (const txbx of getOutermostElements(drawing, "w:txbxContent")) readBlocks(txbx, documentContent, lifted);
+                    floatTextBox(drawing, lifted);
                 }
 
                 // Footnotes/Endnotes inside runs
@@ -1254,7 +1468,12 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 const reference = noteRefField(node.getAttribute("w:instr") || '');
                 if (reference?.note) attach(reference.note, 'notes');
                 if (!reference || (!reference.note && !config.ignoreNotes)) {
-                    for (const child of Array.from(node.childNodes)) processChildNode(child, depth + 1);
+                    pageFields.push(pageFieldOf(node.getAttribute("w:instr") || ''));
+                    try {
+                        for (const child of Array.from(node.childNodes)) processChildNode(child, depth + 1);
+                    } finally {
+                        pageFields.pop();
+                    }
                 }
             } else if (isElement(node) && isAlternateContent(node)) {
                 const resolved = resolveAlternateContent(node);
@@ -1265,7 +1484,9 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 // their paragraphs: reading a text box's paragraphs reaches those, and taking them here too
                 // read nested text boxes again at each level (1.3 KB took half a minute).
                 appendAll(lifted, diagramNodes(node));
+                textBoxesFrom.set(node, lifted.length);
                 for (const txbx of getOutermostElements(node, "w:txbxContent")) readBlocks(txbx, documentContent, lifted);
+                floatTextBox(node, lifted);
             } else if (isElement(node) && (node.nodeName === 'm:oMath' || node.nodeName === 'oMath'
                 || node.nodeName === 'm:oMathPara' || node.nodeName === 'oMathPara')) {
                 // Equations. Without this branch they reach the generic fallback below, which
@@ -1315,6 +1536,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
 
             let listType: 'ordered' | 'unordered' = 'ordered';
             let itemIndex = 0;
+            let marker: string | undefined;
             if (numId && numberingMap[numId]) {
                 const ilvlStr = ilvl.toString();
                 if (!numberingState[numId]) numberingState[numId] = Object.create(null);
@@ -1334,6 +1556,9 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     listCounters[numId][ilvlStr]++;
                 }
                 itemIndex = listCounters[numId][ilvlStr];
+                // A deeper level counts afresh after an item of this one, as Word restarts it.
+                for (let k = ilvl + 1; k < 10; k++) delete listCounters[numId][String(k)];
+                marker = wordListMarker(numId, ilvl, listType);
             }
 
             const listNode: OfficeContentNode = {
@@ -1349,6 +1574,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     alignment: (alignment || 'left') as 'left' | 'center' | 'right' | 'justify',
                     listId: numId,
                     itemIndex: itemIndex,
+                    ...(marker !== undefined ? { marker } : {}),
                     style: pStyleVal,
                     ...commonMetadata
                 } as ListMetadata
@@ -1365,7 +1591,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 children: children,
                 ...(notes.length > 0 ? { notes } : {}),
                 ...(comments.length > 0 ? { comments } : {}),
-                metadata: { level, alignment, paragraphIndentation: paraIndentation, style: pStyleVal ?? undefined, ...commonMetadata }
+                metadata: { level, alignment, paragraphIndentation: paraIndentation, ...(paraSpacing ? { spacing: paraSpacing } : {}), style: pStyleVal ?? undefined, ...commonMetadata }
             };
             if (config.includeRawContent) headingNode.rawContent = getRawContent(pNode, documentContent, config);
             return headingNode;
@@ -1376,7 +1602,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 children: children,
                 ...(notes.length > 0 ? { notes } : {}),
                 ...(comments.length > 0 ? { comments } : {}),
-                metadata: { alignment, paragraphIndentation: paraIndentation, style: pStyleVal ?? undefined, ...commonMetadata }
+                metadata: { alignment, paragraphIndentation: paraIndentation, ...(paraSpacing ? { spacing: paraSpacing } : {}), style: pStyleVal ?? undefined, ...commonMetadata }
             };
             if (config.includeRawContent) paraNode.rawContent = getRawContent(pNode, documentContent, config);
             return paraNode;
@@ -1391,6 +1617,89 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
      * however deep text boxes nest, where copying each level's content up into the one around it copied
      * it again per level.
      */
+    /**
+     * The body's sections, each its `w:sectPr` (in a paragraph's properties for every section but the
+     * last, whose stands at the body's end), in order; and the paragraph that ends each but the last.
+     */
+    const sections: Element[] = [];
+    const sectionEnds = new Map<Element, number>();
+
+    /** A section's pages (see PageSetup): `w:pgSz` and `w:pgMar` in twips. Undefined without a size. */
+    // A section's setup: how it numbers its pages and whether its first page has a header of its own
+    // always, its page (size, margins, columns) where it states one and geometry is wanted.
+    const pageSetupOf = (sectPr: Element | undefined): PageSetup | undefined => {
+        if (!sectPr) return undefined;
+        const setup: PageSetup = {};
+        if (isOn(getDirectChildren(sectPr, "w:titlePg")[0])) setup.differentFirstPage = true;
+        // How it numbers its pages (`w:pgNumType w:fmt`: lowerRoman for front matter; decimal without one).
+        const pageNumberFormat = wordPageNumberFormat(getDirectChildren(sectPr, "w:pgNumType")[0]?.getAttribute("w:fmt"));
+        if (pageNumberFormat) setup.pageNumberFormat = pageNumberFormat;
+        if (config.ignorePageGeometry) return setup;
+        const twips = (element: Element | undefined, name: string): number | undefined => {
+            const v = Number(element?.getAttribute(name));
+            return element?.getAttribute(name) && Number.isFinite(v) ? Math.abs(v) / 20 : undefined;
+        };
+        const size = getDirectChildren(sectPr, "w:pgSz")[0];
+        let width = twips(size, "w:w"), height = twips(size, "w:h");
+        const sized = !!width && !!height && width <= MAX_PAGE_PT && height <= MAX_PAGE_PT;
+        // A landscape page given in portrait's order is turned, as Word turns it.
+        if (sized && size.getAttribute("w:orient") === 'landscape' && width! < height!) [width, height] = [height, width];
+        if (sized) { setup.width = width; setup.height = height; }
+        const mar = getDirectChildren(sectPr, "w:pgMar")[0];
+        if (sized && mar) {
+            const [top, right, bottom, left] = ["w:top", "w:right", "w:bottom", "w:left"].map(name => Math.min(twips(mar, name) ?? 72, Math.min(width!, height!) / 3));
+            setup.margin = { top, right, bottom, left };
+            const header = twips(mar, "w:header"), footer = twips(mar, "w:footer");
+            if (header !== undefined) setup.headerDistance = Math.min(header, height! / 3);
+            if (footer !== undefined) setup.footerDistance = Math.min(footer, height! / 3);
+        }
+        // Its columns (`w:cols`): their number and gap, each column's width where they differ, a line
+        // between (on Word's own Letter page where the section states none).
+        const cols = getDirectChildren(sectPr, "w:cols")[0];
+        const own = cols ? getDirectChildren(cols, "w:col") : [];
+        const count = Math.min(16, Math.max(1, Math.round(Number(cols?.getAttribute("w:num")) || 0) || own.length || 1));
+        if (cols && count > 1) {
+            // (The gap: the columns' own where they give none together, as LibreOffice writes unequal columns.)
+            const columns: NonNullable<PageSetup['columns']> = { count, gap: Math.min(twips(cols, "w:space") ?? (own.length ? twips(own[0], "w:space") : undefined) ?? 36, (sized ? width! : 612) / 4) };
+            const widths = cols.getAttribute("w:equalWidth") === '0' || cols.getAttribute("w:equalWidth") === 'false' ? own.map(c => twips(c, "w:w") ?? 0) : [];
+            if (widths.length === count && widths.every(w => w > 0)) columns.widths = widths;
+            const sep = cols.getAttribute("w:sep");
+            if (sep && !['false', '0', 'off'].includes(sep)) columns.separator = true;
+            setup.columns = columns;
+        }
+        return setup;
+    };
+
+    /**
+     * A drawing's text box floating beside the text (see textBoxFloat): the blocks just read from it (from
+     * where `textBoxesFrom` notes they start in `lifted`) become a `drawing` node holding them, which
+     * readBlocks stands before the paragraph. (Noted and done apart from the reading: text boxes nest, and
+     * anything the reading's frames hold costs the stack at each level of them.)
+     */
+    const textBoxesFrom = new Map<Element, number>();
+    const floatTextBox = (drawing: Element, lifted: OfficeContentNode[]): void => {
+        const from = textBoxesFrom.get(drawing) ?? lifted.length;
+        textBoxesFrom.delete(drawing);
+        if (config.ignorePageGeometry || lifted.length === from || getOutermostElements(drawing, "w:txbxContent").length !== 1) return;
+        const floating = textBoxFloat(drawing);
+        if (!floating) return;
+        const blocks = lifted.splice(from);
+        lifted.push({ type: 'drawing', text: blocks.map(b => b.text || '').join('\n'), children: blocks, metadata: floating });
+    };
+
+    /**
+     * The text boxes floating beside the paragraph at `at` of `out` (read after it, with what else it lifts)
+     * stand before it, where a writer places them before laying the paragraph out.
+     */
+    const standFloatsBefore = (out: OfficeContentNode[], at: number): void => {
+        let floats = false;
+        for (let i = at + 1; i < out.length && !floats; i++) floats = isFloatingFrame(out[i]);
+        if (!floats) return;
+        const after = out.splice(at);
+        appendAll(out, after.filter(isFloatingFrame));
+        appendAll(out, after.filter(n => !isFloatingFrame(n)));
+    };
+
     const readBlocks = (container: Element, xml: string, out: OfficeContentNode[]): void => {
         let pendingAnchorIds: string[] = [];
         for (const child of layoutChildren(container)) {
@@ -1400,6 +1709,18 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 out.push(undefined as unknown as OfficeContentNode);
                 out[at] = parseParagraph(child, xml, pendingAnchorIds, out);
                 pendingAnchorIds = [];
+                standFloatsBefore(out, at);
+                // The paragraph ends a section: the next starts on a new page (unless it runs on, a
+                // continuous section), with pages of its own.
+                const ended = sectionEnds.get(child);
+                if (ended !== undefined && ended + 1 < sections.length) {
+                    const next = sections[ended + 1];
+                    const kind = getDirectChildren(next, "w:type")[0]?.getAttribute("w:val");
+                    const pageSetup = pageSetupOf(next);
+                    // A continuous section runs on on the same page (as two columns under a title do).
+                    const breakType = kind === 'continuous' || kind === 'nextColumn' ? 'section' : 'page';
+                    out.push({ type: 'break', text: '', metadata: { breakType, section: ended + 1, ...(pageSetup ? { pageSetup } : {}) } as BreakMetadata });
+                }
             } else if (child.nodeName === 'w:tbl') {
                 out.push(parseTable(child, xml, pendingAnchorIds));
                 pendingAnchorIds = [];
@@ -1620,25 +1941,118 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         }
     }
 
-    // Pre-process headers and footers
     const headers: OfficeContentNode[] = [];
     const footers: OfficeContentNode[] = [];
-    if (!config.ignoreHeadersAndFooters) {
-        for (const [regex, out] of [[headerFileRegex, headers], [footerFileRegex, footers]] as const) {
-            for (const partFile of files.filter(f => f.path.match(regex))) {
+    /** Whether an on/off property is on: present, and not `false`, `0` or `off`. */
+    const isOn = (element: Element | undefined): boolean => !!element && !['false', '0', 'off'].includes(element.getAttribute("w:val") ?? '');
+
+    /**
+     * The headers and footers: each part a section refers to, as a `header` or `footer` node of its type
+     * (default, first, even) and of the first section that refers to it (a later section without one
+     * of its own takes the one before's, as Word does). A first-page part in a section without a
+     * different first page, an even-page one without different odd and even pages, and a part no
+     * section refers to are kept, hidden: Word shows none of them. They were read as one list of
+     * paragraphs, every part's, which printed three headers at the top of a document of three.
+     */
+    const readHeadersAndFooters = async (documentPath: string): Promise<void> => {
+        if (config.ignoreHeadersAndFooters) return;
+        const settings = files.find(f => f.path === 'word/settings.xml');
+        const settingsDoc = settings ? parseXmlString(settings.content.toString(), { config }) : undefined;
+        const evenAndOdd = isOn(settingsDoc ? getFirstElementByTagName(settingsDoc, "w:evenAndOddHeaders") : undefined);
+        const rels = relsOf(documentPath);
+        // Each part read once, and a node for every reference to it that changes what its section shows, with that
+        // reference's section and type: a part two sections refer to (or one section, for two types, as a writer
+        // that writes a part once gives it) was read for its first reference alone, and the later section showed
+        // another's. A reference to the part (and hiddenness) already in force for its kind and type gives none:
+        // the section takes it on. The nodes share the part's blocks (they were copied for each, and one part of
+        // thousands of paragraphs that thousands of sections refer to took gigabytes), and each one past the first
+        // is charged to the repeated content budget, going without its blocks once that is spent.
+        const byPath = new Map(files.map(f => [f.path, f]));
+        const read = new Map<string, { children: OfficeContentNode[]; text: string; weight: number } | null>();
+        const given = new Set<string>();
+        const inForce = new Map<string, string>();
+        const readInto = async (path: string, kind: 'header' | 'footer', metadata: HeaderFooterMetadata) => {
+            const partFile = byPath.get(path);
+            if (!partFile) return;
+            const key = `${path}|${kind}|${metadata.type}|${metadata.section ?? ''}`;
+            if (given.has(key)) return;
+            given.add(key);
+            const state = `${path}|${metadata.hidden ? 1 : 0}`, slot = `${kind}|${metadata.type}`;
+            if (metadata.section !== undefined && inForce.get(slot) === state) return;
+            inForce.set(slot, state);
+            let part = read.get(path);
+            const repeat = part !== undefined;
+            if (part === undefined) {
+                read.set(path, part = null);
                 const partXml = partFile.content.toString();
                 const partDoc = parseXmlString(partXml, { config });
-                if (partDoc.documentElement) await readPart(partFile.path, partDoc.documentElement, () => readBlocks(partDoc.documentElement, partXml, out));
+                if (!partDoc.documentElement) return;
+                const blocks: OfficeContentNode[] = [];
+                await readPart(partFile.path, partDoc.documentElement, () => readBlocks(partDoc.documentElement, partXml, blocks));
+                const text = blocks.map(c => c.text || '').join('\n');
+                let count = 0;
+                const stack = [...blocks];
+                while (stack.length) { const n = stack.pop()!; count++; for (const c of n.children ?? []) stack.push(c); }
+                read.set(path, part = { children: blocks, text, weight: text.length + 16 * count });
+            }
+            if (!part) return;
+            const kept = !repeat || takeRepeats(config, 1, part.weight) > 0;
+            (kind === 'header' ? headers : footers).push({ type: kind, text: kept ? part.text : '', children: kept ? part.children : [], metadata });
+        };
+        for (const [index, sectPr] of sections.entries()) {
+            const titlePage = isOn(getDirectChildren(sectPr, "w:titlePg")[0]);
+            for (const ref of [...getDirectChildren(sectPr, "w:headerReference"), ...getDirectChildren(sectPr, "w:footerReference")]) {
+                const target = rels[ref.getAttribute("r:id") || ''];
+                if (!target) continue;
+                const type = ref.getAttribute("w:type") || 'default';
+                const hidden = (type === 'first' && !titlePage) || (type === 'even' && !evenAndOdd);
+                await readInto(resolvePartPath('word/', target), ref.nodeName === 'w:headerReference' ? 'header' : 'footer',
+                    { type, ...(sections.length > 1 ? { section: index } : {}), ...(hidden ? { hidden: true } : {}) });
             }
         }
-    }
+        // Even and odd pages' parts set on with no even pages' part anywhere: even pages show none, as Word shows
+        // them (they showed every page's), an empty even pages' part of each kind the document has.
+        const shownEven = (n: OfficeContentNode) => (n.metadata as HeaderFooterMetadata).type === 'even' && !(n.metadata as HeaderFooterMetadata).hidden;
+        if (evenAndOdd && !headers.some(shownEven) && !footers.some(shownEven)) {
+            for (const [list, kind] of [[headers, 'header'], [footers, 'footer']] as const) {
+                if (list.some(n => !(n.metadata as HeaderFooterMetadata).hidden)) list.push({ type: kind, text: '', children: [], metadata: { type: 'even', ...(sections.length > 1 ? { section: 0 } : {}) } });
+            }
+        }
+        // (A later title page takes on a first page's part an earlier section keeps hidden.)
+        if (sections.length > 1) {
+            const titled = sections.map(sectPr => isOn(getDirectChildren(sectPr, "w:titlePg")[0]));
+            titlePagesTakeHiddenFirsts(headers, 'header', titled);
+            titlePagesTakeHiddenFirsts(footers, 'footer', titled);
+        }
+        for (const [regex, kind] of [[headerFileRegex, 'header'], [footerFileRegex, 'footer']] as const) {
+            for (const partFile of files.filter(f => regex.test(f.path) && !read.has(f.path))) {
+                await readInto(partFile.path, kind, sections.length ? { type: 'default', hidden: true } : { type: 'default' });
+            }
+        }
+    };
 
     for (const file of files) {
         if (!file.path.match(documentFileRegex)) continue;
         const documentContent = file.content.toString();
         const doc = parseXmlString(documentContent, { config, locator: config.includeRawContent });
         const body = getFirstElementByTagName(doc, "w:body");
-        if (body) await readPart(file.path, body, () => readBlocks(body, documentContent, content));
+        if (body) {
+            // The sections: a paragraph's `w:sectPr` ends one, the body's own is the last's (one in a
+            // revision's record of the old properties is no section).
+            for (const sectPr of getElementsByTagName(body, "w:sectPr")) {
+                const parent = sectPr.parentNode as Element | null;
+                if (parent?.nodeName === 'w:sectPrChange') continue;
+                if (parent?.nodeName === 'w:pPr' && parent.parentNode) sectionEnds.set(parent.parentNode as Element, sections.length);
+                else if (parent !== body) continue;
+                sections.push(sectPr);
+            }
+            const first = pageSetupOf(sections[0]);
+            if (first) metadata.pageSetup = first;
+            await readHeadersAndFooters(file.path);
+            await readPart(file.path, body, () => readBlocks(body, documentContent, content));
+            // (A section starting after the last text starts nothing.)
+            dropTrailingSectionStarts(content);
+        }
     }
     // A chunk standing where no content is read from would be lost unseen.
     for (const [element, nodes] of chunkNodes) {

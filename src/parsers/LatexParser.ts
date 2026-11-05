@@ -26,6 +26,8 @@ const MAX_MACRO_EXPANSIONS = 200000;
 const MAX_EXPANDED_CHARS = 5000000;
 const MAX_INPUT_FRAMES = 128;
 const MAX_INCLUDE_DEPTH = 16;
+/** Most page styles kept by name (see `\fancypagestyle`): a document of sections has two each. */
+const MAX_PAGE_STYLES = 100000;
 /** Deepest nesting of groups and environments interpreted; deeper content is read as plain text. */
 const MAX_NESTING_DEPTH = 128;
 /** Deepest nesting of tables (a table inside a cell) interpreted; deeper tables are read as plain text. */
@@ -1069,6 +1071,8 @@ class LatexReader {
     /** What decoding PDF pictures into images may cost this document, across all of them. */
     private readonly decodeBudget = newDecodeBudget();
     private headerFields = new Map<string, string>();
+    /** The page styles defined (`\\fancypagestyle`), by name: their fields, read where the pages are set in one. */
+    private readonly pageStyles = new Map<string, string>();
     private footerFields = new Map<string, string>();
     private graphicsPaths: string[] = [];
 
@@ -2673,6 +2677,30 @@ class LatexReader {
                 if (list && /^enum(i|ii|iii|iv)$/.test(c) && Number.isFinite(v)) list.nextIndex = Math.max(0, v);
                 return;
             }
+            // A page style defined (`\\fancypagestyle{name}[base]{...}`) is not the pages' own until the pages are
+            // set in it (`\\pagestyle{name}`, before the document's text: its first page's style): its fields were
+            // read as the document's header and footer, over them. One page's style (`\\thispagestyle`) is that page's.
+            case 'fancypagestyle': {
+                const styleName = (sc.readRawGroup() ?? '').trim();
+                sc.readRawOptional();
+                const body = sc.readRawGroup();
+                if (styleName && body !== null && this.pageStyles.size < MAX_PAGE_STYLES) this.pageStyles.set(styleName, body);
+                return;
+            }
+            case 'pagestyle': {
+                const body = this.pageStyles.get((sc.readRawGroup() ?? '').trim());
+                const doc = this.docFlow;
+                if (body !== undefined && (!this.bodyStarted || !doc || (!doc.blocks.length && !doc.inline.length))) this.expand(sc, body);
+                return;
+            }
+            // Every field emptied, as the fields set after it (a page style's own, most often) start from none.
+            case 'fancyhf': {
+                sc.readRawOptional();
+                sc.readRawGroup();
+                this.headerFields.clear();
+                this.footerFields.clear();
+                return;
+            }
             case 'fancyhead': case 'fancyfoot': case 'lhead': case 'chead': case 'rhead': case 'lfoot': case 'cfoot': case 'rfoot': {
                 const pos = name.startsWith('fancy') ? (sc.readRawOptional() ?? 'LCR') : name[0].toUpperCase();
                 const raw = sc.readRawGroup() ?? '';
@@ -4153,18 +4181,27 @@ class LatexReader {
         // The fields were collected from the preamble; read them even though the body has ended.
         this.finished = false;
         const build = (fields: Map<string, string>, type: 'header' | 'footer'): OfficeContentNode[] => {
-            const paragraphs: OfficeContentNode[] = [];
+            // A field shown on the first page alone (`\\ifnum\\value{page}=1 {...}\\fi`) or on even pages alone
+            // (`\\ifodd\\value{page}\\else {...}\\fi`), as the LaTeX generator writes them, is that kind's part.
+            const parts = new Map<string, OfficeContentNode[]>();
             for (const pos of ['L', 'C', 'R']) {
-                const raw = fields.get(pos);
+                let raw = fields.get(pos);
                 if (!raw || !raw.replace(/\\thepage|\\hfill|\s/g, '')) continue;
+                // (On odd pages alone, `\\ifodd\\value{page} {...}\\fi`, the pages' own where even pages have theirs;
+                // and both, `\\ifodd\\value{page} {...}\\else {...}\\fi`: they were read as text, "page" and all.)
+                const kinds: [string, string][] = pageCondition(raw) ?? [['default', raw]];
                 const align: TextAlignment = pos === 'C' ? 'center' : pos === 'R' ? 'right' : 'left';
-                const blocks = this.parseBlocksOf(raw);
-                for (const b of blocks) {
-                    if (b.type === 'paragraph') (b.metadata ??= {} as any) && ((b.metadata as any).alignment = align);
-                    paragraphs.push(b);
+                for (const [kind, text] of kinds) {
+                    const blocks = this.parseBlocksOf(text);
+                    let paragraphs = parts.get(kind);
+                    if (!paragraphs) parts.set(kind, paragraphs = []);
+                    for (const b of blocks) {
+                        if (b.type === 'paragraph') (b.metadata ??= {} as any) && ((b.metadata as any).alignment = align);
+                        paragraphs.push(b);
+                    }
                 }
             }
-            return paragraphs.length ? [{ type, metadata: { type: 'default' } as any, children: paragraphs }] : [];
+            return [...parts].filter(([, paragraphs]) => paragraphs.length).map(([kind, paragraphs]) => ({ type, metadata: { type: kind } as any, children: paragraphs }));
         };
         const headers = build(this.headerFields, 'header');
         const footers = build(this.footerFields, 'footer');
@@ -4174,6 +4211,48 @@ class LatexReader {
 }
 
 // ── project loading ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A header field shown on some pages, as the LaTeX generator writes one, as the parts it is: the first page's
+ * (`\\ifnum\\value{page}=1 {X}\\fi`), the odd pages' (`\\ifodd\\value{page} {X}\\fi`, the pages' own where even
+ * pages have theirs), the even pages' (`\\ifodd\\value{page}\\else {Y}\\fi`) or both (`... {X}\\else {Y}\\fi`);
+ * undefined for any other field. Read in one pass, each branch a group of balanced braces: patterns of two
+ * open-ended branches were tried at each `}\\else{` of a long field, in time of its square.
+ */
+function pageCondition(raw: string): [string, string][] | undefined {
+    let at = 0;
+    const blanks = () => { while (at < raw.length && /\s/.test(raw[at])) at++; };
+    const word = (w: string) => { if (raw.startsWith(w, at)) { at += w.length; return true; } return false; };
+    // A group of balanced braces at `at` (a brace a backslash escapes is no brace), its inside; undefined where there is none.
+    const group = (): string | undefined => {
+        if (raw[at] !== '{') return undefined;
+        let depth = 0;
+        for (let i = at; i < raw.length; i++) {
+            const c = raw[i];
+            if (c === '\\') { i++; continue; }
+            if (c === '{') depth++;
+            else if (c === '}' && --depth === 0) { const inside = raw.slice(at + 1, i); at = i + 1; return inside; }
+        }
+        return undefined;
+    };
+    blanks();
+    const first = word('\\ifnum\\value{page}=1');
+    if (!first && !word('\\ifodd\\value{page}')) return undefined;
+    if (raw[at] === ' ') at++;
+    const shown = raw[at] === '{' ? group() : undefined;
+    if (raw[at] === '{' || (shown === undefined && raw[at] !== '\\')) return undefined;
+    let other: string | undefined;
+    if (!first && word('\\else')) {
+        if (raw[at] === ' ') at++;
+        other = group();
+        if (other === undefined) return undefined;
+    }
+    if (!word('\\fi')) return undefined;
+    blanks();
+    if (at < raw.length || (shown === undefined && other === undefined)) return undefined;
+    if (first) return shown === undefined ? undefined : [['first', shown]];
+    return [...(shown !== undefined ? [['default', shown] as [string, string]] : []), ...(other !== undefined ? [['even', other] as [string, string]] : [])];
+}
 
 /**
  * The legacy encoding a `.tex` file declares, as a WHATWG encoding label: `inputenc`'s option (the

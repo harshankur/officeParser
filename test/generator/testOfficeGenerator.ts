@@ -18,7 +18,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { strFromU8, unzipSync } from 'fflate';
+import { strFromU8, unzipSync, zlibSync } from 'fflate';
 import { OfficeGenerator } from '../../src/OfficeGenerator';
 import { OfficeParser } from '../../src/OfficeParser';
 import {
@@ -33,13 +33,16 @@ import {
 import { resolveGeneratorConfig } from '../../src/utils/configUtils.js';
 import { createAST } from '../../src/utils/astUtils.js';
 import { isHeaderRow } from '../../src/utils/officeGenUtils.js';
+import { fontkitUnbrotli, nativeUnbrotli, sfntOf } from '../../src/generators/pdf/fontFiles.js';
+import { toWoff, toWoff2 } from '../helpers/webFontWriter';
+import { BOX, cffTable, type CffSpec, charString, EMPTY, withCffOutlines } from '../helpers/cffFontWriter';
 
 // ============================================================================
 // CONSTANTS & CONFIGURATION
 // ============================================================================
 
 /** Output formats tested (PDF excluded — slow/brittle in CI) */
-const GENERATOR_FORMATS = ['html', 'md', 'text', 'rtf', 'csv', 'chunks', 'epub', 'docx', 'odt', 'tex'] as const;
+const GENERATOR_FORMATS = ['html', 'md', 'text', 'rtf', 'csv', 'chunks', 'epub', 'docx', 'odt', 'tex', 'xlsx', 'ods', 'pptx', 'odp'] as const;
 type GeneratorFormat = typeof GENERATOR_FORMATS[number];
 
 /** Formats that support roundtrip testing (parse → generate → re-parse) */
@@ -75,6 +78,9 @@ const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     ignoreNotes: false,
     newlineDelimiter: '\n',
     pdfWorkerSrc: '',
+    // '' in Node is pdfjs-dist's own folders.
+    pdfCMapUrl: '',
+    pdfDecoderUrl: '',
     serializeRawContent: true,
     preserveXmlWhitespace: false,
     includeBreakNodes: false,
@@ -110,10 +116,13 @@ const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
         pageRange: '',
         normalizeText: true,
         extractTextColor: true,
+        // In auxiliary, as headers and footers: the most the AST says of them.
+        keepHeadersAndFootersInPages: false,
         maxTextItems: 20_000,
         maxOperators: 250_000,
         maxAnnotations: 10_000,
         maxTimeMs: 5_000,
+        maxImagePixels: 40_000_000,
         // pdf.js in a process of its own, as it runs by default in Node.
         separateProcess: true,
         processMemoryMb: 1024,
@@ -141,7 +150,7 @@ const BASELINE_MODIFIED = new Date('2024-01-01T00:00:00Z');
  * entry mtimes follow the same instant.
  */
 const deterministicConfigFor = (destFmt: string): GeneratorConfig =>
-    (destFmt === 'epub' || destFmt === 'docx' || destFmt === 'odt' ? { metadataOverrides: { modified: BASELINE_MODIFIED } } : {}) as GeneratorConfig;
+    (destFmt === 'epub' || destFmt === 'docx' || destFmt === 'odt' || isPackage(destFmt) ? { metadataOverrides: { modified: BASELINE_MODIFIED } } : {}) as GeneratorConfig;
 
 /** Generator config permutations */
 const GENERATOR_CONFIG_TESTS = [
@@ -450,6 +459,48 @@ function extractOdtMetrics(bytes: Uint8Array): GeneratedMetrics {
     };
 }
 
+/** The workbook and deck formats, written as packages and measured by {@link extractPackageMetrics}. */
+type PackageFormat = 'xlsx' | 'ods' | 'pptx' | 'odp';
+const isPackage = (fmt: string): fmt is PackageFormat => fmt === 'xlsx' || fmt === 'ods' || fmt === 'pptx' || fmt === 'odp';
+
+/** A workbook's or deck's metrics. */
+function extractPackageMetrics(bytes: Uint8Array, fmt: PackageFormat): GeneratedMetrics {
+    return fmt === 'pptx' || fmt === 'odp' ? extractDeckMetrics(bytes, fmt) : extractSheetMetrics(bytes, fmt);
+}
+
+/** A deck's metrics (PPTX, ODP): its slides as lines, its tables, its text's words. */
+function extractDeckMetrics(bytes: Uint8Array, fmt: 'pptx' | 'odp'): GeneratedMetrics {
+    const files = unzipSync(bytes);
+    const slides = fmt === 'pptx' ? Object.keys(files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n)).map(n => strFromU8(files[n])) : [];
+    const xml = fmt === 'pptx' ? slides.join('') : (files['content.xml'] ? strFromU8(files['content.xml']) : '');
+    const texts = fmt === 'pptx' ? (xml.match(/<a:t>[^<]*<\/a:t>/g) || []) : (xml.match(/<text:(?:p|span)[^>]*>[^<]*(?=<)/g) || []);
+    const words = texts.join(' ').replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean);
+    return {
+        outputLength: bytes.length,
+        hasContent: bytes.length > 0 && words.length > 0,
+        lineCount: fmt === 'pptx' ? slides.length : (xml.match(/<draw:page[ >]/g) || []).length,
+        wordCount: words.length,
+        tableCount: (xml.match(fmt === 'pptx' ? /<a:tbl>/g : /<table:table[ >]/g) || []).length,
+    };
+}
+
+/** A workbook's metrics (XLSX, ODS): its sheets as tables, its rows as lines, its cells' words. */
+function extractSheetMetrics(bytes: Uint8Array, fmt: 'xlsx' | 'ods'): GeneratedMetrics {
+    const files = unzipSync(bytes);
+    const xml = fmt === 'xlsx'
+        ? Object.keys(files).filter(n => /^xl\/worksheets\/sheet\d+\.xml$/.test(n)).map(n => strFromU8(files[n])).join('')
+        : (files['content.xml'] ? strFromU8(files['content.xml']) : '');
+    const texts = fmt === 'xlsx' ? (xml.match(/<t[^>]*>[^<]*<\/t>|<v>[^<]*<\/v>/g) || []) : (xml.match(/<text:p>[^<]*<\/text:p>|office:value="[^"]*"/g) || []);
+    const words = texts.join(' ').replace(/<[^>]+>|office:value="|"/g, ' ').split(/\s+/).filter(Boolean);
+    return {
+        outputLength: bytes.length,
+        hasContent: bytes.length > 0 && words.length > 0,
+        lineCount: (xml.match(fmt === 'xlsx' ? /<row[ >]/g : /<table:table-row[ >]/g) || []).length,
+        wordCount: words.length,
+        tableCount: (xml.match(fmt === 'xlsx' ? /<worksheet[ >]/g : /<table:table[ >]/g) || []).length,
+    };
+}
+
 function extractGeneratedMetrics(output: string, fmt: GeneratorFormat): GeneratedMetrics {
     const outputLength = output.length;
     const hasContent = outputLength > 0;
@@ -708,6 +759,9 @@ async function testGeneration(
             // ODT is always a binary ZIP (ODF) archive.
             isOdtOutput = true;
             rawOutput = '[ODT archive]';
+        } else if (isPackage(destFmt)) {
+            // A workbook or deck is always a binary ZIP archive.
+            rawOutput = `[${destFmt.toUpperCase()} archive]`;
         } else if (destFmt === 'csv') {
             if (result.value instanceof Uint8Array) {
                 // ZIP archive — convert to base64 placeholder metrics
@@ -730,6 +784,8 @@ async function testGeneration(
             actualMetrics = extractDocxMetrics(result.value as Uint8Array);
         } else if (isOdtOutput) {
             actualMetrics = extractOdtMetrics(result.value as Uint8Array);
+        } else if (isPackage(destFmt)) {
+            actualMetrics = extractPackageMetrics(result.value as Uint8Array, destFmt);
         } else if (isZipOutput) {
             // ZIP: treat as valid multi-sheet output, just validate non-empty archive
             actualMetrics = {
@@ -753,6 +809,8 @@ async function testGeneration(
             fs.writeFileSync(`${outPath}.docx`, result.value as Uint8Array);
         } else if (isOdtOutput) {
             fs.writeFileSync(`${outPath}.odt`, result.value as Uint8Array);
+        } else if (isPackage(destFmt)) {
+            fs.writeFileSync(`${outPath}.${destFmt}`, result.value as Uint8Array);
         } else if (isZipOutput) {
             fs.writeFileSync(`${outPath}.zip`, result.value as Uint8Array);
         } else {
@@ -1010,7 +1068,7 @@ async function testGeneratorConfigs(
                     }
                 });
 
-                const hasStyle = htmlVal.includes('<style>');
+                const hasStyle = /<style[\s>]/.test(htmlVal);
                 const hasEnvelopeScript = htmlVal.includes('cdn.jsdelivr.net/npm/chart.js') || htmlVal.includes('initSpreadsheetResizing');
                 const hasContainer = /<div class="[^"]*container[^"]*"/.test(htmlVal);
                 results.push({
@@ -1029,7 +1087,7 @@ async function testGeneratorConfigs(
             if (ct.id === 'G15' && destFmt === 'html') {
                 const htmlVal = typeof result.value === 'string' ? result.value : '';
                 const hasDoctype = htmlVal.includes('<!DOCTYPE');
-                const hasStyle = htmlVal.includes('<style>');
+                const hasStyle = /<style[\s>]/.test(htmlVal);
                 results.push({
                     category, feature: `${ct.id}: Styled fragment (document:false only)`, sourceFormat: srcFmt, destFormat: destFmt,
                     result: {
@@ -1980,6 +2038,7 @@ const tableGrid = (table: OfficeContentNode | null): string[][] =>
 
 /** A 1x1 GIF: a real image pdf-lib cannot embed (it handles PNG and JPEG only). */
 const GIF_1PX = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+const WEBP_1PX = 'UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA';
 /** A 1x1 PNG. */
 const PNG_1PX = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
@@ -2071,17 +2130,24 @@ async function runNativePdfEngineTests(): Promise<GenFeatureTest[]> {
         'CommonGeneratorConfig.onNode promises every node; the engine flattened runs without ever asking'));
 
     // --- An image the engine cannot embed degrades to its alt text, and says so ---
-    const gifAst = synthAst('docx', [{ type: 'image', metadata: { attachmentName: 'pic.gif', altText: 'A described picture' } } as OfficeContentNode],
-        [{ name: 'pic.gif', extension: 'gif', mimeType: 'image/gif', data: GIF_1PX, size: 40 }]);
-    const gifOut = await nativeText(gifAst);
-    results.push(mk('an unembeddable image (GIF) falls back to its alt text',
-        'alt text drawn', JSON.stringify(gifOut.text).slice(0, 120),
-        gifOut.text.includes('A described picture'),
+    // (A GIF is drawn: the engine turns it into PNG. A WebP is the format it cannot embed.)
+    const webpAst = synthAst('docx', [{ type: 'image', metadata: { attachmentName: 'pic.webp', altText: 'A described picture' } } as OfficeContentNode],
+        [{ name: 'pic.webp', extension: 'webp', mimeType: 'image/webp', data: WEBP_1PX, size: 42 }]);
+    const webpOut = await nativeText(webpAst);
+    results.push(mk('an unembeddable image (WebP) falls back to its alt text',
+        'alt text drawn', JSON.stringify(webpOut.text).slice(0, 120),
+        webpOut.text.includes('A described picture'),
         'pdf-lib embeds PNG/JPEG only; a bare catch drew nothing at all for every other format'));
     results.push(mk('an unembeddable image warns (IMAGE_PROCESSING_FAILED)',
-        'IMAGE_PROCESSING_FAILED', JSON.stringify(gifOut.messages.map((m: any) => m.code)),
-        gifOut.messages.some((m: any) => m.code === OfficeWarningType.IMAGE_PROCESSING_FAILED),
+        'IMAGE_PROCESSING_FAILED', JSON.stringify(webpOut.messages.map((m: any) => m.code)),
+        webpOut.messages.some((m: any) => m.code === OfficeWarningType.IMAGE_PROCESSING_FAILED),
         'DOCX and ODT warn and degrade for the same input; a silently vanishing picture is unfindable'));
+    const gifOut = await nativeText(synthAst('docx', [{ type: 'image', metadata: { attachmentName: 'pic.gif', altText: 'A described picture' } } as OfficeContentNode],
+        [{ name: 'pic.gif', extension: 'gif', mimeType: 'image/gif', data: GIF_1PX, size: 40 }]));
+    results.push(mk('a GIF picture is drawn, turned into PNG',
+        'no IMAGE_PROCESSING_FAILED', JSON.stringify(gifOut.messages.map((m: any) => m.code)),
+        !gifOut.messages.some((m: any) => m.code === OfficeWarningType.IMAGE_PROCESSING_FAILED),
+        'a PDF cannot hold a GIF; it was dropped'));
 
     const missingAst = synthAst('docx', [{ type: 'image', metadata: { attachmentName: 'gone.png', altText: 'Missing picture alt' } } as OfficeContentNode]);
     const missingOut = await nativeText(missingAst);
@@ -2108,6 +2174,15 @@ async function runNativePdfEngineTests(): Promise<GenFeatureTest[]> {
         { type: 'code', text: 'код = 1' },
     ] as OfficeContentNode[]);
     const scriptWords = ['Καλημέρα', 'Привет', 'ΩΜΕΓΑ', 'κόσμε', 'мир', 'код'];
+
+    // A break inside a paragraph (`<br>`, `w:br`, RTF's \\line) starts a new line: it was dropped,
+    // gluing "Line one" to "line two".
+    const brokenAst = await OfficeParser.parseOffice(Buffer.from('<p>Line one<br>line two</p><p>a<br><br>b</p>'), { fileType: 'html' } as any) as OfficeParserAST;
+    const broken = await native(brokenAst);
+    results.push(mk('a line break inside a paragraph starts a new line',
+        'Line one and line two on lines of their own', JSON.stringify(broken.text),
+        broken.text.includes('Line one') && broken.text.includes('line two') && !/Line one[ \t]*line two/.test(broken.text),
+        'an HTML <br> was dropped by the native PDF engine'));
 
     const plain = await native(scriptsAst);
     const plainLoss = lossOf(plain.messages);
@@ -2182,6 +2257,354 @@ async function runNativePdfEngineTests(): Promise<GenFeatureTest[]> {
         'PDF_GENERATION_FAILED naming pdfConfig.fonts.regular', badFontCode,
         badFontCode.startsWith('PDF_GENERATION_FAILED') && badFontCode.includes('pdfConfig.fonts.regular'),
         'drawing in another font without a word would be a different document'));
+
+    // --- Fonts in the web's formats, WOFF and WOFF2, are embedded as the font each holds ---
+    // (Written here from Liberation Sans by the test's own writer; a WOFF2 with its outlines, and its
+    // metrics, in the specification's transformed forms, and one with neither.)
+    const fontkitModule: any = await import('@pdf-lib/fontkit');
+    const fontkit = fontkitModule.default || fontkitModule;
+    const pdfLib: any = await import('pdf-lib');
+    const webFonts: Record<string, Uint8Array> = {
+        'WOFF': toWoff(liberation),
+        'WOFF2': toWoff2(liberation).bytes,
+        'WOFF2 (hmtx transformed)': toWoff2(liberation, { transformHmtx: true }).bytes,
+        'WOFF2 (outlines untransformed)': toWoff2(liberation, { transformGlyf: false }).bytes,
+    };
+    const reference = fontkit.create(liberation);
+    const referenceOutlines = new Set<string>();
+    for (let g = 0; g < reference.numGlyphs; g++) referenceOutlines.add(reference.getGlyph(g).path.toSVG());
+    /** How a font differs from Liberation Sans: its glyphs, code points, widths and outlines. */
+    const unlikeLiberation = (font: any): string[] => {
+        const problems: string[] = [];
+        if (font.numGlyphs !== reference.numGlyphs) problems.push(`${font.numGlyphs} glyphs`);
+        if (font.characterSet.join() !== reference.characterSet.join()) problems.push('another character set');
+        let outlines = 0, widths = 0;
+        for (let g = 0; g < Math.min(font.numGlyphs, reference.numGlyphs); g++) {
+            if (font.getGlyph(g).path.toSVG() !== reference.getGlyph(g).path.toSVG()) outlines++;
+            if (font.getGlyph(g).advanceWidth !== reference.getGlyph(g).advanceWidth) widths++;
+        }
+        if (outlines) problems.push(`${outlines} outlines differ`);
+        if (widths) problems.push(`${widths} widths differ`);
+        return problems;
+    };
+    for (const [format, bytes] of Object.entries(webFonts)) {
+        const unpacked = sfntOf(bytes, () => nativeUnbrotli() ?? fontkitUnbrotli(fontkit));
+        const viaFontkit = sfntOf(bytes, () => fontkitUnbrotli(fontkit));
+        const problems = unlikeLiberation(fontkit.create(unpacked));
+        if (Buffer.compare(Buffer.from(unpacked), Buffer.from(viaFontkit)) !== 0) problems.push("fontkit's Brotli decoder gave another font");
+        results.push(mk(`a ${format} font unpacks to the font it holds`,
+            'same glyphs, code points, widths and outlines as Liberation Sans, by either Brotli decoder', problems.join('; ') || 'the same',
+            problems.length === 0,
+            'a WOFF2 font was subset by fontkit into glyphs viewers drew blank, and a WOFF or WOFF2 embedded whole was not a font at all'));
+    }
+    // fontkit's decoder (browsers' route) gives what Brotli holds, and refuses data longer than declared:
+    // it does not stop at a length, and its longer output was cut to the declared one and accepted.
+    {
+        const zlib = await import('zlib');
+        const data = new Uint8Array(1 << 20).map((_, i) => (i * 7) & 0xFF);
+        const viaFontkit = fontkitUnbrotli(fontkit);
+        const same = Buffer.compare(Buffer.from(viaFontkit(zlib.brotliCompressSync(data), data.length)), Buffer.from(data)) === 0;
+        let longer = 'accepted';
+        try { viaFontkit(zlib.brotliCompressSync(data), 1000); } catch (e: any) { longer = String(e?.message); }
+        results.push(mk("fontkit's Brotli route gives the data, and refuses more than declared",
+            'the same bytes; refused: decompresses to 1048576 bytes, not the 1000', `${same ? 'the same' : 'other bytes'}; ${longer}`,
+            same && longer.includes('decompresses to 1048576 bytes, not the 1000'),
+            'data decompressing past the length a WOFF2 declares was cut to it and accepted'));
+    }
+    /** The font programs a PDF embeds, decoded. */
+    const embeddedFonts = async (pdfBytes: Uint8Array): Promise<Uint8Array[]> => {
+        const doc = await pdfLib.PDFDocument.load(pdfBytes);
+        const programs: Uint8Array[] = [];
+        for (const [, object] of doc.context.enumerateIndirectObjects()) {
+            if (!(object instanceof pdfLib.PDFDict) || object.get(pdfLib.PDFName.of('Type')) !== pdfLib.PDFName.of('FontDescriptor')) continue;
+            for (const key of ['FontFile2', 'FontFile3']) {
+                const ref = object.get(pdfLib.PDFName.of(key));
+                if (ref) programs.push(pdfLib.decodePDFRawStream(doc.context.lookup(ref)).decode());
+            }
+        }
+        return programs;
+    };
+    /** What is wrong with the fonts a PDF embeds: each must be an sfnt of Liberation Sans's outlines. */
+    const unlikeEmbedded = (programs: Uint8Array[]): string[] => {
+        const problems: string[] = [];
+        if (!programs.length) problems.push('no font embedded');
+        for (const program of programs) {
+            const signature = (program[0] << 24 | program[1] << 16 | program[2] << 8 | program[3]) >>> 0;
+            // (A TrueType font starts 0x00010000, or `true`, as fontkit writes its subsets.)
+            if (signature !== 0x00010000 && signature !== 0x74727565) { problems.push(`a font file starting ${Buffer.from(program.subarray(0, 4)).toString('latin1')}`); continue; }
+            const font = fontkit.create(program);
+            let drawn = 0;
+            for (let g = 0; g < font.numGlyphs; g++) {
+                const outline = font.getGlyph(g).path.toSVG();
+                if (!outline) continue;
+                drawn++;
+                if (!referenceOutlines.has(outline)) { problems.push(`glyph ${g} is no glyph of the font given`); break; }
+            }
+            if (!drawn) problems.push('a font of no outlines');
+        }
+        return problems;
+    };
+    for (const format of ['WOFF', 'WOFF2']) {
+        for (const where of ['fonts', 'fallbackFonts']) {
+            for (const subsetFonts of [true, false]) {
+                const given = webFonts[format];
+                const out = await native(scriptsAst, { ...(where === 'fonts' ? { fonts: { regular: given, bold: given } } : { fallbackFonts: [given] }), subsetFonts });
+                const problems = unlikeEmbedded(await embeddedFonts(out.bytes));
+                const read = scriptWords.filter(w => out.text.includes(w)).length;
+                results.push(mk(`a ${format} font in pdfConfig.${where}, ${subsetFonts ? 'subset' : 'embedded whole'}, is drawn`,
+                    'every word read back, no loss warning, the font embedded a TrueType font of its outlines', `${read}/${scriptWords.length}; ${problems.join('; ') || 'a TrueType font of its outlines'}; ${JSON.stringify(lossOf(out.messages)?.details)}`,
+                    read === scriptWords.length && !lossOf(out.messages) && problems.length === 0,
+                    "a WOFF2 subset crashed the process or drew nothing; a WOFF or WOFF2 embedded whole was its own bytes, which viewers could not read"));
+            }
+        }
+    }
+
+    // --- A font that cannot be read or embedded fails the conversion, naming it, and never ends the process ---
+    const tableAt = (bytes: Uint8Array, tag: string) => {
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        for (let i = 0; i < view.getUint16(4); i++) {
+            const at = 12 + i * 16;
+            if (String.fromCharCode(...bytes.subarray(at, at + 4)) === tag) return { offset: view.getUint32(at + 8), length: view.getUint32(at + 12) };
+        }
+        return { offset: 0, length: 0 };
+    };
+    const failureOf = async (pdfConfig: any): Promise<string> => {
+        try { await native(scriptsAst, pdfConfig); return 'generated'; } catch (e: any) { return `${e?.officeIssue?.code}: ${e?.message}`; }
+    };
+    // Every glyph's outline placed past the end of glyf (its offsets in loca).
+    const misplaced = liberation.slice();
+    {
+        const view = new DataView(misplaced.buffer), loca = tableAt(misplaced, 'loca'), glyf = tableAt(misplaced, 'glyf');
+        const long = view.getInt16(tableAt(misplaced, 'head').offset + 50) === 1;
+        for (let i = 1; i < loca.length / (long ? 4 : 2); i++) long ? view.setUint32(loca.offset + i * 4, glyf.length + 4 * i) : view.setUint16(loca.offset + i * 2, (glyf.length + 4 * i) / 2);
+    }
+    const damagedWoff2 = webFonts['WOFF2'].slice();
+    for (let i = 200; i < 400; i++) damagedWoff2[i] ^= 0x5A;
+    // A WOFF of one table whose zlib data inflates to 16 MB, declaring one byte more than its compressed
+    // length (it was inflated whole, cut to its declared length and accepted).
+    const inflating = (() => {
+        const stored = zlibSync(new Uint8Array(16 << 20));
+        const view = new DataView(new ArrayBuffer(64 + stored.length));
+        view.setUint32(0, 0x774F4646); view.setUint32(4, 0x00010000); view.setUint32(8, 64 + stored.length);
+        view.setUint16(12, 1); view.setUint32(16, 12 + 16 + stored.length + 4);
+        [0x41, 0x41, 0x41, 0x41].forEach((c, i) => view.setUint8(44 + i, c));
+        view.setUint32(48, 64); view.setUint32(52, stored.length); view.setUint32(56, stored.length + 1);
+        const bytes = new Uint8Array(view.buffer);
+        bytes.set(stored, 64);
+        return bytes;
+    })();
+    // Liberation Sans as a WOFF, its second table named as its first, and, in another, its first compressed
+    // table declaring four bytes more than it inflates to.
+    const woffEntry = (bytes: Uint8Array, i: number) => 44 + i * 20;
+    const twoOfOne = webFonts['WOFF'].slice();
+    twoOfOne.copyWithin(woffEntry(twoOfOne, 1), woffEntry(twoOfOne, 0), woffEntry(twoOfOne, 0) + 4);
+    const longer = webFonts['WOFF'].slice();
+    {
+        const view = new DataView(longer.buffer);
+        for (let i = 0; i < view.getUint16(12); i++) {
+            const at = woffEntry(longer, i);
+            if (view.getUint32(at + 8) < view.getUint32(at + 12)) { view.setUint32(at + 12, view.getUint32(at + 12) + 4); break; }
+        }
+    }
+    for (const [what, bytes, cause] of [
+        ['a font whose outlines lie outside its glyf table', misplaced, 'lies outside its glyf table'],
+        ['a WOFF2 font whose compressed data is damaged', damagedWoff2, 'do not decompress'],
+        ['a WOFF2 font cut short', webFonts['WOFF2'].slice(0, 30_000), 'WOFF2 file ends before its data does'],
+        ['a WOFF table inflating past its declared length', inflating, 'inflates to more than'],
+        ['a WOFF font with two tables of one name', twoOfOne, 'two tables'],
+        ['a WOFF table inflating short of its declared length', longer, 'bytes, not the'],
+    ] as [string, Uint8Array, string][]) {
+        const failures = [await failureOf({ fonts: { regular: bytes }, subsetFonts: true }), await failureOf({ fonts: { regular: bytes }, subsetFonts: false })];
+        results.push(mk(`${what} fails the conversion, subset or whole, naming the option`,
+            `PDF_GENERATION_FAILED naming pdfConfig.fonts.regular: ${cause}`, failures.join(' | '),
+            failures.every(f => f.startsWith('PDF_GENERATION_FAILED') && f.includes('pdfConfig.fonts.regular') && f.includes(cause)),
+            'a damaged font crashed the process from a timer fontkit set, or was embedded for viewers to draw nothing'));
+    }
+
+    // --- A character is a font's to draw only when its glyph draws something ---
+    /** Liberation Sans with the outline of the glyph of each of these characters changed by `change` (given the outline's offset). */
+    const withGlyphs = (codePoints: number[], change: (view: DataView, at: number, id: number) => void): Uint8Array => {
+        const font = liberation.slice();
+        const view = new DataView(font.buffer), loca = tableAt(font, 'loca'), glyf = tableAt(font, 'glyf');
+        const long = view.getInt16(tableAt(font, 'head').offset + 50) === 1;
+        for (const cp of codePoints) {
+            const id = reference.glyphForCodePoint(cp).id;
+            change(view, glyf.offset + (long ? view.getUint32(loca.offset + id * 4) : view.getUint16(loca.offset + id * 2) * 2), id);
+        }
+        return font;
+    };
+    /** A font with its table `from` renamed `to` (a table named sbix makes a color font of it). */
+    const renamed = (font: Uint8Array, from: string, to: string): Uint8Array => {
+        const out = font.slice();
+        for (let i = 0; i < new DataView(out.buffer).getUint16(4); i++) {
+            const at = 12 + i * 16;
+            if (String.fromCharCode(...out.subarray(at, at + 4)) === from) out.set([...to].map(c => c.charCodeAt(0)), at);
+        }
+        return out;
+    };
+    /** A font with the glyph Liberation Sans draws this character with made empty, as a font keeps one (no data: loca gives it its end as its start). */
+    const withEmptyGlyph = (source: Uint8Array, cp: number): Uint8Array => {
+        const font = source.slice();
+        const view = new DataView(font.buffer), loca = tableAt(font, 'loca');
+        const long = view.getInt16(tableAt(font, 'head').offset + 50) === 1;
+        const id = reference.glyphForCodePoint(cp).id;
+        if (long) view.setUint32(loca.offset + id * 4, view.getUint32(loca.offset + (id + 1) * 4));
+        else view.setUint16(loca.offset + id * 2, view.getUint16(loca.offset + (id + 1) * 2));
+        return font;
+    };
+    /**
+     * Liberation Sans with this character (one after U+2666 and before U+F001) given an empty glyph: the
+     * cmap's segment of U+266A to U+266C moved to end at it, and the glyph of U+266C, now its, made empty.
+     */
+    const emptyAt = (cp: number): Uint8Array => {
+        const font = liberation.slice();
+        const view = new DataView(font.buffer), cmap = tableAt(font, 'cmap').offset;
+        // (Its two subtables are one table, of format 4: once moved, no segment ends at U+266C to be moved again.)
+        for (let i = 0; i < view.getUint16(cmap + 2); i++) {
+            const table = cmap + view.getUint32(cmap + 8 + i * 8);
+            if (view.getUint16(table) !== 4) continue;
+            const segments = view.getUint16(table + 6) / 2;
+            for (let s = 0; s < segments; s++) {
+                const end = table + 14 + s * 2, start = end + 2 + segments * 2, delta = start + segments * 2;
+                if (view.getUint16(end) !== 0x266C) continue;
+                const shift = cp - 0x266C;
+                view.setUint16(end, cp);
+                view.setUint16(start, view.getUint16(start) + shift);
+                view.setInt16(delta, view.getInt16(delta) - shift);
+            }
+        }
+        return withEmptyGlyph(font, 0x266C);
+    };
+    // The glyph of Cyrillic П made empty, and, in another font, made of itself (a composite glyph whose
+    // one component is itself: fontkit, reading it, filled the heap and ended the process).
+    const emptied = withEmptyGlyph(liberation, 0x041F);
+    const selfMade = withGlyphs([0x041F], (view, at, id) => { view.setInt16(at, -1); view.setUint16(at + 10, 0); view.setUint16(at + 12, id); });
+    // An empty glyph draws nothing: a font's defect (U+FC39 in one of Fontsource's files of Noto Sans
+    // Arabic), or, in a color font, a color glyph's stand-in; and a glyph made of itself is no glyph.
+    for (const [what, bytes, why] of [
+        ['empty', emptied, "a font's empty glyph drew a blank where the character was, and nothing was reported lost"],
+        ['empty in a color font', renamed(emptied, 'prep', 'sbix'), 'a color font drew a blank where its color glyph was, and viewers showed a gap'],
+        ['made of itself', selfMade, 'fontkit, reading a glyph made of itself, filled the heap and ended the process'],
+    ] as [string, Uint8Array, string][]) {
+        const alone = [await native(scriptsAst, { fallbackFonts: [bytes] }), await native(scriptsAst, { fallbackFonts: [bytes], subsetFonts: false })];
+        const backed = await native(scriptsAst, { fallbackFonts: [bytes, liberation] });
+        results.push(mk(`a character whose glyph is ${what} is drawn by the next font, or counted lost`,
+            'П counted lost with the font alone (subset or whole), the other words drawn; no loss with Liberation Sans after it',
+            `${alone.map(out => JSON.stringify(lossOf(out.messages)?.details)).join(' | ')} | ${JSON.stringify(lossOf(backed.messages)?.details)}`,
+            alone.every(out => lossOf(out.messages)?.details.sample === 'П' && out.text.includes('ривет') && out.text.includes('Καλημέρα')) && !lossOf(backed.messages) && scriptWords.every(w => backed.text.includes(w)),
+            why));
+    }
+    // The font after it draws it, not the empty glyph: П in Liberation Sans Bold, given after the font whose П is empty.
+    const laterAst = synthAst('md', [{ type: 'paragraph', children: [{ type: 'text', text: 'Пример' }] }] as OfficeContentNode[]);
+    const later = await OfficeGenerator.generate(laterAst, 'pdf' as any, { pdfConfig: { engine: 'native', fonts: { regular: emptied }, fallbackFonts: [liberationBold] } } as any);
+    const laterBack: any = await OfficeParser.parseOffice(Buffer.from(later.value as Uint8Array), { ...PARSER_CONFIG, ocr: false });
+    const laterRuns: string[] = [];
+    const runsOf = (node: any) => { if (node?.type === 'text' && node.text) laterRuns.push(`${node.text}${node.formatting?.bold ? ' (bold)' : ''}`); (node?.children || []).forEach(runsOf); };
+    laterBack.content.forEach(runsOf);
+    results.push(mk('a character whose glyph is empty is drawn by a font after it that draws it',
+        'П in the bold font after it, the rest in the font given, no loss', `${JSON.stringify(laterRuns)}; ${JSON.stringify(lossOf((later as any).messages || [])?.details)}`,
+        laterRuns.some(r => r.startsWith('П') && r.endsWith('(bold)')) && laterRuns.some(r => r.includes('ример') && !r.endsWith('(bold)')) && !lossOf((later as any).messages || []),
+        "a font's empty glyph was drawn, blank, though a font after it drew the character (U+FC39 in Noto Sans Arabic's 400 weight, with its 500 weight after it)"));
+    // A character blank by design is drawn by a font whose glyph for it is empty: U+2800 BRAILLE PATTERN
+    // BLANK, as Apple Braille has it (without the font, the Standard-14 fonts have no U+2800).
+    const brailleBlank = String.fromCodePoint(0x2800);
+    const brailleAst = synthAst('md', [{ type: 'paragraph', children: [{ type: 'text', text: `Braille ${brailleBlank} blank` }] }] as OfficeContentNode[]);
+    const brailleFont = emptyAt(0x2800);
+    const braille = [await native(brailleAst, { fallbackFonts: [brailleFont] }), await native(brailleAst, { fallbackFonts: [brailleFont], subsetFonts: false })];
+    const brailleWithout = await native(brailleAst);
+    results.push(mk('a character blank by design whose glyph is empty is drawn by its font',
+        'no loss with the font, subset or whole; U+2800 counted lost without it', `${braille.map(out => JSON.stringify(lossOf(out.messages)?.details)).join(' | ')} | ${JSON.stringify(lossOf(brailleWithout.messages)?.details)}`,
+        braille.every(out => !lossOf(out.messages) && out.text.includes('Braille') && out.text.includes('blank')) && lossOf(brailleWithout.messages)?.details.sample === brailleBlank,
+        "a font's blank glyph (U+2800, Braille's blank cell) was drawn as ? and counted lost"));
+    // A combining mark whose glyph is empty is drawn with its letter in a font that substitutes glyphs as it
+    // shapes (an invisible virama stacking the next letter, a mark composed into its letter): U+3099 after
+    // A. In a font that substitutes none (its GSUB renamed) the empty glyph draws nothing, and the mark is
+    // lost, as is the mark after a space, with no letter to be drawn with.
+    const markFont = emptyAt(0x3099);
+    const mark = String.fromCodePoint(0x3099);
+    const markOf = async (text: string, font: Uint8Array) => lossOf((await native(synthAst('md', [{ type: 'paragraph', children: [{ type: 'text', text }] }] as OfficeContentNode[]), { fonts: { regular: font } })).messages)?.details;
+    const marks = [await markOf(`xA${mark}x`, markFont), await markOf(`xA${mark}x`, renamed(markFont, 'GSUB', 'GSUX')), await markOf(`x ${mark}x`, markFont)];
+    results.push(mk('a combining mark whose glyph is empty is drawn with its letter only in a font that substitutes glyphs',
+        'no loss after A in the font; U+3099 lost in the font without GSUB, and after a space', JSON.stringify(marks),
+        !marks[0] && marks[1]?.sample === mark && marks[2]?.sample === mark,
+        "a mark's empty glyph was drawn as nothing in a font that could not draw it, and nothing was reported lost"));
+    // A color font: its glyphs drawn from a table a PDF does not hold (here every outline emptied, and a
+    // table named sbix, as Apple Color Emoji's), so none of its characters is drawn.
+    const colorFont = renamed(withGlyphs(reference.characterSet, (view, at) => view.setInt16(at, 0)), 'prep', 'sbix');
+    const colored = await native(scriptsAst, { fallbackFonts: [colorFont] });
+    const coloredOptions = colored.messages.filter((m: any) => m.code === OfficeWarningType.INVALID_CONFIG_VALUE).map((m: any) => String(m.message));
+    results.push(mk('a color font is reported and not used, its characters counted lost',
+        'INVALID_CONFIG_VALUE for pdfConfig.fallbackFonts[0] naming sbix; loss counted as without fonts', `${JSON.stringify(coloredOptions)}; ${JSON.stringify(lossOf(colored.messages)?.details)}`,
+        coloredOptions.some(m => m.includes('pdfConfig.fallbackFonts[0]') && m.includes('sbix')) && lossOf(colored.messages)?.details.count === plainLoss?.details.count,
+        'Apple Color Emoji drew nothing for an emoji, and nothing was reported lost'));
+
+    // --- A CFF glyph draws when its charstring draws, read without running it ---
+    // Liberation Sans with CFF outlines of these tests' own (see cffFontWriter): a box for each glyph but
+    // those given. fontkit's outline was read before: @pdf-lib/fontkit 1.1.1 runs the first glyph of each
+    // FDSelect range with the font dictionary of the range before it (Noto Sans KR, SC, TC and JP), and
+    // draws nothing of a glyph made of two others (seac).
+    const cffFont = (glyphs: Map<number, number[]>, spec: Omit<CffSpec, 'charStrings'> = {}): Uint8Array =>
+        withCffOutlines(liberation, cffTable({ ...spec, charStrings: Array.from({ length: reference.numGlyphs }, (_, id) => glyphs.get(id) ?? BOX) }));
+    const gid = (cp: number) => reference.glyphForCodePoint(cp).id;
+    /** The runs text is read back in when drawn in this font, with Liberation Sans Bold after it (a run marked bold is drawn in it), and the characters lost. */
+    const drawnIn = async (font: Uint8Array, text: string) => {
+        const res = await OfficeGenerator.generate(synthAst('md', [{ type: 'paragraph', children: [{ type: 'text', text }] }] as OfficeContentNode[]), 'pdf' as any, { pdfConfig: { engine: 'native', fonts: { regular: font }, fallbackFonts: [liberationBold] } } as any);
+        const back: any = await OfficeParser.parseOffice(Buffer.from(res.value as Uint8Array), { ...PARSER_CONFIG, ocr: false });
+        const runs: string[] = [];
+        const runsIn = (node: any) => { if (node?.type === 'text' && node.text) runs.push(`${node.text}${node.formatting?.bold ? ' (bold)' : ''}`); (node?.children || []).forEach(runsIn); };
+        back.content.forEach(runsIn);
+        return { runs, lost: lossOf((res as any).messages || [])?.details };
+    };
+    const allInFont = (out: { runs: string[]; lost: any }, text: string) => !out.lost && !out.runs.some(r => r.endsWith('(bold)')) && out.runs.join('').replace(/\s/g, '') === text.replace(/\s/g, '');
+    // An empty glyph (endchar alone) draws nothing: П alone is lost, and with a font after it drawn there.
+    const cffEmptied = cffFont(new Map([[gid(0x041F), EMPTY]]));
+    const cffAlone = await native(scriptsAst, { fallbackFonts: [cffEmptied] });
+    const cffBacked = await native(scriptsAst, { fallbackFonts: [cffEmptied, liberation] });
+    results.push(mk('a CFF glyph that draws nothing is passed over; one that draws, drawn',
+        'П counted lost with the CFF font alone, the other words drawn; no loss with Liberation Sans after it',
+        `${JSON.stringify(lossOf(cffAlone.messages)?.details)} | ${JSON.stringify(lossOf(cffBacked.messages)?.details)}`,
+        lossOf(cffAlone.messages)?.details.sample === 'П' && cffAlone.text.includes('ривет') && cffAlone.text.includes('Καλημέρα') && !lossOf(cffBacked.messages) && scriptWords.every(w => cffBacked.text.includes(w)),
+        "a CFF font's empty glyph drew a blank where the character was, and nothing was reported lost"));
+    // A glyph drawn only through a subroutine (р a local one, и a global one): drawn, the subroutine not run.
+    const subroutine = charString(50, 0, 'rmoveto', 400, 0, 'rlineto', 0, 600, 'rlineto', -400, 0, 'rlineto', 'return');
+    const throughSubrs = await drawnIn(cffFont(new Map([[gid(0x0440), charString(-107, 'callsubr', 'endchar')], [gid(0x0438), charString(-107, 'callgsubr', 'endchar')]]), { subrs: [subroutine], globalSubrs: [subroutine] }), 'Привет мир');
+    results.push(mk('a CFF glyph drawn through a subroutine is drawn in its font',
+        'Привет мир in the CFF font, no run in the bold font after it, no loss', JSON.stringify(throughSubrs),
+        allInFont(throughSubrs, 'Привет мир'),
+        "a CFF glyph drawn by its subroutines was judged by fontkit's outline of it"));
+    // An accented glyph made of two others (seac: endchar with four operands, or five with a width): é of
+    // e (StandardEncoding 101) and acute (194), è of e and grave (193), each named in the font as seac finds it.
+    const seacFont = cffFont(new Map([[gid(0x00E9), charString(0, 0, 101, 194, 'endchar')], [gid(0x00E8), charString(556, 0, 0, 101, 193, 'endchar')]]),
+        { names: new Map([[gid(0x0065), 70], [gid(0x00B4), 125], [gid(0x0060), 124]]) });
+    const seac = await drawnIn(seacFont, 'Café crème');
+    results.push(mk('a CFF glyph made of two others (seac) is drawn in its font',
+        'Café crème in the CFF font, no run in the bold font after it, no loss', JSON.stringify(seac),
+        allInFont(seac, 'Café crème'),
+        'an accented CFF glyph of two others (seac) was drawn in the next font, or counted lost: fontkit draws nothing of it'));
+    // A CID-keyed font of two font dictionaries, the second's range starting at Ж's glyph, which calls the
+    // second's subroutine: fontkit ran it with the first's (none), and drew nothing.
+    const cid = await drawnIn(cffFont(new Map([[gid(0x0416), charString(-107, 'callsubr', 'endchar')]]), { cid: { fds: [[], [subroutine]], ranges: [[0, 0], [gid(0x0416), 1]] } }), 'Жук');
+    results.push(mk('the first glyph of a CID-keyed CFF font\'s FDSelect range is drawn in its font',
+        'Жук in the CFF font, no run in the bold font after it, no loss', JSON.stringify(cid),
+        allInFont(cid, 'Жук'),
+        'Noto Sans KR drew U+0391, U+2190, U+FF1A and U+02C7 as ? and reported them lost, and Noto Sans SC drew U+2018 in another font: fontkit read the first glyph of each FDSelect range with the font dictionary before it'));
+
+    // fontkit failing as it writes a subset (on a later turn of the event loop, in @pdf-lib/fontkit 1.x).
+    const subsetType = Object.getPrototypeOf(fontkit.create(liberation).createSubset());
+    const encode = subsetType.encode;
+    let encodeCalls = 0;
+    subsetType.encode = function () { encodeCalls++; throw new RangeError('Index out of range'); };
+    let subsetFailure: string;
+    try {
+        subsetFailure = await failureOf({ fonts: { regular: liberation } });
+        await new Promise(resolve => setTimeout(resolve, 50));
+    } finally {
+        subsetType.encode = encode;
+    }
+    results.push(mk('fontkit failing to write a subset fails the conversion, and the process lives',
+        'PDF_GENERATION_FAILED naming pdfConfig.fonts.regular: Index out of range', `${encodeCalls} call(s); ${subsetFailure}`,
+        encodeCalls > 0 && subsetFailure.startsWith('PDF_GENERATION_FAILED') && subsetFailure.includes('pdfConfig.fonts.regular') && subsetFailure.includes('Index out of range'),
+        "fontkit writes a subset on a timer: what it threw there was no caller's to catch, and ended the process while the conversion never settled"));
 
     results.push(mk('a conversion with fonts leaves no global behind',
         'no regeneratorRuntime', typeof (globalThis as any).regeneratorRuntime,
@@ -2477,12 +2900,74 @@ async function runDegradeFidelityTests(): Promise<GenFeatureTest[]> {
         /<w:hyperlink r:id="[^"]+"><w:r><w:drawing>/.test(documentXml) && relsXml.includes('https://example.com/target'),
         'ODT wraps the frame in <draw:a>; DOCX dropped ImageMetadata.link entirely'));
 
+    // --- RTF breaks the page between a source's pages and slides, as DOCX does ---
+    const para = (text: string): OfficeContentNode => ({ type: 'paragraph', text, children: [{ type: 'text', text } as OfficeContentNode] } as OfficeContentNode);
+    for (const kind of ['page', 'slide'] as const) {
+        const paged = synthAst(kind === 'page' ? 'pdf' : 'pptx', ['One', 'Two', 'Three'].map(t => ({ type: kind, children: [para(`${kind} ${t}`)] } as OfficeContentNode)));
+        const rtf = String((await OfficeGenerator.generate(paged as any, 'rtf' as any, {} as any)).value);
+        const ordered = new RegExp(`${kind} One[\\s\\S]*\\\\page\\n[\\s\\S]*${kind} Two[\\s\\S]*\\\\page\\n[\\s\\S]*${kind} Three`).test(rtf);
+        const breaks = (rtf.match(/\\page\n/g) || []).length;
+        results.push(mk('rtf', `a page break between consecutive ${kind}s`,
+            '2 breaks, one between each two', `${breaks} breaks`, ordered && breaks === 2,
+            `each ${kind} on a page of its own, none before the first; a PDF's pages ran together into one`));
+    }
+
     return results;
 }
 
 // ============================================================================
 // MAIN RUNNERS
 // ============================================================================
+
+/**
+ * A PDF's pages of other sizes are sections (a page break with BreakMetadata.section and the page's
+ * size), so the writers that lay out pages keep each one: DOCX, ODT and RTF output read back with the
+ * same pages, LaTeX sets the landscape ones in a `landscape` environment, and the native engine and
+ * the slide writers keep a page (or slide) for each.
+ */
+async function runPdfSectionTests(): Promise<GenFeatureTest[]> {
+    const results: GenFeatureTest[] = [];
+    const category = 'PDF Sections';
+    const mk = (feature: string, destFormat: string, exp: any, act: any, ok: boolean, details: string): GenFeatureTest => ({
+        category, feature, sourceFormat: 'pdf', destFormat: destFormat as any,
+        result: { status: ok ? 'PASS' : 'FAIL', expected: exp, actual: act, details, duration: 0 }
+    });
+    // Letter, Letter, landscape, a /Rotate 90 page shown landscape, Letter, A4 (see scripts/generate-pdf-fixtures.js).
+    const ast = await OfficeParser.parseOffice(path.join(__dirname, '..', 'files', 'pdf', 'page_sizes.pdf'), { ...PARSER_CONFIG, ocr: false });
+    // The document's page, then each section's, as whole points.
+    const pagesOf = (a: OfficeParserAST) => [a.metadata.pageSetup, ...a.content.filter(n => n.type === 'break' && typeof (n.metadata as any)?.section === 'number').map(n => (n.metadata as any).pageSetup)]
+        .map(s => `${Math.round(s?.width ?? 0)}x${Math.round(s?.height ?? 0)}`).join(' ');
+    const want = '612x792 792x612 612x792 595x842';
+    results.push(mk('a PDF\'s sections are its pages\' sizes', 'pdf', want, pagesOf(ast), pagesOf(ast) === want, 'a page of another size or turned starts a section'));
+    for (const fmt of ['docx', 'odt', 'rtf'] as const) {
+        try {
+            const out = await OfficeGenerator.generate(ast, fmt, {} as any);
+            const value = out.value as string | Uint8Array;
+            const back = await OfficeParser.parseOffice(typeof value === 'string' ? Buffer.from(value, 'utf8') : Buffer.from(value), { ...PARSER_CONFIG, ocr: false, fileType: fmt } as any);
+            results.push(mk('each section of PDF pages written with its page', fmt, want, pagesOf(back), pagesOf(back) === want, `${fmt} output read back has the PDF's pages`));
+        } catch (e: any) {
+            results.push(mk('each section of PDF pages written with its page', fmt, want, e?.message || String(e), false, 'generation or reading back failed'));
+        }
+    }
+    const tex = String((await OfficeGenerator.generate(ast, 'tex', {} as any)).value);
+    const turned = /\\begin\{landscape\}[\s\S]*Landscape page three[\s\S]*Turned page four[\s\S]*\\end\{landscape\}[\s\S]*Letter page five/.test(tex);
+    results.push(mk('PDF landscape pages in a landscape environment', 'tex', 'pages three and four turned', turned ? 'turned' : 'not turned', turned, 'pdflscape for the landscape section'));
+    try {
+        const pdf = await OfficeGenerator.generate(ast, 'pdf' as any, { pdfConfig: { engine: 'native' } } as any);
+        const back = await OfficeParser.parseOffice(Buffer.from(pdf.value as Uint8Array), { ...PARSER_CONFIG, ocr: false });
+        const sizes = back.content.filter(n => n.type === 'page').map(n => `${Math.round((n.metadata as any)?.pageWidth)}x${Math.round((n.metadata as any)?.pageHeight)}`).join(' ');
+        const wantPages = '612x792 612x792 792x612 792x612 612x792 595x842';
+        results.push(mk('native engine prints each PDF page at its size', 'pdf', wantPages, sizes, sizes === wantPages, 'a section start and the page after it make one page'));
+    } catch (e: any) {
+        results.push(mk('native engine prints each PDF page at its size', 'pdf', 'printed', e?.message || String(e), false, 'native engine failed'));
+    }
+    for (const fmt of ['pptx', 'odp'] as const) {
+        const deck = unzipSync((await OfficeGenerator.generate(ast, fmt as any, {} as any)).value as unknown as Uint8Array);
+        const slides = fmt === 'pptx' ? Object.keys(deck).filter(k => /^ppt\/slides\/slide\d+\.xml$/.test(k)).length : (strFromU8(deck['content.xml']).match(/<draw:page /g) || []).length;
+        results.push(mk('a slide for each PDF page, sections or not', fmt, 6, slides, slides === 6, 'the slide writers take the page nodes'));
+    }
+    return results;
+}
 
 async function runAllTests(): Promise<void> {
     const startTime = Date.now();
@@ -2577,6 +3062,14 @@ async function runAllTests(): Promise<void> {
     allResults.push(...nativePdfResults);
     console.log(nativePdfResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' ✗' : ' ✓');
 
+    // A PDF's pages of other sizes as sections, through every writer that lays out pages (PDF: not in fast mode)
+    if (!FAST_MODE) {
+        process.stdout.write('  pdf sections...');
+        const pdfSectionResults = await runPdfSectionTests();
+        allResults.push(...pdfSectionResults);
+        console.log(pdfSectionResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' ✗' : ' ✓');
+    }
+
     // Table geometry: sparse spreadsheet grids, header rows, onNode call counts
     process.stdout.write('  table geometry...');
     const tableGeometryResults = await runTableGeometryTests();
@@ -2639,6 +3132,8 @@ async function generateBaselines(): Promise<void> {
                     metrics = extractDocxMetrics(result.value as Uint8Array);
                 } else if (destFmt === 'odt') {
                     metrics = extractOdtMetrics(result.value as Uint8Array);
+                } else if (isPackage(destFmt)) {
+                    metrics = extractPackageMetrics(result.value as Uint8Array, destFmt);
                 } else if (result.value instanceof Uint8Array) {
                     // ZIP archive (multi-sheet CSV)
                     metrics = { outputLength: result.value.length, hasContent: result.value.length > 0, lineCount: 0, wordCount: 0 };
@@ -2660,6 +3155,8 @@ async function generateBaselines(): Promise<void> {
                     fs.writeFileSync(`${fileBaselinePath}.docx`, result.value as Uint8Array);
                 } else if (destFmt === 'odt') {
                     fs.writeFileSync(`${fileBaselinePath}.odt`, result.value as Uint8Array);
+                } else if (isPackage(destFmt)) {
+                    fs.writeFileSync(`${fileBaselinePath}.${destFmt}`, result.value as Uint8Array);
                 } else if (result.value instanceof Uint8Array) {
                     fs.writeFileSync(`${fileBaselinePath}.zip`, result.value);
                 } else if (destFmt === 'chunks') {

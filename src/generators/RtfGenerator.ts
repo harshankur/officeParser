@@ -1,9 +1,12 @@
-import { CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextMetadata } from '../types.js';
+import { BreakMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, IndentationMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageNumberFormat, PageSetup, ParagraphMetadata, TextMetadata } from '../types.js';
+import { hasPageSize, MAX_PAGE_PT, onDocumentPage, type SizedPageSetup } from '../utils/pageLimits.js';
+import { pageFieldInstruction } from '../utils/pageNumbers.js';
 import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
-import { base64ByteLength, decodeBase64, embedUrl, hexColor, isHeaderRow } from '../utils/officeGenUtils.js';
+import { heldColumns } from '../utils/columnUtils.js';
+import { base64ByteLength, decodeBase64, embedUrl, furnitureKind, hexColor, isHeaderRow, runningFurniture, sectionFurniture, sectionFurnitureIndex, writableSpacing } from '../utils/officeGenUtils.js';
 
 /** Each byte's two hex digits. */
 const HEX_BYTES = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
@@ -65,6 +68,8 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
     private usedMonospace = false;
     /** Whether the math-as-source warning was given (once per document). */
     private mathWarned = false;
+    /** The section being written, counted from 0 as BreakMetadata.section counts. */
+    private currentSection = 0;
     /** The node processor the document is written with, kept so a comment's and a header's blocks are written by it too. */
     private processor?: (node: OfficeContentNode, childrenOutput: string) => Promise<string>;
     /** The comments of a block written, to go before it (see processNodeRecursive). */
@@ -79,6 +84,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         this.colorIndex = new Map();
         this.usedMonospace = false;
         this.mathWarned = false;
+        this.currentSection = 0;
 
         // We first process all nodes to collect colors and analyze structure
         const { running, body: bodyContent } = await this.renderBody(this.ast);
@@ -116,7 +122,11 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
             output += '}\n';
         }
 
-        // 4. Header and footer, then the body
+        // 4. The document's page (where it gives one), the first section's columns, the header and footer, then the body
+        output += documentPageRtf(this.ast.metadata?.pageSetup);
+        const columns = columnsRtf(this.ast.metadata?.pageSetup?.columns, this.ast.metadata?.pageSetup);
+        const numbering = this.numberingRtf(this.ast.metadata?.pageSetup?.pageNumberFormat) + this.pageStartRtf(this.ast.metadata?.pageSetup?.pageNumberStart);
+        if (columns || numbering) output += `\\sectd${numbering}${columns}\n`;
         output += running;
         output += '\\f0\\fs24\n';
         output += bodyContent;
@@ -175,6 +185,26 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
     }
 
     /** A paragraph's opening: `\pard`, and in a table `\intbl` and, nested, how deeply (`\itapN`). */
+    /** A paragraph's or heading's alignment and indents (`\qc`, `\li`, `\ri`, `\fi`), when formatting is written. */
+    private paragraphLayout(meta: { alignment?: string; paragraphIndentation?: IndentationMetadata } | undefined): string {
+        if (!this.config.includeFormatting || !meta) return '';
+        let out = meta.alignment === 'center' ? '\\qc' : meta.alignment === 'right' ? '\\qr' : meta.alignment === 'justify' ? '\\qj' : '';
+        const ind = meta.paragraphIndentation;
+        // Written into control words, so only ever whole numbers.
+        const twips = (v: unknown) => clampInt(v, -31680, 31680, 0);
+        if (ind?.left) out += `\\li${twips(ind.left)}`;
+        if (ind?.right) out += `\\ri${twips(ind.right)}`;
+        if (ind?.firstLine) out += `\\fi${twips(ind.firstLine)}`;
+        else if (ind?.hanging) out += `\\fi${-twips(ind.hanging)}`;
+        // Space in twips; a line multiple in 240ths under \slmult1, a fixed line in twips (negative: exact).
+        const spacing = writableSpacing(meta);
+        if (spacing?.before !== undefined) out += `\\sb${Math.round(spacing.before * 20)}`;
+        if (spacing?.after !== undefined) out += `\\sa${Math.round(spacing.after * 20)}`;
+        if (spacing?.lineMultiple) out += `\\sl${Math.round(spacing.lineMultiple * 240)}\\slmult1`;
+        else if (spacing?.lineHeight) out += `\\sl${(spacing.lineAtLeast ? 1 : -1) * Math.round(spacing.lineHeight * 20)}\\slmult0`;
+        return out;
+    }
+
     private pard(): string {
         if (this.tableDepth === 0) return '\\pard';
         return this.tableDepth === 1 ? '\\pard\\intbl' : `\\pard\\intbl\\itap${this.tableDepth}`;
@@ -252,6 +282,12 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                         text = `{\\f0 ${prefix}${text}${suffix}}`;
                     }
 
+                    // A page field (the page's number, the document's pages) as the field, its saved number its
+                    // result, so each page shows its own.
+                    if (meta?.field === 'page' || meta?.field === 'pages') {
+                        return `{\\field{\\*\\fldinst ${pageFieldInstruction(meta.field, meta.fieldFormat).replace(/\\/g, '\\\\')}}{\\fldrslt ${text}}}`;
+                    }
+
                     if (meta?.link) {
                         const isInternal = meta.linkType !== 'external';
                         if (!this.config.ignoreInternalLinks || !isInternal) {
@@ -276,21 +312,13 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     // Written into control words, so only ever a number.
                     const level = clampInt(meta?.level, 1, 9, 1);
                     const fontSize = 24 + (6 - level) * 4;
-                    const pPr = this.pard();
-                    return `${pPr}\\s${level}\\sb240\\sa120{\\b\\fs${fontSize} ${childrenOutput}}\\par\n`;
+                    // The document's own spacing after the heading's usual, so it wins where it is set.
+                    return `${this.pard()}\\s${level}\\sb240\\sa120${this.paragraphLayout(meta)}{\\b\\fs${fontSize} ${childrenOutput}}\\par\n`;
                 }
 
                 case 'paragraph': {
                     let pPr = this.pard();
-                    pPr += '\\sa120';
-                    if (this.config.includeFormatting && node.metadata) {
-                        const meta = node.metadata as any;
-                        if (meta.alignment) {
-                            if (meta.alignment === 'center') pPr += '\\qc';
-                            else if (meta.alignment === 'right') pPr += '\\qr';
-                            else if (meta.alignment === 'justify') pPr += '\\qj';
-                        }
-                    }
+                    pPr += '\\sa120' + this.paragraphLayout(node.metadata as ParagraphMetadata | undefined);
                     return `${pPr} ${childrenOutput}\\par\n`;
                 }
 
@@ -299,7 +327,9 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     const level = clampInt(meta?.indentation, 0, 64, 0);
                     const indent = (level + 1) * 360;
                     const isOrdered = meta?.listType === 'ordered';
-                    const marker = isOrdered ? `${clampInt(meta.itemIndex, 0, 999_999_998, 0) + 1}. ` : '\\bullet ';
+                    // The document's own marker (`a)`, `◦`), else the item's number or a bullet.
+                    const marker = typeof meta?.marker === 'string' ? (meta.marker ? `${this.escapeRtf(meta.marker)} ` : '')
+                        : isOrdered ? `${clampInt(meta.itemIndex, 0, 999_999_998, 0) + 1}. ` : '\\bullet ';
                     const listControl = isOrdered ? '\\pndec' : '\\pnbullet';
                     const pPr = this.pard();
                     return `${pPr}\\li${indent}\\fi-360\\ilvl${level}${listControl} ${marker}${childrenOutput}\\par\n`;
@@ -396,7 +426,18 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                 }
 
                 case 'break': {
-                    return (node.metadata as any)?.breakType === 'page' ? '\\page\n' : '\\line\n';
+                    const meta = node.metadata as BreakMetadata | undefined;
+                    // A section starting on this page (`\sbknone`: no break in the text) or on a new one, on its
+                    // page (size, margins), in its columns, with its own header and footer where it has them.
+                    if (meta?.breakType === 'section' || (meta?.breakType === 'page' && typeof meta.section === 'number')) {
+                        // The section as the break numbers it (one numbering only some breaks leaves the others in the
+                        // section before); its own header and footer, written where it starts.
+                        const starts = typeof meta.section === 'number' && meta.section !== this.currentSection;
+                        if (typeof meta.section === 'number') this.currentSection = meta.section;
+                        const own = starts ? await this.sectionFurnitureRtf(this.currentSection, meta.pageSetup) : { title: !!meta.pageSetup?.differentFirstPage, rtf: '' };
+                        return `\\sect\\sectd\\${meta.breakType === 'section' ? 'sbknone' : 'sbkpage'}${own.title ? '\\titlepg' : ''}${this.numberingRtf(meta.pageSetup?.pageNumberFormat)}${this.pageStartRtf(meta.pageSetup?.pageNumberStart)}${sectionPageRtf(meta.pageSetup)}${columnsRtf(meta.pageSetup?.columns, onDocumentPage(meta.pageSetup, this.ast.metadata?.pageSetup))}\n${own.rtf}`;
+                    }
+                    return meta?.breakType === 'page' ? '\\page\n' : '\\line\n';
                 }
 
                 case 'code': {
@@ -458,9 +499,13 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                 case 'slide':
                 case 'note':
                 case 'sheet':
-                case 'page':
                 case 'header':
                 case 'footer':
+                    // Page furniture of runs alone (a PDF's header is a line's runs) is a paragraph: two of them
+                    // ran into one line ("Anlage ... 20251/4").
+                    if (node.children?.length && node.children.every(c => c.type === 'text' || c.type === 'break')) return `${this.pard()}\\sa0 ${childrenOutput}\\par\n`;
+                    return childrenOutput;
+                case 'page':
                 case 'slideMaster':
                 case 'admonition':
                 case 'definitionList':
@@ -485,13 +530,41 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
 
         // The header and footer (the AST's auxiliary) first, so a note in one is listed with the body's.
         // Written into one header and one footer, as DOCX and ODT write them; they were left out.
+        // A first page's own (a letterhead) is the title page's (`\titlepg`, `\headerf`), even pages' own
+        // the left pages' (`\facingp`, `\headerl`), every page's the right pages' where pages face. The first
+        // section's own first page's and even pages' parts beside them, and every later section's (see
+        // sectionFurnitureRtf): a type a section has none of its own of is the one before it, as Word gives it.
         let running = '';
-        for (const [kind, nodes] of [['header', ast.auxiliary?.headers], ['footer', ast.auxiliary?.footers]] as const) {
-            if (nodes?.length) running += `{\\${kind} ${await this.renderApart(nodes)}}\n`;
+        const lists = { header: ast.auxiliary?.headers, footer: ast.auxiliary?.footers };
+        const parts = (['header', 'footer'] as const).map(kind => {
+            const nodes = runningFurniture(lists[kind], kind);
+            return { kind, nodes, on: nodes.length ? furnitureKind(nodes, kind) : 'default' };
+        });
+        // Even pages' own parts anywhere: left and right pages (`\facingp`) for the whole document.
+        const evenAnywhere = (['header', 'footer'] as const).some(kind => !!lists[kind]?.length && sectionFurnitureIndex(lists[kind]!, kind, 'even').sections.length > 0);
+        this.facingPages = parts.some(p => p.nodes.length && p.on === 'even') || evenAnywhere;
+        const ownFirst = { header: sectionFurniture(lists.header, 'header', 0, 'first'), footer: sectionFurniture(lists.footer, 'footer', 0, 'first') };
+        const ownEven = { header: sectionFurniture(lists.header, 'header', 0, 'even'), footer: sectionFurniture(lists.footer, 'footer', 0, 'even') };
+        const titlePage = parts.some(p => p.nodes.length && p.on === 'first') || !!(ownFirst.header || ownFirst.footer) || !!ast.metadata?.pageSetup?.differentFirstPage;
+        if (this.facingPages) running += '\\facingp\n';
+        if (titlePage) running += '\\titlepg\n';
+        for (const { kind, nodes, on } of parts) {
+            if (nodes.length) {
+                const text = await this.renderApart(nodes);
+                const groups = on === 'first' ? ['f'] : on === 'even' ? ['l'] : [this.facingPages ? 'r' : ''];
+                for (const group of groups) running += `{\\${kind}${group} ${text}}\n`;
+            }
+            if (ownFirst[kind]) running += `{\\${kind}f ${await this.renderApart(ownFirst[kind]!)}}\n`;
+            if (ownEven[kind]) running += `{\\${kind}l ${await this.renderApart(ownEven[kind]!)}}\n`;
         }
 
+        // A page break between consecutive pages (or slides), as the source paginates them: a PDF's pages ran
+        // together. (A section's start between two is its own break.)
+        let prevPaginated: string | null = null;
         for (const node of ast.content) {
+            if ((node.type === 'page' || node.type === 'slide') && prevPaginated === node.type) body += '\\page\n';
             body += await this.processNodeRecursive(node, processor);
+            prevPaginated = (node.type === 'page' || node.type === 'slide') ? node.type : null;
         }
         if (this.collectedNotes.length > 0) {
             body += '\\pard\\sb120\\sa120\\keepn{\\b Notes:}\\par\n';
@@ -500,6 +573,48 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
             }
         }
         return { running, body };
+    }
+
+    /** Left and right pages (`\facingp`): the document has even pages' own parts. */
+    private facingPages = false;
+
+    /**
+     * A later section's own header and footer, written where it starts: its every page's (the right pages'
+     * where pages face), its first page's and its even pages', each only where it has its own (a type it has
+     * none of its own of is the one before it, as Word gives it, and as RTF reading reads it); and whether it
+     * has a title page (`\titlepg`: its own first page's part, or its page's `differentFirstPage`).
+     */
+    /** How a section numbers its pages, as RTF's section words (`\\pgnlcrm`); decimal, RTF's own, as nothing. */
+    /** The number a section's pages start from (see PageSetup.pageNumberStart). */
+    private pageStartRtf(start: number | undefined): string {
+        return start === undefined ? '' : `\\pgnstarts${clampInt(start, 0, 32767, 1)}\\pgnrestart`;
+    }
+
+    private numberingRtf(format: PageNumberFormat | undefined): string {
+        if (!format || format === 'decimal') return '';
+        const word = RTF_NUMBERING[format];
+        if (word) return `\\${word}`;
+        if (!this.unwrittenNumbering.has(format)) {
+            this.unwrittenNumbering.add(format);
+            this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'rtf', feature: `page numbers in ${format} (written in digits)` });
+        }
+        return '';
+    }
+    /** The page number formats a section had that RTF has none of, each reported once. */
+    private unwrittenNumbering = new Set<string>();
+
+    private async sectionFurnitureRtf(section: number, setup: PageSetup | undefined): Promise<{ title: boolean; rtf: string }> {
+        const lists = { header: this.ast.auxiliary?.headers, footer: this.ast.auxiliary?.footers };
+        const own = (kind: 'header' | 'footer', type: 'default' | 'first' | 'even') => sectionFurniture(lists[kind], kind, section, type);
+        const title = !!(own('header', 'first') || own('footer', 'first') || setup?.differentFirstPage);
+        let rtf = '';
+        for (const kind of ['header', 'footer'] as const) {
+            const every = own(kind, 'default'), first = own(kind, 'first'), even = own(kind, 'even');
+            if (every) rtf += `{\\${kind}${this.facingPages ? 'r' : ''} ${await this.renderApart(every)}}\n`;
+            if (first) rtf += `{\\${kind}f ${await this.renderApart(first)}}\n`;
+            if (even) rtf += `{\\${kind}l ${await this.renderApart(even)}}\n`;
+        }
+        return { title, rtf };
     }
 
     /**
@@ -588,4 +703,58 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
             .replace(/\f/g, '\\page ')
             .replace(/[\x00-\x08\x0e-\x1f\x7f]/g, '');
     }
+}
+
+/** RTF's section word for each page number format it has. */
+const RTF_NUMBERING: Partial<Record<PageNumberFormat, string>> = { lowerRoman: 'pgnlcrm', upperRoman: 'pgnucrm', lowerLetter: 'pgnlcltr', upperLetter: 'pgnucltr', decimalFullWidth: 'pgndecd' };
+
+/**
+ * Columns as RTF's section controls: their number, the gap in twips, a line between, each one's width
+ * where they differ; held to the page they are on (see heldColumns). Nothing for one.
+ */
+function columnsRtf(given: PageSetup['columns'] | undefined, setup: PageSetup | undefined): string {
+    const page = heldPage(setup);
+    const columns = heldColumns(given, page?.width ?? 612, page ? page.width - (page.margin?.left ?? 72) - (page.margin?.right ?? 72) : 468);
+    if (!columns) return '';
+    const count = columns.count, gap = twips(columns.gap);
+    const own = columns.widths?.length === columns.count
+        ? columns.widths.slice(0, count).map((w, i) => `\\colno${i + 1}\\colw${Math.max(1, Math.round(w * 20))}${i < count - 1 ? `\\colsr${gap}` : ''}`).join('')
+        : '';
+    return `\\cols${count}\\colsx${gap}${columns.separator ? '\\linebetcol' : ''}${own}`;
+}
+
+/** A twips value RTF takes (a whole number, at most a page's largest: A0 and larger papers are kept, as Word keeps them). */
+const twips = (pt: number) => Number.isFinite(pt) ? Math.max(0, Math.min(MAX_PAGE_PT * 20, Math.round(pt * 20))) : 0;
+
+/**
+ * A page as RTF output writes it: none where its size is no page (an inch to two hundred inches each way,
+ * as Word takes), its margins at most a third of it, its header's and footer's distances a third of its
+ * height: a page of a hundred million points by a twentieth of
+ * one lost its text.
+ */
+function heldPage(setup: PageSetup | undefined): SizedPageSetup | undefined {
+    if (!hasPageSize(setup)) return undefined;
+    const most = Math.min(setup.width, setup.height) / 3;
+    const held = (v: number | undefined) => Math.min(Number.isFinite(v) && v! > 0 ? v! : 0, most);
+    const m = setup.margin;
+    const distance = (v: number | undefined) => v === undefined ? undefined : Math.min(Number.isFinite(v) && v > 0 ? v : 0, setup.height / 3);
+    return { ...setup, ...(m ? { margin: { top: held(m.top), right: held(m.right), bottom: held(m.bottom), left: held(m.left) } } : {}),
+        headerDistance: distance(setup.headerDistance), footerDistance: distance(setup.footerDistance) };
+}
+
+/** The document's page (`\paperw`, `\margl`, ..., `\landscape`) as its first section's setup gives it; nothing where it gives none. */
+function documentPageRtf(given: PageSetup | undefined): string {
+    const setup = heldPage(given);
+    if (!setup) return '';
+    const m = setup.margin;
+    return `\\paperw${twips(setup.width)}\\paperh${twips(setup.height)}${m ? `\\margl${twips(m.left)}\\margr${twips(m.right)}\\margt${twips(m.top)}\\margb${twips(m.bottom)}` : ''}${setup.width > setup.height ? '\\landscape' : ''}\n`;
+}
+
+/** A section's own page (`\pgwsxn`, `\marglsxn`, ..., `\lndscpsxn`, header and footer distances); nothing where the break gives none. */
+function sectionPageRtf(given: PageSetup | undefined): string {
+    const setup = heldPage(given);
+    if (!setup) return '';
+    const m = setup.margin;
+    return `\\pgwsxn${twips(setup.width)}\\pghsxn${twips(setup.height)}${m ? `\\marglsxn${twips(m.left)}\\margrsxn${twips(m.right)}\\margtsxn${twips(m.top)}\\margbsxn${twips(m.bottom)}` : ''}`
+        + `${setup.headerDistance !== undefined ? `\\headery${twips(setup.headerDistance)}` : ''}${setup.footerDistance !== undefined ? `\\footery${twips(setup.footerDistance)}` : ''}${setup.width > setup.height ? '\\lndscpsxn' : ''}`;
 }

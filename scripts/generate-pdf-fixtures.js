@@ -11,6 +11,14 @@
  *   - rotated.pdf          : the same content on a /Rotate 90 page.
  *   - encrypted.pdf        : single page, RC4 40-bit standard security, user password "test123".
  *   - tagged_headings.pdf  : tagged headings beside headings guessed from font size, for headingDetection.
+ *   - page_sizes.pdf       : pages of several sizes (landscape, a /Rotate 90 page, A4), for sections.
+ *   - invisible_text.pdf   : text in rendering modes 3 and 7 (a Type 3 font's and Helvetica's) beside and
+ *                            among visible text, as a scan's recognised text layer is drawn.
+ *   - mixed_size_line.pdf  : one line set in three sizes on one baseline, for the runs' baselines.
+ *   - cjk_ccitt_jpx.pdf    : what pdf.js reads with files it loads on demand: Japanese text in a font the
+ *                            file does not embed (KozMinPr6N-Regular, read through the predefined CMap
+ *                            UniJIS-UTF16-H), a CCITT Group 4 picture (jbig2.wasm) and a JPEG 2000
+ *                            picture (openjpeg.wasm).
  *
  * The encryption is the PDF standard security handler, revision 2 (RC4, 40-bit). RC4 is implemented
  * inline because modern OpenSSL/Node no longer expose it, and qpdf is not assumed to be installed.
@@ -76,7 +84,7 @@ function serialize(objects, trailerExtra, idHex) {
  * image XObject or an outline can reference them by a number it knows up front.
  *
  * @param {Buffer} content
- * @param {{ rotate?: number, encrypt?: { userPassword: string }, extra?: Buffer[], resources?: string, catalog?: string }} opts
+ * @param {{ rotate?: number, encrypt?: { userPassword: string }, extra?: Buffer[], resources?: string, fonts?: string, catalog?: string }} opts
  */
 function buildPdf(content, opts = {}) {
     const rotate = opts.rotate || 0;
@@ -87,7 +95,7 @@ function buildPdf(content, opts = {}) {
     const rotateEntry = rotate ? ` /Rotate ${rotate}` : '';
     objects[2] = Buffer.from(
         `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]${rotateEntry} ` +
-        `/Resources << /Font << /F1 5 0 R >>${opts.resources || ''} >> /Contents 4 0 R >>`, 'latin1');
+        `/Resources << /Font << /F1 5 0 R${opts.fonts || ''} >>${opts.resources || ''} >> /Contents 4 0 R >>`, 'latin1');
     // object 4 (content) filled below, possibly encrypted
     objects[4] = Buffer.from('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', 'latin1');
 
@@ -412,6 +420,136 @@ function buildTaggedHeadingsPdf() {
     return serialize(o, '', '30313233343536373839414243444547');
 }
 
+/**
+ * A document of pages of several sizes, for sections read from a PDF's pages: two US Letter pages, a
+ * landscape one, an upright one shown landscape (`/Rotate 90`, the same page as the one before it as it
+ * is seen), an upright Letter page again and an A4 page. Each page says which it is.
+ */
+function buildPageSizesPdf() {
+    const pages = [
+        { box: [612, 792], text: 'Letter page one' },
+        { box: [612, 792], text: 'Letter page two' },
+        { box: [792, 612], text: 'Landscape page three' },
+        { box: [612, 792], rotate: 90, text: 'Turned page four' },
+        { box: [612, 792], text: 'Letter page five' },
+        { box: [595, 842], text: 'A4 page six' },
+    ];
+    const o = [];
+    const put = (n, body) => { o[n - 1] = Buffer.from(body, 'latin1'); };
+    // Objects: 1 catalog, 2 pages, 3 font, then a page and its content for each page.
+    put(1, '<< /Type /Catalog /Pages 2 0 R >>');
+    put(2, `<< /Type /Pages /Kids [${pages.map((_, i) => `${4 + 2 * i} 0 R`).join(' ')}] /Count ${pages.length} >>`);
+    put(3, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+    pages.forEach((p, i) => {
+        put(4 + 2 * i, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${p.box[0]} ${p.box[1]}]${p.rotate ? ` /Rotate ${p.rotate}` : ''} ` +
+            `/Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + 2 * i} 0 R >>`);
+        o[4 + 2 * i] = streamObject('', contentStream([
+            { x: 72, y: p.box[1] - 100, size: 18, text: p.text },
+            { x: 72, y: p.box[1] - 140, size: 12, text: `This page is ${p.box[0]} by ${p.box[1]} points${p.rotate ? `, shown turned ${p.rotate} degrees` : ''}.` },
+        ]));
+    });
+    return serialize(o, '', '30313233343536373839414243444548');
+}
+
+/**
+ * A Type 3 font with no BaseFont and no FontName, its glyphs drawing nothing (as a scan's invisible text
+ * layer is often set), mapped to the letters of `text` by its ToUnicode: the font, its one empty glyph
+ * procedure and its CMap are three objects from `first` on. Returns the objects and the hex string that
+ * shows `text` in it.
+ */
+function type3Font(first, text) {
+    const letters = [...new Set(text)];
+    const code = new Map(letters.map((c, i) => [c, i + 1]));
+    const hex2 = n => n.toString(16).padStart(2, '0').toUpperCase();
+    const cmap = [
+        '/CIDInit /ProcSet findresource begin 12 dict begin begincmap',
+        '/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def',
+        '/CMapName /Adobe-Identity-UCS def /CMapType 2 def',
+        '1 begincodespacerange <00> <FF> endcodespacerange',
+        `${letters.length} beginbfchar`,
+        ...letters.map(c => `<${hex2(code.get(c))}> <${c.charCodeAt(0).toString(16).padStart(4, '0').toUpperCase()}>`),
+        'endbfchar endcmap CMapName currentdict /CMap defineresource pop end end',
+    ].join('\n');
+    const names = letters.map(c => `/g${code.get(c)}`).join(' ');
+    const procs = letters.map(c => `/g${code.get(c)} ${first + 1} 0 R`).join(' ');
+    const font = `<< /Type /Font /Subtype /Type3 /FontBBox [0 0 600 700] /FontMatrix [0.001 0 0 0.001 0 0] ` +
+        `/CharProcs << ${procs} >> /Encoding << /Type /Encoding /Differences [1 ${names}] >> ` +
+        `/FirstChar 1 /LastChar ${letters.length} /Widths [${letters.map(() => 600).join(' ')}] /Resources << >> /ToUnicode ${first + 2} 0 R >>`;
+    return {
+        objects: [Buffer.from(font, 'latin1'), streamObject('', Buffer.from('600 0 d0', 'latin1')), streamObject('', Buffer.from(cmap, 'latin1'))],
+        hex: [...text].map(c => hex2(code.get(c))).join(''),
+    };
+}
+
+/**
+ * Text drawn invisibly (rendering mode 3, and 7, which adds it to the clip) among visible text: a line in a
+ * Type 3 font inside a `q`/`Q` (the mode is restored with the graphics state, so the line after it is
+ * seen), a Helvetica line in mode 7, a line whose second half is invisible in the same text object, a
+ * large invisible line (no heading by its size), visible body lines, and a line turned a quarter, invisible,
+ * beside a turned visible label.
+ */
+function invisibleTextPdf() {
+    const scanned = type3Font(FIRST_EXTRA_OBJ, 'Scanned words of a page');
+    const content = Buffer.from([
+        'BT /F1 12 Tf 1 0 0 1 72 720 Tm (Visible first line of the page.) Tj ET',
+        `q BT 3 Tr /F2 12 Tf 1 0 0 1 72 700 Tm <${scanned.hex}> Tj ET Q`,
+        'BT /F1 12 Tf 1 0 0 1 72 680 Tm (Visible again after the state is restored.) Tj ET',
+        'q BT 7 Tr /F1 12 Tf 1 0 0 1 72 660 Tm (Clipped and unseen words.) Tj ET Q',
+        'BT /F1 12 Tf 1 0 0 1 72 640 Tm (Seen words then ) Tj 3 Tr (unseen words.) Tj 0 Tr ET',
+        'BT 3 Tr /F1 24 Tf 1 0 0 1 72 600 Tm (Large unseen line) Tj 0 Tr ET',
+        'BT /F1 12 Tf 1 0 0 1 72 570 Tm (A visible body line of ordinary text.) Tj ET',
+        'BT /F1 12 Tf 1 0 0 1 72 550 Tm (Another visible body line of ordinary text.) Tj ET',
+        'BT 3 Tr /F1 12 Tf 0 1 -1 0 300 200 Tm (Scanned sideways words) Tj 0 Tr ET',
+        'BT /F1 12 Tf 0 1 -1 0 330 200 Tm (Visible sideways label) Tj ET',
+        '',
+    ].join('\n'), 'latin1');
+    return buildPdf(content, { extra: scanned.objects, fonts: ` /F2 ${FIRST_EXTRA_OBJ} 0 R` });
+}
+
+/** One line in three sizes on one baseline (24, 10 and 16 points), and a line under it. */
+function mixedSizeLineContent() {
+    return Buffer.from([
+        'BT /F1 24 Tf 1 0 0 1 72 700 Tm (Large) Tj /F1 10 Tf 1 0 0 1 150 700 Tm (small) Tj /F1 16 Tf 1 0 0 1 190 700 Tm (middle) Tj ET',
+        'BT /F1 12 Tf 1 0 0 1 72 670 Tm (A plain line under it.) Tj ET',
+        '',
+    ].join('\n'), 'latin1');
+}
+
+/**
+ * The CCITT Group 4 data of a 64x32 one-bit picture (the strip of a TIFF written with Group 4
+ * compression), and a 16x16 RGB JPEG 2000 file written by OpenJPEG 2.5.4. Neither format can be written
+ * here in a few lines, so their bytes are kept as made.
+ */
+const CCITT_G4_64x32 = Buffer.from('JqB4b//8iiX//////////4//wAQAQA==', 'base64');
+const JPX_16x16 = Buffer.from(
+    'AAAADGpQICANCocKAAAAFGZ0eXBqcDIgAAAAAGpwMiAAAAAtanAyaAAAABZpaGRyAAAAEAAAABAAAwcHAAAAAAAPY29scgEAAAAAABAAAAC+anAy' +
+    'Y/9P/1EALwAAAAAAEAAAABAAAAAAAAAAAAAAABAAAAAQAAAAAAAAAAAAAwcBAQcBAQcBAf9SAAwAAAABAQEEBAAB/1wAB0BASEhQ/2QAJQABQ3Jl' +
+    'YXRlZCBieSBPcGVuSlBFRyB2ZXJzaW9uIDIuNS40/5AACgAAAAAAQwAB/5PH1BgRUFSvgj1IAAGEhL+A34D4FABcon22kAADCQjVChhISEBoBhIR' +
+    '7hgwkJCA0AwkI4CAgP/Z', 'base64');
+
+/**
+ * 日本語テキスト in a Type0 font the file does not embed, whose encoding is the predefined CMap
+ * UniJIS-UTF16-H (the codes are UTF-16), beside a CCITT Group 4 picture and a JPEG 2000 picture. pdf.js
+ * reads the text only with its cmaps/ folder and decodes the pictures only with its wasm/ folder.
+ */
+function cjkCcittJpxPdf() {
+    const font = FIRST_EXTRA_OBJ;
+    const content = Buffer.from([
+        'BT /F2 12 Tf 72 700 Td <65E5672C8A9E30C630AD30B930C8> Tj ET',
+        'q 128 0 0 64 72 500 cm /Im1 Do Q',
+        'q 32 0 0 32 72 400 cm /Im2 Do Q',
+        '',
+    ].join('\n'), 'latin1');
+    const extra = [
+        Buffer.from(`<< /Type /Font /Subtype /Type0 /BaseFont /KozMinPr6N-Regular-UniJIS-UTF16-H /Encoding /UniJIS-UTF16-H /DescendantFonts [${font + 1} 0 R] >>`, 'latin1'),
+        Buffer.from(`<< /Type /Font /Subtype /CIDFontType0 /BaseFont /KozMinPr6N-Regular /CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 6 >> /FontDescriptor ${font + 2} 0 R /DW 1000 >>`, 'latin1'),
+        Buffer.from('<< /Type /FontDescriptor /FontName /KozMinPr6N-Regular /Flags 4 /FontBBox [0 -120 1000 880] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 700 /StemV 80 >>', 'latin1'),
+        streamObject('/Type /XObject /Subtype /Image /Width 64 /Height 32 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 64 /Rows 32 /BlackIs1 false >>', CCITT_G4_64x32),
+        streamObject('/Type /XObject /Subtype /Image /Width 16 /Height 16 /BitsPerComponent 8 /ColorSpace /DeviceRGB /Filter /JPXDecode', JPX_16x16),
+    ];
+    return buildPdf(content, { extra, fonts: ` /F2 ${font} 0 R`, resources: ` /XObject << /Im1 ${font + 3} 0 R /Im2 ${font + 4} 0 R >>` });
+}
+
 function main() {
     fs.mkdirSync(OUT_DIR, { recursive: true });
 
@@ -438,6 +576,10 @@ function main() {
 
     fs.writeFileSync(path.join(OUT_DIR, 'tagged_lists.pdf'), buildTaggedListsPdf());
     fs.writeFileSync(path.join(OUT_DIR, 'tagged_headings.pdf'), buildTaggedHeadingsPdf());
+    fs.writeFileSync(path.join(OUT_DIR, 'page_sizes.pdf'), buildPageSizesPdf());
+    fs.writeFileSync(path.join(OUT_DIR, 'invisible_text.pdf'), invisibleTextPdf());
+    fs.writeFileSync(path.join(OUT_DIR, 'mixed_size_line.pdf'), buildPdf(mixedSizeLineContent()));
+    fs.writeFileSync(path.join(OUT_DIR, 'cjk_ccitt_jpx.pdf'), cjkCcittJpxPdf());
 
     console.log('Wrote fixtures to', OUT_DIR);
 }
