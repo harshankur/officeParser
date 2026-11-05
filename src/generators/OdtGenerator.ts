@@ -1236,7 +1236,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         return map[tag.toLowerCase()];
     }
     private knownParaStyle(style: string | undefined): string | undefined {
-        const map: Record<string, string> = lookupTable({ Quote: 'Quotations', IntenseQuote: 'Quotations', Title: 'Title', Code: 'Preformatted_20_Text' });
+        const map: Record<string, string> = lookupTable({ Quote: 'Quotations', IntenseQuote: 'Quotations', Title: 'Title', Code: 'Preformatted_20_Text', Caption: 'Caption' });
         return style ? map[style] : undefined;
     }
 
@@ -1379,6 +1379,8 @@ const NAMED_STYLES = (() => {
         + heading(1, 18) + heading(2, 16) + heading(3, 14) + heading(4, 13) + heading(5, 12) + heading(6, 12)
         + `<style:style style:name="Title" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-weight="bold" fo:font-size="28pt" style:font-size-asian="28pt"/></style:style>`
         + `<style:style style:name="Quotations" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:margin-left="0.5in" fo:margin-right="0.5in"/><style:text-properties fo:font-style="italic" style:font-style-asian="italic"/></style:style>`
+        // LibreOffice's own caption style (a picture's caption is written so).
+        + `<style:style style:name="Caption" style:family="paragraph" style:parent-style-name="Standard" style:class="extra"><style:paragraph-properties fo:margin-top="0.0835in" fo:margin-bottom="0.0835in"/><style:text-properties fo:font-size="10pt" fo:font-style="italic" style:font-style-asian="italic"/></style:style>`
         + `<style:style style:name="Preformatted_20_Text" style:display-name="Preformatted Text" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:background-color="#f5f5f5"/><style:text-properties style:font-name="Courier New"/></style:style>`
         + `<style:style style:name="Footnote" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="10pt" style:font-size-asian="10pt"/></style:style>`;
 })();

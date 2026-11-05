@@ -1,4 +1,5 @@
 import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, EmbedSyntax, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, StrikethroughSyntax, TableMetadata, TextFormatting, TextMetadata, WikilinkSyntax } from '../types.js';
+import { captionOf } from '../utils/figureCaptions.js';
 import { sameQuote } from '../utils/quoteGroups.js';
 import { escapeHtml, isCssLength, isVideoId, markdownEscapeInline, markdownEscapePlain, markdownEscapeTags, markdownEscapeText, sanitizeCommentText, sanitizeCssValue, sanitizeImageUrl, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
 import { isDefaultHighlight } from '../utils/colorUtils.js';
@@ -122,7 +123,9 @@ const isBlankRun = (node: OfficeContentNode): boolean =>
 /** A block written in the middle of a paragraph's children: a rule, a code block or display math. */
 const isBlockInLine = (node: OfficeContentNode): boolean =>
     (node.type === 'break' && (node.metadata as BreakMetadata | undefined)?.breakType === 'thematic')
-    || (node.type === 'code' && (node.metadata as CodeMetadata | undefined)?.math !== 'inline');
+    || (node.type === 'code' && (node.metadata as CodeMetadata | undefined)?.math !== 'inline')
+    // A captioned picture is a figure block.
+    || (node.type === 'image' && !!captionOf(node));
 
 /**
  * A paragraph's or heading's children without the line breaks (and blank runs among them) that end it
@@ -964,6 +967,17 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // ocr-text-only: emit just the recognized text, no image markup.
                     if (mode === 'ocr-text-only') return ocr ? withAnchors(ocrMd) : '';
 
+                    // A captioned picture (ImageMetadata.caption) is a figure, which Markdown has no syntax
+                    // for: an HTML <figure> block (CommonMark passes it through, and it reads back as one),
+                    // on lines of its own. In one line (a list item, a cell), where no block can go, its
+                    // caption follows it in the line, and that is reported.
+                    const caption = captionOf(node);
+                    if (caption && !this.inOneLine) {
+                        const figure = (await this.htmlCellNode(node, '')).trim();
+                        return `${this.atLineStart ? '' : '\n\n'}${figure}\n\n`;
+                    }
+                    if (caption) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'md', feature: 'a figure in a list item or table cell (its caption follows the picture as text)' });
+
                     // Build the image markup: inline as a data URI when small, otherwise reference by
                     // name (never inline a multi-MB image, which would emit a single line that overflows
                     // downstream Markdown parsers).
@@ -995,9 +1009,10 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     const imgTitle = meta?.title ? markdownTitle(meta.title) : '';
                     const imageMd = withAnchors(this.linkedImage(meta, `![${safeAlt}](${safeSrc}${imgTitle})${this.renderAttributeList(meta)}`));
 
+                    const captionInLine = caption ? ` ${markdownEscapeInline(caption)}` : '';
                     // image+ocr-text: the image, then its recognized text.
-                    if (mode === 'image+ocr-text' && ocr) return `${imageMd}\n\n${ocrMd}`;
-                    return imageMd;
+                    if (mode === 'image+ocr-text' && ocr) return `${imageMd}${captionInLine}\n\n${ocrMd}`;
+                    return imageMd + captionInLine;
                 }
 
                 case 'table': {
@@ -1905,6 +1920,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 const { attr, extra } = this.htmlIds(meta);
                 let img = `<img src="${sanitizeImageUrl(src)}" alt="${esc(meta?.altText || '')}"${meta?.title ? ` title="${esc(meta.title)}"` : ''}${attr}>`;
                 if (meta?.link) img = link(meta.link, meta.linkType, meta.linkTitle, img);
+                // A captioned picture is a figure (see the image case of generate).
+                const caption = captionOf(n);
+                if (caption) return `${extra}<figure>${img}${mode === 'image+ocr-text' && ocr ? `<pre class="ocr-text">${ocr}</pre>` : ''}<figcaption>${esc(caption)}</figcaption></figure>`;
                 return extra + (mode === 'image+ocr-text' && ocr ? `${img}<br>${ocr}` : img);
             }
             case 'paragraph': {

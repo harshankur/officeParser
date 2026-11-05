@@ -8,7 +8,7 @@ import { OfficeParser } from '../src/OfficeParser';
 import { withinTime } from './helpers/timing';
 import { testUnicodeChunks } from './generator/unicodeChunks';
 import { testBrotliGuard } from './security/brotliGuard';
-import { testNoteMarks, testQuoteParagraphs, testRtfListTypesPerLevel, testXhtmlReadAsHtml } from './generator/documentShapes';
+import { testFigureCaptions, testNoteMarks, testQuoteParagraphs, testRtfListTypesPerLevel, testXhtmlReadAsHtml } from './generator/documentShapes';
 import { OfficeGenerator } from '../src/OfficeGenerator';
 import { bulletCharacter, formatListNumber, readMarkerLabels } from '../src/utils/listMarkers';
 import { decodeBmp, decodeGif } from '../src/utils/rasterUtils';
@@ -11111,7 +11111,8 @@ async function testMarkdownRoundTrips(): Promise<void> {
         assert.strictEqual(await htmlOnce(first), first, `HTML: ${src} saves the same HTML twice (${first})`);
     }
     const figure = await OfficeParser.parseOffice(Buffer.from('<figure><img src="a.png" alt="A"><figcaption>cap</figcaption></figure>'), { fileType: 'html' } as any);
-    assert.deepStrictEqual(figure.content.map(n => n.type), ['image', 'paragraph'], 'HTML: a figure caption is a block beside its picture');
+    // (A figure's caption is its picture's, ImageMetadata.caption: no paragraph after it, see testFigureCaptions.)
+    assert.deepStrictEqual(figure.content.map(n => [n.type, (n.metadata as ImageMetadata | undefined)?.caption]), [['image', 'cap']], 'HTML: a figure caption is its picture\'s');
     for (const file of ['test.html', 'test.epub']) {
         let ast: any = await OfficeParser.parseOffice(path.join(__dirname, 'files', file), {} as any);
         const counts: number[] = [];
@@ -12427,6 +12428,7 @@ async function runTests(): Promise<void> {
         ['RTF list types per level', testRtfListTypesPerLevel],
         ['Note marks', testNoteMarks],
         ['Quote paragraphs', testQuoteParagraphs],
+        ['Figure captions', testFigureCaptions],
         ['Cancellation', testCancellation],
     ];
 

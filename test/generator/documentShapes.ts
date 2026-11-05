@@ -6,7 +6,7 @@
 import * as assert from 'assert';
 import { unzipSync } from 'fflate';
 import { OfficeParser } from '../../src/OfficeParser';
-import type { NoteMetadata, OfficeContentNode, OfficeParserAST, ParagraphMetadata } from '../../src/types';
+import type { ImageMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, ParagraphMetadata } from '../../src/types';
 
 /** An XML document whose root is `html` (XHTML, as office suites export HTML) is read as HTML. */
 export async function testXhtmlReadAsHtml(): Promise<void> {
@@ -102,6 +102,54 @@ export async function testQuoteParagraphs(): Promise<void> {
     const fromEpub = await OfficeParser.parseOffice(Buffer.from((await ast.to('epub')).value as Uint8Array));
     assert.ok(((await fromEpub.to('md')).value).endsWith(source), 'Quote: EPUB keeps one quote of two paragraphs');
     console.log('✓ Quote paragraphs');
+}
+
+/** A one-pixel PNG, as base64. */
+const PIXEL_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+/**
+ * A `<figure>`'s caption is its picture's (ImageMetadata.caption): a figure again in HTML, EPUB and
+ * Markdown, a caption paragraph after the picture in every other format, never a stray paragraph.
+ */
+export async function testFigureCaptions(): Promise<void> {
+    const figure = `<p>Before</p><figure><img src="data:image/png;base64,${PIXEL_PNG}" alt="A map"><figcaption>Survey  area &amp; map</figcaption></figure><p>After</p>`;
+    const ast = await OfficeParser.parseOffice(Buffer.from(figure), { fileType: 'html', extractAttachments: true });
+    assert.deepStrictEqual(ast.content.map(n => n.type), ['paragraph', 'image', 'paragraph'], 'Figure: a picture, its caption no paragraph of its own');
+    assert.strictEqual((ast.content[1].metadata as ImageMetadata).caption, 'Survey area & map', 'Figure: the caption is the picture\'s');
+    const html = (await ast.to('html', { htmlConfig: { standalone: false } })).value;
+    assert.ok(/<figure><img [^>]*alt="A map"[^>]*><figcaption>Survey area &amp; map<\/figcaption><\/figure>/.test(html), `Figure: HTML writes a figure: ${html}`);
+    // Markdown: an HTML <figure> block, read back as the same captioned picture, stable through an editor's HTML.
+    const md = (await ast.to('md')).value;
+    assert.ok(/\n\n<figure><img [^>]*><figcaption>Survey area &amp; map<\/figcaption><\/figure>\n\nAfter/.test(md), `Figure: Markdown writes an HTML figure block: ${md}`);
+    const { md: passes } = await markdownThroughHtml(md);
+    assert.deepStrictEqual(passes, [md, md, md], 'Figure: Markdown to HTML to Markdown is stable over three passes');
+    // EPUB keeps the figure.
+    const epub = await OfficeParser.parseOffice(Buffer.from((await ast.to('epub')).value as Uint8Array), { extractAttachments: true });
+    assert.strictEqual((epub.content.find(n => n.type === 'image')?.metadata as ImageMetadata | undefined)?.caption, 'Survey area & map', 'Figure: EPUB keeps the caption');
+    // DOCX and ODT: a caption paragraph in the format's own caption style, after the picture.
+    const docx = new TextDecoder().decode(unzipSync((await ast.to('docx')).value as Uint8Array)['word/document.xml']);
+    assert.ok(/<w:drawing>[\s\S]*<\/w:p><w:p><w:pPr><w:pStyle w:val="Caption"\/><\/w:pPr><w:r><w:t xml:space="preserve">Survey area &amp; map<\/w:t>/.test(docx), 'Figure: DOCX writes a Caption paragraph after the picture');
+    const odt = new TextDecoder().decode(unzipSync((await ast.to('odt')).value as Uint8Array)['content.xml']);
+    assert.ok(/<text:p text:style-name="Caption">Survey area &amp; map<\/text:p>/.test(odt), 'Figure: ODT writes a Caption paragraph');
+    const tex = (await ast.to('tex')).value;
+    assert.ok(tex.includes('\\captionof{figure}{Survey area \\& map}'), 'Figure: LaTeX numbers the caption as the figure\'s');
+    for (const format of ['rtf', 'docx', 'odt', 'pptx'] as const) {
+        const back = await OfficeParser.parseOffice(Buffer.from((await ast.to(format)).value as Uint8Array));
+        const text = (await back.to('text')).value;
+        assert.ok(/Before[\s\S]*Survey area & map[\s\S]*After/.test(text), `Figure: ${format} keeps the caption after the picture: ${text}`);
+    }
+    assert.ok(/\[Image: A map\]\nSurvey area & map\nAfter/.test((await ast.to('text')).value), 'Figure: text writes the caption after the picture');
+    const pdf = await OfficeParser.parseOffice(Buffer.from((await ast.to('pdf', { pdfConfig: { engine: 'native' } })).value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } });
+    assert.ok(((await pdf.to('text')).value).includes('Survey area & map'), 'Figure: the native PDF engine draws the caption');
+    // In a list item, where no figure goes, the caption follows the picture, reported.
+    const inItem = await OfficeParser.parseOffice(Buffer.from(`<ul><li><figure><img src="data:image/png;base64,${PIXEL_PNG}" alt="Dot"><figcaption>The dot</figcaption></figure></li></ul>`), { fileType: 'html', extractAttachments: true });
+    const itemMd = await inItem.to('md');
+    assert.ok(/^- !\[Dot\]\([^)]*\) The dot$/m.test(itemMd.value), `Figure: in a list item the caption follows the picture: ${itemMd.value}`);
+    assert.ok(itemMd.messages.some(m => m.code === 'CONTENT_NOT_REPRESENTABLE'), 'Figure: and that is reported');
+    // A caption of more than text stays a paragraph after the picture, nothing of it lost.
+    const rich = await OfficeParser.parseOffice(Buffer.from(`<figure><img src="data:image/png;base64,${PIXEL_PNG}" alt="A"><figcaption>See <a href="https://example.com">the source</a></figcaption></figure>`), { fileType: 'html', extractAttachments: true });
+    assert.deepStrictEqual(rich.content.map(n => n.type), ['image', 'paragraph'], 'Figure: a rich caption stays a paragraph');
+    console.log('✓ Figure captions');
 }
 
 /** Every note in an AST, in reference order, once each. */

@@ -1077,7 +1077,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         return map[tag.toLowerCase()];
     }
     private knownStyle(style: string | undefined): string | undefined {
-        const known = new Set(['Quote', 'IntenseQuote', 'Title', 'ListParagraph', 'Code', 'DefinitionTerm']);
+        const known = new Set(['Quote', 'IntenseQuote', 'Title', 'ListParagraph', 'Code', 'DefinitionTerm', 'Caption']);
         return style && known.has(style) ? style : undefined;
     }
 
@@ -1276,6 +1276,8 @@ function buildStyles(): string {
         + `<w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:pPr><w:shd w:val="clear" w:color="auto" w:fill="F5F5F5"/></w:pPr><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/></w:rPr></w:style>`
         + `<w:style w:type="character" w:styleId="CodeChar"><w:name w:val="Code Char"/><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/></w:rPr></w:style>`
         + `<w:style w:type="paragraph" w:styleId="DefinitionTerm"><w:name w:val="Definition Term"/><w:basedOn w:val="Normal"/><w:rPr><w:b/></w:rPr></w:style>`
+        // Word's own caption style (a figure's or table's caption: a picture's caption is written so).
+        + `<w:style w:type="paragraph" w:styleId="Caption"><w:name w:val="caption"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:after="200"/></w:pPr><w:rPr><w:i/><w:sz w:val="18"/></w:rPr></w:style>`
         + `<w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr></w:style>`
         + `<w:style w:type="character" w:styleId="FootnoteReference"><w:name w:val="Footnote Reference"/><w:rPr><w:vertAlign w:val="superscript"/></w:rPr></w:style>`
         + `<w:style w:type="paragraph" w:styleId="FootnoteText"><w:name w:val="Footnote Text"/><w:basedOn w:val="Normal"/></w:style>`

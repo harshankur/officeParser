@@ -3470,6 +3470,14 @@ export interface ImageMetadata {
     /** Advisory image title (Markdown `![alt](url "title")`, HTML `<img title>`), if any. */
     title?: string;
     /**
+     * The picture's caption, as text: an HTML or EPUB `<figure>`'s `<figcaption>` (a caption of plain
+     * text; a richer one stays a paragraph after the picture). Written as `<figure><figcaption>` in HTML
+     * and EPUB, as an HTML `<figure>` block in Markdown, and as a caption paragraph (`style: 'Caption'`)
+     * after the picture everywhere else (`\captionof` in LaTeX), so it is never lost. Unlike `altText`,
+     * which stands in for the picture, it is shown with it.
+     */
+    caption?: string;
+    /**
      * Where the image links to, when it is a link: a badge or a clickable picture (Markdown
      * `[![alt](src)](target)`, HTML `<a href><img></a>`, a hyperlinked picture in Word, PowerPoint,
      * ODF, RTF or LaTeX's `\href`). An internal target is `#` and an anchor id.

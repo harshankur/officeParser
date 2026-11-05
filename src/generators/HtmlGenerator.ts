@@ -1,4 +1,5 @@
 import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
+import { captionOf } from '../utils/figureCaptions.js';
 import { quoteIdOf, sameQuote } from '../utils/quoteGroups.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
@@ -29,6 +30,8 @@ const MAX_NO_SCRIPT_TAB_RULES = 200;
  */
 const isBlockInParagraph = (child: OfficeContentNode): boolean =>
     BLOCK_TYPES.has(child.type)
+    // A captioned picture is a <figure>, a block.
+    || (child.type === 'image' && !!captionOf(child))
     || (child.type === 'code' && (child.metadata as CodeMetadata | undefined)?.math !== 'inline')
     || (child.type === 'break' && ['thematic', 'page'].includes((child.metadata as { breakType?: string } | undefined)?.breakType ?? ''))
     || ((TRANSPARENT_TYPES.has(child.type) || (child.type === 'comment' && !isSourceComment(child))) && !!child.children?.some(isBlockInParagraph));
@@ -1349,12 +1352,21 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // and parser.
                 if (this.inlineDepth > 0) {
                     const ocrText = mode === 'image+ocr-text' && ocr ? `<br><span class="ocr-text">${this.escape(ocr)}</span>` : '';
-                    return `${extraAnchors}${imgWithId(idAttr)}${ocrText}`;
+                    // (A paragraph's captioned picture is a figure among its blocks; in a heading, where no
+                    // block goes, its caption follows it in the line.)
+                    const inlineCaption = captionOf(node) ? ` <span class="caption">${this.escape(captionOf(node)!)}</span>` : '';
+                    return `${extraAnchors}${imgWithId(idAttr)}${ocrText}${inlineCaption}`;
                 }
                 // Among the blocks too its id is on the <img>, after the anchors of its other ids, as they
                 // are read back: on the wrapper it was read after them, and the order flipped each save.
                 const img = imgWithId(idAttr);
-                // No caption under it: its file name is not one, and no other writer shows it.
+                // A picture with a caption (ImageMetadata.caption) is a figure: the picture, then its caption.
+                const caption = captionOf(node);
+                if (caption) {
+                    const ocrBlock = mode === 'image+ocr-text' && ocr ? `<pre class="ocr-text">${this.escape(ocr)}</pre>` : '';
+                    return `${extraAnchors}<figure>${img}${ocrBlock}<figcaption>${this.escape(caption)}</figcaption></figure>`;
+                }
+                // No caption under it otherwise: its file name is not one, and no other writer shows it.
                 let content = this.config.includeFormatting ? `<div class="image-container">${img}</div>` : img;
                 // image+ocr-text: the image, then its recognized text (a <pre> keeps the 2-D layout).
                 if (mode === 'image+ocr-text' && ocr) content += `<pre class="ocr-text">${this.escape(ocr)}</pre>`;

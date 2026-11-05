@@ -1205,6 +1205,7 @@ idempotent and `.md → AST → HTML → AST → .md` survives unchanged.
 | Highlight | `==text==` | `TextMetadata.backgroundColor` |
 | Link/image titles | `[text](url "Title")` / `![alt](img.png "Title")` | `TextMetadata.title` / `ImageMetadata.title` |
 | Linked images (badges) | `[![alt](img.png "Title")](url "Link title")` | `ImageMetadata.link` / `.linkType` / `.linkTitle` |
+| Captioned pictures | `<figure><img src="..." alt="..."><figcaption>Caption</figcaption></figure>` (an HTML block; Markdown has no caption syntax, and a paragraph after the picture would read back as text) | `ImageMetadata.caption`. Written as that block; in a list item or table cell, where no block goes, the caption follows the picture as text and `CONTENT_NOT_REPRESENTABLE` reports it |
 | Inline/block math | `$E=mc^2$` / `` $$...$$ `` | `type: 'code'`, `CodeMetadata.math` (`'inline' \| 'block'`). `$$...$$` is display math wherever it is written: inside a paragraph, the paragraph is split around it; in a heading, list item, table cell, quote or note, where a block cannot go, it is inline math |
 | Embeds | `::youtube[Label]{id=… width=… align=…}` / `::embed[Label]{src=… …}` (leaf directive; see `mdConfig.dialect.embeds`) | `type: 'embed'`, `EmbedMetadata` |
 | Frontmatter arrays | `tags: [a, b]` or `tags: ["a","b"]` | Real array in `metadata.customProperties`/`nativeProperties` |
@@ -1235,6 +1236,7 @@ save→reload cycle:
 | `<th>`, and any cell of a `<thead>` | `CellMetadata.style: 'header'` | A header row stays one, whether or not its text is bold |
 | `title` on `<a>` / `<img>` | `TextMetadata.title` / `ImageMetadata.title` | Survives both directions (`[text](url "Title")` in Markdown) |
 | `<a href>` around `<img>` | `ImageMetadata.link` / `.linkType` / `.linkTitle` | A linked picture (a badge); written back the same way, and as a linked picture in DOCX, ODT, RTF and LaTeX |
+| `<figure>` of one picture and a `<figcaption>` | `ImageMetadata.caption` | A caption of plain text (a richer one stays a paragraph after the picture). Written back as `<figure><figcaption>` in HTML and EPUB, as an HTML `<figure>` block in Markdown, and as a caption paragraph after the picture elsewhere: the `Caption` style in DOCX and ODT, `\captionof{figure}` in LaTeX, a paragraph in RTF, text, slides and the native PDF engine |
 | `colspan` / `rowspan` on `<td>`/`<th>` | `CellMetadata.colSpan` / `.rowSpan` | Previously dropped on HTML import; merged cells now survive a save→reload cycle |
 | `<div data-youtube-video="ID">` / `<iframe src="...youtube.com...">` | `type: 'embed'` | |
 | `<ul data-type="taskList">` / `<li data-checked data-type="taskItem">` | `ListMetadata.isTask` / `.checked` | The shape Tiptap's task list reads and writes |

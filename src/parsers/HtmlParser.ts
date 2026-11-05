@@ -1808,6 +1808,29 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
             // save. Any other caption, a <figcaption> and a table's <caption> (which the table's branch puts
             // before it), is a block of its own, which must not run into the picture before it.
             const isClass = (name: string) => (node.attributes?.class || '').split(/\s+/).includes(name);
+            // A figure of one picture and its caption: the caption is the picture's (ImageMetadata.caption),
+            // not a paragraph after it. A caption of more than text (a link, formatting, a block) stays a
+            // paragraph after the picture, where nothing of it is lost; so does one under a figure of
+            // several pictures, or of none.
+            if (tagName === 'figure') {
+                const captions = node.children.filter(c => c.type === 'element' && c.tagName === 'figcaption');
+                if (captions.length === 1) {
+                    const kids = parseChildren({ ...node, children: node.children.filter(c => c !== captions[0]) }, newFormatting, listContext);
+                    const images: OfficeContentNode[] = [];
+                    for (const kid of kids) {
+                        if (kid.type === 'image') images.push(kid);
+                        else for (const inner of kid.children ?? []) if (inner.type === 'image') images.push(inner);
+                    }
+                    const caption = parseChildren(captions[0], newFormatting, listContext);
+                    const plain = caption.every(c => c.type === 'text' && !c.notes?.length && !c.comments?.length && !c.metadata
+                        && !Object.values(c.formatting ?? {}).some(v => v !== undefined && v !== false && v !== ''));
+                    const text = plainTextOf(caption).replace(/\s+/g, ' ').trim();
+                    if (images.length === 1 && plain && text) {
+                        (images[0].metadata = (images[0].metadata ?? {}) as ImageMetadata).caption = text;
+                        return markedBefore(anchorIds, kids);
+                    }
+                }
+            }
             if (tagName === 'figcaption' || tagName === 'caption' || (tagName === 'div' && isClass('caption'))) {
                 const caption = parseChildren(node, newFormatting, listContext);
                 if (!caption.some(c => c.type !== 'text' || c.text?.trim())) return [];

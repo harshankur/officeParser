@@ -1,4 +1,5 @@
 import { BaseGenerator } from './generators/BaseGenerator.js';
+import { withCaptionParagraphs } from './utils/figureCaptions.js';
 import { sharedNodeVisits } from './utils/nodeListUtils.js';
 import { ChunkingGenerator } from './generators/ChunkingGenerator.js';
 import { CsvGenerator } from './generators/CsvGenerator.js';
@@ -117,6 +118,11 @@ export class OfficeGenerator {
             // cells far apart is written as it is, not laid out closer.)
             const keepPlacedSheets = normalizedDestination === 'xlsx' || normalizedDestination === 'ods';
             input = withBoundedSheetGrids(keepsComments ? known : withoutSourceComments(known, { tree }), gridGaps, { tree, onLaidOut: tables => { laidOut = tables; }, keepPlacedSheets });
+            // A picture's caption is a figure's in HTML (EPUB's and the browser-printed PDF's) and Markdown;
+            // every other writer is given it as a caption paragraph after the picture (see figureCaptions).
+            const writesFigures = normalizedDestination === 'html' || normalizedDestination === 'md' || normalizedDestination === 'epub'
+                || (normalizedDestination === 'pdf' && (config as GeneratorConfig<'pdf'> | undefined)?.pdfConfig?.engine !== 'native');
+            if (!writesFigures) input = withCaptionParagraphs(input, { tree });
             noteDocumentBytes(input, documentBytesOf(ast));
             // A table's grid is held to the grid budget once, and its empty positions are written along
             // every path to it: 1,000 cells along a diagonal, shared 1,000 times, filled a billion. An AST
