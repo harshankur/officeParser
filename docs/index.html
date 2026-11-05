@@ -127,6 +127,8 @@
             --primary: #6366f1;
             --secondary: #a855f7;
             --accent: #38bdf8;
+            /* Links in running text: the dark theme's indigo is too dim for small type on a dark card. */
+            --link: #818cf8;
             --text-main: #f8fafc;
             --text-dim: #94a3b8;
             --text-dark: #475569;
@@ -178,6 +180,7 @@
             --primary: #4f46e5;
             --secondary: #9333ea;
             --accent: #0ea5e9;
+            --link: #4f46e5;
             --text-main: #1e293b;
             --text-dim: #64748b;
             --text-dark: #94a3b8;
@@ -1622,6 +1625,16 @@
         .doc-body li {
             margin-bottom: 0.5rem;
             color: var(--text-dim);
+        }
+
+        /* Links in the specs take the theme's link colour, as the repository pages' do; the browser's own blue is unreadable in dark mode. */
+        .doc-body a {
+            color: var(--link);
+            text-decoration: none;
+        }
+
+        .doc-body a:hover {
+            text-decoration: underline;
         }
 
         /* --- Modern Callouts --- */

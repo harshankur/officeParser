@@ -197,7 +197,7 @@ dialog.repo-doc[open]::backdrop { animation: repoDocFade 0.28s ease; }
 .repo-doc-article h3 { font-size: 1.2rem; margin: 2rem 0 0.75rem; }
 .repo-doc-article h4 { font-size: 1.05rem; margin: 1.5rem 0 0.5rem; }
 .repo-doc-article p { margin: 0.9rem 0; }
-.repo-doc-article a { color: var(--primary); text-decoration: none; }
+.repo-doc-article a { color: var(--link, var(--primary)); text-decoration: none; }
 .repo-doc-article a:hover { text-decoration: underline; }
 .repo-doc-article strong { color: var(--text-main); }
 .repo-doc-article hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
