@@ -3267,6 +3267,17 @@ async function parserHardeningTests() {
     await parseQuiet(repeatedStringDoc, 'xlsx', { decompressionLimits: { maxRepeatedContent: 1000 }, onWarning: (issue: any) => repeatedIssues.push(issue) });
     const repeatedLimit = repeatedIssues.find(issue => issue.code === 'REPEATED_CONTENT_LIMIT_EXCEEDED');
     check('xlsx: maxRepeatedContent grows by 16 characters a byte of the document', repeatedLimit?.message.includes(`(${1000 + 16 * repeatedStringDoc.length} characters`), repeatedLimit?.message.slice(0, 120));
+    const sharedFormulaDoc = xlsxOf({ 'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="B1"><f t="shared" ref="B1:B2000" si="0">${'A1+'.repeat(2666)}A1</f><v>1</v></c></row>${Array.from({ length: 1999 }, (_, i) => `<row r="${i + 2}"><c r="B${i + 2}"><f t="shared" si="0"/><v>1</v></c></row>`).join('')}</sheetData></worksheet>` });
+    const sharedFormulas = await warned(sharedFormulaDoc, 'xlsx', { decompressionLimits: { maxRepeatedContent: 1_000_000 } });
+    const formulaCells = cellsOf(sharedFormulas.ast);
+    const withFormula = formulaCells.filter((c: any) => c.metadata?.formula);
+    check('xlsx: a shared formula\'s copies count against maxRepeatedContent, with REPEATED_CONTENT_LIMIT_EXCEEDED', !sharedFormulas.error && formulaCells.length === 2000 && withFormula.length > 1 && withFormula.length < 1000 && withFormula[1].metadata.formula.startsWith('A2+') && sharedFormulas.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${sharedFormulas.error} ${formulaCells.length} ${withFormula.length} ${sharedFormulas.codes}`);
+    // A copy is charged at the length its moved references make: a 63-character master of `1:1`s is
+    // free to repeat, and each of its copies a million rows down is 255 characters.
+    const growingFormulaDoc = xlsxOf({ 'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="B1"><f t="shared" ref="B1:B1004000" si="0">${'1:1+'.repeat(15)}1:1</f><v>1</v></c></row>${Array.from({ length: 4000 }, (_, i) => `<row r="${1_000_001 + i}"><c r="B${1_000_001 + i}"><f t="shared" si="0"/><v>1</v></c></row>`).join('')}</sheetData></worksheet>` });
+    const growingFormulas = await warned(growingFormulaDoc, 'xlsx', { decompressionLimits: { maxRepeatedContent: 0 } });
+    const growingCopies = cellsOf(growingFormulas.ast).filter((c: any) => c.metadata?.formula?.startsWith('100'));
+    check('xlsx: a shared formula\'s copy counts against maxRepeatedContent at its moved length', !growingFormulas.error && growingCopies.length > 0 && growingCopies.length <= Math.floor(16 * growingFormulaDoc.length / (255 - 64)) && growingCopies[0].metadata.formula.length === 255 && growingFormulas.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${growingFormulas.error} ${growingCopies.length} ${growingFormulaDoc.length} ${growingFormulas.codes}`);
 
     // Plain text lays out a table from its cells once: rendered first and then again, each nested
     // table doubled the work (26 levels took minutes).

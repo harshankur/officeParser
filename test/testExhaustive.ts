@@ -14,6 +14,7 @@ import { OfficeGenerator } from '../src/OfficeGenerator';
 import { bulletCharacter, formatListNumber, readMarkerLabels } from '../src/utils/listMarkers';
 import { decodeBmp, decodeGif } from '../src/utils/rasterUtils';
 import { excelShownText } from '../src/utils/excelFormat';
+import { shiftFormula } from '../src/utils/sheetUtils';
 import { fillPageNumber, pageNumberText } from '../src/utils/pageNumbers';
 import { guardShaping } from '../src/generators/pdf/nativePdfEngine';
 import { OfficeTemplate } from '../src/OfficeTemplate';
@@ -5969,6 +5970,66 @@ async function testExcelChartSheetPlacedInItsTab(): Promise<void> {
         'xl/worksheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId1', 'drawing', '../drawings/drawing1.xml']]),
     }));
     assert.deepStrictEqual(sheetParts.shape(shared), [['Chart1', undefined, ['chart:chart1.xml']], ['Data', undefined, ['row:data']]], 'a drawing shared with a worksheet is placed once, at the first tab');
+}
+
+/**
+ * A cell's formula is read beside its value (CellMetadata.formula), a shared formula's moved to each
+ * cell (see shiftFormula); text and data outputs keep the calculated values.
+ */
+async function testXlsxFormulas(): Promise<void> {
+    const shifts: [string, number, number, string][] = [
+        ['B5-C5', 1, 0, 'B6-C6'], ['$B$5+B$5+$B5', 1, 1, '$B$5+C$5+$B6'], ['SUM(A1:A3)', 1, 0, 'SUM(A2:A4)'],
+        ['LOG10(A1)', 1, 1, 'LOG10(B2)'], ['"A1"&A1', 1, 0, '"A1"&A2'], ['"say ""B2"""&B2', 0, 1, '"say ""B2"""&C2'],
+        ["'Sheet A1'!A1", 1, 0, "'Sheet A1'!A2"], ["'It''s B2'!B2", 1, 0, "'It''s B2'!B3"], ['Graph!B31', 1, 0, 'Graph!B32'],
+        ['Graph!$B$31', 1, 0, 'Graph!$B$31'], ['Sheet1:Sheet3!A1', 1, 0, 'Sheet1:Sheet3!A2'], ['[1]Data!A1', 1, 0, '[1]Data!A2'],
+        ['SUM(A:A)+SUM($B:B)', 0, 1, 'SUM(B:B)+SUM($B:C)'], ['SUM(1:1)+SUM($1:2)', 2, 0, 'SUM(3:3)+SUM($1:4)'],
+        ['Table1[Col]+Table1[[#This Row],[B2]]', 1, 1, 'Table1[Col]+Table1[[#This Row],[B2]]'],
+        ['1E5+A1+1.5E+10', 1, 0, '1E5+A2+1.5E+10'], ['_xlfn.XLOOKUP(A1,B:B,C:C)', 1, 1, '_xlfn.XLOOKUP(B2,C:C,D:D)'],
+        ['IF(ISERROR(A1),#N/A,A1)', 1, 0, 'IF(ISERROR(A2),#N/A,A2)'], ['Tax_2024*A1', 1, 0, 'Tax_2024*A2'], ['A1#', 1, 0, 'A2#'],
+        ['A1048576', 1, 0, '#REF!'], ['XFD1', 0, 1, '#REF!'], ['SUM(A1:A1048576)', 1, 0, 'SUM(#REF!)'],
+    ];
+    for (const [formula, rows, cols, shifted] of shifts) assert.strictEqual(shiftFormula(formula, rows, cols), shifted, `${formula} moved ${rows} rows, ${cols} columns`);
+
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const long = 'A1+'.repeat(2731) + 'A1';
+    const rowRanges = '1:1+'.repeat(2047) + '1:1';
+    const rows = [
+        '<row r="1"><c r="A1"><v>10</v></c><c r="C1" t="str"><f>A1&amp;&quot;x&quot;</f><v>10x</v></c><c r="D1"><v>7</v></c><c r="E1"><f t="array" ref="E1:E2">A1:A2*2</f><v>20</v></c></row>',
+        '<row r="2"><c r="A2"><v>20</v></c><c r="E2"><v>40</v></c></row>',
+        '<row r="3"><c r="F3"><f t="shared" si="1"/><v>1</v></c></row>',
+        '<row r="4"><c r="F4"><f t="shared" ref="F3:F4" si="1">A4</f><v>2</v></c></row>',
+        '<row r="5"><c r="D5"><f t="shared" ref="D5:D7" si="0">B5-C5</f><v>750000</v></c></row>',
+        '<row r="6"><c r="D6"><f t="shared" si="0"/><v>1</v></c></row>',
+        '<row r="7"><c r="D7"><f t="shared" si="0"/><v>2</v></c></row>',
+        `<row r="8"><c r="G8"><f t="dataTable" ref="G8:G9" dt2D="0" dtr="0" r1="A1"/><v>3</v></c><c r="H8"><f>${long}</f><v>9</v></c></row>`,
+        '<row r="10"><c r="D10" t="str"><f t="shared" ref="D10:D11" si="2">IF(A10,&quot;&quot;,B10)</f><v></v></c></row>',
+        '<row r="11"><c r="D11" t="str"><f t="shared" si="2"/><v>x</v></c></row>',
+        `<row r="13"><c r="J13"><f t="shared" ref="J13:J22" si="3">${rowRanges}</f><v>1</v></c></row>`,
+        '<row r="14"><c r="J14"><f t="shared" si="3"/><v>1</v></c></row>',
+        '<row r="22"><c r="J22"><f t="shared" si="3"/><v>1</v></c></row>',
+    ];
+    const xlsx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+        'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData>${rows.join('')}</sheetData></worksheet>`),
+    }));
+    const ast = await OfficeParser.parseOffice(xlsx, { fileType: 'xlsx' } as any) as OfficeParserAST;
+    const cells = collectAllNodes(ast).filter(n => n.type === 'cell');
+    const at = (ref: string) => {
+        const col = ref.charCodeAt(0) - 65, row = Number(ref.slice(1)) - 1;
+        return cells.find(c => (c.metadata as any).row === row && (c.metadata as any).col === col);
+    };
+    const formulaAt = (ref: string) => (at(ref)?.metadata as any)?.formula;
+    assert.deepStrictEqual(['C1', 'D1', 'E1', 'E2'].map(formulaAt), ['A1&"x"', undefined, 'A1:A2*2', undefined], 'a formula decoded, none on a value, an array formula on its first cell');
+    assert.deepStrictEqual(['D5', 'D6', 'D7'].map(formulaAt), ['B5-C5', 'B6-C6', 'B7-C7'], 'a shared formula with each cell\'s own references');
+    assert.deepStrictEqual(['F3', 'F4'].map(formulaAt), [undefined, 'A4'], 'a cell before its shared formula\'s first has none');
+    assert.deepStrictEqual(['G8', 'H8'].map(formulaAt), [undefined, undefined], 'a data table\'s cell and a formula longer than Excel holds have none');
+    assert.deepStrictEqual([at('D10'), formulaAt('D11')], [undefined, 'IF(A11,"",B11)'], 'a shared formula whose first cell shows nothing is still the others\'');
+    assert.deepStrictEqual([formulaAt('J14')?.length, formulaAt('J22')?.length], [8191, undefined], 'a shared formula\'s copy that its moved references make longer than Excel holds has none');
+    assert.deepStrictEqual([at('D5')?.text, (at('D5')?.metadata as any).valueType, at('C1')?.text], ['750000', 'number', '10x'], 'the value is the result calculated');
+    const text = String((await ast.to('text')).value), csv = String((await ast.to('csv')).value);
+    assert.ok(text.includes('750000') && csv.includes('750000') && ![text, csv].some(out => out.includes('B5-C5') || out.includes('A1:A2*2')), `text and CSV keep the results; got ${JSON.stringify(text)}`);
 }
 
 /**
@@ -13990,6 +14051,7 @@ async function runTests(): Promise<void> {
         ['Speaker notes in PDF', testSpeakerNotesInPdf],
         ['Native PDF GIF and BMP', testNativePdfGifAndBmp],
         ['XLSX shown text', testXlsxShownText],
+        ['XLSX formulas', testXlsxFormulas],
         ['Sheet tables in PDF', testSheetTablesInPdf],
         ['Native PDF links', testNativePdfLinks],
         ['Paragraph layout', testParagraphLayout],

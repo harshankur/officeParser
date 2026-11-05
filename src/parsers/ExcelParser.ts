@@ -34,7 +34,7 @@ import { chargeRawContent, decodeXmlEntities, getChildElements, getElementsByTag
 import { MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
 import { BUILTIN_NUMBER_FORMATS, BUILTIN_OTHER_FORMATS, excelShownText } from '../utils/excelFormat.js';
 import { extractFiles, findRequiredPart, resolvePartPath } from '../utils/zipUtils.js';
-import { inRanges } from '../utils/sheetUtils.js';
+import { inRanges, shiftFormula } from '../utils/sheetUtils.js';
 
 /** The folder of a package part, with its trailing slash (`xl/worksheets/` for `xl/worksheets/sheet1.xml`). */
 const folderOf = (partPath: string): string => partPath.slice(0, partPath.lastIndexOf('/') + 1);
@@ -194,6 +194,43 @@ const attributeNamed = (attrs: string, name: string): string | undefined => {
 
 /** Whether a boolean attribute's value is true (`1` or `true`, as the schema's xsd:boolean has it). */
 const isTrue = (value: string | undefined): boolean => value === '1' || value === 'true';
+
+/** Excel's limit on a formula's length. */
+const MAX_FORMULA_LENGTH = 8192;
+
+/** A shared formula's text and the cell it is written on, by its index (`si`), for a sheet. */
+type SharedFormulas = Map<string, { text: string; row: number; col: number }>;
+
+/**
+ * A cell's formula (see CellMetadata.formula) from its `<f>` element. A shared formula is written once,
+ * with its text, on its first cell, which `shared` keeps; each other cell of it names it by index and
+ * gets it moved by its offset from that cell. Those copies are charged to the repeated-content budget
+ * (see repeatUtils), and only for a cell `kept` in the AST: one formula of 8 KB written once and named
+ * by a million cells would be 8 GB. A copy is charged at its first cell's length before it is moved, so
+ * a spent budget refuses it without the work, and then for what moving added: `1:1` a million rows
+ * down is `1000001:1000001`, and a free 63-character formula became 255 characters in every cell.
+ */
+function cellFormula(cContent: string, row: number, col: number, shared: SharedFormulas, kept: boolean, config: FullOfficeParserConfig): string | undefined {
+    for (const f of xmlElements(cContent, 'f')) {
+        const kind = attributeNamed(f.attrs, 't');
+        if (kind === 'dataTable') return undefined;
+        const text = f.content.trim() ? decodeXmlEntities(f.content) : '';
+        const si = kind === 'shared' ? attributeNamed(f.attrs, 'si') : undefined;
+        if (text) {
+            if (text.length > MAX_FORMULA_LENGTH) return undefined;
+            if (si !== undefined && !shared.has(si)) shared.set(si, { text, row, col });
+            return text;
+        }
+        const first = si === undefined ? undefined : shared.get(si);
+        if (!first || !kept || takeRepeats(config, 1, first.text.length) === 0) return undefined;
+        const moved = shiftFormula(first.text, row - first.row, col - first.col);
+        if (moved.length > MAX_FORMULA_LENGTH) return undefined;
+        const added = moved.length - Math.max(first.text.length, REPEAT_ALLOWANCE);
+        if (added > 0 && takeRepeats(config, 1, REPEAT_ALLOWANCE + added) === 0) return undefined;
+        return moved;
+    }
+    return undefined;
+}
 
 /** A cell reference's 0-based column and row (`B3` is 1, 2), or null. */
 function cellAt(ref: string): { col: number; row: number } | null {
@@ -1201,6 +1238,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             // Its cells' hyperlinks (a web or mail address, or a place in the workbook), by `row:col`.
             const links = cellLinks(sheetXml, hyperlinkTargets);
             const columnHidden = inRanges(hiddenColumns);
+            const sharedFormulas: SharedFormulas = new Map();
 
             /** Helper to convert Excel column string (A, B, AA, etc.) to 0-based index */
             const colToNumber = (col: string): number => {
@@ -1366,7 +1404,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                         }
                     }
 
-                    if (text || sharedRuns?.length) {
+                    const kept = !!(text || sharedRuns?.length);
+                    const formula = cellFormula(cContent, rowIndex, colIndex, sharedFormulas, kept, config);
+                    if (kept) {
                         if (sharedRuns?.length) {
                             // The cell's style under each run's own (see restyledRuns, whose copies
                             // richCopyValues weighs from the same key list, STYLE_GIVES).
@@ -1399,6 +1439,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                                 ...(valueType ? { valueType } : {}),
                                 ...(value !== undefined ? { value } : {}),
                                 ...(numberFormat !== undefined ? { numberFormat } : {}),
+                                ...(formula !== undefined ? { formula } : {}),
                                 ...(rowHidden || columnHidden(colIndex) ? { hidden: true } : {}),
                             }
                         };

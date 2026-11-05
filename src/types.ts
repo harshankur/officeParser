@@ -3459,6 +3459,15 @@ export interface CellMetadata {
      */
     numberFormat?: string;
     /**
+     * The formula the cell's value is calculated from, as the sheet holds it, without the leading `=`
+     * (XLSX's `<f>`: `B5-C5`, `SUM(A1:A3)`, `_xlfn.XLOOKUP(A1,B:B,C:C)`, a newer function under the prefix
+     * Excel stores it with). A cell of a shared formula has it with its own references (`B6-C6` below
+     * `B5-C5`), as Excel fills a formula down; an array formula is on its range's first cell. `text` and
+     * `value` keep the result the file last calculated, which every output writes. Not set for a cell
+     * without a formula, a what-if data table's cell, or a formula longer than Excel's 8,192 characters.
+     */
+    formula?: string;
+    /**
      * The sheet does not show the cell: its row or its column is hidden. It is read as any cell (text,
      * CSV, chunks and every other output keep it as data); a printout leaves it out, as PDF output does
      * unless `pdfConfig.printHidden` is set.
