@@ -643,6 +643,30 @@ A field can be written through filters, after `|`. `format` takes a picture, as 
 | `maxPasswordAttempts` | `number` | `3` | How many times `onPassword` is asked before the render rejects |
 | `decompressionLimits` | `DecompressionLimits` | parser's | Bounds unzipping an untrusted template; `maxXmlElements` (2,000,000) bounds its elements, its tags and the tokens they hold together (`XML_ELEMENT_LIMIT_EXCEEDED`), and `maxRepeatedContent` (16 MiB) what loops and repeated values add, past which the render rejects with `OUTPUT_TOO_LARGE` |
 
+### Listing tags and checking data
+
+`OfficeTemplate.tags()` lists a template's tags without any data, to build a form or a data source from it. `OfficeTemplate.check()` reads your data against the template without writing a document, and returns every problem a render with `onMissing: 'error'` would reject for, all at once instead of the first.
+
+```ts
+// What the template reads: each field, and each tag opening a block or branch, in the order of each part.
+const tags = await OfficeTemplate.tags('invoice-template.docx');
+// [{ kind: 'field', tag: '{{name}}', part: 'word/document.xml', fields: ['name'], loops: [] },
+//  { kind: 'for', tag: '{{ for line in lines }}', part: 'word/document.xml', fields: ['lines'], item: 'line', loops: [] },
+//  { kind: 'field', tag: '{{ line.qty }}', part: 'word/document.xml', fields: ['line.qty'], loops: [{ item: 'line', list: 'lines' }] }, ...]
+
+// Check before rendering.
+const data = { name: 'Acme Corp', lines: [{ description: 'Widgets', qty: 2 }, { description: 'Support' }] };
+const problems = await OfficeTemplate.check('invoice-template.docx', { data });
+// [{ code: 'TEMPLATE_FIELD_MISSING', field: 'line.qty', part: 'word/document.xml',
+//    loops: [{ list: 'lines', index: 1 }], message: "Template field 'line.qty' has no matching value in the data, ..." }, ...]
+if (problems.length === 0) await OfficeTemplate.render('invoice-template.docx', { data });
+```
+
+- **A tag** (`TemplateTagInfo`) has its `kind` (`field`, `if`, `elseif`, `else` or `for`; `endif` and `endfor` are not listed), the tag as typed, the `part` holding it (a header's tags are in `word/header1.xml`), the paths it reads (`fields`), a field's `filters`, a loop's `item`, and the loops it is inside, outermost first.
+- **A problem** (`TemplateProblem`) is `TEMPLATE_FIELD_MISSING` (with the `field`) or `TEMPLATE_DATA_INVALID` (with `details`: why, the tag and the kinds of value), with the render's `message`, the `part`, and the loops it was read in, each with its pass from 0.
+- **A check follows the data** as a render does: the branch each condition picks (a field only another branch uses is not needed), every pass of every loop, and nothing inside a list that is missing or does not fit, whose fields are checked once it is given. A key present but `undefined` or `null` counts as given, as a render writes it empty.
+- **A batch** (`data` as an array) returns one list per entry. A check lists at most 1,000 problems for one entry and 10,000 for a batch, and says it stopped with a `TEMPLATE_CHECK_LIMITED` warning. A template's own errors (`TEMPLATE_SYNTAX`) and the limits a render is held to reject as a render's do.
+
 Only DOCX is supported today (other OOXML/ODF formats will follow); a non-DOCX template rejects with `TEMPLATE_UNSUPPORTED_FORMAT`.
 
 ---
@@ -818,7 +842,7 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | Code | Phase | Meaning / what to do |
 |---|---|---|
 | `OCR_REQUIRES_ATTACHMENTS` | parse | `ocr: true` without `extractAttachments: true`; no OCR ran. Set both. |
-| `PDF_NO_TEXT_EXTRACTED` | parse | A PDF yielded ~no text (likely scanned). Set `ocr: true` + `extractAttachments: true`. When a CMap its fonts need could not be loaded (`PDF_ASSET_UNAVAILABLE`), the message says so instead. |
+| `PDF_NO_TEXT_EXTRACTED` | parse | A PDF yielded little or no text (likely scanned). Set `ocr: true` + `extractAttachments: true`. The message says how many characters were read, if any. Where a CMap its fonts need could not be loaded (`PDF_ASSET_UNAVAILABLE`), or the text is in fonts with no character map, it also says so and names them: `details` is then `{ pages, cMaps?, fonts? }`, otherwise the page count. |
 | `PDF_ASSET_UNAVAILABLE` | parse | A file pdf.js needed could not be had: a CMap (text in the fonts using it is missing) or an image decoder (pictures needing it are not decoded). Once per file per document, with the first page that needed it (`page`); the message names the file, why (missing, failed, or blocked by `allowRemoteAssets: false`) and the option to set (`pdfCMapUrl` or `pdfDecoderUrl`). |
 | `PDF_STRUCT_TREE_UNRELIABLE` | parse | PDF tag tree absent/incomplete; structure recovered geometrically. |
 | `PDF_TEXT_ENCODING_SUSPECT` | parse | A fifth or more of a PDF's characters (of at least 50) are unmappable glyphs (broken ToUnicode); text may be garbage. Consider OCR. |
@@ -1114,7 +1138,7 @@ ast.metadata = {
     keywords?: string                            // NEW: Keywords from document properties
     customProperties?: Record<string, any>       // User-defined metadata from the document
     nativeProperties?: Record<string, any>       // NEW: All format-specific raw metadata
-    pageSetup?: PageSetup                        // The document's page: width, height, margin, headerDistance, footerDistance (points), differentFirstPage, columns, pageNumberFormat
+    pageSetup?: PageSetup                        // The document's page: width, height, margin, headerDistance, footerDistance (points), differentFirstPage, columns, pageNumberFormat, pageNumberStart (the number its pages start from: a PDF's printed numbers, a Word, RTF or ODT section's restart)
     styleMap?: Record<string, TextFormatting>    // Named styles → formatting definitions
     formatting?: TextFormatting                  // Document-wide defaults
 }
@@ -1649,7 +1673,7 @@ object instead for granular control; any field you omit defaults to its "on" (st
 | `document` | `boolean` | `true` | Wrap in `<!DOCTYPE html><html><head>…</head><body>…</body></html>` |
 | `metaTags` | `boolean` | `true` | Emit `<title>`/`<meta>` tags. Only meaningful when `document` is true |
 | `styles` | `'full' \| 'scoped' \| 'none'` | `'full'` | See below |
-| `scripts` | `boolean` | `true` | Emit the Chart.js CDN loader and spreadsheet-interactivity `<script>` tags |
+| `scripts` | `boolean` | `true` | Emit the Chart.js CDN loader and spreadsheet-interactivity `<script>` tags. A workbook's sheet tabs switch sheets without them too (links to each sheet, shown by CSS `:target`, with the `'full'` or `'scoped'` styles), and column resizing is the script's. A host that leaves the script out and switches sheets with its own code sets `data-sheet-script` on each `.spreadsheet-container`, which turns those CSS rules off |
 | `headInjections` | `boolean` | `true` | Apply `injections.headStart`/`headEnd`. Only meaningful when `document` is true |
 | `bodyInjections` | `boolean` | `true` | Apply `injections.bodyStart`/`bodyEnd`, even to a bare fragment |
 

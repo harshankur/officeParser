@@ -4,6 +4,25 @@ All notable changes to `officeParser` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.6.0] - 2026-11-05
+
+### Added
+- **`OfficeTemplate.tags()` lists a template's tags.** Each field, and each tag opening a block or a branch, with the part holding it, the paths it reads, a field's filters, a loop's item and the loops it is inside (`TemplateTagInfo`). No data is needed.
+- **`OfficeTemplate.check()` checks data against a template without rendering.** It returns every problem a render with `onMissing: 'error'` would reject for, all at once: a missing field (`TEMPLATE_FIELD_MISSING`) or a value that does not fit its tag (`TEMPLATE_DATA_INVALID`), each with its part and the loops and passes it was read in (`TemplateProblem`, `TemplateLoopPlace`). It follows the data as a render does: the branch each condition picks and every pass of every loop. A batch gives one list per entry; past 1,000 problems for an entry or 10,000 for a batch it stops, with a `TEMPLATE_CHECK_LIMITED` warning.
+- **HTML: a workbook's sheet tabs switch sheets without JavaScript.** CSS `:target` shows the sheet a tab links to where the script does not run (scripts off, a sandboxed frame, a fragment inserted into a page); the script still switches sheets wherever it runs. A host that leaves the script out and switches sheets itself sets `data-sheet-script` on `.spreadsheet-container`.
+
+### Fixed
+- **PDF parses work beside an application's own `pdfjs-dist` of another version.** In Node, `parseOffice` rejected every PDF with "The API version ... does not match the Worker version" when the application's pdf.js had loaded first, and the application's pdf.js got officeParser's worker when officeParser's had. Wherever pdf.js's worker file is found, officeParser now runs pdf.js's worker on a module of its own, in the separate process or in this one, in either order. `pdfjs-dist` stays pinned to one version: the README says why. (#128)
+- **A pdf.js document your own code opens no longer moves PDF parses into this process.** Its worker module, loaded in the process, was taken for a worker you preloaded, so later parses ran pdf.js here without the separate process's memory limit. A worker preloaded as `globalThis.pdfjsWorker` is used only where pdf.js's worker file cannot be found.
+- **pdf.js documents your own code opens no longer print pdf.js's warnings after a parse with `separateProcess: false`.** Where pdf.js's worker file is found, their worker keeps its own warning level.
+- **In a browser, a preloaded pdf.js worker parses under `allowRemoteAssets: false`.** It was refused with `REMOTE_ASSET_BLOCKED`, though nothing was fetched.
+- **`PDF_NO_TEXT_EXTRACTED` says how much text was read.** A PDF with a little text was called very likely scanned; the message now gives the characters and pages read, and where the text is in fonts with no character map it names them (`details.fonts`).
+- **Word, RTF and ODT sections that restart their page numbers are read.** `PageSetup.pageNumberStart` is set from `w:pgNumType w:start`, `\pgnrestart`/`\pgnstartsN` and `style:page-number`, so a body restarting at 1 after its front matter is numbered 1, 2, 3 in DOCX, ODT, RTF and LaTeX output and the native PDF engine.
+- **DOCX: Word's legacy form fields are read.** A check box reads as ☒ or ☐ and a drop-down as its selected entry; both were dropped.
+- **ODT and ODP: form controls are read as they show.** Check boxes and radio buttons as ☒ or ☐ with their labels, text fields and areas as their values, list and combo boxes as their selected items, and LibreOffice's check box and drop-down fields too; all were dropped. A control shown in many places is read once: whole the first time, and as one run, its line breaks as spaces, at each later place, within `decompressionLimits.maxRepeatedContent`.
+- **The native PDF engine draws ☐ ☑ ☒ when no font has them.** They are drawn as boxes in the text's size and colour, and copy and search as their characters; they were `?` and reported as text that could not be encoded.
+- **HTML: a workbook in a frame that blocks storage shows one sheet at a time.** Switching sheets failed and left two showing; tabs and column resizing now work there, without remembering widths.
+
 ## [8.5.0] - 2026-11-01
 
 ### Added

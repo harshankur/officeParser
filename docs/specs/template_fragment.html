@@ -172,6 +172,62 @@ docs.forEach((d, i) => writeFileSync(`invoice-${i}.docx`, d));</code></pre>
         </tbody>
     </table>
 
+    <h2>OfficeTemplate.tags() and OfficeTemplate.check()</h2>
+    <pre><code>// What the template reads: each field, and each tag opening a block or branch, in the order of each part.
+const tags = await OfficeTemplate.tags('invoice-template.docx');
+
+// Check data before rendering: every problem a render with onMissing: 'error' would reject for.
+const problems = await OfficeTemplate.check('invoice-template.docx', { data });
+if (problems.length === 0) await OfficeTemplate.render('invoice-template.docx', { data });</code></pre>
+    <p><code>tags(template, config?)</code> takes the template and the options a render takes but <code>data</code>, and
+        resolves to <code>TemplateTagInfo[]</code>. The template is read as a render reads it, so a tag error rejects as a
+        render's would.</p>
+    <table>
+        <thead>
+            <tr>
+                <th><code>TemplateTagInfo</code> field</th>
+                <th>Type</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td><code>kind</code></td><td><code>'field' | 'if' | 'elseif' | 'else' | 'for'</code></td><td>The tag's kind; <code>endif</code> and <code>endfor</code> close what they open and are not listed.</td></tr>
+            <tr><td><code>tag</code></td><td><code>string</code></td><td>The tag as typed, delimiters included (a very long one is cut short).</td></tr>
+            <tr><td><code>part</code></td><td><code>string</code></td><td>The document part holding it: <code>word/document.xml</code>, <code>word/header1.xml</code>, ...</td></tr>
+            <tr><td><code>fields</code></td><td><code>string[]</code></td><td>What it reads from the data, each as typed: a field's path, every path in a condition, a loop's list. A path may start with a loop's item (<code>line.qty</code>) or <code>loop</code>.</td></tr>
+            <tr><td><code>filters</code></td><td><code>string[]</code></td><td>A field's filters, by name, in order.</td></tr>
+            <tr><td><code>item</code></td><td><code>string</code></td><td>A <code>for</code> tag's item name (<code>line</code> in <code>{{ for line in lines }}</code>).</td></tr>
+            <tr><td><code>loops</code></td><td><code>{ item, list }[]</code></td><td>The <code>for</code> tags it is inside, outermost first.</td></tr>
+        </tbody>
+    </table>
+    <p><code>check(template, config)</code> reads <code>config.data</code> as a render with <code>onMissing: 'error'</code>
+        reads it, whatever <code>onMissing</code> says, without writing a document: each field, condition and loop the
+        data leads to, every pass of every loop, and the branch each condition picks (a field only another branch uses is
+        not needed). Where a render would reject, the problem is noted and the check goes on past that tag: a branch or
+        loop whose condition or list is missing or does not fit is not entered, so the fields inside it are checked once
+        it is given. A key present but <code>undefined</code> or <code>null</code> counts as given. One data object
+        resolves to <code>TemplateProblem[]</code>; an array to one list per entry. At most 1,000 problems are listed for
+        an entry and 10,000 for a batch: past them the check stops with a <code>TEMPLATE_CHECK_LIMITED</code> warning, and
+        a batch's later entries get empty lists. A template's own errors, the limits a render is held to, and an error
+        a filter of your own throws reject as a render's do.</p>
+    <table>
+        <thead>
+            <tr>
+                <th><code>TemplateProblem</code> field</th>
+                <th>Type</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td><code>code</code></td><td><code>'TEMPLATE_FIELD_MISSING' | 'TEMPLATE_DATA_INVALID'</code></td><td>A field the data does not have, or a value that does not fit its tag.</td></tr>
+            <tr><td><code>message</code></td><td><code>string</code></td><td>What a render would say.</td></tr>
+            <tr><td><code>field</code></td><td><code>string</code></td><td>For a missing field: the field as typed.</td></tr>
+            <tr><td><code>details</code></td><td><code>TemplateDataDetails</code></td><td>For a value that does not fit: the reason, the tag, the value's kind (see Errors below).</td></tr>
+            <tr><td><code>part</code></td><td><code>string</code></td><td>The document part the tag is in.</td></tr>
+            <tr><td><code>loops</code></td><td><code>TemplateLoopPlace[]</code></td><td>The loops it was read in, outermost first, each <code>{ list, index }</code> with its pass from 0: <code>line.qty</code> in the third line is <code>[{ list: 'lines', index: 2 }]</code>.</td></tr>
+        </tbody>
+    </table>
+
     <h2>Conditions and loops</h2>
     <p>Block tags are typed in Word as ordinary text, between the same delimiters as fields:</p>
     <pre><code>{{ if paid }}

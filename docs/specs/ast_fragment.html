@@ -221,7 +221,10 @@
         (<code>'page'</code> or <code>'pages'</code>): it is the number when the file was saved. The format it writes its
         number in, where it sets one, is <code>TextMetadata.fieldFormat</code> (a <code>PageNumberFormat</code>:
         <code>lowerRoman</code>, <code>upperLetter</code>, <code>cardinalText</code>, ...), and a section's own page numbering
-        is <code>PageSetup.pageNumberFormat</code> (<code>decimal</code> unless the section says otherwise); the native PDF
+        is <code>PageSetup.pageNumberFormat</code> (<code>decimal</code> unless the section says otherwise), and the number its
+        pages start from where it restarts them is <code>PageSetup.pageNumberStart</code> (Word's <code>w:pgNumType w:start</code>,
+        RTF's <code>\pgnrestart</code> with <code>\pgnstartsN</code>, an ODF paragraph or table style's
+        <code>style:page-number</code>, a PDF's printed numbers); DOCX, ODT, RTF and LaTeX output write it, and the native PDF
         engine prints each page's number in them. Under <code>ignorePageGeometry</code> a text document's
         <code>pageSetup</code> keeps its <code>pageNumberFormat</code> and <code>differentFirstPage</code>, which are no geometry.</p>
 

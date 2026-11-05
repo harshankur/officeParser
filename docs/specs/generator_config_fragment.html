@@ -296,7 +296,10 @@
                 <td><code>true</code></td>
                 <td>Emits the Chart.js CDN loader and spreadsheet-interactivity <code>&lt;script&gt;</code> tags. (A
                     per-chart inline init script is content, not envelope, and is emitted regardless of this flag
-                    whenever a chart node is present.)</td>
+                    whenever a chart node is present.) A workbook's sheet tabs switch sheets without the script too, by CSS
+                    <code>:target</code> (with the <code>'full'</code> or <code>'scoped'</code> styles); a host that leaves the
+                    script out and switches sheets with its own sets <code>data-sheet-script</code> on each
+                    <code>.spreadsheet-container</code>, which turns those rules off.</td>
             </tr>
             <tr>
                 <td><code>headInjections</code></td>

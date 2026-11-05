@@ -9,24 +9,24 @@ Kindles or EPUB for other ebook readers, to see it in action.
     There is support for images, tables, lists, footnotes, endnotes, links, dropcaps and
 various types of text and paragraph level formatting.
     To see the DOCX conversion in action, simply add this file to calibre using the
-“Add Books”   button and then click “Convert”. Set the output format in the top right
-corner of the conversion dialog to EPUB or AZW3 and click “OK” .
+“Add Books” button and then click “Convert”. Set the output format in the top right
+corner of the conversion dialog to EPUB or AZW3 and click “OK”.
 
                                  Text Formatting
 Inline formatting
     Here, we demonstrate various types of inline text formatting and the use of
 embedded fonts.
     Here is some bold, italic, bold-italic, underlined and struck out text. Then, we
-have a super script and a subscript. Now we see some red, green and blue text. Some text
+have a superscript and a subscript. Now we see some red, green and blue text. Some text
 with a yellow highlight. Some text in a box. Some text in inverse video.
-    A paragraph with styled text: subtle emphasis followed by strong text  and
-intense emphasis  . This paragraph uses document wide styles for styling rather than
+    A paragraph with styled text: subtle emphasis followed by strong text and
+intense emphasis. This paragraph uses document wide styles for styling rather than
 inline text properties as demonstrated in the previous paragraph — calibre can handle
 both with equal ease.
 Fun with fonts
     This document has embedded the Ubuntu font family. The body text is in the
 Ubuntu typeface, here is some text in the Ubuntu Mono typeface, notice how every
-letter has the same width, even i and m    . Every embedded font will automatically
+letter has the same width, even i and m. Every embedded font will automatically
 be embedded in the output ebook during conversion.
 Paragraph level formatting
       You can do crazy things with paragraphs, if the urge strikes you. For instance this
@@ -109,7 +109,7 @@ fare well in ebooks.
    Miscellaneous structural elements you can add to your document, like footnotes,
 endnotes, dropcaps and the like.
 Footnotes & Endnotes
-   Footnotes 1 and endnotesi are automatically recognized and both are converted to
+   Footnotes1 and endnotesi are automatically recognized and both are converted to
 endnotes, with backlinks for maximum ease of use in ebook devices.
 Dropcaps
    D
