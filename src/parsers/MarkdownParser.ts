@@ -1,4 +1,4 @@
-import { AdmonitionMetadata, BreakMetadata, CodeMetadata, CommentMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, TextFormatting, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, BreakMetadata, CodeMetadata, CommentMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { anchorMark, resolveAnchorMarks } from '../utils/anchorUtils.js';
 import { createAST } from '../utils/astUtils.js';
 import { parseHtml } from './HtmlParser.js';
@@ -2208,6 +2208,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     };
 
     let listIdCounter = 1;
+    /** The quotes read so far (each quote's paragraphs share an id, see ParagraphMetadata.quoteId). */
+    let quoteCount = 0;
 
     // Parses blocks (see splitIntoBlocks) into nodes appended to `content`: the document's, or those
     // of a quote or note being read.
@@ -2589,8 +2591,10 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             // in it is lifted here: the top-level pass could not see it behind the markers.)
             const quoted: OfficeContentNode[] = [];
             await parseBlocks(splitIntoBlocks(liftCode(dequoted)), quoted);
+            // Its paragraphs share the quote's id, so `> a` `>` `> b` is one quote of two paragraphs.
+            const quoteId = `md-quote-${++quoteCount}`;
             for (const node of quoted) {
-                if (node.type === 'paragraph') node.metadata = { ...node.metadata, style: 'Quote' } as any;
+                if (node.type === 'paragraph') node.metadata = { ...node.metadata, style: 'Quote', quoteId: (node.metadata as ParagraphMetadata | undefined)?.quoteId ?? quoteId } as any;
                 content.push(node);
             }
             continue;

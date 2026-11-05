@@ -1193,6 +1193,7 @@ idempotent and `.md → AST → HTML → AST → .md` survives unchanged.
 | Feature | Markdown syntax | AST representation |
 |---|---|---|
 | Task lists (GFM) | `- [x] Done` / `- [ ] Todo` | `ListMetadata.isTask` / `.checked` |
+| Block quotes | `> a` / `>` / `> b` (one quote of two paragraphs) | `paragraph` nodes with `style: 'Quote'`; the paragraphs of one quote share `ParagraphMetadata.quoteId`, and HTML, EPUB, Markdown and LaTeX write them back as one quote (`<blockquote><p>a</p><p>b</p></blockquote>`, `>` lines between them, one `quote` environment) |
 | Admonitions | `> [!NOTE]` (also accepts GLFM `:::note ... :::` and Pandoc `::: {.note} ... :::` on import) | `type: 'admonition'`, `AdmonitionMetadata` |
 | Footnotes | `Text[^1]` + `[^1]: Definition` | `type: 'note'`, keyed by footnote id |
 | Definition lists | `Term\n: Definition` | `type: 'definitionList'` / `'definitionTerm'` / `'definitionDescription'` |

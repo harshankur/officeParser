@@ -1227,6 +1227,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
     let inTableHead = 0;
     const hasToken = (value: string | undefined, token: string): boolean => !!value && value.split(/\s+/).includes(token);
     /** A note's back-link to its reference: this library's, GitHub's, Pandoc's and markdown-it's. */
+    /** The quotes read so far (each `<blockquote>`'s paragraphs share an id, see ParagraphMetadata.quoteId). */
+    let quoteCount = 0;
     /** The ids of note references and of the elements holding them (an EPUB's `<sup id="calledF1">`), which a back-link targets. */
     const noteReferenceIds = new Set<string>();
     const isFootnoteBackLink = (node: HtmlNode): boolean => node.tagName === 'a' && (
@@ -1764,12 +1766,14 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
             if (tagName === 'blockquote') {
                 const kids = parseChildren(node, newFormatting, listContext);
                 const isBlock = (t: string) => t === 'paragraph' || t === 'heading' || t === 'list';
+                // The quote's paragraphs share its id: `<blockquote><p>a</p><p>b</p></blockquote>` is one quote.
+                const quoteId = `html-quote-${++quoteCount}`;
                 if (!kids.some(k => isBlock(k.type))) {
-                    return { type: 'paragraph', metadata: { style: 'Quote', ...(anchorIds.length > 0 && { anchorIds }) } as any, children: kids };
+                    return { type: 'paragraph', metadata: { style: 'Quote', quoteId, ...(anchorIds.length > 0 && { anchorIds }) } as any, children: kids };
                 }
                 kids.forEach(k => {
                     // A block quoted already (a quote in a quote) is not given the style again.
-                    if (isBlock(k.type) && (k.metadata as any)?.style !== 'Quote') k.metadata = { ...(k.metadata as any), style: 'Quote' };
+                    if (isBlock(k.type) && (k.metadata as any)?.style !== 'Quote') k.metadata = { ...(k.metadata as any), style: 'Quote', ...(k.type === 'paragraph' ? { quoteId } : {}) };
                 });
                 // The quote's id is the first of what it holds, where HtmlGenerator writes a quoted
                 // paragraph's id (on its <blockquote>).

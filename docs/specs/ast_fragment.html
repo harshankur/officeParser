@@ -189,6 +189,12 @@
         <code>before</code> and <code>after</code> in points, <code>lineMultiple</code> for proportional line spacing,
         or <code>lineHeight</code> in points, with <code>lineAtLeast</code> for a least height). A PDF paragraph whose
         text is turned on its page has <code>rotation</code> (degrees clockwise).</p>
+    <p>A quoted paragraph is a <code>paragraph</code> with <code>style: 'Quote'</code>. The paragraphs of one quote of
+        several (Markdown <code>&gt; a</code>, <code>&gt;</code>, <code>&gt; b</code>; HTML
+        <code>&lt;blockquote&gt;&lt;p&gt;a&lt;/p&gt;&lt;p&gt;b&lt;/p&gt;&lt;/blockquote&gt;</code>; a LaTeX
+        <code>quote</code> environment) share <code>ParagraphMetadata.quoteId</code>: adjacent paragraphs with the same
+        id are written back as one quote where the format has one (HTML and EPUB, Markdown, LaTeX). Quote paragraphs
+        without one (a word processor's Quote style) are each a quote of their own.</p>
 
     <h3>2b. Pages and Sections</h3>
     <p><code>ast.metadata.pageSetup</code> (a <code>PageSetup</code>: <code>width</code>, <code>height</code>,

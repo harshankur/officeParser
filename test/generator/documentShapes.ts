@@ -6,7 +6,7 @@
 import * as assert from 'assert';
 import { unzipSync } from 'fflate';
 import { OfficeParser } from '../../src/OfficeParser';
-import type { NoteMetadata, OfficeContentNode, OfficeParserAST } from '../../src/types';
+import type { NoteMetadata, OfficeContentNode, OfficeParserAST, ParagraphMetadata } from '../../src/types';
 
 /** An XML document whose root is `html` (XHTML, as office suites export HTML) is read as HTML. */
 export async function testXhtmlReadAsHtml(): Promise<void> {
@@ -59,6 +59,49 @@ export async function testRtfListTypesPerLevel(): Promise<void> {
     assert.ok(/<ul>\s*<li[^>]*>\s*North/.test(html), `RTF: the bullet list writes as <ul>: ${html}`);
     assert.ok(/<ol>\s*<li[^>]*>\s*Hire/.test(html), 'RTF: the numbered list writes as <ol>');
     console.log('✓ RTF list types per level');
+}
+
+/** The generate options of an editor-bound HTML fragment and of a Markdown save, as a host round-tripping documents sets them. */
+const EDITOR_HTML = { maxInlineImageBytes: Infinity, htmlConfig: { sourceAttributes: true, standalone: { document: false, styles: 'none' as const }, gatedEmbeds: true, omitDefaultTextColor: true } };
+const SAVED_MD = { generateIds: false, maxInlineImageBytes: Infinity, mdConfig: { dialect: { extends: 'extended' as const, embeds: 'directive' as const }, fallbackToHtml: { inlineFormatting: true } } };
+
+/** Markdown to editor HTML and back to Markdown, `passes` times; each pass's HTML and Markdown. */
+async function markdownThroughHtml(markdown: string, passes = 3): Promise<{ html: string[]; md: string[] }> {
+    const html: string[] = [];
+    const md: string[] = [];
+    let current = markdown;
+    for (let pass = 0; pass < passes; pass++) {
+        const ast = await OfficeParser.parseOffice(Buffer.from(current), { fileType: 'md', extractAttachments: true, includeBreakNodes: true, ocr: false, htmlParserConfig: { preserveIframes: true } });
+        html.push((await ast.to('html', EDITOR_HTML)).value);
+        const back = await OfficeParser.parseOffice(Buffer.from(html[pass]), { fileType: 'html' });
+        current = (await back.to('md', SAVED_MD)).value;
+        md.push(current);
+    }
+    return { html, md };
+}
+
+/** A quote of several paragraphs is one quote: one <blockquote> of paragraphs in HTML, `>` lines between them in Markdown. */
+export async function testQuoteParagraphs(): Promise<void> {
+    const source = 'Before\n\n> a\n>\n> b *c*\n\n> d\n\nAfter';
+    const { html, md } = await markdownThroughHtml(source);
+    assert.ok(html[0].includes('<blockquote><p>a</p><p>b <i>c</i></p></blockquote>'), `Quote: one <blockquote> of two paragraphs: ${html[0]}`);
+    assert.ok(html[0].includes('<blockquote>d</blockquote>'), 'Quote: a quote of one paragraph is written as before');
+    assert.deepStrictEqual(md, [source, source, source], 'Quote: Markdown to HTML to Markdown is stable over three passes');
+    const ast = await OfficeParser.parseOffice(Buffer.from(source), { fileType: 'md' });
+    const quotes = ast.content.filter(n => (n.metadata as ParagraphMetadata | undefined)?.style === 'Quote').map(n => (n.metadata as ParagraphMetadata).quoteId);
+    assert.ok(quotes.length === 3 && quotes[0] === quotes[1] && quotes[1] !== quotes[2], `Quote: the paragraphs of one quote share an id: ${quotes}`);
+    // The HTML reader reads one <blockquote> of paragraphs as one quote; two quotes stay two.
+    const fromHtml = await OfficeParser.parseOffice(Buffer.from('<blockquote><p>a</p><p>b</p></blockquote><blockquote><p>c</p></blockquote>'), { fileType: 'html' });
+    assert.strictEqual((await fromHtml.to('md')).value, '> a\n>\n> b\n\n> c', 'Quote: HTML quotes to Markdown');
+    // LaTeX: one quote environment, read back as one quote.
+    const tex = (await ast.to('tex')).value;
+    assert.ok(tex.includes('\\begin{quote}\na\n\nb \\textit{c}\n\\end{quote}'), `Quote: one quote environment: ${tex}`);
+    const fromTex = await OfficeParser.parseOffice(Buffer.from(tex), { fileType: 'tex' });
+    assert.strictEqual((await fromTex.to('md')).value, source, 'Quote: LaTeX reads a quote environment of paragraphs as one quote');
+    // EPUB (XHTML) keeps it too.
+    const fromEpub = await OfficeParser.parseOffice(Buffer.from((await ast.to('epub')).value as Uint8Array));
+    assert.ok(((await fromEpub.to('md')).value).endsWith(source), 'Quote: EPUB keeps one quote of two paragraphs');
+    console.log('✓ Quote paragraphs');
 }
 
 /** Every note in an AST, in reference order, once each. */

@@ -1,4 +1,5 @@
 import { zipSync, Zippable } from 'fflate';
+import { sameQuote } from '../utils/quoteGroups.js';
 import { UniqueNames } from '../utils/uniqueNames.js';
 import { trimEndChars } from '../utils/textUtils.js';
 import type { PageNumberFormat } from '../types.js';
@@ -657,6 +658,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             inline = [];
         };
         let prevPaginated: string | null = null;
+        /** The block written last, when it was a node of its own (a quote paragraph whose environment the next may join). */
+        let lastQuote: OfficeContentNode | undefined;
         for (let i = 0; i < items.length; i++) {
             checkAbortSignal(this.config.abortSignal);
             const node = items[i];
@@ -718,7 +721,12 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             }
             if ((node.type === 'page' || node.type === 'slide') && prevPaginated === node.type) blocks.push('\\clearpage');
             const out = (await this.renderBlockNode(node)).trim();
-            if (out) blocks.push(out);
+            // A paragraph of the quote the block before ends (see quoteGroups) goes into its environment.
+            const quoteOpen = '\\begin{quote}\n', quoteClose = '\n\\end{quote}';
+            if (out && lastQuote && sameQuote(lastQuote, node) && lastQuote === items[i - 1] && out.startsWith(quoteOpen) && out.endsWith(quoteClose) && blocks[blocks.length - 1]?.endsWith(quoteClose)) {
+                blocks[blocks.length - 1] = `${blocks[blocks.length - 1].slice(0, -quoteClose.length)}${BLOCK_SEPARATOR}${out.slice(quoteOpen.length)}`;
+            } else if (out) blocks.push(out);
+            lastQuote = out ? node : undefined;
             prevPaginated = (node.type === 'page' || node.type === 'slide') ? node.type : null;
         }
         await flushInline();

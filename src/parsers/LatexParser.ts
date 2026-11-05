@@ -3593,8 +3593,17 @@ class LatexReader {
                 return;
             }
         }
+        // Its paragraphs are one quote's (see ParagraphMetadata.quoteId).
+        const quoteId = `tex-quote-${++this.quoteCount}`;
+        for (const b of inner) {
+            const meta = b.metadata as ParagraphMetadata | undefined;
+            if (b.type === 'paragraph' && meta?.style === 'Quote' && !meta.quoteId) meta.quoteId = quoteId;
+        }
         for (const b of inner) this.pushBlock(flow, b);
     }
+
+    /** The quote environments read so far. */
+    private quoteCount = 0;
 
     private float(sc: Scanner, flow: Flow, env: string): void {
         const labelsBefore = this.labelLog.length;

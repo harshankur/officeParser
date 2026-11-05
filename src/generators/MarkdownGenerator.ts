@@ -1,4 +1,5 @@
 import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, EmbedSyntax, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, StrikethroughSyntax, TableMetadata, TextFormatting, TextMetadata, WikilinkSyntax } from '../types.js';
+import { sameQuote } from '../utils/quoteGroups.js';
 import { escapeHtml, isCssLength, isVideoId, markdownEscapeInline, markdownEscapePlain, markdownEscapeTags, markdownEscapeText, sanitizeCommentText, sanitizeCssValue, sanitizeImageUrl, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
 import { isDefaultHighlight } from '../utils/colorUtils.js';
 import { cssListMarker, writtenMarkerLabel } from '../utils/listMarkers.js';
@@ -1343,6 +1344,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     }
                 }
             }
+            result = this.joinQuote(node, nextNode, result);
 
             appendBlock(body, node, result);
         }
@@ -1466,6 +1468,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 if (next && childOutput && (isBlockNode(child) || isBlockNode(next)) && !(child.type === 'list' && next.type === 'list') && !childOutput.endsWith('\n\n')) {
                     childOutput += childOutput.endsWith('\n') ? '\n' : '\n\n';
                 }
+                childOutput = this.joinQuote(child, next, childOutput);
                 appendBlock(children, child, childOutput);
             }
             childrenOutput = children.toString();
@@ -1517,6 +1520,16 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         }
 
         return result;
+    }
+
+    /**
+     * A quote paragraph followed by another paragraph of the same quote (see quoteGroups) ends in a `>`
+     * line instead of a blank one, so the two read back as one quote of two paragraphs: `> a`, `>`, `> b`.
+     */
+    private joinQuote(node: OfficeContentNode, next: OfficeContentNode | undefined, written: string): string {
+        if (this.inOneLine || !sameQuote(node, next) || !written.startsWith('> ') || !written.endsWith('\n\n')) return written;
+        const quoted = (n: OfficeContentNode) => this.getSemanticMapping(n)?.tag === 'blockquote';
+        return quoted(node) && quoted(next!) ? `${trimEndChars(written, '\n')}\n>\n` : written;
     }
 
     /**

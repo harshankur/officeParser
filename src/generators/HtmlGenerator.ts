@@ -1,4 +1,5 @@
 import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
+import { quoteIdOf, sameQuote } from '../utils/quoteGroups.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { base64ByteLength, documentLanguage, isHeaderRow, resolveEmbed, writableSpacing } from '../utils/officeGenUtils.js';
@@ -758,7 +759,15 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             }
         };
 
-        for (const node of nodes) {
+        // The quote whose <blockquote> is open: its paragraphs written so far, the last of them (see quoteMember).
+        let openQuote: OfficeContentNode | undefined;
+        const closeQuote = () => {
+            if (!openQuote) return;
+            html += '</blockquote>\n\n';
+            openQuote = undefined;
+        };
+
+        for (const [index, node] of nodes.entries()) {
             // Check if node should be filtered out or overridden
             const override = await this.handleOnNode(node);
             if (override === false) {
@@ -832,7 +841,25 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             } else {
                 // Non-list node closes all active lists
                 closeListsToLevel(-1);
-                let result = await this.processNodeRecursive(node, this.boundNodeProcessor, { value: override });
+                // The paragraphs of one quote (see quoteGroups) in one <blockquote>, each a <p> in it.
+                const member = typeof override !== 'string' && this.quoteMember(node);
+                if (openQuote && !(member && sameQuote(openQuote, node))) closeQuote();
+                if (member && !openQuote && sameQuote(node, nodes[index + 1]) && this.quoteMember(nodes[index + 1])) {
+                    html += '<blockquote>';
+                    openQuote = node;
+                }
+                if (openQuote) this.quoteParagraphs++;
+                let result: string;
+                try {
+                    result = await this.processNodeRecursive(node, this.boundNodeProcessor, { value: override });
+                } finally {
+                    if (openQuote) this.quoteParagraphs--;
+                }
+                if (openQuote) {
+                    openQuote = node;
+                    html += result;
+                    continue;
+                }
                 // (A section's start after a page writes nothing, and no gap either.)
                 if (!result && this.afterPage && node.type === 'break') continue;
 
@@ -852,8 +879,22 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             }
         }
 
+        closeQuote();
         closeListsToLevel(-1);
         return html;
+    }
+
+    /** Set while the paragraphs of one quote are written inside its <blockquote>: each is a <p>. */
+    private quoteParagraphs = 0;
+
+    /**
+     * Whether `node` is a paragraph written as a quote that can stand in a quote of several: one the
+     * styleMap writes as <blockquote>, with its source's quote id, holding no block of its own.
+     */
+    private quoteMember(node: OfficeContentNode | undefined): boolean {
+        if (!node || quoteIdOf(node) === undefined || node.children?.some(isBlockInParagraph)) return false;
+        const tag = this.getSemanticMapping(node)?.tag;
+        return isSafeStyleMapTag(tag) && tag.toLowerCase() === 'blockquote';
     }
 
     /**
@@ -1778,7 +1819,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             case 'heading': {
                 // The styleMap tag wins over the structural default; that is the whole point of
                 // mapping "Heading 1"/"Intense Quote" onto a semantic element.
-                const tag = mappedTag ?? (node.type === 'heading' ? `h${clampInt((node.metadata as HeadingMetadata)?.level, 1, 6, 1)}` : 'p');
+                // (A paragraph of a quote of several is a <p> in the quote's <blockquote>.)
+                const tag = this.quoteParagraphs > 0 && node.type === 'paragraph' && mappedTag === 'blockquote' ? 'p'
+                    : mappedTag ?? (node.type === 'heading' ? `h${clampInt((node.metadata as HeadingMetadata)?.level, 1, 6, 1)}` : 'p');
 
                 // Normalize empty paragraphs so DOCX and PPTX empty cells render with consistent height
                 // Strip tags to check if it's purely empty or just contains non-breaking spaces (like PPTX)

@@ -3244,6 +3244,15 @@ export interface ParagraphMetadata {
     rotation?: number;
     /** The style of the paragraph. */
     style?: string;
+    /**
+     * For a quote paragraph (`style: 'Quote'`), the quote it belongs to: adjacent quote paragraphs with
+     * the same id are the paragraphs of one quote (Markdown `> a` `>` `> b`, HTML
+     * `<blockquote><p>a</p><p>b</p></blockquote>`, a LaTeX `quote` environment), written back as one
+     * where the format has the notion. Paragraphs without one are each a quote of their own, as a
+     * word processor's Quote-styled paragraphs are. A grouping key derived while parsing.
+     * @example "md-quote-1"
+     */
+    quoteId?: string;
     /** Detailed indentation information. */
     paragraphIndentation?: IndentationMetadata;
     /** The space around the paragraph and between its lines. */
