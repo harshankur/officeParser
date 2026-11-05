@@ -56,7 +56,7 @@ import { FURNITURE_BAND, findRunningLines, markPageFields, PageFurniture, planFu
 import { setOwn } from '../utils/lookupUtils.js';
 import { BROTLI_AVOIDED_LINE, acquirePdfProcess, PdfProcess } from './pdf/pdfProcess.js';
 import { avoidBrotliInThisProcess, BROTLI_FIXED_RELEASES, onBrotliRefused, runtimeHasBrotliFlaw, runtimeName } from '../utils/brotliFlaw.js';
-import { captureConsoleWarnings, openWarningWorker, PdfAssetSession, pdfjsWorkerFile, resolvePdfAssetFolders, WarningWorker } from './pdf/pdfAssets.js';
+import { bindOwnWorker, captureConsoleWarnings, isWorkerOfVersion, openWarningWorker, PdfAssetSession, pdfjsWorkerFile, resolvePdfAssetFolders, WarningWorker } from './pdf/pdfAssets.js';
 import { appendAll } from '../utils/nodeListUtils.js';
 
 /**
@@ -1736,15 +1736,19 @@ function imageBounds(viewport: any, ctm: number[]): { x: number; y: number; widt
 
 /**
  * Whether the caller preloaded pdf.js's worker as `globalThis.pdfjsWorker`, which runs pdf.js in this
- * process (see `separateProcess`). pdf.js's own worker module sets that global too, when it loads
- * here: the first time pdf.js runs in this process (`separateProcess: false`, or the fallback). So
- * the global is read until then and settled when it happens (settleCallerPreloadedWorker); read
- * afterwards, one parse in this process took pdf.js's own worker for the caller's, and every later
- * parse ran pdf.js here too, without its memory limit.
+ * process (see `separateProcess`). Only a worker of this pdf.js's version counts: another pdf.js in the
+ * process (an application's own) leaves its worker on that global too, and a worker of another version
+ * rejects every document. The global is read until pdf.js first runs in this process
+ * (`separateProcess: false`, or the fallback) and settled then (settleCallerPreloadedWorker), so a global
+ * set afterwards does not move every later parse into this process, without its memory limit.
  */
 let workerPreloaded: boolean | undefined;
-const callerPreloadedWorker = (): boolean => workerPreloaded ?? !!(globalThis as any).pdfjsWorker;
-const settleCallerPreloadedWorker = (): void => { workerPreloaded ??= !!(globalThis as any).pdfjsWorker; };
+const preloadedWorkerIsCallers = (pdfjs: any): boolean => {
+    const preloaded = (globalThis as any).pdfjsWorker;
+    return !!preloaded && isWorkerOfVersion(preloaded.WorkerMessageHandler, pdfjs.version);
+};
+const callerPreloadedWorker = (pdfjs: any): boolean => workerPreloaded ?? preloadedWorkerIsCallers(pdfjs);
+const settleCallerPreloadedWorker = (pdfjs: any): void => { workerPreloaded ??= preloadedWorkerIsCallers(pdfjs); };
 
 /**
  * Parses a PDF file and extracts content.
@@ -1776,7 +1780,7 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         if (workerSrc !== DEFAULT_OFFICE_PARSER_CONFIG.pdfWorkerSrc && workerSrc !== '') {
             pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
             resolved = true;
-        } else if (callerPreloadedWorker()) {
+        } else if (callerPreloadedWorker(pdfjs)) {
             resolved = true;
         } else {
             try {
@@ -1824,11 +1828,11 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // preloaded as `globalThis.pdfjsWorker`, or no separate process at all, runs pdf.js here.
     const workerUrl = String(pdfjs.GlobalWorkerOptions.workerSrc ?? '');
     let pdfProcess: PdfProcess | undefined;
-    if (!isBrowser && pdfCfg.separateProcess && !callerPreloadedWorker() && workerUrl.startsWith('file:')) {
+    if (!isBrowser && pdfCfg.separateProcess && !callerPreloadedWorker(pdfjs) && workerUrl.startsWith('file:')) {
         pdfProcess = await acquirePdfProcess(pdfjs, workerUrl, pdfCfg.processMemoryMb, config.abortSignal);
         if (!pdfProcess) logWarning(OfficeWarningType.PDF_SEPARATE_PROCESS_UNAVAILABLE, config);
     }
-    if (!pdfProcess && !isBrowser) settleCallerPreloadedWorker();
+    if (!pdfProcess && !isBrowser) settleCallerPreloadedWorker(pdfjs);
     // pdf.js's worker for this parse runs at warning verbosity, and its warnings are taken: from the
     // separate process's messages; in this process from the console while the parse's document is open
     // (see takeInProcessTurn and captureConsoleWarnings), in a PDFWorker of the parse's own, as also in a
@@ -1842,9 +1846,12 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     try {
         if (pdfProcess) {
             pdfProcess.onWarning(takeWarning);
-        } else if (isBrowser && !callerPreloadedWorker()) {
+        } else if (isBrowser && !callerPreloadedWorker(pdfjs)) {
             ownWorker = await openWarningWorker(pdfjs, String(pdfjs.GlobalWorkerOptions.workerSrc ?? ''), takeWarning, config.abortSignal);
         } else {
+            if (!isBrowser && !callerPreloadedWorker(pdfjs) && !pdfjs.GlobalWorkerOptions.workerPort) {
+                await bindOwnWorker(pdfjs, String(pdfjs.GlobalWorkerOptions.workerSrc ?? ''));
+            }
             // A worker port the caller set is pdf.js's to use; one PDFWorker per port.
             const workerFile = pdfjs.GlobalWorkerOptions.workerPort ? undefined : await pdfjsWorkerFile(pdfjs);
             if (!pdfjs.GlobalWorkerOptions.workerPort) {

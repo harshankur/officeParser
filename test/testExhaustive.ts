@@ -8799,6 +8799,75 @@ async function testPdfPicturesLeftOut(): Promise<void> {
 }
 
 /**
+ * Another pdf.js in the process, of another version (an application's own, to render pages itself): its
+ * worker module puts itself on `globalThis.pdfjsWorker` as it loads, and is not taken for a worker the
+ * caller preloaded for the library's pdf.js. A PDF is read in a separate process and in this one, in
+ * either order, and the global is left as it was found, so the other pdf.js keeps its own worker.
+ */
+async function testPdfBesideAnotherPdfjs(): Promise<void> {
+    const os = await import('os');
+    const childProcess = await import('child_process');
+    const { pathToFileURL } = await import('url');
+    const { isWorkerOfVersion } = await import('../src/parsers/pdf/pdfAssets');
+    const version: string = require('pdfjs-dist/package.json').version;
+    const ownWorker = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'officeparser-other-pdfjs-'));
+    try {
+        const source = fs.readFileSync(ownWorker, 'utf8');
+        const otherSource = source.replaceAll(JSON.stringify(version), '"99.0.0"');
+        assert.notStrictEqual(otherSource, source, "pdf.js's worker still holds its version as a literal");
+        const otherWorker = path.join(dir, 'pdf.worker.mjs');
+        fs.writeFileSync(otherWorker, otherSource);
+
+        const saved = Object.getOwnPropertyDescriptor(globalThis, 'pdfjsWorker');
+        try {
+            const own = await import(pathToFileURL(ownWorker).href);
+            const other = await import(pathToFileURL(otherWorker).href);
+            assert.strictEqual(isWorkerOfVersion(own.WorkerMessageHandler, version), true, "the library's own worker is of its pdf.js version");
+            assert.strictEqual(isWorkerOfVersion(other.WorkerMessageHandler, version), false, 'a worker of another version is not');
+            assert.strictEqual(isWorkerOfVersion({ createDocumentHandler() { return null; } }, version), true, 'one whose version cannot be read is taken to be');
+        } finally {
+            if (saved) Object.defineProperty(globalThis, 'pdfjsWorker', saved);
+            else delete (globalThis as any).pdfjsWorker;
+        }
+
+        const doc = await PDFDocument.create();
+        doc.addPage([300, 200]).drawText('Read beside another pdf.js', { x: 20, y: 100, size: 14, font: await doc.embedFont(StandardFonts.Helvetica) });
+        const pdfFile = path.join(dir, 'beside.pdf');
+        fs.writeFileSync(pdfFile, await doc.save());
+        const run = (name: string, body: string[]): string => {
+            const script = path.join(dir, `${name}.ts`);
+            fs.writeFileSync(script, [
+                `const { OfficeParser } = require(${JSON.stringify(path.join(__dirname, '..', 'src', 'OfficeParser'))});`,
+                `const read = async (config) => String((await (await OfficeParser.parseOffice(${JSON.stringify(pdfFile)}, { onWarning: () => {}, ...config })).to('text')).value).trim();`,
+                `const loadOther = async () => { await import(${JSON.stringify(pathToFileURL(otherWorker).href)}); return globalThis.pdfjsWorker; };`,
+                `(async () => {`,
+                ...body,
+                `})().then(() => process.exit(0), (e) => { console.log('FAILED ' + e.message); process.exit(0); });`,
+            ].join('\n'));
+            return childProcess.execFileSync(process.execPath, [...process.execArgv, script], { encoding: 'utf8', timeout: 60_000 });
+        };
+        const separate = `console.log('SEPARATE ' + await read({}));`;
+        const here = `console.log('HERE ' + await read({ pdfParserConfig: { separateProcess: false } }));`;
+
+        for (const [name, order] of [['separate-first', [separate, here]], ['here-first', [here, separate]]] as const) {
+            const out = run(name, [`const other = await loadOther();`, ...order, `console.log('KEPT ' + (globalThis.pdfjsWorker === other));`]);
+            assert.ok(!/FAILED/.test(out), `${name}: a PDF is read beside another pdf.js's worker; got ${JSON.stringify(out.trim())}`);
+            assert.ok(/SEPARATE Read beside another pdf\.js/.test(out), `${name}: in a separate process; got ${JSON.stringify(out.trim())}`);
+            assert.ok(/HERE Read beside another pdf\.js/.test(out), `${name}: and in this one; got ${JSON.stringify(out.trim())}`);
+            assert.ok(/KEPT true/.test(out), `${name}: the other pdf.js keeps its worker on the global; got ${JSON.stringify(out.trim())}`);
+        }
+
+        const alone = run('alone', [here, `console.log('LEFT ' + ('pdfjsWorker' in globalThis));`]);
+        assert.ok(/HERE Read beside another pdf\.js/.test(alone), `read in this process; got ${JSON.stringify(alone.trim())}`);
+        assert.ok(/LEFT false/.test(alone), `the library's worker is not left on the global for a pdf.js loaded later; got ${JSON.stringify(alone.trim())}`);
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+    console.log('  PDF beside another pdf.js: All assertions passed ✓');
+}
+
+/**
  * pdf.js in this process has one document open at a time (see takeInProcessTurn in PdfParser), and a
  * turn is never held while code of the caller's is waited on: an `onPassword` that parses another PDF
  * first, an `onWarning` that starts one, and OCR (here a worker that parses one before it answers) each
@@ -11752,6 +11821,7 @@ async function runTests(): Promise<void> {
         ['Markdown attributes', testMarkdownAttributes],
         ['PDF warning pages', testPdfWarningPages],
         ['PDF pictures left out', testPdfPicturesLeftOut],
+        ['PDF beside another pdf.js', testPdfBesideAnotherPdfjs],
         ['PDF in-process turns', testPdfInProcessTurns],
         ['PDF form metadata and HTML details', testPdfFormMetadataAndHtml],
         ['PDF form values as text', testPdfFormValuesAsText],

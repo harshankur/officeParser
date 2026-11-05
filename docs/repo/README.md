@@ -2171,6 +2171,7 @@ const ast = await officeParser.parseOffice(pdfArrayBuffer, {
 
 > [!NOTE]
 > The `pdfjs-dist` worker version must match the version bundled with `officeparser` (currently `pdfjs-dist@6.2.108`).
+> `officeparser` pins that exact version because its PDF output depends on it. In Node.js, another `pdfjs-dist` in the same process, of any version (an application's own, to render pages), works: each copy keeps its own worker.
 
 ---
 
@@ -2180,6 +2181,7 @@ const ast = await officeParser.parseOffice(pdfArrayBuffer, {
 |---------|-----|
 | Node.js process stays alive after finishing | Call `await officeParser.terminateOcr()` at end of script when OCR was used |
 | `"Worker not found"` in browser for PDF | Verify `pdfWorkerSrc` points to `pdf.worker.min.mjs` matching `pdfjs-dist@6.2.108` |
+| `The API version "…" does not match the Worker version "…"` for PDF | Point `pdfWorkerSrc` at the worker of `pdfjs-dist@6.2.108`, or leave it unset in Node.js |
 | Japanese, Chinese or Korean PDF text missing (`PDF_ASSET_UNAVAILABLE` for a CMap) | Set `pdfCMapUrl` to a copy of `pdfjs-dist/cmaps/` you host (or leave `allowRemoteAssets` on) |
 | Low OCR accuracy | Verify `ocrConfig.language` matches the document language; quality depends on image resolution |
 | Out of memory on large Excel files | Call `await ast.to('text')` early and discard the AST object to allow garbage collection |

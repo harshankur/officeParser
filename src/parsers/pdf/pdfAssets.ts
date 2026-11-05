@@ -531,6 +531,67 @@ export async function pdfjsWorkerFile(pdfjs: any): Promise<string | undefined> {
 }
 
 /**
+ * Whether `handler`, a pdf.js worker's `WorkerMessageHandler`, is of pdf.js `version`, as the version
+ * literal in its `createDocumentHandler` says. One whose version cannot be read is taken to be.
+ */
+export function isWorkerOfVersion(handler: unknown, version: string): boolean {
+    try {
+        const create = (handler as { createDocumentHandler?: unknown } | null | undefined)?.createDocumentHandler;
+        if (typeof create !== 'function' || typeof version !== 'string') return true;
+        const versions = Function.prototype.toString.call(create).match(/"\d+\.\d+\.\d+"/g);
+        return !versions || versions.includes(JSON.stringify(version));
+    } catch {
+        return true;
+    }
+}
+
+const boundWorkers = new WeakMap<object, Promise<void>>();
+
+/**
+ * Gives `pdfjs`'s fake worker (pdf.js run in this process) the worker module at `workerSrc`, and leaves
+ * `globalThis.pdfjsWorker` as it was. The fake worker takes that global before `workerSrc` and keeps the
+ * handler it took for good, and a worker module sets the global as it loads, so two pdf.js copies in one
+ * process could otherwise each end up with the other's worker. Done once per pdf.js: parses that start
+ * together share the binding, since a second one saving the global while the module loads would restore
+ * this module's worker to it. Where the module cannot be imported, pdf.js finds a worker itself.
+ */
+export function bindOwnWorker(pdfjs: any, workerSrc: string): Promise<void> {
+    const PDFWorker = pdfjs.PDFWorker;
+    if (!PDFWorker || !workerSrc) return Promise.resolve();
+    let binding = boundWorkers.get(PDFWorker);
+    if (!binding) {
+        binding = bindWorkerModule(PDFWorker, workerSrc);
+        boundWorkers.set(PDFWorker, binding);
+    }
+    return binding;
+}
+
+async function bindWorkerModule(PDFWorker: any, workerSrc: string): Promise<void> {
+    const saved = Object.getOwnPropertyDescriptor(globalThis, 'pdfjsWorker');
+    const restore = () => {
+        if (saved) Object.defineProperty(globalThis, 'pdfjsWorker', saved);
+        else delete (globalThis as any).pdfjsWorker;
+    };
+    try {
+        let worker: any;
+        try {
+            worker = await import(workerSrc);
+        } finally {
+            restore();
+        }
+        if (typeof worker?.WorkerMessageHandler?.setup !== 'function') return;
+        try {
+            (globalThis as any).pdfjsWorker = { WorkerMessageHandler: worker.WorkerMessageHandler };
+            void PDFWorker._setupFakeWorkerGlobal;
+        } finally {
+            restore();
+        }
+    } catch {
+        /* pdf.js finds a worker itself */
+    }
+}
+
+/**
  * Sends the warnings pdf.js's worker writes in this process to `sink` until the returned function is
  * called. pdf.js's worker module, run in this process, writes them with `console.warn` ("Warning: ...")
  * from its own `warn`: while any sink is open, a line that starts so and was written by code in

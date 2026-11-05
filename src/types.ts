@@ -853,8 +853,9 @@ export interface PdfParserConfig {
      * `abortSignal` fires). They end when the host exits. When a process cannot start (a runtime that
      * cannot run its own executable as Node), pdf.js runs in this one with a
      * `PDF_SEPARATE_PROCESS_UNAVAILABLE` warning; it also runs here, without one, when this is false or
-     * the caller preloaded a worker as `globalThis.pdfjsWorker`. The browser runs pdf.js in a Web
-     * Worker regardless.
+     * the caller preloaded a worker of the library's pdf.js version as `globalThis.pdfjsWorker` (one of
+     * another version, as another pdf.js in the process leaves there, is not used). The browser runs
+     * pdf.js in a Web Worker regardless.
      *
      * Default is true.
      */
