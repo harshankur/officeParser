@@ -1,6 +1,6 @@
 /**
- * DOCX templating: fills a Word document's tags with caller data, preserving all of the document's
- * formatting and structure, and returns a new `.docx`. A tag is a field (`{{name}}`, `{{ a.b }}`) or a
+ * Templating: fills a document's tags with caller data, preserving all of the document's formatting
+ * and structure, and returns a new document of its format. A tag is a field (`{{name}}`, `{{ a.b }}`) or a
  * block tag: `{{ if cond }}` ... `{{ else if cond }}` ... `{{ else }}` ... `{{ endif }}` keeps one
  * branch, `{{ for item in list }}` ... `{{ endfor }}` repeats its content once per item.
  *
@@ -25,6 +25,11 @@
  *    `maxRepeatedContent`. A last pass keeps every table with a row and every cell ending in a paragraph,
  *    as Word requires, when a loop or a branch left one without.
  *
+ * The engine is the same for every format. What differs (which elements hold text, what a paragraph,
+ * a table row or a cell is called, which ids must stay unique, how a value is written as XML) is a
+ * {@link TemplateDialect}: DOCX's is here ({@link DOCX_DIALECT}), with the notes Word keeps in parts of
+ * their own; ODT's is in `odtTemplate.ts`.
+ *
  * @module template/templateEngine
  */
 
@@ -37,6 +42,70 @@ import { conditionSize, ConditionValue, evaluateCondition, Incomparable, kindOfV
 
 /** The `word/*.xml` parts that carry body text a tag could live in. */
 const TEXT_PART = /^word\/(document\d*|header\d*|footer\d*|footnotes|endnotes|comments)\.xml$/;
+
+/**
+ * What the engine needs to know of a format: the names of its elements, the ids it keeps unique, how
+ * its text runs are found and how a value is written. The DOCX dialect is {@link DOCX_DIALECT}.
+ */
+export interface TemplateDialect {
+    /** Whether a part carries text a tag could be in. */
+    isTextPart(name: string): boolean;
+    /** Finds the tags in a part's text and marks them (see {@link markRuns}); returns the part unchanged when it holds none. */
+    markPart(xml: string, ctx: PartContext): string;
+    /** Paragraph elements. */
+    paragraphs: ReadonlySet<string>;
+    /** Elements whose own text is a run of a paragraph's text (DOCX's `w:t`; ODT's paragraphs and spans). */
+    textHolders: ReadonlySet<string>;
+    /** Elements whose content starts afresh: their paragraphs are not inside the paragraph holding them (a text box). */
+    freshContent: ReadonlySet<string>;
+    /** The table, row and cell elements. */
+    table: string;
+    row: string;
+    /** Elements between a table and its rows that a row block may widen to. */
+    rowWrappers: ReadonlySet<string>;
+    /** Elements between a table and its rows that may hold a row block whole, which a block never crosses (ODT's heading rows). */
+    rowGroups: ReadonlySet<string>;
+    /** Elements a paragraph of a paragraph block may sit in below the block's container, the same for each of its tags (ODT's list items). */
+    paragraphWrappers: ReadonlySet<string>;
+    /** What a paragraph may hold and still count as holding nothing but tags. */
+    tagOnlyAllowed: ReadonlySet<string>;
+    /** Elements a block may be cut through: closed before the cut and opened again after it. */
+    splittable: ReadonlySet<string>;
+    /** Elements an inline block's cut is lifted out of (DOCX's text and run). */
+    liftedFromInline: ReadonlySet<string>;
+    /** Containers that must hold at least one paragraph (or table). */
+    needsBlock: ReadonlySet<string>;
+    /** The block-level children of a container, counted to know what it holds. */
+    blockElements: ReadonlySet<string>;
+    /** Elements a tracked change is, named in an error with what to do about it. */
+    trackedChanges: ReadonlySet<string>;
+    /** Elements holding a paragraph's properties (inside them, nothing is content). */
+    propertyElements: ReadonlySet<string>;
+    /** A run and its properties, copied when the run is cut (DOCX's `w:r` and `w:rPr`). */
+    runProps: { run: string; props: string } | null;
+    /** The element marking a complex field's begin, separate and end (DOCX's `w:fldChar`). */
+    fieldChar: string | null;
+    /** Section properties, content of the paragraph holding them. */
+    sectionProps: string | null;
+    /** What a crossing is, for its error. */
+    describeCrossing(units: Frame[], container: Frame): string;
+    /** A value's text as XML in a text run, and how much longer the XML can be than the text. */
+    textXml(text: string): string;
+    textGrowth(text: string): number;
+    /** The unique ids in an element's start tag, by its name; and those any element may carry. */
+    idAttributes(name: string): [string, IdKind][];
+    everyElementIds: [string, IdKind][];
+    /** The range a slot is an end of (`bookmark:<id>`), or null. */
+    rangeOf(slot: IdSlot): string | null;
+    /** Where fresh ids start, from every text part of the template. */
+    seedIds(entries: Record<string, Uint8Array>, chargeFor: (part: string) => (() => void) | undefined): unknown;
+    /** A render's id state, from those seeds. */
+    newIds(seeds: unknown, rangesAcross: Set<string>): TemplateIds;
+    /** Keeps a rendered part valid after loops and branches removed content. */
+    repair(xml: string, limit: () => never): string;
+    /** Notes kept in parts of their own, copied per reference in a loop (DOCX's footnotes, endnotes, comments); null when notes are inline. */
+    noteParts: typeof NOTE_PARTS | null;
+}
 
 /**
  * Parts whose bytes are already compressed, so deflating them again buys nothing and only costs CPU,
@@ -86,9 +155,13 @@ const NAME_END = /[\s/>]/;
 /** How a tracked change in a block's path is named in an error, with what to do about it. */
 const TRACKED_CHANGE = new Set(['w:ins', 'w:del', 'w:moveFrom', 'w:moveTo']);
 
-/** Id attributes Word requires to be unique, and so renumbers in each repeated copy. */
-type IdKind = 'docPr' | 'bookmarkStart' | 'bookmarkEnd' | 'bookmarkName' | 'sdt' | 'paraId' | 'textId'
-    | 'footnoteRef' | 'endnoteRef' | 'commentStart' | 'commentEnd' | 'commentRef';
+/**
+ * Id attributes a format requires to be unique, and so renumbers in each repeated copy: Word's first,
+ * then OpenDocument's (`odf...`: an id, a note's id, a name, a range's start and end by its kind).
+ */
+export type IdKind = 'docPr' | 'bookmarkStart' | 'bookmarkEnd' | 'bookmarkName' | 'sdt' | 'paraId' | 'textId'
+    | 'footnoteRef' | 'endnoteRef' | 'commentStart' | 'commentEnd' | 'commentRef'
+    | 'odfId' | 'odfNoteId' | 'odfName' | 'odfRangeStart' | 'odfRangeEnd';
 
 /** The longest bookmark name Word keeps. */
 const MAX_BOOKMARK_NAME = 40;
@@ -256,7 +329,7 @@ type TemplateNode = LiteralNode | FieldNode | IfNode | ForNode;
 
 /** An id in a literal that a repeated copy renumbers. */
 /** An id in a start tag: where its value starts and ends, and where its tag starts (`<`) and ends (`>`), as visitIds read them. */
-interface IdSlot { start: number; end: number; kind: IdKind; value: string; tag: number; gt: number }
+export interface IdSlot { start: number; end: number; kind: IdKind; value: string; tag: number; gt: number }
 
 /**
  * A note compiled on its own, to be written per reference: its nodes (null with no tag), its text, and
@@ -269,10 +342,11 @@ interface CompiledPart { name: string; nodes: TemplateNode[] | null; hasBlocks: 
 
 /** A whole template, compiled once and rendered once per data entry. */
 export interface CompiledDocxTemplate {
+    dialect: TemplateDialect;
     entries: Record<string, Uint8Array>;
     parts: Map<string, CompiledPart>;
-    /** Where fresh ids start, when a loop repeats content holding ids (null when no loop does). */
-    ids: IdSeeds | null;
+    /** Where fresh ids start, when a loop repeats content holding ids (null when no loop does); the dialect's own. */
+    ids: unknown | null;
     literalCount: number;
     /** Each note of a notes part compiled on its own, by part and id: rendered per reference in a loop. */
     noteTemplates: Map<string, Map<string, NoteTemplate>>;
@@ -297,9 +371,10 @@ export interface CompiledDocxTemplate {
 interface ElementBudget { left: number; textRuns: number }
 
 /** Per-part compile state. */
-interface PartContext {
+export interface PartContext {
     part: string;
     opts: DocxTemplateOptions;
+    dialect: TemplateDialect;
     /** The delimiters as Word stores them in `<w:t>` text (`<<` as `&lt;&lt;`). */
     startText: string;
     endText: string;
@@ -470,45 +545,23 @@ function typedOf(record: TagRecord, opts: DocxTemplateOptions): string {
 }
 
 /**
- * Puts markers for the tags in one chunk of run-level XML (the content between two paragraph-boundary
- * tags). Returns the chunk unchanged when it holds no tag.
+ * One run of a paragraph's text, as the part stores it (XML-escaped): where it starts and ends in the
+ * part, and its text. `spaces` is set on a run that stands for spaces (ODT's `<text:s/>`), whose text
+ * a marker's piece is written back as with {@link TemplateDialectSpaces.spacesXml}.
  */
-function markChunk(chunk: string, ctx: PartContext): string {
-    // A `<w:t>` is either self-closing (`<w:t/>`, emitted by the OpenXML SDK / POI / docx4j for an
-    // empty run) or a normal `<w:t ...>text</w:t>`; capture the inner text of the latter.
-    //
-    // This is a forward-only scan rather than a `<w:t\b[^>]*?(?:\/>|>([\s\S]*?)<\/w:t>)/g` exec loop:
-    // the template input is arbitrary caller bytes, and that pattern rescans to the end of the part
-    // from every `<w:t` token, so a run of unclosed tokens costs O(n^2) (80k tokens: ~6s). Here every
-    // byte is looked at once. Well-formed XML, where `<w:t>` never nests, parses identically.
-    // A chunk without the delimiter's first character holds no tag, however its text is split.
-    if (!chunk.includes(ctx.startText[0])) return chunk;
-    const segs: { start: number; end: number; inner: string }[] = [];
-    const counted = (): void => { if (--ctx.elements.textRuns < 0) ctx.opts.onElementLimit(); };
-    // One walk from `<` to `<`: a comment (or CDATA section, or processing instruction) is passed whole,
-    // a `<w:t` or quote in it being none, and nothing is searched for past the next `<`.
-    for (let s = chunk.indexOf('<'); s >= 0; s = chunk.indexOf('<', s + 1)) {
-        const inert = inertEnd(chunk, s);
-        if (inert !== null) { if (inert < 0) break; s = inert; continue; }
-        // The `\b` after the tag name: `<w:tab` and `<w:tabs` are not `<w:t` elements.
-        if (!chunk.startsWith('<w:t', s) || /\w/.test(chunk[s + 4] ?? '')) continue;
-        const tagEnd = startTagEnd(chunk, s + 4);
-        if (tagEnd < 0) break;                       // unterminated tag: nothing further can match
-        counted();
-        if (chunk.charCodeAt(tagEnd - 1) === 0x2f) { // `<w:t/>`
-            segs.push({ start: s, end: tagEnd + 1, inner: '' });
-            s = tagEnd;
-            continue;
-        }
-        const close = chunk.indexOf('</w:t>', tagEnd + 1);
-        if (close < 0) break;                        // no closing tag left in this chunk
-        segs.push({ start: s, end: close + 6, inner: chunk.slice(tagEnd + 1, close) });
-        s = close + 5;
-    }
-    if (!segs.length) return chunk;
+export interface TextRun { start: number; end: number; inner: string; spaces?: boolean }
 
+/** How a dialect writes back spaces that a run of spaces stood for. */
+export interface TemplateDialectSpaces { spacesXml(spaces: string): string }
+
+/**
+ * Finds the tags in one paragraph's runs of text, joined, records them in `ctx`, and returns each
+ * run's new content, in pieces: text, and a marker for each tag (or part of a tag) it held. Null when
+ * the runs hold no tag (they are then left exactly as they are).
+ */
+export function markRuns(segs: TextRun[], ctx: PartContext, spaces?: TemplateDialectSpaces): string[][] | null {
     const joined = segs.map(s => s.inner).join('');
-    if (!joined.includes(ctx.startText)) return chunk; // no tag here: leave it exactly as-is
+    if (!joined.includes(ctx.startText)) return null; // no tag here: leave it exactly as-is
     const matches = findTagSpans(joined, ctx);
     let tagCount = 0;
     for (const span of matches) if (span.tag) tagCount++;
@@ -516,7 +569,7 @@ function markChunk(chunk: string, ctx: PartContext): string {
     const remember = (span: TagSpan): void => {
         if (span.unreadable) ctx.unreadable.push({ inner: span.inner, reason: span.unreadable, beforeTag: ctx.tags.length, word: (/\p{L}+/u.exec(decodeXmlText(span.inner))?.[0] ?? '').toLowerCase() });
     };
-    if (!tagCount) { matches.forEach(remember); return chunk; }
+    if (!tagCount) { matches.forEach(remember); return null; }
 
     // Rebuild each segment's inner text. Ordinary characters stay in their own segment; a tag becomes a
     // marker in each segment it spanned (the first one standing for the tag). Built from slices of the
@@ -554,13 +607,56 @@ function markChunk(chunk: string, ctx: PartContext): string {
             const end = Math.min(mt.end, offsets[si + 1]);
             const markerIndex = ctx.markerTag.push(tagIndex) - 1;
             ctx.markerPiece.push(piece);
-            ctx.pieceText.push(joined.slice(at, end));
+            const text = joined.slice(at, end);
+            ctx.pieceText.push(spaces && segs[si].spaces ? spaces.spacesXml(text) : text);
             pieces[si].push(`${ctx.open}${markerIndex}${ctx.close}`);
             at = end;
         }
         copied = mt.end;
     }
     copy(copied, joined.length);
+    return pieces;
+}
+
+/**
+ * Puts markers for the tags in one chunk of run-level XML (the content between two paragraph-boundary
+ * tags). Returns the chunk unchanged when it holds no tag.
+ */
+function markChunk(chunk: string, ctx: PartContext): string {
+    // A `<w:t>` is either self-closing (`<w:t/>`, emitted by the OpenXML SDK / POI / docx4j for an
+    // empty run) or a normal `<w:t ...>text</w:t>`; capture the inner text of the latter.
+    //
+    // This is a forward-only scan rather than a `<w:t\b[^>]*?(?:\/>|>([\s\S]*?)<\/w:t>)/g` exec loop:
+    // the template input is arbitrary caller bytes, and that pattern rescans to the end of the part
+    // from every `<w:t` token, so a run of unclosed tokens costs O(n^2) (80k tokens: ~6s). Here every
+    // byte is looked at once. Well-formed XML, where `<w:t>` never nests, parses identically.
+    // A chunk without the delimiter's first character holds no tag, however its text is split.
+    if (!chunk.includes(ctx.startText[0])) return chunk;
+    const segs: { start: number; end: number; inner: string }[] = [];
+    const counted = (): void => { if (--ctx.elements.textRuns < 0) ctx.opts.onElementLimit(); };
+    // One walk from `<` to `<`: a comment (or CDATA section, or processing instruction) is passed whole,
+    // a `<w:t` or quote in it being none, and nothing is searched for past the next `<`.
+    for (let s = chunk.indexOf('<'); s >= 0; s = chunk.indexOf('<', s + 1)) {
+        const inert = inertEnd(chunk, s);
+        if (inert !== null) { if (inert < 0) break; s = inert; continue; }
+        // The `\b` after the tag name: `<w:tab` and `<w:tabs` are not `<w:t` elements.
+        if (!chunk.startsWith('<w:t', s) || /\w/.test(chunk[s + 4] ?? '')) continue;
+        const tagEnd = startTagEnd(chunk, s + 4);
+        if (tagEnd < 0) break;                       // unterminated tag: nothing further can match
+        counted();
+        if (chunk.charCodeAt(tagEnd - 1) === 0x2f) { // `<w:t/>`
+            segs.push({ start: s, end: tagEnd + 1, inner: '' });
+            s = tagEnd;
+            continue;
+        }
+        const close = chunk.indexOf('</w:t>', tagEnd + 1);
+        if (close < 0) break;                        // no closing tag left in this chunk
+        segs.push({ start: s, end: close + 6, inner: chunk.slice(tagEnd + 1, close) });
+        s = close + 5;
+    }
+    if (!segs.length) return chunk;
+    const pieces = markRuns(segs, ctx);
+    if (!pieces) return chunk;
 
     // Rebuild the chunk in a single forward pass: copy the text between `<w:t>` segments verbatim and
     // drop each rewritten segment in place. Splicing last-to-first would recopy the growing tail on
@@ -583,7 +679,7 @@ function markChunk(chunk: string, ctx: PartContext): string {
  * from every `<w:p` that has none: 570 bytes of zipped `<w:p ` took 24 seconds), and only the stretches
  * a tag changes are collected, so a part of many paragraphs holds no list of them.
  */
-function markPart(xml: string, ctx: PartContext): string {
+function markDocxPart(xml: string, ctx: PartContext): string {
     const out: string[] = [];
     let copied = 0;
     let stretchStart = 0;
@@ -619,7 +715,7 @@ function markPart(xml: string, ctx: PartContext): string {
 // ─── Phase 2: where the markers sit ─────────────────────────────────────────
 
 /** An element, as the structure scan saw it. Frames a marker sits in are kept (through `parent`). */
-interface Frame {
+export interface Frame {
     name: string;
     /** Offset of its `<`, just past its start tag, and just past its end (-1 until closed). */
     start: number;
@@ -645,6 +741,13 @@ interface Frame {
     lastTagOnly: Frame | null;
     /** Set on a `<w:rPr>` that is its run's properties. */
     isRunProps: boolean;
+    /**
+     * What a paragraph holding nothing but tags is removed as: itself, or the list items (and lists) it
+     * is the only content of (see {@link TemplateDialect.paragraphWrappers}). Set on a wrapper holding
+     * such a paragraph alone, `sole` is that paragraph.
+     */
+    unit: Frame;
+    sole: Frame | null;
 }
 
 /** A marker in the XML: where it is, and the `<w:t>` holding it. */
@@ -654,13 +757,15 @@ interface Occurrence {
     field: number;
 }
 
-function newFrame(name: string, start: number, tagEnd: number, parent: Frame | null): Frame {
-    return {
+function newFrame(name: string, start: number, tagEnd: number, parent: Frame | null, d: TemplateDialect): Frame {
+    const frame = {
         name, start, tagEnd, end: -1, parent, depth: parent ? parent.depth + 1 : 0,
         // A text box's content starts afresh: its paragraphs are not inside the paragraph holding the box.
-        para: name === W.p || name === W.txbxContent ? null : parent?.para ?? null, props: false, rPr: null, content: false,
-        blockMarks: [], goBack: null, tagOnly: false, kids: 0, tagOnlyKids: 0, lastTagOnly: null, isRunProps: false,
-    };
+        para: d.paragraphs.has(name) || d.freshContent.has(name) ? null : parent?.para ?? null, props: false, rPr: null, content: false,
+        blockMarks: [], goBack: null, tagOnly: false, kids: 0, tagOnlyKids: 0, lastTagOnly: null, isRunProps: false, sole: null,
+    } as Omit<Frame, 'unit'> as Frame;
+    frame.unit = frame;
+    return frame;
 }
 
 /** An attribute's value in a start tag (bounded to the tag). */
@@ -706,7 +811,8 @@ function scanStructure(xml: string, ctx: PartContext): Occurrence[] {
     const occurrences: Occurrence[] = [];
     const fields: number[] = [];
     let fieldStates = 0;
-    const root = newFrame('#document', 0, 0, null);
+    const d = ctx.dialect;
+    const root = newFrame('#document', 0, 0, null, d);
     let top = root;
     function malformed(detail: string): never {
         return ctx.opts.onSyntax({ reason: 'malformed-xml', tag: firstBlockTag(ctx), part: ctx.part, detail });
@@ -720,7 +826,7 @@ function scanStructure(xml: string, ctx: PartContext): Occurrence[] {
         return nextMarker;
     };
     const onText = (from: number, to: number): void => {
-        if (top.name !== W.t) return;
+        if (!d.textHolders.has(top.name)) return;
         const para = top.para;
         let at = from;
         while (at < to) {
@@ -745,25 +851,26 @@ function scanStructure(xml: string, ctx: PartContext): Occurrence[] {
         const parent = frame.parent!;
         // A complex field is runs, not an element: its begin, separate and end marks are followed in
         // document order, each part of each field a state of its own.
-        if (frame.name === W.fldChar) {
+        if (frame.name === d.fieldChar) {
             const type = attributeOf(startTag, 'w:fldCharType');
             if (type === 'begin') fields.push(++fieldStates);
             else if (type === 'separate' && fields.length) fields[fields.length - 1] = ++fieldStates;
             else if (type === 'end') fields.pop();
         }
-        frame.props = parent.props || frame.name === W.pPr || frame.name === W.rPr;
-        if (frame.name === W.rPr && parent.name === W.r && !parent.rPr) frame.isRunProps = true;
-        if (BLOCK_ELEMENTS.has(frame.name)) parent.kids++;
+        frame.props = parent.props || d.propertyElements.has(frame.name);
+        if (d.runProps && frame.name === d.runProps.props && parent.name === d.runProps.run && !parent.rPr) frame.isRunProps = true;
+        if (d.blockElements.has(frame.name)) parent.kids++;
         const para = parent.para;
-        if (frame.name === W.p) frame.para = frame;
-        if (!para || frame.name === W.p) return;
+        const isParagraph = d.paragraphs.has(frame.name);
+        if (isParagraph) frame.para = frame;
+        if (!para || isParagraph) return;
         if (parent.props) {
-            if (frame.name === W.sectPr) para.content = true;
-        } else if (TAG_ONLY_ALLOWED.has(frame.name)) {
+            if (frame.name === d.sectionProps) para.content = true;
+        } else if (d.tagOnlyAllowed.has(frame.name)) {
             // allowed in a paragraph that holds nothing but tags
-        } else if (frame.name === W.bookmarkStart && attributeOf(startTag, 'w:name') === GO_BACK_BOOKMARK) {
+        } else if (d === DOCX_DIALECT && frame.name === W.bookmarkStart && attributeOf(startTag, 'w:name') === GO_BACK_BOOKMARK) {
             (para.goBack ??= new Set()).add(attributeOf(startTag, 'w:id') ?? '');
-        } else if (frame.name === W.bookmarkEnd && para.goBack?.has(attributeOf(startTag, 'w:id') ?? '')) {
+        } else if (d === DOCX_DIALECT && frame.name === W.bookmarkEnd && para.goBack?.has(attributeOf(startTag, 'w:id') ?? '')) {
             // the end of Word's last-edit bookmark
         } else {
             para.content = true;
@@ -772,9 +879,19 @@ function scanStructure(xml: string, ctx: PartContext): Occurrence[] {
     const onClose = (frame: Frame, end: number): void => {
         frame.end = end;
         if (frame.isRunProps) frame.parent!.rPr = [frame.start, end];
-        if (frame.name === W.p) {
+        if (d.paragraphs.has(frame.name)) {
             frame.tagOnly = !frame.content && frame.blockMarks.length > 0;
             if (frame.tagOnly && frame.parent) {
+                frame.parent.tagOnlyKids++;
+                frame.parent.lastTagOnly = frame;
+            }
+        } else if (d.paragraphWrappers.has(frame.name) && frame.kids === 1 && frame.tagOnlyKids === 1 && frame.lastTagOnly) {
+            // A list item holding a paragraph of nothing but tags alone, and nothing else, goes with it.
+            const sole = frame.lastTagOnly.sole ?? frame.lastTagOnly;
+            frame.sole = sole;
+            sole.unit = frame;
+            frame.tagOnly = true;
+            if (frame.parent) {
                 frame.parent.tagOnlyKids++;
                 frame.parent.lastTagOnly = frame;
             }
@@ -835,7 +952,7 @@ function scanStructure(xml: string, ctx: PartContext): Occurrence[] {
         // Every element, a text run too: nested runs (malformed, but read) and runs where no tag can be
         // were counted nowhere, and each kept a frame alive.
         if (--ctx.elements.left < 0) ctx.opts.onElementLimit();
-        const frame = newFrame(name, lt, gt + 1, top);
+        const frame = newFrame(name, lt, gt + 1, top, d);
         onElement(frame, xml.slice(lt, gt + 1));
         if (xml.charCodeAt(gt - 1) === 0x2f) onClose(frame, gt + 1);
         else top = frame;
@@ -982,8 +1099,8 @@ function commonAncestorOf(frames: Frame[]): Frame {
     return frontier.values().next().value!;
 }
 
-/** What a crossing is, for its error. */
-function describeCrossing(units: Frame[], container: Frame): string {
+/** What a crossing is in a Word document, for its error. */
+function describeDocxCrossing(units: Frame[], container: Frame): string {
     if (container.para) return 'one is inside a text box and another is not';
     if (units.some(u => u.name === W.tbl)) return 'one is inside a table and another is outside it, or in another table';
     if (units.some(u => u.name === W.sdt)) return 'one is inside a content control and another is not';
@@ -995,6 +1112,7 @@ function describeCrossing(units: Frame[], container: Frame): string {
  * `crossing` or `row-branch` for tags that cannot enclose content together.
  */
 function resolveScopes(blocks: Block[], ctx: PartContext): void {
+    const d = ctx.dialect;
     function syntax(reason: TemplateSyntaxDetails['reason'], occurrence: Occurrence, detail?: string): never {
         return ctx.opts.onSyntax({ reason, tag: typedOf(ctx.tags[occurrence.tagIndex], ctx.opts), part: ctx.part, detail });
     }
@@ -1010,7 +1128,7 @@ function resolveScopes(blocks: Block[], ctx: PartContext): void {
         if (paras.every(p => p === paras[0])) { block.mode = 'inline'; continue; }
         const container = commonAncestorOf(paras);
         // Paragraphs that share a paragraph: one is in a text box inside the other.
-        if (container.para) syntax('crossing', block.tags[Math.max(paras.indexOf(container), 0)], describeCrossing([], container));
+        if (container.para) syntax('crossing', block.tags[Math.max(paras.indexOf(container), 0)], d.describeCrossing([], container));
         // What a frame below the container sees above it, each frame worked out once for the block (a block
         // can hold any number of tags under one deep path: walking up for each of them took time quadratic in
         // the template): the topmost row between it and the container, its ancestor that is a child of the
@@ -1023,10 +1141,10 @@ function resolveScopes(blocks: Block[], ctx: PartContext): void {
             let next = f && f !== container ? above.get(f)! : null;
             for (let k = chain.length - 1; k >= 0; k--) {
                 const g = chain[k];
-                const own = g.name === W.tr ? g : null;
+                const own = g.name === d.row ? g : null;
                 next = next
-                    ? { row: next.row ?? own, child: next.child, wrappers: next.wrappers && ROW_WRAPPERS.has(g.name) }
-                    : { row: own, child: g, wrappers: ROW_WRAPPERS.has(g.name) };
+                    ? { row: next.row ?? own, child: next.child, wrappers: next.wrappers && d.rowWrappers.has(g.name) }
+                    : { row: own, child: g, wrappers: d.rowWrappers.has(g.name) };
                 above.set(g, next);
             }
             return above.get(start)!;
@@ -1034,14 +1152,14 @@ function resolveScopes(blocks: Block[], ctx: PartContext): void {
         const childOfContainer = (p: Frame): Frame => view(p).child;
         // Rows: every tag in a row of the same table (or of row wrappers inside it).
         const rows = paras.map(p => p.parent && p.parent !== container ? view(p.parent).row : null);
-        const rowLevel = container.name === W.tr || rows.every(row => {
+        const rowLevel = container.name === d.row || rows.every(row => {
             if (!row) return false;
             if (row.parent && row.parent !== container && !view(row.parent).wrappers) return false;
-            return container.name === W.tbl || ROW_WRAPPERS.has(container.name);
+            return container.name === d.table || d.rowWrappers.has(container.name) || d.rowGroups.has(container.name);
         });
         if (rowLevel) {
             block.mode = 'row';
-            block.units = container.name === W.tr ? paras.map(() => container) : paras.map(childOfContainer);
+            block.units = container.name === d.row ? paras.map(() => container) : paras.map(childOfContainer);
             const last = block.tags.length - 1;
             for (let i = 1; i < last; i++) {
                 if (block.units[i].start <= block.units[i - 1].start) syntax('row-branch', block.tags[i]);
@@ -1050,9 +1168,22 @@ function resolveScopes(blocks: Block[], ctx: PartContext): void {
             continue;
         }
         const units = paras.map(childOfContainer);
-        const strayIndex = units.findIndex((u, i) => u !== paras[i]);
-        if (strayIndex >= 0) syntax('crossing', block.tags[strayIndex], describeCrossing(units, container));
+        // A paragraph is its own unit, or sits in wrappers (list items) below the container, the same ones
+        // for every tag: a cut inside one paragraph and a cut inside another then close and open the same
+        // elements, so the content between them repeats balanced.
+        const wrappersOf = (p: Frame, unit: Frame): string | null => {
+            let names = '';
+            for (let f = p.parent; f && f !== unit.parent; f = f.parent) {
+                if (!d.paragraphWrappers.has(f.name)) return null;
+                names += `${f.name}/`;
+            }
+            return names;
+        };
+        const chains = units.map((u, i) => u === paras[i] ? '' : wrappersOf(paras[i], u));
+        const strayIndex = chains.findIndex((chain, i) => chain === null || chain !== chains[0] || (chain === '' && units[i] !== paras[i]));
+        if (strayIndex >= 0) syntax('crossing', block.tags[strayIndex], d.describeCrossing(units, container));
         block.mode = 'paragraph';
+        block.units = units;
     }
 }
 
@@ -1064,15 +1195,25 @@ function resolveScopes(blocks: Block[], ctx: PartContext): void {
  * do not balance. Each paragraph turns from removed to kept at most once and each block is settled at
  * most once, so this takes time linear in the number of tags.
  */
-function removableParagraphs(blocks: Block[]): Set<Frame> {
+function removableParagraphs(blocks: Block[], d: TemplateDialect): Set<Frame> {
     const removable = new Set<Frame>();
     const candidates = new Set<Frame>();
-    for (const block of blocks) for (const tag of block.tags) candidates.add(tag.frame.para!);
+    // A paragraph removed as more than itself (its list item) is removed so only for a block cut at that
+    // level: one whose tags sit in list items of one list.
+    const kept = new Set<Frame>();
+    for (const block of blocks) {
+        block.tags.forEach((tag, i) => {
+            const p = tag.frame.para!;
+            candidates.add(p);
+            if (p.unit !== p && block.mode === 'paragraph' && block.units[i] !== p.unit) kept.add(p);
+        });
+    }
     for (const p of candidates) {
-        if (!p.tagOnly) continue;
+        if (!p.tagOnly || kept.has(p)) continue;
         if (p.blockMarks.some(m => m.block!.mode === 'inline')) continue;
-        const parent = p.parent!;
-        if (NEEDS_BLOCK.has(parent.name) && parent.kids === parent.tagOnlyKids && parent.lastTagOnly === p) continue;
+        const unit = p.unit;
+        const parent = unit.parent!;
+        if (d.needsBlock.has(parent.name) && parent.kids === parent.tagOnlyKids && parent.lastTagOnly === unit) continue;
         removable.add(p);
     }
     // For each paragraph block, how many of its tags sit in paragraphs still to be removed; a block
@@ -1122,8 +1263,8 @@ function cutHalves(occurrence: Occurrence, stop: Frame, xml: string, ctx: PartCo
         if (chain.length >= MAX_CUT_DEPTH) {
             ctx.opts.onSyntax({ reason: 'crossing', tag: typedOf(ctx.tags[occurrence.tagIndex], ctx.opts), part: ctx.part, detail: `it sits inside more than ${MAX_CUT_DEPTH} nested elements, where a block can neither begin nor end` });
         }
-        if (!SPLITTABLE.has(f.name)) {
-            const detail = TRACKED_CHANGE.has(f.name)
+        if (!ctx.dialect.splittable.has(f.name)) {
+            const detail = ctx.dialect.trackedChanges.has(f.name)
                 ? `it sits inside a tracked change (${f.name}); accept or reject the change first`
                 : `it sits inside ${f.name}, where a block can neither begin nor end`;
             ctx.opts.onSyntax({ reason: 'crossing', tag: typedOf(ctx.tags[occurrence.tagIndex], ctx.opts), part: ctx.part, detail });
@@ -1131,7 +1272,8 @@ function cutHalves(occurrence: Occurrence, stop: Frame, xml: string, ctx: PartCo
         chain.push(f);
     }
     const close = chain.map(f => `</${f.name}>`).join('');
-    const open = chain.reverse().map(f => xml.slice(f.start, f.tagEnd) + (f.name === W.r && f.rPr ? xml.slice(f.rPr[0], f.rPr[1]) : '')).join('');
+    // A run's properties come with it (rPr is only ever set on a run).
+    const open = chain.reverse().map(f => xml.slice(f.start, f.tagEnd) + (f.rPr ? xml.slice(f.rPr[0], f.rPr[1]) : '')).join('');
     return { close, open };
 }
 
@@ -1141,12 +1283,12 @@ function placeCuts(blocks: Block[], removable: Set<Frame>, xml: string, ctx: Par
     for (const block of blocks) {
         if (block.mode === 'inline') {
             let stop = commonAncestorOf(block.tags.map(t => t.frame));
-            while (stop.name === W.t || stop.name === W.r) stop = stop.parent!;
+            while (ctx.dialect.liftedFromInline.has(stop.name)) stop = stop.parent!;
             block.cuts = block.tags.map(t => splitCut(t, stop, xml, ctx, cache));
         } else if (block.mode === 'paragraph') {
             block.cuts = block.tags.map(t => {
                 const p = t.frame.para!;
-                return removable.has(p) ? { a: p.start, b: p.end, close: '', open: '' } : splitCut(t, p, xml, ctx, cache);
+                return removable.has(p) ? { a: p.unit.start, b: p.unit.end, close: '', open: '' } : splitCut(t, p, xml, ctx, cache);
             });
         } else {
             const last = block.tags.length - 1;
@@ -1289,7 +1431,7 @@ function buildTree(xml: string, occurrences: Occurrence[], blocks: Block[], remo
         if (ctx.tags[occurrence.tagIndex].tag.kind === 'field') events.push({ kind: 'field', at: occurrence.at, rank: 1, seq: occurrence.at, occurrence });
         else if (!cutMarkers.has(occurrence.marker)) events.push({ kind: 'delete', at: occurrence.at, rank: 1, seq: occurrence.at, to: occurrence.at + occurrence.length });
     }
-    for (const p of removable) events.push({ kind: 'delete', at: p.start, rank: 1, seq: p.start, to: p.end });
+    for (const p of removable) events.push({ kind: 'delete', at: p.unit.start, rank: 1, seq: p.unit.start, to: p.unit.end });
     for (const m of ctx.inert) events.push({ kind: 'restore', at: m.at, rank: 1, seq: m.at, to: m.at + m.length, text: ctx.pieceText[m.marker] });
     events.sort((x, y) => x.at - y.at || x.rank - y.rank || x.seq - y.seq);
 
@@ -1363,8 +1505,8 @@ function blockNode(block: Block, xml: string, ctx: PartContext, builder: NodeBui
 /** Where fresh ids start: past every id of each kind in the document; and the bookmark names it has. */
 interface IdSeeds { docPr: number; annotation: number; sdt: number; para: number; paraIds: Set<number>; bookmarkNames: Set<string> }
 
-/** The unique ids in a start tag: each attribute, and its kind. */
-function idAttributes(name: string): [string, IdKind][] {
+/** The unique ids in a Word start tag: each attribute, and its kind. */
+function docxIdAttributes(name: string): [string, IdKind][] {
     switch (name) {
         case 'wp:docPr': return [['id', 'docPr']];
         case W.bookmarkStart: return [['w:id', 'bookmarkStart'], ['w:name', 'bookmarkName']];
@@ -1410,14 +1552,14 @@ function readStartTag(xml: string, nameEnd: number, wanted: readonly string[]): 
 }
 
 /** Every unique id in a stretch of XML, in order, by a forward scan of its start tags. */
-function findIds(xml: string): IdSlot[] {
+function findIds(xml: string, d: TemplateDialect): IdSlot[] {
     const slots: IdSlot[] = [];
-    visitIds(xml, slot => { slots.push(slot); });
+    visitIds(xml, d, slot => { slots.push(slot); });
     return slots;
 }
 
 /** Each unique id in a stretch of XML, in order, handed to `visit` as it is found, so no list is kept. */
-function visitIds(xml: string, visit: (slot: IdSlot) => void): void {
+export function visitIds(xml: string, d: TemplateDialect, visit: (slot: IdSlot) => void): void {
     for (let lt = xml.indexOf('<'); lt >= 0 && lt < xml.length; lt = xml.indexOf('<', lt + 1)) {
         const c = xml.charCodeAt(lt + 1);
         if (c === 0x2f) continue; // an end tag
@@ -1426,7 +1568,7 @@ function visitIds(xml: string, visit: (slot: IdSlot) => void): void {
         let nameEnd = lt + 1;
         while (nameEnd < xml.length && xml[nameEnd] !== '>' && !NAME_END.test(xml[nameEnd])) nameEnd++;
         // Any element can carry paragraph ids; the others belong to the element they are named for.
-        const wanted = [...idAttributes(xml.slice(lt + 1, nameEnd)), ['w14:paraId', 'paraId'], ['w14:textId', 'textId']] as [string, IdKind][];
+        const wanted = [...d.idAttributes(xml.slice(lt + 1, nameEnd)), ...d.everyElementIds];
         const tag = readStartTag(xml, nameEnd, wanted.map(([attribute]) => attribute));
         if (!tag) break;
         const inTag: IdSlot[] = [];
@@ -1445,7 +1587,7 @@ function visitIds(xml: string, visit: (slot: IdSlot) => void): void {
 const ANNOTATION_ID = /\sw:id\s*=\s*["'](\d{1,15})["']/g;
 
 /** Fresh ids start past every id the template already has, in every part. */
-function seedIds(entries: Record<string, Uint8Array>, chargeFor: (part: string) => (() => void) | undefined): IdSeeds {
+function seedDocxIds(entries: Record<string, Uint8Array>, chargeFor: (part: string) => (() => void) | undefined): IdSeeds {
     const seeds: IdSeeds = { docPr: 1, annotation: 1, sdt: 1, para: 1, paraIds: new Set(), bookmarkNames: new Set() };
     for (const [name, bytes] of Object.entries(entries)) {
         if (!TEXT_PART.test(name)) continue;
@@ -1454,7 +1596,7 @@ function seedIds(entries: Record<string, Uint8Array>, chargeFor: (part: string) 
         // starts past every `w:id` attribute in the document.
         for (const m of xml.matchAll(ANNOTATION_ID)) seeds.annotation = Math.max(seeds.annotation, Number(m[1]) + 1);
         const charge = chargeFor(name);
-        visitIds(xml, slot => {
+        visitIds(xml, DOCX_DIALECT, slot => {
             charge?.();
             if (slot.kind === 'bookmarkName') { seeds.bookmarkNames.add(slot.value); return; }
             if (slot.kind === 'paraId' || slot.kind === 'textId') {
@@ -1472,24 +1614,24 @@ function seedIds(entries: Record<string, Uint8Array>, chargeFor: (part: string) 
 }
 
 /** Gives every literal inside a loop its id slots. */
-function markRepeatedIds(nodes: TemplateNode[], inLoop: boolean): boolean {
+function markRepeatedIds(nodes: TemplateNode[], inLoop: boolean, d: TemplateDialect): boolean {
     let found = false;
     for (const node of nodes) {
         switch (node.kind) {
             case 'literal':
                 if (inLoop) {
-                    const slots = findIds(node.xml);
+                    const slots = findIds(node.xml, d);
                     if (slots.length) { node.slots = slots; found = true; }
                 }
                 break;
             case 'field': break;
             case 'if':
-                for (const section of node.sections) found = markRepeatedIds(section, inLoop) || found;
+                for (const section of node.sections) found = markRepeatedIds(section, inLoop, d) || found;
                 // A kept block's ids are found when it is written (see renderKept); it may hold some.
                 if (inLoop) node.kept.inLoop = found = true;
                 break;
             case 'for':
-                found = markRepeatedIds(node.body, true) || found;
+                found = markRepeatedIds(node.body, true, d) || found;
                 if (inLoop) node.kept.inLoop = found = true;
                 break;
         }
@@ -1502,13 +1644,25 @@ function markRepeatedIds(nodes: TemplateNode[], inLoop: boolean): boolean {
 interface NoteCopy { part: string; element: string; from: string; to: string; scope: Scope | null; kept?: true }
 
 /**
- * Per render: which ids have been written, and the next fresh one of each kind. The first write of an
+ * A render's ids: which have been written, and fresh ones for those written again. `take` gives the id
+ * a slot is written with; `writtenAcross` says whether an element of a range across a loop's edge was
+ * written already (see {@link rangesAcrossLoops}); `keep` is told of each id written as typed in a block
+ * kept as typed outside any loop.
+ */
+export interface TemplateIds {
+    take(kind: IdKind, value: string, scope: Scope | null, slot: IdSlot): string;
+    writtenAcross(range: string, kind: IdKind): boolean;
+    keep(kind: IdKind, value: string): void;
+}
+
+/**
+ * Per render of a Word document: which ids have been written, and the next fresh one of each kind. The first write of an
  * id keeps it and each later write gets a fresh one. A bookmark's end, and a comment's range end and
  * reference, follow the start written before them. A note referred to inside a loop (a footnote,
  * endnote or comment) gets a copy of its own at every pass, rendered in that pass's scope, so its
  * `{{ item }}` reads the pass's item (see {@link copyNotes}).
  */
-class IdState {
+class IdState implements TemplateIds {
     readonly copies: NoteCopy[] = [];
     private readonly keptNotes = new Set<string>();
     private across = new Set<string>();
@@ -1577,6 +1731,8 @@ class IdState {
             case 'sdt': return this.first(kind, value) ? value : String(this.sdt++);
             case 'paraId':
             case 'textId': return this.first(kind, value) ? value : this.freshPara();
+            // OpenDocument's kinds are never found in a Word document (see docxIdAttributes).
+            case 'odfId': case 'odfNoteId': case 'odfName': case 'odfRangeStart': case 'odfRangeEnd': return value;
         }
     }
     /**
@@ -1599,7 +1755,7 @@ class IdState {
      * again, it named a copy of a comment that does not exist, and the filled comment lost its anchor.
      */
     renumberCopy(note: string, scope: Scope | null): string {
-        const slots = findIds(note);
+        const slots = findIds(note, DOCX_DIALECT);
         if (!slots.length) return note;
         const local = new Map<string, string>();
         const together = (space: string, value: string, make: () => string): string => {
@@ -1624,7 +1780,8 @@ class IdState {
                 case 'commentEnd':
                 case 'commentRef': id = this.madeComments.has(slot.value) ? slot.value : together('comment', slot.value, () => this.copyNote('comment', slot.value, scope)); break;
                 case 'footnoteRef':
-                case 'endnoteRef': id = slot.value; break;
+                case 'endnoteRef':
+                case 'odfId': case 'odfNoteId': case 'odfName': case 'odfRangeStart': case 'odfRangeEnd': id = slot.value; break;
             }
             pieces.push(note.slice(at, slot.start), id);
             at = slot.end;
@@ -1744,14 +1901,14 @@ function copyNotes(xml: string, part: string, element: string, copies: NoteCopy[
             if (span || !template) continue;
             const pieces: string[] = [];
             const nodes = template.nodes;
-            if (nodes) state.ids!.inNote(template.rangesAcross, () => renderNodes(nodes, null, state, pieces));
+            if (nodes) state.noteIds!.inNote(template.rangesAcross, () => renderNodes(nodes, null, state, pieces));
             // Repaired as its part was (that ran before the notes were written): a range its loop or branch
             // left open is closed, and a note left with no paragraph gets one.
-            const text = nodes ? repairStructure(pieces.join(''), state.opts.onOutputLimit) : template.xml;
+            const text = nodes ? state.dialect.repair(pieces.join(''), state.opts.onOutputLimit) : template.xml;
             // The comments it anchors were cut with it, so they are written as typed too: the note came
             // back pointing at comments that were not.
-            const ids = state.ids!;
-            visitIds(text, slot => ids.keep(slot.kind, slot.value));
+            const ids = state.noteIds!;
+            visitIds(text, state.dialect, slot => ids.keep(slot.kind, slot.value));
             made.push(text);
             continue;
         }
@@ -1762,12 +1919,12 @@ function copyNotes(xml: string, part: string, element: string, copies: NoteCopy[
         if (template?.nodes) {
             const pieces: string[] = [];
             const nodes = template.nodes;
-            state.ids!.inNote(template.rangesAcross, () => renderNodes(nodes, copy.scope, state, pieces));
-            note = repairStructure(pieces.join(''), state.opts.onOutputLimit);
+            state.noteIds!.inNote(template.rangesAcross, () => renderNodes(nodes, copy.scope, state, pieces));
+            note = state.dialect.repair(pieces.join(''), state.opts.onOutputLimit);
         } else {
             note = template ? template.xml : xml.slice(span![0], span![1]);
         }
-        made.push(state.ids!.renumberCopy(withNoteId(note, copy.to), copy.scope));
+        made.push(state.noteIds!.renumberCopy(withNoteId(note, copy.to), copy.scope));
     }
     if (!made.length) return xml;
     const added = made.join('');
@@ -1778,23 +1935,23 @@ function copyNotes(xml: string, part: string, element: string, copies: NoteCopy[
 // ─── Compile ────────────────────────────────────────────────────────────────
 
 /** Compiles one part: null nodes when it holds no tag. */
-function compilePart(name: string, xml: string, opts: DocxTemplateOptions, literalBase: number, copies: { left: number }, elements: ElementBudget): { part: CompiledPart; literals: number } {
+function compilePart(name: string, xml: string, opts: DocxTemplateOptions, d: TemplateDialect, literalBase: number, copies: { left: number }, elements: ElementBudget): { part: CompiledPart; literals: number } {
     const markerChars = chooseMarkerChars(xml);
     // A part using every noncharacter and private-use character cannot be marked; it holds no tags we
     // could tell from its own text, so it is copied as is (only a crafted part reaches this).
     if (!markerChars) return { part: { name, nodes: null, hasBlocks: false }, literals: 0 };
     const ctx: PartContext = {
-        part: name, opts, startText: escapeXmlText(opts.start), endText: escapeXmlText(opts.end),
+        part: name, opts, dialect: d, startText: escapeXmlText(opts.start), endText: escapeXmlText(opts.end),
         tags: [], markerTag: [], markerPiece: [], pieceText: [], open: markerChars[0], close: markerChars[1], hasBlocks: false, unreadable: [], inert: [], elements,
     };
-    const marked = markPart(xml, ctx);
+    const marked = d.markPart(xml, ctx);
     if (!ctx.tags.length) return { part: { name, nodes: null, hasBlocks: false }, literals: 0 };
     const builder = new NodeBuilder(ctx, literalBase, copies);
     if (!ctx.hasBlocks) return { part: { name, nodes: buildFlatNodes(marked, ctx, builder), hasBlocks: false }, literals: builder.count };
     const occurrences = scanStructure(marked, ctx);
     const blocks = pairBlocks(occurrences, ctx);
     resolveScopes(blocks, ctx);
-    const removable = removableParagraphs(blocks);
+    const removable = removableParagraphs(blocks, ctx.dialect);
     placeCuts(blocks, removable, marked, ctx);
     const nodes = buildTree(marked, occurrences, blocks, removable, ctx, builder);
     return { part: { name, nodes, hasBlocks: true }, literals: builder.count };
@@ -1858,7 +2015,7 @@ export function templateTags(compiled: CompiledDocxTemplate, opts: DocxTemplateO
 }
 
 /** Compiles a template's parts once, for every data entry of a batch. Raises the tag errors up front. */
-export function compileDocxTemplate(entries: Record<string, Uint8Array>, opts: DocxTemplateOptions): CompiledDocxTemplate {
+export function compileTemplate(entries: Record<string, Uint8Array>, opts: DocxTemplateOptions, d: TemplateDialect): CompiledDocxTemplate {
     const parts = new Map<string, CompiledPart>();
     let literalCount = 0;
     let repeatsIds = false;
@@ -1866,10 +2023,10 @@ export function compileDocxTemplate(entries: Record<string, Uint8Array>, opts: D
     // Each element read costs memory, as when parsing: the template as a whole is held to the parser's bound.
     const elements: ElementBudget = { left: opts.maxXmlElements, textRuns: opts.maxXmlElements };
     for (const [name, bytes] of Object.entries(entries)) {
-        if (!TEXT_PART.test(name)) continue;
-        const { part, literals } = compilePart(name, Buffer.from(bytes).toString('utf8'), opts, literalCount, copies, elements);
+        if (!d.isTextPart(name)) continue;
+        const { part, literals } = compilePart(name, Buffer.from(bytes).toString('utf8'), opts, d, literalCount, copies, elements);
         literalCount += literals;
-        if (part.nodes && part.hasBlocks) repeatsIds = markRepeatedIds(part.nodes, false) || repeatsIds;
+        if (part.nodes && part.hasBlocks) repeatsIds = markRepeatedIds(part.nodes, false, d) || repeatsIds;
         parts.set(name, part);
     }
     // Only a part with blocks is read element by element (scanStructure), its elements counted. In any
@@ -1883,7 +2040,8 @@ export function compileDocxTemplate(entries: Record<string, Uint8Array>, opts: D
     const notesPartXml = new Map<string, string>();
     const loopNotes = new Map<string, string[]>();
     const noteElements: ElementBudget = { left: opts.maxXmlElements, textRuns: opts.maxXmlElements };
-    if (repeatsIds) {
+    const NOTE_PARTS = d.noteParts;
+    if (repeatsIds && NOTE_PARTS) {
         // Each note on its own, to be rendered in the scope of a reference to it inside a loop. Its
         // elements were counted against maxXmlElements with its part when that was read element by
         // element (this reading is a second); otherwise each note is counted as it is found.
@@ -1894,10 +2052,10 @@ export function compileDocxTemplate(entries: Record<string, Uint8Array>, opts: D
             const templates = new Map<string, NoteTemplate>();
             for (const [id, [start, end]] of noteSpans(xml, element, chargeNotes(part))) {
                 const noteXml = xml.slice(start, end);
-                const compiledNote = compilePart(part, noteXml, opts, literalCount, copies, noteElements);
+                const compiledNote = compilePart(part, noteXml, opts, d, literalCount, copies, noteElements);
                 literalCount += compiledNote.literals;
-                if (compiledNote.part.nodes && compiledNote.part.hasBlocks) markRepeatedIds(compiledNote.part.nodes, false);
-                templates.set(id, { nodes: compiledNote.part.nodes, xml: noteXml, rangesAcross: compiledNote.part.nodes ? rangesAcrossLoops(compiledNote.part.nodes) : new Set() });
+                if (compiledNote.part.nodes && compiledNote.part.hasBlocks) markRepeatedIds(compiledNote.part.nodes, false, d);
+                templates.set(id, { nodes: compiledNote.part.nodes, xml: noteXml, rangesAcross: compiledNote.part.nodes ? rangesAcrossLoops(compiledNote.part.nodes, d) : new Set() });
             }
             noteTemplates.set(part, templates);
         }
@@ -1911,7 +2069,7 @@ export function compileDocxTemplate(entries: Record<string, Uint8Array>, opts: D
         // note's copies, one per pass, as if in the loop: so the notes parts are counted after the parts
         // that refer to them, footnotes and endnotes before the comments they can hold.
         const rank = (name: string): number => name === NOTE_PARTS.comment.part ? 2 : name === NOTE_PARTS.footnoteRef.part || name === NOTE_PARTS.endnoteRef.part ? 1 : 0;
-        const textParts = Object.keys(entries).filter(name => TEXT_PART.test(name)).sort((a, b) => rank(a) - rank(b));
+        const textParts = Object.keys(entries).filter(name => d.isTextPart(name)).sort((a, b) => rank(a) - rank(b));
         for (const name of textParts) {
             const counts = new Map<string, number>();
             const countOne = (slot: IdSlot, by: number): void => {
@@ -1928,7 +2086,7 @@ export function compileDocxTemplate(entries: Record<string, Uint8Array>, opts: D
             const cut = element ? [...noteSpans(xml, element, chargeCut(name))].filter(([id]) => inLoops.has(`${name}:${id}`) && !outside.has(`${name}:${id}`))
                 .map(([, span]) => span).sort((a, b) => a[0] - b[0]) : [];
             let next = 0;
-            visitIds(xml, slot => {
+            visitIds(xml, d, slot => {
                 charge?.();
                 while (next < cut.length && cut[next][1] <= slot.start) next++;
                 countOne(slot, next < cut.length && cut[next][0] <= slot.start ? -1 : 1);
@@ -1937,10 +2095,10 @@ export function compileDocxTemplate(entries: Record<string, Uint8Array>, opts: D
             if (compiledPart?.nodes) {
                 // A range across a loop's edge is written once, under its own id (see rangesAcrossLoops):
                 // its comment is referred to as from outside the loops, not cut to be copied per pass.
-                const across = rangesAcrossLoops(compiledPart.nodes);
+                const across = rangesAcrossLoops(compiledPart.nodes, d);
                 forEachLoopSlots(compiledPart.nodes, slots => {
                     for (const slot of slots) {
-                        const range = rangeOf(slot);
+                        const range = d.rangeOf(slot);
                         if (!range || !across.has(range)) countOne(slot, -1);
                     }
                 });
@@ -1961,19 +2119,19 @@ export function compileDocxTemplate(entries: Record<string, Uint8Array>, opts: D
             kept.push(xml.slice(at));
             const stripped = kept.join('');
             notesPartXml.set(part, stripped);
-            const recompiled = compilePart(part, stripped, opts, literalCount, copies, noteElements);
+            const recompiled = compilePart(part, stripped, opts, d, literalCount, copies, noteElements);
             literalCount += recompiled.literals;
-            if (recompiled.part.nodes && recompiled.part.hasBlocks) markRepeatedIds(recompiled.part.nodes, false);
+            if (recompiled.part.nodes && recompiled.part.hasBlocks) markRepeatedIds(recompiled.part.nodes, false, d);
             parts.set(part, recompiled.part);
         }
     }
     const rangesAcross = new Set<string>();
-    if (repeatsIds) for (const part of parts.values()) if (part.nodes) for (const key of rangesAcrossLoops(part.nodes)) rangesAcross.add(key);
-    return { entries, parts, ids: repeatsIds ? seedIds(entries, unreadScan()) : null, literalCount, noteTemplates, notesPartXml, rangesAcrossLoops: rangesAcross, loopNotes };
+    if (repeatsIds) for (const part of parts.values()) if (part.nodes) for (const key of rangesAcrossLoops(part.nodes, d)) rangesAcross.add(key);
+    return { dialect: d, entries, parts, ids: repeatsIds ? d.seedIds(entries, unreadScan()) : null, literalCount, noteTemplates, notesPartXml, rangesAcrossLoops: rangesAcross, loopNotes };
 }
 
-/** The range a slot is an end of (a bookmark's or a comment's), as `bookmark:<id>` or `comment:<id>`, or null. */
-function rangeOf(slot: IdSlot): string | null {
+/** The range a slot of a Word document is an end of (a bookmark's or a comment's), as `bookmark:<id>` or `comment:<id>`, or null. */
+function docxRangeOf(slot: IdSlot): string | null {
     if (slot.kind === 'bookmarkStart' || slot.kind === 'bookmarkEnd') return `bookmark:${slot.value}`;
     if (slot.kind === 'commentStart' || slot.kind === 'commentEnd' || slot.kind === 'commentRef') return `comment:${slot.value}`;
     return null;
@@ -1986,13 +2144,13 @@ function rangeOf(slot: IdSlot): string | null {
  * range of its own that nothing closes. Such a range is written once instead: the first pass writes its end
  * in the loop, under its own id, and later passes leave it out.
  */
-function rangesAcrossLoops(nodes: TemplateNode[]): Set<string> {
+function rangesAcrossLoops(nodes: TemplateNode[], d: TemplateDialect): Set<string> {
     const where = new Map<string, Set<ForNode | null>>();
     const visit = (list: TemplateNode[], loop: ForNode | null): void => {
         for (const node of list) {
             if (node.kind === 'literal') {
-                for (const slot of node.slots ?? (loop ? [] : findIds(node.xml))) {
-                    const range = rangeOf(slot);
+                for (const slot of node.slots ?? (loop ? [] : findIds(node.xml, d))) {
+                    const range = d.rangeOf(slot);
                     if (!range) continue;
                     let loops = where.get(range);
                     if (!loops) where.set(range, loops = new Set());
@@ -2043,7 +2201,7 @@ function writeSlots(xml: string, slots: IdSlot[], scope: Scope | null, state: Re
             const tagEnd = slot.gt;
             let leaveOut = false;
             for (let k = i; k < slots.length && slots[k].tag === from; k++) {
-                const range = rangeOf(slots[k]);
+                const range = state.dialect.rangeOf(slots[k]);
                 if (range) { leaveOut = ids.writtenAcross(range, slots[k].kind); break; }
             }
             const to = leaveOut ? emptyElementEnd(xml, from, tagEnd) : -1;
@@ -2054,7 +2212,7 @@ function writeSlots(xml: string, slots: IdSlot[], scope: Scope | null, state: Re
             }
         }
         state.emit(out, xml.slice(at, slot.start));
-        state.emit(out, ids.take(slot.kind, slot.value, scope));
+        state.emit(out, ids.take(slot.kind, slot.value, scope, slot));
         at = slot.end;
     }
     state.emit(out, xml.slice(at));
@@ -2147,12 +2305,17 @@ class RenderState {
         if (n === undefined) this.listNumbers.set(listText, n = this.listNumbers.size);
         return n;
     }
-    readonly ids: IdState | null;
+    readonly ids: TemplateIds | null;
+    /** The ids, when they are a Word document's: notes in parts of their own are copied through them. */
+    readonly noteIds: IdState | null;
+    readonly dialect: TemplateDialect;
     part = '';
     constructor(readonly data: TemplateData, readonly opts: DocxTemplateOptions, compiled: CompiledDocxTemplate) {
         this.repeatLeft = opts.maxRepeatedContent;
         this.written = new Uint8Array(compiled.literalCount);
-        this.ids = compiled.ids ? new IdState(compiled.ids, compiled.rangesAcrossLoops) : null;
+        this.dialect = compiled.dialect;
+        this.ids = compiled.ids ? compiled.dialect.newIds(compiled.ids, compiled.rangesAcrossLoops) : null;
+        this.noteIds = this.ids instanceof IdState ? this.ids : null;
     }
     /** What the part being rendered has written so far. */
     partLength = 0;
@@ -2221,11 +2384,11 @@ function renderKept(span: KeptSpan, scope: Scope | null, state: RenderState, out
     if (!span.inLoop) {
         // Written once, under the ids it was typed with; a note it refers to is written with it.
         const ids = state.ids;
-        visitIds(xml, slot => ids.keep(slot.kind, slot.value));
+        visitIds(xml, state.dialect, slot => ids.keep(slot.kind, slot.value));
         state.emit(out, xml);
         return;
     }
-    writeSlots(xml, findIds(xml), scope, state, out);
+    writeSlots(xml, findIds(xml, state.dialect), scope, state, out);
 }
 
 function renderLiteral(node: LiteralNode, scope: Scope | null, state: RenderState, out: string[]): void {
@@ -2277,8 +2440,8 @@ function renderField(node: FieldNode, scope: Scope | null, state: RenderState, o
     // past what a part can hold is refused, typed, instead of failing in the runtime.
     const build = (): string => {
         const text = scalarText(value as string | number | boolean | Date | null | undefined);
-        if (state.partLength + text.length + runXmlGrowth(text) > MAX_PART_LENGTH) state.opts.onOutputLimit();
-        return textToRunXml(text);
+        if (state.partLength + text.length + state.dialect.textGrowth(text) > MAX_PART_LENGTH) state.opts.onOutputLimit();
+        return state.dialect.textXml(text);
     };
     if (xml === undefined) {
         xml = build();
@@ -2383,7 +2546,7 @@ function renderFor(node: ForNode, scope: Scope | null, state: RenderState, out: 
  * branch not taken) is closed where it starts. One forward scan; returns the part unchanged when
  * nothing needs it.
  */
-function repairStructure(xml: string, limit: () => never): string {
+function repairDocx(xml: string, limit: () => never): string {
     interface Open { name: string; start: number; rows: number; last: string | null; blocks: number; needsBlock: boolean; blockLevel: boolean; rowLevel: boolean }
     const edits: { from: number; to: number; insert: string }[] = [];
     const stack: Open[] = [];
@@ -2512,8 +2675,13 @@ export function renderParts(compiled: CompiledDocxTemplate, data: TemplateData, 
         const pieces: string[] = [];
         renderNodes(part.nodes, null, state, pieces);
         const xml = pieces.join('');
-        rendered.set(name, part.hasBlocks ? repairStructure(xml, opts.onOutputLimit) : xml);
+        rendered.set(name, part.hasBlocks ? compiled.dialect.repair(xml, opts.onOutputLimit) : xml);
     };
+    const NOTE_PARTS = compiled.dialect.noteParts;
+    if (!NOTE_PARTS) {
+        for (const name of compiled.parts.keys()) renderPart(name);
+        return rendered;
+    }
     // The parts referring to notes first, then the notes, footnotes and endnotes before comments: a note
     // referred to in a loop is copied once the parts referring to it are rendered, and a footnote can
     // anchor a comment.
@@ -2521,13 +2689,18 @@ export function renderParts(compiled: CompiledDocxTemplate, data: TemplateData, 
     for (const name of compiled.parts.keys()) if (!noteParts.includes(name)) renderPart(name);
     for (const { part, element } of Object.values(NOTE_PARTS)) {
         renderPart(part);
-        const copies = state.ids?.copies.filter(c => c.part === part) ?? [];
+        const copies = state.noteIds?.copies.filter(c => c.part === part) ?? [];
         if (!copies.length || !compiled.entries[part]) continue;
         state.part = part;
         onPart?.(part);
         rendered.set(part, copyNotes(rendered.get(part) ?? Buffer.from(compiled.entries[part]).toString('utf8'), part, element, copies, compiled, state));
     }
     return rendered;
+}
+
+/** Compiles a Word template (see {@link compileTemplate}). */
+export function compileDocxTemplate(entries: Record<string, Uint8Array>, opts: DocxTemplateOptions): CompiledDocxTemplate {
+    return compileTemplate(entries, opts, DOCX_DIALECT);
 }
 
 /** Renders one `.docx` from a compiled template and a single data map. */
@@ -2575,3 +2748,39 @@ export async function openDocx(bytes: Uint8Array, limits?: DecompressionLimits, 
     for (const f of files) map[f.path] = f.content;
     return map['word/document.xml'] ? map : null;
 }
+
+// ─── The Word dialect ───────────────────────────────────────────────────────
+
+/** Word's names and rules (see {@link TemplateDialect}). */
+export const DOCX_DIALECT: TemplateDialect = {
+    isTextPart: name => TEXT_PART.test(name),
+    markPart: markDocxPart,
+    paragraphs: new Set([W.p]),
+    textHolders: new Set([W.t]),
+    freshContent: new Set([W.txbxContent]),
+    table: W.tbl,
+    row: W.tr,
+    rowWrappers: ROW_WRAPPERS,
+    rowGroups: new Set(),
+    paragraphWrappers: new Set(),
+    tagOnlyAllowed: TAG_ONLY_ALLOWED,
+    splittable: SPLITTABLE,
+    liftedFromInline: new Set([W.t, W.r]),
+    needsBlock: NEEDS_BLOCK,
+    blockElements: BLOCK_ELEMENTS,
+    trackedChanges: TRACKED_CHANGE,
+    propertyElements: new Set([W.pPr, W.rPr]),
+    runProps: { run: W.r, props: W.rPr },
+    fieldChar: W.fldChar,
+    sectionProps: W.sectPr,
+    describeCrossing: describeDocxCrossing,
+    textXml: textToRunXml,
+    textGrowth: runXmlGrowth,
+    idAttributes: docxIdAttributes,
+    everyElementIds: [['w14:paraId', 'paraId'], ['w14:textId', 'textId']],
+    rangeOf: docxRangeOf,
+    seedIds: seedDocxIds,
+    newIds: (seeds, rangesAcross) => new IdState(seeds as IdSeeds, rangesAcross),
+    repair: repairDocx,
+    noteParts: NOTE_PARTS,
+};
