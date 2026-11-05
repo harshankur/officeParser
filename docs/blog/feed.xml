@@ -1123,7 +1123,7 @@ console.log(frame.metadata.float);
 </p>
 <ul>
     <li>Text takes the side with more room. A box near the right edge leaves the left for the text.</li>
-    <li>If that room is less than 36 points, or a third of the line, the line moves down below the box
+    <li>If that room is less than 36 points<del datetime="2026-11-05">, or a third of the line</del><ins datetime="2026-11-05"> (or, on a line narrower than 108 points, a third of it)</ins> <em>(Corrected 5 Nov 2026: The rule is the smaller of the two, so on a full-width line a 36-point gap is enough; I had written either.)</em>, the line moves down below the box
         instead of squeezing a word or two into a sliver.</li>
     <li>A box set to keep text above and below it (Word's <code>wrapTopAndBottom</code>, ODT's
         <code>style:wrap="none"</code>) sends the line below it whatever the room.</li>
@@ -1238,7 +1238,7 @@ for (const row of sheet.children) {
     for (const cell of row.children) console.log(cell.text, cell.metadata);
 }</code></pre>
 <p>
-    For the value column, that prints (the labels left out):
+    For the value column, that prints (the labels left out<ins datetime="2026-11-05">, and each cell's <code>row</code> and <code>col</code></ins> <em>(Corrected 5 Nov 2026: The sample also prints each cell&#39;s row and col, which I had left out without saying so.)</em>):
 </p>
 <pre><code>0.19        { shownText: '19%', valueType: 'number', numberFormat: '0%' }
 120         { shownText: '120.00 €', valueType: 'number', numberFormat: '#,##0.00 [$€-407]' }
@@ -1518,7 +1518,7 @@ writeFileSync('report.pdf', pdf.value);</code></pre>
     Each character is drawn in the first font <del datetime="2026-10-28" cite="https://officeparser.harshankur.com/#doc/changelog/840---2026-10-28">that has it</del><ins datetime="2026-10-28" cite="https://officeparser.harshankur.com/#doc/changelog/840---2026-10-28">whose glyph for it draws something</ins> <em>(Updated 28 Oct 2026 for <a href="https://officeparser.harshankur.com/#doc/changelog/840---2026-10-28">8.4.0</a>: A font whose glyph for a character draws nothing is now passed over for the next font.)</em>, so one Latin font in
     <code>pdfConfig.fonts</code> and a font for each other script in <code>fallbackFonts</code> covers a document
     that mixes them. <ins datetime="2026-10-28" cite="https://officeparser.harshankur.com/#doc/changelog/840---2026-10-28">A font may be a TrueType or OpenType file, and since 8.4.0 a WOFF or WOFF2 file too.</ins> <em>(Updated 28 Oct 2026 for <a href="https://officeparser.harshankur.com/#doc/changelog/840---2026-10-28">8.4.0</a>: The native engine now takes WOFF and WOFF2 fonts.)</em>
-    The fonts need the optional peer dependency <code>@pdf-lib/fontkit</code>.
+    <del datetime="2026-11-05">The fonts need the optional peer dependency <code>@pdf-lib/fontkit</code>.</del><ins datetime="2026-11-05">The native engine needs the optional peer dependency <code>pdf-lib</code>, and fonts need <code>@pdf-lib/fontkit</code> beside it.</ins> <em>(Corrected 5 Nov 2026: The native engine itself needs pdf-lib installed, which I had left out.)</em>
 </p>
 
 <h2>What is Still Not Right</h2>
@@ -2338,7 +2338,7 @@ const { value: markdown } = await ast.to('markdown');</code></pre>
     </p>
     <p>
         The parser tells you when it suspects trouble: <code>PDF_NO_TEXT_EXTRACTED</code> when a document
-        yields almost no text and OCR is off, and <code>PDF_TEXT_ENCODING_SUSPECT</code> when a fifth or
+        yields almost no text and OCR is off, <ins datetime="2026-11-05" cite="https://officeparser.harshankur.com/#doc/changelog/850---2026-11-01"><code>PDF_FONT_UNMAPPED</code> when a font with no map from its codes to characters seems to give its glyph numbers as text,</ins> <em>(Updated 5 Nov 2026 for <a href="https://officeparser.harshankur.com/#doc/changelog/850---2026-11-01">8.5.0</a>: A new warning, PDF_FONT_UNMAPPED, names a font whose text is likely its glyph numbers.)</em> and <code>PDF_TEXT_ENCODING_SUSPECT</code> when a fifth or
         more of the characters it read (out of at least 50) could not be mapped to Unicode.
     </p>
 </div>]]></content:encoded>

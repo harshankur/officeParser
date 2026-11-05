@@ -180,7 +180,7 @@ writeFileSync('report.pdf', pdf.value);</code></pre>
     Each character is drawn in the first font <del data-revision="first-font-that-draws">that has it</del><ins data-revision="first-font-that-draws">whose glyph for it draws something</ins>, so one Latin font in
     <code>pdfConfig.fonts</code> and a font for each other script in <code>fallbackFonts</code> covers a document
     that mixes them. <ins data-revision="web-fonts">A font may be a TrueType or OpenType file, and since 8.4.0 a WOFF or WOFF2 file too.</ins>
-    The fonts need the optional peer dependency <code>@pdf-lib/fontkit</code>.
+    <del data-revision="pdf-lib-peer">The fonts need the optional peer dependency <code>@pdf-lib/fontkit</code>.</del><ins data-revision="pdf-lib-peer">The native engine needs the optional peer dependency <code>pdf-lib</code>, and fonts need <code>@pdf-lib/fontkit</code> beside it.</ins>
 </p>
 
 <h2>What is Still Not Right</h2>

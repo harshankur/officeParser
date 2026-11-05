@@ -222,7 +222,7 @@ const { value: markdown } = await ast.to('markdown');</code></pre>
     </p>
     <p>
         The parser tells you when it suspects trouble: <code>PDF_NO_TEXT_EXTRACTED</code> when a document
-        yields almost no text and OCR is off, and <code>PDF_TEXT_ENCODING_SUSPECT</code> when a fifth or
+        yields almost no text and OCR is off, <ins data-revision="font-unmapped"><code>PDF_FONT_UNMAPPED</code> when a font with no map from its codes to characters seems to give its glyph numbers as text,</ins> and <code>PDF_TEXT_ENCODING_SUSPECT</code> when a fifth or
         more of the characters it read (out of at least 50) could not be mapped to Unicode.
     </p>
 </div>

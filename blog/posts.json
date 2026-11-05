@@ -81,6 +81,10 @@
             "shortTitle": "Text Around a Floating Frame",
             "category": "architecture",
             "published": "2026-10-26",
+            "updated": "2026-11-05",
+            "revisions": [
+                { "id": "room-beside", "date": "2026-11-05", "note": "The rule is the smaller of the two, so on a full-width line a 36-point gap is enough; I had written either." }
+            ],
             "description": "How ODT, Word and RTF each say where a text box stands, how officeParser reads them into one shape, and how its PDF engine sets lines round the box, with an interactive column to try it.",
             "deck": "A sidebar in a shaded box, text running down its left: three formats store it three ways, and a layout engine that sets lines once from the top of the page has to decide what to do when a box stands over text it has already set."
         },
@@ -90,6 +94,10 @@
             "shortTitle": "The Spreadsheet You See",
             "category": "deep-dive",
             "published": "2026-10-26",
+            "updated": "2026-11-05",
+            "revisions": [
+                { "id": "row-and-col", "date": "2026-11-05", "note": "The sample also prints each cell's row and col, which I had left out without saying so." }
+            ],
             "description": "A cell stores 0.19 and shows 19%. What XLSX keeps, how Excel's number formats work, and how officeParser reads both halves of a cell so a CSV keeps the numbers and a PDF prints what the sheet shows.",
             "deck": "Type 19% into a cell and the file stores 0.19 and a note on how to show it. Which one is the content? Both, and every writer needs a different half."
         },
@@ -99,12 +107,13 @@
             "shortTitle": "Drawing Hindi in a PDF",
             "category": "architecture",
             "published": "2026-10-26",
-            "updated": "2026-10-28",
+            "updated": "2026-11-05",
             "revisions": [
                 { "id": "tm-value", "date": "2026-10-28", "note": "The sample said 765.89 when the post went out. The engine draws this line at 782.89." },
                 { "id": "whole-words", "date": "2026-10-28", "release": "8.4.0", "note": "The reader now reads words whole from PDFs that place each letter cluster apart, as LibreOffice's do." },
                 { "id": "first-font-that-draws", "date": "2026-10-28", "release": "8.4.0", "note": "A font whose glyph for a character draws nothing is now passed over for the next font." },
                 { "id": "web-fonts", "date": "2026-10-28", "release": "8.4.0", "note": "The native engine now takes WOFF and WOFF2 fonts." },
+                { "id": "pdf-lib-peer", "date": "2026-11-05", "note": "The native engine itself needs pdf-lib installed, which I had left out." },
                 { "id": "space-after-conjunct", "date": "2026-10-28", "release": "8.4.0", "note": "The reader now keeps the space after a conjunct, so this is no longer a problem." }
             ],
             "description": "Why a Hindi word came apart in officeParser's PDF writer, copied with its letters out of order, or drew the wrong glyphs, and the font and PDF details behind each failure.",
@@ -142,7 +151,10 @@
             "shortTitle": "Why PDF Extraction is Hard",
             "category": "deep-dive",
             "published": "2026-10-04",
-            "updated": "2026-10-26",
+            "updated": "2026-11-05",
+            "revisions": [
+                { "id": "font-unmapped", "date": "2026-11-05", "release": "8.5.0", "note": "A new warning, PDF_FONT_UNMAPPED, names a font whose text is likely its glyph numbers." }
+            ],
             "description": "A PDF has no words, paragraphs, or reading order. Positioned glyphs, missing spaces, font encodings, ligatures, multi-column pages, and the XY-cut that rebuilds reading order.",
             "deck": "PDF describes how a page looks, not what it says. It knows how to paint glyphs at coordinates. Getting text back out means reconstructing what a reader's eye does without being told."
         },

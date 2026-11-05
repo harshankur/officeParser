@@ -47,7 +47,7 @@ for (const row of sheet.children) {
     for (const cell of row.children) console.log(cell.text, cell.metadata);
 }</code></pre>
 <p>
-    For the value column, that prints (the labels left out):
+    For the value column, that prints (the labels left out<ins data-revision="row-and-col">, and each cell's <code>row</code> and <code>col</code></ins>):
 </p>
 <pre><code>0.19        { shownText: '19%', valueType: 'number', numberFormat: '0%' }
 120         { shownText: '120.00 €', valueType: 'number', numberFormat: '#,##0.00 [$€-407]' }

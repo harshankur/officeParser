@@ -23,7 +23,7 @@
     <meta property="og:url" content="https://officeparser.harshankur.com/blog/drawing-hindi-in-a-pdf.html">
     <meta property="og:site_name" content="officeParser">
     <meta property="article:published_time" content="2026-10-26">
-    <meta property="article:modified_time" content="2026-10-28">
+    <meta property="article:modified_time" content="2026-11-05">
 
     <!-- Fonts: the site's own copies (docs/fonts), shared with the home page. -->
     <link rel="stylesheet" href="../fonts/fonts.css">
@@ -86,7 +86,7 @@
                     <div>
                         <a href="https://harshankur.com" target="_blank" rel="noopener" class="author-name">Harsh
                             Ankur</a>
-                        <div>Published <time datetime="2026-10-26">26 October 2026</time>, updated <time datetime="2026-10-28">28 October 2026</time> · <a href="#revisions" class="byline-changes">5 changes</a> · 8 min read</div>
+                        <div>Published <time datetime="2026-10-26">26 October 2026</time>, updated <time datetime="2026-11-05">5 November 2026</time> · <a href="#revisions" class="byline-changes">6 changes</a> · 8 min read</div>
                     </div>
                 </div>
             </div>
@@ -274,7 +274,7 @@ writeFileSync('report.pdf', pdf.value);</code></pre>
     Each character is drawn in the first font <del datetime="2026-10-28" cite="../#doc/changelog/840---2026-10-28">that has it</del><ins datetime="2026-10-28" cite="../#doc/changelog/840---2026-10-28">whose glyph for it draws something</ins><button type="button" class="revision-mark" id="change-first-font-that-draws" popovertarget="change-first-font-that-draws-note">Updated</button><span class="revision-note" id="change-first-font-that-draws-note" popover><strong>Updated 28 Oct 2026 for <a href="../#doc/changelog/840---2026-10-28">8.4.0</a>.</strong> A font whose glyph for a character draws nothing is now passed over for the next font. <a href="#revisions">All revisions</a><button type="button" class="revision-note-hide" hidden>Hide all changes</button></span>, so one Latin font in
     <code>pdfConfig.fonts</code> and a font for each other script in <code>fallbackFonts</code> covers a document
     that mixes them. <ins datetime="2026-10-28" cite="../#doc/changelog/840---2026-10-28">A font may be a TrueType or OpenType file, and since 8.4.0 a WOFF or WOFF2 file too.</ins><button type="button" class="revision-mark" id="change-web-fonts" popovertarget="change-web-fonts-note">Updated</button><span class="revision-note" id="change-web-fonts-note" popover><strong>Updated 28 Oct 2026 for <a href="../#doc/changelog/840---2026-10-28">8.4.0</a>.</strong> The native engine now takes WOFF and WOFF2 fonts. <a href="#revisions">All revisions</a><button type="button" class="revision-note-hide" hidden>Hide all changes</button></span>
-    The fonts need the optional peer dependency <code>@pdf-lib/fontkit</code>.
+    <del datetime="2026-11-05">The fonts need the optional peer dependency <code>@pdf-lib/fontkit</code>.</del><ins datetime="2026-11-05">The native engine needs the optional peer dependency <code>pdf-lib</code>, and fonts need <code>@pdf-lib/fontkit</code> beside it.</ins><button type="button" class="revision-mark" id="change-pdf-lib-peer" popovertarget="change-pdf-lib-peer-note">Corrected</button><span class="revision-note" id="change-pdf-lib-peer-note" popover><strong>Corrected 5 Nov 2026.</strong> The native engine itself needs pdf-lib installed, which I had left out. <a href="#revisions">All revisions</a><button type="button" class="revision-note-hide" hidden>Hide all changes</button></span>
 </p>
 
 <h2>What is Still Not Right</h2>
@@ -300,6 +300,7 @@ writeFileSync('report.pdf', pdf.value);</code></pre>
                         <li><strong>Updated</strong> <time datetime="2026-10-28">28 October 2026</time> for <a href="../#doc/changelog/840---2026-10-28">8.4.0</a>: The reader now reads words whole from PDFs that place each letter cluster apart, as LibreOffice&#39;s do. <a href="#change-whole-words">See the change</a></li>
                         <li><strong>Updated</strong> <time datetime="2026-10-28">28 October 2026</time> for <a href="../#doc/changelog/840---2026-10-28">8.4.0</a>: A font whose glyph for a character draws nothing is now passed over for the next font. <a href="#change-first-font-that-draws">See the change</a></li>
                         <li><strong>Updated</strong> <time datetime="2026-10-28">28 October 2026</time> for <a href="../#doc/changelog/840---2026-10-28">8.4.0</a>: The native engine now takes WOFF and WOFF2 fonts. <a href="#change-web-fonts">See the change</a></li>
+                        <li><strong>Corrected</strong> <time datetime="2026-11-05">5 November 2026</time>: The native engine itself needs pdf-lib installed, which I had left out. <a href="#change-pdf-lib-peer">See the change</a></li>
                         <li><strong>Updated</strong> <time datetime="2026-10-28">28 October 2026</time> for <a href="../#doc/changelog/840---2026-10-28">8.4.0</a>: The reader now keeps the space after a conjunct, so this is no longer a problem. <a href="#change-space-after-conjunct">See the change</a></li>
                     </ol>
                 </section>

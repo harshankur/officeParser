@@ -77,7 +77,7 @@ console.log(frame.metadata.float);
 </p>
 <ul>
     <li>Text takes the side with more room. A box near the right edge leaves the left for the text.</li>
-    <li>If that room is less than 36 points, or a third of the line, the line moves down below the box
+    <li>If that room is less than 36 points<del data-revision="room-beside">, or a third of the line</del><ins data-revision="room-beside"> (or, on a line narrower than 108 points, a third of it)</ins>, the line moves down below the box
         instead of squeezing a word or two into a sliver.</li>
     <li>A box set to keep text above and below it (Word's <code>wrapTopAndBottom</code>, ODT's
         <code>style:wrap="none"</code>) sends the line below it whatever the room.</li>
