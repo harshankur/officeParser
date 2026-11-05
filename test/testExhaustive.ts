@@ -21,7 +21,7 @@ import { PDFDocument, PDFHexString, PDFName, PDFOperator, PDFRawStream, Standard
 import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
-import type { ImageMetadata, OfficeContentNode, OfficeParserAST, ShapeMetadata } from '../src/types';
+import type { ImageMetadata, OfficeContentNode, OfficeParserAST, ShapeMetadata, TextMetadata } from '../src/types';
 import { parseXmlString } from '../src/utils/xmlUtils';
 import { decodeWindows1252, textDecoder } from '../src/utils/encodingUtils';
 import { ocrTestHooks, performOcr, terminateOcr } from '../src/utils/ocrUtils';
@@ -1233,6 +1233,90 @@ async function testWordRunCharacters(): Promise<void> {
     assert.strictEqual(text, 'co-operate\nChapter 1\t7\nsoftware', 'Word: noBreakHyphen and ptab read as their characters, a soft hyphen stays hidden');
 
     console.log('  Word run characters: All assertions passed ✓');
+}
+
+/**
+ * A content control that still shows its placeholder holds Word's prompt ("Click or tap here to enter
+ * text.") until the author fills it in. The prompt is the glossary building block the control names; it
+ * is kept in the AST, marked, and left out of generated output. A control whose flag is set over other
+ * text, a control around a cell or a row, and a field that ends inside a control keep their content,
+ * their cells and their fields.
+ */
+async function testWordPlaceholders(): Promise<void> {
+    console.log('\n=== Running Word Placeholder Tests ===');
+
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+    const PROMPT = 'Click or tap here to enter text.';
+    const run = (text: string) => `<w:r><w:t xml:space="preserve">${text}</w:t></w:r>`;
+    const control = (content: string, docPart = 'DefaultPlaceholder_1') =>
+        `<w:sdt><w:sdtPr><w:placeholder><w:docPart w:val="${docPart}"/></w:placeholder><w:showingPlcHdr/></w:sdtPr><w:sdtContent>${content}</w:sdtContent></w:sdt>`;
+    const cell = (text: string) => `<w:tc><w:p>${run(text)}</w:p></w:tc>`;
+    const twoLines = '<w:r><w:t>Street</w:t><w:br/><w:t>City</w:t></w:r>';
+    const body = `
+    ${control(`<w:p>${run(PROMPT)}</w:p>`)}
+    <w:p>${run('Name: ')}${control(run(PROMPT))}${run(' (required)')}</w:p>
+    <w:p>${run('Applicant: ')}${control(run('Ada Lovelace'))}</w:p>
+    ${control(`<w:p>${run('Agreed terms: payment within 30 days.')}</w:p>`)}
+    <w:tbl><w:tr>${cell('H1')}${cell('H2')}${cell('H3')}</w:tr>
+      <w:tr>${cell('a1')}${control(cell(PROMPT))}${cell('a3')}</w:tr>
+      ${control(`<w:tr>${cell(PROMPT)}</w:tr>`)}
+      <w:tr>${cell('c1')}${cell('c2')}${cell('c3')}</w:tr></w:tbl>
+    <w:p>${run('Page ')}<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>${control(`${run(PROMPT)}<w:r><w:fldChar w:fldCharType="end"/></w:r>`)}${run(' of the report')}</w:p>
+    ${control(`<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>${run(PROMPT)}</w:p>`)}
+    <w:p>${run('Address: ')}${control(twoLines, 'Address')}${run('.')}</w:p>`;
+    const docPart = (name: string, content: string) =>
+        `<w:docPart><w:docPartPr><w:name w:val="${name}"/></w:docPartPr><w:docPartBody><w:p>${content}</w:p></w:docPartBody></w:docPart>`;
+    const glossary = `<w:glossaryDocument ${W}><w:docParts>${docPart('DefaultPlaceholder_1', run(PROMPT))}${docPart('Address', twoLines)}</w:docParts></w:glossaryDocument>`;
+    const docx = (withGlossary: boolean) => Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`),
+        '_rels/.rels': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`),
+        'word/document.xml': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W}><w:body>${body}</w:body></w:document>`),
+        ...(withGlossary ? { 'word/glossary/document.xml': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>${glossary}`) } : {}),
+    }));
+    const textNodes = (nodes: OfficeContentNode[]): OfficeContentNode[] =>
+        nodes.flatMap(n => (n.type === 'text' ? [n] : textNodes(n.children ?? [])));
+
+    const ast = await OfficeParser.parseOffice(docx(true), { fileType: 'docx' });
+    const text = (await ast.to('text')).value as string;
+    assert.ok(!text.includes('Click or tap') && !text.includes('Street'), `Word: a placeholder prompt is left out of the text (got ${JSON.stringify(text)})`);
+    assert.ok(text.includes('Name:  (required)'), 'Word: the paragraph around an inline prompt keeps its text');
+    assert.ok(text.includes('Applicant: Ada Lovelace'), 'Word: text in a flagged control that is not the prompt is read');
+    assert.ok(text.includes('Agreed terms: payment within 30 days.'), 'Word: a flagged block control over real text is read');
+    assert.ok(text.includes('Page  of the report'), 'Word: a field that ends inside a prompt control still closes');
+    assert.ok(text.includes('Address: .'), 'Word: a line break in a prompt is part of the prompt');
+
+    const nodes = textNodes(ast.content);
+    const prompts = nodes.filter(n => (n.metadata as TextMetadata | undefined)?.placeholder);
+    assert.deepStrictEqual(prompts.map(n => n.text), [...Array(6).fill(PROMPT), 'Street', 'City'], 'Word: every prompt stays in the AST, marked as a placeholder');
+    const after = nodes.find(n => n.text === ' of the report');
+    assert.strictEqual((after?.metadata as TextMetadata | undefined)?.field, undefined, 'Word: text after a field ending in a control is not its result');
+
+    const table = ast.content.find(n => n.type === 'table')!;
+    assert.deepStrictEqual(table.children!.map(row => row.children!.length), [3, 3, 1, 3], 'Word: a control around a cell or a row keeps the cell and the row');
+
+    const md = (await ast.to('md')).value as string;
+    assert.ok(!md.includes('Click or tap') && !md.includes('click-or-tap'), 'Word: a heading holding a prompt takes no id from it');
+    const chunks = (await ast.to('chunks')).value as { text: string }[];
+    assert.ok(chunks.every(c => !c.text.includes('Click or tap')), 'Word: a prompt is in no chunk');
+
+    const shown = (await ast.to('text', { includePlaceholderText: true })).value as string;
+    assert.strictEqual(shown.split(PROMPT).length - 1, 6, 'Word: includePlaceholderText writes the prompts');
+    assert.ok(shown.includes('Address: Street\nCity.'), 'Word: includePlaceholderText writes a prompt with its line break');
+    const shownChunks = (await ast.to('chunks', { includePlaceholderText: true })).value as { text: string }[];
+    assert.ok(shownChunks.some(c => c.text.includes(`Name: ${PROMPT} (required)`)), 'Word: includePlaceholderText puts a prompt in its chunk');
+
+    const plain = (await (await OfficeParser.parseOffice(docx(false), { fileType: 'docx' })).to('text')).value as string;
+    assert.ok(plain.includes(`Name: ${PROMPT} (required)`), 'Word: without a glossary to compare with, a control is read as before');
+
+    console.log('  Word placeholders: All assertions passed ✓');
 }
 
 /**
@@ -11686,6 +11770,7 @@ async function runTests(): Promise<void> {
         ['BlobInput', testBlobInput],
         ['WordParagraphMark', testWordParagraphMarkFormatting],
         ['WordRunCharacters', testWordRunCharacters],
+        ['WordPlaceholders', testWordPlaceholders],
         ['ExcelDates', testExcelDates],
         ['GeneratedOutput', testGeneratedOutput],
         ['ODG', testOdg],

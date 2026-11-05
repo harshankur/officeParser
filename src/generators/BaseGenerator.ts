@@ -1,7 +1,7 @@
 import { ChartData, OfficeAttachment, OfficeIssue, ConversionResult, FullGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, StructuredStyleMapping, UniversalGeneratorFormat } from '../types.js';
 import { resolveGeneratorConfig } from '../utils/configUtils.js';
 import { checkAbortSignal, getWarningMessage } from '../utils/errorUtils.js';
-import { forgetFurniture, resolveImageMode } from '../utils/officeGenUtils.js';
+import { forgetFurniture, isPlaceholderNode, resolveImageMode } from '../utils/officeGenUtils.js';
 import { StyleMapper } from '../utils/styleMapper.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { gridPositionsFor } from '../utils/sheetGridUtils.js';
@@ -281,7 +281,9 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
     protected async handleOnNode(node: OfficeContentNode): Promise<string | false | void> {
         if (this.onNodeMemo?.has(node)) return this.onNodeMemo.get(node);
         const result = await this.config.onNode(node);
-        const verdict: string | false | undefined = result === false ? false : (typeof result === 'string' ? result : undefined);
+        let verdict: string | false | undefined = result === false ? false : (typeof result === 'string' ? result : undefined);
+        // A content control's placeholder prompt is not the document's text (TextMetadata.placeholder).
+        if (verdict === undefined && isPlaceholderNode(node) && !this.config.includePlaceholderText) verdict = false;
         this.onNodeMemo?.set(node, verdict);
         return verdict;
     }
@@ -466,7 +468,12 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
      */
     protected getNodeText(node: OfficeContentNode): string {
         if (isSourceComment(node)) return '';
-        if (node.text) return node.text;
+        // A content control's placeholder prompt is no text of the node (TextMetadata.placeholder): a
+        // heading holding one was given an id made from it. A paragraph's `.text` leaves prompts out,
+        // so to write them it is read from its runs.
+        const prompts = this.config.includePlaceholderText;
+        if (isPlaceholderNode(node) && !prompts) return '';
+        if (node.text && !(prompts && node.children?.some(isPlaceholderNode))) return node.text;
         if (node.children) {
             return node.children.map(c => this.getNodeText(c)).join('');
         }
