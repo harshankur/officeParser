@@ -8,7 +8,7 @@
  * document back, or an array to get one document per entry (a batch mail-merge).
  *
  * Today it templates DOCX (`.docx`); the run-aware substitution generalizes to the other OOXML/ODF
- * text formats later. See {@link module:template/docxTemplate} for the substitution details.
+ * text formats later. See {@link module:template/templateEngine} for the substitution details.
  *
  * @example
  * ```typescript
@@ -33,7 +33,7 @@
 
 import { decryptIfNeeded } from './crypto/decryptContainer.js';
 import { DEFAULT_OFFICE_PARSER_CONFIG, DEFAULT_TEMPLATE_CONFIG } from './defaults.js';
-import { CompiledDocxTemplate, compileDocxTemplate, DocxTemplateOptions, openDocx, renderDocxTemplate, renderParts, TAG_SKIPPED, TemplatePlace, templateTags } from './template/docxTemplate.js';
+import { CompiledDocxTemplate, compileDocxTemplate, DocxTemplateOptions, openDocx, renderDocxTemplate, renderParts, TAG_SKIPPED, TemplatePlace, templateTags } from './template/templateEngine.js';
 import { BlobLike, OfficeErrorType, OfficeParserConfig, OfficeWarningType, TemplateConfig, TemplateData, TemplateDataDetails, TemplateFormatter, TemplateProblem, TemplateSyntaxDetails, TemplateTagInfo } from './types.js';
 import { PictureSettings } from './template/templateFormat.js';
 import { assertNode } from './utils/envUtils.js';

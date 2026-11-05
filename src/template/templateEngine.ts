@@ -25,7 +25,7 @@
  *    `maxRepeatedContent`. A last pass keeps every table with a row and every cell ending in a paragraph,
  *    as Word requires, when a loop or a branch left one without.
  *
- * @module template/docxTemplate
+ * @module template/templateEngine
  */
 
 import { zipSync, Zippable } from 'fflate';
