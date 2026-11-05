@@ -1371,6 +1371,13 @@ export interface CommonGeneratorConfig {
      */
     includeCharts?: boolean;
     /**
+     * Whether to write the prompt of a DOCX content control that still shows its placeholder ("Click or
+     * tap here to enter text.", see `TextMetadata.placeholder`). Defaults to false: the prompt is not the
+     * document's text, so every generator leaves it out and keeps the cell, row or paragraph around it.
+     * `true` writes it, for output that shows the form as Word displays it.
+     */
+    includePlaceholderText?: boolean;
+    /**
      * Whether to ignore all internal (anchor) links and anchor IDs during generation.
      * When true, all bookmarks, cross-references, and internal document jumps are stripped.
      * Specifically for Markdown, this removes the {#id} block from headings.
@@ -3564,6 +3571,14 @@ export interface TextMetadata {
      * `\* ALPHABETIC` and the other switches, ODF's `style:num-format`).
      */
     fieldFormat?: PageNumberFormat;
+    /**
+     * The text is the prompt of a DOCX content control that still shows its placeholder ("Click or tap
+     * here to enter text."): the control is flagged `w:showingPlcHdr` and its content reads as the
+     * placeholder building block in the document's glossary. It is kept in the AST but is not the
+     * document's text: generators leave it out unless `includePlaceholderText` is set, and the
+     * paragraph's own `text` does not include it.
+     */
+    placeholder?: boolean;
 }
 
 /**
@@ -3641,6 +3656,8 @@ export interface BreakMetadata {
 
     /** Unique anchor IDs for internal linking (a rule or page break can be a link's target). */
     anchorIds?: string[];
+    /** The break is part of a content control's placeholder prompt, as its text is (TextMetadata.placeholder). */
+    placeholder?: boolean;
 }
 
 /**

@@ -74,7 +74,7 @@ const knownParserBooleans = new Set([
 ]);
 
 const knownGeneratorBooleans = new Set([
-    'includeFormatting', 'generateIds', 'renderMetadata', 'includeImages', 'includeCharts', 'ignoreInternalLinks',
+    'includeFormatting', 'generateIds', 'renderMetadata', 'includeImages', 'includeCharts', 'includePlaceholderText', 'ignoreInternalLinks',
     // Dotted generator booleans, same rationale as the parser set above.
     'pdfConfig.tagged', 'pdfConfig.outline', 'pdfConfig.subsetFonts', 'pdfConfig.printHidden', 'pdfConfig.printSpeakerNotes', 'pdfConfig.landscape', 'pdfConfig.printBackground', 'pdfConfig.displayHeaderFooter',
     'docxConfig.landscape', 'odtConfig.landscape',

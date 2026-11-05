@@ -355,6 +355,7 @@ export const DEFAULT_GENERATOR_CONFIG: FullGeneratorConfig = {
     includeImages: true,
     maxInlineImageBytes: 1500000,
     includeCharts: true,
+    includePlaceholderText: false,
     ignoreInternalLinks: false,
     abortSignal: null,
     htmlConfig: DEFAULT_HTML_GENERATOR_CONFIG,

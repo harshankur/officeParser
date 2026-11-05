@@ -5,6 +5,7 @@ import {
     DEFAULT_SEMANTIC_CHUNKING_CONFIG,
 } from '../defaults.js';
 import {
+    BreakMetadata,
     ChunkingConfig,
     CodeMetadata,
     ConversionResult,
@@ -27,6 +28,7 @@ import {
 import { getOfficeError, checkAbortSignal } from '../utils/errorUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { appendAll } from '../utils/nodeListUtils.js';
+import { isPlaceholderNode } from '../utils/officeGenUtils.js';
 
 /** Node types whose text is block-level, so a boundary between two of them is a real break. */
 const BLOCK_NODE_TYPES = new Set<string>([
@@ -73,14 +75,21 @@ interface ChunkTextContext {
      * among thousands of references was copied into every chunk holding one.
      */
     notesIncluded: Set<OfficeContentNode>;
+    /** Whether a content control's placeholder prompt is written (`includePlaceholderText`). */
+    includePlaceholderText: boolean;
 }
 
 function collectNodeText(node: OfficeContentNode, context: ChunkTextContext): string {
     // A picture is its alt text and recognized text (see ChunkingGenerator.imageText): its alt text,
     // kept in its metadata, was in no chunk.
     if (node.type === 'image') return context.imageText(node);
+    // A content control's placeholder prompt is not the document's text (TextMetadata.placeholder).
+    if (isPlaceholderNode(node) && !context.includePlaceholderText) return '';
     let out = '';
-    if (typeof node.text === 'string' && node.text.length > 0) {
+    // A paragraph's `.text` leaves its prompts out: to write them, it is read from its runs, as the
+    // parser built its `.text`, a line break being a newline there.
+    const fromRuns = context.includePlaceholderText && !!node.children?.some(isPlaceholderNode);
+    if (typeof node.text === 'string' && node.text.length > 0 && !fromRuns) {
         out = node.text;
         // The `.text` fast-path above skips the children walk, but DOCX/ODT/RTF set `.text` on the
         // paragraph while the footnote hangs off a nested text child - so its body would be missed.
@@ -91,6 +100,11 @@ function collectNodeText(node: OfficeContentNode, context: ChunkTextContext): st
         // A block starts a line, and what follows it starts another; math in a line of text is no block.
         let afterBlock = false;
         for (const child of node.children) {
+            if (fromRuns && child.type === 'break') {
+                const breakType = (child.metadata as BreakMetadata | undefined)?.breakType;
+                if (breakType === 'textWrapping' || breakType === 'carriageReturn') out += '\n';
+                continue;
+            }
             const block = BLOCK_NODE_TYPES.has(child.type) && !(child.type === 'code' && (child.metadata as CodeMetadata | undefined)?.math === 'inline');
             if (out && (block || afterBlock) && !out.endsWith('\n')) out += '\n';
             out += collectNodeText(child, context);
@@ -165,7 +179,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
         const recognized = typeof image.text === 'string' ? image.text : '';
         return label && recognized ? `${label}\n${recognized}` : label || recognized;
     };
-    private readonly textContext: ChunkTextContext = { imageText: this.imageText, notesIncluded: new Set() };
+    private readonly textContext: ChunkTextContext = { imageText: this.imageText, notesIncluded: new Set(), includePlaceholderText: !!this.config.includePlaceholderText };
 
     /**
      * Merges the user's chunking config with the appropriate defaults for the chosen strategy.

@@ -9,11 +9,21 @@
  * @module officeGenUtils
  */
 
-import { CellMetadata, EmbedMetadata, HeaderFooterMetadata, ImageMode, OfficeContentNode, OfficeParserAST, PageSetup, ParagraphSpacing, RowMetadata, SheetMetadata } from '../types.js';
+import { BreakMetadata, CellMetadata, EmbedMetadata, HeaderFooterMetadata, ImageMode, OfficeContentNode, OfficeParserAST, PageSetup, ParagraphSpacing, RowMetadata, SheetMetadata, TextMetadata } from '../types.js';
 import { cssColorHex } from './colorUtils.js';
 import { escapeXml, stripInvalidXmlChars } from './sanitize.js';
 import { lookupTable } from './lookupUtils.js';
 import { hasPageSize } from './pageLimits.js';
+
+/**
+ * Whether `node` is part of a DOCX content control's placeholder prompt ("Click or tap here to enter
+ * text."): its text, or a line break in it (TextMetadata.placeholder). Every generator leaves these
+ * nodes out unless `includePlaceholderText` is set.
+ */
+export function isPlaceholderNode(node: OfficeContentNode): boolean {
+    return (node.type === 'text' && !!(node.metadata as TextMetadata | undefined)?.placeholder)
+        || (node.type === 'break' && !!(node.metadata as BreakMetadata | undefined)?.placeholder);
+}
 
 /**
  * Resolves `config.includeImages` - a boolean, a CLI-provided `'true'`/`'false'` string, or an

@@ -266,6 +266,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
 
     const documentFileRegex = /word\/document[\d+]?.xml/;
     const footnotesFileRegex = /word\/footnotes[\d+]?.xml/;
+    // The glossary holds the building blocks a content control names as its placeholder prompt.
+    const glossaryFileRegex = /word\/glossary\/document[\d+]?.xml/;
     const endnotesFileRegex = /word\/endnotes[\d+]?.xml/;
     const commentsFileRegex = /word\/comments[\d+]?.xml/;
     // Headers and footers are the only parts a document can have many of: Word writes up to
@@ -484,6 +486,56 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
      */
     const ownFirst = (element: Element, tag: string): Element | undefined => getOutermostElements(element, tag, TEXT_BOX)[0];
 
+    /** Whether content control `sdt` is set to show its placeholder (`w:showingPlcHdr`, unless switched off). */
+    const showsPlaceholder = (sdt: Element): boolean => {
+        const properties = getDirectChildren(sdt, "w:sdtPr")[0];
+        const flag = properties ? getDirectChildren(properties, "w:showingPlcHdr")[0] : undefined;
+        if (!flag) return false;
+        const value = (flag.getAttribute("w:val") || "").toLowerCase();
+        return value !== "false" && value !== "0" && value !== "off";
+    };
+
+    /** The text of `element`'s runs, one line per paragraph, with whitespace runs read as one space. */
+    const promptText = (element: Element): string => {
+        const paragraphs = getElementsByTagName(element, "w:p");
+        const lines = (paragraphs.length ? paragraphs : [element]).map(p => getElementsByTagName(p, "w:t").map(t => t.textContent || '').join(''));
+        return lines.join('\n').replace(/\s+/g, ' ').trim();
+    };
+
+    // The placeholder prompt of each glossary building block, by name. Null-prototype: keyed by the
+    // document's own names (see numberingMap).
+    const placeholderPrompts: { [name: string]: string } = Object.create(null);
+
+    /**
+     * Whether content control `sdt` holds its placeholder prompt ("Click or tap here to enter text."):
+     * it is set to show the placeholder, and its content reads as the glossary building block that
+     * `w:placeholder/w:docPart` names. The flag alone is not enough, since a program can fill a control
+     * without clearing it; such text differs from the prompt and is the document's text, as is any
+     * control's content when the document has no glossary to compare it with.
+     */
+    const promptControls = new Map<Element, boolean>();
+    const isPromptControl = (sdt: Element): boolean => {
+        let prompt = promptControls.get(sdt);
+        if (prompt === undefined) {
+            const properties = getDirectChildren(sdt, "w:sdtPr")[0];
+            const placeholder = properties ? getDirectChildren(properties, "w:placeholder")[0] : undefined;
+            const name = placeholder ? getDirectChildren(placeholder, "w:docPart")[0]?.getAttribute("w:val") : undefined;
+            const content = getDirectChildren(sdt, "w:sdtContent")[0];
+            prompt = !!name && !!content && showsPlaceholder(sdt) && name in placeholderPrompts
+                && promptText(content) === placeholderPrompts[name];
+            promptControls.set(sdt, prompt);
+        }
+        return prompt;
+    };
+
+    /** Whether `element` lies inside a content control that holds its placeholder prompt. */
+    const inPromptControl = (element: Element): boolean => {
+        for (let node = element.parentNode; node; node = node.parentNode) {
+            if (isElement(node) && node.nodeName === 'w:sdt' && isPromptControl(node)) return true;
+        }
+        return false;
+    };
+
     /**
      * The child elements of `container` as Word lays them out: a content control (`w:sdt`) or custom XML
      * element (`w:customXml`) stands for what it wraps, at any depth, and alternate content for the branch
@@ -527,6 +579,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         x =>
             !!x.match(documentFileRegex) ||
             !!x.match(footnotesFileRegex) ||
+            !!x.match(glossaryFileRegex) ||
             !!x.match(endnotesFileRegex) ||
             !!x.match(numberingFileRegex) ||
             !!x.match(corePropsFileRegex) ||
@@ -550,6 +603,17 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
     // parse loop below uses to recognize it, so the two cannot fall out of step.
     findRequiredPart(files, path => !!path.match(documentFileRegex), config,
         { fileType: 'docx', part: 'word/document.xml' });
+
+    // Each placeholder building block's prompt, for telling a control's prompt from text put in it.
+    const glossaryFile = files.find(f => f.path.match(glossaryFileRegex));
+    if (glossaryFile) {
+        for (const docPart of getElementsByTagName(parseXmlString(glossaryFile.content.toString(), { config }), "w:docPart")) {
+            const docPartPr = getDirectChildren(docPart, "w:docPartPr")[0];
+            const name = docPartPr ? getDirectChildren(docPartPr, "w:name")[0]?.getAttribute("w:val") : undefined;
+            const body = getDirectChildren(docPart, "w:docPartBody")[0];
+            if (name && body) placeholderPrompts[name] = promptText(body);
+        }
+    }
 
     // Each part's relationships, by the part's path: an id in a note, comment, header or footer names a
     // relationship of that part's own, and looking it up among the document's found another target, or
@@ -1122,6 +1186,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
             if (isElement(node) && (node.nodeName === 'w:r' || node.nodeName === 'm:r')) {
                 const runNode = node;
                 const rPr = getDirectChildren(runNode, "w:rPr")[0];
+                // A content control's prompt stays in the AST, marked, but is not the paragraph's text.
+                const prompt = inPromptControl(runNode);
 
                 // Formatting
                 let formatting: TextFormatting = {};
@@ -1178,7 +1244,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         const tNode = child;
 
                         const tContent = tNode.textContent || '';
-                        text += tContent;
+                        if (!prompt) text += tContent;
                         const textNode: OfficeContentNode = {
                             type: 'text',
                             text: tContent,
@@ -1195,6 +1261,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         }
                         const pageField = pageFields[pageFields.length - 1];
                         if (pageField) textNode.metadata = { ...(textNode.metadata as TextMetadata), field: pageField.field, ...(pageField.format ? { fieldFormat: pageField.format } : {}) };
+                        if (prompt) textNode.metadata = { ...(textNode.metadata as TextMetadata), placeholder: true };
                         children.push(textNode);
                     }
                     // Complex fields: where one begins, its instruction, where its result begins, where it ends.
@@ -1222,16 +1289,16 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     // read "AB". An absolute-position tab (w:ptab, as in "left<ptab>right" headers) is one too.
                     else if (child.tagName === "w:tab" || child.tagName === "tab" || child.tagName === "w:ptab") {
                         if (hiddenResults > 0) continue;
-                        text += '\t';
-                        children.push({ type: 'text', text: '\t', formatting } as OfficeContentNode);
+                        if (!prompt) text += '\t';
+                        children.push({ type: 'text', text: '\t', formatting, ...(prompt ? { metadata: { placeholder: true } } : {}) } as OfficeContentNode);
                     }
                     // A non-breaking hyphen is Word's own element, not a character of w:t: left out,
                     // "co<noBreakHyphen/>operate" read "cooperate". A soft hyphen stays out, as Word shows it
                     // only at a line end.
                     else if (child.tagName === "w:noBreakHyphen") {
                         if (hiddenResults > 0) continue;
-                        text += '-';
-                        children.push({ type: 'text', text: '-', formatting } as OfficeContentNode);
+                        if (!prompt) text += '-';
+                        children.push({ type: 'text', text: '-', formatting, ...(prompt ? { metadata: { placeholder: true } } : {}) } as OfficeContentNode);
                     }
                     // Break nodes
                     else if (child.tagName === "w:br"
@@ -1256,7 +1323,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         const lineBreak = breakType === 'textWrapping' || breakType === 'carriageReturn';
                         if (!lineBreak && !config.includeBreakNodes) continue;
                         if (lineBreak && hiddenResults > 0) continue;
-                        if (lineBreak) text += '\n';
+                        if (lineBreak && !prompt) text += '\n';
 
                         let breakClear: BreakMetadata["clear"] = undefined;
                         if (breakType === 'textWrapping' && brNode.getAttribute("w:clear") !== null) {
@@ -1265,7 +1332,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
 
                         const breakNode: OfficeContentNode = {
                             type: 'break',
-                            metadata: { breakType, clear: breakClear }
+                            metadata: { breakType, clear: breakClear, ...(prompt ? { placeholder: true } : {}) }
                         };
 
                         if (config.includeRawContent) {
