@@ -1511,7 +1511,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // In an HTML table cell the reference is HTML too (as HtmlGenerator writes it), which
                     // the parser ties to its `[^id]:` definition.
                     const key = this.getFootnoteKey(note);
-                    result += this.inHtmlTable ? `<sup data-footnote-ref="${escapeHtml(key)}">${escapeHtml(key)}</sup>` : `[^${key}]`;
+                    result += this.inHtmlTable ? `<sup data-footnote-ref="${escapeHtml(key)}">${escapeHtml(this.getNoteMark(note))}</sup>` : `[^${key}]`;
                 }
             }
         }

@@ -9,7 +9,8 @@ import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXml
 import { heldColumns } from '../utils/columnUtils.js';
 import { onDocumentPage } from '../utils/pageLimits.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, odfUserDefinedXml, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
-import { markerPattern, MarkerPattern, odfNumFormat } from '../utils/listMarkers.js';
+import { formatListNumber, markerPattern, MarkerPattern, odfNumFormat } from '../utils/listMarkers.js';
+import { customNoteMark } from '../utils/noteMarks.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 
@@ -188,7 +189,9 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     private commentCounter = 0;
     private footnoteOrd = 0;
     /** Where each note was written: its id and number, in each part (by the part's style registry) it is written in. */
-    private readonly writtenNotes = new Map<OfficeContentNode, { id: string; ord: number; cls: 'footnote' | 'endnote'; part: StyleRegistry }[]>();
+    private readonly writtenNotes = new Map<OfficeContentNode, { id: string; ord: number; cls: 'footnote' | 'endnote'; part: StyleRegistry; mark?: string }[]>();
+    /** How many footnotes and endnotes were written, their ids' numbers (a note with a custom mark takes an id, not a number). */
+    private readonly notesWritten = { footnote: 0, endnote: 0 };
     private endnoteOrd = 0;
 
     private usedBookmarkNames = new UniqueNames();
@@ -668,14 +671,25 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         // the same number.
         const written = this.writtenNotes.get(node);
         const writtenHere = written?.find(w => w.part === this.activeStyles);
-        if (writtenHere) return `<text:note-ref text:note-class="${writtenHere.cls}" text:reference-format="text" text:ref-name="${writtenHere.id}">${writtenHere.ord}</text:note-ref>`;
-        const ord = written ? written[0].ord : cls === 'footnote' ? ++this.footnoteOrd : ++this.endnoteOrd;
-        const id = `${cls === 'footnote' ? 'ftn' : 'edn'}${ord}${written ? `_${written.length + 1}` : ''}`;
-        const entry = { id, ord, cls, part: this.activeStyles };
+        if (writtenHere) return `<text:note-ref text:note-class="${writtenHere.cls}" text:reference-format="text" text:ref-name="${writtenHere.id}">${writtenHere.mark !== undefined ? escapeXml(stripInvalidXmlChars(writtenHere.mark)) : this.citationOf(writtenHere.cls, writtenHere.ord)}</text:note-ref>`;
+        // A mark the author chose (`*`) is the citation's label, and the note takes no number.
+        const mark = written ? written[0].mark : customNoteMark(node);
+        const ord = written ? written[0].ord : mark !== undefined ? (cls === 'footnote' ? this.footnoteOrd : this.endnoteOrd) : cls === 'footnote' ? ++this.footnoteOrd : ++this.endnoteOrd;
+        const seq = written ? undefined : ++this.notesWritten[cls];
+        const id = written ? `${written[0].id}_${written.length + 1}` : `${cls === 'footnote' ? 'ftn' : 'edn'}${seq}`;
+        const entry = { id, ord, cls, part: this.activeStyles, mark };
         if (written) written.push(entry);
         else this.writtenNotes.set(node, [entry]);
         const body = this.styleNoteBody((await this.renderBlocks(this.bodyBlocks(node))) || '<text:p/>');
-        return `<text:note text:id="${id}" text:note-class="${cls}"><text:note-citation>${ord}</text:note-citation><text:note-body>${body}</text:note-body></text:note>`;
+        const citation = mark !== undefined
+            ? `<text:note-citation text:label="${escapeXml(stripInvalidXmlChars(mark))}">${escapeXml(stripInvalidXmlChars(mark))}</text:note-citation>`
+            : `<text:note-citation>${this.citationOf(cls, ord)}</text:note-citation>`;
+        return `<text:note text:id="${id}" text:note-class="${cls}">${citation}<text:note-body>${body}</text:note-body></text:note>`;
+    }
+
+    /** A note's number as LibreOffice shows it by default (the citation is its cached text): footnotes 1, 2, 3, endnotes i, ii, iii. */
+    private citationOf(cls: 'footnote' | 'endnote', ord: number): string {
+        return cls === 'endnote' ? formatListNumber(ord, 'lowerRoman') : String(ord);
     }
 
     private styleNoteBody(body: string): string {

@@ -6,6 +6,7 @@ import { StyleMapper } from '../utils/styleMapper.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { gridPositionsFor } from '../utils/sheetGridUtils.js';
 import { MAX_LAYOUT_COLUMNS } from '../utils/tableLayout.js';
+import { NoteMarks } from '../utils/noteMarks.js';
 
 /** The most cells one chart's data table holds in DOCX, ODT and LaTeX output (see BaseGenerator.chartTable). */
 const MAX_CHART_TABLE_CELLS = 100_000;
@@ -375,6 +376,16 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
             .replace(/[^\p{L}\p{M}\p{N}\s_-]/gu, '')
             .replace(/[\s_-]+/g, '-')
             .replace(/^-+|-+$/g, '');
+    }
+
+    private readonly noteMarks = new NoteMarks();
+
+    /**
+     * The mark a note's references show (see NoteMarks): the one its source records, or its ordinal
+     * within its kind. Never its key, which names it in ids and links only.
+     */
+    protected getNoteMark(note: OfficeContentNode): string {
+        return this.noteMarks.markOf(note);
     }
 
     private noteFootnoteKeys = new Map<OfficeContentNode, string>();

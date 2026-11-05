@@ -1,4 +1,4 @@
-import { AdmonitionMetadata, CellMetadata, CodeMetadata, CommentMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, ParagraphMetadata, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, CellMetadata, CodeMetadata, CommentMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, ParagraphMetadata, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { anchorMark, isAnchorMark, resolveAnchorMarks } from '../utils/anchorUtils.js';
 import { createAST } from '../utils/astUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
@@ -1227,8 +1227,11 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
     let inTableHead = 0;
     const hasToken = (value: string | undefined, token: string): boolean => !!value && value.split(/\s+/).includes(token);
     /** A note's back-link to its reference: this library's, GitHub's, Pandoc's and markdown-it's. */
+    /** The ids of note references and of the elements holding them (an EPUB's `<sup id="calledF1">`), which a back-link targets. */
+    const noteReferenceIds = new Set<string>();
     const isFootnoteBackLink = (node: HtmlNode): boolean => node.tagName === 'a' && (
         (node.attributes?.href || '').startsWith('#footnote-ref-') || node.attributes?.['data-footnote-backref'] !== undefined
+        || ((node.attributes?.href || '').startsWith('#') && noteReferenceIds.has(node.attributes!.href!.slice(1)))
         || node.attributes?.role === 'doc-backlink' || hasToken(node.attributes?.class, 'footnote-back') || hasToken(node.attributes?.class, 'footnote-backref'));
     /** Whether `link` is marked as a reference to a note (`inMarkedSup`: it is all a `<sup class="footnote-ref">` holds). */
     const isNoteReferenceLink = (link: HtmlNode, inMarkedSup: boolean): boolean => link.tagName === 'a' && (inMarkedSup
@@ -1526,6 +1529,13 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         // and attach nothing. The orphan sweep below is likewise skipped.
                         if (config.ignoreNotes) continue;
                         const noteNode = noteFor(key);
+                        // The mark the reference shows (`1`, `*`), read at its first reference; the key is
+                        // internal. A pair of brackets around it (`[1]`) is the reference's look, not its mark.
+                        const meta = noteNode.metadata as NoteMetadata;
+                        if (meta.mark === undefined) {
+                            const shown = decodeEntities(preformattedText(child)).replace(/\s+/g, ' ').trim().replace(/^\[(.+)\]$|^\((.+)\)$/, '$1$2').trim();
+                            if (shown) meta.mark = shown;
+                        }
                         if (kids.length > 0) {
                             const target = kids[kids.length - 1];
                             if (!target.notes) target.notes = [];
@@ -2369,8 +2379,14 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
         const scan = (n: HtmlNode, depth: number, inSection: boolean): void => {
             for (const child of n.children) {
                 if (child.type !== 'element') continue;
-                const href = referenceLinkOf(child)?.attributes?.href;
-                if (href?.startsWith('#')) cited.add(href.slice(1));
+                const link = referenceLinkOf(child);
+                const href = link?.attributes?.href;
+                if (href?.startsWith('#')) {
+                    cited.add(href.slice(1));
+                    // A link in the note back to this reference (EPUB's `<a href="#calledF1">1</a>`, the mark
+                    // repeated at the note's start) is its back-link, not its text.
+                    for (const id of [link!.attributes?.id, child.attributes?.id]) if (id) noteReferenceIds.add(id);
+                }
                 let within = inSection;
                 if (!inSection && isFootnotesSection(child)) { sections.push(child); within = true; }
                 else if (!inSection && noteKind(child)) notes.push(child);

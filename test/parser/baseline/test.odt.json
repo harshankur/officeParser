@@ -10269,7 +10269,8 @@
               ],
               "metadata": {
                 "noteType": "footnote",
-                "noteId": "_ftn0"
+                "noteId": "_ftn0",
+                "mark": "1"
               }
             }
           ]
@@ -10330,7 +10331,8 @@
               ],
               "metadata": {
                 "noteType": "endnote",
-                "noteId": "_edn0"
+                "noteId": "_edn0",
+                "mark": "1"
               }
             }
           ]

@@ -27,6 +27,7 @@ import { decodeBmp, decodeGif, encodePng } from '../../utils/rasterUtils.js';
 import { sanitizeOfficePackageUrl } from '../../utils/sanitize.js';
 import { cssColorHex } from '../../utils/colorUtils.js';
 import { formatListNumber } from '../../utils/listMarkers.js';
+import { recordedNoteMark } from '../../utils/noteMarks.js';
 import { drawSvg, readSvg } from './svgDrawing.js';
 import { BROTLI_FIXED_RELEASES, runtimeHasBrotliFlaw, runtimeName } from '../../utils/brotliFlaw.js';
 import { cffOutlines, colorTables, fontkitUnbrotli, nativeUnbrotli, sfntOf, substitutes, trueTypeOutlines, Unbrotli, UnreadableFont } from './fontFiles.js';
@@ -2965,11 +2966,16 @@ class NativeLayout {
             if (this.collectedNoteSet.has(note)) continue;
             this.collectedNoteSet.add(note);
             this.collectedNotes.push(note);
-            // Numbered in the order they are cited: footnotes 1, 2, 3, endnotes i, ii, iii, as Word does.
+            // Shown by the mark its source records (ODT's citation, an HTML reference's text, a custom mark),
+            // else numbered in the order they are cited: footnotes 1, 2, 3, endnotes i, ii, iii, as Word does.
             if (NativeLayout.isNumberedNote(note)) {
+                const recorded = recordedNoteMark(note);
                 const endnote = (note.metadata as { noteType?: string } | undefined)?.noteType === 'endnote';
-                const count = endnote ? ++this.endnoteCount : ++this.footnoteCount;
-                this.noteLabels.set(note, endnote ? formatListNumber(count, 'lowerRoman') : String(count));
+                if (recorded !== undefined) this.noteLabels.set(note, recorded);
+                else {
+                    const count = endnote ? ++this.endnoteCount : ++this.footnoteCount;
+                    this.noteLabels.set(note, endnote ? formatListNumber(count, 'lowerRoman') : String(count));
+                }
             }
             this.collectNotes(note);
         }

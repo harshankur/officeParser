@@ -1250,6 +1250,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     const noteClass = (element.getAttribute('text:note-class') || 'footnote') as 'footnote' | 'endnote';
                     const noteId = element.getAttribute('text:id') || element.getAttribute('xml:id') || undefined;
                     const noteBody = getFirstElementByTagName(element, "text:note-body");
+                    // The mark the reference shows (`text:note-citation`: the number the application gave it,
+                    // or the author's own mark in `text:label`). The id is internal and never shown.
+                    const citation = getDirectChildren(element, "text:note-citation")[0];
+                    const label = citation?.getAttribute('text:label') || '';
+                    const mark = (label || citation?.textContent || '').trim();
 
                     if (noteBody) {
                         // Extract note content recursively
@@ -1283,7 +1288,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             children: noteChildren,
                             metadata: {
                                 noteType: noteClass,
-                                noteId: noteId
+                                noteId: noteId,
+                                ...(mark ? { mark } : {}),
+                                ...(label.trim() ? { customMark: true } : {})
                             }
                         };
 

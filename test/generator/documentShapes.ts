@@ -4,7 +4,9 @@
  * written as document tables.
  */
 import * as assert from 'assert';
+import { unzipSync } from 'fflate';
 import { OfficeParser } from '../../src/OfficeParser';
+import type { NoteMetadata, OfficeContentNode, OfficeParserAST } from '../../src/types';
 
 /** An XML document whose root is `html` (XHTML, as office suites export HTML) is read as HTML. */
 export async function testXhtmlReadAsHtml(): Promise<void> {
@@ -57,4 +59,71 @@ export async function testRtfListTypesPerLevel(): Promise<void> {
     assert.ok(/<ul>\s*<li[^>]*>\s*North/.test(html), `RTF: the bullet list writes as <ul>: ${html}`);
     assert.ok(/<ol>\s*<li[^>]*>\s*Hire/.test(html), 'RTF: the numbered list writes as <ol>');
     console.log('✓ RTF list types per level');
+}
+
+/** Every note in an AST, in reference order, once each. */
+function notesOf(ast: OfficeParserAST): OfficeContentNode[] {
+    const out: OfficeContentNode[] = [];
+    const walk = (nodes: OfficeContentNode[] | undefined) => {
+        for (const n of nodes ?? []) {
+            for (const note of n.notes ?? []) if (!out.includes(note)) out.push(note);
+            walk(n.children);
+        }
+    };
+    walk(ast.content);
+    return out;
+}
+
+/** The marks the references in generated HTML show, with the keys their links go to. */
+function referenceMarks(html: string): string[][] {
+    return [...html.matchAll(/<sup data-footnote-ref="([^"]*)"[^>]*><a href="#footnote-([^"]*)">([^<]*)<\/a><\/sup>/g)].map(m => [m[1], m[3]]);
+}
+
+/**
+ * A note's reference shows its mark (the one its source records, else its ordinal within its kind), never
+ * its internal key, which stays in ids and links; a custom mark is kept through DOCX and ODT.
+ */
+export async function testNoteMarks(): Promise<void> {
+    const md = await OfficeParser.parseOffice(Buffer.from('A[^a] B[^b] C[^c] D[^d].\n\n[^a]: First.\n[^b]: Second.\n[^c]: Third.\n[^d]: Fourth.\n'), { fileType: 'md' });
+    const plain = (await md.to('html', { htmlConfig: { standalone: false } })).value;
+    assert.deepStrictEqual(referenceMarks(plain), [['a', '1'], ['b', '2'], ['c', '3'], ['d', '4']], 'Notes: keys in links, ordinals shown');
+    // One endnote among the footnotes, and one footnote with a mark its author chose.
+    const [, b, c] = notesOf(md);
+    (b.metadata as NoteMetadata).noteType = 'endnote';
+    Object.assign(c.metadata as NoteMetadata, { mark: '*', customMark: true });
+    const expected = ['1', 'i', '*', '2'];
+    const shown = (html: string) => referenceMarks(html).map(r => r[1]);
+    assert.deepStrictEqual(shown((await md.to('html', { htmlConfig: { standalone: false } })).value), expected, 'Notes: footnotes and endnotes counted apart, a custom mark kept');
+    // Through the formats that number notes themselves, and back.
+    for (const format of ['docx', 'odt', 'epub'] as const) {
+        const written = (await md.to(format)).value as Uint8Array;
+        const back = await OfficeParser.parseOffice(Buffer.from(written));
+        const html = (await back.to('html', { htmlConfig: { standalone: false } })).value;
+        assert.deepStrictEqual(shown(html), expected, `Notes: ${format} keeps the marks`);
+        const custom = notesOf(back)[2];
+        assert.strictEqual(custom.text.trim(), 'Third.', `Notes: ${format} keeps the custom mark out of the note's text`);
+        if (format !== 'epub') assert.strictEqual((custom.metadata as NoteMetadata).customMark, true, `Notes: ${format} reads the custom mark back as one`);
+    }
+    const odt = new TextDecoder().decode(unzipSync((await md.to('odt')).value as Uint8Array)['content.xml']);
+    assert.ok(odt.includes('<text:note-citation text:label="*">*</text:note-citation>'), 'Notes: ODT writes a custom mark as its label');
+    assert.ok(odt.includes('<text:note text:id="edn1" text:note-class="endnote"><text:note-citation>i</text:note-citation>'), 'Notes: ODT caches an endnote citation as LibreOffice shows it');
+    const docx = new TextDecoder().decode(unzipSync((await md.to('docx')).value as Uint8Array)['word/document.xml']);
+    assert.ok(/<w:footnoteReference w:customMarkFollows="1" w:id="\d+"\/><w:t xml:space="preserve">\*<\/w:t>/.test(docx), 'Notes: DOCX writes a custom mark after its reference');
+    // The native PDF engine and slides draw the same marks.
+    const pdf = (await md.to('pdf', { pdfConfig: { engine: 'native' } })).value as Uint8Array;
+    const pdfBack = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } });
+    const pdfText = (await pdfBack.to('text')).value;
+    assert.ok(/\*\s*Third\./.test(pdfText) && /i\s*Second\./.test(pdfText), `Notes: native PDF draws the marks: ${pdfText}`);
+    const pptx = await OfficeParser.parseOffice(Buffer.from((await md.to('pptx')).value as Uint8Array));
+    const pptxText = (await pptx.to('text')).value;
+    assert.ok(/\*\.\s*Third\./.test(pptxText) && /i\.\s*Second\./.test(pptxText), `Notes: slides list the notes by their marks: ${pptxText}`);
+    // An EPUB 3 note whose text repeats its mark as a link back to the reference: the mark is no text.
+    const epubHtml = '<p>Text<sup id="calledF1"><a epub:type="noteref" href="#dataF1">1</a></sup>.</p>'
+        + '<aside epub:type="footnote" id="dataF1"><p><sup><a href="#calledF1">1</a></sup>Figures are rounded.</p></aside>';
+    const epubAst = await OfficeParser.parseOffice(Buffer.from(epubHtml), { fileType: 'html' });
+    const epubNote = notesOf(epubAst)[0];
+    assert.strictEqual(epubNote.text.trim(), 'Figures are rounded.', 'Notes: a link back to the reference is the back-link, not text');
+    assert.strictEqual((epubNote.metadata as NoteMetadata).mark, '1', 'Notes: the reference text is the mark');
+    assert.deepStrictEqual(shown((await epubAst.to('html', { htmlConfig: { standalone: false } })).value), ['1'], 'Notes: and shown again');
+    console.log('✓ Note marks');
 }

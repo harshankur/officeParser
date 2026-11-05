@@ -61,7 +61,7 @@
  */
 
 import { attachmentLookup, takeRepeats } from '../utils/repeatUtils.js';
-import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, ShapeMetadata, PageNumberFormat, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, ShapeMetadata, PageNumberFormat, IndentationMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { MAX_PAGE_PT } from '../utils/pageLimits.js';
 import { lengthToPt, titlePagesTakeHiddenFirsts } from '../utils/officeGenUtils.js';
 import { fieldSwitchFormat, pageNumberStartOf, wordPageNumberFormat } from '../utils/pageNumbers.js';
@@ -665,6 +665,28 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         if (!node) referencedNodes.set(`${kind}:${id}`, node = build());
         return node;
     };
+    /**
+     * A note given the mark its author typed (`w:customMarkFollows`), when it has one. Word writes that
+     * mark again at the note's start (as text, where a numbered note has `w:footnoteRef`): it is the
+     * note's mark, not its text, and is taken off.
+     */
+    const customMarkedNote = (note: OfficeContentNode, mark: string): OfficeContentNode => {
+        const trimmed = mark.trim();
+        if (!trimmed) return note;
+        (note.metadata as NoteMetadata).mark = trimmed;
+        (note.metadata as NoteMetadata).customMark = true;
+        const first = note.children?.[0];
+        const run = first?.children?.find(c => c.type === 'text' && (c.text ?? '').trim());
+        if (first && run && (run.text ?? '').trimStart().startsWith(trimmed)) {
+            const rest = (run.text ?? '').trimStart().slice(trimmed.length);
+            const children = first.children!.filter(c => c !== run || rest);
+            const kept = children.map(c => (c === run ? { ...run, text: rest } : c));
+            const paragraph = { ...first, children: kept, text: kept.map(c => c.text ?? '').join('').replace(/^\s+/, '') };
+            note.children = [paragraph, ...note.children!.slice(1)];
+            note.text = note.children.map(n => n.text).join(' ');
+        }
+        return note;
+    };
     const endnoteMap = new Map<string, OfficeContentNode[]>();
     const commentMap = new Map<string, OfficeContentNode[]>();
     const commentMetadataMap = new Map<string, CommentMetadata>();
@@ -1241,6 +1263,11 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 const runItems: Node[] = [];
                 const pushRunItems = (nodes: ArrayLike<Node>) => { for (let i = nodes.length - 1; i >= 0; i--) runItems.push(nodes[i]); };
                 pushRunItems(runNode.childNodes);
+                // A note reference with a mark the author typed (`w:customMarkFollows`): the run's text is
+                // that mark, the note's (NoteMetadata.mark), not the paragraph's.
+                const markedReference = config.ignoreNotes ? undefined : (ownFirst(runNode, "w:footnoteReference") ?? ownFirst(runNode, "w:endnoteReference"));
+                const customMarkFollows = !!markedReference && !['', 'false', '0', 'off'].includes(markedReference.getAttribute("w:customMarkFollows") ?? '');
+                let customMark = '';
                 while (runItems.length) {
                     const child = runItems.pop()!;
                     if (!isElement(child)) continue;
@@ -1255,6 +1282,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     if (child.tagName === "w:t" || child.tagName === "t" || child.tagName === "m:t") {
                         if (hiddenResults > 0) continue;
                         const tNode = child;
+                        if (customMarkFollows) { customMark += tNode.textContent || ''; continue; }
 
                         const tContent = tNode.textContent || '';
                         text += tContent;
@@ -1434,12 +1462,12 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         const id = footnoteRef.getAttribute("w:id");
                         if (id && footnoteMap.has(id)) {
                             const noteNodes = footnoteMap.get(id)!;
-                            const noteNode = referencedNode('footnote', id, () => ({
+                            const noteNode = referencedNode('footnote', id, () => customMarkedNote({
                                 type: 'note',
                                 text: noteNodes.map((n: OfficeContentNode) => n.text).join(' '),
                                 children: noteNodes,
                                 metadata: { noteType: 'footnote', noteId: id }
-                            } as OfficeContentNode));
+                            }, customMarkFollows ? customMark : ''));
                             attach(noteNode, 'notes');
                             noteReferenced(noteNode);
                         }
@@ -1450,12 +1478,12 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         const id = endnoteRef.getAttribute("w:id");
                         if (id && endnoteMap.has(id)) {
                             const noteNodes = endnoteMap.get(id)!;
-                            const noteNode = referencedNode('endnote', id, () => ({
+                            const noteNode = referencedNode('endnote', id, () => customMarkedNote({
                                 type: 'note',
                                 text: noteNodes.map((n: OfficeContentNode) => n.text).join(' '),
                                 children: noteNodes,
                                 metadata: { noteType: 'endnote', noteId: id }
-                            } as OfficeContentNode));
+                            }, customMarkFollows ? customMark : ''));
                             attach(noteNode, 'notes');
                             noteReferenced(noteNode);
                         }

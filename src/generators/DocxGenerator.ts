@@ -10,6 +10,7 @@ import { pageFieldInstruction, wordFmtOf } from '../utils/pageNumbers.js';
 import { clampInt } from '../utils/numberUtils.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, ooxmlCustomPropertiesXml, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
 import { markerPattern, MarkerPattern } from '../utils/listMarkers.js';
+import { customNoteMark } from '../utils/noteMarks.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 
@@ -544,7 +545,9 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
      * Each note written, at its first reference: its number as Word shows it, and the bookmark around
      * that reference when the AST refers to the note again (see noteRefField).
      */
-    private readonly writtenNotes = new Map<OfficeContentNode, { kind: 'footnote' | 'endnote'; number: number; bookmark?: string }>();
+    private readonly writtenNotes = new Map<OfficeContentNode, { kind: 'footnote' | 'endnote'; number: number; bookmark?: string; mark?: string }>();
+    /** How many footnotes and endnotes Word numbers (a note with a custom mark takes no number). */
+    private readonly numberedNotes = { footnote: 0, endnote: 0 };
 
     /**
      * Registers a note into the footnotes/endnotes part at its first reference, rendering its body with
@@ -559,16 +562,21 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         const key = this.getFootnoteKey(note);
         const notes = kind === 'endnote' ? this.endnotes : this.footnotes;
         notes.push({ key, kind, node: note });
-        const entry: { kind: 'footnote' | 'endnote'; number: number; bookmark?: { id: number; name: string } } = { kind, number: notes.length };
+        // A mark the author chose (`*`) is written as Word's custom mark: after the reference, and in place
+        // of the number at the note's start. Word numbers the other notes without it.
+        const mark = customNoteMark(note);
+        const entry: { kind: 'footnote' | 'endnote'; number: number; bookmark?: { id: number; name: string } } = { kind, number: mark === undefined ? ++this.numberedNotes[kind] : this.numberedNotes[kind] };
         if (this.noteReferences(note) > 1) entry.bookmark = this.mintBookmark(`_RefNote${this.writtenNotes.size + 1}`);
         // Marked written before its body is, so a reference to the note inside it refers back.
-        this.writtenNotes.set(note, { kind, number: entry.number, bookmark: entry.bookmark?.name });
+        this.writtenNotes.set(note, { kind, number: entry.number, bookmark: entry.bookmark?.name, mark });
         const owner = kind === 'endnote' ? 'word/endnotes.xml' : 'word/footnotes.xml';
         const body = (await this.withRelOwner(owner, () => this.renderBlocks(this.bodyBlocks(note)))) || '<w:p/>';
-        this.noteBodies.set(key, this.withNoteMarker(this.styleNoteBody(body), kind, this.pointBookmarks(note)));
+        this.noteBodies.set(key, this.withNoteMarker(this.styleNoteBody(body), kind, this.pointBookmarks(note), mark));
         const id = this.noteId(key);
         const tag = kind === 'endnote' ? 'w:endnoteReference' : 'w:footnoteReference';
-        const reference = `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><${tag} w:id="${id}"/></w:r>`;
+        const reference = mark === undefined
+            ? `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><${tag} w:id="${id}"/></w:r>`
+            : `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><${tag} w:customMarkFollows="1" w:id="${id}"/><w:t xml:space="preserve">${escapeXml(stripInvalidXmlChars(mark))}</w:t></w:r>`;
         if (!entry.bookmark) return reference;
         return `<w:bookmarkStart w:id="${entry.bookmark.id}" w:name="${escapeXml(entry.bookmark.name)}"/>${reference}<w:bookmarkEnd w:id="${entry.bookmark.id}"/>`;
     }
@@ -581,8 +589,9 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
      * referred to once (a reference outside the content, such as a header's) has no bookmark, and is its
      * mark alone.
      */
-    private noteRefField(written: { kind: 'footnote' | 'endnote'; number: number; bookmark?: string }): string {
-        const mark = `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:t>${noteMark(written.kind, written.number)}</w:t></w:r>`;
+    private noteRefField(written: { kind: 'footnote' | 'endnote'; number: number; bookmark?: string; mark?: string }): string {
+        const shown = written.mark === undefined ? `<w:t>${noteMark(written.kind, written.number)}</w:t>` : `<w:t xml:space="preserve">${escapeXml(stripInvalidXmlChars(written.mark))}</w:t>`;
+        const mark = `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr>${shown}</w:r>`;
         if (!written.bookmark) return mark;
         return `<w:fldSimple w:instr=" NOTEREF ${escapeXml(written.bookmark)} \\f${this.config.ignoreInternalLinks ? '' : ' \\h'} ">${mark}</w:fldSimple>`;
     }
@@ -596,8 +605,9 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
      * Prepends the numbered marker run (w:footnoteRef/w:endnoteRef) to the note body's first paragraph,
      * followed by the note's own bookmarks (`anchors`), where a link to the note arrives.
      */
-    private withNoteMarker(body: string, kind: 'footnote' | 'endnote', anchors = ''): string {
-        const ref = `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:${kind}Ref/></w:r>${anchors}`;
+    private withNoteMarker(body: string, kind: 'footnote' | 'endnote', anchors = '', customMark?: string): string {
+        const marker = customMark === undefined ? `<w:${kind}Ref/>` : `<w:t xml:space="preserve">${escapeXml(stripInvalidXmlChars(customMark))}</w:t>`;
+        const ref = `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr>${marker}</w:r>${anchors}`;
         const m = /^<w:p>(<w:pPr>[\s\S]*?<\/w:pPr>)?/.exec(body);
         if (m) return body.slice(0, m[0].length) + ref + body.slice(m[0].length);
         // The body does not open with a paragraph (a note whose first block is a table). A run is not

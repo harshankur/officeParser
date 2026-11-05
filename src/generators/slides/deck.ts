@@ -16,6 +16,7 @@
  * @module generators/slides/deck
  */
 
+import { NoteMarks } from '../../utils/noteMarks.js';
 import { CommentMetadata, HeadingMetadata, ImageMode, ListMetadata, NodeBounds, OfficeContentNode, OfficeMetadata, ShapeMetadata, SlideMetadata, TextFormatting, TextMetadata } from '../../types.js';
 import { lengthToPt } from '../../utils/officeGenUtils.js';
 import { sanitizeOfficePackageUrl } from '../../utils/sanitize.js';
@@ -86,7 +87,7 @@ const linkOf = (meta: TextMetadata | undefined): string | undefined => {
  * The notes cited (numbered once each, for the notes slides) and the comments met since the last slide was
  * made, which go into that slide's speaker notes.
  */
-interface NoteState { list: DeckParagraph[]; seen: Map<OfficeContentNode, number>; comments: DeckParagraph[]; seenComments: Set<OfficeContentNode>; /** Whether a link to a place in the document was met (a slide's text cannot open one). */ placeLinks?: boolean }
+interface NoteState { list: DeckParagraph[]; seen: Map<OfficeContentNode, string>; /** Each note's mark (see NoteMarks). */ marks: NoteMarks; /** The note each line of `list` is. */ listed: OfficeContentNode[]; comments: DeckParagraph[]; seenComments: Set<OfficeContentNode>; /** Whether a link to a place in the document was met (a slide's text cannot open one). */ placeLinks?: boolean }
 
 /** A comment as a line of a slide's speaker notes: `Comment (author): its text`. */
 async function noteComment(comment: OfficeContentNode, source: DeckSource, notes: NoteState): Promise<void> {
@@ -146,13 +147,14 @@ async function runsOf(node: OfficeContentNode, source: DeckSource, notes: NoteSt
             if (n === undefined) {
                 const noteKept = await source.keep(note);
                 if (noteKept === false) continue;
-                n = notes.list.length + 1;
+                n = notes.marks.markOf(note);
                 notes.seen.set(note, n);
                 // (Its runs, their links kept, on one line: a note's text joined as plain text lost them.)
                 const noteRuns = trimmed(typeof noteKept === 'string' ? [{ text: noteKept }] : (await runsOf(note, source, notes, {}, depth + 1)).filter(r => !r.lineBreak));
+                notes.listed.push(note);
                 notes.list.push({ runs: [{ text: `${n}. `, size: 14 }, ...noteRuns.map(r => ({ ...r, size: 14 }))] });
             }
-            runs.push({ text: String(n), superscript: true });
+            runs.push({ text: n, superscript: true });
         }
     }
     return runs;
@@ -474,7 +476,7 @@ const boxOf = (b: NodeBounds | undefined, scale = 1, dx = 0, dy = 0): Box | unde
 /** Builds the deck of a document (see the module's description). */
 export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMetadata, source: DeckSource, options: { backgrounds?: (Uint8Array | undefined | null)[] }): Promise<Deck> {
     const unrepresentable = new Set<string>();
-    const notes: NoteState = { list: [], seen: new Map(), comments: [], seenComments: new Set() };
+    const notes: NoteState = { list: [], seen: new Map(), marks: new NoteMarks(), listed: [], comments: [], seenComments: new Set() };
     const reportPlaceLinks = <T>(deck: T) => { if (notes.placeLinks) unrepresentable.add('links to places in the document'); return deck; };
     const wantPicture = source.imageMode === 'image-only' || source.imageMode === 'image+ocr-text';
     const wantOcr = source.imageMode === 'ocr-text-only' || source.imageMode === 'image+ocr-text';
@@ -493,7 +495,7 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
         const [width, height] = isSlides && metadata.pageSetup?.width && metadata.pageSetup.height ? [metadata.pageSetup.width, metadata.pageSetup.height]
             : common ? common.split('x').map(Number) as [number, number] : [metadata.pageSetup?.width ?? FLOW_W, metadata.pageSetup?.height ?? FLOW_H];
         const slides: DeckSlide[] = [];
-        const printed = new Set<number>();
+        const printed = new Set<OfficeContentNode>();
         for (const [index, node] of nodes.entries()) {
             if (slides.length >= MAX_SLIDES) { unrepresentable.add('slides past the deck\'s limit'); break; }
             const nodeKept = await source.keep(node);
@@ -700,12 +702,12 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
             for (const note of cited) {
                 const n = notes.seen.get(note);
                 const blocks = note.children ?? [];
-                if (n === undefined || printed.has(n) || !blocks.length || !blocks.every(b => b.bounds)) continue;
-                printed.add(n);
+                if (n === undefined || printed.has(note) || !blocks.length || !blocks.every(b => b.bounds)) continue;
+                printed.add(note);
                 for (const [k, block] of blocks.entries()) {
                     const p = await paragraphOf(block, source, notes, true, true);
                     const box = boxOf(p.baselineBox && block.bounds ? { ...block.bounds, y: p.baselineBox.top, height: p.baselineBox.bottom - p.baselineBox.top } : block.bounds, scale, dx, dy);
-                    if (box) slide.items.push({ kind: 'text', box, paragraphs: [k ? p : { ...p, runs: [{ text: String(n), superscript: true }, { text: ' ' }, ...p.runs] }], exact: true });
+                    if (box) slide.items.push({ kind: 'text', box, paragraphs: [k ? p : { ...p, runs: [{ text: n, superscript: true }, { text: ' ' }, ...p.runs] }], exact: true });
                 }
             }
             // A slide's speaker notes.
@@ -716,7 +718,7 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
             if (notes.comments.length) { slide.notes = [...(slide.notes ?? []), ...notes.comments]; notes.comments = []; }
             slides.push(slide);
         }
-        slides.push(...notesSlides(notes.list.filter((_, i) => !printed.has(i + 1)), width, height));
+        slides.push(...notesSlides(notes.list.filter((_, i) => !printed.has(notes.listed[i])), width, height));
         return reportPlaceLinks({ width, height, slides, unrepresentable });
     }
 

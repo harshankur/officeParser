@@ -3643,6 +3643,21 @@ export interface NoteMetadata {
      * @example "1", "2"
      */
     noteId?: string;
+    /**
+     * The mark the note's reference shows, as the source records it: ODT's `text:note-citation`, the
+     * text of an HTML or EPUB note reference, a custom mark (see `customMark`). `noteId` is an internal
+     * key (DOCX's `w:id`, ODT's `ftn1`) and never shown. Absent where the source numbers its notes
+     * itself and records no mark (DOCX, RTF, Markdown, LaTeX): writers then show the note's ordinal
+     * within its kind, footnotes `1, 2, 3` and endnotes `i, ii, iii`, as word processors number them.
+     * @example "1", "iv", "*"
+     */
+    mark?: string;
+    /**
+     * True when `mark` is one the author chose rather than a number the application gave (ODT's
+     * `text:label`, DOCX's `w:customMarkFollows`). Writers that number notes themselves (DOCX, ODT)
+     * write it as their own custom mark; other numbers they give again.
+     */
+    customMark?: boolean;
     /** Unique anchor IDs for internal linking. */
     anchorIds?: string[];
     /** The slide number this note is associated with (used in PowerPoint). */

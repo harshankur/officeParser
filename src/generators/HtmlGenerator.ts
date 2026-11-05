@@ -1067,7 +1067,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 const meta = note.metadata as any;
                 if (meta?.noteType === 'footnote' || meta?.noteType === 'endnote') {
                     const key = this.escape(this.getFootnoteKey(note));
-                    result += `<sup data-footnote-ref="${key}" id="${this.escape(this.footnoteReferenceId(note))}"><a href="#footnote-${key}">${key}</a></sup>`;
+                    // The key names the note in ids and links; the reference shows its mark (see getNoteMark).
+                    result += `<sup data-footnote-ref="${key}" id="${this.escape(this.footnoteReferenceId(note))}"><a href="#footnote-${key}">${this.escape(this.getNoteMark(note))}</a></sup>`;
                 }
             }
         }

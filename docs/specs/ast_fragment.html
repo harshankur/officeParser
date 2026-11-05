@@ -292,6 +292,16 @@
 
     <h3>4b. Annotation Nodes</h3>
     <ul>
+        <li><strong><code>note</code></strong>: A footnote or endnote, attached to the run that cites it via
+            <code>node.notes[]</code>. Carries <code>NoteMetadata</code>: <code>noteType</code>
+            (<code>'footnote' | 'endnote'</code>), <code>noteId</code> (the source's internal key, such as DOCX's
+            <code>w:id</code> or ODT's <code>ftn1</code>, which writers use in ids and links and never show), and
+            <code>mark</code>, the mark the reference shows where the source records one (ODT's
+            <code>text:note-citation</code>, the text of an HTML or EPUB note reference). <code>customMark: true</code>
+            says the author chose that mark (<code>*</code>: ODT's <code>text:label</code>, DOCX's
+            <code>w:customMarkFollows</code>); DOCX and ODT write it as their own custom mark. Where no mark is
+            recorded, writers show the note's ordinal within its kind: footnotes <code>1, 2, 3</code>, endnotes
+            <code>i, ii, iii</code>.</li>
         <li><strong><code>comment</code></strong>: An inline comment or annotation attached to a document node via
             <code>node.comments[]</code>. Carries <code>CommentMetadata</code>: <code>author</code>,
             <code>initials</code>, <code>date</code>, <code>commentId</code>, and for a reply in a PowerPoint
