@@ -21,7 +21,7 @@ import { PDFDocument, PDFHexString, PDFName, PDFOperator, PDFRawStream, Standard
 import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
-import type { ImageMetadata, OfficeContentNode, OfficeParserAST, ShapeMetadata } from '../src/types';
+import type { ImageMetadata, OfficeContentNode, OfficeParserAST, ShapeMetadata, SheetMetadata } from '../src/types';
 import { parseXmlString } from '../src/utils/xmlUtils';
 import { decodeWindows1252, textDecoder } from '../src/utils/encodingUtils';
 import { ocrTestHooks, performOcr, terminateOcr } from '../src/utils/ocrUtils';
@@ -4658,6 +4658,32 @@ async function testXlsxShownText(): Promise<void> {
     const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
     const printed = String((await back.to('text')).value);
     assert.ok(['01.10.2026', '€120.00', '19%', '7'].every(t => printed.includes(t)) && !printed.includes('0.19'), `the PDF prints what the sheet shows; got ${JSON.stringify(printed)}`);
+}
+
+async function testExcelSheetOrder(): Promise<void> {
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const sheet = (value: number) => strToU8(`<worksheet ${ns}><sheetData><row r="1"><c r="A1"><v>${value}</v></c></row></sheetData></worksheet>`);
+    const xlsx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': strToU8(`<workbook ${ns}><sheets><sheet name="Chart" sheetId="3" r:id="rId3"/><sheet name="First" sheetId="2" r:id="rId2"/><sheet name="Hidden" sheetId="1" state="hidden" r:id="rId1"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/><Relationship Id="rId2" Target="/xl/worksheets/sheet2.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/><Relationship Id="rId3" Target="chartsheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet"/></Relationships>'),
+        'xl/chartsheets/sheet1.xml': strToU8(`<chartsheet ${ns}/>`),
+        'xl/worksheets/sheet4.xml': sheet(4),
+        'xl/worksheets/sheet1.xml': sheet(1),
+        'xl/worksheets/sheet3.xml': sheet(3),
+        'xl/worksheets/sheet2.xml': sheet(2),
+    }));
+
+    const ast = await OfficeParser.parseOffice(xlsx, { fileType: 'xlsx' });
+    assert.deepStrictEqual(ast.content.map(node => {
+        const metadata = node.metadata as SheetMetadata;
+        return [metadata.sheetName, metadata.hidden, node.children?.[0]?.children?.[0]?.text];
+    }), [
+        ['First', undefined, '2'],
+        ['Hidden', true, '1'],
+        ['sheet4.xml', undefined, '4'],
+        ['sheet3.xml', undefined, '3'],
+    ]);
 }
 
 /**
@@ -11687,6 +11713,7 @@ async function runTests(): Promise<void> {
         ['WordParagraphMark', testWordParagraphMarkFormatting],
         ['WordRunCharacters', testWordRunCharacters],
         ['ExcelDates', testExcelDates],
+        ['ExcelSheetOrder', testExcelSheetOrder],
         ['GeneratedOutput', testGeneratedOutput],
         ['ODG', testOdg],
         ['ODFComments', testOdfComments],
