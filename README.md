@@ -310,6 +310,9 @@ const ast = await officeParser.parseOffice(input.files[0]);
 > ```js
 > const ast = await officeParser.parseOffice(markdownBuffer, { fileType: 'md' });
 > ```
+> One exception: XHTML, an HTML page written as XML (an XML declaration before
+> `<html xmlns="http://www.w3.org/1999/xhtml">`, as office suites export HTML), is recognised by its
+> `html` root element and read as HTML with or without the hint, and with no type-mismatch warning.
 
 > [!NOTE]
 > **ZIP-backed formats are identified from inside the archive.** DOCX, XLSX, PPTX, ODT, ODS, ODP

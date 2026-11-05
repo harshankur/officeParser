@@ -64,6 +64,70 @@ const GENERIC_ZIP_EXTENSION = 'zip';
 /** The formats that are ZIP archives, and so cannot be contradicted by a bare `zip` result. */
 const ZIP_BACKED_FILE_TYPES: ReadonlySet<string> = new Set(['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'epub', 'tex']);
 
+/** What magic-byte sniffing reports for any document that starts with an XML declaration. */
+const XML_EXTENSION = 'xml';
+
+/** How much of an XML document is read to find its root element (the prolog is short in practice). */
+const XML_ROOT_SCAN_BYTES = 64 * 1024;
+
+/**
+ * Whether an XML document's root element is `html` (XHTML, with or without a namespace prefix), so
+ * that a page written as XML (an XML declaration before `<html xmlns="http://www.w3.org/1999/xhtml">`,
+ * as office suites export HTML) is read as the HTML it is rather than refused as XML.
+ *
+ * Reads past the prolog (BOM, XML declaration, processing instructions, comments, the DOCTYPE with
+ * any internal subset) in one forward pass, and looks at the first element's name only.
+ *
+ * @param buffer - The file content
+ * @returns True when the root element is `html`
+ */
+const hasXhtmlRoot = (buffer: Buffer): boolean => {
+    const head = buffer.subarray(0, XML_ROOT_SCAN_BYTES);
+    const isUtf16le = head[0] === 0xFF && head[1] === 0xFE;
+    const isUtf16be = head[0] === 0xFE && head[1] === 0xFF;
+    let text: string;
+    try {
+        text = new TextDecoder(isUtf16le ? 'utf-16le' : isUtf16be ? 'utf-16be' : 'utf-8').decode(head);
+    } catch {
+        return false;
+    }
+    let i = text.charCodeAt(0) === 0xFEFF ? 1 : 0;
+    const n = text.length;
+    while (i < n) {
+        const c = text[i];
+        if (c === ' ' || c === '\t' || c === '\r' || c === '\n') { i++; continue; }
+        if (c !== '<') return false;
+        if (text.startsWith('<?', i)) {
+            const end = text.indexOf('?>', i + 2);
+            if (end < 0) return false;
+            i = end + 2;
+        } else if (text.startsWith('<!--', i)) {
+            const end = text.indexOf('-->', i + 4);
+            if (end < 0) return false;
+            i = end + 3;
+        } else if (text.startsWith('<!', i)) {
+            // A DOCTYPE, whose internal subset in brackets may itself hold `>`.
+            let j = i + 2;
+            let depth = 0;
+            for (; j < n; j++) {
+                const d = text[j];
+                if (d === '[') depth++;
+                else if (d === ']') depth = Math.max(0, depth - 1);
+                else if (d === '>' && depth === 0) break;
+            }
+            if (j >= n) return false;
+            i = j + 1;
+        } else {
+            let j = i + 1;
+            while (j < n && !/[\s/>]/.test(text[j])) j++;
+            const name = text.slice(i + 1, j);
+            const local = name.includes(':') ? name.slice(name.lastIndexOf(':') + 1) : name;
+            return local.toLowerCase() === 'html';
+        }
+    }
+    return false;
+};
+
 /**
  * Upgrades a magic-byte result of `zip` (or none at all) into the specific office format the
  * archive declares, by reading that declaration from inside the archive.
@@ -84,6 +148,7 @@ const resolveZipBackedType = async (
     buffer: Buffer,
     config: OfficeParserConfig
 ): Promise<string | undefined> => {
+    if (detected === XML_EXTENSION && hasXhtmlRoot(buffer)) return 'html';
     if (detected && detected !== GENERIC_ZIP_EXTENSION) return detected;
 
     const resolved = await detectOfficeTypeFromZip(buffer, config.decompressionLimits ?? {});

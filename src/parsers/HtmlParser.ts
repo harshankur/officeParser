@@ -889,7 +889,15 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
             // A declaration or processing instruction (`<!DOCTYPE html>`, `<?xml ...?>`, Word's conditional
             // markers `<![if !supportLists]>` and `<![endif]>`): markup read as nothing, as a browser reads
             // it, and what stands between the markers is kept.
-            const end = html.indexOf('>', tagStart + 2);
+            let end = html.indexOf('>', tagStart + 2);
+            // An XML DOCTYPE (an XHTML page) may carry an internal subset in brackets, whose entity
+            // values can hold `>`: the declaration ends at the `>` after the closing bracket.
+            const subset = html.indexOf('[', tagStart + 2);
+            if (subset !== -1 && end !== -1 && subset < end && /^<!doctype/i.test(html.substring(tagStart, tagStart + 9))) {
+                const close = html.indexOf(']', subset + 1);
+                const after = close === -1 ? -1 : html.indexOf('>', close + 1);
+                if (after !== -1) end = after;
+            }
             cursor = end === -1 ? html.length : end + 1;
             continue;
         }

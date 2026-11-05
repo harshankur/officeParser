@@ -114,7 +114,10 @@ await terminateOcr(); // Snappy exit</code></pre>
     <h2>7. Text-Based Buffer Detection Failure (<code>IMPROPER_BUFFERS</code>)</h2>
     <p>When passing a <code>Buffer</code> or <code>ArrayBuffer</code> for <code>md</code>, <code>html</code>,
         <code>csv</code>, or <code>tex</code> files, the parser cannot auto-detect the format, since these formats have no magic bytes. You must
-        provide a <code>fileType</code> hint:
+        provide a <code>fileType</code> hint. XHTML is the exception: an HTML page written as XML (an XML declaration
+        before <code>&lt;html xmlns="http://www.w3.org/1999/xhtml"&gt;</code>) is recognised by its <code>html</code>
+        root element and read as HTML without one, and with no <code>BUFFER_TYPE_MISMATCH</code> warning when the hint is
+        <code>'html'</code>:
     </p>
     <pre><code>// Without fileType → throws IMPROPER_BUFFERS
 await officeParser.parseOffice(markdownBuffer);
