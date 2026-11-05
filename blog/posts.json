@@ -14,6 +14,24 @@
     ],
     "posts": [
         {
+            "slug": "two-versions-of-pdfjs-in-one-process",
+            "title": "Two Versions of pdf.js in One Process",
+            "shortTitle": "Two pdf.js in One Process",
+            "category": "architecture",
+            "published": "2026-11-05",
+            "description": "Why an application's own pdf.js and officeParser's could not read PDFs in the same Node process, why a version range or a peer dependency was not the fix, and how officeParser 8.6.0 gives its pdf.js a worker of its own.",
+            "deck": "Two copies of pdf.js on disk are fine. One global they both reach for is not: the first to start a worker names it there, and the other takes it, whatever its version."
+        },
+        {
+            "slug": "form-fields-that-were-never-text",
+            "title": "Form Fields That Were Never Text: Check Boxes in Word and OpenDocument",
+            "shortTitle": "Form Fields That Were Never Text",
+            "category": "deep-dive",
+            "published": "2026-11-05",
+            "description": "Where Word and LibreOffice keep a form's check boxes, drop-downs and fields, how officeParser 8.6.0 reads them instead of dropping them, and how its PDF engine draws a box no font it has can draw.",
+            "deck": "A Word check box is a field with an empty result, and a LibreOffice one is a pointer to a control listed elsewhere. Neither is text, so both were lost, until officeParser read them where they live."
+        },
+        {
             "slug": "text-that-looks-real-a-pdf-font-with-no-map",
             "title": "Text That Looks Real: A PDF Font With No Map",
             "shortTitle": "A PDF Font With No Map",

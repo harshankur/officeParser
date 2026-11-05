@@ -5,8 +5,365 @@
     <link>https://officeparser.harshankur.com/blog/</link>
     <description>How document formats work inside, how officeParser reads and writes them, where it falls short, and how to chunk documents for retrieval. Written by Harsh Ankur, author of officeParser.</description>
     <language>en</language>
-    <lastBuildDate>Sun, 01 Nov 2026 00:00:00 GMT</lastBuildDate>
+    <lastBuildDate>Thu, 05 Nov 2026 00:00:00 GMT</lastBuildDate>
     <atom:link href="https://officeparser.harshankur.com/blog/feed.xml" rel="self" type="application/rss+xml"/>
+    <item>
+      <title>Two Versions of pdf.js in One Process</title>
+      <link>https://officeparser.harshankur.com/blog/two-versions-of-pdfjs-in-one-process.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/two-versions-of-pdfjs-in-one-process.html</guid>
+      <pubDate>Thu, 05 Nov 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Build Notes</category>
+      <description>Why an application&#39;s own pdf.js and officeParser&#39;s could not read PDFs in the same Node process, why a version range or a peer dependency was not the fix, and how officeParser 8.6.0 gives its pdf.js a worker of its own.</description>
+      <content:encoded><![CDATA[<p>
+    An application renders PDF pages with its own pdf.js, 6.4.299, and extracts their text with officeParser,
+    which uses pdf.js 6.2.108. Both are fine on their own. Together, the second one to read a PDF fails:
+</p>
+<pre><code>The API version "6.2.108" does not match the Worker version "6.4.299".</code></pre>
+<p>
+    That was <a href="https://github.com/harshankur/officeParser/issues/128">issue #128</a>. The report asked
+    whether officeParser could take a version range for <code>pdfjs-dist</code>, or make it a peer dependency, so
+    the package manager installs one copy. This post is about why I did neither, what the clash really is, and how
+    8.6.0 runs two versions of pdf.js side by side in one Node process.
+</p>
+
+<h2>Reproducing It</h2>
+<p>
+    Two packages in a scratch project: <code>pdfjs-dist@6.4.299</code> for the application, and officeParser, which
+    brings its own <code>pdfjs-dist@6.2.108</code>. npm installs both copies, one nested under officeParser. The
+    application opens a page first, then asks officeParser for the text:
+</p>
+<pre><code>import { readFileSync } from 'node:fs';
+import { getDocument, version } from 'pdfjs-dist/legacy/build/pdf.mjs'; // the app's own pdf.js
+import { parseOffice } from 'officeparser';
+
+const file = readFileSync('report.pdf');
+
+const doc = await getDocument({ data: new Uint8Array(file) }).promise;
+await doc.getPage(1);
+console.log(`app's pdf.js ${version}: ${doc.numPages} pages`);
+
+try {
+    const ast = await parseOffice(file);
+    console.log(`officeParser: ${(await ast.to('text')).value.length} characters of text`);
+} catch (error) {
+    console.log(`officeParser: ${error.message}`);
+}</code></pre>
+<p>On officeParser 8.5.0:</p>
+<pre><code>app's pdf.js 6.4.299: 8 pages
+officeParser: [OfficeParser]: The API version "6.2.108" does not match the Worker version "6.4.299".</code></pre>
+<p>
+    The other order fails too, the other way round. With officeParser reading first, in the same process
+    (<code>separateProcess: false</code>), it is the application's pdf.js that breaks:
+</p>
+<pre><code>officeParser: 9081 characters of text
+app's pdf.js 6.4.299: The API version "6.4.299" does not match the Worker version "6.2.108".</code></pre>
+
+<h2>One Global for Every Copy</h2>
+<p>
+    pdf.js comes in two halves: the API you call (<code>getDocument</code>), and a worker that does the parsing. In
+    a browser the worker is a real Web Worker, started from its own file. Node has no Web Workers, so pdf.js runs
+    what it calls a fake worker: the worker's code, in the same thread, talking to the API through a port. To get
+    that code it first looks for a worker someone has already loaded, on a global:
+</p>
+<pre><code>static get #mainThreadWorkerMessageHandler() {
+  try {
+    return globalThis.pdfjsWorker?.WorkerMessageHandler || null;
+  } catch {
+    return null;
+  }
+}</code></pre>
+<p>
+    Only if that is empty does it import the worker file it was told about, and either way it keeps the answer
+    for good. The worker file, as it loads, puts itself on that global:
+</p>
+<pre><code>globalThis.pdfjsWorker = {
+  WorkerMessageHandler: WorkerMessageHandler
+};</code></pre>
+<p>
+    So the first copy of pdf.js to start a worker in a process names it on <code>globalThis</code>, and every other
+    copy that starts one later finds it there and takes it, whatever its version. Then the worker checks the
+    version of the API talking to it, finds another one, and refuses the document. That is the error.
+</p>
+<p>
+    The two copies on disk are not the problem. Two copies of most packages live side by side without noticing,
+    because each keeps its state in its own modules. pdf.js's worker is shared through the one object every module
+    in the process can see.
+</p>
+
+<h2>Why Not a Range, or a Peer Dependency</h2>
+<p>
+    A range such as <code>^6.2.108</code> would have helped this report. npm would have seen that 6.4.299 fits it
+    and installed one copy for both. But it only helps while the application's version fits the range: an
+    application on 5.x or 7.x still gets two copies, and so does one using another package that brings its own
+    pdf.js. And it hands the choice of officeParser's pdf.js to whatever else is installed.
+</p>
+<p>
+    That matters because what officeParser reads from a PDF depends on pdf.js's output, which changes between
+    releases. Here is <code>getMarkInfo()</code>, which says whether a PDF is tagged, on the same tagged file, in
+    four releases of pdf.js 6:
+</p>
+<table role="table">
+    <thead role="rowgroup">
+        <tr role="row"><th role="columnheader">pdf.js</th><th role="columnheader">getMarkInfo()</th><th role="columnheader">Page 1 structure tree</th></tr>
+    </thead>
+    <tbody role="rowgroup">
+        <tr role="row"><td role="cell">6.2.108</td><td role="cell" data-label="getMarkInfo()"><code>{"Marked":true,"UserProperties":false,"Suspects":false}</code></td><td role="cell" data-label="Page 1 structure tree">1 top node</td></tr>
+        <tr role="row"><td role="cell">6.3.289</td><td role="cell" data-label="getMarkInfo()"><code>{}</code></td><td role="cell" data-label="Page 1 structure tree">1 top node</td></tr>
+        <tr role="row"><td role="cell">6.4.299</td><td role="cell" data-label="getMarkInfo()"><code>{}</code></td><td role="cell" data-label="Page 1 structure tree">1 top node</td></tr>
+        <tr role="row"><td role="cell">6.5.438</td><td role="cell" data-label="getMarkInfo()"><code>{}</code></td><td role="cell" data-label="Page 1 structure tree">1 top node</td></tr>
+    </tbody>
+</table>
+<p>
+    The structure is still there in every release, but the flag that announces it is gone from 6.3.289 on, in
+    minor releases of the same major version. officeParser decides whether to trust a PDF's tags by that flag, so
+    under a range, the same officeParser on the same file would read headings from the tags in one application
+    and guess them from font sizes in another. When 6.3.289 came out, I tried it and reverted, because six tests
+    of tagged PDFs failed. A peer dependency moves the same choice to every user, and asks each of them to find a
+    version that works.
+</p>
+<p>
+    So <code>pdfjs-dist</code> stays pinned to the version officeParser is tested with. The pin keeps officeParser's
+    output the same for everyone; the clash has to be fixed where it happens.
+</p>
+
+<h2>A Worker of Its Own</h2>
+<p>
+    In Node, officeParser reads PDFs in a separate process by default, with its own memory limit. That process has
+    a global of its own, so it was never part of the clash. Why did the first sample fail, then? Because 8.5.0 saw
+    the application's worker on the global and took it for one the caller had loaded on purpose, for officeParser
+    to use, and moved the parse into this process to use it. 8.6.0 takes a worker from that global only where
+    pdf.js's worker file cannot be found, which is the case it is there for: a bundle that carries pdf.js inside it.
+</p>
+<p>
+    That leaves parses in this process: with <code>separateProcess: false</code>, or where a process cannot start.
+    There, officeParser now gives its pdf.js a worker module of its own instead of sharing one:
+</p>
+<ol>
+    <li>
+        It imports its pdf.js's worker file at the same address with <code>?officeparser</code> added. Node keeps
+        modules by their full address, query included, so this is a separate instance of the module, even if the
+        application imported the same file.
+    </li>
+    <li>
+        Loading, that instance puts itself on <code>globalThis.pdfjsWorker</code>, as every copy does. officeParser
+        puts the global back as it was straight away, so the application's pdf.js never sees it.
+    </li>
+    <li>
+        It connects its pdf.js to that instance through a pair of ports in the same thread, the way pdf.js connects
+        its own fake worker, and gives the API the port. An API given a port uses it and never looks at the global.
+    </li>
+</ol>
+<p>
+    Here is a small check of the first two points, with nothing of officeParser in it:
+</p>
+<pre><code>const plain = await import(workerFile);
+const own = await import(`${workerFile}?officeparser`);
+console.log('same module object:', plain === own);
+console.log('global now names the second copy:', globalThis.pdfjsWorker.WorkerMessageHandler === own.WorkerMessageHandler);</code></pre>
+<pre><code>same module object: false
+global now names the second copy: true</code></pre>
+<p>
+    The second line is why the global has to be put back: left alone, the application's pdf.js would take
+    officeParser's worker from it the next time it started one.
+</p>
+
+<h2>Warnings That Belong to Someone</h2>
+<p>
+    Sharing a worker also shared its warnings. pdf.js's worker keeps one warning level for every document it
+    reads, in a variable inside its module, which a message can set and nothing can read back. officeParser raises
+    it while it reads a PDF, to report pdf.js's warnings as its own, and 8.4.0 and 8.5.0 left it raised for the
+    application's documents afterwards. With a module of its own, officeParser's level is its own, and the
+    application's worker keeps whatever the application set.
+</p>
+<p>
+    The warnings themselves still arrive through <code>console.warn</code>, which both workers share. To tell its
+    own from the application's, officeParser runs every message its worker receives inside a Node
+    <code>AsyncLocalStorage</code> context, so a warning written anywhere inside that work, after any number of
+    promises and timers, can be traced back to it. The application's warnings, printed outside it, reach the
+    console as they always did.
+</p>
+
+<h2>The Same Script on 8.6.0</h2>
+<pre><code>app's pdf.js 6.4.299: 8 pages
+officeParser: 9081 characters of text</code></pre>
+<p>And officeParser first, in the same process:</p>
+<pre><code>officeParser: 9081 characters of text
+app's pdf.js 6.4.299: 8 pages</code></pre>
+
+<h2>Where It Still Shares</h2>
+<p>
+    A bundle that inlines pdf.js, such as an ESM bundle for Node or an application shipped without
+    <code>node_modules</code>, has no worker file for officeParser to import. There officeParser's own bundled worker
+    goes on the global, and a pdf.js of another version in the same bundle would find it, as before. In that setup,
+    use officeParser's version of <code>pdfjs-dist</code>. In a browser, pdf.js normally starts a real Web Worker
+    from its own file, so the clash needs a worker loaded on the page itself.
+</p>
+<p>
+    And the pin has a cost of its own: officeParser's pdf.js moves only when I move it. The table above is also
+    the plan for that. Before officeParser can take 6.4 or 6.5, it has to read a PDF's tags from the structure tree
+    rather than from a flag that newer releases no longer set.
+</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>Form Fields That Were Never Text: Check Boxes in Word and OpenDocument</title>
+      <link>https://officeparser.harshankur.com/blog/form-fields-that-were-never-text.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/form-fields-that-were-never-text.html</guid>
+      <pubDate>Thu, 05 Nov 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Format Deep Dives</category>
+      <description>Where Word and LibreOffice keep a form&#39;s check boxes, drop-downs and fields, how officeParser 8.6.0 reads them instead of dropping them, and how its PDF engine draws a box no font it has can draw.</description>
+      <content:encoded><![CDATA[<p>
+    A Word form says "Ticked: ☒ Agree". Extract its text with officeParser 8.5.0 and you get "Ticked:  Agree",
+    two spaces and no box. A drop-down set to Blue gives nothing at all where Blue was. The answers were dropped,
+    and nothing said so.
+</p>
+<p>
+    I wrote about <a href="https://officeparser.harshankur.com/blog/reading-a-filled-pdf-form.html">reading a filled PDF form</a>, where the values are not
+    in the page but in widgets laid over it. Word and OpenDocument files have the same problem in another shape: a
+    check box or a drop-down is not text in the document either. This post is about where each format keeps them,
+    how officeParser 8.6.0 reads them, and how its own PDF writer draws a box no font it has can draw.
+</p>
+
+<h2>Word: A Field With No Result</h2>
+<p>
+    Word's legacy form fields (the ones under Developer, Legacy Tools) are fields, like a page number. A field is
+    a run marking its start, its instruction, a run marking where its result begins, the result, and a run
+    marking its end. For a text field, the result is the typed value, so text extraction already found it. Here
+    is a check box instead, cut down to what matters:
+</p>
+<pre><code>&lt;w:r&gt;&lt;w:fldChar w:fldCharType="begin"&gt;
+  &lt;w:ffData&gt;
+    &lt;w:name w:val="C1"/&gt;
+    &lt;w:checkBox&gt;&lt;w:sizeAuto/&gt;&lt;w:default w:val="0"/&gt;&lt;w:checked/&gt;&lt;/w:checkBox&gt;
+  &lt;/w:ffData&gt;
+&lt;/w:fldChar&gt;&lt;/w:r&gt;
+&lt;w:r&gt;&lt;w:instrText&gt; FORMCHECKBOX &lt;/w:instrText&gt;&lt;/w:r&gt;
+&lt;w:r&gt;&lt;w:fldChar w:fldCharType="separate"/&gt;&lt;/w:r&gt;
+&lt;w:r&gt;&lt;w:fldChar w:fldCharType="end"/&gt;&lt;/w:r&gt;</code></pre>
+<p>
+    Between <code>separate</code> and <code>end</code> there is nothing. Word draws the box from the field's data,
+    <code>w:ffData</code>, which sits inside the start marker. A text extractor that reads results reads an empty
+    one. A drop-down is the same: its entries are <code>w:listEntry</code> elements in its data, and its result is
+    empty too.
+</p>
+<p>So officeParser reads the data:</p>
+<ul>
+    <li>
+        A check box is ticked when <code>w:checked</code> says so. A bare <code>&lt;w:checked/&gt;</code> means on,
+        <code>w:val="0"</code> off. Where there is no <code>w:checked</code>, <code>w:default</code> decides, as
+        Word does. A ticked box reads as ☒ and an empty one as ☐: the characters U+2612 and U+2610, the same ones
+        the PDF form post settled on, so a ticked box survives into plain text, a CSV cell or a search index.
+    </li>
+    <li>
+        A drop-down reads as its chosen entry: the one <code>w:result</code> points to, counting from 0, then
+        <code>w:default</code>'s, then the first.
+    </li>
+</ul>
+
+<h2>OpenDocument: Two Kinds of Form</h2>
+<p>
+    LibreOffice Writer has two ways to put a check box in a document, and they are stored nothing alike.
+</p>
+<p>
+    The first is Word's legacy fields, kept when LibreOffice opens and saves a Word form. They become field
+    marks, with the state as named parameters:
+</p>
+<pre><code>&lt;field:fieldmark text:name="__Fieldmark__2_3781684256"
+    field:type="vnd.oasis.opendocument.field.FORMCHECKBOX"&gt;
+  &lt;field:param field:name="Checkbox_Checked" field:value="true"/&gt;
+&lt;/field:fieldmark&gt;
+
+&lt;field:fieldmark text:name="__Fieldmark__18_3781684256"
+    field:type="vnd.oasis.opendocument.field.FORMDROPDOWN"&gt;
+  &lt;field:param field:name="Dropdown_ListEntry" field:value="Red"/&gt;
+  &lt;field:param field:name="Dropdown_ListEntry" field:value="Green"/&gt;
+  &lt;field:param field:name="Dropdown_ListEntry" field:value="Blue"/&gt;
+  &lt;field:param field:name="Dropdown_Selected" field:value="2"/&gt;
+&lt;/field:fieldmark&gt;</code></pre>
+<p>
+    The second is LibreOffice's own form controls, and here the text holds nothing but a pointer. Where a check
+    box stands in a paragraph, the paragraph has an empty shape naming a control by its id:
+</p>
+<pre><code>&lt;draw:control text:anchor-type="as-char" draw:name="Shape2"
+    svg:width="1.5004in" svg:height="0.2504in" draw:control="control1"/&gt;</code></pre>
+<p>
+    The control itself is somewhere else: in <code>office:forms</code>, at the start of the document's body, where
+    a form lists every control it has with its state and its label:
+</p>
+<pre><code>&lt;form:checkbox form:name="Agree" form:id="control1"
+    form:label="I agree" form:current-state="checked"/&gt;
+&lt;form:checkbox form:name="News" form:id="control2"
+    form:label="Send news" form:state="checked"/&gt;</code></pre>
+<p>
+    Those two boxes look alike and are not. <code>form:state</code> is the box's default, the state it returns to
+    when a form is reset; <code>form:current-state</code> is what it shows. "Send news" is ticked by default and
+    shows empty. officeParser reads the current state, so the two read differently, as they look.
+</p>
+<p>
+    Each kind of control has its own attribute for what it shows. Radio buttons have
+    <code>form:current-selected</code>. Text fields have <code>form:current-value</code>. List boxes mark each
+    selected option. A text area keeps its lines as paragraphs, and a date field may store
+    <code>20240131</code>, digits alone, in files from older releases. A password field is read as one bullet a
+    character, never as the password. Here is a LibreOffice test file on both releases:
+</p>
+<table role="table">
+    <thead role="rowgroup">
+        <tr role="row"><th role="columnheader">Line in the document</th><th role="columnheader">8.5.0</th><th role="columnheader">8.6.0</th></tr>
+    </thead>
+    <tbody role="rowgroup">
+        <tr role="row"><td role="cell">Check boxes</td><td role="cell" data-label="8.5.0"><code>Terms:  and  then .</code></td><td role="cell" data-label="8.6.0"><code>Terms: ☒ I agree and ☐ Send news then ☐.</code></td></tr>
+        <tr role="row"><td role="cell">Radio buttons</td><td role="cell" data-label="8.5.0"><code>Size:  </code></td><td role="cell" data-label="8.6.0"><code>Size: ☐ Small ☒ Large</code></td></tr>
+        <tr role="row"><td role="cell">Text field</td><td role="cell" data-label="8.5.0"><code>Name: .</code></td><td role="cell" data-label="8.6.0"><code>Name: Jane Doe.</code></td></tr>
+        <tr role="row"><td role="cell">List box, combo box, date</td><td role="cell" data-label="8.5.0"><code>Fruit: ; City: ; When: ;</code></td><td role="cell" data-label="8.6.0"><code>Fruit: Apple, Cherry; City: Berlin; When: 2024-01-31;</code></td></tr>
+    </tbody>
+</table>
+<p>
+    Because a control is named, not written, one control can be named many times. A small file can name one long
+    text area thousands of times, and every writer would write it out each time. officeParser reads each control
+    once and shows it whole the first time; every later naming is a single run with its line breaks as spaces,
+    and counts toward <code>decompressionLimits.maxRepeatedContent</code>, the budget for content a document
+    repeats by reference.
+</p>
+
+<h2>Drawing a Box No Font Has</h2>
+<p>
+    Reading the boxes was half of it. officeParser also writes PDFs, and its native engine draws text in the
+    fonts it is given, or in the PDF's built-in Helvetica and Courier when it is given none. Those fonts have no
+    ☐. Here is a line with all three boxes, written to PDF and read back, on 8.5.0:
+</p>
+<pre><code>warning: CONTENT_NOT_REPRESENTABLE | The 'non-WinAnsi characters (native engine)' content has no faithful representation in pdf output ...
+read back: Plan: ? Basic ? Premium ? Done</code></pre>
+<p>
+    8.6.0 adds a font of its own when a box has no other font to draw it: a Type 3 font, the kind of PDF font
+    whose glyphs are drawing instructions instead of an outline file. It has three glyphs, an empty, a ticked
+    and a crossed box, each a square and its mark as filled paths in the text's colour, and a heavier set for
+    bold text. Its <code>ToUnicode</code> map gives each glyph its character, so the box copies and searches as
+    ☐, ☑ or ☒:
+</p>
+<figure>
+    <img src="https://officeparser.harshankur.com/blog/native-pdf-ballot-boxes.png" alt="A PDF line reading Plan: an empty box, Basic, a crossed box, Premium, a ticked box, Done.">
+    <figcaption>The native engine's boxes, drawn by officeParser 8.6.0 with no font given.</figcaption>
+</figure>
+<pre><code>read back: Plan: ☐ Basic ☒ Premium ☑ Done
+pdftotext: Plan: ☐ Basic ☒ Premium ☑ Done</code></pre>
+<p>
+    The second line is Poppler's <code>pdftotext</code>, which reads PDFs without pdf.js. It needed one more
+    glyph. Poppler works out the size of a Type 3 font's text from the width of the font's first glyph, and with a box
+    first it took the boxes for text 1.6 times their size, set on a line apart from the words around them. A space, half an em
+    wide and never drawn, placed first in the font, fixed that.
+</p>
+
+<h2>What It Does Not Read Yet</h2>
+<ul>
+    <li>
+        A control placed inside a drawn shape's text, a rectangle or a custom shape, is still dropped. In a frame it
+        is read.
+    </li>
+    <li>LibreOffice Calc's form controls, in a spreadsheet, are not read.</li>
+    <li>A button reads as nothing, though it shows its label.</li>
+</ul>]]></content:encoded>
+    </item>
     <item>
       <title>Text That Looks Real: A PDF Font With No Map</title>
       <link>https://officeparser.harshankur.com/blog/text-that-looks-real-a-pdf-font-with-no-map.html</link>
