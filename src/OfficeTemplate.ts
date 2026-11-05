@@ -35,7 +35,7 @@ import { decryptIfNeeded } from './crypto/decryptContainer.js';
 import { DEFAULT_OFFICE_PARSER_CONFIG, DEFAULT_TEMPLATE_CONFIG } from './defaults.js';
 import { CompiledDocxTemplate, compileDocxTemplate, DocxTemplateOptions, openDocx, renderDocxTemplate, renderParts, TAG_SKIPPED, TemplatePlace, templateTags } from './template/templateEngine.js';
 import { BlobLike, OfficeErrorType, OfficeParserConfig, OfficeWarningType, TemplateConfig, TemplateData, TemplateDataDetails, TemplateFormatter, TemplateProblem, TemplateSyntaxDetails, TemplateTagInfo } from './types.js';
-import { PictureSettings } from './template/templateFormat.js';
+import { NumberTextSeparators, PictureSettings } from './template/templateFormat.js';
 import { assertNode } from './utils/envUtils.js';
 import { buildOfficeError, getOfficeError, logWarning } from './utils/errorUtils.js';
 import { decompressionLimitsOf, maxPasswordAttemptsOf, PROTOTYPE_POLLUTION_KEYS } from './utils/configUtils.js';
@@ -64,13 +64,13 @@ const BUILT_IN_FILTER_NAMES = new Set(['format', 'upper', 'lower']);
 
 /** Every option render takes (the compiler holds this to TemplateConfig's own keys). */
 const TEMPLATE_OPTIONS: Record<keyof TemplateConfig, true> = {
-    data: true, delimiters: true, onMissing: true, numberSeparators: true, dateNames: true, utcOffsetMinutes: true, formatters: true,
+    data: true, delimiters: true, onMissing: true, numberSeparators: true, dataNumberSeparators: true, dateNames: true, utcOffsetMinutes: true, formatters: true,
     password: true, onPassword: true, maxPasswordAttempts: true, fileType: true, decompressionLimits: true, onWarning: true,
 };
 
 /**
  * The options of a render's config that it does not take, as dotted paths: at the top, and inside
- * `delimiters` and `decompressionLimits` (`numberSeparators` and `dateNames` are checked with their
+ * `delimiters` and `decompressionLimits` (`numberSeparators`, `dataNumberSeparators` and `dateNames` are checked with their
  * values). A misspelt one left its default in place without a word; each is now reported.
  */
 function unknownTemplateOptions(config: TemplateConfig): string[] {
@@ -148,6 +148,27 @@ function delimitersOf(config: TemplateConfig, errCfg: OfficeParserConfig): { sta
     return { start: (start as string | undefined) || defaults.start, end: (end as string | undefined) || defaults.end };
 }
 
+/** Characters a number's text uses for itself, which cannot separate its parts. */
+const NUMBER_CHARACTERS = '0123456789+-eE';
+
+/**
+ * How text in the data is read as a number (`dataNumberSeparators`): null when not given, which reads it
+ * as before the option was (`.` for the point, no group separator). Each separator is one character, the
+ * point not white space, neither a digit, a sign or an exponent's `e`, and the two not the same; another
+ * value is refused, typed. A name the option does not have is added to `unknown`, to be reported.
+ */
+function numberTextOf(config: TemplateConfig, errCfg: OfficeParserConfig, unknown: string[]): NumberTextSeparators | null {
+    const given: unknown = config.dataNumberSeparators;
+    if (given === undefined || given === null) return null;
+    const refuse = (detail: string): never => { throw getOfficeError(OfficeErrorType.IMPROPER_ARGUMENTS, errCfg, detail); };
+    if (typeof given !== 'object' || Array.isArray(given)) refuse('dataNumberSeparators is an object: decimal and group');
+    const { decimal = '.', group = '' } = given as { decimal?: unknown; group?: unknown };
+    for (const key of Object.keys(given as object)) if (key !== 'decimal' && key !== 'group') unknown.push(`dataNumberSeparators.${key}`);
+    if (typeof decimal !== 'string' || decimal.length !== 1 || /\s/.test(decimal) || NUMBER_CHARACTERS.includes(decimal)) refuse('dataNumberSeparators.decimal is one character, not white space, a digit, a sign or e');
+    if (typeof group !== 'string' || group.length > 1 || (group !== '' && NUMBER_CHARACTERS.includes(group)) || group === decimal) refuse('dataNumberSeparators.group is one character (or empty for none), not a digit, a sign or e, nor the decimal point');
+    return { decimal: decimal as string, group: group as string };
+}
+
 /** The most a UTC offset can be: a day, either way. */
 const MAX_UTC_OFFSET_MINUTES = 24 * 60;
 
@@ -198,6 +219,7 @@ async function prepareTemplate(template: TemplateInput, config: Omit<TemplateCon
     // and one render does not take is reported, as a parse reports its own.
     const unknownOptions = unknownTemplateOptions(config as TemplateConfig);
     const pictures = pictureSettings(config as TemplateConfig, errCfg, unknownOptions);
+    const numberText = numberTextOf(config as TemplateConfig, errCfg, unknownOptions);
     const delimiters = delimitersOf(config as TemplateConfig, errCfg);
     if (unknownOptions.length) logWarning(OfficeWarningType.UNRECOGNIZED_CONFIG_OPTION, errCfg, { keys: unknownOptions });
 
@@ -237,6 +259,7 @@ async function prepareTemplate(template: TemplateInput, config: Omit<TemplateCon
         onNestingLimit: (): never => { throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED, errCfg); },
         onOutputLimit: (): never => { throw getOfficeError(OfficeErrorType.OUTPUT_TOO_LARGE, errCfg); },
         pictures,
+        numberText,
         formatters: templateFormatters(config as TemplateConfig, errCfg),
         maxXmlElements: limits.maxXmlElements,
         onElementLimit: (): never => { throw getOfficeError(OfficeErrorType.XML_ELEMENT_LIMIT_EXCEEDED, errCfg, options.maxXmlElements); },

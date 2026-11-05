@@ -37,7 +37,7 @@ import { zipSync, Zippable } from 'fflate';
 import { DecompressionLimits, OfficeErrorType, OfficeParserConfig, TemplateData, TemplateDataDetails, TemplateFormatter, TemplateLoopPlace, TemplateSyntaxDetails, TemplateTagInfo, TemplateValue } from '../types.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { extractFiles } from '../utils/zipUtils.js';
-import { dateOf, formatDate, formatNumber, numberOf, Picture, PictureSettings, readPicture } from './templateFormat.js';
+import { dateOf, formatDate, formatNumber, numberOf, NumberTextSeparators, Picture, PictureSettings, readPicture } from './templateFormat.js';
 import { conditionSize, ConditionValue, evaluateCondition, Incomparable, kindOfValue, LOOP_DETAILS_NAME, MISSING, readTag, TemplateExpression, TemplatePath, TemplateTag } from './templateTags.js';
 
 /** The `word/*.xml` parts that carry body text a tag could live in. */
@@ -277,6 +277,8 @@ export interface DocxTemplateOptions {
     onElementLimit: () => never;
     /** What a picture writes: separators, month and day names, the UTC offset. */
     pictures: PictureSettings;
+    /** How text in the data is read as a number (null: `.` for the point, no group separator). */
+    numberText: NumberTextSeparators | null;
     /**
      * A check, not a render: a block whose condition or list is missing is not written as typed (nothing
      * inside it is read until the data gives it, and writing it would only spend the budget a check needs).
@@ -2481,7 +2483,7 @@ function applyFilters(value: TemplateValue, filters: CompiledFilter[], node: Fie
             if (typeof current === 'string') state.charge(current.length);
             const { picture } = filter;
             if (picture.kind === 'number') {
-                const n = numberOf(current);
+                const n = numberOf(current, state.opts.numberText);
                 const written = n === null ? null : formatNumber(n, picture, state.opts.pictures);
                 if (written === null) unformattable('format', 'number', current);
                 current = written;
@@ -2517,12 +2519,14 @@ function renderIf(node: IfNode, scope: Scope | null, state: RenderState, out: st
     const read = (path: TemplatePath, text: string): ConditionValue => blockValue(path, text, scope, state);
     // Comparing two strings reads them: as long as the shorter one.
     const compared = (length: number): void => state.charge(length);
+    // Reading text compared with a number reads the whole text.
+    const readNumber = (text: string): number | null => { state.charge(text.length); return numberOf(text, state.opts.numberText); };
     const incomparable = (why: Incomparable): never => state.opts.onDataInvalid({ reason: 'incomparable', tag: typedOf(node.branches[branch].record, state.opts), part: state.part, kind: why.left, otherKind: why.right }, placeOf(scope, state));
     for (; branch < node.branches.length; branch++) {
         const { condition, cost } = node.branches[branch];
         state.charge(cost);
         let holds: boolean | typeof MISSING;
-        try { holds = condition === null ? true : evaluateCondition(condition, read, incomparable, compared); }
+        try { holds = condition === null ? true : evaluateCondition(condition, read, incomparable, compared, readNumber); }
         catch (e) { if (e === TAG_SKIPPED) return; throw e; }
         if (holds === MISSING) { if (!state.opts.checking) renderKept(node.kept, scope, state, out); return; }
         if (holds) { renderNodes(node.sections[branch], scope, state, out); return; }

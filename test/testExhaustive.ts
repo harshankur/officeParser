@@ -4106,6 +4106,62 @@ async function testTemplateSuggestions(): Promise<void> {
 }
 
 /**
+ * Numbers written as text in the data: `dataNumberSeparators` says how they are read (a number picture
+ * and a comparison read them so), apart from `numberSeparators`, which says how numbers are written; and
+ * text that is a number, compared with a number, compares as that number.
+ */
+async function testTemplateNumbersAsText(): Promise<void> {
+    const { p, docx } = ooxmlHelpers();
+    const text = async (body: string, config: any) => {
+        const out = await OfficeTemplate.render(docx(body), config) as Uint8Array;
+        return strFromU8(unzipSync(out)['word/document.xml']).replace(/<[^>]+>/g, '');
+    };
+    const formatted = p('{{ total | format "#,##0.00" }}');
+    // Not given: as before, `.` for the point and no group separator.
+    assert.strictEqual(await text(formatted, { data: { total: '1250.5' } }), '1,250.50', 'text with a point is a number, as before');
+    const refused = await OfficeTemplate.check(docx(formatted), { data: { total: '12,50' } });
+    assert.deepStrictEqual(refused.map(x => x.details?.reason), ['unformattable'], 'a decimal comma is no number without dataNumberSeparators');
+    const outputOnly = await OfficeTemplate.check(docx(formatted), { data: { total: '12,50' }, numberSeparators: { decimal: ',', group: '.' } });
+    assert.deepStrictEqual(outputOnly.map(x => x.details?.reason), ['unformattable'], 'numberSeparators only says how numbers are written');
+    // Given: text in the data is read with them, and written with numberSeparators.
+    const german = { dataNumberSeparators: { decimal: ',', group: '.' }, numberSeparators: { decimal: ',', group: '.' } };
+    for (const [value, expected] of [['12,50', '12,50'], ['1.234,5', '1.234,50'], ['-1.234.567,891', '-1.234.567,89'], [' 7 ', '7,00'], ['+3,', '3,00'], [',5', '0,50'], ['1,5e3', '1.500,00']]) {
+        assert.strictEqual(await text(formatted, { data: { total: value }, ...german }), expected, `${JSON.stringify(value)} read with a decimal comma writes ${expected}`);
+    }
+    for (const value of ['1.5', '12.50', '1.23,4', '1..234', '1.2345', '12,5,0', '.', ',', '', '1e', '1.234,5x', '٣']) {
+        const problems = await OfficeTemplate.check(docx(formatted), { data: { total: value }, ...german });
+        assert.deepStrictEqual(problems.map(x => x.details?.reason), ['unformattable'], `${JSON.stringify(value)} is no number with a decimal comma and . for groups`);
+    }
+    // A space for groups takes either no-break space too; a point alone, no groups.
+    const french = { dataNumberSeparators: { decimal: ',', group: ' ' } };
+    for (const value of ['1 234,5', '1 234,5', '1 234,5']) assert.strictEqual(await text(formatted, { data: { total: value }, ...french }), '1,234.50', `${JSON.stringify(value)} is read with spaces for groups`);
+    assert.strictEqual(await text(formatted, { data: { total: '12,5' }, dataNumberSeparators: { decimal: ',' } }), '12.50', 'a decimal comma with no group separator');
+    assert.strictEqual(await text(formatted, { data: { total: 12.5 }, ...german }), '12,50', 'a number is a number whatever the separators');
+    // A value of the wrong shape is refused; a name the option does not have is reported.
+    for (const bad of [3, 'x', { decimal: 'ab' }, { decimal: '1' }, { decimal: ' ' }, { decimal: ',', group: ',' }, { group: 'e' }, { group: '--' }, { decimal: 5 }]) {
+        await assert.rejects(OfficeTemplate.render(docx(formatted), { data: { total: '1' }, dataNumberSeparators: bad } as any), (e: any) => e.officeIssue?.code === 'IMPROPER_ARGUMENTS', `dataNumberSeparators ${JSON.stringify(bad)} is refused`);
+    }
+    const warnings: any[] = [];
+    await OfficeTemplate.render(docx(formatted), { data: { total: '1' }, dataNumberSeparators: { decimal: '.', grouping: ',' }, onWarning: (w: any) => warnings.push(w) } as any);
+    assert.deepStrictEqual(warnings.map(w => [w.code, w.details?.keys]), [['UNRECOGNIZED_CONFIG_OPTION', ['dataNumberSeparators.grouping']]], 'a name dataNumberSeparators does not have is reported');
+
+    // Comparisons: text that is a number, beside a number, is that number; other text still refuses.
+    const branch = p('{{ if total > 100 }}big{{ else if total == 0 }}zero{{ else }}small{{ endif }}');
+    assert.strictEqual(await text(branch, { data: { total: '250' } }), 'big', "'250' > 100 compares as a number");
+    assert.strictEqual(await text(branch, { data: { total: '99.5' } }), 'small', "'99.5' > 100 is false");
+    assert.strictEqual(await text(branch, { data: { total: ' 0 ' } }), 'zero', "' 0 ' == 0");
+    assert.strictEqual(await text(p('{{ if 100 < total }}big{{ endif }}'), { data: { total: '250' } }), 'big', 'with the number on the left too');
+    assert.strictEqual(await text(branch, { data: { total: '1.250,00' }, dataNumberSeparators: { decimal: ',', group: '.' } }), 'big', 'read with dataNumberSeparators');
+    assert.strictEqual(await text(p('{{ if total == 12 }}y{{ endif }}'), { data: { total: 12n } as any }), 'y', 'a bigint compares with a number, as before');
+    assert.strictEqual(await text(p('{{ if total == "250" }}y{{ else }}n{{ endif }}'), { data: { total: '250.0' } }), 'n', 'text with text compares as text, as before');
+    for (const total of ['abc', '1,5', '']) {
+        const problems = await OfficeTemplate.check(docx(branch), { data: { total } });
+        assert.deepStrictEqual(problems.map(x => [x.details?.reason, x.details?.kind, x.details?.otherKind]), [['incomparable', 'text', 'number']], `${JSON.stringify(total)} is no number: incomparable, as before`);
+    }
+    console.log('  Template numbers as text: All assertions passed ✓');
+}
+
+/**
  * DOCX templating with block tags: `if`/`else if`/`else`/`endif` and `for`/`endfor`, in each of their
  * scopes (inline, paragraphs, table rows), their conditions, the data they read, the errors they raise,
  * and the document they leave (balanced XML, unique ids, every cell ending in a paragraph).
@@ -4289,7 +4345,7 @@ async function testTemplateBlocks(): Promise<void> {
     await rejects(p(r('{{ for a in s }}x{{ endfor }}')), { s: 'abc' }, 'TEMPLATE_DATA_INVALID', 'not-a-list');
     await rejects(p(r('{{ c }}')), { c: { a: 1 } }, 'TEMPLATE_DATA_INVALID', 'not-text');
     await rejects(p(r('{{ c }}')), { c: [1, 2] }, 'TEMPLATE_DATA_INVALID', 'not-text');
-    const incomparable = await rejects(p(r('{{ if total &gt; 100 }}x{{ endif }}')), { total: '150' }, 'TEMPLATE_DATA_INVALID', 'incomparable');
+    const incomparable = await rejects(p(r('{{ if total &gt; 100 }}x{{ endif }}')), { total: '150 EUR' }, 'TEMPLATE_DATA_INVALID', 'incomparable');
     assert.ok(incomparable.message.includes('{{ if total > 100 }}') && incomparable.officeIssue.details.kind === 'text' && incomparable.officeIssue.details.otherKind === 'number', 'an incomparable error names the tag and both kinds');
     await rejects(p(r('{{ constructor }}{{ __proto__ }}')), {}, 'TEMPLATE_FIELD_MISSING', undefined, { onMissing: 'error' });
     await rejects(p(r('{{ for x in toString }}{{ endfor }}')), {}, 'TEMPLATE_FIELD_MISSING', undefined, { onMissing: 'error' });
@@ -12391,6 +12447,7 @@ async function runTests(): Promise<void> {
         ['Template blocks', testTemplateBlocks],
         ['Template tags and check', testTemplateTagsAndCheck],
         ['Template suggestions', testTemplateSuggestions],
+        ['Template numbers as text', testTemplateNumbersAsText],
         ['Chart scripts', testChartScripts],
         ['Markdown header rows', testMarkdownHeaderRows],
         ['RTF header rows', testRtfHeaderRows],
