@@ -64,7 +64,7 @@ const ERROR_MESSAGES: Record<OfficeErrorType, string | ((...args: any[]) => stri
     [OfficeErrorType.PASSWORD_REQUIRED]: `This document is password-protected. Provide the password via the 'password' config option (or an 'onPassword' callback) to parse it.`,
     [OfficeErrorType.PASSWORD_INCORRECT]: `The password provided is incorrect for this document.`,
     [OfficeErrorType.DOCUMENT_DECRYPTION_FAILED]: (detail: string) => `Could not decrypt this document${detail ? `: ${detail}` : ''}.`,
-    [OfficeErrorType.TEMPLATE_UNSUPPORTED_FORMAT]: (detail: string) => `This document type cannot be used as a template${detail ? `: ${detail}` : ''}. Template rendering currently supports DOCX (.docx).`,
+    [OfficeErrorType.TEMPLATE_UNSUPPORTED_FORMAT]: (detail: string) => `This document type cannot be used as a template${detail ? `: ${detail}` : ''}. Template rendering supports Word documents (.docx) and OpenDocument texts and text templates (.odt, .ott).`,
     [OfficeErrorType.TEMPLATE_FIELD_MISSING]: (field: string) => `Template field '${field}' has no matching value in the data, and onMissing is 'error'. Provide the field, or set onMissing to 'keep' or 'empty'.`,
     [OfficeErrorType.TEMPLATE_SYNTAX]: (info: TemplateSyntaxDetails) => `Template tag '${info.tag}' in ${info.part} ${templateSyntaxReason(info)}.`,
     [OfficeErrorType.TEMPLATE_DATA_INVALID]: (info: TemplateDataDetails) => `Template tag '${info.tag}' in ${info.part} ${templateDataReason(info)}.`,

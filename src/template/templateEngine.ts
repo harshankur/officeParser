@@ -93,8 +93,8 @@ export interface TemplateDialect {
     textXml(text: string): string;
     textGrowth(text: string): number;
     /** The unique ids in an element's start tag, by its name; and those any element may carry. */
-    idAttributes(name: string): [string, IdKind][];
-    everyElementIds: [string, IdKind][];
+    idAttributes(name: string): IdAttribute[];
+    everyElementIds: IdAttribute[];
     /** The range a slot is an end of (`bookmark:<id>`), or null. */
     rangeOf(slot: IdSlot): string | null;
     /** Where fresh ids start, from every text part of the template. */
@@ -113,7 +113,7 @@ export interface TemplateDialect {
  * uncompressed metafile or font) still deflates: those are plain text or highly redundant binary and
  * compress several-fold, which matters more than the CPU on parts that are typically tens of KB.
  */
-const STORED_PART = /\.(png|jpe?g|jfif|gif|webp|avif|heic|heif|emz|wmz|woff2?|mp[34]|m4[av]|aac|ogg|oga|ogv|opus|flac|mov|avi|wmv|webm|zip|gz|docx|xlsx|pptx|odt|ods|odp)$/i;
+export const STORED_PART = /\.(png|jpe?g|jfif|gif|webp|avif|heic|heif|emz|wmz|woff2?|mp[34]|m4[av]|aac|ogg|oga|ogv|opus|flac|mov|avi|wmv|webm|zip|gz|docx|xlsx|pptx|odt|ods|odp)$/i;
 
 /** The element names the engine reads. */
 const W = {
@@ -150,7 +150,7 @@ const NEEDS_BLOCK = new Set(['w:tc', 'w:txbxContent', 'w:footnote', 'w:endnote',
 const BLOCK_ELEMENTS = new Set<string>([W.p, W.tbl, W.sdt]);
 
 /** The character that ends an element's name in a tag. */
-const NAME_END = /[\s/>]/;
+export const NAME_END = /[\s/>]/;
 
 /** How a tracked change in a block's path is named in an error, with what to do about it. */
 const TRACKED_CHANGE = new Set(['w:ins', 'w:del', 'w:moveFrom', 'w:moveTo']);
@@ -196,12 +196,12 @@ const MAX_PARA_ID = 0x7FFFFFFF;
  * the general {@link escapeXml} (which also encodes `"`/`'` as `&quot;`/`&apos;`), this matches the
  * literal quotes Word leaves in text, so a custom delimiter such as `«"»` still matches the stored XML.
  */
-function escapeXmlText(s: string): string {
+export function escapeXmlText(s: string): string {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /** Decodes the XML entities of `<w:t>` text, so a tag's condition reads `<` where Word stored `&lt;`. */
-function decodeXmlText(s: string): string {
+export function decodeXmlText(s: string): string {
     return s.replace(/&(lt|gt|amp|quot|apos|#\d{1,7}|#x[0-9a-fA-F]{1,6});/g, (entity, name: string) => {
         if (name === 'lt') return '<';
         if (name === 'gt') return '>';
@@ -255,7 +255,7 @@ function hasOwn(target: object, key: string): boolean {
 // ─── Options and errors ─────────────────────────────────────────────────────
 
 /** What the caller decides, and how errors are raised (as the caller's typed errors). */
-export interface DocxTemplateOptions {
+export interface TemplateOptions {
     start: string;
     end: string;
     onMissing: 'keep' | 'empty' | 'error';
@@ -331,7 +331,11 @@ type TemplateNode = LiteralNode | FieldNode | IfNode | ForNode;
 
 /** An id in a literal that a repeated copy renumbers. */
 /** An id in a start tag: where its value starts and ends, and where its tag starts (`<`) and ends (`>`), as visitIds read them. */
-export interface IdSlot { start: number; end: number; kind: IdKind; value: string; tag: number; gt: number }
+export interface IdSlot {
+    start: number; end: number; kind: IdKind; value: string; tag: number; gt: number;
+    /** The names an OpenDocument id or name must be unique among (`bookmark`, `table`, ...), as its element says. */
+    space?: string;
+}
 
 /**
  * A note compiled on its own, to be written per reference: its nodes (null with no tag), its text, and
@@ -343,7 +347,7 @@ interface NoteTemplate { nodes: TemplateNode[] | null; xml: string; rangesAcross
 interface CompiledPart { name: string; nodes: TemplateNode[] | null; hasBlocks: boolean }
 
 /** A whole template, compiled once and rendered once per data entry. */
-export interface CompiledDocxTemplate {
+export interface CompiledTemplate {
     dialect: TemplateDialect;
     entries: Record<string, Uint8Array>;
     parts: Map<string, CompiledPart>;
@@ -375,7 +379,7 @@ interface ElementBudget { left: number; textRuns: number }
 /** Per-part compile state. */
 export interface PartContext {
     part: string;
-    opts: DocxTemplateOptions;
+    opts: TemplateOptions;
     dialect: TemplateDialect;
     /** The delimiters as Word stores them in `<w:t>` text (`<<` as `&lt;&lt;`). */
     startText: string;
@@ -544,13 +548,13 @@ function compileFilters(filters: { name: string; args: (string | number)[] }[], 
 const MAX_TYPED_TAG = 120;
 
 /** A tag as typed, for messages (long tags shortened). */
-function typedTag(decodedInner: string, opts: DocxTemplateOptions): string {
+function typedTag(decodedInner: string, opts: TemplateOptions): string {
     const inner = decodedInner.length > MAX_TYPED_TAG ? `${decodedInner.slice(0, MAX_TYPED_TAG)}...` : decodedInner;
     return `${opts.start}${inner}${opts.end}`;
 }
 
 /** A recorded tag as typed, for an error message: made only when an error is raised. */
-function typedOf(record: TagRecord, opts: DocxTemplateOptions): string {
+function typedOf(record: TagRecord, opts: TemplateOptions): string {
     return typedTag(decodeXmlText(record.inner.length > MAX_TYPED_TAG * 8 ? record.inner.slice(0, MAX_TYPED_TAG * 8) : record.inner), opts);
 }
 
@@ -779,7 +783,7 @@ function newFrame(name: string, start: number, tagEnd: number, parent: Frame | n
 }
 
 /** An attribute's value in a start tag (bounded to the tag). */
-function attributeOf(startTag: string, name: string): string | null {
+export function attributeOf(startTag: string, name: string): string | null {
     let nameEnd = 1;
     while (nameEnd < startTag.length && !NAME_END.test(startTag[nameEnd])) nameEnd++;
     const value = readStartTag(startTag, nameEnd, [name])?.attributes.get(name);
@@ -791,7 +795,7 @@ function attributeOf(startTag: string, name: string): string | null {
  * of its last character), -1 for one never closed, or null when none starts there. Text in one that looks
  * like a tag is none.
  */
-function inertEnd(xml: string, at: number): number | null {
+export function inertEnd(xml: string, at: number): number | null {
     const c = xml.charCodeAt(at + 1);
     if (xml.charCodeAt(at) !== 0x3c || (c !== 0x21 && c !== 0x3f)) return null;
     // Looked for past the opener: `<!-->` opens a comment, it does not close one.
@@ -801,7 +805,7 @@ function inertEnd(xml: string, at: number): number | null {
 }
 
 /** Where a start tag ends: its first `>` outside a quoted attribute value, looking from `from` (in the tag, outside a value), or -1. */
-function startTagEnd(xml: string, from: number): number {
+export function startTagEnd(xml: string, from: number): number {
     for (let i = from; i < xml.length; i++) {
         const c = xml.charCodeAt(i);
         if (c === 0x22 || c === 0x27) {
@@ -1208,14 +1212,15 @@ function resolveScopes(blocks: Block[], ctx: PartContext): void {
 function removableParagraphs(blocks: Block[], d: TemplateDialect): Set<Frame> {
     const removable = new Set<Frame>();
     const candidates = new Set<Frame>();
-    // A paragraph removed as more than itself (its list item) is removed so only for a block cut at that
-    // level: one whose tags sit in list items of one list.
+    // A paragraph block's tag-only paragraphs are removed at the level of its units, the children of its
+    // container (a list item, when its tags sit in list items of one list): one whose removal would be at
+    // another level (a paragraph beside others in its list item) is kept, and so all of them are.
     const kept = new Set<Frame>();
     for (const block of blocks) {
         block.tags.forEach((tag, i) => {
             const p = tag.frame.para!;
             candidates.add(p);
-            if (p.unit !== p && block.mode === 'paragraph' && block.units[i] !== p.unit) kept.add(p);
+            if (block.mode === 'paragraph' && block.units[i] !== p.unit) kept.add(p);
         });
     }
     for (const p of candidates) {
@@ -1515,8 +1520,11 @@ function blockNode(block: Block, xml: string, ctx: PartContext, builder: NodeBui
 /** Where fresh ids start: past every id of each kind in the document; and the bookmark names it has. */
 interface IdSeeds { docPr: number; annotation: number; sdt: number; para: number; paraIds: Set<number>; bookmarkNames: Set<string> }
 
+/** An id attribute: its name, its kind, and (OpenDocument's) the names it must be unique among. */
+export type IdAttribute = [string, IdKind] | [string, IdKind, string];
+
 /** The unique ids in a Word start tag: each attribute, and its kind. */
-function docxIdAttributes(name: string): [string, IdKind][] {
+function docxIdAttributes(name: string): IdAttribute[] {
     switch (name) {
         case 'wp:docPr': return [['id', 'docPr']];
         case W.bookmarkStart: return [['w:id', 'bookmarkStart'], ['w:name', 'bookmarkName']];
@@ -1582,10 +1590,12 @@ export function visitIds(xml: string, d: TemplateDialect, visit: (slot: IdSlot) 
         const tag = readStartTag(xml, nameEnd, wanted.map(([attribute]) => attribute));
         if (!tag) break;
         const inTag: IdSlot[] = [];
-        for (const [attribute, kind] of wanted) {
+        for (const [attribute, kind, space] of wanted) {
             const value = tag.attributes.get(attribute);
             if (!value) continue;
-            inTag.push({ start: value[0], end: value[1], kind, value: xml.slice(value[0], value[1]), tag: lt, gt: tag.gt });
+            const slot: IdSlot = { start: value[0], end: value[1], kind, value: xml.slice(value[0], value[1]), tag: lt, gt: tag.gt };
+            if (space) slot.space = space;
+            inTag.push(slot);
         }
         // A tag's attributes come in any order; the slots are written in the order they stand.
         for (const slot of inTag.sort((x, y) => x.start - y.start)) visit(slot);
@@ -1662,7 +1672,7 @@ interface NoteCopy { part: string; element: string; from: string; to: string; sc
 export interface TemplateIds {
     take(kind: IdKind, value: string, scope: Scope | null, slot: IdSlot): string;
     writtenAcross(range: string, kind: IdKind): boolean;
-    keep(kind: IdKind, value: string): void;
+    keep(kind: IdKind, value: string, slot: IdSlot): void;
 }
 
 /**
@@ -1896,7 +1906,7 @@ function withNoteId(note: string, id: string): string {
  * refer to was cut from its part when the template was compiled: it is written only as these copies.)
  * Each copy is charged to the repetition budget before it is made.
  */
-function copyNotes(xml: string, part: string, element: string, copies: NoteCopy[], compiled: CompiledDocxTemplate, state: RenderState): string {
+function copyNotes(xml: string, part: string, element: string, copies: NoteCopy[], compiled: CompiledTemplate, state: RenderState): string {
     const notes = noteSpans(xml, element);
     const containerEnd = containerEndOf(xml, `</${element}s>`);
     if (containerEnd < 0) return xml;
@@ -1945,7 +1955,7 @@ function copyNotes(xml: string, part: string, element: string, copies: NoteCopy[
 // ─── Compile ────────────────────────────────────────────────────────────────
 
 /** Compiles one part: null nodes when it holds no tag. */
-function compilePart(name: string, xml: string, opts: DocxTemplateOptions, d: TemplateDialect, literalBase: number, copies: { left: number }, elements: ElementBudget): { part: CompiledPart; literals: number } {
+function compilePart(name: string, xml: string, opts: TemplateOptions, d: TemplateDialect, literalBase: number, copies: { left: number }, elements: ElementBudget): { part: CompiledPart; literals: number } {
     const markerChars = chooseMarkerChars(xml);
     // A part using every noncharacter and private-use character cannot be marked; it holds no tags we
     // could tell from its own text, so it is copied as is (only a crafted part reaches this).
@@ -1988,7 +1998,7 @@ function conditionFields(expression: TemplateExpression, out: string[]): void {
  * that open a block or a branch of one. A note that only loops refer to is compiled on its own, and its
  * tags follow its part's own.
  */
-export function templateTags(compiled: CompiledDocxTemplate, opts: DocxTemplateOptions): TemplateTagInfo[] {
+export function templateTags(compiled: CompiledTemplate, opts: TemplateOptions): TemplateTagInfo[] {
     const out: TemplateTagInfo[] = [];
     const walk = (nodes: TemplateNode[], part: string, loops: { item: string; list: string }[]): void => {
         // Blocks nest at most MAX_BLOCK_DEPTH deep, so this recursion is bounded.
@@ -2025,7 +2035,7 @@ export function templateTags(compiled: CompiledDocxTemplate, opts: DocxTemplateO
 }
 
 /** Compiles a template's parts once, for every data entry of a batch. Raises the tag errors up front. */
-export function compileTemplate(entries: Record<string, Uint8Array>, opts: DocxTemplateOptions, d: TemplateDialect): CompiledDocxTemplate {
+export function compileTemplate(entries: Record<string, Uint8Array>, opts: TemplateOptions, d: TemplateDialect): CompiledTemplate {
     const parts = new Map<string, CompiledPart>();
     let literalCount = 0;
     let repeatsIds = false;
@@ -2243,7 +2253,7 @@ function forEachLoopSlots(nodes: TemplateNode[], visit: (slots: IdSlot[]) => voi
 interface LoopDetails { index: number; number: number; first: boolean; last: boolean; length: number }
 
 /** The names in scope: a loop's item and details, innermost first. */
-interface Scope { name: string; item: TemplateValue; list: readonly TemplateValue[]; listText: string; listNumber: number; index: number; loop: LoopDetails; parent: Scope | null; loops?: TemplateLoopPlace[]; place?: PlaceNode }
+export interface Scope { name: string; item: TemplateValue; list: readonly TemplateValue[]; listText: string; listNumber: number; index: number; loop: LoopDetails; parent: Scope | null; loops?: TemplateLoopPlace[]; place?: PlaceNode }
 
 /**
  * Where a tag is read: one object for each pass of each set of loops, as `loops` tells them apart (loops
@@ -2320,7 +2330,7 @@ class RenderState {
     readonly noteIds: IdState | null;
     readonly dialect: TemplateDialect;
     part = '';
-    constructor(readonly data: TemplateData, readonly opts: DocxTemplateOptions, compiled: CompiledDocxTemplate) {
+    constructor(readonly data: TemplateData, readonly opts: TemplateOptions, compiled: CompiledTemplate) {
         this.repeatLeft = opts.maxRepeatedContent;
         this.written = new Uint8Array(compiled.literalCount);
         this.dialect = compiled.dialect;
@@ -2394,7 +2404,7 @@ function renderKept(span: KeptSpan, scope: Scope | null, state: RenderState, out
     if (!span.inLoop) {
         // Written once, under the ids it was typed with; a note it refers to is written with it.
         const ids = state.ids;
-        visitIds(xml, state.dialect, slot => ids.keep(slot.kind, slot.value));
+        visitIds(xml, state.dialect, slot => ids.keep(slot.kind, slot.value, slot));
         state.emit(out, xml);
         return;
     }
@@ -2671,7 +2681,7 @@ const BLOCK_HOLDERS = new Set(['w:body', 'w:tc', 'w:txbxContent', 'w:footnote', 
  * not among them, save a notes part with notes cut out of it). A check renders with nothing more, told
  * each part it moves to (`onPart`).
  */
-export function renderParts(compiled: CompiledDocxTemplate, data: TemplateData, opts: DocxTemplateOptions, onPart?: (part: string) => void): Map<string, string> {
+export function renderParts(compiled: CompiledTemplate, data: TemplateData, opts: TemplateOptions, onPart?: (part: string) => void): Map<string, string> {
     const state = new RenderState(data, opts, compiled);
     const rendered = new Map<string, string>();
     const renderPart = (name: string): void => {
@@ -2711,28 +2721,37 @@ export function renderParts(compiled: CompiledDocxTemplate, data: TemplateData, 
 }
 
 /** Compiles a Word template (see {@link compileTemplate}). */
-export function compileDocxTemplate(entries: Record<string, Uint8Array>, opts: DocxTemplateOptions): CompiledDocxTemplate {
+export function compileDocxTemplate(entries: Record<string, Uint8Array>, opts: TemplateOptions): CompiledTemplate {
     return compileTemplate(entries, opts, DOCX_DIALECT);
 }
 
 /** Renders one `.docx` from a compiled template and a single data map. */
-export function renderDocxTemplate(compiled: CompiledDocxTemplate, data: TemplateData, opts: DocxTemplateOptions): Uint8Array {
-    const rendered = renderParts(compiled, data, opts);
+export function renderDocxTemplate(compiled: CompiledTemplate, data: TemplateData, opts: TemplateOptions): Uint8Array {
+    return zipRendered(compiled, renderParts(compiled, data, opts), opts.mtime);
+}
+
+/**
+ * A rendered document's package: its rendered parts, and every other entry as the template has it.
+ * `stored` names an entry written first and stored (OpenDocument's `mimetype`), when the template has it.
+ */
+export function zipRendered(compiled: CompiledTemplate, rendered: Map<string, string>, mtime: Date, stored?: string): Uint8Array {
     const out: Zippable = {};
+    if (stored && compiled.entries[stored]) out[stored] = [compiled.entries[stored], { mtime, level: 0 }];
     for (const [name, bytes] of Object.entries(compiled.entries)) {
+        if (name === stored) continue;
         const xml = rendered.get(name);
         if (xml !== undefined) {
-            out[name] = [Buffer.from(xml, 'utf8'), { mtime: opts.mtime }];
+            out[name] = [Buffer.from(xml, 'utf8'), { mtime }];
         } else if (STORED_PART.test(name)) {
             // Already-compressed media (PNG/JPEG images, audio/video, WOFF fonts): deflate yields next
             // to nothing, so store them (`level: 0`) instead of paying to re-deflate the same bytes on
             // every document in a batch. Much less CPU, negligible size.
-            out[name] = [bytes, { mtime: opts.mtime, level: 0 }];
+            out[name] = [bytes, { mtime, level: 0 }];
         } else {
             // Everything else, including a text part with no tag (copied byte for byte, so a part that
             // is not valid UTF-8 is never corrupted by a decode/encode round-trip it did not need):
             // styles.xml, numbering.xml, settings.xml, theme/*.xml, the .rels parts deflate normally.
-            out[name] = [bytes, { mtime: opts.mtime }];
+            out[name] = [bytes, { mtime }];
         }
     }
     return zipSync(out);
@@ -2744,6 +2763,16 @@ export function renderDocxTemplate(compiled: CompiledDocxTemplate, data: Templat
  * is bounded exactly as an ordinary parsed document is.
  */
 export async function openDocx(bytes: Uint8Array, limits?: DecompressionLimits, config?: OfficeParserConfig): Promise<Record<string, Uint8Array> | null> {
+    const map = await openPackage(bytes, limits, config);
+    return map?.['word/document.xml'] ? map : null;
+}
+
+/**
+ * Unzips a template's package under decompression limits (the parser's streaming `extractFiles` guard,
+ * so a zip-bomb template is bounded exactly as an ordinary parsed document is): its entries by name, or
+ * null when the input is no zip.
+ */
+export async function openPackage(bytes: Uint8Array, limits?: DecompressionLimits, config?: OfficeParserConfig): Promise<Record<string, Uint8Array> | null> {
     const src = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     let files;
     try { files = await extractFiles(src, () => true, limits ?? {}, config); }
@@ -2758,7 +2787,7 @@ export async function openDocx(bytes: Uint8Array, limits?: DecompressionLimits, 
     }
     const map: Record<string, Uint8Array> = {};
     for (const f of files) map[f.path] = f.content;
-    return map['word/document.xml'] ? map : null;
+    return map;
 }
 
 // ─── The Word dialect ───────────────────────────────────────────────────────

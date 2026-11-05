@@ -4128,13 +4128,13 @@ async function testTemplateNumbersAsText(): Promise<void> {
     for (const [value, expected] of [['12,50', '12,50'], ['1.234,5', '1.234,50'], ['-1.234.567,891', '-1.234.567,89'], [' 7 ', '7,00'], ['+3,', '3,00'], [',5', '0,50'], ['1,5e3', '1.500,00']]) {
         assert.strictEqual(await text(formatted, { data: { total: value }, ...german }), expected, `${JSON.stringify(value)} read with a decimal comma writes ${expected}`);
     }
-    for (const value of ['1.5', '12.50', '1.23,4', '1..234', '1.2345', '12,5,0', '.', ',', '', '1e', '1.234,5x', '٣']) {
+    for (const value of ['1.5', '12.50', '1.23,4', '1..234', '1.2345', '12,5,0', '.', ',', '', '1e', '1.234,5x', '\u0663']) {
         const problems = await OfficeTemplate.check(docx(formatted), { data: { total: value }, ...german });
         assert.deepStrictEqual(problems.map(x => x.details?.reason), ['unformattable'], `${JSON.stringify(value)} is no number with a decimal comma and . for groups`);
     }
     // A space for groups takes either no-break space too; a point alone, no groups.
     const french = { dataNumberSeparators: { decimal: ',', group: ' ' } };
-    for (const value of ['1 234,5', '1 234,5', '1 234,5']) assert.strictEqual(await text(formatted, { data: { total: value }, ...french }), '1,234.50', `${JSON.stringify(value)} is read with spaces for groups`);
+    for (const value of ['1 234,5', '1\u00A0234,5', '1\u202F234,5']) assert.strictEqual(await text(formatted, { data: { total: value }, ...french }), '1,234.50', `${JSON.stringify(value)} is read with spaces for groups`);
     assert.strictEqual(await text(formatted, { data: { total: '12,5' }, dataNumberSeparators: { decimal: ',' } }), '12.50', 'a decimal comma with no group separator');
     assert.strictEqual(await text(formatted, { data: { total: 12.5 }, ...german }), '12,50', 'a number is a number whatever the separators');
     // A value of the wrong shape is refused; a name the option does not have is reported.
@@ -4159,6 +4159,244 @@ async function testTemplateNumbersAsText(): Promise<void> {
         assert.deepStrictEqual(problems.map(x => [x.details?.reason, x.details?.kind, x.details?.otherKind]), [['incomparable', 'text', 'number']], `${JSON.stringify(total)} is no number: incomparable, as before`);
     }
     console.log('  Template numbers as text: All assertions passed ✓');
+}
+
+/** OpenDocument text packages for the template tests: a body, the master page's header and footer, other parts. */
+function odtHelpers() {
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/"';
+    const p = (inner: string) => `<text:p>${inner}</text:p>`;
+    const span = (inner: string, style = 'T1') => `<text:span text:style-name="${style}">${inner}</text:span>`;
+    const manifest = (mediaType: string) => `<?xml version="1.0" encoding="UTF-8"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.3"><manifest:file-entry manifest:full-path="/" manifest:media-type="${mediaType}"/><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/><manifest:file-entry manifest:full-path="styles.xml" manifest:media-type="text/xml"/></manifest:manifest>`;
+    const odt = (body: string, master: { header?: string; footer?: string } = {}, parts: Record<string, string | Uint8Array> = {}, mediaType = 'application/vnd.oasis.opendocument.text') => Buffer.from(zipSync({
+        mimetype: [strToU8(mediaType), { level: 0 }],
+        'META-INF/manifest.xml': strToU8(manifest(mediaType)),
+        'content.xml': strToU8(`<?xml version="1.0" encoding="UTF-8"?><office:document-content ${NS} office:version="1.3"><office:body><office:text>${body}</office:text></office:body></office:document-content>`),
+        'styles.xml': strToU8(`<?xml version="1.0" encoding="UTF-8"?><office:document-styles ${NS} office:version="1.3"><office:master-styles><style:master-page style:name="Standard"><style:header>${master.header ?? p('Header')}</style:header>${master.footer ? `<style:footer>${master.footer}</style:footer>` : ''}</style:master-page></office:master-styles></office:document-styles>`),
+        ...Object.fromEntries(Object.entries(parts).map(([name, value]) => [name, typeof value === 'string' ? strToU8(value) : value])),
+    }));
+    const part = (bytes: Uint8Array, name = 'content.xml') => strFromU8(unzipSync(bytes)[name]);
+    /** The body of a rendered document's content.xml, checked well-formed. */
+    const body = async (xml: string, data: any, cfg: any = {}) => {
+        const out = await OfficeTemplate.render(odt(xml), { data, ...cfg }) as Uint8Array;
+        const content = part(out);
+        assert.doesNotThrow(() => parseXmlString(content), 'rendered content.xml is well-formed XML');
+        return content.slice(content.indexOf('<office:text>') + 13, content.indexOf('</office:text>'));
+    };
+    /** A rendered body's text, each paragraph a line. */
+    const text = async (xml: string, data: any, cfg: any = {}) => (await body(xml, data, cfg))
+        .replace(/<text:s\/>/g, ' ').replace(/<text:s text:c="(\d+)"\/>/g, (_, n) => ' '.repeat(Number(n))).replace(/<text:line-break\/>/g, '\n').replace(/<text:tab\/>/g, '\t')
+        .replace(/<\/text:(p|h)>/g, '\n').replace(/<[^>]+>/g, '').replace(/&quot;/g, '"').replace(/&apos;/g, '\'').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/\n$/, '');
+    const rejects = async (xml: string, data: any, code: string, reason?: string, cfg: any = {}) => {
+        let error: any;
+        try { await OfficeTemplate.render(odt(xml), { data, ...cfg }); } catch (e) { error = e; }
+        assert.strictEqual(error?.officeIssue?.code, code, `${xml.slice(0, 120)} rejects with ${code}; got ${error?.officeIssue?.code ?? error}`);
+        if (reason) assert.strictEqual(error.officeIssue.details?.reason, reason, `${xml.slice(0, 120)}: ${reason}; got ${error.officeIssue.details?.reason}`);
+        return error;
+    };
+    return { NS, p, span, odt, part, body, text, rejects };
+}
+
+/**
+ * OpenDocument text templates (`.odt`, `.ott`): the same tags and data as DOCX's, filled where LibreOffice
+ * keeps text. Fixtures `test/files/template/invoice.odt`, `invoice.ott` and `shapes.odt` are generated by
+ * `scripts/generate-odt-template-fixtures.mjs` from the ODF spec.
+ */
+async function testOdtTemplate(): Promise<void> {
+    const { p, span, odt, part, body, text, rejects } = odtHelpers();
+    const tpl = path.join(__dirname, 'files', 'template', 'invoice.odt');
+    const lines = [{ description: 'Bolts', qty: 2, price: '$500.00' }, { description: 'Nuts', qty: 1, price: '$250.00' }];
+    const data = { name: 'Acme Corp', amount: '$1,250.00', date: '2026-10-01', item: 'Widget', note: 'Line one\nLine two', company: 'GLOBEX', paid: false, due: '2026-11-01', lines, discount: '$50.00', contacts: [{ name: 'Ann' }, { name: 'Bob' }], total: 1250.5, dueDate: '2026-11-01' };
+    const astText = (ast: OfficeParserAST) => ast.content.map(n => n.text).join('\n');
+
+    // The fixture renders, and reads back with the values in place.
+    const bytes = await OfficeTemplate.render(tpl, { data }) as Uint8Array;
+    const ast = await OfficeParser.parseOffice(Buffer.from(bytes), { fileType: 'odt' }) as OfficeParserAST;
+    const all = astText(ast);
+    for (const expected of ['Dear Acme Corp, welcome.', 'Your balance is $1,250.00 as of 2026-10-01.', 'Ref: {{missing}}', 'Note: Line one\nLine two', 'Please pay $1,250.00 by 2026-11-01.', 'Total due: $1,250.50 by November 1, 2026.', 'Contacts: Ann, Bob']) {
+        assert.ok(all.includes(expected), `${expected} is in the rendered document; got ${all}`);
+    }
+    assert.ok(!all.includes('Paid in full') && !/\{\{ (if|else|endif|for|endfor)/.test(all), 'the branch not taken and every block tag are gone');
+    assert.ok((ast.auxiliary?.headers || []).some(h => String(h.text).includes('GLOBEX - Confidential')), 'the master page\'s header (styles.xml) is filled');
+    const content = part(bytes);
+    assert.ok(content.includes('Dear Acme Corp<text:span text:style-name="T2"></text:span>, welcome.'), 'a tag split across a span is one tag, its value where it began');
+    assert.ok(content.includes('<text:span text:style-name="T1">$1,250.00</text:span>'), 'a value takes the span its tag sat in (bold)');
+    assert.ok(content.includes('Line one<text:line-break/>Line two'), 'a line break in a value is a text:line-break');
+    const rows = [...content.matchAll(/<table:table-row>([\s\S]*?)<\/table:table-row>/g)].map(m => m[1].replace(/<[^>]+>/g, '|').replace(/\|+/g, '|'));
+    assert.deepStrictEqual(rows, ['|Item|Widget|', '|Description|Qty|Price|', '|Bolts|2|$500.00|', '|Nuts|1|$250.00|', '|Discount|-$50.00|'], `the heading row stays in the heading rows, the item row repeats, the discount row is kept; got ${JSON.stringify(rows)}`);
+    assert.ok(/<table:table-header-rows><table:table-row>/.test(content), 'the heading rows are kept');
+    const paid = part(await OfficeTemplate.render(tpl, { data: { ...data, paid: true, lines: [], discount: null, contacts: [] } }) as Uint8Array);
+    assert.ok(paid.includes('Paid in full') && !paid.includes('Please pay') && !paid.includes('Discount') && !paid.includes('Bolts'), 'the other branch, no item rows, no discount row');
+    assert.ok(paid.includes('</table:table-header-rows></table:table>'), 'a table left with only its heading rows keeps them');
+
+    // The package: mimetype first and stored, every part but the filled ones as the template has them.
+    const entries = unzipSync(bytes);
+    const template = unzipSync(fs.readFileSync(tpl));
+    assert.strictEqual(Object.keys(entries)[0], 'mimetype', 'mimetype is the first entry');
+    assert.strictEqual(Buffer.from(bytes).readUInt16LE(8), 0, 'mimetype is stored, not compressed');
+    assert.ok(Buffer.from(bytes).toString('latin1', 30, 38) === 'mimetype' && Buffer.from(bytes).readUInt16LE(28) === 0, 'named first, with no extra field');
+    for (const name of ['mimetype', 'META-INF/manifest.xml', 'meta.xml']) assert.ok(Buffer.from(entries[name]).equals(Buffer.from(template[name])), `${name} is unchanged`);
+    assert.deepStrictEqual(Object.keys(entries), Object.keys(template), 'the same entries, in the same order');
+    assert.ok(Buffer.from(bytes).equals(Buffer.from(await OfficeTemplate.render(tpl, { data }) as Uint8Array)), 'rendering is deterministic');
+
+    // A template (.ott) is written as a text (.odt): mimetype and the manifest's root switched, nothing else.
+    const fromOtt = await OfficeTemplate.render(path.join(__dirname, 'files', 'template', 'invoice.ott'), { data }) as Uint8Array;
+    const ott = unzipSync(fromOtt);
+    const ottTemplate = unzipSync(fs.readFileSync(path.join(__dirname, 'files', 'template', 'invoice.ott')));
+    assert.strictEqual(strFromU8(ott.mimetype), 'application/vnd.oasis.opendocument.text', 'an .ott renders to an .odt mimetype');
+    assert.strictEqual(strFromU8(ott['META-INF/manifest.xml']), strFromU8(ottTemplate['META-INF/manifest.xml']).replace('opendocument.text-template', 'opendocument.text'), "the manifest's root media type is switched, nothing else");
+    assert.strictEqual(strFromU8(ott['content.xml']), content, 'and its content is the same as the .odt\'s');
+    assert.strictEqual(astText(await OfficeParser.parseOffice(Buffer.from(fromOtt), { fileType: 'odt' }) as OfficeParserAST), all, 'it reads back the same');
+
+    // onMissing, delimiters, a batch.
+    assert.ok(!astText(await OfficeParser.parseOffice(Buffer.from(await OfficeTemplate.render(tpl, { data, onMissing: 'empty' }) as Uint8Array), { fileType: 'odt' }) as OfficeParserAST).includes('{{missing}}'), "onMissing 'empty' blanks a missing field");
+    await assert.rejects(OfficeTemplate.render(tpl, { data, onMissing: 'error' }), (e: any) => e.officeIssue?.code === 'TEMPLATE_FIELD_MISSING' && e.officeIssue.message.includes("'missing'"), "onMissing 'error' rejects");
+    const batch = await OfficeTemplate.render(tpl, { data: [{ ...data, name: 'First' }, { ...data, name: 'Second' }] });
+    assert.ok(batch.length === 2 && part(batch[0]).includes('Dear First<') && part(batch[1]).includes('Dear Second<'), 'a batch: one document per entry');
+    assert.strictEqual(await text(p('&lt;&lt;who&gt;&gt; {{who}}'), { who: 'X' }, { delimiters: { start: '<<', end: '>>' } }), 'X {{who}}', 'delimiters of the caller\'s own, stored escaped');
+
+    // Values as OpenDocument keeps text: escaped, tabs, runs of spaces, line breaks; XML-illegal characters stripped.
+    const v = await body(p('[{{ v }}]'), { v: 'a & <b> "c"\tz  two   three\r\nnext\u2028x\u0001' });
+    assert.strictEqual(v, '<text:p>[a &amp; &lt;b&gt; &quot;c&quot;<text:tab/>z <text:s/>two <text:s text:c="2"/>three<text:line-break/>next<text:line-break/>x]</text:p>', `a value's characters as OpenDocument keeps them; got ${v}`);
+    assert.strictEqual(await body(p('{{ v }}'), { v: '  lead' }), '<text:p><text:s text:c="2"/>lead</text:p>', 'spaces where a line starts are kept as text:s');
+    // A tag holding <text:s/>, split across spans, in a heading, a link, a text box, a note and a comment.
+    assert.strictEqual(await text(p('Hi {{<text:s/>who<text:s text:c="2"/>}}!'), { who: 'Ann' }), 'Hi Ann!', 'a tag holding text:s is read with its spaces');
+    assert.strictEqual(await text(`<text:h text:outline-level="1">{{ a }}</text:h>${p(`${span('{{')}${span('b', 'T2')}}}`)}`, { a: 'A', b: 'B' }), 'A\nB', 'a heading, and a tag across spans');
+    assert.strictEqual(await text(p('<text:a xlink:href="https://example.com" xmlns:xlink="http://www.w3.org/1999/xlink">{{ link }}</text:a>'), { link: 'Site' }), 'Site', 'a tag in a link');
+    const nested = `${p(`Before {{ a }} <draw:frame draw:name="F1"><draw:text-box>${p('Box {{ b }}')}</draw:text-box></draw:frame><text:note text:id="ftn1" text:note-class="footnote"><text:note-citation>1</text:note-citation><text:note-body>${p('Note {{ c }}')}</text:note-body></text:note><office:annotation><dc:creator>{{ author }}</dc:creator>${p('Comment {{ d }}')}</office:annotation> after {{ e }}`)}`;
+    const filled = await body(nested, { a: 'A', b: 'B', c: 'C', d: 'D', e: 'E', author: 'X' });
+    for (const expected of ['Before A ', 'Box B', '<text:note-citation>1</text:note-citation>', 'Note C', '<dc:creator>{{ author }}</dc:creator>', 'Comment D', ' after E']) assert.ok(filled.includes(expected), `${expected}: tags in a text box, note and comment are filled, a comment's author is not text; got ${filled}`);
+    assert.strictEqual(await text(p(`x {{na<draw:frame draw:name="F"><draw:text-box>${p('inner')}</draw:text-box></draw:frame>me}} y`), { name: 'Z' }), 'x {{nainner\nme}} y', 'a tag is not joined across a text box\'s paragraphs');
+    // Text not read: fields, deleted text kept for tracked changes, comments of the XML.
+    const unread = `<text:tracked-changes><text:changed-region text:id="c1"><text:deletion>${p('{{ gone }}')}</text:deletion></text:changed-region></text:tracked-changes>${p('<text:date>{{ date }}</text:date> <!-- {{ hidden }} --> {{ shown }}')}`;
+    assert.deepStrictEqual((await OfficeTemplate.tags(odt(unread))).map(t => t.tag), ['{{ shown }}'], 'deleted text, a field\'s text and an XML comment hold no tag');
+
+    // tags() and check() read an ODT as a render does.
+    const tags = await OfficeTemplate.tags(tpl);
+    assert.deepStrictEqual(tags.map(t => `${t.kind} ${t.part} ${t.fields.join(',')}`).slice(0, 4), ['field content.xml name', 'field content.xml amount', 'field content.xml date', 'field content.xml item'], 'tags in document order, the part named');
+    assert.ok(tags.some(t => t.part === 'styles.xml' && t.fields[0] === 'company'), 'the header\'s tag is in styles.xml');
+    assert.deepStrictEqual(tags.find(t => t.kind === 'for')?.item, 'line', 'a loop names its item');
+    const { name: _n, ...noName } = data;
+    const problems = await OfficeTemplate.check(tpl, { data: { ...noName, lines: [{ description: 'x' }] } as any });
+    assert.deepStrictEqual(problems.map(x => `${x.field} ${x.part} ${x.loops.map(l => `${l.list}[${l.index}]`).join('')}`), ['name content.xml ', 'missing content.xml ', 'line.qty content.xml lines[0]', 'line.price content.xml lines[0]'], `a check of an ODT; got ${JSON.stringify(problems.map(x => x.field))}`);
+
+    // Encrypted: decrypted with the password, written plain (no encryption data left in its manifest).
+    const encrypted = path.join(__dirname, 'files', 'encrypted', 'real-libreoffice.odt');
+    await assert.rejects(OfficeTemplate.render(encrypted, { data: {} }), (e: any) => e.officeIssue?.code === 'PASSWORD_REQUIRED', 'an encrypted ODT without its password is refused');
+    const plain = await OfficeTemplate.render(encrypted, { data: {}, password: 'test123' }) as Uint8Array;
+    const plainEntries = unzipSync(plain);
+    assert.ok(!strFromU8(plainEntries['META-INF/manifest.xml']).includes('encryption-data'), 'the written manifest has no encryption data');
+    assert.ok(strFromU8(plainEntries['META-INF/manifest.xml']).includes('manifest:full-path="content.xml"'), 'and keeps its entries');
+    assert.ok(astText(await OfficeParser.parseOffice(Buffer.from(plain), { fileType: 'odt' }) as OfficeParserAST).includes('REAL LIBRE MARKER 77'), 'the plain document reads with no password');
+    const asked: string[] = [];
+    assert.ok(await OfficeTemplate.render(encrypted, { data: {}, onPassword: reason => { asked.push(reason); return 'test123'; } }) instanceof Uint8Array && asked.join() === 'required', 'onPassword is asked, as for DOCX');
+
+    // Formats that are not templates.
+    for (const other of ['test.ods', 'test.odp']) {
+        await assert.rejects(OfficeTemplate.render(path.join(__dirname, 'files', other), { data: {} }), (e: any) => e.officeIssue?.code === 'TEMPLATE_UNSUPPORTED_FORMAT', `${other} is not a template format`);
+    }
+    await rejects(p('{{ if a }}x'), { a: 1 }, 'TEMPLATE_SYNTAX', 'unclosed');
+    console.log('  ODT template: All assertions passed ✓');
+}
+
+/**
+ * ODT templates' blocks in each of their scopes, the ids a copy renumbers, and the document left valid:
+ * fixture `test/files/template/shapes.odt` and small documents built around one case each.
+ */
+async function testOdtTemplateBlocks(): Promise<void> {
+    const { p, part, body, text, rejects } = odtHelpers();
+    const shapes = path.join(__dirname, 'files', 'template', 'shapes.odt');
+    const data = {
+        client: 'Initech', who: 'World', draft: true, company: 'GLOBEX', authors: ['Ann', 'Bob'], tasks: ['Write', 'Test'],
+        people: [{ name: 'Ada' }, { name: 'Grace' }], parts: ['One', 'Two'], heads: [{ a: 'H1', b: 'h1' }, { a: 'H2', b: 'h2' }], rows: [{ a: 'r1', b: 's1' }],
+    };
+    const out = await OfficeTemplate.render(shapes, { data }) as Uint8Array;
+    const content = part(out);
+    const styles = part(out, 'styles.xml');
+    for (const xml of [content, styles]) assert.doesNotThrow(() => parseXmlString(xml), 'each rendered part is well-formed');
+    const values = (re: RegExp, xml = content) => [...xml.matchAll(re)].map(m => m[1]);
+    assert.deepStrictEqual(values(/<text:list-item><text:p[^>]*>([^<]*)<\/text:p><\/text:list-item>/g), ['Task: Write', 'Task: Test'], 'a loop over list items repeats the item; the tag-only items go with their tags');
+    assert.ok(content.includes('<text:h text:style-name="Heading_20_1" text:outline-level="1">Report for Initech</text:h>') && content.includes('Hello World!'), 'a heading, a tag holding text:s');
+    assert.ok(content.includes('<text:p text:style-name="Standard">Deleted {{ deleted }}</text:p>'), 'deleted text kept for tracked changes is not read');
+    // Every copy renumbers what must stay unique, and a range's end follows its start.
+    assert.deepStrictEqual(values(/xml:id="([^"]+)"/g), ['ct1', 'person-para', 'person-para_2'], 'paragraph ids are unique across copies');
+    assert.deepStrictEqual(values(/<text:bookmark-start text:name="([^"]+)"/g), values(/<text:bookmark-end text:name="([^"]+)"/g), 'each copy of a bookmark ends with its own name');
+    assert.strictEqual(new Set(values(/<text:bookmark-start text:name="([^"]+)"/g)).size, 2, 'bookmark names are unique');
+    assert.deepStrictEqual(values(/<office:annotation office:name="([^"]+)"/g), values(/<office:annotation-end office:name="([^"]+)"/g), 'each copy of a comment range ends with its own name');
+    for (const [label, re] of [['note ids', /<text:note text:id="([^"]+)"/g], ['frame names', /draw:name="([^"]+)"/g], ['section names', /<text:section text:name="([^"]+)"/g], ['comment names', /office:annotation office:name="([^"]+)"/g]] as [string, RegExp][]) {
+        const found = values(re);
+        assert.ok(found.length === 2 && new Set(found).size === 2, `${label} are unique across copies; got ${found}`);
+    }
+    for (const expected of ['Badge: Ada', 'Badge: Grace', 'About Ada', 'About Grace', 'Check Ada', 'Check Grace', 'Part 1: One', 'Part 2: Two']) assert.ok(content.includes(expected), `${expected}: a copy's text box, note, comment and section read its pass`);
+    const grid = content.slice(content.indexOf('table:name="Grid"'));
+    assert.deepStrictEqual(values(/<table:table-row>([\s\S]*?)<\/table:table-row>/g, grid).map(r => r.replace(/<[^>]+>/g, ' ').trim().replace(/\s+/g, ' ')), ['H1 h1', 'H2 h2', 'r1 s1'], 'a loop inside the heading rows repeats them there; a row loop below');
+    assert.ok(/<table:table-header-rows>(<table:table-row>.*?<\/table:table-row>){2}<\/table:table-header-rows>/.test(grid), 'both heading rows are inside the heading rows');
+    assert.ok(styles.includes('DRAFT GLOBEX') && styles.includes('Left: GLOBEX') && styles.includes('Authors: Ann, Bob'), 'a branch in the header, the left-page header, a loop in the footer');
+    // With nothing to repeat: a table left with no row goes, an empty header keeps a paragraph.
+    const empty = await OfficeTemplate.render(shapes, { data: { ...data, tasks: [], people: [], parts: [], heads: [], rows: [], authors: [], draft: false } }) as Uint8Array;
+    const emptyContent = part(empty);
+    assert.ok(!emptyContent.includes('table:name="Grid"') && !emptyContent.includes('<text:list-item>') && !emptyContent.includes('<text:section'), 'a table, list items and a section with no pass are gone');
+    assert.doesNotThrow(() => parseXmlString(emptyContent), 'and the part is well-formed');
+
+    // Scopes, case by case.
+    assert.strictEqual(await text(p('Hello {{ if x }}there') + p('world{{ endif }}!'), { x: false }), 'Hello !', 'tags mid-paragraph in two paragraphs drop what is between them');
+    assert.strictEqual(await text(p('Keep') + p('{{ if x }}') + p('Gone') + p('{{ endif }}') + p('After'), { x: false }), 'Keep\nAfter', 'tag-only paragraphs go with their tags');
+    const list = (...items: string[]) => `<text:list>${items.map(i => `<text:list-item>${p(i)}</text:list-item>`).join('')}</text:list>`;
+    assert.strictEqual(await body(list('A', '{{ if x }}', 'B', '{{ endif }}', 'C'), { x: false }), '<text:list><text:list-item><text:p>A</text:p></text:list-item><text:list-item><text:p>C</text:p></text:list-item></text:list>', 'an if over list items drops whole items');
+    assert.strictEqual(await text(list('{{ for a in xs }}{{ a }}', 'x{{ endfor }}'), { xs: [1, 2] }), '1\nx2\nx', 'tags beside text in list items cut the items where they stand');
+    // A list item holding more than the tag's paragraph keeps it (emptied).
+    assert.strictEqual(await body(`<text:list><text:list-item>${p('{{ if x }}')}${p('kept')}</text:list-item><text:list-item>${p('{{ endif }}')}</text:list-item></text:list>`, { x: true }), '<text:list><text:list-item><text:p></text:p><text:p>kept</text:p></text:list-item><text:list-item><text:p></text:p></text:list-item></text:list>', 'a list item holding more than its tag paragraph stays');
+    await rejects(p('{{ if x }}') + list('{{ endif }}'), { x: 1 }, 'TEMPLATE_SYNTAX', 'crossing');
+    const level = await rejects(`<text:list><text:list-item>${p('{{ if x }}')}<text:list><text:list-item>${p('{{ endif }}')}</text:list-item></text:list></text:list-item></text:list>`, { x: 1 }, 'TEMPLATE_SYNTAX', 'crossing');
+    assert.ok(/list/.test(level.message), `a block across list levels names the list; got ${level.message}`);
+    const table = (...rows: string[][]) => `<table:table table:name="T">${rows.map(r => `<table:table-row>${r.map(c => `<table:table-cell>${p(c)}</table:table-cell>`).join('')}</table:table-row>`).join('')}</table:table>`;
+    const tableRows = (xml: string) => [...xml.matchAll(/<table:table-row>([\s\S]*?)<\/table:table-row>/g)].map(m => [...m[1].matchAll(/<text:p>([^<]*)<\/text:p>/g)].map(c => c[1]));
+    assert.deepStrictEqual(tableRows(await body(table(['{{ for q in qs }}{{ q.a }}', 'x'], ['{{ q.b }}', 'y{{ endfor }}']), { qs: [{ a: 1, b: 2 }, { a: 3, b: 4 }] })), [['1', 'x'], ['2', 'y'], ['3', 'x'], ['4', 'y']], 'tags in two rows repeat them as a group');
+    assert.deepStrictEqual(tableRows(await body(table(['{{ if vip }}VIP', 'a'], ['{{ else }}Std', 'b{{ endif }}']), { vip: false })), [['Std', 'b']], 'if/else over rows keeps one branch of rows');
+    assert.ok(!(await body(table(['{{ for q in qs }}{{ q }}', '{{ endfor }}']), { qs: [] })).includes('<table:table '), 'a table whose only row repeats nothing is removed');
+    assert.strictEqual(await body(`<table:table table:name="T"><table:table-row><table:table-cell>${p('{{ if x }}')}${p('gone')}${p('{{ endif }}')}</table:table-cell></table:table-row></table:table>`, { x: false }), '<table:table table:name="T"><table:table-row><table:table-cell><text:p/></table:table-cell></table:table-row></table:table>', 'a cell a branch emptied keeps a paragraph');
+    const grouped = `<table:table table:name="T"><table:table-rows><table:table-row><table:table-cell>${p('{{ for r in rs }}{{ r }}')}</table:table-cell></table:table-row></table:table-rows><table:table-rows><table:table-row><table:table-cell>${p('{{ endfor }}')}</table:table-cell></table:table-row></table:table-rows></table:table>`;
+    assert.strictEqual((await body(grouped, { rs: [1, 2] })).match(/<table:table-rows>/g)?.length, 4, 'a row block widens to the groups of rows holding its rows');
+    const crossHeading = await rejects(`<table:table table:name="T"><table:table-header-rows><table:table-row><table:table-cell>${p('{{ for r in rs }}')}</table:table-cell></table:table-row></table:table-header-rows><table:table-row><table:table-cell>${p('{{ endfor }}')}</table:table-cell></table:table-row></table:table>`, { rs: [1] }, 'TEMPLATE_SYNTAX', 'crossing');
+    assert.ok(/heading rows/.test(crossHeading.message), `a block from the heading rows into the body is a crossing, named; got ${crossHeading.message}`);
+    await rejects(table(['{{ if v }}A', '{{ else }}B', '{{ endif }}']), { v: 1 }, 'TEMPLATE_SYNTAX', 'row-branch');
+    const box = await rejects(p(`{{ if x }}<draw:frame draw:name="F"><draw:text-box>${p('{{ endif }}')}</draw:text-box></draw:frame>`), { x: 1 }, 'TEMPLATE_SYNTAX', 'crossing');
+    assert.ok(/text box, a note or a comment/.test(box.message), `a block into a text box is a crossing, named; got ${box.message}`);
+    await rejects(p('{{ if x }}<text:note text:id="n1"><text:note-body>' + p('{{ endif }}') + '</text:note-body></text:note>'), { x: 1 }, 'TEMPLATE_SYNTAX', 'crossing');
+    await rejects(p('{{ if x }}') + '<text:p><text:span></text:p>', { x: 1 }, 'TEMPLATE_SYNTAX', 'malformed-xml');
+    assert.strictEqual(await text(p(`{{ for a in xs }}<text:span text:style-name="T1">[{{ a }}]</text:span>{{ endfor }}`), { xs: [1, 2] }), '[1][2]', 'an inline loop over a span');
+    assert.ok((await body(p(`A <text:span text:style-name="T1">b {{ if x }}c</text:span> d{{ endif }} e`), { x: false })).includes('<text:span text:style-name="T1">b </text:span>'), 'an inline block cut through a span closes and reopens it');
+
+    // Kept as typed, data that does not fit, limits: as for DOCX.
+    await rejects(p('A{{ if x }}B{{ end'), {}, 'TEMPLATE_SYNTAX', 'unclosed');
+    assert.strictEqual(await text(p(`A{{ if x }}B<text:span>{{ end</text:span>if }}C`), {}), 'A{{ if x }}B{{ endif }}C', 'a kept block writes its split closing tag whole');
+    assert.strictEqual(await text(p('{{ for a in xs }}[{{ a.b }}]{{ endfor }}'), { xs: [{ b: 1 }, {}] }), '[1][{{ a.b }}]', 'a missing field in a pass is kept as typed');
+    await rejects(p('{{ for a in s }}x{{ endfor }}'), { s: 'abc' }, 'TEMPLATE_DATA_INVALID', 'not-a-list');
+    await rejects(p('{{ for a in xs }}{{ for b in xs }}{{ for c in xs }}{{ endfor }}{{ endfor }}{{ endfor }}'), { xs: Array(1000).fill(0) }, 'OUTPUT_TOO_LARGE');
+    await rejects(p('{{ if x }}'.repeat(65) + '{{ endif }}'.repeat(65)), { x: 1 }, 'MAX_NESTING_DEPTH_EXCEEDED');
+    await rejects(p('{{ constructor }}{{ __proto__ }}'), {}, 'TEMPLATE_FIELD_MISSING', undefined, { onMissing: 'error' });
+
+    // Ids: a bookmark across a loop's edge is written once; an orphaned end is removed; a lone start is closed.
+    const across = await body(p('<text:bookmark-start text:name="b"/>A') + p('{{ for a in xs }}') + p('{{ a }}<text:bookmark-end text:name="b"/>') + p('{{ endfor }}'), { xs: [1, 2] });
+    assert.strictEqual(across.match(/bookmark-end/g)?.length, 1, `a range across a loop's edge ends once; got ${across}`);
+    const orphan = await body(p('{{ if x }}<text:bookmark-start text:name="b"/>{{ endif }}A<text:bookmark-end text:name="b"/>'), { x: false });
+    assert.ok(!orphan.includes('bookmark'), `an end whose start a branch removed is removed; got ${orphan}`);
+    const lone = await body(p('<text:bookmark-start text:name="b"/>{{ if x }}A<text:bookmark-end text:name="b"/>{{ endif }}'), { x: false });
+    assert.ok(lone.includes('<text:bookmark-start text:name="b"/><text:bookmark-end text:name="b"/>'), `a start whose end a branch removed is closed; got ${lone}`);
+    const twoIds = await body(p('{{ for a in xs }}<draw:frame draw:name="F" xml:id="f1" draw:id="f1"><draw:text-box>' + p('{{ a }}') + '</draw:text-box></draw:frame>{{ endfor }}'), { xs: [1, 2] });
+    assert.deepStrictEqual(values(/xml:id="([^"]+)"/g, twoIds).map((id, i) => id === values(/draw:id="([^"]+)"/g, twoIds)[i]), [true, true], `a drawing's xml:id and draw:id stay one value in a copy; got ${twoIds}`);
+    assert.strictEqual(new Set(values(/xml:id="([^"]+)"/g, twoIds)).size, 2, 'and are unique across copies');
+    const seeded = await body(p('<text:bookmark text:name="m_2"/>') + p('{{ for a in xs }}<text:bookmark text:name="m"/>{{ endfor }}'), { xs: [1, 2] });
+    assert.deepStrictEqual(values(/text:name="([^"]+)"/g, seeded), ['m_2', 'm', 'm_3'], 'a fresh name is not one the document holds');
+    const tableNames = await body(p('{{ for a in xs }}') + '<table:table table:name="T"><table:table-row><table:table-cell>' + p('{{ a }}') + '</table:table-cell></table:table-row></table:table>' + p('{{ endfor }}'), { xs: [1, 2] });
+    assert.deepStrictEqual(values(/table:name="([^"]+)"/g, tableNames), ['T', 'T_2'], 'a repeated table has a name of its own');
+
+    // A check and a render agree.
+    for (const d of [data, { ...data, people: [{}] }, { ...data, heads: 3 }]) {
+        const found = await OfficeTemplate.check(shapes, { data: d as any });
+        const rendered = await OfficeTemplate.render(shapes, { data: d as any, onMissing: 'error' }).then(() => null, (e: any) => e.officeIssue);
+        assert.strictEqual(rendered?.code ?? null, found[0]?.code ?? null, 'a render rejects exactly when a check finds a problem');
+    }
+    console.log('  ODT template blocks: All assertions passed ✓');
 }
 
 /**
@@ -12448,6 +12686,8 @@ async function runTests(): Promise<void> {
         ['Template tags and check', testTemplateTagsAndCheck],
         ['Template suggestions', testTemplateSuggestions],
         ['Template numbers as text', testTemplateNumbersAsText],
+        ['ODT template', testOdtTemplate],
+        ['ODT template blocks', testOdtTemplateBlocks],
         ['Chart scripts', testChartScripts],
         ['Markdown header rows', testMarkdownHeaderRows],
         ['RTF header rows', testRtfHeaderRows],

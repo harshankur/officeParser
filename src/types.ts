@@ -2898,12 +2898,12 @@ export interface TemplateConfig {
     /** How many times `onPassword` is asked before the render rejects, as the parser's option of the same name. Default is 3. */
     maxPasswordAttempts?: number;
     /**
-     * Optional hint for the template's format. DOCX is the only supported template format today, and the
-     * format is always detected from the bytes, so this hint does not influence detection: it only
-     * refines the `TEMPLATE_UNSUPPORTED_FORMAT` message when an unsupported file is passed. It is kept as
-     * the extension point for a second template format.
+     * Optional hint for the template's format: a Word document (`docx`), or an OpenDocument text (`odt`)
+     * or text template (`ott`, rendered as an `.odt`). The format is always detected from the bytes, so
+     * this hint does not influence detection: it only refines the `TEMPLATE_UNSUPPORTED_FORMAT` message
+     * when an unsupported file is passed.
      */
-    fileType?: 'docx';
+    fileType?: 'docx' | 'odt' | 'ott';
     /**
      * Limits on decompressing the (untrusted) template zip, same shape and defaults as the parser's.
      * Guards against zip-bomb templates. Defaults to 512 MiB / 10000 entries. `maxXmlElements` (2,000,000)

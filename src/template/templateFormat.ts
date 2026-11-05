@@ -333,7 +333,7 @@ const NUMBER_TEXT = /^\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\s*$/;
 export interface NumberTextSeparators { decimal: string; group: string }
 
 /** Separators that are a space, any of which a space group separator matches (French data writes either no-break space). */
-const SPACE_SEPARATORS = '   ';
+const SPACE_SEPARATORS = ' \u00A0\u202F';
 
 /** Whether a character is white space a number's text may have around it, as `\s` matches. */
 function isSpace(c: string): boolean {

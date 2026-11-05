@@ -33,7 +33,8 @@
 
 import { decryptIfNeeded } from './crypto/decryptContainer.js';
 import { DEFAULT_OFFICE_PARSER_CONFIG, DEFAULT_TEMPLATE_CONFIG } from './defaults.js';
-import { CompiledDocxTemplate, compileDocxTemplate, DocxTemplateOptions, openDocx, renderDocxTemplate, renderParts, TAG_SKIPPED, TemplatePlace, templateTags } from './template/templateEngine.js';
+import { CompiledTemplate, compileTemplate, DOCX_DIALECT, openPackage, renderDocxTemplate, renderParts, TAG_SKIPPED, TemplateOptions, TemplatePlace, templateTags } from './template/templateEngine.js';
+import { ODT_DIALECT, odtEntries, renderOdtTemplate } from './template/odtTemplate.js';
 import { BlobLike, OfficeErrorType, OfficeParserConfig, OfficeWarningType, TemplateConfig, TemplateData, TemplateDataDetails, TemplateFormatter, TemplateProblem, TemplateSyntaxDetails, TemplateTagInfo } from './types.js';
 import { NumberTextSeparators, PictureSettings } from './template/templateFormat.js';
 import { assertNode } from './utils/envUtils.js';
@@ -123,7 +124,7 @@ function pictureSettings(config: TemplateConfig, errCfg: OfficeParserConfig, unk
  * `onMissing` as given when it is one the renderer knows; another value is reported (INVALID_CONFIG_VALUE)
  * and the default used. One such as `'skip'` emptied fields but kept the blocks they decide as typed.
  */
-function onMissingOf(config: TemplateConfig, errCfg: OfficeParserConfig): DocxTemplateOptions['onMissing'] {
+function onMissingOf(config: TemplateConfig, errCfg: OfficeParserConfig): TemplateOptions['onMissing'] {
     const value: unknown = config.onMissing;
     if (value === 'keep' || value === 'empty' || value === 'error') return value;
     if (value !== undefined && value !== null && value !== '') {
@@ -208,7 +209,10 @@ const MAX_BATCH_PROBLEMS = 10_000;
 const CHECK_FULL: unique symbol = Symbol('check full');
 
 /** A template read and compiled, with the options a render, a listing and a check share. */
-interface PreparedTemplate { compiled: CompiledDocxTemplate; options: DocxTemplateOptions; errCfg: OfficeParserConfig }
+interface PreparedTemplate { compiled: CompiledTemplate; options: TemplateOptions; errCfg: OfficeParserConfig; write: (compiled: CompiledTemplate, data: TemplateData, options: TemplateOptions) => Uint8Array }
+
+/** The formats a template may be in, as `fileType` names them. */
+const TEMPLATE_FILE_TYPES = new Set(['docx', 'odt', 'ott']);
 
 /**
  * Reads, decrypts and compiles a template: every tag error is raised here, before any data is used.
@@ -225,11 +229,11 @@ async function prepareTemplate(template: TemplateInput, config: Omit<TemplateCon
 
     // The limits a render is held to, each a number of 0 or more (another value is reported, and the default used).
     const limits = decompressionLimitsOf(config.decompressionLimits, errCfg);
-    let bytes = await readInput(template, errCfg);
+    const read = await readInput(template, errCfg);
 
     // Decrypt an encrypted template up front (shared with the parser), so rendering sees plaintext.
     // Threads through `password` and `onPassword` with the same capped-retry semantics as parsing.
-    bytes = await decryptIfNeeded(bytes, {
+    const bytes = await decryptIfNeeded(read, {
         onWarning: config.onWarning,
         password: config.password,
         onPassword: config.onPassword,
@@ -237,13 +241,17 @@ async function prepareTemplate(template: TemplateInput, config: Omit<TemplateCon
         decompressionLimits: limits,
     });
 
-    const entries = await openDocx(bytes, limits, errCfg);
+    // The format is the package's own, whatever `fileType` says: a Word document, or an OpenDocument
+    // text or text template (whose output is a text, its manifest plain when it was decrypted).
+    const opened = await openPackage(bytes, limits, errCfg);
+    const odt = opened && !opened['word/document.xml'] ? odtEntries(opened, bytes !== read) : null;
+    const entries = odt ?? (opened?.['word/document.xml'] ? opened : null);
     if (!entries) {
-        const hint = config.fileType && config.fileType !== 'docx' ? `'${config.fileType}' is not supported` : 'the input is not a .docx';
+        const hint = config.fileType && !TEMPLATE_FILE_TYPES.has(config.fileType) ? `'${config.fileType}' is not supported` : 'the input is not a .docx, .odt or .ott';
         throw getOfficeError(OfficeErrorType.TEMPLATE_UNSUPPORTED_FORMAT, errCfg, hint);
     }
 
-    const options: DocxTemplateOptions = {
+    const options: TemplateOptions = {
         start: delimiters.start,
         end: delimiters.end,
         onMissing: onMissingOf(config as TemplateConfig, errCfg),
@@ -267,7 +275,9 @@ async function prepareTemplate(template: TemplateInput, config: Omit<TemplateCon
 
     // Compiled once: the tags are read, their blocks paired and scoped, and every tag error raised
     // before any document is rendered; then each data entry renders from the same compiled template.
-    return { compiled: compileDocxTemplate(entries, options), options, errCfg };
+    return odt
+        ? { compiled: compileTemplate(entries, options, ODT_DIALECT), options, errCfg, write: renderOdtTemplate }
+        : { compiled: compileTemplate(entries, options, DOCX_DIALECT), options, errCfg, write: renderDocxTemplate };
 }
 
 /** The data given: one object, or an array of objects, refused (typed) otherwise. */
@@ -295,8 +305,8 @@ export class OfficeTemplate {
         // rejection is not also printed to stderr; a caller-supplied onWarning is still honored.
         const errCfg: OfficeParserConfig = { onWarning: config?.onWarning };
         const rows = dataRows(config, errCfg);
-        const { compiled, options } = await prepareTemplate(template, config, errCfg);
-        const renderOne = (data: TemplateData): Uint8Array => renderDocxTemplate(compiled, data, options);
+        const { compiled, options, write } = await prepareTemplate(template, config, errCfg);
+        const renderOne = (data: TemplateData): Uint8Array => write(compiled, data, options);
         return Array.isArray(config.data) ? rows.map(renderOne) : renderOne(config.data);
     }
 
@@ -363,7 +373,7 @@ export class OfficeTemplate {
             };
             // The part being rendered, which a missing field is noted in.
             let part = '';
-            const checking: DocxTemplateOptions = {
+            const checking: TemplateOptions = {
                 ...options,
                 onMissing: 'error',
                 checking: true,
