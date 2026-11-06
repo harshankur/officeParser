@@ -326,12 +326,86 @@ const MAX_OFFSET_HOURS = 18;
 // digits that is no number was split every way before failing, in time quadratic in its length.
 const NUMBER_TEXT = /^\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\s*$/;
 
-/** The number a value is for a number picture: a number, or text that is one; null when it is neither. */
-export function numberOf(value: unknown): number | null {
+/**
+ * How numbers written as text in a template's data are read: the decimal point, and the separator of
+ * groups of three digits (`''` for none). `{ decimal: ',', group: '.' }` reads `1.234,50`.
+ */
+export interface NumberTextSeparators { decimal: string; group: string }
+
+/** Separators that are a space, any of which a space group separator matches (French data writes either no-break space). */
+const SPACE_SEPARATORS = ' \u00A0\u202F';
+
+/** Whether a character is white space a number's text may have around it, as `\s` matches. */
+function isSpace(c: string): boolean {
+    return /\s/.test(c);
+}
+
+/**
+ * Text read as a number with the given separators: an optional sign, the integer digits (in groups of
+ * exactly three after the first, one to three, when a group separator is given), an optional decimal
+ * point and fraction, an optional exponent, white space around it. Digits are needed before or after
+ * the point. A group separator where groups do not fit (`1.5` with `.` for groups) makes it no number,
+ * so an ambiguous text is refused rather than misread. One forward pass, no pattern built from the
+ * caller's text.
+ */
+function readNumberText(text: string, separators: NumberTextSeparators): number {
+    const digit = (c: string | undefined): boolean => c !== undefined && c >= '0' && c <= '9';
+    const isGroup = (c: string | undefined): boolean => c !== undefined && separators.group !== ''
+        && (c === separators.group || (SPACE_SEPARATORS.includes(separators.group) && SPACE_SEPARATORS.includes(c)));
+    let at = 0;
+    let end = text.length;
+    while (end > at && isSpace(text[end - 1])) end--;
+    while (at < end && isSpace(text[at])) at++;
+    let normal = '';
+    if (text[at] === '+' || text[at] === '-') normal += text[at++];
+    const digitsFrom = (from: number): number => {
+        let to = from;
+        while (to < end && digit(text[to])) to++;
+        return to;
+    };
+    let next = digitsFrom(at);
+    let integer = text.slice(at, next);
+    at = next;
+    if (at < end && isGroup(text[at])) {
+        if (integer.length < 1 || integer.length > 3) return NaN;
+        while (at < end && isGroup(text[at])) {
+            next = digitsFrom(at + 1);
+            if (next - at - 1 !== 3) return NaN;
+            integer += text.slice(at + 1, next);
+            at = next;
+        }
+    }
+    let fraction = '';
+    if (at < end && text[at] === separators.decimal) {
+        next = digitsFrom(at + 1);
+        fraction = text.slice(at + 1, next);
+        at = next;
+    }
+    if (!integer && !fraction) return NaN;
+    normal += `${integer || '0'}.${fraction || '0'}`;
+    if (at < end && (text[at] === 'e' || text[at] === 'E')) {
+        let expAt = at + 1;
+        const sign = text[expAt] === '+' || text[expAt] === '-' ? text[expAt++] : '';
+        next = digitsFrom(expAt);
+        if (next === expAt) return NaN;
+        normal += `e${sign}${text.slice(expAt, next)}`;
+        at = next;
+    }
+    return at === end ? Number(normal) : NaN;
+}
+
+/**
+ * The number a value is for a number picture or a comparison: a number, or text that is one; null when
+ * it is neither. Text is read with `separators` when given (see {@link NumberTextSeparators}), else as
+ * before they could be given: `.` for the point and no group separator (`1250.5`, `-3`, `1e3`, `.5`).
+ */
+export function numberOf(value: unknown, separators?: NumberTextSeparators | null): number | null {
     // A value past a double's range (1e400, a bigint of 400 digits) is no number a picture can write.
     const n = typeof value === 'number' ? value
         : typeof value === 'bigint' ? Number(value)
-            : typeof value === 'string' && NUMBER_TEXT.test(value) ? Number(value) : NaN;
+            : typeof value !== 'string' ? NaN
+                : separators ? readNumberText(value, separators)
+                    : NUMBER_TEXT.test(value) ? Number(value) : NaN;
     return Number.isFinite(n) ? n : null;
 }
 

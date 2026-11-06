@@ -46,7 +46,7 @@ export interface TemplateFilter { name: string; args: (string | number)[] }
 export type TemplateBlockTagKind = Exclude<TemplateTag['kind'], 'field'>;
 
 /** A tag read from its text: what it is, or why it cannot be read. `null` text is not a tag (prose). */
-export type TagReading = { ok: true; tag: TemplateTag } | { ok: false; reason: string; misspelled?: true } | null;
+export type TagReading = { ok: true; tag: TemplateTag } | { ok: false; reason: string; misspelled?: true; respelt?: string } | null;
 
 /** Block keywords as other template languages spell them, which mean a block tag here, misspelt. */
 const MISSPELLED = new Map([['elseif', 'else if'], ['elsif', 'else if'], ['elif', 'else if']]); // a Map: `constructor` is no misspelling
@@ -357,11 +357,12 @@ export function readTag(rawText: string): TagReading {
     if (word === KEYWORD.endif || word === KEYWORD.endfor) return { ok: false, reason: `has more after ${word} than ${word} takes` };
     // `elseif`, `elif`, `end if`: a block tag as Jinja, Handlebars or Liquid spell it. Read as prose, the
     // branch it opens vanished without a word; it is a mistake to name at once.
+    // `respelt` is the tag's text as it should be typed: the keyword respelt, the rest as typed.
     const spelling = MISSPELLED.get(word);
-    if (spelling) return { ok: false, misspelled: true, reason: `is written ${word}; a branch is written ${spelling}` };
+    if (spelling) return { ok: false, misspelled: true, reason: `is written ${word}; a branch is written ${spelling}`, respelt: rest ? `${spelling} ${rest}` : spelling };
     if (word === 'end') {
         const [next] = splitFirstWord(rest);
-        if (MISSPELLED_END.has(next) && rest.trim().toLowerCase() === next) return { ok: false, misspelled: true, reason: `is written end ${next}; a block is closed with end${next}` };
+        if (MISSPELLED_END.has(next) && rest.trim().toLowerCase() === next) return { ok: false, misspelled: true, reason: `is written end ${next}; a block is closed with end${next}`, respelt: `end${next}` };
     }
     return null;
 }
@@ -397,11 +398,6 @@ export function isTruthy(value: TemplateValue): boolean {
     return true;
 }
 
-/**
- * Compares two values. Null (or undefined) equals only null and is never ordered. Otherwise both
- * must be the same kind (text, number, true/false, date); anything else is reported through
- * `incomparable`, since a silent false would pick the wrong branch without a word.
- */
 /** Whether two values of one kind are equal; a bigint and a number by their value (1n and 1 are the same number). */
 function same(a: unknown, b: unknown): boolean {
     if (typeof a === 'bigint' && typeof b === 'number') return Number.isInteger(b) && a === BigInt(b);
@@ -409,7 +405,13 @@ function same(a: unknown, b: unknown): boolean {
     return a === b;
 }
 
-function compareValues(operator: CompareOperator, left: TemplateValue, right: TemplateValue, incomparable: (why: Incomparable) => never, compared?: (length: number) => void): boolean {
+/**
+ * Compares two values. Null (or undefined) equals only null and is never ordered. Otherwise both
+ * must be the same kind (text, number, true/false, date), save that text compared with a number is
+ * read as a number (`readNumber`), when it is one; anything else is reported through `incomparable`,
+ * since a silent false would pick the wrong branch without a word.
+ */
+function compareValues(operator: CompareOperator, left: TemplateValue, right: TemplateValue, incomparable: (why: Incomparable) => never, compared?: (length: number) => void, readNumber?: (text: string) => number | null): boolean {
     const leftEmpty = left === null || left === undefined;
     const rightEmpty = right === null || right === undefined;
     if (leftEmpty || rightEmpty) {
@@ -417,8 +419,16 @@ function compareValues(operator: CompareOperator, left: TemplateValue, right: Te
         if (operator === '!=') return !(leftEmpty && rightEmpty);
         return false;
     }
-    const leftKind = kindOfValue(left);
-    const rightKind = kindOfValue(right);
+    let leftKind = kindOfValue(left);
+    let rightKind = kindOfValue(right);
+    // Text that is a number, beside a number, is that number: data from a form or a table is all text.
+    if (readNumber && leftKind === 'text' && rightKind === 'number') {
+        const n = readNumber(left as string);
+        if (n !== null) { left = n; leftKind = 'number'; }
+    } else if (readNumber && leftKind === 'number' && rightKind === 'text') {
+        const n = readNumber(right as string);
+        if (n !== null) { right = n; rightKind = 'number'; }
+    }
     if (leftKind !== rightKind || leftKind === 'list' || leftKind === 'object' || leftKind === 'function' || leftKind === 'symbol') incomparable({ left: leftKind, right: rightKind });
     if (typeof left === 'string' && typeof right === 'string') compared?.(Math.min(left.length, right.length));
     const a = left instanceof Date ? left.getTime() : left as string | number | boolean;
@@ -438,9 +448,9 @@ function compareValues(operator: CompareOperator, left: TemplateValue, right: Te
  * the data does not have, or the value the caller's `onMissing` gives it). A missing value makes the
  * whole condition missing, so the block it heads can be kept as typed. `and` and `or` stop as soon
  * as their answer is known, as they do in JavaScript. `compared` is told how much of two strings a
- * comparison reads, so a caller can count it.
+ * comparison reads, so a caller can count it; `readNumber` reads text compared with a number.
  */
-export function evaluateCondition(expression: TemplateExpression, lookup: (path: TemplatePath, text: string) => ConditionValue, incomparable: (why: Incomparable) => never, compared?: (length: number) => void): boolean | typeof MISSING {
+export function evaluateCondition(expression: TemplateExpression, lookup: (path: TemplatePath, text: string) => ConditionValue, incomparable: (why: Incomparable) => never, compared?: (length: number) => void, readNumber?: (text: string) => number | null): boolean | typeof MISSING {
     switch (expression.kind) {
         case 'literal': return isTruthy(expression.value);
         case 'path': {
@@ -448,7 +458,7 @@ export function evaluateCondition(expression: TemplateExpression, lookup: (path:
             return value === MISSING ? MISSING : isTruthy(value);
         }
         case 'not': {
-            const value = evaluateCondition(expression.operand, lookup, incomparable, compared);
+            const value = evaluateCondition(expression.operand, lookup, incomparable, compared, readNumber);
             return value === MISSING ? MISSING : !value;
         }
         case 'and':
@@ -456,7 +466,7 @@ export function evaluateCondition(expression: TemplateExpression, lookup: (path:
             // `and` stops at the first false operand, `or` at the first true one.
             const stopAt = expression.kind === 'or';
             for (const operand of expression.operands) {
-                const value = evaluateCondition(operand, lookup, incomparable, compared);
+                const value = evaluateCondition(operand, lookup, incomparable, compared, readNumber);
                 if (value === MISSING) return MISSING;
                 if (value === stopAt) return stopAt;
             }
@@ -466,12 +476,12 @@ export function evaluateCondition(expression: TemplateExpression, lookup: (path:
             const operand = (side: TemplateExpression): ConditionValue => side.kind === 'literal' ? side.value
                 : side.kind === 'path' ? lookup(side.path, side.text)
                 // The parser only puts literals and paths beside an operator; a parenthesised condition is true/false.
-                : evaluateCondition(side, lookup, incomparable, compared) as ConditionValue;
+                : evaluateCondition(side, lookup, incomparable, compared, readNumber) as ConditionValue;
             const left = operand(expression.left);
             if (left === MISSING) return MISSING;
             const right = operand(expression.right);
             if (right === MISSING) return MISSING;
-            return compareValues(expression.operator, left, right, incomparable, compared);
+            return compareValues(expression.operator, left, right, incomparable, compared, readNumber);
         }
     }
 }

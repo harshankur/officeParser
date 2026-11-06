@@ -8,7 +8,7 @@
  * document back, or an array to get one document per entry (a batch mail-merge).
  *
  * Today it templates DOCX (`.docx`); the run-aware substitution generalizes to the other OOXML/ODF
- * text formats later. See {@link module:template/docxTemplate} for the substitution details.
+ * text formats later. See {@link module:template/templateEngine} for the substitution details.
  *
  * @example
  * ```typescript
@@ -33,9 +33,10 @@
 
 import { decryptIfNeeded } from './crypto/decryptContainer.js';
 import { DEFAULT_OFFICE_PARSER_CONFIG, DEFAULT_TEMPLATE_CONFIG } from './defaults.js';
-import { CompiledDocxTemplate, compileDocxTemplate, DocxTemplateOptions, openDocx, renderDocxTemplate, renderParts, TAG_SKIPPED, TemplatePlace, templateTags } from './template/docxTemplate.js';
+import { CompiledTemplate, compileTemplate, DOCX_DIALECT, openPackage, renderDocxTemplate, renderParts, TAG_SKIPPED, TemplateOptions, TemplatePlace, templateTags } from './template/templateEngine.js';
+import { ODT_DIALECT, odtEntries, renderOdtTemplate } from './template/odtTemplate.js';
 import { BlobLike, OfficeErrorType, OfficeParserConfig, OfficeWarningType, TemplateConfig, TemplateData, TemplateDataDetails, TemplateFormatter, TemplateProblem, TemplateSyntaxDetails, TemplateTagInfo } from './types.js';
-import { PictureSettings } from './template/templateFormat.js';
+import { NumberTextSeparators, PictureSettings } from './template/templateFormat.js';
 import { assertNode } from './utils/envUtils.js';
 import { buildOfficeError, getOfficeError, logWarning } from './utils/errorUtils.js';
 import { decompressionLimitsOf, maxPasswordAttemptsOf, PROTOTYPE_POLLUTION_KEYS } from './utils/configUtils.js';
@@ -64,13 +65,13 @@ const BUILT_IN_FILTER_NAMES = new Set(['format', 'upper', 'lower']);
 
 /** Every option render takes (the compiler holds this to TemplateConfig's own keys). */
 const TEMPLATE_OPTIONS: Record<keyof TemplateConfig, true> = {
-    data: true, delimiters: true, onMissing: true, numberSeparators: true, dateNames: true, utcOffsetMinutes: true, formatters: true,
+    data: true, delimiters: true, onMissing: true, numberSeparators: true, dataNumberSeparators: true, dateNames: true, utcOffsetMinutes: true, formatters: true,
     password: true, onPassword: true, maxPasswordAttempts: true, fileType: true, decompressionLimits: true, onWarning: true,
 };
 
 /**
  * The options of a render's config that it does not take, as dotted paths: at the top, and inside
- * `delimiters` and `decompressionLimits` (`numberSeparators` and `dateNames` are checked with their
+ * `delimiters` and `decompressionLimits` (`numberSeparators`, `dataNumberSeparators` and `dateNames` are checked with their
  * values). A misspelt one left its default in place without a word; each is now reported.
  */
 function unknownTemplateOptions(config: TemplateConfig): string[] {
@@ -123,7 +124,7 @@ function pictureSettings(config: TemplateConfig, errCfg: OfficeParserConfig, unk
  * `onMissing` as given when it is one the renderer knows; another value is reported (INVALID_CONFIG_VALUE)
  * and the default used. One such as `'skip'` emptied fields but kept the blocks they decide as typed.
  */
-function onMissingOf(config: TemplateConfig, errCfg: OfficeParserConfig): DocxTemplateOptions['onMissing'] {
+function onMissingOf(config: TemplateConfig, errCfg: OfficeParserConfig): TemplateOptions['onMissing'] {
     const value: unknown = config.onMissing;
     if (value === 'keep' || value === 'empty' || value === 'error') return value;
     if (value !== undefined && value !== null && value !== '') {
@@ -146,6 +147,27 @@ function delimitersOf(config: TemplateConfig, errCfg: OfficeParserConfig): { sta
     const { start, end } = given as { start?: unknown; end?: unknown };
     if ((start !== undefined && start !== null && typeof start !== 'string') || (end !== undefined && end !== null && typeof end !== 'string')) refuse();
     return { start: (start as string | undefined) || defaults.start, end: (end as string | undefined) || defaults.end };
+}
+
+/** Characters a number's text uses for itself, which cannot separate its parts. */
+const NUMBER_CHARACTERS = '0123456789+-eE';
+
+/**
+ * How text in the data is read as a number (`dataNumberSeparators`): null when not given, which reads it
+ * as before the option was (`.` for the point, no group separator). Each separator is one character, the
+ * point not white space, neither a digit, a sign or an exponent's `e`, and the two not the same; another
+ * value is refused, typed. A name the option does not have is added to `unknown`, to be reported.
+ */
+function numberTextOf(config: TemplateConfig, errCfg: OfficeParserConfig, unknown: string[]): NumberTextSeparators | null {
+    const given: unknown = config.dataNumberSeparators;
+    if (given === undefined || given === null) return null;
+    const refuse = (detail: string): never => { throw getOfficeError(OfficeErrorType.IMPROPER_ARGUMENTS, errCfg, detail); };
+    if (typeof given !== 'object' || Array.isArray(given)) refuse('dataNumberSeparators is an object: decimal and group');
+    const { decimal = '.', group = '' } = given as { decimal?: unknown; group?: unknown };
+    for (const key of Object.keys(given as object)) if (key !== 'decimal' && key !== 'group') unknown.push(`dataNumberSeparators.${key}`);
+    if (typeof decimal !== 'string' || decimal.length !== 1 || /\s/.test(decimal) || NUMBER_CHARACTERS.includes(decimal)) refuse('dataNumberSeparators.decimal is one character, not white space, a digit, a sign or e');
+    if (typeof group !== 'string' || group.length > 1 || (group !== '' && NUMBER_CHARACTERS.includes(group)) || group === decimal) refuse('dataNumberSeparators.group is one character (or empty for none), not a digit, a sign or e, nor the decimal point');
+    return { decimal: decimal as string, group: group as string };
 }
 
 /** The most a UTC offset can be: a day, either way. */
@@ -187,7 +209,10 @@ const MAX_BATCH_PROBLEMS = 10_000;
 const CHECK_FULL: unique symbol = Symbol('check full');
 
 /** A template read and compiled, with the options a render, a listing and a check share. */
-interface PreparedTemplate { compiled: CompiledDocxTemplate; options: DocxTemplateOptions; errCfg: OfficeParserConfig }
+interface PreparedTemplate { compiled: CompiledTemplate; options: TemplateOptions; errCfg: OfficeParserConfig; write: (compiled: CompiledTemplate, data: TemplateData, options: TemplateOptions) => Uint8Array }
+
+/** The formats a template may be in, as `fileType` names them. */
+const TEMPLATE_FILE_TYPES = new Set(['docx', 'odt', 'ott']);
 
 /**
  * Reads, decrypts and compiles a template: every tag error is raised here, before any data is used.
@@ -198,16 +223,17 @@ async function prepareTemplate(template: TemplateInput, config: Omit<TemplateCon
     // and one render does not take is reported, as a parse reports its own.
     const unknownOptions = unknownTemplateOptions(config as TemplateConfig);
     const pictures = pictureSettings(config as TemplateConfig, errCfg, unknownOptions);
+    const numberText = numberTextOf(config as TemplateConfig, errCfg, unknownOptions);
     const delimiters = delimitersOf(config as TemplateConfig, errCfg);
     if (unknownOptions.length) logWarning(OfficeWarningType.UNRECOGNIZED_CONFIG_OPTION, errCfg, { keys: unknownOptions });
 
     // The limits a render is held to, each a number of 0 or more (another value is reported, and the default used).
     const limits = decompressionLimitsOf(config.decompressionLimits, errCfg);
-    let bytes = await readInput(template, errCfg);
+    const read = await readInput(template, errCfg);
 
     // Decrypt an encrypted template up front (shared with the parser), so rendering sees plaintext.
     // Threads through `password` and `onPassword` with the same capped-retry semantics as parsing.
-    bytes = await decryptIfNeeded(bytes, {
+    const bytes = await decryptIfNeeded(read, {
         onWarning: config.onWarning,
         password: config.password,
         onPassword: config.onPassword,
@@ -215,13 +241,17 @@ async function prepareTemplate(template: TemplateInput, config: Omit<TemplateCon
         decompressionLimits: limits,
     });
 
-    const entries = await openDocx(bytes, limits, errCfg);
+    // The format is the package's own, whatever `fileType` says: a Word document, or an OpenDocument
+    // text or text template (whose output is a text, its manifest plain when it was decrypted).
+    const opened = await openPackage(bytes, limits, errCfg);
+    const odt = opened && !opened['word/document.xml'] ? odtEntries(opened, bytes !== read) : null;
+    const entries = odt ?? (opened?.['word/document.xml'] ? opened : null);
     if (!entries) {
-        const hint = config.fileType && config.fileType !== 'docx' ? `'${config.fileType}' is not supported` : 'the input is not a .docx';
+        const hint = config.fileType && !TEMPLATE_FILE_TYPES.has(config.fileType) ? `'${config.fileType}' is not supported` : 'the input is not a .docx, .odt or .ott';
         throw getOfficeError(OfficeErrorType.TEMPLATE_UNSUPPORTED_FORMAT, errCfg, hint);
     }
 
-    const options: DocxTemplateOptions = {
+    const options: TemplateOptions = {
         start: delimiters.start,
         end: delimiters.end,
         onMissing: onMissingOf(config as TemplateConfig, errCfg),
@@ -237,6 +267,7 @@ async function prepareTemplate(template: TemplateInput, config: Omit<TemplateCon
         onNestingLimit: (): never => { throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED, errCfg); },
         onOutputLimit: (): never => { throw getOfficeError(OfficeErrorType.OUTPUT_TOO_LARGE, errCfg); },
         pictures,
+        numberText,
         formatters: templateFormatters(config as TemplateConfig, errCfg),
         maxXmlElements: limits.maxXmlElements,
         onElementLimit: (): never => { throw getOfficeError(OfficeErrorType.XML_ELEMENT_LIMIT_EXCEEDED, errCfg, options.maxXmlElements); },
@@ -244,7 +275,15 @@ async function prepareTemplate(template: TemplateInput, config: Omit<TemplateCon
 
     // Compiled once: the tags are read, their blocks paired and scoped, and every tag error raised
     // before any document is rendered; then each data entry renders from the same compiled template.
-    return { compiled: compileDocxTemplate(entries, options), options, errCfg };
+    return odt
+        ? { compiled: compileTemplate(entries, options, ODT_DIALECT), options, errCfg, write: renderOdtTemplate }
+        : { compiled: compileTemplate(entries, options, DOCX_DIALECT), options, errCfg, write: renderDocxTemplate };
+}
+
+/** Reports the template's text that looks like a tag and is not one (`TEMPLATE_NOT_A_TAG`), once, all of it. */
+function warnNotATag(compiled: CompiledTemplate, options: TemplateOptions, errCfg: OfficeParserConfig): void {
+    const texts = templateTags(compiled, options).filter(t => t.kind === 'text').map(t => ({ text: t.tag, part: t.part, reason: t.reason! }));
+    if (texts.length) logWarning(OfficeWarningType.TEMPLATE_NOT_A_TAG, errCfg, { texts });
 }
 
 /** The data given: one object, or an array of objects, refused (typed) otherwise. */
@@ -272,8 +311,9 @@ export class OfficeTemplate {
         // rejection is not also printed to stderr; a caller-supplied onWarning is still honored.
         const errCfg: OfficeParserConfig = { onWarning: config?.onWarning };
         const rows = dataRows(config, errCfg);
-        const { compiled, options } = await prepareTemplate(template, config, errCfg);
-        const renderOne = (data: TemplateData): Uint8Array => renderDocxTemplate(compiled, data, options);
+        const { compiled, options, write } = await prepareTemplate(template, config, errCfg);
+        warnNotATag(compiled, options, errCfg);
+        const renderOne = (data: TemplateData): Uint8Array => write(compiled, data, options);
         return Array.isArray(config.data) ? rows.map(renderOne) : renderOne(config.data);
     }
 
@@ -309,6 +349,7 @@ export class OfficeTemplate {
         const errCfg: OfficeParserConfig = { onWarning: config?.onWarning };
         const rows = dataRows(config, errCfg);
         const { compiled, options } = await prepareTemplate(template, config, errCfg);
+        warnNotATag(compiled, options, errCfg);
         // What problems share, made once: each text's number (a key holds numbers, not the texts, which a
         // template can make long), and each field's or tag's message.
         const numbers = new Map<string, number>();
@@ -340,7 +381,7 @@ export class OfficeTemplate {
             };
             // The part being rendered, which a missing field is noted in.
             let part = '';
-            const checking: DocxTemplateOptions = {
+            const checking: TemplateOptions = {
                 ...options,
                 onMissing: 'error',
                 checking: true,
