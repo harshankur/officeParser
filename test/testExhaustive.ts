@@ -9,7 +9,7 @@ import { withinTime } from './helpers/timing';
 import { digestOf, docxTemplateCases } from './helpers/docxTemplateCases';
 import { testUnicodeChunks } from './generator/unicodeChunks';
 import { testBrotliGuard } from './security/brotliGuard';
-import { testDisclosuresAndKeyboard, testFigureCaptions, testSheetsAsTables, testNoteMarks, testQuoteParagraphs, testRtfListTypesPerLevel, testXhtmlReadAsHtml } from './generator/documentShapes';
+import { testDisclosuresAndKeyboard, testFigureCaptions, testSheetsAsTables, testNoteMarks, testQuoteParagraphs, testRtfListTypesPerLevel, testXhtmlReadAsHtml, testNestedFiguresReadOnce } from './generator/documentShapes';
 import { OfficeGenerator } from '../src/OfficeGenerator';
 import { bulletCharacter, formatListNumber, readMarkerLabels } from '../src/utils/listMarkers';
 import { decodeBmp, decodeGif } from '../src/utils/rasterUtils';
@@ -12999,6 +12999,7 @@ async function runTests(): Promise<void> {
         ['Figure captions', testFigureCaptions],
         ['Disclosures and keyboard input', testDisclosuresAndKeyboard],
         ['Sheets as tables', testSheetsAsTables],
+        ['Nested figures read once', testNestedFiguresReadOnce],
         ['Cancellation', testCancellation],
     ];
 

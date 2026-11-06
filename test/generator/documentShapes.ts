@@ -312,3 +312,68 @@ export async function testNoteMarks(): Promise<void> {
     assert.deepStrictEqual(shown((await epubAst.to('html', { htmlConfig: { standalone: false } })).value), ['1'], 'Notes: and shown again');
     console.log('✓ Note marks');
 }
+
+/** Milliseconds `run` takes. */
+async function timed(run: () => Promise<unknown>): Promise<number> {
+    const start = performance.now();
+    await run();
+    return performance.now() - start;
+}
+
+/** `text` read as `fileType` and written back as `format`, `passes` times: each pass's output. */
+async function passesOf(text: string, fileType: 'html' | 'md', format: 'html' | 'md', passes = 3): Promise<string[]> {
+    const out: string[] = [];
+    let current = text;
+    for (let pass = 0; pass < passes; pass++) {
+        const ast = await OfficeParser.parseOffice(Buffer.from(current), { fileType: pass === 0 ? fileType : format });
+        current = (await ast.to(format, { htmlConfig: { standalone: false } })).value;
+        out.push(current);
+    }
+    return out;
+}
+
+/**
+ * Nested figures are read once each: in time linear in their depth, each picture decoded once and each
+ * quote numbered once, and a picture a figure inside captioned keeps that caption (the outer caption
+ * stays a paragraph).
+ */
+export async function testNestedFiguresReadOnce(): Promise<void> {
+    const depth = 250;
+    const picture = `<img src="data:image/png;base64,${PIXEL_PNG}">`;
+    const figures = '<figure><b>c</b><figcaption><b>x</b></figcaption>'.repeat(depth) + picture + '</figure>'.repeat(depth);
+    const divs = '<div><b>c</b><div><b>x</b></div>'.repeat(depth) + picture + '</div>'.repeat(depth);
+    let ast: OfficeParserAST | undefined;
+    for (const source of [figures, divs]) await OfficeParser.parseOffice(Buffer.from(source), { fileType: 'html', extractAttachments: true });
+    const figureTime = await timed(async () => { ast = await OfficeParser.parseOffice(Buffer.from(figures), { fileType: 'html', extractAttachments: true }); });
+    const divTime = await timed(() => OfficeParser.parseOffice(Buffer.from(divs), { fileType: 'html', extractAttachments: true }));
+    assert.ok(figureTime < 3 * divTime + 200, `Nested figures: ${depth} levels in ${figureTime.toFixed(0)} ms, the same divs in ${divTime.toFixed(0)} ms`);
+    assert.strictEqual(ast!.attachments.length, 1, 'Nested figures: the picture is decoded once');
+    // Through Markdown, whose HTML blocks the HTML reader reads.
+    const mdFigures = '<figure><figcaption>x</figcaption>'.repeat(depth) + '<p>t</p>' + '</figure>'.repeat(depth) + '\n';
+    const mdDivs = '<div><div>x</div>'.repeat(depth) + '<p>t</p>' + '</div>'.repeat(depth) + '\n';
+    // Each read once first, so neither time holds the first read's compiling.
+    for (const source of [mdFigures, mdDivs]) await OfficeParser.parseOffice(Buffer.from(source), { fileType: 'md' });
+    const mdFigureTime = await timed(() => OfficeParser.parseOffice(Buffer.from(mdFigures), { fileType: 'md' }));
+    const mdDivTime = await timed(() => OfficeParser.parseOffice(Buffer.from(mdDivs), { fileType: 'md' }));
+    assert.ok(mdFigureTime < 3 * mdDivTime + 200, `Nested figures: Markdown, ${depth} levels in ${mdFigureTime.toFixed(0)} ms, the same divs in ${mdDivTime.toFixed(0)} ms`);
+    // The inner figure's caption stays its picture's; the outer caption is a paragraph, nothing lost.
+    const nested = '<figure><figure><img src="a.png" alt="pic"><figcaption>Inner caption</figcaption></figure><figcaption>Outer caption</figcaption></figure><p>After</p>';
+    const nestedAst = await OfficeParser.parseOffice(Buffer.from(nested), { fileType: 'html' });
+    assert.deepStrictEqual(nestedAst.content.map(n => [n.type, (n.metadata as ImageMetadata | undefined)?.caption ?? nodeText(n)]),
+        [['image', 'Inner caption'], ['paragraph', 'Outer caption'], ['paragraph', 'After']], 'Nested figures: the inner caption kept, the outer one a paragraph');
+    assert.strictEqual((await nestedAst.to('text')).value.trim(), '[Image: pic]\nInner caption\nOuter caption\nAfter', 'Nested figures: text');
+    const html = await passesOf(nested, 'html', 'html');
+    assert.ok(html[0].includes('<figcaption>Inner caption</figcaption></figure>') && html[0].includes('<p>Outer caption</p>'), `Nested figures: HTML: ${html[0]}`);
+    assert.deepStrictEqual(html, [html[0], html[0], html[0]], 'Nested figures: HTML to HTML is stable over three passes');
+    const md = await passesOf((await nestedAst.to('md')).value, 'md', 'md');
+    assert.deepStrictEqual(md, [md[0], md[0], md[0]], 'Nested figures: Markdown to Markdown is stable over three passes');
+    // A quote in a captioned figure is the document's first quote, numbered once.
+    const quoted = await OfficeParser.parseOffice(Buffer.from('<figure><blockquote>Q</blockquote><figcaption>Who</figcaption></figure>'), { fileType: 'html' });
+    assert.strictEqual((quoted.content[0].metadata as ParagraphMetadata).quoteId, 'html-quote-1', 'Nested figures: a quote in a figure is numbered once');
+    console.log('✓ Nested figures read once');
+}
+
+/** A node's text, from its runs where it has none of its own. */
+function nodeText(node: OfficeContentNode): string {
+    return node.text ?? (node.children ?? []).map(nodeText).join('');
+}

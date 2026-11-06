@@ -1229,6 +1229,11 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
     /** A note's back-link to its reference: this library's, GitHub's, Pandoc's and markdown-it's. */
     /** The quotes read so far (each `<blockquote>`'s paragraphs share an id, see ParagraphMetadata.quoteId). */
     let quoteCount = 0;
+    /**
+     * What each figure's caption was read as, by its `<figcaption>` (see the figure branch): the figure
+     * registers its caption before reading its content, and the figcaption branch records its paragraph.
+     */
+    const figureCaptions = new Map<HtmlNode, OfficeContentNode[]>();
     /** The ids of note references and of the elements holding them (an EPUB's `<sup id="calledF1">`), which a back-link targets. */
     const noteReferenceIds = new Set<string>();
     const isFootnoteBackLink = (node: HtmlNode): boolean => node.tagName === 'a' && (
@@ -1839,23 +1844,36 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
             // paragraph after the picture, where nothing of it is lost; so does one under a figure of
             // several pictures, or of none.
             if (tagName === 'figure') {
+                // Read once, as any container is (its caption a paragraph, by the figcaption branch below),
+                // and the caption then taken from that paragraph: read again on the way to the generic
+                // branch, a figure's content was read twice at every level of nesting (2^depth times, each
+                // picture decoded and each quote numbered again every time).
                 const captions = node.children.filter(c => c.type === 'element' && c.tagName === 'figcaption');
-                if (captions.length === 1) {
-                    const kids = parseChildren({ ...node, children: node.children.filter(c => c !== captions[0]) }, newFormatting, listContext);
-                    const images: OfficeContentNode[] = [];
-                    for (const kid of kids) {
-                        if (kid.type === 'image') images.push(kid);
-                        else for (const inner of kid.children ?? []) if (inner.type === 'image') images.push(inner);
-                    }
-                    const caption = parseChildren(captions[0], newFormatting, listContext);
-                    const plain = caption.every(c => c.type === 'text' && !c.notes?.length && !c.comments?.length && !c.metadata
-                        && !Object.values(c.formatting ?? {}).some(v => v !== undefined && v !== false && v !== ''));
-                    const text = plainTextOf(caption).replace(/\s+/g, ' ').trim();
-                    if (images.length === 1 && plain && text) {
-                        (images[0].metadata = (images[0].metadata ?? {}) as ImageMetadata).caption = text;
-                        return markedBefore(anchorIds, kids);
-                    }
+                const captionElement = captions.length === 1 ? captions[0] : undefined;
+                if (captionElement) figureCaptions.set(captionElement, []);
+                const all = parseChildren(node, newFormatting, listContext);
+                if (!captionElement) return all;
+                const read = figureCaptions.get(captionElement) ?? [];
+                figureCaptions.delete(captionElement);
+                // A caption of plain text is one paragraph of plain text runs.
+                const paragraph = read.length === 1 && read[0].type === 'paragraph' && !read[0].metadata ? read[0] : undefined;
+                const caption = paragraph?.children ?? [];
+                const plain = caption.every(c => c.type === 'text' && !c.notes?.length && !c.comments?.length && !c.metadata
+                    && !Object.values(c.formatting ?? {}).some(v => v !== undefined && v !== false && v !== ''));
+                const text = plainTextOf(caption).replace(/\s+/g, ' ').trim();
+                if (!paragraph || !plain || !text) return all;
+                const kids = all.filter(kid => kid !== paragraph);
+                if (kids.length === all.length) return all;
+                const images: OfficeContentNode[] = [];
+                for (const kid of kids) {
+                    if (kid.type === 'image') images.push(kid);
+                    else for (const inner of kid.children ?? []) if (inner.type === 'image') images.push(inner);
                 }
+                // A picture captioned already (by a figure inside this one) keeps its caption, and this
+                // figure's caption stays the paragraph it was read as: the outer one overwrote the inner.
+                if (images.length !== 1 || (images[0].metadata as ImageMetadata | undefined)?.caption) return all;
+                (images[0].metadata = (images[0].metadata ?? {}) as ImageMetadata).caption = text;
+                return markedBefore(anchorIds, kids);
             }
             if (tagName === 'figcaption' || tagName === 'caption' || (tagName === 'div' && isClass('caption'))) {
                 const caption = parseChildren(node, newFormatting, listContext);
@@ -1865,7 +1883,12 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 if (writersLabel) return [];
                 // Blocks in it stay blocks (a <p> cannot hold a <p>); each run of inline content (text, a
                 // line break, inline math, a picture) is a paragraph.
-                if (!caption.some(isBlockNode)) return { type: 'paragraph', children: caption };
+                if (!caption.some(isBlockNode)) {
+                    const paragraph: OfficeContentNode = { type: 'paragraph', children: caption };
+                    // A figure's own caption: the figure takes it from here (see the figure branch).
+                    figureCaptions.get(node)?.push(paragraph);
+                    return paragraph;
+                }
                 const parts: OfficeContentNode[] = [];
                 let run: OfficeContentNode[] = [];
                 const flush = () => {
