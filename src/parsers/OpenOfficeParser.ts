@@ -1089,6 +1089,39 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
      * @param withFrames - Whether frames' pictures and objects are read: a spreadsheet cell reads those itself (a text box's text is read either way)
      * @returns Object containing text and children
      */
+    // Text boxes in the text: an inline box's blocks are children of the paragraph holding it, and its text
+    // is the paragraph's text too; a box nested in a box paragraph is in that paragraph's text already, so
+    // each level of nesting held everything below it again (1.9 KB of ODT, 100 levels around 1 MB of text,
+    // made 102 MB of JSON, unwarned). `boxShares`: for each block of an inline box, the text it gives the
+    // paragraph holding it (its own, or past the repeated content budget a part of it); `floatShares`: a
+    // floating box's text, which a list item's text takes from its children (a paragraph's does not);
+    // `textOfChildren`: the children of a block whose text is its children's (a list item's segments).
+    const boxShares = new WeakMap<OfficeContentNode, string>();
+    const floatShares = new WeakMap<OfficeContentNode, string>();
+    const textOfChildren = new WeakSet<OfficeContentNode[]>();
+    /**
+     * The characters of a text box's blocks' text that they took from boxes nested in them: the copy of a
+     * copy, charged to the repeated content budget (see repeatUtils). One level (a box's text in the
+     * paragraph holding it) is the AST's usual shape, a paragraph's text over its runs, and free.
+     */
+    const nestedBoxText = (blocks: OfficeContentNode[]): number => {
+        let carried = 0;
+        for (const block of blocks) {
+            if (!block.children) continue;
+            const fromChildren = textOfChildren.has(block.children);
+            for (const child of block.children) {
+                const share = boxShares.get(child) ?? (fromChildren ? floatShares.get(child) : undefined);
+                if (share !== undefined) carried += share.length;
+            }
+        }
+        return carried;
+    };
+    /** A text box's text as a copy of what it holds: whole, unless it holds nested boxes' text past the budget. */
+    const keptBoxText = (blocks: OfficeContentNode[], text: string): { text: string; whole: boolean } => {
+        const carried = nestedBoxText(blocks);
+        return carried === 0 || takeRepeats(config, 1, carried + 16) > 0 ? { text, whole: true } : { text: repeatPreview(text), whole: false };
+    };
+
     const parseInlineContent = (
         node: Node,
         styleMap: Record<string, TextFormatting>,
@@ -1375,15 +1408,21 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     if (drawTextBox) {
                         const textBoxChildren: OfficeContentNode[] = [];
                         traverse(drawTextBox, textBoxChildren, false, sourceXml);
-                        const textBoxText = textBoxChildren.map(c => c.text || '').join('\n');
+                        // (Its text past the repeated content budget, where it repeats nested boxes' text: see boxShares.)
+                        const textBox = keptBoxText(textBoxChildren, textBoxChildren.map(c => c.text || '').join('\n'));
+                        const textBoxText = textBox.text;
                         // A frame floating beside the text: its blocks in a `drawing` node, which goes before
                         // the paragraph (see liftFloatingFrames); its text is not the paragraph's.
                         const floating = frameFloat(frame);
                         if (floating) {
-                            children.push({ type: 'drawing', text: textBoxText, children: textBoxChildren, metadata: floating });
+                            const drawing: OfficeContentNode = { type: 'drawing', text: textBoxText, children: textBoxChildren, metadata: floating };
+                            floatShares.set(drawing, textBoxText);
+                            children.push(drawing);
                         } else {
                             appendAll(children, textBoxChildren);
                             fullText += textBoxText;
+                            // What each block gives the paragraph's text: whole, its own; shortened, the start on the first.
+                            textBoxChildren.forEach((block, index) => boxShares.set(block, textBox.whole ? block.text || '' : index === 0 ? textBoxText : ''));
                         }
                     } else if (drawObject) {
                         const href = drawObject.getAttribute("xlink:href");
@@ -1597,11 +1636,13 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 currentText = "";
                 currentChildren = [];
             } else {
-                currentText += child.text || "";
+                // (A text box's block gives what it gave the paragraph: see boxShares.)
+                currentText += boxShares.get(child) ?? child.text ?? "";
                 currentChildren.push(child);
             }
         }
         segments.push({ text: currentText, children: currentChildren });
+        for (const segment of segments) textOfChildren.add(segment.children);
         return segments;
     };
 

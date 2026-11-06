@@ -5025,6 +5025,52 @@ async function xlsxRichStringChargeTests() {
 }
 
 /**
+ * Text boxes nested in text boxes: each box's text is the text of the paragraph (or list item, or
+ * floating drawing) holding it, so each level held all the text below it again (1.9 KB of ODT, 1 MB of
+ * text in 100 levels, made 102 MB of JSON, unwarned). The copy of a copy is charged; the runs are all
+ * kept, so writers that write runs write the same.
+ */
+async function nestedTextBoxTests() {
+    console.log('- Text boxes nested in text boxes charge the text they repeat...');
+    const listStyle = '<text:list-style style:name="L1"><text:list-level-style-bullet text:level="1" text:bullet-char="*"/></text:list-style>';
+    const shapes: Record<string, (inner: string, anchor: string) => string> = {
+        paragraph: inner => `<text:p>${inner}</text:p>`,
+        heading: inner => `<text:h text:outline-level="2">${inner}</text:h>`,
+        'list item': inner => `<text:list text:style-name="L1"><text:list-item><text:p>${inner}</text:p></text:list-item></text:list>`,
+    };
+    const nested = (shape: string, depth: number, length: number, anchor = 'as-char') => {
+        const wrap = shapes[shape];
+        let inner = 'x'.repeat(length);
+        for (let i = 0; i < depth; i++) inner = `<draw:frame text:anchor-type="${anchor}" svg:width="5cm"><draw:text-box>${wrap(inner, anchor)}</draw:text-box></draw:frame>`;
+        return sizeOdf('text', wrap(inner, anchor), listStyle);
+    };
+    // (Under a budget of 2,000,000 characters, so the case stays small: 100 levels of 100,000 repeat 10 MB.)
+    const length = 100_000, budget = 2_000_000;
+    for (const [shape, anchor] of [['paragraph', 'as-char'], ['heading', 'as-char'], ['list item', 'as-char'], ['list item', 'paragraph']] as const) {
+        const bytes = nested(shape, 100, length, anchor);
+        const parsed = await sizeParse(bytes, 'odt', { decompressionLimits: { maxRepeatedContent: budget } });
+        const json = parsed.ast ? JSON.stringify(parsed.ast).length : 0;
+        const html = await sizeWrite(parsed.ast, 'html');
+        // (A floating box's drawing and the list item holding it both take its text: two copies a level.)
+        const limit = (anchor === 'paragraph' ? 3 : 2) * (budget + 16 * bytes.length) + 4 * length;
+        check(`odt: 100,000 characters in 100 ${anchor === 'paragraph' ? 'floating' : 'inline'} text boxes nested in ${shape}s are charged, with REPEATED_CONTENT_LIMIT_EXCEEDED, and write their text`,
+            !parsed.error && parsed.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && json > length && json < limit && html.includes('x'.repeat(length)),
+            `${parsed.error} ${parsed.codes} json ${json} (limit ${limit}), html ${html.length}`);
+    }
+    // Ordinary nesting: two levels, and a floating box holding an inline one, keep every level's text, unwarned.
+    const two = await sizeParse(nested('paragraph', 2, 1_000), 'odt');
+    const texts: string[] = [];
+    const collect = (nodes: any[] | undefined) => nodes?.forEach(node => { if (node.type === 'paragraph') texts.push(node.text); collect(node.children); });
+    collect(two.ast?.content);
+    check('odt: 1,000 characters in two nested inline text boxes are every paragraph\'s text, unwarned',
+        !two.error && !two.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && texts.length === 3 && texts.every(text => text === 'x'.repeat(1_000)), `${two.error} ${two.codes} ${texts.map(t => t.length)}`);
+    const mixed = await sizeParse(sizeOdf('text', `<text:p><draw:frame text:anchor-type="paragraph" svg:width="5cm"><draw:text-box><text:p><draw:frame text:anchor-type="as-char"><draw:text-box><text:p>${'y'.repeat(100_000)}</text:p></draw:text-box></draw:frame></text:p></draw:text-box></draw:frame></text:p>`), 'odt');
+    const drawing = mixed.ast?.content.find(node => node.type === 'drawing');
+    check('odt: a floating text box holding an inline one keeps its text, unwarned',
+        !mixed.error && !mixed.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && drawing?.text === 'y'.repeat(100_000), `${mixed.error} ${mixed.codes} ${drawing?.text?.length}`);
+}
+
+/**
  * The files pdf.js loads for a PDF (its CMaps and image decoders) are read only as asked for by name,
  * from inside their folder, bounded in size and time, never from the built-in CDN address under
  * `allowRemoteAssets: false`; and nothing waiting on one outlives its bound or the parse's abortSignal.
@@ -5362,6 +5408,7 @@ async function main() {
     await fontFileTests();
     await headerPartWeightTests();
     await xlsxRichStringChargeTests();
+    await nestedTextBoxTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);
