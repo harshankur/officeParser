@@ -6031,6 +6031,43 @@ async function templateTextBoundTests() {
         const listed = result?.warnings.find(w => w.code === 'TEMPLATE_NOT_A_TAG')?.details.texts.length ?? 0;
         check(`template: ${label} renders, listing ${texts} look-alikes`, result?.out instanceof Uint8Array && listed === texts, `${result?.code ?? ''} listed ${listed}`);
     }
+    // Braces are counted as a stack that never falls below zero, and pending missing ends as a stack of
+    // levels: no allocation depends on a depth. Adversarial paragraphs of look-alikes and braces, each about
+    // 2,000,000 characters, linear and flat outside the heap.
+    const escaped = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    for (const [label, delimiters, make] of [
+        ['500,000 missing ends {{a} left pending', { start: '{{', end: '}}' }, () => '{{a}'.repeat(n(500_000))],
+        ['250,000 missing ends {{a} then 250,000 }', { start: '{{', end: '}}' }, () => '{{a}'.repeat(n(250_000)) + '}'.repeat(n(250_000))],
+        ['250,000 {{ a }}} with the end }}}}', { start: '{{', end: '}}}}' }, () => '{{ a }}}'.repeat(n(250_000))],
+        ['285,000 {{ a }} with the end }}}', { start: '{{', end: '}}}' }, () => '{{ a }}'.repeat(n(285_000))],
+        ['1,000,000 { then 1,000,000 }', { start: '{{', end: '}}' }, () => '{'.repeat(n(1_000_000)) + '}'.repeat(n(1_000_000))],
+        ['500,000 $$a$ with $$ for both delimiters', { start: '$$', end: '$$' }, () => '$$a$'.repeat(n(500_000))],
+        ['500,000 <<a> with << and >>', { start: '<<', end: '>>' }, () => '<<a>'.repeat(n(500_000))],
+        ['400,000 full-width starts', { start: '{{', end: '}}' }, () => '\uFF5B{a}}'.repeat(n(400_000))],
+        ['500,000 missing starts {a}}', { start: '{{', end: '}}' }, () => '{a}}'.repeat(n(500_000))],
+    ] as [string, { start: string; end: string }, () => string][]) {
+        const bytes = () => docxOf(wp(escaped(`${delimiters.start} v ${delimiters.end}`)) + wp(escaped(make())));
+        let result: Awaited<ReturnType<typeof renderQuiet>> | undefined;
+        await linear(`template: look-alikes, ${label}`, async () => { result = await renderQuiet(bytes(), { v: 1 }, { delimiters }); },
+            { label: `template: look-alikes, ${label}, its heap`, limit: 400_000_000 });
+        // Outside the heap a render holds the document's own bytes a few times (unzipped, and the output);
+        // a depth's allocation was 512 MB at a time.
+        const input = bytes();
+        const memory = await memoryOf(() => renderQuiet(input, { v: 1 }, { delimiters }));
+        check(`template: look-alikes, ${label} render, flat outside the heap`, result?.out instanceof Uint8Array && memory.buffers < 128_000_000, `${result?.code ?? ''} buffers ${megabytes(memory.buffers)}`);
+    }
+    // The reviewer's case: 1,001 look-alikes use the room, then paragraphs of missing ends whose end is two
+    // longer than the start (each allocated 512 MB, by a depth of -1, and took 5 seconds for 1,000).
+    const negdepth = () => docxOf(wp('{{ v }}}}') + wp('{{ a }}}'.repeat(1001)) + wp('{{ a }}}{{ b }}}').repeat(n(1000)));
+    await linear('template: 1,000 paragraphs of two missing ends past the room, end }}}}', () => renderQuiet(negdepth(), { v: 1 }, { delimiters: { start: '{{', end: '}}}}' } }));
+    const negdepthInput = negdepth();
+    const negdepthRun = await memoryOf(() => renderQuiet(negdepthInput, { v: 1 }, { delimiters: { start: '{{', end: '}}}}' } }));
+    const negdepthWarning = negdepthRun.result.warnings.find(w => w.code === 'TEMPLATE_NOT_A_TAG');
+    check('template: 1,000 paragraphs of two missing ends past the room are counted, flat outside the heap',
+        negdepthRun.result.out instanceof Uint8Array && negdepthWarning?.details.found === 3001 && negdepthWarning?.details.texts.length === 1000 && negdepthRun.buffers < 16_000_000,
+        `found ${negdepthWarning?.details.found}, listed ${negdepthWarning?.details.texts.length}, buffers ${megabytes(negdepthRun.buffers)}`);
+    const negdepthTime = await withinTime(3000, () => renderQuiet(negdepth(), { v: 1 }, { delimiters: { start: '{{', end: '}}}}' } }));
+    check('template: 1,000 paragraphs of two missing ends past the room render quickly', negdepthTime.within, `${negdepthTime.ms}ms`);
     // A template lists at most 1,000 look-alikes, and says how many it found.
     const many = await renderQuiet(docxOf(wp('{{ v }}') + wp('{a}}'.repeat(2_100_000))), { v: 1 });
     const manyWarning = many.warnings.find(w => w.code === 'TEMPLATE_NOT_A_TAG');

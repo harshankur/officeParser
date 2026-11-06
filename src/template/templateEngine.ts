@@ -693,8 +693,8 @@ function isNameChar(c: string): boolean {
     return code < 0x80 ? ASCII_NAME_CHAR[code] === 1 : NAME_CHAR_OR_SPACE.test(c);
 }
 
-/** The characters a run of text holds when it may hold a tag, or text that looks like one (see {@link findLookalikeTags}). */
-function triggersOf(opts: TemplateOptions): string[] {
+/** The characters a run of text holds when it may hold a tag, or text that looks like one (see {@link findLookalikeTags}). Exported for tests. */
+export function triggersOf(opts: Pick<TemplateOptions, 'start'>): string[] {
     const triggers = new Set([escapeXmlText(opts.start)[0]]);
     for (const c of Array.from(opts.start)) { const wide = fullWidthOf(c); if (wide) triggers.add(wide); }
     return [...triggers];
@@ -733,35 +733,6 @@ function doubled(chars: string[]): boolean {
 const MAX_NEAR_TAGS = 1000;
 
 /**
- * Depths of a stack of missing ends past the room to list them (see findLookalikeTags): only counted,
- * each by the depth before it, a bit per depth. A depth is held at most once, and the depth falls a
- * delimiter's length at most at a time, so each fall looks at a few bits.
- */
-class DepthSet {
-    private bits = new Uint32Array(0);
-    size = 0;
-    add(depth: number): void {
-        const word = depth >>> 5;
-        if (word >= this.bits.length) {
-            const grown = new Uint32Array(Math.max(word + 1, this.bits.length * 2));
-            grown.set(this.bits);
-            this.bits = grown;
-        }
-        this.bits[word] |= 1 << (depth & 31);
-        this.size++;
-    }
-    /** Removes every depth from `from` up to (not including) `to`. */
-    removeFrom(from: number, to: number): void {
-        for (let depth = Math.max(0, from); depth < to && this.size > 0; depth++) {
-            const word = depth >>> 5;
-            if (word >= this.bits.length) return;
-            const bit = 1 << (depth & 31);
-            if (this.bits[word] & bit) { this.bits[word] &= ~bit; this.size--; }
-        }
-    }
-}
-
-/**
  * Text in a paragraph that looks like a tag but whose delimiters are not the delimiters: around a name
  * (as {@link NAME_WITH_SPACES} reads one, spaces optional), a start delimiter typed with full-width
  * characters (`｛｛nom｝｝`, `full-width`), or, for delimiters of one character typed twice or more, one
@@ -770,14 +741,29 @@ class DepthSet {
  * brace a later one closes (`{{x}, {y}}`). `{ name }` (both missing) is ordinary braces. Tags
  * themselves, and text between whole delimiters, are not this (see findTagSpans).
  *
+ * Braces are counted as a stack of the start's and the end's characters typed as stored:
+ *
+ * - `depth` is how many start characters are open. An end character closes one when any is open; a
+ *   look-alike opens its plain start characters and then closes its plain end characters, each only
+ *   while one is open. So depth never falls below 0 and never exceeds the start characters read.
+ * - A missing end (`{{ name }`) that leaves some of its own braces open (its plain start characters
+ *   outnumber its plain end characters) is pending: code if a later end character closes all it left
+ *   open (depth falls back to `level`, the depth before it), reported if any is still open at the end.
+ *   One that leaves none open (`{{ name }}` with `}}}`) cannot be closed by anything later: reported.
+ * - Braces are counted only when a short delimiter can be told and its start and end characters differ.
+ *
+ * Pending entries form a stack whose levels rise strictly; each is pushed once and popped once.
  * One forward pass that stops only at a character a delimiter starts with (and, braces being counted,
- * at a closing brace); each stop looks at most a name's length ahead and makes nothing. At most what is
- * left of the template's room is returned; the rest are counted in `ctx.nearUnlisted`.
+ * at a closing brace); each stop looks at most a name's length ahead and makes nothing. The
+ * first `room` reported in document order are returned, the rest counted in `ctx.nearUnlisted`: an
+ * entry is held with its place only when its rank, were it kept, is under the room, which for a pending
+ * one is known when it is found (the immediates before it, and the pending below it, which outlive it).
+ *
+ * Exported for tests (checked against a plain reference): not part of the API.
  */
-function findLookalikeTags(joined: string, ctx: PartContext): { start: number; end: number; reason: TemplateTextReason }[] {
-    const found: { start: number; end: number; reason: TemplateTextReason }[] = [];
-    if (!ctx.triggers.some(t => joined.includes(t))) return found;
-    const room = ctx.elements.nearTags;
+export function findLookalikeTags(joined: string, ctx: PartContext): { start: number; end: number; reason: TemplateTextReason }[] {
+    if (!ctx.triggers.some(t => joined.includes(t))) return [];
+    const room = Math.max(0, ctx.elements.nearTags);
     const start = Array.from(ctx.opts.start);
     const end = Array.from(ctx.opts.end);
     const startForms = start.map(formsOf);
@@ -787,35 +773,36 @@ function findLookalikeTags(joined: string, ctx: PartContext): { start: number; e
     const endShort = endForms.slice(0, -1);
     const opener = startForms[0];
     const closer = endForms[endForms.length - 1];
-    // The characters a stop starts with: the start's first, as stored and full-width, and (braces being counted) the end's last.
+    // With one character for both (`$$`), no brace closes another: none are counted.
+    const braces = canMiss && opener.plain !== closer.plain;
     const c1 = opener.plain.charCodeAt(0);
     const c2 = opener.wide ? opener.wide.charCodeAt(0) : -1;
-    const c3 = canMiss ? closer.plain.charCodeAt(0) : -1;
+    const c3 = braces ? closer.plain.charCodeAt(0) : -1;
     const hit = { wide: 0 };
-    // How many of the start delimiter's characters are open, typed as stored (code nests braces).
     let depth = 0;
-    // Missing ends (`{{ name }`) whose brace is still open, as start, end and the depth before each:
-    // reported only if never closed. Past the room they are only counted, by their depths.
-    const pending: number[] = [];
-    let unlistedPending: DepthSet | null = null;
-    let unlisted = 0;
-    const listed = (): number => found.length + pending.length / 3;
-    const closeTo = (to: number): void => {
-        const before = depth;
-        depth = Math.max(0, to);
-        while (pending.length && pending[pending.length - 1] >= depth) pending.length -= 3;
-        unlistedPending?.removeFrom(depth, before);
+    // Reported at once (full-width, a missing start, a missing end that leaves nothing open), in
+    // document order: the first `room` held, all counted.
+    const held: { start: number; end: number; reason: TemplateTextReason }[] = [];
+    let immediate = 0;
+    // Pending missing ends, bottom to top: the depth before each (rising strictly). The bottom ones
+    // that can be listed are also held with their place (start, end), a prefix of the stack.
+    let levels = new Int32Array(16);
+    let pending = 0;
+    const placed: number[] = [];
+    const closeBraces = (count: number): void => {
+        depth = Math.max(0, depth - count);
+        while (pending > 0 && levels[pending - 1] >= depth) pending--;
+        if (placed.length > 2 * pending) placed.length = 2 * pending;
     };
     const brace = (i: number): void => {
-        if (!canMiss) return;
+        if (!braces) return;
         if (joined.startsWith(opener.plain, i)) depth++;
-        else if (depth > 0 && joined.startsWith(closer.plain, i)) closeTo(depth - 1);
+        else if (depth > 0 && joined.startsWith(closer.plain, i)) closeBraces(1);
     };
     for (let i = 0; i < joined.length; i++) {
         const c = joined.charCodeAt(i);
         if (c !== c1 && c !== c2) {
-            // Only a delimiter's first character starts one: the end's last is a brace that may close one.
-            if (c === c3 && depth > 0 && joined.startsWith(closer.plain, i)) closeTo(depth - 1);
+            if (c === c3 && depth > 0 && joined.startsWith(closer.plain, i)) closeBraces(1);
             continue;
         }
         let openEnd = matchDelimiter(joined, i, startForms, hit);
@@ -847,24 +834,30 @@ function findLookalikeTags(joined: string, ctx: PartContext): { start: number; e
         }
         if (closeEnd < 0) { brace(i); continue; }
         const wide = openWide > 0 || closeWide > 0;
-        // Whole delimiters as stored: a tag, or text between the delimiters, which findTagSpans reads. Its braces balance.
         if (!wide && !missingStart && !missingEnd) { i = closeEnd - 1; continue; }
-        // The braces it opens and closes, typed as stored, counted as any others.
-        const net = canMiss ? (openChars - openWide) - (closeChars - closeWide) : 0;
-        if (missingEnd && !wide) {
-            if (listed() < room) pending.push(i, closeEnd, depth);
-            else (unlistedPending ??= new DepthSet()).add(depth);
-            depth += net;
+        // Its plain start characters open braces, then its plain end characters close what is open.
+        const opens = braces ? openChars - openWide : 0;
+        const closes = braces ? closeChars - closeWide : 0;
+        depth += opens;
+        closeBraces(closes);
+        if (missingEnd && !wide && opens > closes) {
+            if (pending === levels.length) { const grown = new Int32Array(levels.length * 2); grown.set(levels); levels = grown; }
+            // Its rank, should it be reported: every immediate so far, and every pending below it.
+            if (immediate + pending < room) placed.push(i, closeEnd);
+            levels[pending++] = depth - (opens - closes);
         } else {
-            if (listed() < room) found.push({ start: i, end: closeEnd, reason: wide ? 'full-width' : 'missing-delimiter' });
-            else unlisted++;
-            if (net < 0) closeTo(depth + net); else depth += net;
+            if (immediate < room) held.push({ start: i, end: closeEnd, reason: wide ? 'full-width' : 'missing-delimiter' });
+            immediate++;
         }
         i = closeEnd - 1;
     }
-    for (let k = 0; k < pending.length; k += 3) found.push({ start: pending[k], end: pending[k + 1], reason: 'missing-delimiter' });
-    // (Those still pending come last, out of document order: noteNearTags sorts them in.)
-    ctx.nearUnlisted += unlisted + (unlistedPending?.size ?? 0);
+    // The pending ones left are reported: merged with the immediates in document order, up to the room.
+    const found: { start: number; end: number; reason: TemplateTextReason }[] = [];
+    for (let a = 0, b = 0; found.length < room && (a < held.length || b < placed.length);) {
+        if (b >= placed.length || (a < held.length && held[a].start < placed[b])) found.push(held[a++]);
+        else { found.push({ start: placed[b], end: placed[b + 1], reason: 'missing-delimiter' }); b += 2; }
+    }
+    ctx.nearUnlisted += immediate + pending - found.length;
     return found;
 }
 

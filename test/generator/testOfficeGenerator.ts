@@ -36,6 +36,8 @@ import { isHeaderRow } from '../../src/utils/officeGenUtils.js';
 import { fontkitUnbrotli, nativeUnbrotli, sfntOf } from '../../src/generators/pdf/fontFiles.js';
 import { toWoff, toWoff2 } from '../helpers/webFontWriter';
 import { BOX, cffTable, type CffSpec, charString, EMPTY, withCffOutlines } from '../helpers/cffFontWriter';
+import { checkLookalikeScan } from '../helpers/lookalikeReference';
+import { findLookalikeTags, PartContext, triggersOf } from '../../src/template/templateEngine.js';
 
 // ============================================================================
 // CONSTANTS & CONFIGURATION
@@ -2793,6 +2795,30 @@ async function runTableGeometryTests(): Promise<GenFeatureTest[]> {
 }
 
 /**
+ * The template engine's readings checked against plain references on random inputs: the look-alike scan
+ * (text that looks like a tag) against test/helpers/lookalikeReference.ts. Fast mode runs a tenth of the cases.
+ */
+async function runTemplatePropertyTests(): Promise<GenFeatureTest[]> {
+    const results: GenFeatureTest[] = [];
+    const mk = (feature: string, exp: any, act: any, ok: boolean, details: string, duration: number): GenFeatureTest => ({
+        category: 'Template Properties', feature, sourceFormat: 'synthetic', destFormat: 'docx',
+        result: { status: ok ? 'PASS' : 'FAIL', expected: exp, actual: act, details, duration },
+    });
+    const cases = FAST_MODE ? 20_000 : 200_000;
+    const started = Date.now();
+    const scan = (joined: string, start: string, end: string, room: number) => {
+        const ctx = { opts: { start, end }, triggers: triggersOf({ start }), elements: { nearTags: room }, nearUnlisted: 0 } as unknown as PartContext;
+        const found = findLookalikeTags(joined, ctx);
+        return { found, unlisted: ctx.nearUnlisted };
+    };
+    const { withLookalikes, failures } = checkLookalikeScan(scan, cases, 1);
+    results.push(mk(`the look-alike scan lists and counts what the reference finds (${cases} texts, rooms 0 to 3 and 1,000)`,
+        'no difference', failures.length ? `${failures.length} differences` : 'none', failures.length === 0,
+        failures.length ? failures.slice(0, 3).join('\n') : `${withLookalikes} texts with look-alikes`, Date.now() - started));
+    return results;
+}
+
+/**
  * The spreadsheet viewer (HTML output of a workbook) in hosts that limit it: a frame with scripts but no
  * storage, where any localStorage access throws, and a host with scripts off, where the sheet tabs switch
  * by CSS `:target` alone. What a browser does with these was checked in one; here, what the HTML says.
@@ -3224,6 +3250,12 @@ async function runAllTests(): Promise<void> {
     const spreadsheetViewerResults = await runSpreadsheetViewerTests();
     allResults.push(...spreadsheetViewerResults);
     console.log(spreadsheetViewerResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' \u2717' : ' \u2713');
+
+    // Template readings against plain references on random inputs
+    process.stdout.write('  template properties...');
+    const templatePropertyResults = await runTemplatePropertyTests();
+    allResults.push(...templatePropertyResults);
+    console.log(templatePropertyResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' \u2717' : ' \u2713');
 
     // Degrade fidelity: over-cap images, unembeddable pictures, notes, OCR line breaks
     process.stdout.write('  degrade fidelity...');

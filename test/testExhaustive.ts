@@ -4610,6 +4610,28 @@ async function testTemplateNearTagsBalanceAndLimit(): Promise<void> {
     ] as [string, string[]][]) {
         assert.deepStrictEqual(await near(text), expected, `${text}: ${JSON.stringify(expected)}; got ${JSON.stringify(await near(text))}`);
     }
+    // Braces are counted as a stack, never below zero: a missing end that leaves none of its braces open
+    // (an end longer than the start by one) is reported, whatever brace closes later, and one whose braces
+    // a later end character closes is code. With one character for both delimiters no brace is counted.
+    const nearWith = async (text: string, delimiters: { start: string; end: string }) => (await OfficeTemplate.tags(docx(p(text)), { delimiters })).filter(t => t.kind === 'text').map(t => `${t.reason} ${t.tag}`);
+    for (const [text, delimiters, expected] of [
+        ['Dear {{ name }}, see {x}.', { start: '{{', end: '}}}' }, ['missing-delimiter {{ name }}']],
+        ['Dear [[ name ]], see [x].', { start: '[[', end: ']]]' }, ['missing-delimiter [[ name ]]']],
+        ['{{{ a }} }', { start: '{{', end: '}}}' }, ['missing-delimiter {{ a }}']],
+        ['{{ a }}}{{ b }}}', { start: '{{', end: '}}}}' }, ['missing-delimiter {{ a }}}', 'missing-delimiter {{ b }}}']],
+        ['{{ a }}} }', { start: '{{', end: '}}}}' }, ['missing-delimiter {{ a }}}']],
+        ['Total $5. Dear $ name $$', { start: '$$', end: '$$' }, ['missing-delimiter $ name $$']],
+        ['Total $5. Dear $$ name $', { start: '$$', end: '$$' }, ['missing-delimiter $$ name $']],
+    ] as [string, { start: string; end: string }, string[]][]) {
+        const got = await nearWith(text, delimiters);
+        assert.deepStrictEqual(got, expected, `${text} with ${JSON.stringify(delimiters)}: ${JSON.stringify(expected)}; got ${JSON.stringify(got)}`);
+    }
+    // The same text is counted whether or not the room to list it is used up.
+    for (const fill of [0, 1000]) {
+        const found: any[] = [];
+        await OfficeTemplate.render(docx(p('{{ v }}}') + (fill ? p('{{ z }}'.repeat(fill)) : '') + p('{{{ a }} }')), { data: { v: 1 }, delimiters: { start: '{{', end: '}}}' }, onWarning: (w: any) => found.push(w) });
+        assert.deepStrictEqual(found.map(w => [w.code, w.details.texts.length, w.details.found]), [['TEMPLATE_NOT_A_TAG', fill ? 1000 : 1, fill + 1]], `{{{ a }} } after ${fill} others is counted`);
+    }
     // No look-alike is an XML element: plain text 8.6.0 rendered renders.
     const warnings: any[] = [];
     await OfficeTemplate.render(docx(p('{{ x }}') + p('{a}}'.repeat(200))), { data: { x: 1 }, decompressionLimits: { maxXmlElements: 100 }, onWarning: (w: any) => warnings.push(w) });
