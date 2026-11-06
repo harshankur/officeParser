@@ -854,6 +854,38 @@ export async function testMarkdownDisclosureTagAttributes(): Promise<void> {
     console.log('✓ Markdown disclosure tags with attributes');
 }
 
+/**
+ * A disclosure's summary is the `<summary>` first in it (white space, blank lines too, between, a
+ * `</summary>` with none open ignored), to its `</summary>` wherever that falls: across blank lines and
+ * blocks, with disclosure tags in it (its text). Its text runs inline nodes together and sets blocks
+ * apart; the Markdown written settles.
+ */
+export async function testMarkdownDisclosureSummaries(): Promise<void> {
+    const cases: [string, string, string][] = [
+        ['<details>\n<summary>\n\n**Bold** summary\n\n</summary>\n\nBody\n\n</details>\n\nAfter\n', 'disclosure[Bold summary](paragraph(text)),paragraph(text)', 'a Markdown summary across blank lines'],
+        ['<details><summary>\n\n## Heading summary\n\n</summary>\n\nBody\n\n</details>\n\nAfter\n', 'disclosure[Heading summary](paragraph(text)),paragraph(text)', 'a heading as the summary'],
+        ['<details>\n<summary>\n\n### Install on Linux\n\n</summary>\n\nRun make.\n\n</details>\n\nAfter\n', 'disclosure[Install on Linux](paragraph(text)),paragraph(text)', 'a heading summary, then the body'],
+        ['<details>\n<summary>S</summary>\n<p>raw</p>\n\nBody *md*\n\n</details>\n\nAfter\n', 'disclosure[S](paragraph(text),paragraph(text,text)),paragraph(text)', 'raw HTML after a one-line summary'],
+        ['<details>\n\n\n<summary>S</summary>\n\nBody\n\n</details>\n\nAfter\n', 'disclosure[S](paragraph(text)),paragraph(text)', 'a summary after blank lines'],
+        ['<details>\n<summary>S <details> x</summary>\n\nBody\n\n</details>\n\nAfter\n', 'disclosure[S x](paragraph(text)),paragraph(text)', 'a disclosure tag in the summary'],
+        ['<DETAILS OPEN>\n<SUMMARY>S</SUMMARY>\n\nBody\n\n</DETAILS >\n\nAfter\n', 'disclosure[S](paragraph(text)),paragraph(text)', 'upper case'],
+        ['Text <details>\n\nBody\n\n</details> tail\n\nAfter\n', 'paragraph(text),disclosure[](paragraph(text)),paragraph(text),paragraph(text)', 'no summary'],
+        ['<details>\n<summary>a<b>b</b>c <kbd>K</kbd>d</summary>\n\nx\n\n</details>\n', 'disclosure[abc Kd](paragraph(text))', 'inline formatting in a one-line summary'],
+        ['> <details>\n> </summary>\n> <summary>S</summary> body\n', 'disclosure[S](paragraph(text))', 'a stray </summary> before the summary'],
+        ['<details>\n<summary>S <details><summary>inner</summary> x</details> y</summary>\n\nB\n\n</details>\n', 'disclosure[S inner x y](paragraph(text))', 'a disclosure in the summary, its summary kept'],
+    ];
+    for (const [source, shape, name] of cases) {
+        const read = await markdownRead(source);
+        assert.strictEqual(read.shape, shape, `Disclosure summary: ${name}`);
+        const again = await markdownRead(read.md);
+        assert.strictEqual(again.md, read.md, `Disclosure summary: ${name}, the Markdown written settles`);
+        assert.strictEqual(again.shape, shape, `Disclosure summary: ${name}, the same tree read back`);
+    }
+    const open = await OfficeParser.parseOffice(Buffer.from('<details open>\n<summary>\n\nS\n\n</summary>\n\nB\n\n</details>\n'), { fileType: 'md' });
+    assert.strictEqual(JSON.stringify(open.content[0].metadata), '{"summary":"S","open":true}', 'Disclosure summary: the summary first in the metadata, as the HTML reader writes it');
+    console.log('✓ Markdown disclosure summaries');
+}
+
 /** ODF namespaces of a note test file. */
 const ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/"';
 

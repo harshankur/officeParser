@@ -1,4 +1,4 @@
-import { AdmonitionMetadata, BreakMetadata, CodeMetadata, CommentMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, BreakMetadata, CodeMetadata, CommentMetadata, DisclosureMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { anchorMark, resolveAnchorMarks } from '../utils/anchorUtils.js';
 import { createAST } from '../utils/astUtils.js';
 import { parseHtml } from './HtmlParser.js';
@@ -681,19 +681,21 @@ const MAX_DISCLOSURE_DEPTH = 16;
 
 /** A `</table>` closing tag, read where it starts. */
 const TABLE_CLOSE_TAG = /<\/table\s*>/iy;
-/** White space, then a whole `<summary>` opening tag, read where the white space starts. */
-const SUMMARY_OPEN_TAG = /\s*<summary(?:[\s/][^<>]*)?>/iy;
-/** A `</summary>` closing tag. */
-const SUMMARY_CLOSE_TAG = /<\/summary\s*>/gi;
-
-/** CommonMark's HTML block start condition 1, whose block a renderer passes through whole: a `<pre>` (or a raw-text element). */
-const RAW_HTML_BLOCK_START = /^ {0,3}<(?:pre|script|style|textarea)(?=[\s>]|$)/i;
 
 /** A block (see splitIntoBlocks), or a part of one cut at a disclosure's tag: its text, and whether all of it is raw HTML. */
 interface BlockPart { text: string; html: boolean }
 
-/** A disclosure's tag in a block: where it starts and ends, and whether it opens one. */
-interface DisclosureTag { at: number; end: number; open: boolean }
+/** A disclosure's or summary's tag in a block: where it starts and ends, whether it opens one, and whether it is a summary's. */
+interface DisclosureTag { at: number; end: number; open: boolean; summary: boolean }
+
+/** The tags of a block, and where its raw HTML starts (see disclosureTags). */
+interface BlockTags { tags: DisclosureTag[]; htmlFrom: number }
+
+/** Whether a text holds anything that may be a disclosure's or summary's tag. */
+const MAY_HOLD_DISCLOSURE_TAG = /<\/?(?:details|summary)/i;
+
+/** CommonMark's HTML block start condition 1, whose block a renderer passes through whole: a `<pre>` (or a raw-text element). */
+const RAW_HTML_BLOCK_START = /^ {0,3}<(?:pre|script|style|textarea)(?=[\s>]|$)/i;
 
 /**
  * The next `"` and `'` after each place in a text, found once for the whole text when first asked
@@ -781,17 +783,17 @@ function tagEnd(text: string, at: number, close: boolean, nameLength: number, st
 }
 
 /**
- * The `<details>` and `</details>` tags of a block that open and close disclosures where it stands, in
- * order, and where its raw HTML starts (see groupDisclosures). As a browser has a renderer's output: a
- * tag in a paragraph (inline HTML: not in a code span, not escaped, whole by CommonMark's grammar) or
- * in an HTML block (as a browser reads a tag, not in a table, which closes what opens in it; an HTML
- * block that a `<pre>` starts is one whether or not the block closes it); none in a list item, quote, heading, pipe table or indented code,
- * whose element closes what opens in it (a quote's text is read as blocks of its own). Linear in the
- * block's length.
+ * The disclosure and summary tags of a block where it stands, in order, and where its raw HTML starts
+ * (see groupDisclosures). As a browser has a renderer's output: a tag in a paragraph (inline HTML: not
+ * in a code span, not escaped, whole by CommonMark's grammar) or in an HTML block (as a browser reads
+ * a tag, not in a table, which closes what opens in it; an HTML block that a `<pre>` starts is one
+ * whether or not the block closes it); none in a list item, quote, heading, pipe table or indented
+ * code, whose element closes what opens in it (a quote's text is read as blocks of its own). Linear in
+ * the block's length.
  */
-function disclosureTags(part: BlockPart): { tags: DisclosureTag[]; htmlFrom: number } {
+function disclosureTags(part: BlockPart): BlockTags {
     const text = part.text;
-    if (!/<\/?details/i.test(text)) return { tags: [], htmlFrom: text.length };
+    if (!MAY_HOLD_DISCLOSURE_TAG.test(text)) return { tags: [], htmlFrom: text.length };
     let htmlFrom = 0;
     if (!part.html) {
         const newline = text.indexOf('\n');
@@ -809,10 +811,11 @@ function disclosureTags(part: BlockPart): { tags: DisclosureTag[]; htmlFrom: num
     let tables = 0;
     // Where the last whole tag in HTML ended: a tag's name inside another tag is none.
     let insideTag = 0;
-    for (const m of text.matchAll(/<(\/?)(details|table)\b/gi)) {
+    for (const m of text.matchAll(/<(\/?)(details|summary|table)\b/gi)) {
         const at = m.index!;
         if (at < insideTag) continue;
-        if (m[2].length === 5) {
+        const name = m[2].toLowerCase();
+        if (name === 'table') {
             // A table's tags count in HTML only.
             if (at < htmlFrom) continue;
             if (!m[1]) tables++;
@@ -828,14 +831,14 @@ function disclosureTags(part: BlockPart): { tags: DisclosureTag[]; htmlFrom: num
             while (text[at - 1 - slashes] === '\\') slashes++;
             if (slashes % 2 === 1) continue;
         }
-        const end = tagEnd(text, at, !!m[1], m[2].length, !html, quotes);
+        const end = tagEnd(text, at, !!m[1], name.length, !html, quotes);
         if (end === -1) {
             // In HTML, a tag that never ends holds the rest of the block: no tag after it.
             if (html) break;
             continue;
         }
         if (html) insideTag = end;
-        tags.push({ at, end, open: !m[1] });
+        tags.push({ at, end, open: !m[1], summary: name === 'summary' });
     }
     return { tags, htmlFrom };
 }
@@ -1191,6 +1194,21 @@ function liftFencedCode(text: string, replace: (lang: string, code: string) => s
 
 /** Plain text of parsed inline nodes, leaving out source comments: a hidden note is not text. */
 const plainTextOf = (nodes: OfficeContentNode[]): string => nodes.map(n => (isSourceComment(n) ? '' : n.text || '')).join('');
+
+/** Nodes that stand in a line of text: a summary's text runs them together, and puts a space around anything else (a block). */
+const INLINE_NODE_TYPES = new Set<string>(['text', 'break', 'image', 'note', 'drawing', 'comment']);
+
+/**
+ * The text of a summary read as blocks (see groupDisclosures): inline nodes run together, blocks set
+ * apart by a space, a disclosure in it giving its summary and body. Its nodes nest no deeper than
+ * the blocks they were read from.
+ */
+const summaryTextOf = (nodes: OfficeContentNode[]): string => nodes.map(node => {
+    if (isSourceComment(node)) return '';
+    const text = node.type === 'disclosure' ? `${(node.metadata as DisclosureMetadata | undefined)?.summary ?? ''} ${summaryTextOf(node.children ?? [])}`
+        : node.text || summaryTextOf(node.children ?? []);
+    return INLINE_NODE_TYPES.has(node.type) ? text : ` ${text} `;
+}).join('');
 
 export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
     // Honour cancellation requests before the line-by-line Markdown scanning loop begins.
@@ -2213,22 +2231,34 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return html;
     };
 
-    // Disclosures lifted out of blocks (see groupDisclosures): each its header (`<details>` and its
-    // summary) and its body's blocks, read when its placeholder is; and raw HTML cut from an HTML block
+    // Disclosures lifted out of blocks (see groupDisclosures): each its `<details>` tag, its summary's
+    // blocks and its body's blocks, read when its placeholder is; and raw HTML cut from an HTML block
     // at a disclosure's tag, which is HTML whatever it starts with.
-    const disclosureBodies: { header: string; body: BlockPart[] }[] = [];
+    const disclosureBodies: { tag: string; summary: BlockPart[] | null; body: BlockPart[] }[] = [];
     const rawHtmlParts: string[] = [];
     /** How many disclosures' bodies are being read (see MAX_DISCLOSURE_DEPTH). */
     let disclosureDepth = 0;
+    // The tags of each part (see disclosureTags), found once.
+    const tagCache = new WeakMap<BlockPart, BlockTags>();
+    const tagsOf = (part: BlockPart): BlockTags => {
+        let tags = tagCache.get(part);
+        if (!tags) tagCache.set(part, tags = disclosureTags(part));
+        return tags;
+    };
 
-    // A disclosure (`<details>`) that a block leaves open, with the blocks up to its matching
-    // `</details>` (or to the end of the text: a browser shows one never closed holding the rest), is
-    // lifted out as one block: its body is read as a Markdown text of its own, by the same reading as
-    // the document (aligned wrappers, headings, tables, lists, quotes, code, nested disclosures). Text
-    // before its tag and after its closing tag in their blocks stays where it stands. Each block's tags
-    // are found once at each level of nesting, and nesting stops at MAX_DISCLOSURE_DEPTH (a
-    // `<details>` deeper is the HTML block it is in, its body the blocks after it), so the work is
-    // linear in the text's length. A disclosure opened and closed in one block is that block's HTML.
+    // A disclosure (`<details>`) opened in a block where it stands (see disclosureTags), with the blocks
+    // up to its matching `</details>` (or to the end of the text: a browser shows one never closed
+    // holding the rest), is lifted out as one block: its summary (a `<summary>` first in it, to its
+    // `</summary>`, across blank lines and blocks) and its body are each read as a Markdown text of its
+    // own, by the same reading as the document (aligned wrappers, headings, tables, lists, quotes, code,
+    // nested disclosures). Tags open and close as a browser has them: a closing tag closes the nearest
+    // one of its kind open, and what opened in it. A summary a
+    // `</summary>` does not close ends where its block does, unless its disclosure closes in that
+    // block: its body is not taken into it. Text before a disclosure's tag and after its closing tag in
+    // their blocks stays where it stands; a disclosure opened and closed in one HTML block is that
+    // block's HTML. Each block's tags are found once at each level of nesting, and nesting stops at
+    // MAX_DISCLOSURE_DEPTH (a `<details>` deeper is the HTML block it is in, its body the blocks after
+    // it), so the work is linear in the text's length.
     const groupDisclosures = (parts: BlockPart[]): string[] => {
         const out: string[] = [];
         const emit = (part: BlockPart) => {
@@ -2238,7 +2268,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 rawHtmlParts.push(part.text);
             } else out.push(part.text);
         };
-        if (disclosureDepth >= MAX_DISCLOSURE_DEPTH || !parts.some(part => /<\/?details/i.test(part.text))) {
+        if (disclosureDepth >= MAX_DISCLOSURE_DEPTH || !parts.some(part => MAY_HOLD_DISCLOSURE_TAG.test(part.text))) {
             for (const part of parts) emit(part);
             return out;
         }
@@ -2252,56 +2282,101 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             }
             return { text: part.text.slice(from, to), html };
         };
-        // Where a summary opening at `from` ends: after its closing tag, else at `limit` (the next disclosure tag, or the block's end).
-        const summaryEnd = (text: string, from: number, limit: number): number => {
-            SUMMARY_CLOSE_TAG.lastIndex = from;
-            const close = SUMMARY_CLOSE_TAG.exec(text);
-            return close && close.index < limit ? close.index + close[0].length : limit;
-        };
         const queue = parts.slice();
+        // The parts from part `from.j` at `from.at` to part `to.j` at `to.at` (or to the end).
+        const between = (from: { j: number; at: number }, to?: { j: number; at: number }): BlockPart[] => {
+            const htmlFrom = (j: number) => tagsOf(queue[j]).htmlFrom;
+            if (to && to.j === from.j) return [cut(queue[from.j], htmlFrom(from.j), from.at, to.at)];
+            const last = to ? to.j : queue.length;
+            return [cut(queue[from.j], htmlFrom(from.j), from.at), ...queue.slice(from.j + 1, last), ...(to ? [cut(queue[to.j], htmlFrom(to.j), 0, to.at)] : [])];
+        };
+        // The first of `tags` from `t` on, past each `</summary>` with only white space before it (from
+        // `from`): a browser ignores one with no summary open. Where the white space before it starts.
+        const pastStrayCloses = (text: string, tags: DisclosureTag[], t: number, from: number): { tag?: DisclosureTag; from: number } => {
+            while (t < tags.length && !tags[t].open && tags[t].summary && !trimAsciiWhitespace(text.slice(from, tags[t].at))) from = tags[t++].end;
+            return { tag: tags[t], from };
+        };
         for (let i = 0; i < queue.length; i++) {
             const part = queue[i];
-            const { tags, htmlFrom } = disclosureTags(part);
-            // The outermost disclosure the block leaves open.
-            let depth = 0;
+            const { tags, htmlFrom } = tagsOf(part);
+            // The first disclosure opened in it at its level: in Markdown, or in HTML and not closed in it.
             let opener = -1;
-            for (let t = 0; t < tags.length; t++) {
-                if (tags[t].open) { if (depth++ === 0) opener = t; } else if (depth > 0) depth--;
+            let first = -1;
+            for (let t = 0, depth = 0; t < tags.length; t++) {
+                const tag = tags[t];
+                if (tag.summary) continue;
+                if (tag.open) {
+                    if (depth === 0) {
+                        if (tag.at < htmlFrom) { opener = t; break; }
+                        first = t;
+                    }
+                    depth++;
+                } else if (depth > 0 && --depth === 0) first = -1;
             }
-            if (depth === 0) { emit(part); continue; }
+            if (opener === -1) opener = first;
+            if (opener === -1) { emit(part); continue; }
             const open = tags[opener];
             emit(cut(part, htmlFrom, 0, open.at));
-            // Its header: the tag, and a summary right after it (white space between).
-            const limit = opener + 1 < tags.length ? tags[opener + 1].at : part.text.length;
-            SUMMARY_OPEN_TAG.lastIndex = open.end;
-            let headerEnd = SUMMARY_OPEN_TAG.test(part.text) && SUMMARY_OPEN_TAG.lastIndex <= limit ? summaryEnd(part.text, SUMMARY_OPEN_TAG.lastIndex, limit) : open.end;
-            let header = part.text.slice(open.at, headerEnd);
-            const body: BlockPart[] = [cut(part, htmlFrom, headerEnd)];
-            // Its blocks, to the one holding its closing tag.
-            let j = i + 1;
-            for (; j < queue.length; j++) {
-                const next = disclosureTags(queue[j]);
-                const close = next.tags.find(tag => (depth += tag.open ? 1 : -1) === 0);
-                if (!close) { body.push(queue[j]); continue; }
-                body.push(cut(queue[j], next.htmlFrom, 0, close.at));
-                queue[j] = cut(queue[j], next.htmlFrom, close.end);
-                break;
+            // Its summary: a `<summary>` first after its tag, white space (blank lines too) between.
+            let summaryTag: { j: number; tag: DisclosureTag } | undefined;
+            const after = pastStrayCloses(part.text, tags, opener + 1, open.end);
+            const next = after.tag;
+            if (next?.open && next.summary && !trimAsciiWhitespace(part.text.slice(after.from, next.at))) summaryTag = { j: i, tag: next };
+            else if (!trimAsciiWhitespace(part.text.slice(after.from))) {
+                let k = i + 1;
+                while (k < queue.length && !trimAsciiWhitespace(queue[k].text)) k++;
+                const first = k < queue.length ? pastStrayCloses(queue[k].text, tagsOf(queue[k]).tags, 0, 0) : undefined;
+                const lead = first?.tag;
+                if (lead?.open && lead.summary && !trimAsciiWhitespace(queue[k].text.slice(first!.from, lead.at))) summaryTag = { j: k, tag: lead };
             }
-            // A summary standing first in the body, after a blank line, is its summary all the same.
-            if (headerEnd === open.end) {
-                const first = body.findIndex(b => trimAsciiWhitespace(b.text));
-                const lead = first === -1 ? undefined : body[first];
-                SUMMARY_OPEN_TAG.lastIndex = 0;
-                if (lead && SUMMARY_OPEN_TAG.test(lead.text)) {
-                    const leadTags = disclosureTags(lead);
-                    const end = summaryEnd(lead.text, SUMMARY_OPEN_TAG.lastIndex, leadTags.tags.length ? leadTags.tags[0].at : lead.text.length);
-                    header += lead.text.slice(0, end);
-                    body[first] = cut(lead, leadTags.htmlFrom, end);
+            let summary: BlockPart[] | null = null;
+            let bodyFrom: { j: number; at: number } | undefined = { j: i, at: open.end };
+            let close: { j: number; tag: DisclosureTag } | undefined;
+            if (summaryTag) {
+                // It ends at its `</summary>` (closing what opened in it), else where its disclosure closes or the text ends.
+                let end: { j: number; tag: DisclosureTag } | undefined;
+                let details = 0;
+                let summaries = 0;
+                scan: for (let k = summaryTag.j; k < queue.length; k++) {
+                    for (const tag of tagsOf(queue[k]).tags) {
+                        if (k === summaryTag.j && tag.at <= summaryTag.tag.at) continue;
+                        if (tag.open) { if (tag.summary) summaries++; else details++; continue; }
+                        if (tag.summary ? summaries > 0 : details > 0) { if (tag.summary) summaries--; else details--; continue; }
+                        end = { j: k, tag };
+                        break scan;
+                    }
+                }
+                const from = { j: summaryTag.j, at: summaryTag.tag.end };
+                if (end?.tag.summary) {
+                    summary = between(from, { j: end.j, at: end.tag.at });
+                    bodyFrom = { j: end.j, at: end.tag.end };
+                } else if (end && end.j === summaryTag.j) {
+                    // Closed with its disclosure in its block: all the disclosure holds after it.
+                    summary = between(from, { j: end.j, at: end.tag.at });
+                    bodyFrom = undefined;
+                    close = end;
+                } else {
+                    summary = between(from, { j: from.j, at: queue[from.j].text.length });
+                    bodyFrom = { j: from.j + 1, at: 0 };
                 }
             }
+            // Its body: to its closing tag.
+            if (bodyFrom && !close) {
+                let depth = 1;
+                scan: for (let k = bodyFrom.j; k < queue.length; k++) {
+                    for (const tag of tagsOf(queue[k]).tags) {
+                        if ((k === bodyFrom.j && tag.at < bodyFrom.at) || tag.summary) continue;
+                        if (tag.open) depth++;
+                        else if (--depth === 0) { close = { j: k, tag }; break scan; }
+                    }
+                }
+            }
+            const body = !bodyFrom ? [] : bodyFrom.j >= queue.length ? [] : between(bodyFrom, close ? { j: close.j, at: close.tag.at } : undefined);
             out.push(placeholder('DISCLOSURE', disclosureBodies.length));
-            disclosureBodies.push({ header, body });
-            i = j - 1;
+            disclosureBodies.push({ tag: part.text.slice(open.at, open.end), summary, body });
+            if (!close) break;
+            queue[close.j] = cut(queue[close.j], tagsOf(queue[close.j]).htmlFrom, close.tag.end);
+            i = close.j - 1;
         }
         return out;
     };
@@ -2723,17 +2798,22 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // HTML parser reads its `<details>` tag, its body read as blocks of its own.
         const disclosureIndex = placeholderIndex(block, 'DISCLOSURE');
         if (disclosureIndex !== null && disclosureIndex < disclosureBodies.length) {
-            const { header, body } = disclosureBodies[disclosureIndex];
-            const shell = (await readHtmlBlock(`${header}</details>`)).content.find(node => node.type === 'disclosure');
+            const { tag, summary, body } = disclosureBodies[disclosureIndex];
+            const shell = (await readHtmlBlock(`${tag}</details>`)).content.find(node => node.type === 'disclosure');
             const children: OfficeContentNode[] = [];
+            const summaryNodes: OfficeContentNode[] = [];
             disclosureDepth++;
             try {
+                // Its summary's text, read as its blocks are (Markdown, or HTML where it stands in an HTML block).
+                if (summary) await parseBlocks(groupDisclosures(summary), summaryNodes);
                 await parseBlocks(groupDisclosures(body), children);
             } finally {
                 disclosureDepth--;
             }
             foldAnchorPlaceholders(children);
-            content.push({ type: 'disclosure', metadata: shell?.metadata ?? {}, children });
+            const summaryText = summaryTextOf(summaryNodes).replace(/\s+/g, ' ').trim();
+            const { summary: _shellSummary, ...attributes } = (shell?.metadata ?? {}) as DisclosureMetadata;
+            content.push({ type: 'disclosure', metadata: { ...(summaryText ? { summary: summaryText } : {}), ...attributes }, children });
             continue;
         }
         // Raw HTML cut from an HTML block at a disclosure's tag (see groupDisclosures).
