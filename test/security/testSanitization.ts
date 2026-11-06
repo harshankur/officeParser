@@ -5126,6 +5126,109 @@ async function xlsxRichStringChargeTests() {
 }
 
 /**
+ * Cells showing a shared string again: each is a cell element of the zip's own, which a regular sheet
+ * compresses to 3 or 4 bytes, so a flat budget and one for the zip's bytes did not count them. 100,000
+ * cells over 500 rich strings of four runs (361 KB) lost the runs of 14,218 cells, 140,000 of 45,917.
+ * Such a cell may weigh up to CELL_REPEAT_ALLOWANCE past REPEAT_ALLOWANCE without charge, while the
+ * document's REPEATED_CELL_CHARACTERS_PER_BYTE last, spent only on a copy made.
+ */
+async function xlsxCellAllowanceTests() {
+    console.log('- XLSX cells showing a shared string again are counted...');
+    const { CELL_REPEAT_ALLOWANCE, REPEAT_ALLOWANCE } = await import('../../src/utils/repeatUtils');
+    const { REPEATED_CELL_CHARACTERS_PER_BYTE, REPEATED_CHARACTERS_PER_BYTE } = await import('../../src/utils/budgetUtils');
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const book = (sst: string, sheetData: string, styles = '') => Buffer.from(zipSync({
+        '[Content_Types].xml': sizeEnc('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'),
+        '_rels/.rels': sizeEnc(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${SIZE_REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>`),
+        'xl/workbook.xml': sizeEnc(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': sizeEnc(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${SIZE_REL}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${SIZE_REL}/sharedStrings" Target="sharedStrings.xml"/>${styles ? `<Relationship Id="rId3" Type="${SIZE_REL}/styles" Target="styles.xml"/>` : ''}</Relationships>`),
+        'xl/sharedStrings.xml': sizeEnc(`<?xml version="1.0"?><sst ${ns}>${sst}</sst>`),
+        ...(styles ? { 'xl/styles.xml': sizeEnc(`<?xml version="1.0"?><styleSheet ${ns}>${styles}</styleSheet>`) } : {}),
+        'xl/worksheets/sheet1.xml': sizeEnc(`<?xml version="1.0"?><worksheet ${ns}><sheetData>${sheetData}</sheetData></worksheet>`),
+    }, { level: 9 }));
+    const cellsOf = (ast: OfficeParserAST | undefined): any[] => {
+        const cells: any[] = [];
+        const walk = (nodes: any[] | undefined) => nodes?.forEach(node => { if (node.type === 'cell') cells.push(node); walk(node.children); });
+        walk(ast?.content);
+        return cells;
+    };
+
+    // An ordinary workbook of rich strings shown again: 20 columns, 500 strings of four bold runs in
+    // a colour, font and size of their own, cells in three styles (none, a fill, a font and alignment).
+    const realBook = (cells: number) => {
+        const strings = 500, runs = 4, cols = 20;
+        let rows = '';
+        for (let i = 0; i < cells / cols; i++) {
+            rows += `<row r="${i + 1}">`;
+            for (let c = 0; c < cols; c++) rows += `<c r="${String.fromCharCode(65 + c)}${i + 1}" t="s" s="${(i + c) % 3}"><v>${(i * cols + c) % strings}</v></c>`;
+            rows += '</row>';
+        }
+        const sst = Array.from({ length: strings }, (_, k) => `<si>${Array.from({ length: runs }, (_, j) => `<r><rPr><b/><sz val="11"/><color rgb="FF${(k * 31 + j).toString(16).padStart(6, '0')}"/><rFont val="Calibri"/><family val="2"/><scheme val="minor"/></rPr><t xml:space="preserve">Item number ${k} of the list, part ${j} </t></r>`).join('')}</si>`).join('');
+        const styles = '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="14"/><name val="Arial"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFFF00"/></patternFill></fill></fills><cellXfs count="3"><xf fontId="0" fillId="0"/><xf fontId="0" fillId="2" applyFill="1"/><xf fontId="1" fillId="0" applyFont="1" applyAlignment="1"><alignment horizontal="center"/></xf></cellXfs>';
+        return book(sst, rows, styles);
+    };
+    for (const cells of [100_000, 140_000, 200_000]) {
+        const bytes = realBook(cells);
+        const parsed = await sizeParse(bytes, 'xlsx');
+        const all = cellsOf(parsed.ast);
+        const cut = all.filter(cell => (cell.children?.length ?? 0) < 4 || cell.text.endsWith('…')).length;
+        check(`xlsx: ${cells.toLocaleString('en-US')} cells showing 500 rich strings of four runs again (${Math.round(bytes.length / 1000)} KB) keep every run, unwarned`,
+            !parsed.error && !parsed.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && all.length === cells && cut === 0,
+            `${parsed.error} ${parsed.codes} ${all.length} cells, ${cut} cut`);
+    }
+
+    // The allowance, exactly: each cell showing a plain string of REPEAT_ALLOWANCE + CELL_REPEAT_ALLOWANCE
+    // + 36 characters again is charged 36 while REPEATED_CELL_CHARACTERS_PER_BYTE of the zip last, then
+    // CELL_REPEAT_ALLOWANCE + 36; past the budget a cell shows the string's start.
+    /** The cells kept whole, as the budget and the allowance should give them, cell by cell. */
+    const expectedWhole = (shows: { length: number; cells: number }[], bytes: number, maxRepeatedContent: number, spent = 0) => {
+        let left = maxRepeatedContent + REPEATED_CHARACTERS_PER_BYTE * bytes, pool = REPEATED_CELL_CHARACTERS_PER_BYTE * bytes - spent;
+        return shows.map(({ length, cells }) => {
+            let whole = 1;
+            for (let k = 1; k < cells; k++) {
+                const free = Math.min(CELL_REPEAT_ALLOWANCE, Math.max(0, length - REPEAT_ALLOWANCE), pool);
+                const cost = length - REPEAT_ALLOWANCE - free;
+                if (cost > left) continue;
+                left -= Math.max(0, cost);
+                pool -= free;
+                whole++;
+            }
+            return whole;
+        });
+    };
+    /** Rows of a thousand cells, without references (as few bytes as a cell takes), showing string 0 `counts[0]` times, then string 1. */
+    const rowsOf = (counts: number[]) => {
+        const shown = counts.flatMap((count, idx) => Array<number>(count).fill(idx));
+        let rows = '';
+        for (let k = 0; k < shown.length; k += 1_000) rows += `<row>${shown.slice(k, k + 1_000).map(idx => `<c t="s"><v>${idx}</v></c>`).join('')}</row>`;
+        return rows;
+    };
+    const wholeOf = (ast: OfficeParserAST | undefined, lengths: number[]) => lengths.map(length => cellsOf(ast).filter(cell => cell.text.length === length).length);
+    const length = REPEAT_ALLOWANCE + CELL_REPEAT_ALLOWANCE + 36, cells = 50_000, budget = 50_000;
+    const plain = book(`<si><t>${'p'.repeat(length)}</t></si>`, rowsOf([cells]));
+    const plainParsed = await sizeParse(plain, 'xlsx', { decompressionLimits: { maxRepeatedContent: budget } });
+    const [plainExpected] = expectedWhole([{ length, cells }], plain.length, budget);
+    const [plainWhole] = wholeOf(plainParsed.ast, [length]);
+    const withoutAllowance = 1 + Math.floor((budget + REPEATED_CHARACTERS_PER_BYTE * plain.length) / (length - REPEAT_ALLOWANCE));
+    check(`xlsx: ${cells.toLocaleString('en-US')} cells showing a ${length}-character string are charged ${CELL_REPEAT_ALLOWANCE} less each while ${REPEATED_CELL_CHARACTERS_PER_BYTE} characters a byte of the zip last, and no more`,
+        !plainParsed.error && plainParsed.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && plainWhole === plainExpected && plainWhole > withoutAllowance && plainWhole < cells,
+        `${plainParsed.error} ${plainWhole} whole, expected ${plainExpected} (${withoutAllowance} without the allowance) of ${cells}`);
+
+    // A copy the budget refuses spends none of the allowance: a 1 MB string in 50 cells, every copy
+    // refused, leaves it whole for a later string of REPEAT_ALLOWANCE + CELL_REPEAT_ALLOWANCE characters.
+    const heavy = 1_000_000, light = REPEAT_ALLOWANCE + CELL_REPEAT_ALLOWANCE;
+    const mixed = book(`<si><t>${'h'.repeat(heavy)}</t></si><si><t>${'l'.repeat(light)}</t></si>`, rowsOf([50, 20_000]));
+    const mixedParsed = await sizeParse(mixed, 'xlsx', { decompressionLimits: { maxRepeatedContent: 1_000 } });
+    const mixedExpected = expectedWhole([{ length: heavy, cells: 50 }, { length: light, cells: 20_000 }], mixed.length, 1_000);
+    const mixedWhole = wholeOf(mixedParsed.ast, [heavy, light]);
+    // (What the later string would keep had the 49 refused copies spent their share.)
+    const ifSpent = expectedWhole([{ length: heavy, cells: 50 }, { length: light, cells: 20_000 }], mixed.length, 1_000, 49 * CELL_REPEAT_ALLOWANCE)[1];
+    check('xlsx: cells refused a copy of a long string spend none of the cells\' allowance, which a later string still has whole',
+        !mixedParsed.error && mixedParsed.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && mixedWhole[0] === 1 && mixedExpected[0] === 1 && mixedWhole[1] === mixedExpected[1] && mixedExpected[1] > ifSpent && mixedExpected[1] < 20_000,
+        `${mixedParsed.error} ${mixedWhole} whole, expected ${mixedExpected} (${ifSpent} had refused copies spent it)`);
+}
+
+/**
  * Text boxes nested in text boxes: each box's text is the text of the paragraph (or list item, or
  * floating drawing) holding it, so each level held all the text below it again (1.9 KB of ODT, 1 MB of
  * text in 100 levels, made 102 MB of JSON, unwarned). The copy of a copy is charged; the runs are all
@@ -6123,6 +6226,7 @@ async function main() {
     await documentShapeEscapingTests(check);
     await headerPartWeightTests();
     await xlsxRichStringChargeTests();
+    await xlsxCellAllowanceTests();
     await nestedTextBoxTests();
     await chunkSplitterTests();
     await nativePdfMemoryTests();

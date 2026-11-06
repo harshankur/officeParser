@@ -22,6 +22,13 @@ export const REPEAT_ALLOWANCE = 64;
 const DEFAULT_MAX_REPEATED_CONTENT = 16 * 1024 * 1024;
 
 /**
+ * What a workbook's cell showing a shared string again may weigh past REPEAT_ALLOWANCE without charge,
+ * while the document's REPEATED_CELL_CHARACTERS_PER_BYTE last (see budgetUtils): a cell of a few rich runs
+ * (text, runs, their fonts and colours, the cell's fill) weighs two to four hundred.
+ */
+export const CELL_REPEAT_ALLOWANCE = 128;
+
+/**
  * What one parse may repeat in all: `decompressionLimits.maxRepeatedContent` (16 MB by default), plus
  * REPEATED_CHARACTERS_PER_BYTE for each byte of the document (see budgetUtils).
  */

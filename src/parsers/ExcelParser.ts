@@ -28,8 +28,8 @@ import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { attachmentLookup, flagsWeight, freshValueLength, freshValuesLength, repeatPreview, takeRepeats, valuesLength } from '../utils/repeatUtils.js';
-import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
+import { attachmentLookup, CELL_REPEAT_ALLOWANCE, flagsWeight, freshValueLength, freshValuesLength, REPEAT_ALLOWANCE, repeatPreview, takeRepeats, valuesLength } from '../utils/repeatUtils.js';
+import { documentBytesOf, REPEATED_CELL_CHARACTERS_PER_BYTE, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
 import { chargeRawContent, decodeXmlEntities, getChildElements, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, takeNodes } from '../utils/xmlUtils.js';
 import { MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
 import { BUILTIN_NUMBER_FORMATS, BUILTIN_OTHER_FORMATS, excelShownText } from '../utils/excelFormat.js';
@@ -526,6 +526,10 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     // richCopyValues), boundRepeatedValues the rest of each: left to it alone, values of 64 characters or
     // less were charged by neither, and 2,000 styled cells over 500 runs wrote 13 times the budget as HTML.
     const richStringRunWeight = new Map<number, RichRunWeight>();
+    // What cells showing a shared string again may still weigh past REPEAT_ALLOWANCE without charge, up to
+    // CELL_REPEAT_ALLOWANCE each (see budgetUtils): each is a cell element of its own, which a flat budget
+    // and one for the zip's bytes did not count, and a workbook of 100,000 such cells (361 KB) lost text.
+    let cellAllowanceLeft = REPEATED_CELL_CHARACTERS_PER_BYTE * documentBytesOf(config);
 
     if (sharedStringsFile) {
         // Read as the sheets are, without building XML elements: a workbook of a million distinct
@@ -1080,12 +1084,16 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                         // The runs' values as this cell writes them, shared or copied (see richCopyValues).
                         const runValues = runWeight ? richCopyValues(runWeight, content.length, restyled ? cellFormatting : undefined, link) : 0;
                         const weight = (joined?.length ?? 0) + (runWeight ? runWeight.runs + runValues : 0);
-                        if (shown > 0 && takeRepeats(config, 1, weight) === 0) {
+                        // (Its share of the cells' allowance, spent only on a copy made.)
+                        const free = shown > 0 ? Math.min(CELL_REPEAT_ALLOWANCE, Math.max(0, weight - REPEAT_ALLOWANCE), cellAllowanceLeft) : 0;
+                        if (shown > 0 && takeRepeats(config, 1, weight - free) === 0) {
                             text = repeatPreview(joined ?? '');
                         } else if (Array.isArray(content)) {
+                            cellAllowanceLeft -= free;
                             sharedRuns = content;
                             text = joined ?? '';
                         } else {
+                            cellAllowanceLeft -= free;
                             text = content || '';
                         }
                     } else if (isContent !== undefined) {

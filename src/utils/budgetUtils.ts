@@ -41,6 +41,16 @@ export const TABLE_CELLS_PER_BYTE = 1;
 export const REPEATED_CHARACTERS_PER_BYTE = 16;
 
 /**
+ * Characters a workbook's cells may write past REPEAT_ALLOWANCE without charge when they show a shared
+ * string again, for each byte of the document, at most CELL_REPEAT_ALLOWANCE a cell (see ExcelParser).
+ * Each such cell is an element of the zip's own, and a real workbook holds under half a cell per byte (see
+ * TABLE_CELLS_PER_BYTE): 100,000 cells showing 500 rich strings of four runs again (361 KB) repeat 26
+ * million characters, more than REPEATED_CHARACTERS_PER_BYTE gives a file of their size. Spent a cell at
+ * a time, it widens no single repeat: a few cells showing a long string are charged as before.
+ */
+export const REPEATED_CELL_CHARACTERS_PER_BYTE = 64;
+
+/**
  * Empty grid positions a document's tables may fill for each of its bytes, beyond the million every
  * document may (see sheetGridUtils). A sparse sheet of 3,000 rows with values in its first and 400th
  * columns (19 KB) fills 1.2 million.
