@@ -28,7 +28,7 @@ import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { attachmentLookup, repeatPreview, takeRepeats, valuesLength } from '../utils/repeatUtils.js';
+import { attachmentLookup, flagsWeight, repeatPreview, takeRepeats, valuesLength } from '../utils/repeatUtils.js';
 import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
 import { chargeRawContent, decodeXmlEntities, getChildElements, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, takeNodes } from '../utils/xmlUtils.js';
 import { MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
@@ -433,9 +433,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     const richStringText = new Map<number, string>();
     // How many cells have shown each shared string so far.
     const sharedStringUses = new Map<number, number>();
-    // What each rich shared string's runs weigh beyond their text: 16 a run, and its runs' formatting and
-    // metadata values (`shared`), those of its runs other than text runs (`kept`: a link copies only text
-    // runs). Cells showing the string share its runs, and every writer writes a run's font or colour again
+    // What each rich shared string's runs weigh beyond their text: 16 a run and its style flags (see
+    // flagsWeight), and its runs' formatting and metadata values (`shared`), those of its runs other than
+    // text runs (`kept`: a link copies only text runs). Cells showing the string share its runs, and every writer writes a run's font or colour again
     // in each cell: counted by run alone, one run of a 64 KB font shown in 7,500 cells (1.8 KB of XLSX)
     // made 492 MB of HTML. A cell whose style or link makes copies of the runs is charged their text and
     // nodes alone: boundRepeatedValues charges the copies' values, each a node of its own.
@@ -994,7 +994,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                             runWeight = { runs: 0, shared: 0, kept: 0 };
                             for (const run of content) {
                                 const values = valuesLength(run.formatting) + valuesLength(run.metadata);
-                                runWeight.runs += 16;
+                                runWeight.runs += 16 + flagsWeight(run.formatting);
                                 runWeight.shared += values;
                                 if (run.type !== 'text') runWeight.kept += values;
                             }

@@ -65,14 +65,28 @@ export const valuesLength = (values: object | undefined): number => {
     return length;
 };
 
+/** The style flags a writer writes a tag pair for around a node's text (`<strong>`, `\textbf{}`, `\b ... \b0`, `"bold":true`). */
+const STYLE_FLAGS = ['bold', 'italic', 'underline', 'strikethrough', 'superscript', 'subscript', 'invisible'] as const;
+
+/**
+ * What a node's style flags weigh: 8 for each one set. A flag is no string, so it weighed nothing, while
+ * every writer writes it with each copy of the node: a cell of 2,000 one-letter spans in four styles,
+ * repeated, wrote 4.6 times the repeated content budget as JSON.
+ */
+export const flagsWeight = (formatting: object | undefined): number => {
+    let weight = 0;
+    if (formatting) for (const flag of STYLE_FLAGS) if ((formatting as Record<string, unknown>)[flag] === true) weight += 8;
+    return weight;
+};
+
 /** Weighs node lists; see contentWeigher. */
 export type ContentWeigher = (nodes: OfficeContentNode[] | undefined) => number;
 
 /**
  * A weigher of shared content: what one more path to `nodes` writes. For each node, 16 for the node
  * itself (a generator spends on a node what it spends on a dozen or two characters of text), its text,
- * its formatting and metadata values (a style's 64 KB font is written with every copy), and its
- * children, comments and notes. Counted along every path, as a generator writes a shared node each
+ * its formatting and metadata values (a style's 64 KB font is written with every copy), its style flags
+ * (see flagsWeight), and its children, comments and notes. Counted along every path, as a generator writes a shared node each
  * time it meets it (a nested table's repeated cells share their content), and memoized per node and
  * per list so a shared subtree is summed once.
  *
@@ -90,7 +104,7 @@ export const contentWeigher = (): ContentWeigher => {
         for (const node of nodes) {
             let weight = weights.get(node);
             if (weight === undefined) {
-                weight = 16 + (node.text?.length ?? 0) + valuesLength(node.formatting) + valuesLength(node.metadata) + weigh(node.children) + weigh(node.comments) + weigh(node.notes);
+                weight = 16 + (node.text?.length ?? 0) + valuesLength(node.formatting) + flagsWeight(node.formatting) + valuesLength(node.metadata) + weigh(node.children) + weigh(node.comments) + weigh(node.notes);
                 weights.set(node, weight);
             }
             total += weight;

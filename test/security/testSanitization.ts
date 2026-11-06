@@ -5372,6 +5372,28 @@ async function odtBreakLinkTests() {
 }
 
 /**
+ * A repeated copy's style flags are weighed, 8 for each set: a flag is no string and weighed nothing,
+ * while every writer writes a tag pair for it with each copy. A cell of 2,000 one-letter spans, bold,
+ * italic, underlined and struck through, repeated 2,000 times wrote 4.6 times the budget as JSON, 1.35
+ * times as HTML and 1.7 times as RTF.
+ */
+async function styleFlagWeightTests() {
+    console.log('- Style flags are weighed with the content a document repeats...');
+    const budget = 2_000_000;
+    const automatic = '<style:style style:name="T1" style:family="text"><style:text-properties fo:font-weight="bold" fo:font-style="italic" style:text-underline-style="solid" style:text-line-through-style="solid"/></style:style><style:style style:name="T2" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style>';
+    const spans = Array.from({ length: 2_000 }, (_, i) => `<text:span text:style-name="${i % 2 ? 'T1' : 'T2'}">a</text:span>`).join('');
+    const bytes = sizeOdf('spreadsheet', `<table:table table:name="S"><table:table-column/><table:table-row><table:table-cell table:number-columns-repeated="2000"><text:p>${spans}</text:p></table:table-cell></table:table-row></table:table>`, automatic);
+    const parsed = await sizeParse(bytes, 'ods', { decompressionLimits: { maxRepeatedContent: budget } });
+    const limit = budget + 16 * bytes.length;
+    const json = parsed.ast ? JSON.stringify(parsed.ast).length : 0;
+    const html = await sizeWrite(parsed.ast, 'html'), rtf = await sizeWrite(parsed.ast, 'rtf');
+    // (JSON writes some 60 characters of keys a node, against the 16 a node weighs: a factor of the AST's own shape.)
+    check('ods: a cell of 2,000 styled one-letter spans repeated 2,000 times writes HTML and RTF within 1.2 times the budget, JSON within 2.5, with REPEATED_CONTENT_LIMIT_EXCEEDED',
+        !parsed.error && parsed.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && json > 0 && json < 2.5 * limit && html.length < 1.2 * limit && rtf.length < 1.2 * limit && !html.startsWith('threw') && !rtf.startsWith('threw'),
+        `${parsed.error} ${parsed.codes} json ${json}, html ${html.length}, rtf ${rtf.length}, limit ${limit}`);
+}
+
+/**
  * The files pdf.js loads for a PDF (its CMaps and image decoders) are read only as asked for by name,
  * from inside their folder, bounded in size and time, never from the built-in CDN address under
  * `allowRemoteAssets: false`; and nothing waiting on one outlives its bound or the parse's abortSignal.
@@ -5713,6 +5735,7 @@ async function main() {
     await chunkSplitterTests();
     await nativePdfMemoryTests();
     await odtBreakLinkTests();
+    await styleFlagWeightTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);

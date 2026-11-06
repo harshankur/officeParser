@@ -367,7 +367,7 @@ const toRepeatCount = (attr: string | null): number => {
 };
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { contentWeigher, repeatPreview, takeRepeats } from '../utils/repeatUtils.js';
+import { contentWeigher, flagsWeight, repeatPreview, takeRepeats } from '../utils/repeatUtils.js';
 import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
 import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString, takeNodes } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
@@ -679,7 +679,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             out.children.push({ type: 'text', text, formatting, metadata: link ? { ...link } : undefined });
         };
         if (shownControls.has(control)) {
-            if (read.line) run(takeRepeats(config, 1, read.line.length + 16) > 0 ? read.line : read.preview ??= repeatPreview(read.line));
+            if (read.line) run(takeRepeats(config, 1, read.line.length + 16 + flagsWeight(formatting)) > 0 ? read.line : read.preview ??= repeatPreview(read.line));
             return out;
         }
         shownControls.add(control);
