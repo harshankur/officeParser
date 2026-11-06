@@ -2807,7 +2807,7 @@ async function runTemplatePropertyTests(): Promise<GenFeatureTest[]> {
     const cases = FAST_MODE ? 20_000 : 200_000;
     const started = Date.now();
     const scan = (joined: string, start: string, end: string, room: number) => {
-        const ctx = { opts: { start, end }, triggers: triggersOf({ start }), elements: { nearTags: room }, nearUnlisted: 0 } as unknown as PartContext;
+        const ctx = { opts: { start, end }, triggers: triggersOf({ start }), nearRoom: { left: room }, nearUnlisted: 0 } as unknown as PartContext;
         const found = findLookalikeTags(joined, ctx);
         return { found, unlisted: ctx.nearUnlisted };
     };

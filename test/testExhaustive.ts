@@ -4646,6 +4646,32 @@ async function testTemplateNearTagsBalanceAndLimit(): Promise<void> {
     await OfficeTemplate.render(many, { data: {}, onWarning: (w: any) => rendered.push(w) });
     assert.deepStrictEqual(rendered.map(w => [w.code, w.details.texts.length, w.details.found]), [['TEMPLATE_NOT_A_TAG', 1000, 2000]], 'a render lists 1,000 and counts 2,000');
     assert.ok(/^2000 texts that look like template tags .* \(only the first 1000 are listed\): .*, and 1995 more\.$/.test(rendered[0].message), `the message says so; got ${rendered[0].message}`);
+    // One room of 1,000 for the template, across its parts and the notes only loops refer to (compiled on
+    // their own), whichever comes first in the package: a notes part compiled again without such notes
+    // takes no room for them twice, and a note that is not listed takes none.
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+    const withNotes = (noteText: string, bodyExtra: string, notesFirst: boolean) => {
+        const files: Record<string, Uint8Array> = {
+            '[Content_Types].xml': strToU8('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/></Types>'),
+            'word/_rels/document.xml.rels': strToU8('<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/></Relationships>'),
+        };
+        const document = strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W}><w:body><w:p><w:r><w:t>{{ for i in items }}x</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r><w:r><w:t>{{ endfor }}</w:t></w:r></w:p>${bodyExtra}</w:body></w:document>`);
+        const notes = strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:footnotes ${W}><w:footnote w:id="1"><w:p><w:r><w:t xml:space="preserve">${noteText}</w:t></w:r></w:p></w:footnote><w:footnote w:id="2"><w:p><w:r><w:t xml:space="preserve">${'{{ c } '.repeat(5)}</w:t></w:r></w:p></w:footnote></w:footnotes>`);
+        return Buffer.from(zipSync(notesFirst ? { ...files, 'word/footnotes.xml': notes, 'word/document.xml': document } : { ...files, 'word/document.xml': document, 'word/footnotes.xml': notes }));
+    };
+    for (const notesFirst of [false, true]) {
+        for (const [body, found] of [[p('{{ b } '.repeat(1500)), 3005], ['', 1505]] as [string, number][]) {
+            const bytes = withNotes('{{ a } '.repeat(1500), body, notesFirst);
+            const where = `1,500 in a note only a loop refers to, 5 in another, ${body ? '1,500' : 'none'} in the body${notesFirst ? ', notes part first' : ''}`;
+            const tagWarnings: any[] = [];
+            const texts = (await OfficeTemplate.tags(bytes, { onWarning: (w: any) => tagWarnings.push(w) })).filter(t => t.kind === 'text');
+            assert.strictEqual(texts.length, 1000, `${where}: tags() lists 1,000; got ${texts.length}`);
+            assert.deepStrictEqual(tagWarnings.map(w => [w.code, w.details.texts.length, w.details.found]), [['TEMPLATE_NOT_A_TAG', 1000, found]], `${where}: tags() says it found ${found}`);
+            const renderWarnings: any[] = [];
+            await OfficeTemplate.render(bytes, { data: { items: [1] }, onWarning: (w: any) => renderWarnings.push(w) });
+            assert.deepStrictEqual(renderWarnings.map(w => [w.code, w.details.texts.length, w.details.found]), [['TEMPLATE_NOT_A_TAG', 1000, found]], `${where}: a render lists 1,000 of ${found}`);
+        }
+    }
     const few: any[] = [];
     await OfficeTemplate.tags(docx(p('{{ a }')), { onWarning: (w: any) => few.push(w) });
     assert.deepStrictEqual(few, [], 'tags() warns only when its list is cut');

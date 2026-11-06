@@ -387,11 +387,15 @@ export interface CompiledTemplate {
 
 // ─── Phase 1: tags in text ──────────────────────────────────────────────────
 
+/** What a template may hold, counted as it is read (see PartContext.elements). */
+interface ElementBudget { left: number; textRuns: number }
+
 /**
- * What a template may hold, counted as it is read (see PartContext.elements); `nearTags` is how many more
- * texts that look like a tag it lists (see {@link MAX_NEAR_TAGS}).
+ * How many more texts that look like a tag may be listed (see {@link MAX_NEAR_TAGS}): one for the
+ * template, shared by every compile whose texts are listed. A compile whose texts may not be listed
+ * holds a room of its own until that is known (see compileTemplate).
  */
-interface ElementBudget { left: number; textRuns: number; nearTags: number }
+interface NearRoom { left: number }
 
 /** Per-part compile state. */
 export interface PartContext {
@@ -428,6 +432,8 @@ export interface PartContext {
     nearTags: NearTag[];
     /** How many more such texts the part holds than it lists, past the template's room (see {@link MAX_NEAR_TAGS}). */
     nearUnlisted: number;
+    /** What is left of the room to list such texts in. */
+    nearRoom: NearRoom;
     /** Characters a run of text holds when it may hold a tag, or text that looks like one. */
     triggers: string[];
 }
@@ -763,7 +769,7 @@ const MAX_NEAR_TAGS = 1000;
  */
 export function findLookalikeTags(joined: string, ctx: PartContext): { start: number; end: number; reason: TemplateTextReason }[] {
     if (!ctx.triggers.some(t => joined.includes(t))) return [];
-    const room = Math.max(0, ctx.elements.nearTags);
+    const room = Math.max(0, ctx.nearRoom.left);
     const start = Array.from(ctx.opts.start);
     const end = Array.from(ctx.opts.end);
     const startForms = start.map(formsOf);
@@ -877,8 +883,8 @@ function noteNearTags(lookalikes: { start: number; end: number; reason: Template
     let next = 0;
     for (const [index, item] of near.entries()) {
         // Listed up to the template's room; the rest counted.
-        if (ctx.elements.nearTags <= 0) { ctx.nearUnlisted += near.length - index; return; }
-        ctx.elements.nearTags--;
+        if (ctx.nearRoom.left <= 0) { ctx.nearUnlisted += near.length - index; return; }
+        ctx.nearRoom.left--;
         while (next < spans.length && spans[next].start < item.start) { if (spans[next].tag) tags++; next++; }
         const text = decodeXmlText(joined.slice(item.start, Math.min(item.end, item.start + MAX_NEAR_TEXT * 8)));
         ctx.nearTags.push({ text: text.length > MAX_NEAR_TEXT ? `${text.slice(0, MAX_NEAR_TEXT)}...` : text, reason: item.reason, beforeTag: ctx.tags.length + tags });
@@ -2267,7 +2273,7 @@ function copyNotes(xml: string, part: string, element: string, copies: NoteCopy[
 // ─── Compile ────────────────────────────────────────────────────────────────
 
 /** Compiles one part: null nodes when it holds no tag. */
-function compilePart(name: string, xml: string, opts: TemplateOptions, d: TemplateDialect, literalBase: number, copies: { left: number }, elements: ElementBudget): { part: CompiledPart; literals: number } {
+function compilePart(name: string, xml: string, opts: TemplateOptions, d: TemplateDialect, literalBase: number, copies: { left: number }, elements: ElementBudget, nearRoom: NearRoom): { part: CompiledPart; literals: number } {
     const markerChars = chooseMarkerChars(xml);
     // A part using every noncharacter and private-use character cannot be marked; it holds no tags we
     // could tell from its own text, so it is copied as is (only a crafted part reaches this).
@@ -2275,7 +2281,7 @@ function compilePart(name: string, xml: string, opts: TemplateOptions, d: Templa
     const ctx: PartContext = {
         part: name, opts, dialect: d, startText: escapeXmlText(opts.start), endText: escapeXmlText(opts.end),
         tags: [], markerTag: [], markerPiece: [], pieceText: [], open: markerChars[0], close: markerChars[1], hasBlocks: false, unreadable: [], inert: [], elements,
-        nearTags: [], nearUnlisted: 0, triggers: triggersOf(opts),
+        nearTags: [], nearUnlisted: 0, nearRoom, triggers: triggersOf(opts),
     };
     const marked = d.markPart(xml, ctx);
     if (!ctx.tags.length) return { part: { name, nodes: null, hasBlocks: false, nearTags: ctx.nearTags, nearUnlisted: ctx.nearUnlisted }, literals: 0 };
@@ -2387,14 +2393,30 @@ export function compileTemplate(entries: Record<string, Uint8Array>, opts: Templ
     let repeatsIds = false;
     const copies = { left: opts.maxRepeatedContent };
     // Each element read costs memory, as when parsing: the template as a whole is held to the parser's bound.
-    const elements: ElementBudget = { left: opts.maxXmlElements, textRuns: opts.maxXmlElements, nearTags: MAX_NEAR_TAGS };
+    const elements: ElementBudget = { left: opts.maxXmlElements, textRuns: opts.maxXmlElements };
+    // Texts that look like a tag are listed up to MAX_NEAR_TAGS for the template, across its parts and the
+    // notes only loops refer to. A notes part may be compiled again without those notes (whose texts are
+    // then listed from their own compiles), so until that is known it lists from a room of its own, at
+    // most MAX_NEAR_TAGS for each of the dialect's few notes parts, settled into the template's below.
+    const near: NearRoom = { left: MAX_NEAR_TAGS };
+    const NOTE_PARTS = d.noteParts;
+    const notesParts = new Set<string>(NOTE_PARTS ? Object.values(NOTE_PARTS).map(note => note.part) : []);
     for (const [name, bytes] of Object.entries(entries)) {
         if (!d.isTextPart(name)) continue;
-        const { part, literals } = compilePart(name, Buffer.from(bytes).toString('utf8'), opts, d, literalCount, copies, elements);
+        const room = notesParts.has(name) ? { left: MAX_NEAR_TAGS } : near;
+        const { part, literals } = compilePart(name, Buffer.from(bytes).toString('utf8'), opts, d, literalCount, copies, elements, room);
         literalCount += literals;
         if (part.nodes && part.hasBlocks) repeatsIds = markRepeatedIds(part.nodes, false, d) || repeatsIds;
         parts.set(name, part);
     }
+    // A notes part kept as compiled lists what the template's room leaves it: its first texts, in document
+    // order, the rest counted.
+    const settle = (part: CompiledPart): void => {
+        const kept = Math.min(near.left, part.nearTags.length);
+        part.nearUnlisted += part.nearTags.length - kept;
+        part.nearTags.length = kept;
+        near.left -= kept;
+    };
     // Only a part with blocks is read element by element (scanStructure), its elements counted. In any
     // other (no tag, or fields only) the ids and notes a scan finds are counted to the same bound, each
     // scan on its own, as each holds what it finds (note references, fresh-id seeds, notes).
@@ -2405,26 +2427,10 @@ export function compileTemplate(entries: Record<string, Uint8Array>, opts: Templ
     const noteTemplates = new Map<string, Map<string, NoteTemplate>>();
     const notesPartXml = new Map<string, string>();
     const loopNotes = new Map<string, string[]>();
-    const noteElements: ElementBudget = { left: opts.maxXmlElements, textRuns: opts.maxXmlElements, nearTags: MAX_NEAR_TAGS };
-    const NOTE_PARTS = d.noteParts;
-    if (repeatsIds && NOTE_PARTS) {
-        // Each note on its own, to be rendered in the scope of a reference to it inside a loop. Its
-        // elements were counted against maxXmlElements with its part when that was read element by
-        // element (this reading is a second); otherwise each note is counted as it is found.
-        const chargeNotes = unreadScan();
-        for (const { part, element } of Object.values(NOTE_PARTS)) {
-            if (!entries[part]) continue;
-            const xml = Buffer.from(entries[part]).toString('utf8');
-            const templates = new Map<string, NoteTemplate>();
-            for (const [id, [start, end]] of noteSpans(xml, element, chargeNotes(part))) {
-                const noteXml = xml.slice(start, end);
-                const compiledNote = compilePart(part, noteXml, opts, d, literalCount, copies, noteElements);
-                literalCount += compiledNote.literals;
-                if (compiledNote.part.nodes && compiledNote.part.hasBlocks) markRepeatedIds(compiledNote.part.nodes, false, d);
-                templates.set(id, { nodes: compiledNote.part.nodes, xml: noteXml, rangesAcross: compiledNote.part.nodes ? rangesAcrossLoops(compiledNote.part.nodes, d) : new Set(), nearTags: compiledNote.part.nearTags, nearUnlisted: compiledNote.part.nearUnlisted });
-            }
-            noteTemplates.set(part, templates);
-        }
+    const noteElements: ElementBudget = { left: opts.maxXmlElements, textRuns: opts.maxXmlElements };
+    if (!repeatsIds || !NOTE_PARTS) {
+        for (const name of notesParts) { const part = parts.get(name); if (part) settle(part); }
+    } else {
         // Notes referred to inside loops, and those referred to outside them: a note's references in a part,
         // less those in its loops' content.
         const inLoops = new Set<string>();
@@ -2471,13 +2477,43 @@ export function compileTemplate(entries: Record<string, Uint8Array>, opts: Templ
             }
             for (const [key, n] of counts) if (n > 0) outside.add(key);
         }
-        // Each notes part without the notes only loops refer to, compiled again from that text.
+        // The notes only loops refer to, cut from each notes part, in the part's order: listed from their own
+        // compiles, after their part's texts. A notes part that cuts none is settled as compiled.
+        const cutOf = new Map<string, [string, [number, number]][]>();
+        const cutIds = new Map<string, Set<string>>();
         for (const { part, element } of Object.values(NOTE_PARTS)) {
             if (!entries[part]) continue;
             const xml = Buffer.from(entries[part]).toString('utf8');
             const cutNotes = [...noteSpans(xml, element)].filter(([id]) => inLoops.has(`${part}:${id}`) && !outside.has(`${part}:${id}`)).sort((a, b) => a[1][0] - b[1][0]);
+            if (cutNotes.length) { cutOf.set(part, cutNotes); cutIds.set(part, new Set(cutNotes.map(([id]) => id))); }
+            else { const compiled = parts.get(part); if (compiled) settle(compiled); }
+        }
+        // Each note on its own, to be rendered in the scope of a reference to it inside a loop. Its
+        // elements were counted against maxXmlElements with its part when that was read element by
+        // element (this reading is a second); otherwise each note is counted as it is found.
+        const chargeNotes = unreadScan();
+        for (const { part, element } of Object.values(NOTE_PARTS)) {
+            if (!entries[part]) continue;
+            const xml = Buffer.from(entries[part]).toString('utf8');
+            const templates = new Map<string, NoteTemplate>();
+            for (const [id, [start, end]] of noteSpans(xml, element, chargeNotes(part))) {
+                const noteXml = xml.slice(start, end);
+                // Only a note cut for loops is listed (the others are in their part's list): only it takes room.
+                const listed = cutIds.get(part)?.has(id) ?? false;
+                const compiledNote = compilePart(part, noteXml, opts, d, literalCount, copies, noteElements, listed ? near : { left: 0 });
+                literalCount += compiledNote.literals;
+                if (compiledNote.part.nodes && compiledNote.part.hasBlocks) markRepeatedIds(compiledNote.part.nodes, false, d);
+                templates.set(id, { nodes: compiledNote.part.nodes, xml: noteXml, rangesAcross: compiledNote.part.nodes ? rangesAcrossLoops(compiledNote.part.nodes, d) : new Set(), nearTags: compiledNote.part.nearTags, nearUnlisted: compiledNote.part.nearUnlisted });
+            }
+            noteTemplates.set(part, templates);
+        }
+        // Each notes part without the notes only loops refer to, compiled again from that text.
+        for (const { part } of Object.values(NOTE_PARTS)) {
+            if (!entries[part]) continue;
+            const cutNotes = cutOf.get(part);
+            if (!cutNotes) continue;
+            const xml = Buffer.from(entries[part]).toString('utf8');
             const cut = cutNotes.map(([, span]) => span);
-            if (!cut.length) continue;
             loopNotes.set(part, cutNotes.map(([id]) => id));
             const kept: string[] = [];
             let at = 0;
@@ -2485,7 +2521,7 @@ export function compileTemplate(entries: Record<string, Uint8Array>, opts: Templ
             kept.push(xml.slice(at));
             const stripped = kept.join('');
             notesPartXml.set(part, stripped);
-            const recompiled = compilePart(part, stripped, opts, d, literalCount, copies, noteElements);
+            const recompiled = compilePart(part, stripped, opts, d, literalCount, copies, noteElements, near);
             literalCount += recompiled.literals;
             if (recompiled.part.nodes && recompiled.part.hasBlocks) markRepeatedIds(recompiled.part.nodes, false, d);
             parts.set(part, recompiled.part);
