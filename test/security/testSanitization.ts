@@ -2273,7 +2273,7 @@ const LATEX_GENERATOR_COMMANDS = new Set((
     'documentclass usepackage ifPDFTeX else fi hypersetup setcounter maxdimen lstset ttfamily small makeatletter makeatother renewcommand paragraph ' +
     'subparagraph startsection z plus minus normalfont normalsize bfseries definecolor newunicodechar DeclareUnicodeCharacter ensuremath ding title author date ' +
     'begin end maketitle section subsection subsubsection chapter label phantomsection hyperref href footnote endnote footnotemark footnotetext addtocounter ' +
-    'stepcounter theendnotes textbf textit texttt uline sout textsuperscript textsubscript textcolor colorbox setlength fboxsep strut fontsize selectfont protect ' +
+    'stepcounter theendnotes textbf textit texttt uline sout textsuperscript textsubscript textcolor colorbox setlength fboxsep strut fontsize selectfont protect providecommand ' +
     'item centering raggedleft raggedright arraybackslash dimexpr linewidth tabcolsep arrayrulewidth relax hline cline endhead multicolumn multirow cellcolor ' +
     'includegraphics ifdim textheight fbox hfil break newpage clearpage rule quad hspace phantom leftskip rightskip hangindent hangafter par cite ' +
     'textbackslash textasciitilde textasciicircum textless textgreater textbar textasciigrave pagestyle fancyhf fancyhead fancyfoot headrulewidth headheight ' +
@@ -2430,7 +2430,8 @@ async function latexSanitizationTests() {
     for (const [label, doc, config] of [['article', hostile, {}], ['beamer', hostile, { texConfig: { documentClass: 'beamer' } }], ['fragment', hostile, { texConfig: { standalone: false } }],
         ['article with CJK, Greek and Cyrillic', scripts, {}]] as const) {
         const out = (await OfficeGenerator.generate(doc as any, 'tex', { renderMetadata: true, onWarning: () => { }, ...config } as any)).value as string;
-        const foreign = [...new Set(liveControlWords(withoutGeneratorPrivileged(out)).filter(w => !LATEX_GENERATOR_COMMANDS.has(w)))];
+        // (A background colour's command, `ophl` and its validated hex digits as letters, is the generator's own.)
+        const foreign = [...new Set(liveControlWords(withoutGeneratorPrivileged(out)).filter(w => !LATEX_GENERATOR_COMMANDS.has(w) && !/^ophl[a-p]{6}$/.test(w)))];
         check(`latex ${label}: hostile content adds no command of its own`, foreign.length === 0, foreign.join(', '));
         const docEnds = (liveLatexSource(out).match(/(^|[^\\])\\end\{document\}/g) || []).length;
         check(`latex ${label}: exactly one live document end`, label === 'fragment' ? docEnds === 0 : docEnds === 1, `found ${docEnds}`);
@@ -5394,6 +5395,45 @@ async function styleFlagWeightTests() {
 }
 
 /**
+ * LaTeX boxes each highlighted word by its colour's one command, defined once: written out at every
+ * word, a highlight took about 30 characters a word, 15.5 times the text of one-letter words, and 1.1 KB
+ * of spreadsheet repeating a highlighted cell wrote 8.5 times the repeated content budget as LaTeX. The
+ * LaTeX reader reads the command back as the highlight it stands for.
+ */
+async function latexHighlightSizeTests() {
+    console.log('- LaTeX writes a highlight by its colour\'s command...');
+    const words = Array.from({ length: 1_000 }, () => 'a').join(' ');
+    const texOf = async (formatting: object) => (await OfficeGenerator.generate(astWith([{ type: 'paragraph', text: words, children: [{ type: 'text', text: words, formatting }] }]), 'tex', { onWarning: () => {} } as any)).value as string;
+    const grown = (await texOf({ backgroundColor: '#FFFF00' })).length - (await texOf({})).length;
+    check('latex: a paragraph of 1,000 highlighted one-letter words grows by under 7 characters a character of text', grown > 0 && grown < 7 * words.length, `${grown} for ${words.length}`);
+    const budget = 2_000_000;
+    const cell = Array.from({ length: 50_000 }, () => 'a').join(' ');
+    const bytes = sizeOdf('spreadsheet', `<table:table table:name="S"><table:table-column/><table:table-row><table:table-cell table:number-columns-repeated="2000"><text:p><text:span text:style-name="T1">${cell}</text:span></text:p></table:table-cell></table:table-row></table:table>`,
+        '<style:style style:name="T1" style:family="text"><style:text-properties fo:background-color="#ffff00"/></style:style>');
+    const parsed = await sizeParse(bytes, 'ods', { decompressionLimits: { maxRepeatedContent: budget } });
+    const tex = await sizeWrite(parsed.ast, 'tex');
+    check('latex: a highlighted cell of 100,000 characters repeated 2,000 times writes under 5 times the repeated content budget (8.5 before)',
+        !parsed.error && parsed.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && !tex.startsWith('threw') && tex.includes('\\colorbox{hexFFFF00}') && tex.length < 5 * (budget + 16 * bytes.length),
+        `${parsed.error} ${parsed.codes} tex ${tex.length}`);
+    // Round trip: the words highlighted in test.docx read back from its LaTeX in the same colours.
+    const docx = await OfficeParser.parseOffice(path.join(__dirname, '..', 'files', 'test.docx'), { onWarning: () => {} } as any);
+    const highlighted = (content: any[]) => {
+        const found: string[] = [];
+        const walk = (nodes: any[] | undefined) => nodes?.forEach(node => {
+            const colour = node.type === 'text' ? cssColorHex(node.formatting?.backgroundColor) : null;
+            if (colour) for (const word of String(node.text).split(/\s+/)) if (word) found.push(`${word} ${colour}`);
+            walk(node.children); walk(node.notes);
+        });
+        walk(content);
+        return found;
+    };
+    const written = (await docx.to('tex', { onWarning: () => {} } as any)).value as string;
+    const read = await OfficeParser.parseOffice(Buffer.from(written), { fileType: 'tex', onWarning: () => {} } as any);
+    const before = highlighted(docx.content), after = highlighted(read.content);
+    check('latex: test.docx\'s highlighted words read back from its LaTeX in their colours', before.length > 0 && JSON.stringify(before) === JSON.stringify(after), `${before.length} written, ${after.length} read: ${before.filter((w, i) => w !== after[i]).slice(0, 3)}`);
+}
+
+/**
  * The files pdf.js loads for a PDF (its CMaps and image decoders) are read only as asked for by name,
  * from inside their folder, bounded in size and time, never from the built-in CDN address under
  * `allowRemoteAssets: false`; and nothing waiting on one outlives its bound or the parse's abortSignal.
@@ -5736,6 +5776,7 @@ async function main() {
     await nativePdfMemoryTests();
     await odtBreakLinkTests();
     await styleFlagWeightTests();
+    await latexHighlightSizeTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);

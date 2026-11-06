@@ -2955,7 +2955,7 @@ async function testLatexGeneration(): Promise<void> {
     assert.ok(stex.includes('% Comment (Rev, 2024-02-02): line one\n% line two\n'), 'TEX synthetic: comment as % lines, one per line');
     assert.ok(stex.includes('\\phantomsection\\label{target}') && !stex.includes('\\label{unlinked}'), 'TEX synthetic: only linked anchors are labelled');
     assert.ok(stex.includes('{\\fontsize{16pt}{19.2pt}\\selectfont Big }'), 'TEX synthetic: a non-body size is written explicitly');
-    assert.ok(stex.includes('\\colorbox{hexFFFF00}{\\strut highlighted} \\colorbox{hexFFFF00}{\\strut words}'), 'TEX synthetic: highlight merged across runs and boxed per word');
+    assert.ok(stex.includes('\\ophlppppaa{highlighted} \\ophlppppaa{words}') && stex.includes('\\providecommand{\\ophlppppaa}[1]{{\\setlength{\\fboxsep}{1pt}\\colorbox{hexFFFF00}{\\strut #1}}}'), 'TEX synthetic: highlight merged across runs and boxed per word, by the colour\'s one command');
     assert.ok(stex.includes('\\footnote{a footnote}\\endnote{an endnote}'), 'TEX synthetic: footnote and endnote marks at the reference point');
     assert.ok(stex.includes('\\hyperref[target]{self}') && stex.includes(' and nowhere and bad'), 'TEX synthetic: resolvable internal link linked, unresolvable and unsafe links left as text');
     assert.ok(stex.includes('$x^2$'), 'TEX synthetic: safe inline math typeset');

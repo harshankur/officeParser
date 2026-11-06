@@ -45,6 +45,8 @@
 \definecolor{hexFF0000}{HTML}{FF0000}
 \definecolor{hexFFFF00}{HTML}{FFFF00}
 \definecolor{hexFFFFFF}{HTML}{FFFFFF}
+\providecommand{\ophlaaaaaa}[1]{{\setlength{\fboxsep}{1pt}\colorbox{hex000000}{\strut #1}}}
+\providecommand{\ophlppppaa}[1]{{\setlength{\fboxsep}{1pt}\colorbox{hexFFFF00}{\strut #1}}}
 \iftutex
   \newunicodechar{▪}{\ensuremath{\blacksquare}}
 \else
@@ -1347,7 +1349,7 @@ startxref
 
 {\hspace*{21.6bp}Here, we demonstrate various types of inline text formatting and the use of embedded fonts.\par}
 
-{\hspace*{21.6bp}Here is some \textbf{bold, }\textit{italic, }\textit{\textbf{bold-italic, }}\uline{underlined }and \sout{struck out } text. Then, we have a super\textsuperscript{script} and a sub\textsubscript{script}. Now we see some \textcolor{hexFF0000}{red}, \textcolor{hex92D050}{green} and \textcolor{hex0070C0}{blue} text. Some text with a {\setlength{\fboxsep}{1pt}\colorbox{hexFFFF00}{\strut yellow} \colorbox{hexFFFF00}{\strut highlight}}. Some text in a box. Some text in \textcolor{hexFFFFFF}{{\setlength{\fboxsep}{1pt}\colorbox{hex000000}{\strut inverse} \colorbox{hex000000}{\strut video}}}.\par}
+{\hspace*{21.6bp}Here is some \textbf{bold, }\textit{italic, }\textit{\textbf{bold-italic, }}\uline{underlined }and \sout{struck out } text. Then, we have a super\textsuperscript{script} and a sub\textsubscript{script}. Now we see some \textcolor{hexFF0000}{red}, \textcolor{hex92D050}{green} and \textcolor{hex0070C0}{blue} text. Some text with a \ophlppppaa{yellow} \ophlppppaa{highlight}. Some text in a box. Some text in \textcolor{hexFFFFFF}{\ophlaaaaaa{inverse} \ophlaaaaaa{video}}.\par}
 
 {\hspace*{21.6bp}A paragraph with styled text: \textcolor{hex808080}{\textit{subtle emphasis  }}followed by \textbf{strong text }and \textcolor{hex4F81BD}{\textit{\textbf{intense emphasis}}}. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.\par}
 
