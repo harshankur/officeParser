@@ -4421,6 +4421,9 @@ async function testTemplateNearTags(): Promise<void> {
     ], `each text that looks like a tag, in order, in every part; got ${JSON.stringify(near(tags))}`);
     assert.deepStrictEqual(tags.filter(t => t.kind !== 'text').map(t => t.tag), ['{{ ok }}', '{{ ok }}'], 'the tags themselves are listed as before');
     assert.ok(tags.filter(t => t.kind === 'text').every(t => t.fields.length === 0 && t.loops.length === 0), 'such text reads no field');
+    // A part whose only braces are full-width is read for them too, in both formats.
+    const { odt, p: op } = odtHelpers();
+    assert.deepStrictEqual(near(await OfficeTemplate.tags(odt(op(FW('{{nom}}'))))), [`full-width content.xml ${FW('{{nom}}')}`], 'an ODT part with only full-width braces');
     const warnings: any[] = [];
     const rendered = await OfficeTemplate.render(fixture, { data: { ok: 'OK' }, onWarning: (w: any) => warnings.push(w) }) as Uint8Array;
     assert.deepStrictEqual(warnings.map(w => [w.code, w.details.texts.length]), [['TEMPLATE_NOT_A_TAG', 12]], 'a render warns once, with every such text');

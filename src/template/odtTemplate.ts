@@ -83,9 +83,9 @@ function spacesXml(count: number): string {
 /** How a marker's piece of a `<text:s/>` is written back: as the spaces it stood for. */
 const ODT_SPACES = { spacesXml: (spaces: string): string => spaces ? spacesXml(spaces.length) : '' };
 
-/** Whether a part may hold a tag: it has the start delimiter's first character. */
+/** Whether a part may hold a tag, or text that looks like one: it has a character such text starts with. */
 function mayHoldTag(xml: string, ctx: PartContext): boolean {
-    return xml.includes(ctx.startText[0]);
+    return ctx.triggers.some(t => xml.includes(t));
 }
 
 /**
