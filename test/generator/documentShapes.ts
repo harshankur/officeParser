@@ -886,6 +886,60 @@ export async function testMarkdownDisclosureSummaries(): Promise<void> {
     console.log('✓ Markdown disclosure summaries');
 }
 
+/** Block kinds a disclosure's closing tag follows in its body, tight or after a blank line. */
+const DISCLOSURE_NEIGHBOURS: Record<string, string> = {
+    para: 'Para *x*', head: '## Head', setext: 'Title\n===', list: '- a\n- b', olist: '1. a', listIndented: '- a\n\n  more', quote: '> q', quoteLazy: '> q\nlazy',
+    fence: '```\nc\n```', indent: '    code', pipe: '| a |\n| - |\n| b |', hr: '***', div: '<div align="center">\n\n*c*\n\n</div>', pdiv: '<p align="center">x</p>',
+    table: '<table><tr><td>\n\n*m*\n\n</td></tr></table>', img: '![a](x.png)', fn: 'N[^z]\n\n[^z]: fnote', def: 'Term\n: def', comment: '<!-- c -->', math: '$$\nx^2\n$$',
+    adm: '> [!NOTE]\n> text', task: '- [ ] todo', kbd: '<kbd>K</kbd> key',
+};
+
+/**
+ * A disclosure's or summary's tag starting a line is an HTML block (CommonMark's condition 6): it ends a
+ * quote, admonition or list item it is not marked or indented into. A closing tag in a quote, list item
+ * or heading closes that too, as a browser has it: what follows it there stands after the disclosure,
+ * a list's later items a block of their own; a `</summary>` in one closes a summary open outside.
+ * Tags in a heading's text, a code span or an HTML table in it close nothing outside it.
+ */
+export async function testMarkdownDisclosureContainerCloses(): Promise<void> {
+    const note = await markdownRead('<details>\n<summary>Note</summary>\n\n> [!NOTE]\n> Read this.\n</details>\n\n## Install\n\nRun it.\n');
+    assert.strictEqual(note.shape, 'disclosure[Note](admonition(paragraph(text))),heading(text),paragraph(text)', 'Disclosure close: a closing line after an admonition ends it');
+    assert.strictEqual(note.md, '<details>\n<summary>Note</summary>\n\n> [!NOTE]\n> Read this.\n\n</details>\n\n## Install {#install}\n\nRun it.', 'Disclosure close: after an admonition, its Markdown');
+    const item = await markdownRead('<details>\n<summary>Log</summary>\n\n- step one\n  </details>\n\n## Next\n');
+    assert.strictEqual(item.shape, 'disclosure[Log](list(text)),heading(text)', 'Disclosure close: a closing line in a list item');
+    assert.strictEqual(item.md, '<details>\n<summary>Log</summary>\n\n- step one\n\n</details>\n\n## Next {#next}', 'Disclosure close: in a list item, no tag kept as its text');
+    // Every block kind before the closing tag in the body, and before the disclosure, tight and after a blank line.
+    for (const [name, block] of Object.entries(DISCLOSURE_NEIGHBOURS)) for (const join of ['\n', '\n\n']) {
+        const inBody = (await OfficeParser.parseOffice(Buffer.from(`<details>\n<summary>S</summary>\n\n${block}${join}</details>\n\nAFTER\n`), { fileType: 'md' })).content;
+        const body = JSON.stringify(inBody[0]);
+        assert.ok(inBody.length === 2 && inBody[0].type === 'disclosure' && JSON.stringify(inBody[1]).includes('AFTER') && !body.includes('AFTER') && !JSON.stringify(inBody).includes('</details>'),
+            `Disclosure close: after ${name} (${JSON.stringify(join)}) the disclosure ends: ${treeShape(inBody)}`);
+        const before = (await OfficeParser.parseOffice(Buffer.from(`${block}${join}<details>\n<summary>S</summary>\n\nBODY\n\n</details>\n\nAFTER\n`), { fileType: 'md' })).content;
+        const disclosure = before.find(node => node.type === 'disclosure');
+        assert.ok(disclosure && JSON.stringify(disclosure).includes('BODY') && !JSON.stringify(disclosure).includes('AFTER') && JSON.stringify(before[before.length - 1]).includes('AFTER'),
+            `Disclosure close: a disclosure after ${name} (${JSON.stringify(join)}) holds its body: ${treeShape(before)}`);
+    }
+    for (const [name, block] of Object.entries({ liCont: '- a\n  ', quoteGt: '> q\n> ', quoteNested: '> > q\n', admLazy: '> [!TIP]\n> t\n', quote2: 'Para\n\n> q\n', quoteThenPara: '> q\n\nP\n' })) {
+        const content = (await OfficeParser.parseOffice(Buffer.from(`<details>\n<summary>S</summary>\n\n${block}</details>\n\nAFTER\n`), { fileType: 'md' })).content;
+        assert.ok(content.length === 2 && content[0].type === 'disclosure' && JSON.stringify(content[1]).includes('AFTER') && !JSON.stringify(content[0]).includes('AFTER') && !JSON.stringify(content).includes('</details>'),
+            `Disclosure close: a closing tag marked or indented into ${name} closes it: ${treeShape(content)}`);
+    }
+    const cases: [string, string, string][] = [
+        ['<details>\n\n> q\n> </details>\n> tail\n\nout\n', 'disclosure[](paragraph(text)),paragraph(text),paragraph(text)', 'a marked closing line: the quote\'s later lines after it'],
+        ['<details open>\n\n1. a </details>\n2. <details >\n', 'disclosure[](list(text)),list(text)', 'a list\'s later items a list of their own'],
+        ['<details>\n\n## h <summary>s</summary> `</details> x`\n\nafter\n\n</details>\n\nout\n', 'disclosure[](heading(text,text),paragraph(text)),paragraph(text)', 'a heading\'s text is inline: a tag in its code span closes nothing'],
+        ['<details>\n\n> q\n> <table><tr><td>a </details></td></tr></table>\n\nin\n\n</details>\n\nout\n', 'disclosure[](paragraph(text),table(row(cell(text))),paragraph(text)),paragraph(text)', 'a table in a quote holds its closing tag'],
+        ['<details open>\n<summary>\n\n> quoted\n> </summary>\n\nBody\n\n</details>\n', 'disclosure[quoted](paragraph(text))', 'a summary closed in a quote'],
+        ['<details>\n\n> <details>\n> inner\n\nout of the quote\n\n</details>\n\nafter\n', 'disclosure[](disclosure[](paragraph(text)),paragraph(text)),paragraph(text)', 'a disclosure opened in a quote ends with it'],
+    ];
+    for (const [source, shape, name] of cases) {
+        const read = await markdownRead(source);
+        assert.strictEqual(read.shape, shape, `Disclosure close: ${name}`);
+        assert.ok(name.includes('code span') || !read.text.includes('</details>'), `Disclosure close: ${name}, no closing tag in its text: ${read.text}`);
+    }
+    console.log('✓ Markdown disclosure closed in quotes, list items and headings');
+}
+
 /** ODF namespaces of a note test file. */
 const ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/"';
 
