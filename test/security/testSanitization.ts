@@ -5071,6 +5071,151 @@ async function nestedTextBoxTests() {
 }
 
 /**
+ * Runs `lines` (TypeScript, with `OfficeParser`, `OfficeGenerator` and `path` in scope) in a child
+ * process whose heap is held to `heapMb` megabytes, and returns its exit status and output: a case
+ * that kept more than it writes dies there of an out-of-memory error.
+ */
+function runCappedChild(heapMb: number, lines: string[]): { status: number | null; stdout: string; stderr: string } {
+    const childProcess = require('child_process') as typeof import('child_process');
+    const repo = path.join(__dirname, '..', '..');
+    const script = path.join(os.tmpdir(), `officeparser-capped-${process.pid}-${Math.random().toString(36).slice(2)}.ts`);
+    fs.writeFileSync(script, [
+        `const path = require('path');`,
+        `const { OfficeParser } = require(${JSON.stringify(path.join(repo, 'src', 'OfficeParser'))});`,
+        `const { OfficeGenerator } = require(${JSON.stringify(path.join(repo, 'src', 'OfficeGenerator'))});`,
+        `(async () => {`,
+        ...lines,
+        `})().catch(e => { console.error(e); process.exit(2); });`,
+    ].join('\n'));
+    try {
+        const result = childProcess.spawnSync(process.execPath, [`--max-old-space-size=${heapMb}`, ...process.execArgv, script], { encoding: 'utf8', timeout: 120_000 });
+        return { status: result.status, stdout: result.stdout ?? '', stderr: (result.stderr ?? '').slice(-400) };
+    } finally {
+        fs.rmSync(script, { force: true });
+    }
+}
+
+/**
+ * The chunker's splitter reads a paragraph's parts (sentences, lines, words, characters) one at a
+ * time: it listed them all first, an entry per character of a paragraph without spaces, and a DOCX of
+ * one 100-million-letter paragraph ran a 4 GB heap out ("invalid array length"). The chunks are the
+ * ones the list gave, checked against the list-based splitter kept here.
+ */
+async function chunkSplitterTests() {
+    console.log('- The chunk splitter reads parts one at a time, with the same chunks...');
+    const { ChunkingGenerator } = await import('../../src/generators/ChunkingGenerator');
+    const generator = (config: object = {}) => new ChunkingGenerator(astWith([]), { chunksConfig: config } as any) as any;
+    // The splitter as it was: every level's parts listed, then packed.
+    const listedSentences = (gen: any, text: string): string[] => {
+        if (gen.isCustomRegex) {
+            const userRegex = gen.chunkConfig.sentenceBoundaryRegex;
+            const regex = typeof userRegex === 'string' ? new RegExp(userRegex, 'g') : userRegex;
+            return text.split(regex).map((s: string) => s.trim()).filter(Boolean);
+        }
+        const abbreviations: string[] = gen.chunkConfig.abbreviations;
+        const sentences: string[] = [];
+        let start = 0;
+        const markRegex = /[.!?。！？]/g;
+        let match;
+        while ((match = markRegex.exec(text)) !== null) {
+            const mark = match[0], pos = match.index;
+            const nextChar = text[pos + 1];
+            if (!nextChar || /\s/.test(nextChar) || /[。！？]/.test(mark)) {
+                if (mark === '.') {
+                    const lastWord = text.substring(text.lastIndexOf(' ', pos - 1) + 1, pos).replace(/^[^\w]+|[^\w]+$/g, '');
+                    if (abbreviations.includes(lastWord)) continue;
+                }
+                sentences.push(text.substring(start, pos + 1).trim());
+                start = pos + 1;
+            }
+        }
+        if (start < text.length) { const remaining = text.substring(start).trim(); if (remaining) sentences.push(remaining); }
+        return sentences.length > 0 ? sentences : [text];
+    };
+    const boundary = (text: string, offset: number) => { const b = text.charCodeAt(offset - 1), a = text.charCodeAt(offset); return b >= 0xD800 && b <= 0xDBFF && a >= 0xDC00 && a <= 0xDFFF ? offset - 1 : offset; };
+    const listed = (gen: any, text: string, size: number, overlap: number, separators: string[], measure: (t: string) => number): { text: string; start: number; end: number }[] => {
+        if (measure(text) <= size) return text.trim() ? [{ text, start: 0, end: text.length }] : [];
+        let chosen: string | undefined, next: string[] = [], parts: string[] = [], joiner = '';
+        const sentences = listedSentences(gen, text);
+        if (sentences.length > 1) { parts = sentences; joiner = ' '; chosen = 'SENTENCE_SPLIT'; next = separators; }
+        else for (let i = 0; i < separators.length; i++) {
+            const sep = separators[i];
+            parts = sep ? text.split(sep) : [...text];
+            if (parts.length > 1) { chosen = sep; joiner = sep; next = separators.slice(i + 1); break; }
+        }
+        if (chosen === undefined) {
+            const results: { text: string; start: number; end: number }[] = [];
+            const width = Math.max(1, Math.floor(size)), step = Math.max(1, width - Math.max(0, Math.floor(overlap)));
+            let offset = 0;
+            while (offset < text.length) {
+                const nextCharacter = offset + ((text.codePointAt(offset) ?? 0) > 0xFFFF ? 2 : 1);
+                const end = Math.max(nextCharacter, boundary(text, Math.min(text.length, offset + width)));
+                results.push({ text: text.slice(offset, end), start: offset, end });
+                offset = Math.max(nextCharacter, boundary(text, Math.min(end, offset + step)));
+            }
+            return results;
+        }
+        const results: { text: string; start: number; end: number }[] = [];
+        let current = '', currentStart = 0, absolute = 0;
+        const flush = () => {
+            if (measure(current) > size) for (const r of listed(gen, current, size, overlap, next, measure)) results.push({ text: r.text, start: currentStart + r.start, end: currentStart + r.end });
+            else results.push({ text: current, start: currentStart, end: currentStart + current.length });
+        };
+        for (const part of parts) {
+            const candidate = current ? current + joiner + part : part;
+            if (measure(candidate) <= size) current = candidate;
+            else {
+                if (current.trim()) flush();
+                const overlapLength = Math.max(0, Math.floor(overlap));
+                if (overlapLength > 0 && current.length > overlapLength && measure(current) <= size) {
+                    const overlapStart = boundary(current, current.length - overlapLength);
+                    currentStart += overlapStart;
+                    current = current.slice(overlapStart) + joiner + part;
+                } else { currentStart = absolute; current = part; }
+            }
+            absolute += part.length + joiner.length;
+        }
+        if (current.trim()) flush();
+        return results;
+    };
+    // Random texts of words, spaces, tabs, newlines, sentence marks, abbreviations and astral and combining characters.
+    let seed = 12345;
+    const random = (n: number) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+    const pieces = ['a', 'bc', 'word', ' ', ' ', '  ', '\t', '\n', '\n\n', '. ', '.', '! ', '? ', '。', 'Mr. ', 'e.g. ', '\u{1F600}', 'e\u0301', ' . '];
+    const measures: [string, (t: string) => number][] = [['length', t => t.length], ['code points', t => [...t].length]];
+    const configs: [string, object][] = [['default', {}], ['a sentence regex with a capture', { sentenceBoundaryRegex: '([.!?])\\s*' }], ['a sentence regex matching empty', { sentenceBoundaryRegex: '(?=[A-Z])|\\s*' }]];
+    let compared = 0;
+    const differences: string[] = [];
+    for (const [configLabel, config] of configs) {
+        const gen = generator(config);
+        for (let k = 0; k < 600; k++) {
+            const text = Array.from({ length: random(60) }, () => pieces[random(pieces.length)]).join('');
+            const size = 1 + random(24), overlap = random(size + 1);
+            const separators = [['\n\n', '\n', ' ', ''], ['\n', ' ', ''], [' ', ''], ['']][random(4)];
+            const [measureLabel, measure] = measures[random(measures.length)];
+            // (Either may end in an error: an overlap that keeps a chunk past the size recursed without end
+            // before and still does, which is the listing splitter's behaviour to keep, not this case's to fix.)
+            const outcome = (split: () => unknown) => { try { return JSON.stringify(split()); } catch (e: any) { return `threw ${e?.name}`; } };
+            const expected = outcome(() => listed(gen, text, size, overlap, separators, measure));
+            const actual = outcome(() => gen.splitTextRecursively(text, size, overlap, separators, measure));
+            compared++;
+            if (expected !== actual && differences.length < 3) differences.push(`${configLabel}, ${measureLabel}, size ${size}, overlap ${overlap}, ${JSON.stringify(separators)}: ${JSON.stringify(text)}`);
+        }
+        const sample = 'One. Two! Three? Mr. Four e.g. five。six\tseven\n\neight';
+        if (JSON.stringify(gen.splitIntoSentences(sample)) !== JSON.stringify(listedSentences(gen, sample))) differences.push(`${configLabel}: sentences of ${JSON.stringify(sample)}`);
+    }
+    check('chunks: the splitter gives the chunks the listing splitter gave, on 1,800 random texts', differences.length === 0, `${compared} compared; ${differences.join(' | ')}`);
+    // One paragraph of 20 million letters, chunked under a 160 MB heap: listed, its characters alone took 160 MB.
+    const capped = runCappedChild(160, [
+        `const ast = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', text: 'A'.repeat(20_000_000), children: [{ type: 'text', text: 'A'.repeat(20_000_000) }] }] };`,
+        `const chunks = (await OfficeGenerator.generate(ast, 'chunks', { onWarning: () => {} })).value;`,
+        `console.log(JSON.stringify({ count: chunks.length, sizes: [...new Set(chunks.map(c => c.text.length))] }));`,
+    ]);
+    const out = (() => { try { return JSON.parse(capped.stdout.trim().split('\n').pop() ?? ''); } catch { return undefined; } })();
+    check('chunks: one paragraph of 20,000,000 letters is chunked under a 160 MB heap, in 20,000 chunks of 1,000', capped.status === 0 && out?.count === 20_000 && out?.sizes?.length === 1 && out.sizes[0] === 1_000, `status ${capped.status} ${capped.stdout.slice(0, 200)} ${capped.stderr}`);
+}
+
+/**
  * The files pdf.js loads for a PDF (its CMaps and image decoders) are read only as asked for by name,
  * from inside their folder, bounded in size and time, never from the built-in CDN address under
  * `allowRemoteAssets: false`; and nothing waiting on one outlives its bound or the parse's abortSignal.
@@ -5409,6 +5554,7 @@ async function main() {
     await headerPartWeightTests();
     await xlsxRichStringChargeTests();
     await nestedTextBoxTests();
+    await chunkSplitterTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);

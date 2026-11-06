@@ -48,6 +48,33 @@ function contextLabel(text: string | undefined): string | undefined {
 }
 
 /** Move a UTF-16 offset off the middle of a surrogate pair. */
+/**
+ * What `text.split(separator)` gives, one part at a time (for `''`, what `[...text]` gives: its code
+ * points). A list of every part cost an entry per character or word of a paragraph, and one paragraph of
+ * 100 million letters asked for an array longer than the engine can hold.
+ */
+function* partsOf(text: string, separator: string): Generator<string> {
+    if (separator === '') {
+        for (let at = 0; at < text.length;) {
+            const next = at + ((text.codePointAt(at) ?? 0) > 0xFFFF ? 2 : 1);
+            yield text.slice(at, next);
+            at = next;
+        }
+        return;
+    }
+    let from = 0;
+    for (;;) {
+        const at = text.indexOf(separator, from);
+        if (at === -1) { yield text.slice(from); return; }
+        yield text.slice(from, at);
+        from = at + separator.length;
+    }
+}
+
+/** Whether `text.split(separator)` (for `''`, `[...text]`) has more than one part. */
+const splitsInTwo = (text: string, separator: string): boolean =>
+    separator === '' ? text.length > ((text.codePointAt(0) ?? 0) > 0xFFFF ? 2 : 1) : text.indexOf(separator) !== -1;
+
 function characterBoundary(text: string, offset: number): number {
     const before = text.charCodeAt(offset - 1);
     const after = text.charCodeAt(offset);
@@ -252,13 +279,15 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
 
         let chosenSep: string | undefined;
         let nextSeparators: string[] = [];
-        let parts: string[] = [];
+        // The parts, read one at a time in order (see partsOf): the packing below reads each once.
+        let parts: Iterable<string> = [];
         let actualSep = '';
 
         // 1. Try splitting into sentences first
-        const sentences = this.splitIntoSentences(text);
-        if (sentences.length > 1) {
-            parts = sentences;
+        const sentences = this.sentencesOf(text);
+        const first = sentences.next(), second = sentences.next();
+        if (!first.done && !second.done) {
+            parts = (function* () { yield first.value; yield second.value; yield* sentences; })();
             actualSep = ' ';
             chosenSep = 'SENTENCE_SPLIT'; // Internal marker to avoid hard-cut
             nextSeparators = separators;
@@ -266,8 +295,8 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             // 2. Fallback to the character separators provided in config
             for (let i = 0; i < separators.length; i++) {
                 const sep = separators[i];
-                parts = sep ? text.split(sep) : [...text];
-                if (parts.length > 1) {
+                if (splitsInTwo(text, sep)) {
+                    parts = partsOf(text, sep);
                     chosenSep = sep;
                     actualSep = sep;
                     nextSeparators = separators.slice(i + 1);
@@ -298,8 +327,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
         let currentStart = 0;
         let absoluteOffset = 0;
 
-        for (let i = 0; i < parts.length; i++) {
-            const part = parts[i];
+        for (const part of parts) {
             const candidate = currentChunk ? currentChunk + actualSep + part : part;
 
             if (measure(candidate) <= chunkSize) {
@@ -907,15 +935,26 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
      * Robustly splits text into sentences, respecting abbreviations and non-Western punctuation.
      */
     private splitIntoSentences(text: string): string[] {
+        return [...this.sentencesOf(text)];
+    }
+
+    /**
+     * The sentences of `text` (see splitIntoSentences), one at a time: a list of them cost an entry per
+     * sentence of a paragraph before any was packed. With a `sentenceBoundaryRegex` they are what
+     * `String.prototype.split` gives (its captures and empty matches are its own to reproduce), so that
+     * path lists them as before.
+     */
+    private *sentencesOf(text: string): Generator<string> {
         if (this.isCustomRegex) {
             const userRegex = this.chunkConfig.sentenceBoundaryRegex;
             const regex = typeof userRegex === 'string' ? new RegExp(userRegex, 'g') : userRegex;
             // Split while keeping the separator if possible, or just split
-            return text.split(regex).map(s => s.trim()).filter(Boolean);
+            yield* text.split(regex).map(s => s.trim()).filter(Boolean);
+            return;
         }
 
         const abbreviations = this.chunkConfig.abbreviations;
-        const sentences: string[] = [];
+        let found = 0;
         let start = 0;
 
         // Japanese full stop: 。 Exclamation: ！ Question: ？
@@ -944,16 +983,17 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
                     if (abbreviations.includes(lastWord)) continue;
                 }
 
-                sentences.push(text.substring(start, pos + 1).trim());
+                found++;
+                yield text.substring(start, pos + 1).trim();
                 start = pos + 1;
             }
         }
 
         if (start < text.length) {
             const remaining = text.substring(start).trim();
-            if (remaining) sentences.push(remaining);
+            if (remaining) { found++; yield remaining; }
         }
 
-        return sentences.length > 0 ? sentences : [text];
+        if (found === 0) yield text;
     }
 }
