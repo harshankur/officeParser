@@ -5199,6 +5199,114 @@ async function htmlReadingTests() {
     await scalesLinearly('pdf (native): a long word in a code block', n => OfficeGenerator.generate(astWith([{ type: 'code', text: 'x'.repeat(n), children: [{ type: 'text', text: 'x'.repeat(n) }] }]), 'pdf', { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any), 5000);
 }
 
+/**
+ * OpenDocument templates are held to every bound Word templates are (see the template cases of
+ * parserHardeningTests): scans forward-only, nesting bounded, repetition and output charged, elements
+ * counted, prototype keys never read. Each case built at the size the run asks for, timed by `linear`.
+ * Also the scans added beside them for both formats: text that looks like a tag, and numbers written as text.
+ */
+async function odtTemplateHardeningTests() {
+    console.log('- ODT templates, text that looks like a tag, numbers written as text (linear time, bounds)...');
+    const enc = (s: string) => new TextEncoder().encode(s);
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/"';
+    const odtOf = (body: string, styles = '<text:p>H</text:p>') => Buffer.from(zipSync({
+        mimetype: [enc('application/vnd.oasis.opendocument.text'), { level: 0 }],
+        'META-INF/manifest.xml': enc('<?xml version="1.0"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.text"/></manifest:manifest>'),
+        'content.xml': enc(`<?xml version="1.0"?><office:document-content ${NS}><office:body><office:text>${body}</office:text></office:body></office:document-content>`),
+        'styles.xml': enc(`<?xml version="1.0"?><office:document-styles ${NS}><office:master-styles><style:master-page style:name="S"><style:header>${styles}</style:header></style:master-page></office:master-styles></office:document-styles>`),
+    }));
+    const docxOf = (body: string) => Buffer.from(zipSync({
+        '[Content_Types].xml': enc('<Types/>'),
+        'word/document.xml': enc(`<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`),
+    }));
+    const renderQuiet = async (bytes: Buffer, data: any, cfg: any = {}) => {
+        try { return { out: await OfficeTemplate.render(bytes, { data, onWarning: () => { }, ...cfg }) as Uint8Array, code: undefined }; }
+        catch (e: any) { return { out: undefined, code: e?.officeIssue?.code ?? String(e) }; }
+    };
+    const p = (t: string) => `<text:p>${t}</text:p>`;
+    const wp = (t: string) => `<w:p><w:r><w:t>${t}</w:t></w:r></w:p>`;
+    for (const [label, make] of [
+        ['200,000 unclosed if tags in one paragraph', () => [odtOf(p('{{ if x }}'.repeat(n(200000)))), { x: 1 }, 'MAX_NESTING_DEPTH_EXCEEDED']],
+        ['200,000 closing tags with no block', () => [odtOf(p('{{ endif }}'.repeat(n(200000)))), {}, 'TEMPLATE_SYNTAX']],
+        ['60,000 sibling inline blocks', () => [odtOf(p('{{ if x }}a{{ endif }}'.repeat(n(60000)))), { x: 1 }, undefined]],
+        ['30,000 paragraph blocks', () => [odtOf((p('{{ if x }}') + p('a') + p('{{ endif }}')).repeat(n(30000))), { x: 0 }, undefined]],
+        ['30,000 list-item blocks', () => [odtOf(`<text:list>${('<text:list-item>' + p('{{ if x }}') + '</text:list-item><text:list-item>' + p('a') + '</text:list-item><text:list-item>' + p('{{ endif }}') + '</text:list-item>').repeat(n(30000))}</text:list>`), { x: 0 }, undefined]],
+        ['a table of 30,000 rows each in a row loop', () => [odtOf(`<table:table>${`<table:table-row><table:table-cell>${p('{{ for v in vs }}{{ v }}')}</table:table-cell><table:table-cell>${p('{{ endfor }}')}</table:table-cell></table:table-row>`.repeat(n(30000))}</table:table>`), { vs: [1] }, undefined]],
+        ['a block before 160,000 unclosed <text:p', () => [odtOf(p('{{ if a }}x{{ endif }}') + '<text:p '.repeat(n(160000))), { a: 1 }, 'TEMPLATE_SYNTAX']],
+        ['a field before 160,000 unclosed <text:p', () => [odtOf(p('{{ a }}') + '<text:p '.repeat(n(160000))), { a: 1 }, undefined]],
+        ['a block before 100,000 start tags with an unclosed quote', () => [odtOf(p('{{ if a }}x{{ endif }}') + '<text:x a="'.repeat(n(100000))), { a: 1 }, 'TEMPLATE_SYNTAX']],
+        ['a block before 100,000 unclosed elements', () => [odtOf(p('{{ if a }}x{{ endif }}') + '<text:x>'.repeat(n(100000))), { a: 1 }, 'TEMPLATE_SYNTAX']],
+        ['a field among 200,000 stray end tags', () => [odtOf(p('{{ a }}' + '</text:span>'.repeat(n(200000)))), { a: 1 }, undefined]],
+        ['three nested loops over 1,000 items with nothing to write', () => [odtOf(p('{{ for a in xs }}{{ for b in xs }}{{ for c in xs }}{{ endfor }}{{ endfor }}{{ endfor }}')), { xs: Array(n(1000)).fill(0) }, 'OUTPUT_TOO_LARGE']],
+        ['two nested loops over 3,000 items writing a paragraph each', () => [odtOf(p('{{ for a in xs }}') + p('{{ for b in xs }}') + p('row') + p('{{ endfor }}') + p('{{ endfor }}')), { xs: Array(n(3000)).fill(0) }, 'OUTPUT_TOO_LARGE']],
+        ['a loop over 1,000,000 items', () => [odtOf(p('{{ for a in xs }}{{ endfor }}')), { xs: Array(n(1000000)).fill(0) }, undefined]],
+        ['a loop copying a 300 KB footnote 2,000 times', () => [odtOf(p('{{ for i in xs }}') + p(`<text:note text:id="n1"><text:note-body>${p('x'.repeat(n(300000)))}</text:note-body></text:note>`) + p('{{ endfor }}')), { xs: Array(n(2000)).fill(0) }, 'OUTPUT_TOO_LARGE']],
+        // Inline blocks inside one span are cut inside it: nothing of the span is copied per tag (Word's run is).
+        ['16,000 tags in one span with 16 KB of attributes', () => [odtOf(p(`<text:span text:style-name="${'A'.repeat(n(16000))}">${'{{ if a }}x{{ endif }}'.repeat(n(16000))}</text:span>`)), { a: true }, undefined]],
+        // A block cut out of a span copies the span's start tag, charged as repetition: here 2,000 spans of 1 KB each, against 100 KB.
+        ['2,000 blocks each cut out of a span of 1 KB of attributes', () => [odtOf(p(`<text:span text:style-name="${'A'.repeat(1000)}">{{ if a }}x</text:span>{{ endif }}`.repeat(n(2000)))), { a: true }, 'OUTPUT_TOO_LARGE', { decompressionLimits: { maxRepeatedContent: 100_000 } }]],
+        ['a value of 30,000,000 line breaks', () => [odtOf(p('{{ v }}')), { v: '\n'.repeat(n(30_000_000)) }, 'OUTPUT_TOO_LARGE']],
+        ['a value of 15,000,000 spaces', () => [odtOf(p('{{ v }}')), { v: ' '.repeat(n(15_000_000)) }, undefined]],
+        ['3,000,000 empty spans beside a field', () => [odtOf(p('{{ a }}' + '<text:span/>'.repeat(n(3_000_000)))), { a: 1 }, 'XML_ELEMENT_LIMIT_EXCEEDED']],
+        ['3,000,000 text:s beside a field', () => [odtOf(p('{{ a }}' + '<text:s/>'.repeat(n(3_000_000)))), { a: 1 }, 'XML_ELEMENT_LIMIT_EXCEEDED']],
+        ['a missing tag split across 400,000 spans', () => [odtOf(p('{{' + '<text:span>a</text:span>'.repeat(n(400000)) + '}}')), { a: 1 }, 'OUTPUT_TOO_LARGE']],
+        ['a tag split across 400,000 empty spans', () => [odtOf(p('{{' + '<text:span></text:span>'.repeat(n(400000)) + 'a}}')), { a: 1 }, undefined]],
+        ['20,000 text:s of 999,999 spaces each beside a field', () => [odtOf(p('{{ a }}' + '<text:s text:c="999999"/>'.repeat(n(20000)))), { a: 1 }, undefined]],
+        ['16,000,000 fields in one paragraph', () => [odtOf(p('{{a}}'.repeat(n(16_000_000)))), { a: 1 }, 'XML_ELEMENT_LIMIT_EXCEEDED']],
+        ['an if, then 40,000 else ifs in a run 40,000 spans deep', () => [odtOf(p(`{{ if a }}${'<text:span>'.repeat(n(40000))}${'{{ else if a }}'.repeat(n(40000))}{{ endif }}${'</text:span>'.repeat(n(40000))}`)), { a: false }, 'TEMPLATE_SYNTAX']],
+        ['40,000 inline blocks 40,000 sections deep', () => [odtOf('<text:section>'.repeat(n(40000)) + p('{{ if a }}x{{ endif }}').repeat(n(40000)) + '</text:section>'.repeat(n(40000))), { a: 1 }, undefined]],
+        ['64,000 nested spans with xml:ids in a loop', () => [odtOf(p('{{ for a in xs }}') + '<text:p>' + '<text:span xml:id="s1">'.repeat(n(64000)) + 'x' + '</text:span>'.repeat(n(64000)) + '</text:p>' + p('{{ endfor }}')), { xs: [1, 2] }, undefined]],
+        ['a loop copying 50,000 named frames twice', () => [odtOf(p('{{ for a in xs }}') + p('<draw:frame draw:name="F" xml:id="f" draw:id="f"/>').repeat(n(50000)) + p('{{ endfor }}')), { xs: [0, 1] }, undefined]],
+        ['a loop copying 50,000 bookmark ranges twice', () => [odtOf(p('{{ for a in xs }}') + p('<text:bookmark-start text:name="b"/>x<text:bookmark-end text:name="b"/>').repeat(n(50000)) + p('{{ endfor }}')), { xs: [0, 1] }, undefined]],
+        ['100,000 orphaned bookmark ends after a branch', () => [odtOf(p('{{ if a }}x{{ endif }}') + p('<text:bookmark-end text:name="b"/>'.repeat(n(100000)))), { a: 1 }, undefined]],
+        ['100,000 open bookmark starts after a branch', () => [odtOf(p('{{ if a }}x{{ endif }}') + p('<text:bookmark-start text:name="b"/>'.repeat(n(100000)))), { a: 1 }, undefined]],
+        ['100,000 empty cells after a branch', () => [odtOf(p('{{ if a }}x{{ endif }}') + `<table:table><table:table-row>${'<table:table-cell/>'.repeat(n(100000))}</table:table-row></table:table>`), { a: 1 }, undefined]],
+        ['400,000 comments before a block', () => [odtOf('<!---->'.repeat(n(400000)) + p('{{ if x }}y{{ endif }}')), { x: true }, undefined]],
+        ['400,000 deleted paragraphs before a field', () => [odtOf(`<text:tracked-changes>${p('{{ a }}').repeat(n(400000))}</text:tracked-changes>` + p('{{ a }}')), { a: 1 }, undefined]],
+        ['a header of 60,000 paragraph blocks', () => [odtOf(p('x'), (p('{{ if a }}') + p('b') + p('{{ endif }}')).repeat(n(60000))), { a: false }, undefined]],
+        // Text that looks like a tag: every scan forward-only, each start looking at most a name ahead.
+        ['ODT: 200,000 unclosed {{ a', () => [odtOf(p('{{ a '.repeat(n(200000)))), {}, undefined]],
+        ['ODT: 200,000 { name }} in braces never closed', () => [odtOf(p('{'.repeat(n(200000)) + '{ name }}'.repeat(n(200000)))), {}, undefined]],
+        ['ODT: 200,000 full-width {{ starts', () => [odtOf(p('\uFF5B\uFF5B nom '.repeat(n(200000)))), {}, undefined]],
+        ['ODT: 200,000 names with spaces between delimiters', () => [odtOf(p('{{a b}}'.repeat(n(200000)))), {}, undefined]],
+        ['ODT: 1,000,000 full-width names', () => [odtOf(p('\uFF5B\uFF5Ba\uFF5D\uFF5D'.repeat(n(1_000_000)))), {}, undefined, { decompressionLimits: { maxXmlElements: 4_000_000 } }]],
+        ['ODT: 3,000,000 full-width names, the bound 2,000,000', () => [odtOf(p('\uFF5B\uFF5Ba\uFF5D\uFF5D'.repeat(n(3_000_000)))), {}, 'XML_ELEMENT_LIMIT_EXCEEDED']],
+        ['ODT: a name of 1,000,000 characters a brace short', () => [odtOf(p('{{ ' + 'a'.repeat(n(1_000_000)) + ' }')), {}, undefined]],
+        ['DOCX: 200,000 unclosed {{ a', () => [docxOf(wp('{{ a '.repeat(n(200000)))), {}, undefined]],
+        ['DOCX: 200,000 { name }} in braces never closed', () => [docxOf(wp('{'.repeat(n(200000)) + '{ name }}'.repeat(n(200000)))), {}, undefined]],
+        ['DOCX: 200,000 full-width braces in 200,000 runs', () => [docxOf('<w:p>' + '<w:r><w:t>\uFF5B</w:t></w:r>'.repeat(n(200000)) + '</w:p>'), {}, undefined]],
+        ['DOCX: 200,000 names with spaces split across runs', () => [docxOf('<w:p>' + '<w:r><w:t>{{a</w:t></w:r><w:r><w:t> b}}</w:t></w:r>'.repeat(n(200000)) + '</w:p>'), {}, undefined]],
+        ['DOCX: 200,000 unknown filters', () => [docxOf(wp('{{ a | nope }}'.repeat(n(200000)))), {}, undefined]],
+        // Numbers written as text, read with separators.
+        ['a 1 MB text of digit groups read with dataNumberSeparators in 50,000 passes', () => [odtOf(p('{{ for i in xs }}{{ v | format "0" }}{{ endfor }}')), { xs: Array(n(50000)).fill(0), v: '1' + '.000'.repeat(n(250_000)) + 'x' }, 'TEMPLATE_DATA_INVALID', { dataNumberSeparators: { decimal: ',', group: '.' } }]],
+        ['a list of 1 MB grouped number texts compared with a number', () => [odtOf(p('{{ for i in xs }}{{ if i > 1 }}y{{ endif }}{{ endfor }}')), { xs: Array(n(2000)).fill('1 000' + ' '.repeat(n(1_000_000))) }, 'OUTPUT_TOO_LARGE', { dataNumberSeparators: { decimal: ',', group: ' ' } }]],
+        ['a 1 MB text of spaces compared with a number in 10,000 passes', () => [odtOf(p('{{ for i in xs }}{{ if v > 1 }}y{{ endif }}{{ endfor }}')), { xs: Array(n(10000)).fill(0), v: ' '.repeat(n(1_000_000)) + '2' }, 'OUTPUT_TOO_LARGE']],
+    ] as [string, () => [Buffer, any, string | undefined, any?]][]) {
+        let result: { out: Uint8Array | undefined; code: string | undefined } = { out: undefined, code: undefined };
+        let wanted: string | undefined;
+        await linear(`template: ${label}`, async () => {
+            const [bytes, data, expected, cfg] = make();
+            wanted = expected;
+            result = await renderQuiet(bytes, data, cfg ?? {});
+        }, { label: `template: ${label} without copying it per reference`, limit: 300_000_000 });
+        check(`template: ${label} ${wanted ? `is refused with ${wanted}` : 'renders'}`, result.code === wanted && (wanted !== undefined || result.out instanceof Uint8Array), String(result.code));
+    }
+    // Prototype keys in an ODT template's paths are never read from the prototype; a data key named
+    // __proto__ (as JSON.parse makes it) is the data's own.
+    const protoList = await renderQuiet(odtOf(p('{{ for x in __proto__ }}[{{ x }}]{{ endfor }}{{ if constructor }}C{{ endif }}{{ if toString }}T{{ endif }}')), {}, { onMissing: 'empty' });
+    check('ODT template: __proto__, constructor and toString are missing fields, not the prototype', !protoList.code && !strFromU8(unzipSync(protoList.out!)['content.xml']).match(/\[|C<|T</), String(protoList.code));
+    const ownProto = await renderQuiet(odtOf(p('{{ for x in __proto__ }}[{{ x }}]{{ endfor }}')), JSON.parse('{"__proto__": ["own"]}'));
+    check('ODT template: a data key named __proto__ is the data\'s own list', !ownProto.code && strFromU8(unzipSync(ownProto.out!)['content.xml']).includes('[own]'), String(ownProto.code));
+    // Ids and names a template holds named as a prototype's keys are ids like any other.
+    const protoIds = await renderQuiet(odtOf(p('{{ for a in xs }}<text:bookmark text:name="__proto__"/><text:section text:name="constructor"/><draw:frame draw:name="toString" xml:id="__proto__"/>{{ endfor }}')), { xs: [1, 2, 3] });
+    const protoXml = protoIds.out ? strFromU8(unzipSync(protoIds.out)['content.xml']) : '';
+    check('ODT template: ids named __proto__ or constructor are renumbered as any other', !protoIds.code && (protoXml.match(/text:name="__proto__/g) ?? []).length === 3 && new Set(protoXml.match(/text:name="__proto__[^"]*"/g)).size === 3, String(protoIds.code));
+    // A zip bomb is bounded as a parse's is.
+    const bomb = Buffer.from(zipSync({ mimetype: enc('application/vnd.oasis.opendocument.text'), 'content.xml': new Uint8Array(40_000_000) }));
+    const bombed = await renderQuiet(bomb, {}, { decompressionLimits: { maxUncompressedBytes: 1_000_000 } });
+    check('ODT template: an entry past the decompression limit is refused, typed', !!bombed.code && bombed.code !== 'TEMPLATE_UNSUPPORTED_FORMAT', String(bombed.code));
+}
+
 async function main() {
     console.log('Running sanitization security tests...\n');
     unitTests();
@@ -5229,6 +5337,7 @@ async function main() {
     errorReportingTests();
     await errorRoutingTests();
     await parserHardeningTests();
+    await odtTemplateHardeningTests();
     await htmlReadingTests();
     await fontFileTests();
 
