@@ -690,6 +690,9 @@ const SUMMARY_OPEN_TAG = /\s*<summary(?:[\s/][^<>]*)?>/iy;
 /** A `</summary>` closing tag. */
 const SUMMARY_CLOSE_TAG = /<\/summary\s*>/gi;
 
+/** CommonMark's HTML block start condition 1, whose block a renderer passes through whole: a `<pre>` (or a raw-text element). */
+const RAW_HTML_BLOCK_START = /^ {0,3}<(?:pre|script|style|textarea)(?=[\s>]|$)/i;
+
 /** A block (see splitIntoBlocks), or a part of one cut at a disclosure's tag: its text, and whether all of it is raw HTML. */
 interface BlockPart { text: string; html: boolean }
 
@@ -700,7 +703,8 @@ interface DisclosureTag { at: number; end: number; open: boolean }
  * The `<details>` and `</details>` tags of a block that open and close disclosures where it stands, in
  * order, and where its raw HTML starts (see groupDisclosures). As a browser has a renderer's output: a
  * tag in a paragraph (inline HTML: not in a code span, not escaped) or in an HTML block (not in a table,
- * which closes what opens in it); none in a list item, quote, heading, pipe table or indented code,
+ * which closes what opens in it; an HTML block that a `<pre>` starts is one whether or not the block
+ * closes it); none in a list item, quote, heading, pipe table or indented code,
  * whose element closes what opens in it (a quote's text is read as blocks of its own). Linear in the
  * block's length.
  */
@@ -713,9 +717,9 @@ function disclosureTags(part: BlockPart): { tags: DisclosureTag[]; htmlFrom: num
         const firstLine = newline === -1 ? text : text.slice(0, newline);
         if (/^ {0,3}>/.test(firstLine) || ATX_HEADING_START.test(firstLine) || (LIST_ITEM_START.test(firstLine) && indentColumn(firstLine) < 4)
             || isIndentedCodeBlock(text)) return { tags: [], htmlFrom: text.length };
-        const start = HTML_BLOCK_LINE.exec(text);
-        htmlFrom = start ? start.index + (text[start.index] === '\n' ? 1 : 0)
-            : /^ {0,3}<pre[\s>]/i.test(text) && /<\/pre\s*>/i.test(text) ? 0 : text.length;
+        if (/^ {0,3}<(?:script|style|textarea)(?=[\s>]|$)/i.test(text)) return { tags: [], htmlFrom: text.length };
+        const start = RAW_HTML_BLOCK_START.test(text) ? { index: 0 } : HTML_BLOCK_LINE.exec(text);
+        htmlFrom = start ? start.index + (text[start.index] === '\n' ? 1 : 0) : text.length;
         if (htmlFrom === text.length && text.includes('|') && hasTableDelimiterRow(text)) return { tags: [], htmlFrom };
     }
     const blanked = htmlFrom > 0 ? blankCodeSpans(text.slice(0, htmlFrom)) : '';
@@ -2149,7 +2153,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         }
         // A part of a block, from `from` (blank lines at its start left out), raw HTML where the block's is.
         const cut = (part: BlockPart, htmlFrom: number, from: number, to = part.text.length): BlockPart => {
-            const html = part.html || (from > 0 && from >= htmlFrom);
+            const html = part.html || from >= htmlFrom;
             while (from < to) {
                 const newline = part.text.indexOf('\n', from);
                 if (newline === -1 || newline >= to || trimAsciiWhitespace(part.text.slice(from, newline))) break;

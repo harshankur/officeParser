@@ -806,6 +806,26 @@ export async function testMarkdownWithoutDisclosuresUnchanged(): Promise<void> {
     console.log(`✓ Markdown without disclosures unchanged (${documents.length} documents)`);
 }
 
+/** Markdown read and written back as Markdown, and its tree's shape (see treeShape). */
+async function markdownRead(markdown: string): Promise<{ shape: string; md: string; text: string }> {
+    const ast = await OfficeParser.parseOffice(Buffer.from(markdown), { fileType: 'md' });
+    return { shape: treeShape(ast.content), md: (await ast.to('md')).value, text: (await ast.to('text')).value };
+}
+
+/**
+ * A `<pre>` block in a disclosure is HTML from its first line, as CommonMark's condition 1 has it, whether
+ * or not the block closes it: a `</details>` in it closes the disclosure there, as a browser has it, and
+ * nothing it holds is read as Markdown.
+ */
+export async function testMarkdownDisclosurePreBlock(): Promise<void> {
+    const open = await markdownRead('<details>\n<summary>S</summary>\n\n<pre>\n</details>\n\nstill pre\n</pre>\n\nBody\n\n</details>\n\nAfter\n');
+    assert.strictEqual(open.shape, 'disclosure[S](code),paragraph(text),paragraph(text),paragraph(text)', 'Disclosure <pre>: a closing tag in a <pre> it does not close closes the disclosure');
+    assert.strictEqual(open.md, '<details>\n<summary>S</summary>\n\n```\n\n```\n\n</details>\n\nstill pre &lt;/pre>\n\nBody\n\nAfter', 'Disclosure <pre>: what follows stands after it');
+    const closed = await markdownRead('<details>\n<summary>S</summary>\n\n<pre>\nline\n</pre>\n\n</details>\n\nAfter\n');
+    assert.strictEqual(closed.md, '<details>\n<summary>S</summary>\n\n```\nline\n\n```\n\n</details>\n\nAfter', 'Disclosure <pre>: a closed <pre> reads as before');
+    console.log('✓ Markdown disclosure <pre> block');
+}
+
 /** ODF namespaces of a note test file. */
 const ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/"';
 
