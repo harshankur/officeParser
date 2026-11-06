@@ -53,7 +53,7 @@ import { bulletCharacter, formatListNumber, odfNumberFormat } from '../utils/lis
 class CellBudget {
     private remaining: number;
     private warned = false;
-    private readonly weights = new WeakMap<object, number>();
+    private readonly weigh = contentWeigher();
     constructor(private limit: number, private config: OfficeParserConfig) {
         this.remaining = limit;
     }
@@ -68,33 +68,9 @@ class CellBudget {
     takeRepeats(repeats: number, weight: number): number {
         return takeRepeats(this.config, repeats, weight);
     }
-    /**
-     * What one copy of a cell writes: its text, and for each node it holds the node's text, formatting
-     * and metadata values (a style's 64 KB font is written with every copy) plus 16 for the node itself
-     * (a generator spends on a node what it spends on a dozen or two characters of text).
-     */
+    /** What one copy of a cell writes: its text, and its content and comments weighed by contentWeigher. */
     weighCell(text: string, children: OfficeContentNode[] | undefined, comments: OfficeContentNode[] | undefined): number {
         return text.length + this.weigh(children) + this.weigh(comments);
-    }
-    /**
-     * Counted along every path, as a generator writes a shared node each time it meets it (a nested
-     * table's repeated cells share their content), and memoized so a shared subtree is summed once.
-     */
-    private weigh(nodes: OfficeContentNode[] | undefined): number {
-        if (!nodes || nodes.length === 0) return 0;
-        let total = this.weights.get(nodes);
-        if (total !== undefined) return total;
-        total = 0;
-        for (const node of nodes) {
-            let weight = this.weights.get(node);
-            if (weight === undefined) {
-                weight = 16 + (node.text?.length ?? 0) + valuesLength(node.formatting) + valuesLength(node.metadata) + this.weigh(node.children) + this.weigh(node.comments) + this.weigh(node.notes);
-                this.weights.set(node, weight);
-            }
-            total += weight;
-        }
-        this.weights.set(nodes, total);
-        return total;
     }
     /** How many of `wanted` may be created; 0 once exhausted. */
     take(wanted: number): number {
@@ -391,7 +367,7 @@ const toRepeatCount = (attr: string | null): number => {
 };
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { repeatPreview, takeRepeats, valuesLength } from '../utils/repeatUtils.js';
+import { contentWeigher, flagsWeight, repeatPreview, takeRepeats } from '../utils/repeatUtils.js';
 import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
 import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString, takeNodes } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
@@ -703,14 +679,15 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             out.children.push({ type: 'text', text, formatting, metadata: link ? { ...link } : undefined });
         };
         if (shownControls.has(control)) {
-            if (read.line) run(takeRepeats(config, 1, read.line.length + 16) > 0 ? read.line : read.preview ??= repeatPreview(read.line));
+            if (read.line) run(takeRepeats(config, 1, read.line.length + 16 + flagsWeight(formatting)) > 0 ? read.line : read.preview ??= repeatPreview(read.line));
             return out;
         }
         shownControls.add(control);
         read.lines.forEach((line, k) => {
             if (k > 0) {
                 out.text += '\n';
-                out.children.push({ type: 'break', formatting, metadata: { breakType: 'textWrapping', ...(link || {}) } as BreakMetadata });
+                // (A break holds no link, as no writer writes one on it: see text:line-break.)
+                out.children.push({ type: 'break', formatting, metadata: { breakType: 'textWrapping' } as BreakMetadata });
             }
             if (line) run(line);
         });
@@ -1113,6 +1090,39 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
      * @param withFrames - Whether frames' pictures and objects are read: a spreadsheet cell reads those itself (a text box's text is read either way)
      * @returns Object containing text and children
      */
+    // Text boxes in the text: an inline box's blocks are children of the paragraph holding it, and its text
+    // is the paragraph's text too; a box nested in a box paragraph is in that paragraph's text already, so
+    // each level of nesting held everything below it again (1.9 KB of ODT, 100 levels around 1 MB of text,
+    // made 102 MB of JSON, unwarned). `boxShares`: for each block of an inline box, the text it gives the
+    // paragraph holding it (its own, or past the repeated content budget a part of it); `floatShares`: a
+    // floating box's text, which a list item's text takes from its children (a paragraph's does not);
+    // `textOfChildren`: the children of a block whose text is its children's (a list item's segments).
+    const boxShares = new WeakMap<OfficeContentNode, string>();
+    const floatShares = new WeakMap<OfficeContentNode, string>();
+    const textOfChildren = new WeakSet<OfficeContentNode[]>();
+    /**
+     * The characters of a text box's blocks' text that they took from boxes nested in them: the copy of a
+     * copy, charged to the repeated content budget (see repeatUtils). One level (a box's text in the
+     * paragraph holding it) is the AST's usual shape, a paragraph's text over its runs, and free.
+     */
+    const nestedBoxText = (blocks: OfficeContentNode[]): number => {
+        let carried = 0;
+        for (const block of blocks) {
+            if (!block.children) continue;
+            const fromChildren = textOfChildren.has(block.children);
+            for (const child of block.children) {
+                const share = boxShares.get(child) ?? (fromChildren ? floatShares.get(child) : undefined);
+                if (share !== undefined) carried += share.length;
+            }
+        }
+        return carried;
+    };
+    /** A text box's text as a copy of what it holds: whole, unless it holds nested boxes' text past the budget. */
+    const keptBoxText = (blocks: OfficeContentNode[], text: string): { text: string; whole: boolean } => {
+        const carried = nestedBoxText(blocks);
+        return carried === 0 || takeRepeats(config, 1, carried + 16) > 0 ? { text, whole: true } : { text: repeatPreview(text), whole: false };
+    };
+
     const parseInlineContent = (
         node: Node,
         styleMap: Record<string, TextFormatting>,
@@ -1193,12 +1203,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     // A line break: a `break` node, as a DOCX `w:br` and an HTML `<br>` are, whatever
                     // includeBreakNodes says (a typed line break is content). As a "\n" text run, only
                     // the text, ODT and LaTeX writers showed it: Markdown and HTML wrote a space, and
-                    // RTF and DOCX joined the words.
+                    // RTF and DOCX joined the words. It holds no link, as another reader's break holds none
+                    // and no writer writes one on it: in a long link, each break's copy of it was charged to
+                    // the repeated content budget, and the text runs, whose links are written, lost theirs.
                     fullText += '\n';
                     children.push({
                         type: 'break',
                         formatting: parentFormatting,
-                        metadata: { breakType: 'textWrapping', ...(linkMetadata || {}) } as BreakMetadata
+                        metadata: { breakType: 'textWrapping' } as BreakMetadata
                     });
                 } else if (tagName === 'text:page-number' || tagName === 'text:page-count') {
                     // A page field: its text is the number when the file was saved, marked so that each
@@ -1406,15 +1418,21 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     if (drawTextBox) {
                         const textBoxChildren: OfficeContentNode[] = [];
                         traverse(drawTextBox, textBoxChildren, false, sourceXml);
-                        const textBoxText = textBoxChildren.map(c => c.text || '').join('\n');
+                        // (Its text past the repeated content budget, where it repeats nested boxes' text: see boxShares.)
+                        const textBox = keptBoxText(textBoxChildren, textBoxChildren.map(c => c.text || '').join('\n'));
+                        const textBoxText = textBox.text;
                         // A frame floating beside the text: its blocks in a `drawing` node, which goes before
                         // the paragraph (see liftFloatingFrames); its text is not the paragraph's.
                         const floating = frameFloat(frame);
                         if (floating) {
-                            children.push({ type: 'drawing', text: textBoxText, children: textBoxChildren, metadata: floating });
+                            const drawing: OfficeContentNode = { type: 'drawing', text: textBoxText, children: textBoxChildren, metadata: floating };
+                            floatShares.set(drawing, textBoxText);
+                            children.push(drawing);
                         } else {
                             appendAll(children, textBoxChildren);
                             fullText += textBoxText;
+                            // What each block gives the paragraph's text: whole, its own; shortened, the start on the first.
+                            textBoxChildren.forEach((block, index) => boxShares.set(block, textBox.whole ? block.text || '' : index === 0 ? textBoxText : ''));
                         }
                     } else if (drawObject) {
                         const href = drawObject.getAttribute("xlink:href");
@@ -1628,11 +1646,13 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 currentText = "";
                 currentChildren = [];
             } else {
-                currentText += child.text || "";
+                // (A text box's block gives what it gave the paragraph: see boxShares.)
+                currentText += boxShares.get(child) ?? child.text ?? "";
                 currentChildren.push(child);
             }
         }
         segments.push({ text: currentText, children: currentChildren });
+        for (const segment of segments) textOfChildren.add(segment.children);
         return segments;
     };
 
@@ -3233,6 +3253,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         // sections alternating two master pages read their parts again for each section, gigabytes for a
         // document of kilobytes.
         const readParts = new Map<Element, { children: OfficeContentNode[]; text: string; weight: number }>();
+        const weighPart = contentWeigher();
         const inForce = new Map<string, Element | null>();
         masters.forEach((name, section) => {
             if (section > 0 && name === masters[section - 1]) return;
@@ -3278,10 +3299,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     // attachment linkage): without it a picture in a header would render blank.
                     if (children.length) assignAttachmentData(children);
                     const text = children.map(c => c.text || '').join('\n');
-                    let count = 0;
-                    const stack = [...children];
-                    while (stack.length) { const n = stack.pop()!; count++; for (const c of n.children ?? []) stack.push(c); }
-                    readParts.set(el, part = { children, text, weight: text.length + 16 * count });
+                    // A later showing shares these blocks, whose values boundRepeatedValues sees once: its
+                    // charge carries them (a 2 KB document showing a header in a 50,000-character font
+                    // 2,000 times made 200 MB of JSON, unwarned).
+                    readParts.set(el, part = { children, text, weight: text.length + weighPart(children) });
                 }
                 const kept = part && (!repeat || takeRepeats(config, 1, part.weight) > 0);
                 (kind === 'header' ? headers : footers).push({ type: kind, text: kept ? part!.text : '', children: kept ? part!.children : [],

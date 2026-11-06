@@ -196,6 +196,16 @@ function fmtPt(n: number): string {
 }
 
 /**
+ * The name of the command boxing a word in a background colour (see LatexGenerator.highlightRef): `ophl`
+ * and the colour's six hex digits as the letters `a` to `p`, `FFFF00` as `ophlppppaa`.
+ */
+function highlightCommand(hex: string): string {
+    let name = 'ophl';
+    for (const digit of hex) name += String.fromCharCode(97 + parseInt(digit, 16));
+    return name;
+}
+
+/**
  * Formats a length the document or the configuration gives in points. A point there is 1/72 of an
  * inch, which TeX calls a big point (`bp`): its own `pt` is 1/72.27 of an inch, so such a length
  * written as `pt` came out 0.4% short (an A4 page of `595.28pt` was 593.06 points wide).
@@ -374,6 +384,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     private nestedFootnotes: string[] = [];
     /** Colors the body uses, as validated `RRGGBB` hex, each defined once by name. */
     private readonly colors = new Set<string>();
+    /** Background colours the body boxes words in, as validated `RRGGBB` hex, each one's command defined once (see highlightRef). */
+    private readonly highlights = new Set<string>();
     /** The control words the formulas written use, for the packages and definitions they need (see planLatexMath). */
     private readonly mathCommands = new Set<string>();
     /** Every key the AST cites (found before rendering, for finding its bibliography), and those `\cite` wrote and `\bibitem` defined. */
@@ -614,8 +626,24 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         return `hex${hex}`;
     }
 
+    /**
+     * The command that boxes one word in a background colour (a validated `RRGGBB` value), defined once
+     * beside the colour (see colorDefinitions). Written out at every word, a highlight took about 30
+     * characters a word, 15 times the text of a run of one-letter words. Its name is letters alone, as a
+     * TeX command's is: the colour's hex digits as the letters `a` to `p`.
+     */
+    private highlightRef(hex: string): string {
+        this.colorRef(hex);
+        this.highlights.add(hex);
+        return highlightCommand(hex);
+    }
+
     private colorDefinitions(): string[] {
-        return [...this.colors].sort().map(h => `\\definecolor{hex${h}}{HTML}{${h}}`);
+        return [
+            ...[...this.colors].sort().map(h => `\\definecolor{hex${h}}{HTML}{${h}}`),
+            // (\providecommand, legal in a fragment's body too, as \definecolor is.)
+            ...[...this.highlights].sort().map(h => `\\providecommand{\\${highlightCommand(h)}}[1]{{\\setlength{\\fboxsep}{1pt}\\colorbox{hex${h}}{\\strut #1}}}`),
+        ];
     }
 
     private warnOnce(key: string, type: OfficeWarningType, info: unknown): void {
@@ -1063,8 +1091,10 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             // A \colorbox cannot break across lines, so a highlighted sentence would run off the page.
             // Boxing each word keeps the highlight and lets the line break between words. Applied to
             // the bare escaped text, where a space is always a word boundary (none of the escapes
-            // contain one), before any wrapper adds braces a split could cut through.
-            t = `{${this.cmd('setlength')}{\\fboxsep}{1pt}${t.split(/( +)/).map(w => (w.trim() ? `${this.cmd('colorbox')}{${this.colorRef(bg)}}{${this.cmd('strut')} ${w}}` : w)).join('')}}`;
+            // contain one), before any wrapper adds braces a split could cut through. Each word is
+            // boxed by the colour's own command (see highlightRef).
+            const box = this.highlightRef(bg);
+            t = t.split(/( +)/).map(w => (w.trim() ? `${this.cmd(box)}{${w}}` : w)).join('');
         }
         if (fmt.font && MONOSPACE_FONTS.has(fmt.font.trim().toLowerCase())) t = `${this.cmd('texttt')}{${t}}`;
         const size = this.suppressSize ? null : this.scaledSize(fmt.size);

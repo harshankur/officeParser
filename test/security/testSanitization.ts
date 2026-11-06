@@ -24,6 +24,7 @@ import {
     sanitizeCommentText, latexSourceComment
 } from '../../src/utils/sanitize';
 import { extractFiles } from '../../src/utils/zipUtils';
+import { cssColorHex } from '../../src/utils/colorUtils';
 import { parseXmlString } from '../../src/utils/xmlUtils';
 import { getOfficeError, getWrappedError } from '../../src/utils/errorUtils';
 import { terminateOcr } from '../../src/utils/ocrUtils';
@@ -2273,7 +2274,7 @@ const LATEX_GENERATOR_COMMANDS = new Set((
     'documentclass usepackage ifPDFTeX else fi hypersetup setcounter maxdimen lstset ttfamily small makeatletter makeatother renewcommand paragraph ' +
     'subparagraph startsection z plus minus normalfont normalsize bfseries definecolor newunicodechar DeclareUnicodeCharacter ensuremath ding title author date ' +
     'begin end maketitle section subsection subsubsection chapter label phantomsection hyperref href footnote endnote footnotemark footnotetext addtocounter ' +
-    'stepcounter theendnotes textbf textit texttt uline sout textsuperscript textsubscript textcolor colorbox setlength fboxsep strut fontsize selectfont protect ' +
+    'stepcounter theendnotes textbf textit texttt uline sout textsuperscript textsubscript textcolor colorbox setlength fboxsep strut fontsize selectfont protect providecommand ' +
     'item centering raggedleft raggedright arraybackslash dimexpr linewidth tabcolsep arrayrulewidth relax hline cline endhead multicolumn multirow cellcolor ' +
     'includegraphics ifdim textheight fbox hfil break newpage clearpage rule quad hspace phantom leftskip rightskip hangindent hangafter par cite ' +
     'textbackslash textasciitilde textasciicircum textless textgreater textbar textasciigrave pagestyle fancyhf fancyhead fancyfoot headrulewidth headheight ' +
@@ -2430,7 +2431,8 @@ async function latexSanitizationTests() {
     for (const [label, doc, config] of [['article', hostile, {}], ['beamer', hostile, { texConfig: { documentClass: 'beamer' } }], ['fragment', hostile, { texConfig: { standalone: false } }],
         ['article with CJK, Greek and Cyrillic', scripts, {}]] as const) {
         const out = (await OfficeGenerator.generate(doc as any, 'tex', { renderMetadata: true, onWarning: () => { }, ...config } as any)).value as string;
-        const foreign = [...new Set(liveControlWords(withoutGeneratorPrivileged(out)).filter(w => !LATEX_GENERATOR_COMMANDS.has(w)))];
+        // (A background colour's command, `ophl` and its validated hex digits as letters, is the generator's own.)
+        const foreign = [...new Set(liveControlWords(withoutGeneratorPrivileged(out)).filter(w => !LATEX_GENERATOR_COMMANDS.has(w) && !/^ophl[a-p]{6}$/.test(w)))];
         check(`latex ${label}: hostile content adds no command of its own`, foreign.length === 0, foreign.join(', '));
         const docEnds = (liveLatexSource(out).match(/(^|[^\\])\\end\{document\}/g) || []).length;
         check(`latex ${label}: exactly one live document end`, label === 'fragment' ? docEnds === 0 : docEnds === 1, `found ${docEnds}`);
@@ -4896,6 +4898,542 @@ function runChildScript(lines: string[], browser = false): any {
     }
 }
 
+/*
+ * Output and memory bounds of content a document repeats: shared parts weighed with their values, and
+ * the writers and the chunker holding what they write rather than everything they walk.
+ */
+const SIZE_ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:form="urn:oasis:names:tc:opendocument:xmlns:form:1.0"';
+const sizeEnc = (s: string) => new TextEncoder().encode(s);
+/** An ODF package of `body` in the given kind, with automatic styles and a styles.xml when given. */
+const sizeOdf = (kind: 'text' | 'spreadsheet', body: string, automatic = '', styles = ''): Buffer => {
+    const mime = `application/vnd.oasis.opendocument.${kind}`;
+    const files: Record<string, Uint8Array> = {
+        mimetype: sizeEnc(mime),
+        'META-INF/manifest.xml': sizeEnc(`<?xml version="1.0"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:file-entry manifest:full-path="/" manifest:media-type="${mime}"/></manifest:manifest>`),
+        'content.xml': sizeEnc(`<?xml version="1.0" encoding="UTF-8"?><office:document-content ${SIZE_ODF_NS}><office:automatic-styles>${automatic}</office:automatic-styles><office:body><office:${kind}>${body}</office:${kind}></office:body></office:document-content>`),
+    };
+    if (styles) files['styles.xml'] = sizeEnc(`<?xml version="1.0" encoding="UTF-8"?><office:document-styles ${SIZE_ODF_NS}>${styles}</office:document-styles>`);
+    return Buffer.from(zipSync(files, { level: 9 }));
+};
+const SIZE_W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+const SIZE_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+/** A DOCX of `body` with header parts (`word/<name>`, related as `id`) and a final section. */
+const sizeDocx = (body: string, headers: { name: string; id: string; xml: string }[], sectPr: string): Buffer => {
+    const files: Record<string, Uint8Array> = {
+        '[Content_Types].xml': sizeEnc(`<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>${headers.map(h => `<Override PartName="/word/${h.name}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>`).join('')}</Types>`),
+        '_rels/.rels': sizeEnc(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${SIZE_REL}/officeDocument" Target="word/document.xml"/></Relationships>`),
+        'word/document.xml': sizeEnc(`<?xml version="1.0"?><w:document ${SIZE_W}><w:body>${body}${sectPr}</w:body></w:document>`),
+        'word/_rels/document.xml.rels': sizeEnc(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${headers.map(h => `<Relationship Id="${h.id}" Type="${SIZE_REL}/header" Target="${h.name}"/>`).join('')}</Relationships>`),
+    };
+    for (const h of headers) files[`word/${h.name}`] = sizeEnc(h.xml);
+    return Buffer.from(zipSync(files, { level: 9 }));
+};
+/** Parses `buffer`, collecting warning codes; an error is returned, not thrown. */
+const sizeParse = async (buffer: Buffer, fileType: string, extra: object = {}): Promise<{ ast?: OfficeParserAST; codes: string[]; error: string }> => {
+    const codes: string[] = [];
+    try { return { ast: await OfficeParser.parseOffice(buffer, { fileType, onWarning: (w: any) => codes.push(w.code), ...extra } as any), codes, error: '' }; }
+    catch (e: any) { return { codes, error: String(e?.message ?? e) }; }
+};
+/** What a writer returns (a binary output as its length), or `threw` and its error's message. */
+const sizeWrite = async (ast: OfficeParserAST | undefined, format: string): Promise<string> => {
+    if (!ast) return 'threw: no AST';
+    try { const value = (await ast.to(format as any)).value as any; return typeof value === 'string' ? value : `${value.length} bytes`; }
+    catch (e: any) { return `threw ${String(e?.message ?? e).slice(0, 80)}`; }
+};
+/** The default repeated-content budget of a document of `bytes` bytes (see repeatUtils). */
+const repeatedBudgetFor = (bytes: number) => 16 * 1024 * 1024 + 16 * bytes;
+
+/**
+ * A header or footer part a document shows in many sections shares its blocks among their header
+ * nodes; each showing after the first is charged with the blocks' values (a font of 50,000 characters
+ * on its run), which boundRepeatedValues sees once. Weighed by text and nodes alone, 2 KB of ODT made
+ * 200 MB of JSON and every writer failed, unwarned; 8 KB of DOCX, 100 MB.
+ */
+async function headerPartWeightTests() {
+    console.log('- Header and footer parts shown again are charged with their values...');
+    const odtHeaders = (alternations: number, font: number) => {
+        const styles = `<office:automatic-styles><style:page-layout style:name="pm1"/><style:style style:name="T1" style:family="text"><style:text-properties style:font-name="${'F'.repeat(font)}"/></style:style></office:automatic-styles><office:master-styles>${['A', 'B'].map(m => `<style:master-page style:name="${m}" style:page-layout-name="pm1"><style:header><text:p><text:span text:style-name="T1">${m}</text:span></text:p></style:header></style:master-page>`).join('')}</office:master-styles>`;
+        const automatic = '<style:style style:name="PA" style:family="paragraph" style:master-page-name="A"/><style:style style:name="PB" style:family="paragraph" style:master-page-name="B"/>';
+        return sizeOdf('text', '<text:p text:style-name="PA">a</text:p><text:p text:style-name="PB">b</text:p>'.repeat(alternations), automatic, styles);
+    };
+    const docxHeaders = (alternations: number, font: number) => {
+        const hdr = (t: string) => `<?xml version="1.0"?><w:hdr ${SIZE_W}><w:p><w:r><w:rPr><w:rFonts w:ascii="${'F'.repeat(font)}"/></w:rPr><w:t>${t}</w:t></w:r></w:p></w:hdr>`;
+        const sect = (id: string) => `<w:sectPr><w:headerReference w:type="default" r:id="${id}"/></w:sectPr>`;
+        let body = '';
+        for (let i = 0; i < alternations; i++) body += `<w:p><w:pPr>${sect(i % 2 ? 'rH2' : 'rH1')}</w:pPr><w:r><w:t>s${i}</w:t></w:r></w:p>`;
+        return sizeDocx(body + '<w:p><w:r><w:t>end</w:t></w:r></w:p>', [{ name: 'header1.xml', id: 'rH1', xml: hdr('A') }, { name: 'header2.xml', id: 'rH2', xml: hdr('B') }], sect('rH1'));
+    };
+    for (const [format, build] of [['odt', odtHeaders], ['docx', docxHeaders]] as const) {
+        const bytes = build(2_000, 50_000);
+        const parsed = await sizeParse(bytes, format);
+        const json = parsed.ast ? JSON.stringify(parsed.ast).length : 0;
+        const html = await sizeWrite(parsed.ast, 'html');
+        check(`${format}: two headers in a 50,000-character font alternated 2,000 times are charged with the font, with REPEATED_CONTENT_LIMIT_EXCEEDED`,
+            !parsed.error && parsed.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && json > 0 && json < 3 * repeatedBudgetFor(bytes.length) && !html.startsWith('threw') && html.length > 0,
+            `${parsed.error} ${parsed.codes} json ${json}, html ${html.slice(0, 80)}`);
+        const small = await sizeParse(build(200, 100), format);
+        const headers = small.ast?.auxiliary?.headers ?? [];
+        check(`${format}: two headers in a 100-character font alternated 200 times are all kept, unwarned`,
+            !small.error && !small.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && headers.length >= 200 && headers.every(h => (h.children?.[0]?.children?.[0]?.formatting?.font?.length ?? 0) === 100),
+            `${small.error} ${small.codes} ${headers.length} headers, ${headers.filter(h => !h.children?.length).length} empty`);
+    }
+}
+
+/**
+ * A rich shared string shown in many cells: an unstyled, unlinked cell shares the string's runs, and is
+ * charged their values; a styled or linked cell holds copies of them, whose values boundRepeatedValues
+ * charges, so the cell is charged their text and nodes alone. Charged twice, a styled copy paid for its
+ * run's font and then lost it: 1 run in 2,000 kept a 10,000-character font.
+ */
+async function xlsxRichStringChargeTests() {
+    console.log('- XLSX rich shared strings are charged each value once...');
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const cells = 2_000, font = 10_000, textLength = 100, budget = 4_000_000;
+    const workbook = (styled: boolean, linked: boolean) => {
+        const rows = Array.from({ length: cells }, (_, i) => `<row r="${i + 1}"><c r="A${i + 1}" t="s"${styled ? ' s="1"' : ''}><v>0</v></c></row>`).join('');
+        return Buffer.from(zipSync({
+            '[Content_Types].xml': sizeEnc('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'),
+            '_rels/.rels': sizeEnc(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${SIZE_REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>`),
+            'xl/workbook.xml': sizeEnc(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+            'xl/_rels/workbook.xml.rels': sizeEnc(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${SIZE_REL}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${SIZE_REL}/sharedStrings" Target="sharedStrings.xml"/><Relationship Id="rId3" Type="${SIZE_REL}/styles" Target="styles.xml"/></Relationships>`),
+            'xl/sharedStrings.xml': sizeEnc(`<?xml version="1.0"?><sst ${ns}><si><r><rPr><rFont val="${'F'.repeat(font)}"/></rPr><t>${'x'.repeat(textLength)}</t></r></si></sst>`),
+            'xl/styles.xml': sizeEnc(`<?xml version="1.0"?><styleSheet ${ns}><fonts count="1"><font/></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFFF00"/></patternFill></fill></fills><cellXfs count="2"><xf fontId="0" fillId="0"/><xf fontId="0" fillId="2"/></cellXfs></styleSheet>`),
+            'xl/worksheets/sheet1.xml': sizeEnc(`<?xml version="1.0"?><worksheet ${ns}><sheetData>${rows}</sheetData>${linked ? `<hyperlinks><hyperlink ref="A1:A${cells}" location="S!B1"/></hyperlinks>` : ''}</worksheet>`),
+        }, { level: 9 }));
+    };
+    const shown = async (styled: boolean, linked: boolean) => {
+        const bytes = workbook(styled, linked);
+        const parsed = await sizeParse(bytes, 'xlsx', { decompressionLimits: { maxRepeatedContent: budget } });
+        let whole = 0, withFont = 0;
+        const walk = (nodes: any[] | undefined) => nodes?.forEach(node => {
+            if (node.type === 'cell') {
+                if (node.text.length === textLength) whole++;
+                if (node.children?.some((c: any) => c.formatting?.font?.length === font)) withFont++;
+            }
+            walk(node.children);
+        });
+        walk(parsed.ast?.content);
+        return { ...parsed, whole, withFont, json: parsed.ast ? JSON.stringify(parsed.ast).length : 0, bytes: bytes.length };
+    };
+    const shared = await shown(false, false);
+    check('xlsx: a rich string in a 10,000-character font shown in 2,000 unstyled cells keeps text and font together as far as the budget goes',
+        !shared.error && shared.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && shared.whole > 350 && shared.whole < 500 && shared.withFont === shared.whole,
+        `${shared.error} ${shared.whole} whole, ${shared.withFont} with the font`);
+    for (const [label, styled, linked] of [['styled', true, false], ['linked', false, true]] as const) {
+        const copies = await shown(styled, linked);
+        check(`xlsx: a rich string in a 10,000-character font shown in 2,000 ${label} cells keeps every cell's text and the font on at least 350, with REPEATED_CONTENT_LIMIT_EXCEEDED`,
+            !copies.error && copies.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && copies.whole === cells && copies.withFont >= 350 && copies.json < 3 * (budget + 16 * copies.bytes),
+            `${copies.error} ${copies.whole} whole, ${copies.withFont} with the font, json ${copies.json}`);
+    }
+}
+
+/**
+ * Text boxes nested in text boxes: each box's text is the text of the paragraph (or list item, or
+ * floating drawing) holding it, so each level held all the text below it again (1.9 KB of ODT, 1 MB of
+ * text in 100 levels, made 102 MB of JSON, unwarned). The copy of a copy is charged; the runs are all
+ * kept, so writers that write runs write the same.
+ */
+async function nestedTextBoxTests() {
+    console.log('- Text boxes nested in text boxes charge the text they repeat...');
+    const listStyle = '<text:list-style style:name="L1"><text:list-level-style-bullet text:level="1" text:bullet-char="*"/></text:list-style>';
+    const shapes: Record<string, (inner: string, anchor: string) => string> = {
+        paragraph: inner => `<text:p>${inner}</text:p>`,
+        heading: inner => `<text:h text:outline-level="2">${inner}</text:h>`,
+        'list item': inner => `<text:list text:style-name="L1"><text:list-item><text:p>${inner}</text:p></text:list-item></text:list>`,
+    };
+    const nested = (shape: string, depth: number, length: number, anchor = 'as-char') => {
+        const wrap = shapes[shape];
+        let inner = 'x'.repeat(length);
+        for (let i = 0; i < depth; i++) inner = `<draw:frame text:anchor-type="${anchor}" svg:width="5cm"><draw:text-box>${wrap(inner, anchor)}</draw:text-box></draw:frame>`;
+        return sizeOdf('text', wrap(inner, anchor), listStyle);
+    };
+    // (Under a budget of 2,000,000 characters, so the case stays small: 100 levels of 100,000 repeat 10 MB.)
+    const length = 100_000, budget = 2_000_000;
+    for (const [shape, anchor] of [['paragraph', 'as-char'], ['heading', 'as-char'], ['list item', 'as-char'], ['list item', 'paragraph']] as const) {
+        const bytes = nested(shape, 100, length, anchor);
+        const parsed = await sizeParse(bytes, 'odt', { decompressionLimits: { maxRepeatedContent: budget } });
+        const json = parsed.ast ? JSON.stringify(parsed.ast).length : 0;
+        const html = await sizeWrite(parsed.ast, 'html');
+        // (A floating box's drawing and the list item holding it both take its text: two copies a level.)
+        const limit = (anchor === 'paragraph' ? 3 : 2) * (budget + 16 * bytes.length) + 4 * length;
+        check(`odt: 100,000 characters in 100 ${anchor === 'paragraph' ? 'floating' : 'inline'} text boxes nested in ${shape}s are charged, with REPEATED_CONTENT_LIMIT_EXCEEDED, and write their text`,
+            !parsed.error && parsed.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && json > length && json < limit && html.includes('x'.repeat(length)),
+            `${parsed.error} ${parsed.codes} json ${json} (limit ${limit}), html ${html.length}`);
+    }
+    // Ordinary nesting: two levels, and a floating box holding an inline one, keep every level's text, unwarned.
+    const two = await sizeParse(nested('paragraph', 2, 1_000), 'odt');
+    const texts: string[] = [];
+    const collect = (nodes: any[] | undefined) => nodes?.forEach(node => { if (node.type === 'paragraph') texts.push(node.text); collect(node.children); });
+    collect(two.ast?.content);
+    check('odt: 1,000 characters in two nested inline text boxes are every paragraph\'s text, unwarned',
+        !two.error && !two.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && texts.length === 3 && texts.every(text => text === 'x'.repeat(1_000)), `${two.error} ${two.codes} ${texts.map(t => t.length)}`);
+    const mixed = await sizeParse(sizeOdf('text', `<text:p><draw:frame text:anchor-type="paragraph" svg:width="5cm"><draw:text-box><text:p><draw:frame text:anchor-type="as-char"><draw:text-box><text:p>${'y'.repeat(100_000)}</text:p></draw:text-box></draw:frame></text:p></draw:text-box></draw:frame></text:p>`), 'odt');
+    const drawing = mixed.ast?.content.find(node => node.type === 'drawing');
+    check('odt: a floating text box holding an inline one keeps its text, unwarned',
+        !mixed.error && !mixed.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && drawing?.text === 'y'.repeat(100_000), `${mixed.error} ${mixed.codes} ${drawing?.text?.length}`);
+}
+
+/**
+ * Runs `lines` (TypeScript, with `OfficeParser`, `OfficeGenerator` and `path` in scope) in a child
+ * process whose heap is held to `heapMb` megabytes, and returns its exit status and output: a case
+ * that kept more than it writes dies there of an out-of-memory error.
+ */
+function runCappedChild(heapMb: number, lines: string[]): { status: number | null; stdout: string; stderr: string } {
+    const childProcess = require('child_process') as typeof import('child_process');
+    const repo = path.join(__dirname, '..', '..');
+    const script = path.join(os.tmpdir(), `officeparser-capped-${process.pid}-${Math.random().toString(36).slice(2)}.ts`);
+    fs.writeFileSync(script, [
+        `const path = require('path');`,
+        `const { OfficeParser } = require(${JSON.stringify(path.join(repo, 'src', 'OfficeParser'))});`,
+        `const { OfficeGenerator } = require(${JSON.stringify(path.join(repo, 'src', 'OfficeGenerator'))});`,
+        `(async () => {`,
+        ...lines,
+        `})().catch(e => { console.error(e); process.exit(2); });`,
+    ].join('\n'));
+    try {
+        const result = childProcess.spawnSync(process.execPath, [`--max-old-space-size=${heapMb}`, ...process.execArgv, script], { encoding: 'utf8', timeout: 120_000 });
+        return { status: result.status, stdout: result.stdout ?? '', stderr: (result.stderr ?? '').slice(-400) };
+    } finally {
+        fs.rmSync(script, { force: true });
+    }
+}
+
+/**
+ * The chunker's splitter reads a paragraph's parts (sentences, lines, words, characters) one at a
+ * time: it listed them all first, an entry per character of a paragraph without spaces, and a DOCX of
+ * one 100-million-letter paragraph ran a 4 GB heap out ("invalid array length"). The chunks are the
+ * ones the list gave, checked against the list-based splitter kept here.
+ */
+async function chunkSplitterTests() {
+    console.log('- The chunk splitter reads parts one at a time, with the same chunks...');
+    const { ChunkingGenerator } = await import('../../src/generators/ChunkingGenerator');
+    const generator = (config: object = {}) => new ChunkingGenerator(astWith([]), { chunksConfig: config } as any) as any;
+    // The splitter as it was: every level's parts listed, then packed.
+    const listedSentences = (gen: any, text: string): string[] => {
+        if (gen.isCustomRegex) {
+            const userRegex = gen.chunkConfig.sentenceBoundaryRegex;
+            const regex = typeof userRegex === 'string' ? new RegExp(userRegex, 'g') : userRegex;
+            return text.split(regex).map((s: string) => s.trim()).filter(Boolean);
+        }
+        const abbreviations: string[] = gen.chunkConfig.abbreviations;
+        const sentences: string[] = [];
+        let start = 0;
+        const markRegex = /[.!?。！？]/g;
+        let match;
+        while ((match = markRegex.exec(text)) !== null) {
+            const mark = match[0], pos = match.index;
+            const nextChar = text[pos + 1];
+            if (!nextChar || /\s/.test(nextChar) || /[。！？]/.test(mark)) {
+                if (mark === '.') {
+                    const lastWord = text.substring(text.lastIndexOf(' ', pos - 1) + 1, pos).replace(/^[^\w]+|[^\w]+$/g, '');
+                    if (abbreviations.includes(lastWord)) continue;
+                }
+                sentences.push(text.substring(start, pos + 1).trim());
+                start = pos + 1;
+            }
+        }
+        if (start < text.length) { const remaining = text.substring(start).trim(); if (remaining) sentences.push(remaining); }
+        return sentences.length > 0 ? sentences : [text];
+    };
+    const boundary = (text: string, offset: number) => { const b = text.charCodeAt(offset - 1), a = text.charCodeAt(offset); return b >= 0xD800 && b <= 0xDBFF && a >= 0xDC00 && a <= 0xDFFF ? offset - 1 : offset; };
+    const listed = (gen: any, text: string, size: number, overlap: number, separators: string[], measure: (t: string) => number): { text: string; start: number; end: number }[] => {
+        if (measure(text) <= size) return text.trim() ? [{ text, start: 0, end: text.length }] : [];
+        let chosen: string | undefined, next: string[] = [], parts: string[] = [], joiner = '';
+        const sentences = listedSentences(gen, text);
+        if (sentences.length > 1) { parts = sentences; joiner = ' '; chosen = 'SENTENCE_SPLIT'; next = separators; }
+        else for (let i = 0; i < separators.length; i++) {
+            const sep = separators[i];
+            parts = sep ? text.split(sep) : [...text];
+            if (parts.length > 1) { chosen = sep; joiner = sep; next = separators.slice(i + 1); break; }
+        }
+        if (chosen === undefined) {
+            const results: { text: string; start: number; end: number }[] = [];
+            const width = Math.max(1, Math.floor(size)), step = Math.max(1, width - Math.max(0, Math.floor(overlap)));
+            let offset = 0;
+            while (offset < text.length) {
+                const nextCharacter = offset + ((text.codePointAt(offset) ?? 0) > 0xFFFF ? 2 : 1);
+                const end = Math.max(nextCharacter, boundary(text, Math.min(text.length, offset + width)));
+                results.push({ text: text.slice(offset, end), start: offset, end });
+                offset = Math.max(nextCharacter, boundary(text, Math.min(end, offset + step)));
+            }
+            return results;
+        }
+        const results: { text: string; start: number; end: number }[] = [];
+        let current = '', currentStart = 0, absolute = 0;
+        const flush = () => {
+            if (measure(current) > size) for (const r of listed(gen, current, size, overlap, next, measure)) results.push({ text: r.text, start: currentStart + r.start, end: currentStart + r.end });
+            else results.push({ text: current, start: currentStart, end: currentStart + current.length });
+        };
+        for (const part of parts) {
+            const candidate = current ? current + joiner + part : part;
+            if (measure(candidate) <= size) current = candidate;
+            else {
+                if (current.trim()) flush();
+                const overlapLength = Math.max(0, Math.floor(overlap));
+                if (overlapLength > 0 && current.length > overlapLength && measure(current) <= size) {
+                    const overlapStart = boundary(current, current.length - overlapLength);
+                    currentStart += overlapStart;
+                    current = current.slice(overlapStart) + joiner + part;
+                } else { currentStart = absolute; current = part; }
+            }
+            absolute += part.length + joiner.length;
+        }
+        if (current.trim()) flush();
+        return results;
+    };
+    // Random texts of words, spaces, tabs, newlines, sentence marks, abbreviations and astral and combining characters.
+    let seed = 12345;
+    const random = (n: number) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+    const pieces = ['a', 'bc', 'word', ' ', ' ', '  ', '\t', '\n', '\n\n', '. ', '.', '! ', '? ', '。', 'Mr. ', 'e.g. ', '\u{1F600}', 'e\u0301', ' . '];
+    const measures: [string, (t: string) => number][] = [['length', t => t.length], ['code points', t => [...t].length]];
+    const configs: [string, object][] = [['default', {}], ['a sentence regex with a capture', { sentenceBoundaryRegex: '([.!?])\\s*' }], ['a sentence regex matching empty', { sentenceBoundaryRegex: '(?=[A-Z])|\\s*' }]];
+    let compared = 0;
+    const differences: string[] = [];
+    for (const [configLabel, config] of configs) {
+        const gen = generator(config);
+        for (let k = 0; k < 600; k++) {
+            const text = Array.from({ length: random(60) }, () => pieces[random(pieces.length)]).join('');
+            const size = 1 + random(24), overlap = random(size + 1);
+            const separators = [['\n\n', '\n', ' ', ''], ['\n', ' ', ''], [' ', ''], ['']][random(4)];
+            const [measureLabel, measure] = measures[random(measures.length)];
+            // (Either may end in an error: an overlap that keeps a chunk past the size recursed without end
+            // before and still does, which is the listing splitter's behaviour to keep, not this case's to fix.)
+            const outcome = (split: () => unknown) => { try { return JSON.stringify(split()); } catch (e: any) { return `threw ${e?.name}`; } };
+            const expected = outcome(() => listed(gen, text, size, overlap, separators, measure));
+            const actual = outcome(() => gen.splitTextRecursively(text, size, overlap, separators, measure));
+            compared++;
+            if (expected !== actual && differences.length < 3) differences.push(`${configLabel}, ${measureLabel}, size ${size}, overlap ${overlap}, ${JSON.stringify(separators)}: ${JSON.stringify(text)}`);
+        }
+        const sample = 'One. Two! Three? Mr. Four e.g. five。six\tseven\n\neight';
+        if (JSON.stringify(gen.splitIntoSentences(sample)) !== JSON.stringify(listedSentences(gen, sample))) differences.push(`${configLabel}: sentences of ${JSON.stringify(sample)}`);
+    }
+    check('chunks: the splitter gives the chunks the listing splitter gave, on 1,800 random texts', differences.length === 0, `${compared} compared; ${differences.join(' | ')}`);
+    // One paragraph of 20 million letters, chunked under a 160 MB heap: listed, its characters alone took 160 MB.
+    const capped = runCappedChild(160, [
+        `const ast = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', text: 'A'.repeat(20_000_000), children: [{ type: 'text', text: 'A'.repeat(20_000_000) }] }] };`,
+        `const chunks = (await OfficeGenerator.generate(ast, 'chunks', { onWarning: () => {} })).value;`,
+        `console.log(JSON.stringify({ count: chunks.length, sizes: [...new Set(chunks.map(c => c.text.length))] }));`,
+    ]);
+    const out = (() => { try { return JSON.parse(capped.stdout.trim().split('\n').pop() ?? ''); } catch { return undefined; } })();
+    check('chunks: one paragraph of 20,000,000 letters is chunked under a 160 MB heap, in 20,000 chunks of 1,000', capped.status === 0 && out?.count === 20_000 && out?.sizes?.length === 1 && out.sizes[0] === 1_000, `status ${capped.status} ${capped.stdout.slice(0, 200)} ${capped.stderr}`);
+}
+
+/**
+ * The native PDF engine holds what it draws compressed, not as pdf-lib's objects (about ten operators a
+ * word, each number and name an object, kept until the file was saved: 250 MB of heap for 300,000
+ * characters), and lays a paragraph out from its pieces one at a time. The file is the same, byte for
+ * byte, folded at every operator or never; the pieces are the ones the listing builder gave, kept here.
+ */
+async function nativePdfMemoryTests() {
+    console.log('- The native PDF engine holds its drawing compressed, and a paragraph\'s pieces one at a time...');
+    const engine = await import('../../src/generators/pdf/nativePdfEngine');
+    const para = (runs: any[]) => ({ type: 'paragraph', text: runs.map(r => r.text).join(''), children: runs });
+    const t = (text: string, formatting: any = {}) => ({ type: 'text', text, formatting });
+    const native = async (content: any[]) => (await OfficeGenerator.generate(astWith(content), 'pdf', { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any)).value as Uint8Array;
+    const document = [
+        para([t('Bold ', { bold: true }), t('italic ', { italic: true }), t('up', { superscript: true }), t(' marked ', { color: '#FF0000', backgroundColor: '#FFFF00', underline: true }), t('x'.repeat(2000)), t(' tail\tend\nnext\fpage')]),
+        ...Array.from({ length: 120 }, (_, i) => para([t(`word${i} `.repeat(30))])),
+        para([t('\u05E9\u05DC\u05D5\u05DD abc 123 '.repeat(40))]),
+    ];
+    const was = engine.setOperatorFoldThreshold(0);
+    let never: Uint8Array, every: Uint8Array, usual: Uint8Array;
+    try {
+        never = await native(document);
+        engine.setOperatorFoldThreshold(1);
+        every = await native(document);
+    } finally { engine.setOperatorFoldThreshold(was); }
+    usual = await native(document);
+    const same = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((byte, i) => byte === b[i]);
+    check('pdf (native): a document is the same file, byte for byte, folded at every operator, as usual, or never', same(never, every) && same(never, usual), `${never.length} ${every.length} ${usual.length}`);
+
+    // The pieces: given one at a time, the ones listed before any was placed (the builder as it was).
+    let layout: any;
+    engine.setNativeLayoutObserver(made => { layout = made; });
+    try { await native([para([t('x')])]); } finally { engine.setNativeLayoutObserver(); }
+    const clusters = (text: string): Iterable<string> => {
+        const Segmenter = (Intl as any).Segmenter;
+        if (!Segmenter || !/\p{M}/u.test(text)) return text;
+        const segments = new Segmenter(undefined, { granularity: 'grapheme' }).segment(text);
+        return { *[Symbol.iterator]() { for (const { segment } of segments) yield segment; } };
+    };
+    const splitToWidth = (text: string, measure: (text: string) => number, width: number): string[] => {
+        if (width <= 0 || measure(text) <= width) return [text];
+        const chunks: string[] = [];
+        let cur = '', curWidth = 0;
+        for (const ch of clusters(text)) {
+            const chWidth = measure(ch);
+            if (cur && curWidth + chWidth > width) { chunks.push(cur); cur = ch; curWidth = chWidth; } else { cur += ch; curWidth += chWidth; }
+        }
+        if (cur) chunks.push(cur);
+        return chunks.length ? chunks : [text];
+    };
+    const listedPieces = (runs: any[], width: number, mono: boolean, pictureRoom: number) => {
+        const pieces: any[] = [];
+        for (const run of runs) {
+            const face = layout.faceFor(run.fmt, mono);
+            const baseSize = parseFloat(run.fmt.size) || (mono ? 10 : 11);
+            const shifted = !!(run.fmt.superscript || run.fmt.subscript);
+            const size = shifted ? baseSize * 0.65 : baseSize;
+            const rise = run.fmt.superscript ? baseSize * 0.35 : run.fmt.subscript ? -baseSize * 0.12 : 0;
+            const color = run.link ? layout.lib.rgb(0.1, 0.32, 0.72) : (layout.color(run.fmt.color) ?? layout.lib.rgb(0.12, 0.12, 0.12));
+            const invisible = !!run.fmt.invisible;
+            const underline = !invisible && !!(run.fmt.underline || run.link);
+            const background = invisible ? undefined : cssColorHex(run.fmt.backgroundColor) ?? undefined;
+            if (run.picture) {
+                const scale = Math.min(1, width / run.picture.w, pictureRoom / run.picture.h);
+                pieces.push({ p: { text: '', face, size, color, underline: false, link: run.link, picture: { img: run.picture.img, w: run.picture.w * scale, h: run.picture.h * scale } }, space: false });
+                continue;
+            }
+            run.text.split(/(\r\n|[\n\r\f])/).forEach((segment: string, at: number) => {
+                if (at % 2) { pieces.push({ p: { text: '', face, size, color, underline: false }, space: false, brk: segment === '\f' ? 'page' : 'line' }); return; }
+                for (const w of layout.enc(segment, face, false).split(/(\s+)/)) {
+                    if (w === '') continue;
+                    if (/^\s+$/.test(w)) { const last = pieces[pieces.length - 1]; if (last && !last.brk) last.space = true; continue; }
+                    for (const chunk of splitToWidth(w, (s: string) => layout.widthOf(s, face, size), width)) {
+                        pieces.push({ p: { text: chunk, face, size, color, underline, link: run.link, background, rise, note: run.note, ...(invisible ? { invisible } : {}) }, space: false });
+                    }
+                }
+            });
+        }
+        while (pieces.length && pieces[pieces.length - 1].brk) pieces.pop();
+        return pieces;
+    };
+    let seed = 777;
+    const random = (n: number) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+    const bits = ['a', 'word', 'longerword', ' ', '  ', '\t', '\n', '\r\n', '\r', '\f', '\n\n', 'x'.repeat(90), 'e\u0301', '\u05E9\u05DC', '\u0627\u0644', ' . ', '\u00A0', '\u2003'];
+    const formats = [{}, { bold: true }, { italic: true, size: '8pt' }, { superscript: true }, { backgroundColor: '#FFFF00', underline: true }, { invisible: true }, { color: '#336699' }];
+    const differences: string[] = [];
+    for (let k = 0; k < 400; k++) {
+        const runs = Array.from({ length: 1 + random(4) }, () => ({
+            text: Array.from({ length: random(12) }, () => bits[random(bits.length)]).join(''),
+            fmt: formats[random(formats.length)],
+            ...(random(5) === 0 ? { link: 'https://example.com/' } : {}),
+            ...(random(9) === 0 ? { picture: { img: {}, w: 400 + random(400), h: 300 + random(900) } } : {}),
+        }));
+        const width = 40 + random(400), mono = random(4) === 0;
+        const expected = JSON.stringify(listedPieces(runs, width, mono, 600));
+        const actual = JSON.stringify([...layout.piecesOf(runs, width, mono, 600)]);
+        if (expected !== actual && differences.length < 2) differences.push(`${JSON.stringify(runs)} width ${width}: ${expected.slice(0, 200)} against ${actual.slice(0, 200)}`);
+    }
+    check('pdf (native): a paragraph\'s pieces, given one at a time, are the ones listed, on 400 random paragraphs', differences.length === 0, differences.join(' | '));
+
+    // 300,000 characters of short words in one paragraph, drawn under a 128 MB heap (it took 250 MB).
+    const capped = runCappedChild(128, [
+        `const text = Array.from({ length: 100_000 }, () => 'o').join(', ');`,
+        `const ast = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', text, children: [{ type: 'text', text }] }] };`,
+        `const pdf = (await OfficeGenerator.generate(ast, 'pdf', { pdfConfig: { engine: 'native' }, onWarning: () => {} })).value;`,
+        `console.log(JSON.stringify({ bytes: pdf.length }));`,
+    ]);
+    check('pdf (native): one paragraph of 300,000 characters is drawn under a 128 MB heap', capped.status === 0 && /"bytes":\d{5,}/.test(capped.stdout), `status ${capped.status} ${capped.stdout.slice(0, 100)} ${capped.stderr}`);
+}
+
+/**
+ * An ODT line break in a link holds no link of its own, as no writer writes one on it: each break's copy
+ * of a long link was charged to the repeated content budget, and the text runs, whose links are
+ * written, lost theirs (886 of 5,000 kept a 1,019-character link with four breaks between lines).
+ */
+async function odtBreakLinkTests() {
+    console.log('- ODT line breaks in a link hold no copy of it...');
+    const lines = Array.from({ length: 5_000 }, (_, i) => `l${i}`).join('<text:line-break/>'.repeat(4));
+    const bytes = sizeOdf('text', `<text:p><text:a xlink:type="simple" xlink:href="https://example.com/${'u'.repeat(1_000)}">${lines}</text:a></text:p>`);
+    const parsed = await sizeParse(bytes, 'odt', { decompressionLimits: { maxRepeatedContent: 8_000_000 } });
+    let runs = 0, linked = 0, breaks = 0, linkedBreaks = 0;
+    const walk = (nodes: any[] | undefined) => nodes?.forEach(node => {
+        if (node.type === 'text') { runs++; if (node.metadata?.link) linked++; }
+        if (node.type === 'break') { breaks++; if (node.metadata?.link) linkedBreaks++; }
+        walk(node.children);
+    });
+    walk(parsed.ast?.content);
+    check('odt: 5,000 lines of a 1,019-character link, four breaks between each, keep the link on every line, unwarned',
+        !parsed.error && !parsed.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && runs === 5_000 && linked === 5_000 && breaks === 19_996 && linkedBreaks === 0,
+        `${parsed.error} ${parsed.codes} ${linked}/${runs} runs linked, ${linkedBreaks}/${breaks} breaks linked`);
+    // Every writer writes the same with the link on the breaks (as they were read before) or not.
+    const formNs = 'xmlns:form="urn:oasis:names:tc:opendocument:xmlns:form:1.0"';
+    const small = await sizeParse(sizeOdf('text', `<office:forms ${formNs}><form:form form:name="F"><form:textarea form:id="c1" form:current-value="l1&#10;l2&#10;&#10;l3"/></form:form></office:forms>`
+        + '<text:p>before <text:a xlink:type="simple" xlink:href="https://example.com/a">one<text:line-break/>two<text:line-break/><text:line-break/>three</text:a> after</text:p>'
+        + '<text:p><text:a xlink:type="simple" xlink:href="https://example.com/b">x <draw:control draw:control="c1"/> y</text:a></text:p>'), 'odt');
+    const relinked = JSON.parse(JSON.stringify(small.ast?.content ?? []));
+    let breaksRelinked = 0;
+    for (const paragraph of relinked) {
+        const children: any[] = paragraph.children ?? [];
+        children.forEach((child, i) => {
+            const around = children[i - 1]?.metadata?.link ? children[i - 1] : undefined;
+            if (child.type === 'break' && around) { child.metadata = { ...child.metadata, link: around.metadata.link, linkType: around.metadata.linkType }; breaksRelinked++; }
+        });
+    }
+    const outputOf = async (content: any[], format: string) => {
+        const value = (await OfficeGenerator.generate({ ...small.ast!, content } as OfficeParserAST, format as any, { onWarning: () => {} } as any)).value as any;
+        if (typeof value === 'string') return value;
+        const files = unzipSync(value);
+        return strFromU8(files['word/document.xml'] ?? files['content.xml']);
+    };
+    const differing: string[] = [];
+    for (const format of ['html', 'md', 'text', 'rtf', 'tex', 'docx', 'odt']) if (await outputOf(small.ast?.content ?? [], format) !== await outputOf(relinked, format)) differing.push(format);
+    check('odt: a linked paragraph and a linked text area with line breaks are written the same with or without a link on the breaks',
+        !small.error && breaksRelinked === 6 && differing.length === 0, `${small.error} ${breaksRelinked} breaks relinked, differing: ${differing}`);
+}
+
+/**
+ * A repeated copy's style flags are weighed, 8 for each set: a flag is no string and weighed nothing,
+ * while every writer writes a tag pair for it with each copy. A cell of 2,000 one-letter spans, bold,
+ * italic, underlined and struck through, repeated 2,000 times wrote 4.6 times the budget as JSON, 1.35
+ * times as HTML and 1.7 times as RTF.
+ */
+async function styleFlagWeightTests() {
+    console.log('- Style flags are weighed with the content a document repeats...');
+    const budget = 2_000_000;
+    const automatic = '<style:style style:name="T1" style:family="text"><style:text-properties fo:font-weight="bold" fo:font-style="italic" style:text-underline-style="solid" style:text-line-through-style="solid"/></style:style><style:style style:name="T2" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style>';
+    const spans = Array.from({ length: 2_000 }, (_, i) => `<text:span text:style-name="${i % 2 ? 'T1' : 'T2'}">a</text:span>`).join('');
+    const bytes = sizeOdf('spreadsheet', `<table:table table:name="S"><table:table-column/><table:table-row><table:table-cell table:number-columns-repeated="2000"><text:p>${spans}</text:p></table:table-cell></table:table-row></table:table>`, automatic);
+    const parsed = await sizeParse(bytes, 'ods', { decompressionLimits: { maxRepeatedContent: budget } });
+    const limit = budget + 16 * bytes.length;
+    const json = parsed.ast ? JSON.stringify(parsed.ast).length : 0;
+    const html = await sizeWrite(parsed.ast, 'html'), rtf = await sizeWrite(parsed.ast, 'rtf');
+    // (JSON writes some 60 characters of keys a node, against the 16 a node weighs: a factor of the AST's own shape.)
+    check('ods: a cell of 2,000 styled one-letter spans repeated 2,000 times writes HTML and RTF within 1.2 times the budget, JSON within 2.5, with REPEATED_CONTENT_LIMIT_EXCEEDED',
+        !parsed.error && parsed.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && json > 0 && json < 2.5 * limit && html.length < 1.2 * limit && rtf.length < 1.2 * limit && !html.startsWith('threw') && !rtf.startsWith('threw'),
+        `${parsed.error} ${parsed.codes} json ${json}, html ${html.length}, rtf ${rtf.length}, limit ${limit}`);
+}
+
+/**
+ * LaTeX boxes each highlighted word by its colour's one command, defined once: written out at every
+ * word, a highlight took about 30 characters a word, 15.5 times the text of one-letter words, and 1.1 KB
+ * of spreadsheet repeating a highlighted cell wrote 8.5 times the repeated content budget as LaTeX. The
+ * LaTeX reader reads the command back as the highlight it stands for.
+ */
+async function latexHighlightSizeTests() {
+    console.log('- LaTeX writes a highlight by its colour\'s command...');
+    const words = Array.from({ length: 1_000 }, () => 'a').join(' ');
+    const texOf = async (formatting: object) => (await OfficeGenerator.generate(astWith([{ type: 'paragraph', text: words, children: [{ type: 'text', text: words, formatting }] }]), 'tex', { onWarning: () => {} } as any)).value as string;
+    const grown = (await texOf({ backgroundColor: '#FFFF00' })).length - (await texOf({})).length;
+    check('latex: a paragraph of 1,000 highlighted one-letter words grows by under 7 characters a character of text', grown > 0 && grown < 7 * words.length, `${grown} for ${words.length}`);
+    const budget = 2_000_000;
+    const cell = Array.from({ length: 50_000 }, () => 'a').join(' ');
+    const bytes = sizeOdf('spreadsheet', `<table:table table:name="S"><table:table-column/><table:table-row><table:table-cell table:number-columns-repeated="2000"><text:p><text:span text:style-name="T1">${cell}</text:span></text:p></table:table-cell></table:table-row></table:table>`,
+        '<style:style style:name="T1" style:family="text"><style:text-properties fo:background-color="#ffff00"/></style:style>');
+    const parsed = await sizeParse(bytes, 'ods', { decompressionLimits: { maxRepeatedContent: budget } });
+    const tex = await sizeWrite(parsed.ast, 'tex');
+    check('latex: a highlighted cell of 100,000 characters repeated 2,000 times writes under 5 times the repeated content budget (8.5 before)',
+        !parsed.error && parsed.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && !tex.startsWith('threw') && tex.includes('\\colorbox{hexFFFF00}') && tex.length < 5 * (budget + 16 * bytes.length),
+        `${parsed.error} ${parsed.codes} tex ${tex.length}`);
+    // Round trip: the words highlighted in test.docx read back from its LaTeX in the same colours.
+    const docx = await OfficeParser.parseOffice(path.join(__dirname, '..', 'files', 'test.docx'), { onWarning: () => {} } as any);
+    const highlighted = (content: any[]) => {
+        const found: string[] = [];
+        const walk = (nodes: any[] | undefined) => nodes?.forEach(node => {
+            const colour = node.type === 'text' ? cssColorHex(node.formatting?.backgroundColor) : null;
+            if (colour) for (const word of String(node.text).split(/\s+/)) if (word) found.push(`${word} ${colour}`);
+            walk(node.children); walk(node.notes);
+        });
+        walk(content);
+        return found;
+    };
+    const written = (await docx.to('tex', { onWarning: () => {} } as any)).value as string;
+    const read = await OfficeParser.parseOffice(Buffer.from(written), { fileType: 'tex', onWarning: () => {} } as any);
+    const before = highlighted(docx.content), after = highlighted(read.content);
+    check('latex: test.docx\'s highlighted words read back from its LaTeX in their colours', before.length > 0 && JSON.stringify(before) === JSON.stringify(after), `${before.length} written, ${after.length} read: ${before.filter((w, i) => w !== after[i]).slice(0, 3)}`);
+}
+
 /**
  * The files pdf.js loads for a PDF (its CMaps and image decoders) are read only as asked for by name,
  * from inside their folder, bounded in size and time, never from the built-in CDN address under
@@ -5342,6 +5880,14 @@ async function main() {
     await htmlReadingTests();
     await fontFileTests();
     await documentShapeEscapingTests(check);
+    await headerPartWeightTests();
+    await xlsxRichStringChargeTests();
+    await nestedTextBoxTests();
+    await chunkSplitterTests();
+    await nativePdfMemoryTests();
+    await odtBreakLinkTests();
+    await styleFlagWeightTests();
+    await latexHighlightSizeTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);

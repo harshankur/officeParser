@@ -28,6 +28,7 @@ import { sanitizeOfficePackageUrl } from '../../utils/sanitize.js';
 import { cssColorHex } from '../../utils/colorUtils.js';
 import { formatListNumber } from '../../utils/listMarkers.js';
 import { recordedNoteMark } from '../../utils/noteMarks.js';
+import { deflateSync, inflateSync } from 'fflate';
 import { drawSvg, readSvg } from './svgDrawing.js';
 import { BROTLI_FIXED_RELEASES, runtimeHasBrotliFlaw, runtimeName } from '../../utils/brotliFlaw.js';
 import { cffOutlines, colorTables, fontkitUnbrotli, nativeUnbrotli, sfntOf, substitutes, trueTypeOutlines, Unbrotli, UnreadableFont } from './fontFiles.js';
@@ -110,9 +111,21 @@ function directionOf(text: string): 'ltr' | 'rtl' | 'neutral' {
 
 /** Whether text is a right-to-left paragraph: its first letter is a right-to-left one. */
 function startsRtl(text: string): boolean {
+    return firstLetterRtl(text) ?? false;
+}
+/** Whether text's first letter (or digit) is a right-to-left one; undefined where it has none. */
+function firstLetterRtl(text: string): boolean | undefined {
     for (const ch of text) {
         if (isRtlChar(ch.codePointAt(0)!)) return true;
         if (LETTER_OR_DIGIT.test(ch)) return false;
+    }
+    return undefined;
+}
+/** Whether runs are a right-to-left paragraph, as their text joined is (see startsRtl), without joining it. */
+function runsStartRtl(runs: readonly { text: string }[]): boolean {
+    for (const run of runs) {
+        const rtl = firstLetterRtl(run.text);
+        if (rtl !== undefined) return rtl;
     }
     return false;
 }
@@ -420,6 +433,57 @@ function fontKind(family: string | undefined): 'mono' | 'serif' | 'sans' {
 }
 
 /** A single word ready to place, carrying the style/size/color it should be drawn with. */
+/**
+ * How many operators drawn on a page are held as pdf-lib's objects before they are folded into bytes
+ * (see NativeLayout.foldDrawn). Each word drawn is about ten operators, each with its numbers and names
+ * as objects of their own, and pdf-lib held every page's until the file was saved: about 1.7 KB of heap
+ * a word, 900 MB for a document of 1.5 million characters.
+ */
+let foldAt = 2048;
+/**
+ * Sets how many drawn operators are held before they are folded (0: none is), and returns the value it
+ * replaces. For tests: not part of the API.
+ */
+export function setOperatorFoldThreshold(count: number): number {
+    const was = foldAt;
+    foldAt = count > 0 ? Math.max(1, Math.floor(count)) : 0;
+    return was;
+}
+/** Called with each layout made, once the document is drawn. For tests: not part of the API. */
+let layoutObserver: ((layout: unknown) => void) | undefined;
+/** Sets (or, with none, clears) what is called with each layout made. For tests: not part of the API. */
+export function setNativeLayoutObserver(observer?: (layout: unknown) => void): void {
+    layoutObserver = observer;
+}
+
+/**
+ * Operators drawn on a page, folded into their bytes, compressed: written as the operators were. A
+ * content stream writes each operator's bytes (`sizeInBytes`, `copyBytesInto`) and a newline after it,
+ * so this stands for operators whose bytes joined by newlines (no newline after the last: the stream
+ * writes it) are `bytes`.
+ */
+function foldedOperators(bytes: Uint8Array): { sizeInBytes(): number; copyBytesInto(buffer: Uint8Array, offset: number): number; toString(): string; clone(): unknown } {
+    const length = bytes.length;
+    const packed = deflateSync(bytes, { level: 1 });
+    const folded = {
+        sizeInBytes: () => length,
+        copyBytesInto: (buffer: Uint8Array, offset: number): number => {
+            buffer.set(inflateSync(packed), offset);
+            return length;
+        },
+        // (Latin-1, a byte a character, as an operator's own string is: a TextDecoder's 'latin1' is windows-1252 in browsers.)
+        toString: (): string => {
+            const raw = inflateSync(packed);
+            let text = '';
+            for (let at = 0; at < raw.length; at += 8192) text += String.fromCharCode(...raw.subarray(at, at + 8192));
+            return text;
+        },
+        // (Never changed, so a copy is itself.)
+        clone: () => folded,
+    };
+    return folded;
+}
+
 interface Piece { text: string; face: FaceKey; size: number; color: any; underline: boolean; link?: string; background?: string; rise?: number; note?: OfficeContentNode; picture?: { img: any; w: number; h: number }; /** Drawn invisibly (TextFormatting.invisible): in its place, there to select and search. */ invisible?: boolean; }
 
 /** A stretch of inline text in one formatting, and the target it links to, if any. */
@@ -1305,6 +1369,7 @@ class NativeLayout {
                     this.y = Math.max(record.margin.top, record.h - record.margin.bottom + 2, record.h - (record.footerDistance || Math.max(12, record.margin.bottom / 3)) - height);
                     await this.render(footer);
                 }
+                if (header || footer) this.foldDrawn(true);
             }
         } finally {
             this.fixedPage = false;
@@ -1437,6 +1502,40 @@ class NativeLayout {
         }
     }
 
+    /**
+     * Folds the operators drawn on the current page since its last fold into their bytes, compressed (see
+     * foldedOperators), once there are `foldAt` of them or `all` asks: the file is the same, byte for byte,
+     * and the heap holds the drawing compressed rather than as an object per number and name. Only what was
+     * drawn since is read again, never a fold. Where the page's content stream is not pdf-lib's as this
+     * engine knows it (another version's), nothing is folded.
+     */
+    private foldDrawn(all = false): void {
+        const stream = (this.page as { contentStream?: { operators?: unknown } } | undefined)?.contentStream;
+        const operators = stream?.operators as { sizeInBytes?: () => number; copyBytesInto?: (buffer: Uint8Array, offset: number) => number }[] | undefined;
+        if (!foldAt || !stream || !Array.isArray(operators)) return;
+        const folded = this.foldedCounts.get(stream) ?? 0;
+        const drawn = operators.length - folded;
+        if (drawn <= 0 || (!all && drawn < foldAt)) return;
+        let size = 0;
+        for (let i = folded; i < operators.length; i++) {
+            const op = operators[i];
+            if (typeof op?.sizeInBytes !== 'function' || typeof op.copyBytesInto !== 'function') return;
+            size += op.sizeInBytes() + 1;
+        }
+        const bytes = new Uint8Array(size);
+        let at = 0;
+        for (let i = folded; i < operators.length; i++) {
+            at += operators[i].copyBytesInto!(bytes, at);
+            bytes[at++] = 0x0A;
+        }
+        if (at !== size) return;
+        operators.length = folded;
+        operators.push(foldedOperators(bytes.subarray(0, size - 1)));
+        this.foldedCounts.set(stream, folded + 1);
+    }
+    /** How many of the operators at the start of each page's content stream are folds (see foldDrawn). */
+    private readonly foldedCounts = new WeakMap<object, number>();
+
     /** Starts a fresh page and resets the cursor to the top margin. */
     private newPage(): void {
         // A page drawn as it is never runs on to another (see bottom).
@@ -1445,6 +1544,7 @@ class NativeLayout {
         // The page's own margins again, for its footnotes and the next page (the text's were a column's).
         if (this.pageMargin) this.margin = this.pageMargin;
         this.drawPageFootnotes();
+        this.foldDrawn(true);
         this.page = this.appendPage(this.pageW, this.pageH);
         this.y = this.margin.top;
         this.recordPage();
@@ -1791,6 +1891,7 @@ class NativeLayout {
                 x += this.segmentWidth(seg, size);
             }
         } finally { if (invisible) this.page.pushOperators(this.lib.popGraphicsState()); }
+        this.foldDrawn();
     }
 
     /** The ballot boxes' font (see ballotBoxFont), made when a box is first drawn, and each page's name for it. */
@@ -2067,17 +2168,32 @@ class NativeLayout {
     }
 
     /**
-     * Wraps a set of inline runs into lines within `[left, left+width]` and draws them, paginating as
-     * needed. Returns nothing; advances the cursor to just below the last line.
+     * A paragraph's runs as the pieces its lines are made of, in order: a word (cut at character boundaries
+     * where it is wider than `width`, a long URL or hash, so it wraps rather than running off the page), a
+     * picture (no wider than `width`, no taller than `pictureRoom`), or (`brk`) a forced break, a new line
+     * or a new page; `space` where a gap follows a piece. Given out one at a time: a piece is given once
+     * what follows it is known (a gap after it is its own), and breaks once a word follows them (breaks at
+     * the very end draw nothing, as a browser shows a `<br>` closing a paragraph). The characters no font
+     * draws are counted first, all of them, as they were when the pieces were listed before any was drawn.
      */
-    private drawRuns(runs: Run[], left: number, width: number, mono = false, layout: LineLayout = {}): void {
-        // The column's left edge and width the paragraph starts at (see flush).
-        let columnLeft = this.margin.left, columnWidth = this.contentWidth;
-        // Expand runs into per-word pieces (a trailing-space flag lets us re-insert inter-word gaps).
-        // A piece is a word, or (`brk`) a forced break: a new line, or a new page.
-        const pieces: { p: Piece; space: boolean; brk?: 'line' | 'page' }[] = [];
-        // A paragraph whose first letter is a right-to-left one is read from the right edge.
-        const baseRtl = startsRtl(runs.map(r => r.text).join(''));
+    private *piecesOf(runs: Run[], width: number, mono: boolean, pictureRoom: number): Generator<{ p: Piece; space: boolean; brk?: 'line' | 'page' }> {
+        type Item = { p: Piece; space: boolean; brk?: 'line' | 'page' };
+        // A newline in a run's text is a line break, as the other writers have it (DOCX writes `<w:br/>`): its
+        // text is cut there before it is encoded, which turns control characters into spaces.
+        const breakAt = /\r\n|[\n\r\f]/g;
+        for (const run of runs) {
+            if (run.picture) continue;
+            const face = this.faceFor(run.fmt, mono);
+            breakAt.lastIndex = 0;
+            let from = 0;
+            for (let found = breakAt.exec(run.text); found; found = breakAt.exec(run.text)) {
+                this.enc(run.text.slice(from, found.index), face);
+                from = found.index + found[0].length;
+            }
+            this.enc(run.text.slice(from), face);
+        }
+        let held: Item | undefined;
+        const breaks: { item: Item; count: number }[] = [];
         for (const run of runs) {
             const face = this.faceFor(run.fmt, mono);
             // A superscript or subscript is smaller and raised or lowered (they were drawn as body text).
@@ -2091,31 +2207,67 @@ class NativeLayout {
             const underline = !invisible && !!(run.fmt.underline || run.link);
             // A highlight or a run's own background, drawn behind its words.
             const background = invisible ? undefined : cssColorHex(run.fmt.backgroundColor) ?? undefined;
-            // A picture in the line: as wide and tall as it is drawn, no wider than the line, no taller
-            // than most of a page.
+            // A word or a picture: the piece before it given, and the breaks between them.
+            const take = function* (item: Item): Generator<Item> {
+                if (held) yield held;
+                for (const { item: brk, count } of breaks) for (let i = 0; i < count; i++) yield brk;
+                breaks.length = 0;
+                held = item;
+            };
             if (run.picture) {
-                const scale = Math.min(1, width / run.picture.w, (this.bottom - this.margin.top) * 0.8 / run.picture.h);
-                pieces.push({ p: { text: '', face, size, color, underline: false, link: run.link, picture: { img: run.picture.img, w: run.picture.w * scale, h: run.picture.h * scale } }, space: false });
+                const scale = Math.min(1, width / run.picture.w, pictureRoom / run.picture.h);
+                yield* take({ p: { text: '', face, size, color, underline: false, link: run.link, picture: { img: run.picture.img, w: run.picture.w * scale, h: run.picture.h * scale } }, space: false });
                 continue;
             }
-            // A newline in a run's text is a line break, as the other writers have it (DOCX writes
-            // `<w:br/>`): split there before encoding, which turns control characters into spaces.
-            run.text.split(/(\r\n|[\n\r\f])/).forEach((segment, at) => {
-                if (at % 2) { pieces.push({ p: { text: '', face, size, color, underline: false }, space: false, brk: segment === '\f' ? 'page' : 'line' }); return; }
-                for (const w of this.enc(segment, face).split(/(\s+)/)) {
-                    if (w === '') continue;
-                    if (/^\s+$/.test(w)) { const last = pieces[pieces.length - 1]; if (last && !last.brk) last.space = true; continue; }
-                    // Split a word wider than the whole line at character boundaries so it wraps instead
-                    // of running off the page (a long URL, a hash, a base64 token).
-                    for (const chunk of splitToWidth(w, t => this.widthOf(t, face, size), width)) {
-                        pieces.push({ p: { text: chunk, face, size, color, underline, link: run.link, background, rise, note: run.note, ...(invisible ? { invisible } : {}) }, space: false });
+            // (One piece for each kind of break the run has: a break is never changed, and a run of many is held as a count.)
+            let lineBreak: Item | undefined, pageBreak: Item | undefined;
+            const piecesOfSegment = function* (this: NativeLayout, segment: string): Generator<Item> {
+                const text = this.enc(segment, face, false);
+                const word = function* (this: NativeLayout, w: string): Generator<Item> {
+                    for (const chunk of chunksToWidth(w, t => this.widthOf(t, face, size), width)) {
+                        yield* take({ p: { text: chunk, face, size, color, underline, link: run.link, background, rise, note: run.note, ...(invisible ? { invisible } : {}) }, space: false });
                     }
+                };
+                const gap = /\s+/g;
+                let from = 0;
+                for (let found = gap.exec(text); found; found = gap.exec(text)) {
+                    if (found.index > from) yield* word.call(this, text.slice(from, found.index));
+                    // A gap after a word is its; after a break, or before anything, it is nothing.
+                    if (held && !breaks.length) held.space = true;
+                    from = found.index + found[0].length;
                 }
-            });
+                if (from < text.length) yield* word.call(this, text.slice(from));
+            };
+            breakAt.lastIndex = 0;
+            let from = 0;
+            for (let found = breakAt.exec(run.text); found; found = breakAt.exec(run.text)) {
+                yield* piecesOfSegment.call(this, run.text.slice(from, found.index));
+                const kind = found[0] === '\f' ? 'page' : 'line';
+                const brk = kind === 'page' ? (pageBreak ??= { p: { text: '', face, size, color, underline: false }, space: false, brk: 'page' }) : (lineBreak ??= { p: { text: '', face, size, color, underline: false }, space: false, brk: 'line' });
+                if (held) { yield held; held = undefined; }
+                const last = breaks[breaks.length - 1];
+                if (last?.item === brk) last.count++; else breaks.push({ item: brk, count: 1 });
+                from = found.index + found[0].length;
+                breakAt.lastIndex = from;
+            }
+            yield* piecesOfSegment.call(this, run.text.slice(from));
         }
-        // Breaks at the very end draw nothing, as a browser shows a `<br>` closing a paragraph.
-        while (pieces.length && pieces[pieces.length - 1].brk) pieces.pop();
-        if (!pieces.length) return;
+        if (held) yield held;
+    }
+
+    /**
+     * Wraps a set of inline runs into lines within `[left, left+width]` and draws them, paginating as
+     * needed. Returns nothing; advances the cursor to just below the last line.
+     */
+    private drawRuns(runs: Run[], left: number, width: number, mono = false, layout: LineLayout = {}): void {
+        // The column's left edge and width the paragraph starts at (see flush).
+        let columnLeft = this.margin.left, columnWidth = this.contentWidth;
+        // The paragraph's pieces (see piecesOf), read as they are placed: listed first, a word's piece each,
+        // a paragraph of millions of words held them all. Cut to the width the paragraph starts at, a picture
+        // no taller than most of the page it starts on.
+        const pieces = this.piecesOf(runs, width, mono, (this.bottom - this.margin.top) * 0.8);
+        // A paragraph whose first letter is a right-to-left one is read from the right edge.
+        const baseRtl = runsStartRtl(runs);
 
         const spaceWidth = (p: Piece) => this.widthOf(' ', p.face, p.size);
         let line: { p: Piece; space: boolean; w: number }[] = [];
@@ -3355,8 +3507,13 @@ function clustersOf(text: string): Iterable<string> {
 }
 
 function splitToWidth(text: string, measure: (text: string) => number, width: number): string[] {
-    if (width <= 0 || measure(text) <= width) return [text];
-    const chunks: string[] = [];
+    return [...chunksToWidth(text, measure, width)];
+}
+
+/** The chunks splitToWidth gives, one at a time. */
+function* chunksToWidth(text: string, measure: (text: string) => number, width: number): Generator<string> {
+    if (width <= 0 || measure(text) <= width) { yield text; return; }
+    let given = false;
     let cur = '';
     // A running width, each character measured once: measuring the chunk so far again at every
     // character took time quadratic in its length, and zero-width characters (combining marks) never
@@ -3367,11 +3524,11 @@ function splitToWidth(text: string, measure: (text: string) => number, width: nu
     // letter left its vowel sign to start the next line alone.
     for (const ch of clustersOf(text)) {
         const chWidth = measure(ch);
-        if (cur && curWidth + chWidth > width) { chunks.push(cur); cur = ch; curWidth = chWidth; }
+        if (cur && curWidth + chWidth > width) { yield cur; given = true; cur = ch; curWidth = chWidth; }
         else { cur += ch; curWidth += chWidth; }
     }
-    if (cur) chunks.push(cur);
-    return chunks.length ? chunks : [text];
+    if (cur) { yield cur; given = true; }
+    if (!given) yield text;
 }
 
 /**
@@ -3384,13 +3541,14 @@ function wrapPlain(text: string, measure: (text: string) => number, width: numbe
     const out: string[] = [];
     for (const raw of String(text ?? '').split(/\r\n|\r|\n/)) {
         const para = enc(raw);
-        const words = para.split(/\s+/).filter(Boolean);
         let line = '';
-        for (const w of words) {
+        // (Its words one at a time: listed, a cell of a million words held them all.)
+        const word = /\S+/g;
+        for (let found = word.exec(para); found; found = word.exec(para)) {
+            const w = found[0];
             // A single word wider than the whole column (a URL, hash, long identifier) is broken at
             // character boundaries so it wraps instead of overflowing into the next cell or off the page.
-            const pieces = width > 0 && measure(w) > width ? splitToWidth(w, measure, width) : [w];
-            for (const piece of pieces) {
+            for (const piece of chunksToWidth(w, measure, width)) {
                 const cand = line ? line + ' ' + piece : piece;
                 if (line && measure(cand) > width) { out.push(line); line = piece; }
                 else line = cand;
@@ -3740,6 +3898,7 @@ async function drawDocument(pdf: any, lib: any, fonts: Fonts, customFonts: boole
     layout.writeLinks();
     layout.dropScratchPage();
     if (pc.outline) writeOutline(pdf, lib, layout.outlineEntries);
+    layoutObserver?.(layout);
 
     return await pdf.save();
 }

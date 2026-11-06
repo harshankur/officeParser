@@ -35,6 +35,8 @@
 \definecolor{hexFF0000}{HTML}{FF0000}
 \definecolor{hexFFFF00}{HTML}{FFFF00}
 \definecolor{hexFFFFFF}{HTML}{FFFFFF}
+\providecommand{\ophlaaaaaa}[1]{{\setlength{\fboxsep}{1pt}\colorbox{hex000000}{\strut #1}}}
+\providecommand{\ophlppppaa}[1]{{\setlength{\fboxsep}{1pt}\colorbox{hexFFFF00}{\strut #1}}}
 \iftutex
   \newunicodechar{ }{\quad}
 \else
@@ -381,7 +383,7 @@ startxref
 
 \textcolor{hex000000}{Here, we~demonstrate~various types~of inline text formatting and the use of embedded fonts.}
 
-\textcolor{hex000000}{Here~is~some~}\textcolor{hex000000}{\textbf{bold,~}}\textcolor{hex000000}{\textit{italic,~}}\textcolor{hex000000}{\textit{\textbf{bold-italic,~}}}\textcolor{hex000000}{\uline{underlined~}}\textcolor{hex000000}{and~}\textcolor{hex000000}{\sout{struck~out~}}\textcolor{hex000000}{~text. Then, we have a super}\textcolor{hex000000}{\textsuperscript{script}}\textcolor{hex000000}{~and a sub}\textcolor{hex000000}{\textsubscript{script}}\textcolor{hex000000}{. Now we see some~}\textcolor{hexFF0000}{red}\textcolor{hex000000}{,~}\textcolor{hex92D050}{green}\textcolor{hex000000}{~and~}\textcolor{hex0070C0}{blue}\textcolor{hex000000}{~text. Some text with a~}\textcolor{hex000000}{{\setlength{\fboxsep}{1pt}\colorbox{hexFFFF00}{\strut yellow} \colorbox{hexFFFF00}{\strut highlight.}}}\textcolor{hex000000}{ Some text in a~box. Some text~in~}\textcolor{hexFFFFFF}{{\setlength{\fboxsep}{1pt}\colorbox{hex000000}{\strut inverse} \colorbox{hex000000}{\strut video}}}\textcolor{hex000000}{.}
+\textcolor{hex000000}{Here~is~some~}\textcolor{hex000000}{\textbf{bold,~}}\textcolor{hex000000}{\textit{italic,~}}\textcolor{hex000000}{\textit{\textbf{bold-italic,~}}}\textcolor{hex000000}{\uline{underlined~}}\textcolor{hex000000}{and~}\textcolor{hex000000}{\sout{struck~out~}}\textcolor{hex000000}{~text. Then, we have a super}\textcolor{hex000000}{\textsuperscript{script}}\textcolor{hex000000}{~and a sub}\textcolor{hex000000}{\textsubscript{script}}\textcolor{hex000000}{. Now we see some~}\textcolor{hexFF0000}{red}\textcolor{hex000000}{,~}\textcolor{hex92D050}{green}\textcolor{hex000000}{~and~}\textcolor{hex0070C0}{blue}\textcolor{hex000000}{~text. Some text with a~}\textcolor{hex000000}{\ophlppppaa{yellow} \ophlppppaa{highlight.}}\textcolor{hex000000}{ Some text in a~box. Some text~in~}\textcolor{hexFFFFFF}{\ophlaaaaaa{inverse} \ophlaaaaaa{video}}\textcolor{hex000000}{.}
 
 \textcolor{hex000000}{A paragraph with styled text:~}\textcolor{hex808080}{\textit{subtle~emphasis~~}}\textcolor{hex000000}{followed~by~}\textcolor{hex000000}{\textbf{strong text~}}\textcolor{hex000000}{and~}\textcolor{hex4F81BD}{\textit{\textbf{intense emphasis}}}\textcolor{hex000000}{.~This paragraph uses document wide styles for styling rather than inline text properties as~demonstrated~in the~previous~paragraph~—~calibre~can handle both with equal ease.}
 
