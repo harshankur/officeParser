@@ -95,7 +95,7 @@ export async function testQuoteParagraphs(): Promise<void> {
     const fromHtml = await OfficeParser.parseOffice(Buffer.from('<blockquote><p>a</p><p>b</p></blockquote><blockquote><p>c</p></blockquote>'), { fileType: 'html' });
     assert.strictEqual((await fromHtml.to('md')).value, '> a\n>\n> b\n\n> c', 'Quote: HTML quotes to Markdown');
     // LaTeX: one quote environment, read back as one quote.
-    const tex = (await ast.to('tex')).value;
+    const tex = String((await ast.to('tex')).value);
     assert.ok(tex.includes('\\begin{quote}\na\n\nb \\textit{c}\n\\end{quote}'), `Quote: one quote environment: ${tex}`);
     const fromTex = await OfficeParser.parseOffice(Buffer.from(tex), { fileType: 'tex' });
     assert.strictEqual((await fromTex.to('md')).value, source, 'Quote: LaTeX reads a quote environment of paragraphs as one quote');
@@ -132,10 +132,10 @@ export async function testFigureCaptions(): Promise<void> {
     assert.ok(/<w:drawing>[\s\S]*<\/w:p><w:p><w:pPr><w:pStyle w:val="Caption"\/><\/w:pPr><w:r><w:t xml:space="preserve">Survey area &amp; map<\/w:t>/.test(docx), 'Figure: DOCX writes a Caption paragraph after the picture');
     const odt = new TextDecoder().decode(unzipSync((await ast.to('odt')).value as Uint8Array)['content.xml']);
     assert.ok(/<text:p text:style-name="Caption">Survey area &amp; map<\/text:p>/.test(odt), 'Figure: ODT writes a Caption paragraph');
-    const tex = (await ast.to('tex')).value;
+    const tex = String((await ast.to('tex')).value);
     assert.ok(tex.includes('\\captionof{figure}{Survey area \\& map}'), 'Figure: LaTeX numbers the caption as the figure\'s');
     for (const format of ['rtf', 'docx', 'odt', 'pptx'] as const) {
-        const back = await OfficeParser.parseOffice(Buffer.from((await ast.to(format)).value as Uint8Array));
+        const back = await OfficeParser.parseOffice(Buffer.from((await ast.to(format)).value as unknown as Uint8Array));
         const text = (await back.to('text')).value;
         assert.ok(/Before[\s\S]*Survey area & map[\s\S]*After/.test(text), `Figure: ${format} keeps the caption after the picture: ${text}`);
     }
@@ -190,7 +190,7 @@ export async function testDisclosuresAndKeyboard(): Promise<void> {
     assert.ok(text.includes('Click me\nSome body text.\n- a\n- b\nconst x = 1;\n\nconst y = 2;\nInner\nNested.'), `Disclosure: text writes it open: ${text}`);
     assert.ok(/Details\nx/.test((await loose.to('text')).value), 'Disclosure: one with no summary is "Details", as a browser shows it');
     for (const format of ['docx', 'odt', 'rtf', 'tex', 'pptx'] as const) {
-        const back = await OfficeParser.parseOffice(Buffer.from((await ast.to(format)).value as Uint8Array), format === 'tex' ? { fileType: 'tex' } : {});
+        const back = await OfficeParser.parseOffice(Buffer.from((await ast.to(format)).value as unknown as Uint8Array), format === 'tex' ? { fileType: 'tex' } : {});
         const backMd = (await back.to('md')).value;
         assert.ok(/\*\*Click me\*\*[\s\S]*Some \*body\* text\.[\s\S]*\*\*Inner\*\*[\s\S]*Nested\./.test(backMd), `Disclosure: ${format} writes its summary in bold and its body: ${backMd}`);
         if (format === 'docx' || format === 'odt' || format === 'tex') assert.ok(backMd.includes('`Ctrl`'), `Keyboard: ${format} writes keyboard input as code: ${backMd}`);
@@ -237,7 +237,7 @@ export async function testSheetsAsTables(): Promise<void> {
     assert.ok(viewer.includes('excel-col-header') && viewer.includes('spreadsheet-tab'), 'Sheets as tables: the viewer stays the default');
     // A workbook read from XLSX and ODS, and a bad value reported.
     for (const format of ['xlsx', 'ods'] as const) {
-        const back = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(ast, format)).value as Uint8Array));
+        const back = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(ast, format)).value as unknown as Uint8Array));
         const html = (await back.to('html', { htmlConfig: { standalone: false, sheetLayout: 'tables' } })).value;
         assert.ok(html.includes('Data &lt;1&gt;</h2>') && html.includes('colspan="2"') && !html.includes('excel-col-header'), `Sheets as tables: from ${format}: ${html}`);
     }
@@ -281,12 +281,12 @@ export async function testNoteMarks(): Promise<void> {
     assert.deepStrictEqual(shown((await md.to('html', { htmlConfig: { standalone: false } })).value), expected, 'Notes: footnotes and endnotes counted apart, a custom mark kept');
     // Through the formats that number notes themselves, and back.
     for (const format of ['docx', 'odt', 'epub'] as const) {
-        const written = (await md.to(format)).value as Uint8Array;
+        const written = (await md.to(format)).value as unknown as Uint8Array;
         const back = await OfficeParser.parseOffice(Buffer.from(written));
         const html = (await back.to('html', { htmlConfig: { standalone: false } })).value;
         assert.deepStrictEqual(shown(html), expected, `Notes: ${format} keeps the marks`);
         const custom = notesOf(back)[2];
-        assert.strictEqual(custom.text.trim(), 'Third.', `Notes: ${format} keeps the custom mark out of the note's text`);
+        assert.strictEqual((custom.text ?? '').trim(), 'Third.', `Notes: ${format} keeps the custom mark out of the note's text`);
         if (format !== 'epub') assert.strictEqual((custom.metadata as NoteMetadata).customMark, true, `Notes: ${format} reads the custom mark back as one`);
     }
     const odt = new TextDecoder().decode(unzipSync((await md.to('odt')).value as Uint8Array)['content.xml']);
@@ -307,7 +307,7 @@ export async function testNoteMarks(): Promise<void> {
         + '<aside epub:type="footnote" id="dataF1"><p><sup><a href="#calledF1">1</a></sup>Figures are rounded.</p></aside>';
     const epubAst = await OfficeParser.parseOffice(Buffer.from(epubHtml), { fileType: 'html' });
     const epubNote = notesOf(epubAst)[0];
-    assert.strictEqual(epubNote.text.trim(), 'Figures are rounded.', 'Notes: a link back to the reference is the back-link, not text');
+    assert.strictEqual((epubNote.text ?? '').trim(), 'Figures are rounded.', 'Notes: a link back to the reference is the back-link, not text');
     assert.strictEqual((epubNote.metadata as NoteMetadata).mark, '1', 'Notes: the reference text is the mark');
     assert.deepStrictEqual(shown((await epubAst.to('html', { htmlConfig: { standalone: false } })).value), ['1'], 'Notes: and shown again');
     console.log('✓ Note marks');

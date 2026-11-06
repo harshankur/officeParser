@@ -30,7 +30,7 @@ export async function documentShapeEscapingTests(check: Check): Promise<void> {
     const noteMd = String((await OfficeGenerator.generate(noted, 'md', silent as any)).value);
     check('note mark: Markdown HTML cell escaped', !live(noteMd), noteMd);
     for (const format of ['docx', 'odt'] as const) {
-        const files = unzipSync((await OfficeGenerator.generate(noted, format, silent as any)).value as Uint8Array);
+        const files = unzipSync((await OfficeGenerator.generate(noted, format, silent as any)).value as unknown as Uint8Array);
         const part = new TextDecoder().decode(files[format === 'docx' ? 'word/document.xml' : 'content.xml']);
         let wellFormed = true;
         try { parseXmlString(part); } catch { wellFormed = false; }
