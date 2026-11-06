@@ -9,6 +9,7 @@ import { strToU8, unzipSync, zipSync } from 'fflate';
 import { OfficeGenerator } from '../../src/OfficeGenerator';
 import { OfficeParser } from '../../src/OfficeParser';
 import type { ImageMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, ParagraphMetadata } from '../../src/types';
+import { MARKDOWN_FINGERPRINTS_FILE, markdownFingerprints, markdownWithoutDisclosures } from '../helpers/markdownFingerprints';
 
 /** An XML document whose root is `html` (XHTML, as office suites export HTML) is read as HTML. */
 export async function testXhtmlReadAsHtml(): Promise<void> {
@@ -602,3 +603,206 @@ export async function testOdtNoteMarksFromConfiguration(): Promise<void> {
         'ODT note marks: a footnote configuration naming no restart restarts per page, as LibreOffice reads it');
     console.log('✓ ODT note marks from the notes configuration');
 }
+
+/**
+ * Whether `run` takes under three times what `baseline` (plain input of the same size) takes, plus 200 ms:
+ * measured again when over, the faster kept, so a pause of the machine is not taken for the limit failing
+ * (see helpers/timing). Both times, for the message.
+ */
+async function linearAgainst(run: () => Promise<unknown>, baseline: () => Promise<unknown>): Promise<{ within: boolean; time: number; plain: number }> {
+    let plain = await timed(baseline);
+    let time = await timed(run);
+    if (time >= 3 * plain + 200) {
+        plain = Math.max(plain, await timed(baseline));
+        time = Math.min(time, await timed(run));
+    }
+    return { within: time < 3 * plain + 200, time, plain };
+}
+
+/** `text` read as `fileType` and written as `format`, then read back and written again, `passes` times: each pass's output and text. */
+async function passesWithText(text: string, fileType: 'html' | 'md', format: 'html' | 'md', passes = 3): Promise<{ out: string[]; text: string[] }> {
+    const out: string[] = [];
+    const texts: string[] = [];
+    let ast = await OfficeParser.parseOffice(Buffer.from(text), { fileType });
+    const first = (await ast.to('text')).value;
+    for (let pass = 0; pass < passes; pass++) {
+        out.push((await ast.to(format, { htmlConfig: { standalone: false } })).value);
+        ast = await OfficeParser.parseOffice(Buffer.from(out[pass]), { fileType: format });
+        texts.push((await ast.to('text')).value);
+    }
+    return { out, text: [first, ...texts] };
+}
+
+/** A tree's shape: each node's type, a disclosure's summary in brackets, and its children's in parentheses. */
+function treeShape(nodes: OfficeContentNode[] | undefined): string {
+    return (nodes ?? []).map(n => n.type + (n.type === 'disclosure' ? `[${(n.metadata as { summary?: string } | undefined)?.summary ?? ''}]` : '')
+        + (n.type !== 'text' && n.children?.length ? `(${treeShape(n.children)})` : '')).join(',');
+}
+
+/** Every block kind in a disclosure's body, from Markdown. */
+const EVERY_KIND_MD = (() => {
+    const body = [
+        '# H1 {#h1}', '## H2', '###### H6',
+        '<div style="text-align: center">Centered **bold**</div>',
+        '<div style="text-align: right">\n\n## Right heading\n\n</div>',
+        '<div align="center">\n\n*centered*\n\n</div>',
+        'Plain *em* **strong** `code` [link](https://e.com) and math $x^2$.',
+        '| A | B |\n| :-- | --: |\n| 1 | *2* |',
+        '<table><tr><td>\n\ncell *md*\n\n</td></tr></table>',
+        '- a\n- b\n  - b1\n- [x] done',
+        '1. one\n2. two',
+        '> quote one\n>\n> quote two',
+        '```js\nconst x = "<details>";\n```',
+        '    indented code',
+        '$$\n\\int_0^1 x\\,dx\n$$',
+        '![alt](a.png)',
+        '<figure><img src="a.png" alt="p"><figcaption>Cap</figcaption></figure>',
+        'Text with a note[^n1].',
+        '---',
+        '<details open>\n<summary>Inner</summary>\n\nInner *body*\n\n<details>\n<summary>Deepest</summary>\n\nDeep\n\n</details>\n\n</details>',
+    ].join('\n\n');
+    return `Before\n\n<details>\n<summary>Every kind</summary>\n\n${body}\n\n</details>\n\nAfter\n\n[^n1]: The *note*.\n`;
+})();
+
+/** Every block kind in a disclosure, from HTML. */
+const EVERY_KIND_HTML = '<p>Before</p><details><summary>Every kind</summary><h1>H1</h1><h2 style="text-align:center">C2</h2><p style="text-align:right">Right <b>b</b></p><p style="text-align:justify">Just</p>'
+    + '<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td><i>2</i></td></tr></table><ul><li>a</li><li>b<ul><li>b1</li></ul></li></ul><ol><li>one</li></ol>'
+    + '<blockquote><p>q1</p><p>q2</p></blockquote><pre><code>x &lt;/details&gt;\ny</code></pre><p><img src="a.png" alt="i"></p><figure><img src="a.png" alt="p"><figcaption>Cap</figcaption></figure>'
+    + '<details open><summary>Inner</summary><p>In <kbd>K</kbd></p><details><summary>D</summary><p>Deep</p></details></details><hr></details><p>After</p>';
+
+/**
+ * A Markdown disclosure's body is a Markdown document of its own, read by the same reading as the
+ * document: an aligned wrapper, a one-line aligned div, a `<div>` holding Markdown and an inline
+ * `<details>` in it read as at top level, no piece token or escaped Markdown in any output, every block
+ * kind stable over three passes, nesting bounded with nothing dropped, in time linear in the text.
+ */
+export async function testMarkdownDisclosureSubDocuments(): Promise<void> {
+    const token = /[a-z0-9]{6,}:\d/;
+    // The editor's HTML of a centred paragraph and of a centred heading in a disclosure, to Markdown and back three times.
+    for (const [html, expected, text] of [
+        ['<details><summary>S</summary><p style="text-align:center">Centered <b>bold</b></p></details>',
+            '<details>\n<summary>S</summary>\n\n<div style="text-align: center">Centered **bold**</div>\n\n</details>', 'S\nCentered bold'],
+        ['<details><summary>S</summary><h2 style="text-align:center">Heading</h2><p>Plain body</p></details><p>After</p>',
+            '<details>\n<summary>S</summary>\n\n<div style="text-align: center">\n\n## Heading {#heading}\n\n</div>\n\nPlain body\n\n</details>\n\nAfter', 'S\nHeading\nPlain body\nAfter'],
+    ]) {
+        let ast = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' });
+        for (let pass = 0; pass < 3; pass++) {
+            const md = (await ast.to('md')).value;
+            assert.strictEqual(md, expected, `Disclosure sub-document: pass ${pass} of ${html}`);
+            ast = await OfficeParser.parseOffice(Buffer.from(md), { fileType: 'md' });
+            const shown = (await ast.to('text')).value;
+            assert.strictEqual(shown, text, `Disclosure sub-document: pass ${pass} text, no token or escaped mark`);
+            const out = shown + (await ast.to('html', { htmlConfig: { standalone: false } })).value;
+            assert.ok(!token.test(out) && !out.includes('\\*'), `Disclosure sub-document: no piece token or backslash in pass ${pass}: ${out}`);
+        }
+    }
+    // Those Markdown sources read as at top level.
+    const textOf = async (md: string) => (await (await OfficeParser.parseOffice(Buffer.from(md), { fileType: 'md' })).to('text')).value;
+    assert.strictEqual(await textOf('<details>\n<summary>S</summary>\n\n<div style="text-align: center">\n\n## Heading {#heading}\n\n</div>\n\nPlain body\n\n</details>\n\nAfter'),
+        'S\nHeading\nPlain body\nAfter', 'Disclosure sub-document: an aligned wrapper\'s heading, and the body after it, stay in the disclosure');
+    assert.strictEqual(await textOf('<details>\n<summary>S</summary>\n\n<div style="text-align: center">Centered **bold**</div>\n\n</details>'), 'S\nCentered bold',
+        'Disclosure sub-document: a one-line aligned div\'s Markdown is read');
+    // A <div> holding Markdown, an aligned one, and an aligned paragraph tag around a picture.
+    const shapes: [string, unknown][] = [
+        ['<details>\n<summary>S</summary>\n\n<div>\n\n*md in div*\n\n</div>\n\nBody\n\n</details>\n\nAfter\n', [
+            { type: 'disclosure', metadata: { summary: 'S' }, children: [
+                { type: 'paragraph', metadata: {}, children: [{ type: 'text', text: 'md in div', formatting: { italic: true } }] },
+                { type: 'paragraph', metadata: {}, children: [{ type: 'text', text: 'Body' }] }] },
+            { type: 'paragraph', metadata: {}, children: [{ type: 'text', text: 'After' }] }]],
+        ['<details>\n<summary>S</summary>\n\n<div align="center">\n\n*centered*\n\n</div>\n\n</details>\n', [
+            { type: 'disclosure', metadata: { summary: 'S' }, children: [
+                { type: 'paragraph', metadata: { alignment: 'center' }, children: [{ type: 'text', text: 'centered', formatting: { italic: true } }] }] }]],
+        ['<details>\n<summary>S</summary>\n\n<p align="center">\n\n![x](a.png)\n\n</p>\n\nBody\n\n</details>\n', [
+            { type: 'disclosure', metadata: { summary: 'S' }, children: [
+                { type: 'paragraph', metadata: { alignment: 'center' }, children: [{ type: 'image', metadata: { url: 'a.png', altText: 'x' } }] },
+                { type: 'paragraph', metadata: {}, children: [{ type: 'text', text: 'Body' }] }] }]],
+    ];
+    for (const [source, expected] of shapes) {
+        assert.deepStrictEqual(JSON.parse(JSON.stringify((await OfficeParser.parseOffice(Buffer.from(source), { fileType: 'md' })).content)), expected, `Disclosure sub-document: ${JSON.stringify(source)}`);
+    }
+    // An inline <details> in a body paragraph opens a disclosure there; the outer body after it stays in the outer one.
+    const inline = await OfficeParser.parseOffice(Buffer.from('<details>\n<summary>Outer</summary>\n\nIntro text <details><summary>Inner</summary>\n\nInner body\n\n</details>\n\nOuter body continues\n\n</details>\n\nAfter\n'), { fileType: 'md' });
+    assert.strictEqual(treeShape(inline.content), 'disclosure[Outer](paragraph(text),disclosure[Inner](paragraph(text)),paragraph(text)),paragraph(text)', 'Disclosure sub-document: an inline opener nests');
+    assert.strictEqual((await inline.to('text')).value, 'Outer\nIntro text\nInner\nInner body\nOuter body continues\nAfter', 'Disclosure sub-document: an inline opener\'s text');
+    // Every block kind, and the edges of a body: the same Markdown, HTML and text over three passes.
+    const cases: [string, 'md' | 'html', string, string][] = [
+        ['every kind from Markdown', 'md', EVERY_KIND_MD, ''],
+        ['every kind from HTML', 'html', EVERY_KIND_HTML, ''],
+        ['an aligned wrapper', 'md', '<details>\n<summary>S</summary>\n\n<div style="text-align: center">\n\n## Heading {#heading}\n\n</div>\n\nPlain body\n\n</details>\n\nAfter\n', 'disclosure[S](heading,paragraph),paragraph'],
+        ['a one-line aligned div', 'md', '<details>\n<summary>S</summary>\n\n<div style="text-align: center">Centered **bold**</div>\n\n</details>\n', 'disclosure[S](paragraph)'],
+        ['a summary after a blank line', 'md', '<details>\n\n<summary>Later</summary>\n\nBody\n\n</details>\n\nAfter\n', 'disclosure[Later](paragraph),paragraph'],
+        ['no summary', 'md', '<details>\n\nBody *x*\n\n</details>\n\nAfter\n', 'disclosure[](paragraph),paragraph'],
+        ['raw HTML after the summary', 'md', '<details>\n<summary>S</summary>\nRaw *not md* line\n\nMd *yes*\n\n</details>\n\nAfter\n', 'disclosure[S](paragraph,paragraph),paragraph'],
+        ['one block', 'md', '<details><summary>S</summary><p>x</p></details>\n\nAfter\n', 'disclosure[S](paragraph),paragraph'],
+        ['text after the closing tag', 'md', '<details>\n<summary>S</summary>\n\nBody\n\n</details> tail *t*\n\nAfter\n', 'disclosure[S](paragraph),paragraph,paragraph'],
+        ['an inline opener', 'md', '<details>\n<summary>Outer</summary>\n\nIntro text <details><summary>Inner</summary>\n\nInner body\n\n</details>\n\nOuter body continues\n\n</details>\n\nAfter\n', ''],
+        ['never closed', 'md', '<details>\n<summary>S</summary>\n\n# All\n\nthe rest\n', 'disclosure[S](heading,paragraph)'],
+        ['an anchor before it', 'md', '<a id="d1"></a>\n<details>\n<summary>S</summary>\n\nBody\n\n</details>\n\nAfter\n', 'disclosure[S](paragraph),paragraph'],
+    ];
+    const blockShape = (nodes: OfficeContentNode[] | undefined): string => (nodes ?? []).filter(n => n.type !== 'text')
+        .map(n => n.type + (n.type === 'disclosure' ? `[${(n.metadata as { summary?: string }).summary ?? ''}](${blockShape(n.children)})` : '')).join(',');
+    for (const [name, fileType, source, shape] of cases) {
+        if (shape) assert.strictEqual(blockShape((await OfficeParser.parseOffice(Buffer.from(source), { fileType })).content), shape, `Disclosure sub-document: ${name}, its blocks`);
+        // HTML: a pipe table's HTML gains white space between cells on its second pass (8.6.0 the same), so only Markdown for it.
+        for (const format of name === 'every kind from Markdown' ? ['md' as const] : ['md' as const, 'html' as const]) {
+            const { out, text } = await passesWithText(source, fileType, format);
+            assert.deepStrictEqual(out, [out[0], out[0], out[0]], `Disclosure sub-document: ${name}, ${format} stable over three passes`);
+            assert.deepStrictEqual(text, text.map(() => text[0]), `Disclosure sub-document: ${name}, the same text through ${format}`);
+            assert.ok(!token.test(out[0]), `Disclosure sub-document: ${name}, no piece token in ${format}: ${out[0]}`);
+        }
+    }
+    const raw = (await OfficeParser.parseOffice(Buffer.from(cases[6][2]), { fileType: 'md' })).content[0].children!;
+    assert.strictEqual(nodeText(raw[0]), 'Raw *not md* line', 'Disclosure sub-document: raw HTML after the summary keeps its Markdown literal, as GitHub shows it');
+    // 20 disclosures nested: 16 read as nested, deeper ones a disclosure of their summary followed by their body; all text kept, stable.
+    let nested = '';
+    for (let i = 0; i < 20; i++) nested += `<details>\n<summary>L${i}</summary>\n\nText ${i}\n\n`;
+    nested += '</details>\n\n'.repeat(20) + 'After\n';
+    const nestedAst = await OfficeParser.parseOffice(Buffer.from(nested), { fileType: 'md' });
+    let level = nestedAst.content[0];
+    for (let i = 0; i < 16; i++) {
+        assert.ok(level.type === 'disclosure' && (level.metadata as { summary?: string }).summary === `L${i}` && nodeText(level.children![0]) === `Text ${i}`, `Disclosure sub-document: level ${i} nested`);
+        level = level.children![level.children!.length - 1];
+    }
+    const allText = Array.from({ length: 20 }, (_, i) => `L${i}\nText ${i}`).join('\n') + '\nAfter';
+    assert.strictEqual((await nestedAst.to('text')).value, allText, 'Disclosure sub-document: past 16 levels nothing dropped');
+    const nestedMd = (await nestedAst.to('md')).value;
+    const { out: nestedPasses, text: nestedTexts } = await passesWithText(nestedMd, 'md', 'md');
+    assert.deepStrictEqual(nestedPasses, [nestedMd, nestedMd, nestedMd], 'Disclosure sub-document: 20 nested stable over three passes');
+    assert.ok(nestedTexts.every(t => t === allText), 'Disclosure sub-document: 20 nested keep their text over three passes');
+    // Linear: each against plain paragraphs of the same size, in the same run.
+    const n = 4000;
+    const plain = (length: number) => 'Some *plain* text here.\n\n'.repeat(Math.ceil(length / 25));
+    for (const [name, source] of [
+        ['inline closers and openers', ('<details>\n\n' + 'a </details> b\n\n').repeat(n)],
+        ['nested blocks', '<details><summary>s</summary>\n\nx\n\n'.repeat(n) + '</details>\n\n'.repeat(n)],
+        ['openers in quotes', '<details>\n\n' + '> <details>\n>\n> x\n\n'.repeat(n)],
+        ['tables of Markdown cells', '<details>\n\n' + '<table><tr><td>\n\nc *x*\n\n</td></tr></table>\n\n'.repeat(n) + '</details>\n'],
+    ]) {
+        const { within, time, plain: baseline } = await linearAgainst(() => OfficeParser.parseOffice(Buffer.from(source), { fileType: 'md' }),
+            () => OfficeParser.parseOffice(Buffer.from(plain(source.length)), { fileType: 'md' }));
+        assert.ok(within, `Disclosure sub-document: ${name} (${source.length} bytes) in ${time.toFixed(0)} ms, paragraphs in ${baseline.toFixed(0)} ms`);
+    }
+    console.log('✓ Markdown disclosure as a sub-document');
+}
+
+/**
+ * Markdown with no disclosure reads and writes as before disclosures were read as sub-documents: the
+ * Markdown test files and a seeded fuzz of every other block kind, tree, metadata, Markdown, HTML and
+ * text, against the fingerprints kept in helpers/markdownFingerprints.json.
+ */
+export async function testMarkdownWithoutDisclosuresUnchanged(): Promise<void> {
+    const documents = markdownWithoutDisclosures();
+    assert.ok(documents.every(document => !/<details/i.test(document)), 'Markdown without disclosures: no document holds one');
+    const fingerprints = await markdownFingerprints((buffer, config) => OfficeParser.parseOffice(buffer, config), documents);
+    if (process.env.WRITE_MARKDOWN_FINGERPRINTS) {
+        fs.writeFileSync(MARKDOWN_FINGERPRINTS_FILE, JSON.stringify({ from: 'WRITE_MARKDOWN_FINGERPRINTS', fingerprints }, null, 1) + '\n');
+        console.log(`✓ Markdown without disclosures: ${fingerprints.length} fingerprints written`);
+        return;
+    }
+    const kept: string[] = JSON.parse(fs.readFileSync(MARKDOWN_FINGERPRINTS_FILE, 'utf8')).fingerprints;
+    assert.strictEqual(fingerprints.length, kept.length, 'Markdown without disclosures: as many documents as fingerprints');
+    const changed = fingerprints.map((fingerprint, i) => fingerprint === kept[i] ? -1 : i).filter(i => i >= 0);
+    assert.deepStrictEqual(changed, [], `Markdown without disclosures: read as before, but ${changed.length} differ, the first ${JSON.stringify(documents[changed[0]]?.slice(0, 300))}`);
+    console.log(`✓ Markdown without disclosures unchanged (${documents.length} documents)`);
+}
+

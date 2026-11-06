@@ -668,25 +668,81 @@ const MAX_TABLE_PIECES = 64;
 /** How deeply nested an HTML table that blank lines run through may be, for its pieces to join (see splitIntoBlocks). */
 const MAX_JOINED_TABLE_DEPTH = 16;
 
-/** CommonMark's HTML block start conditions 1 to 6 (7 is startsHtmlBlock's), up to three spaces in. */
-const HTML_BLOCK_START = new RegExp('^ {0,3}(?:<(?:pre|script|style|textarea)(?:[\\s>]|$)|<!--|<\\?|<![A-Za-z]|<!\\[CDATA\\[|<\\/?(?:'
-    + 'address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|'
-    + 'h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul'
-    + ')(?:[\\s>]|\\/>|$))', 'i');
+/**
+ * The change in how many HTML tables are open over `text`: its `<table` tags less its `</table>` tags.
+ */
+function htmlTableDepthChange(text: string): number {
+    if (!/<\/?table/i.test(text)) return 0;
+    return (text.match(/<table\b/gi)?.length ?? 0) - (text.match(/<\/table\s*>/gi)?.length ?? 0);
+}
 
-/** CommonMark's HTML block start condition 7: one complete open or closing tag, and only white space after it on the line. */
-const HTML_BLOCK_LONE_TAG = /^ {0,3}(?:<[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][\w.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*\/?>|<\/[A-Za-z][A-Za-z0-9-]*\s*>)[ \t]*$/;
+/** How deeply disclosures nest in Markdown (see groupDisclosures): deeper, a `<details>` is the HTML block it stands in. */
+const MAX_DISCLOSURE_DEPTH = 16;
+
+/** A whole `<details>` opening tag (no `<` or `>` in it), read where it starts. */
+const DETAILS_OPEN_TAG = /<details(?:[\s/][^<>]*)?>/iy;
+/** A `</details>` closing tag, read where it starts. */
+const DETAILS_CLOSE_TAG = /<\/details\s*>/iy;
+/** A `</table>` closing tag, read where it starts. */
+const TABLE_CLOSE_TAG = /<\/table\s*>/iy;
+/** White space, then a whole `<summary>` opening tag, read where the white space starts. */
+const SUMMARY_OPEN_TAG = /\s*<summary(?:[\s/][^<>]*)?>/iy;
+/** A `</summary>` closing tag. */
+const SUMMARY_CLOSE_TAG = /<\/summary\s*>/gi;
+
+/** A block (see splitIntoBlocks), or a part of one cut at a disclosure's tag: its text, and whether all of it is raw HTML. */
+interface BlockPart { text: string; html: boolean }
+
+/** A disclosure's tag in a block: where it starts and ends, and whether it opens one. */
+interface DisclosureTag { at: number; end: number; open: boolean }
 
 /**
- * Whether a piece (what a blank line starts) starts an HTML block, as CommonMark reads its first line:
- * in a disclosure's body, any other piece is Markdown (`<kbd>Ctrl</kbd> and *bold*` is a paragraph).
+ * The `<details>` and `</details>` tags of a block that open and close disclosures where it stands, in
+ * order, and where its raw HTML starts (see groupDisclosures). As a browser has a renderer's output: a
+ * tag in a paragraph (inline HTML: not in a code span, not escaped) or in an HTML block (not in a table,
+ * which closes what opens in it); none in a list item, quote, heading, pipe table or indented code,
+ * whose element closes what opens in it (a quote's text is read as blocks of its own). Linear in the
+ * block's length.
  */
-function startsHtmlBlock(piece: string): boolean {
-    const newline = piece.indexOf('\n');
-    const line = newline === -1 ? piece : piece.slice(0, newline);
-    if (HTML_BLOCK_START.test(line)) return true;
-    const lone = /^ {0,3}<\/?([A-Za-z][A-Za-z0-9-]*)/.exec(line);
-    return !!lone && !/^(?:pre|script|style|textarea)$/i.test(lone[1]) && HTML_BLOCK_LONE_TAG.test(line);
+function disclosureTags(part: BlockPart): { tags: DisclosureTag[]; htmlFrom: number } {
+    const text = part.text;
+    if (!/<\/?details/i.test(text)) return { tags: [], htmlFrom: text.length };
+    let htmlFrom = 0;
+    if (!part.html) {
+        const newline = text.indexOf('\n');
+        const firstLine = newline === -1 ? text : text.slice(0, newline);
+        if (/^ {0,3}>/.test(firstLine) || ATX_HEADING_START.test(firstLine) || (LIST_ITEM_START.test(firstLine) && indentColumn(firstLine) < 4)
+            || isIndentedCodeBlock(text)) return { tags: [], htmlFrom: text.length };
+        const start = HTML_BLOCK_LINE.exec(text);
+        htmlFrom = start ? start.index + (text[start.index] === '\n' ? 1 : 0)
+            : /^ {0,3}<pre[\s>]/i.test(text) && /<\/pre\s*>/i.test(text) ? 0 : text.length;
+        if (htmlFrom === text.length && text.includes('|') && hasTableDelimiterRow(text)) return { tags: [], htmlFrom };
+    }
+    const blanked = htmlFrom > 0 ? blankCodeSpans(text.slice(0, htmlFrom)) : '';
+    const tags: DisclosureTag[] = [];
+    let tables = 0;
+    for (const m of text.matchAll(/<(\/?)(details|table)\b/gi)) {
+        const at = m.index!;
+        if (m[2].length === 5) {
+            // A table's tags count in HTML only.
+            if (at < htmlFrom) continue;
+            if (!m[1]) tables++;
+            else if (tables > 0) { TABLE_CLOSE_TAG.lastIndex = at; if (TABLE_CLOSE_TAG.test(text)) tables--; }
+            continue;
+        }
+        if (at >= htmlFrom) {
+            if (tables > 0) continue;
+        } else {
+            if (blanked[at] !== '<') continue;
+            let slashes = 0;
+            while (text[at - 1 - slashes] === '\\') slashes++;
+            if (slashes % 2 === 1) continue;
+        }
+        const tag = m[1] ? DETAILS_CLOSE_TAG : DETAILS_OPEN_TAG;
+        tag.lastIndex = at;
+        if (tag.test(text)) tags.push({ at, end: tag.lastIndex, open: !m[1] });
+    }
+    return { tags, htmlFrom };
 }
 
 /**
@@ -712,88 +768,6 @@ function blankCodeSpans(text: string): string {
         start = text.indexOf('`', close + (end - from));
     }
     return out + text.slice(last);
-}
-
-/**
- * The tables and disclosures a piece opens and closes, in order: a table's tags as they are written
- * (as 8.6.0 counted them), a disclosure's outside code spans (`` `<details>` `` is text). Of a piece
- * read as Markdown, only a disclosure's tags, its inline HTML, and not one escaped (`\<details>`).
- */
-function containerTags(text: string, markdown = false): { details: boolean; open: boolean }[] {
-    if (!(markdown ? /<\/?details/i : /<\/?(?:table|details)/i).test(text)) return [];
-    const blanked = /<\/?details/i.test(text) ? blankCodeSpans(text) : text;
-    const tags: { details: boolean; open: boolean }[] = [];
-    for (const m of text.matchAll(/<(\/?)(table|details)\b(\s*>)?/gi)) {
-        const details = m[2].toLowerCase() === 'details';
-        if (details && blanked[m.index] !== '<') continue;
-        if (m[1] && m[3] === undefined) continue;
-        if (markdown) {
-            if (!details) continue;
-            let slashes = 0;
-            while (text[m.index - 1 - slashes] === '\\') slashes++;
-            if (slashes % 2 === 1) continue;
-        }
-        tags.push({ details, open: !m[1] });
-    }
-    return tags;
-}
-
-/**
- * The tables and disclosures open (see splitIntoBlocks), innermost last. A closing tag closes the
- * innermost container of its kind and none when none of its kind is open; each takes constant time
- * (amortized), so a piece of many tags of both kinds costs time linear in its length.
- */
-class OpenContainers {
-    /** The kinds opened (true for a disclosure), in order, and whether each is still open. */
-    private readonly kinds: boolean[] = [];
-    private readonly open: boolean[] = [];
-    /** The places in `kinds` of the open tables (0) and disclosures (1), innermost last. */
-    private readonly places: [number[], number[]] = [[], []];
-
-    push(details: boolean): void {
-        this.places[details ? 1 : 0].push(this.kinds.length);
-        this.kinds.push(details);
-        this.open.push(true);
-    }
-
-    close(details: boolean): void {
-        const at = this.places[details ? 1 : 0].pop();
-        if (at === undefined) return;
-        this.open[at] = false;
-        while (this.kinds.length > 0 && !this.open[this.open.length - 1]) {
-            this.kinds.pop();
-            this.open.pop();
-        }
-    }
-
-    /** Whether the innermost container open is a disclosure. */
-    get innermostDisclosure(): boolean {
-        return this.kinds.length > 0 && this.kinds[this.kinds.length - 1];
-    }
-
-    /** Whether any disclosure is open. */
-    get anyDisclosure(): boolean {
-        return this.places[1].length > 0;
-    }
-}
-
-/**
- * What a piece changes in the open containers (see splitIntoBlocks): the change in their depth, its
- * opening tags less its closing ones (as 8.6.0 counted a table's), each also applied to `containers`
- * when given. Of a piece read as Markdown, only its inline disclosure tags count (see containerTags).
- */
-function applyContainerTags(text: string, containers?: OpenContainers, markdown = false): number {
-    let change = 0;
-    for (const tag of containerTags(text, markdown)) {
-        if (tag.open) {
-            containers?.push(tag.details);
-            change++;
-        } else {
-            containers?.close(tag.details);
-            change--;
-        }
-    }
-    return change;
 }
 
 /** The column a line's text starts at, a tab advancing to the next multiple of four. */
@@ -2144,6 +2118,99 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return html;
     };
 
+    // Disclosures lifted out of blocks (see groupDisclosures): each its header (`<details>` and its
+    // summary) and its body's blocks, read when its placeholder is; and raw HTML cut from an HTML block
+    // at a disclosure's tag, which is HTML whatever it starts with.
+    const disclosureBodies: { header: string; body: BlockPart[] }[] = [];
+    const rawHtmlParts: string[] = [];
+    /** How many disclosures' bodies are being read (see MAX_DISCLOSURE_DEPTH). */
+    let disclosureDepth = 0;
+
+    // A disclosure (`<details>`) that a block leaves open, with the blocks up to its matching
+    // `</details>` (or to the end of the text: a browser shows one never closed holding the rest), is
+    // lifted out as one block: its body is read as a Markdown text of its own, by the same reading as
+    // the document (aligned wrappers, headings, tables, lists, quotes, code, nested disclosures). Text
+    // before its tag and after its closing tag in their blocks stays where it stands. Each block's tags
+    // are found once at each level of nesting, and nesting stops at MAX_DISCLOSURE_DEPTH (a
+    // `<details>` deeper is the HTML block it is in, its body the blocks after it), so the work is
+    // linear in the text's length. A disclosure opened and closed in one block is that block's HTML.
+    const groupDisclosures = (parts: BlockPart[]): string[] => {
+        const out: string[] = [];
+        const emit = (part: BlockPart) => {
+            if (!trimAsciiWhitespace(part.text)) return;
+            if (part.html && HTML_BLOCK_LINE.exec(part.text)?.index !== 0) {
+                out.push(placeholder('RAW_HTML', rawHtmlParts.length));
+                rawHtmlParts.push(part.text);
+            } else out.push(part.text);
+        };
+        if (disclosureDepth >= MAX_DISCLOSURE_DEPTH || !parts.some(part => /<\/?details/i.test(part.text))) {
+            for (const part of parts) emit(part);
+            return out;
+        }
+        // A part of a block, from `from` (blank lines at its start left out), raw HTML where the block's is.
+        const cut = (part: BlockPart, htmlFrom: number, from: number, to = part.text.length): BlockPart => {
+            const html = part.html || (from > 0 && from >= htmlFrom);
+            while (from < to) {
+                const newline = part.text.indexOf('\n', from);
+                if (newline === -1 || newline >= to || trimAsciiWhitespace(part.text.slice(from, newline))) break;
+                from = newline + 1;
+            }
+            return { text: part.text.slice(from, to), html };
+        };
+        // Where a summary opening at `from` ends: after its closing tag, else at `limit` (the next disclosure tag, or the block's end).
+        const summaryEnd = (text: string, from: number, limit: number): number => {
+            SUMMARY_CLOSE_TAG.lastIndex = from;
+            const close = SUMMARY_CLOSE_TAG.exec(text);
+            return close && close.index < limit ? close.index + close[0].length : limit;
+        };
+        const queue = parts.slice();
+        for (let i = 0; i < queue.length; i++) {
+            const part = queue[i];
+            const { tags, htmlFrom } = disclosureTags(part);
+            // The outermost disclosure the block leaves open.
+            let depth = 0;
+            let opener = -1;
+            for (let t = 0; t < tags.length; t++) {
+                if (tags[t].open) { if (depth++ === 0) opener = t; } else if (depth > 0) depth--;
+            }
+            if (depth === 0) { emit(part); continue; }
+            const open = tags[opener];
+            emit(cut(part, htmlFrom, 0, open.at));
+            // Its header: the tag, and a summary right after it (white space between).
+            const limit = opener + 1 < tags.length ? tags[opener + 1].at : part.text.length;
+            SUMMARY_OPEN_TAG.lastIndex = open.end;
+            let headerEnd = SUMMARY_OPEN_TAG.test(part.text) && SUMMARY_OPEN_TAG.lastIndex <= limit ? summaryEnd(part.text, SUMMARY_OPEN_TAG.lastIndex, limit) : open.end;
+            let header = part.text.slice(open.at, headerEnd);
+            const body: BlockPart[] = [cut(part, htmlFrom, headerEnd)];
+            // Its blocks, to the one holding its closing tag.
+            let j = i + 1;
+            for (; j < queue.length; j++) {
+                const next = disclosureTags(queue[j]);
+                const close = next.tags.find(tag => (depth += tag.open ? 1 : -1) === 0);
+                if (!close) { body.push(queue[j]); continue; }
+                body.push(cut(queue[j], next.htmlFrom, 0, close.at));
+                queue[j] = cut(queue[j], next.htmlFrom, close.end);
+                break;
+            }
+            // A summary standing first in the body, after a blank line, is its summary all the same.
+            if (headerEnd === open.end) {
+                const first = body.findIndex(b => trimAsciiWhitespace(b.text));
+                const lead = first === -1 ? undefined : body[first];
+                SUMMARY_OPEN_TAG.lastIndex = 0;
+                if (lead && SUMMARY_OPEN_TAG.test(lead.text)) {
+                    const leadTags = disclosureTags(lead);
+                    const end = summaryEnd(lead.text, SUMMARY_OPEN_TAG.lastIndex, leadTags.tags.length ? leadTags.tags[0].at : lead.text.length);
+                    header += lead.text.slice(0, end);
+                    body[first] = cut(lead, leadTags.htmlFrom, end);
+                }
+            }
+            out.push(placeholder('DISCLOSURE', disclosureBodies.length));
+            disclosureBodies.push({ header, body });
+            i = j - 1;
+        }
+        return out;
+    };
+
     const splitIntoBlocks = (text: string): string[] => {
     // A line of only spaces and tabs is a blank line too (CommonMark). Each block keeps the blank
     // lines before it, which an indented code block holds (see below).
@@ -2158,49 +2225,25 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // within MAX_TABLE_PIECES pieces, pieces of Markdown between (the GitHub way of writing a cell:
     // `<td>`, a blank line, `Some *text*`, a blank line, `</td>`) join it too, read as Markdown into
     // their cell (see restoreMarkdownPieces); they were a paragraph, and the rest escaped text.
-    // Inside a disclosure (the innermost container open a <details>), everything up to its close is in
-    // it, as a browser shows an HTML block's <details> (one never closed holds the rest of the
-    // document): no look ahead, so no limit on its pieces. A piece there is HTML where CommonMark
-    // starts an HTML block, else Markdown (`<kbd>Ctrl</kbd> and *bold*` is a paragraph), whose inline
-    // `</details>` (`*Body*` and `</details>` on the next line) still closes the disclosure, as a
-    // browser has it. A disclosure's tags in code spans, indented code and fenced code (lifted before)
-    // are text. Inside a table, as before.
     let tableDepth = 0;
     let joinMarkdownUntil = -1;
-    let containers = new OpenContainers();
     for (let i = 0; i < parts.length; i += 2) {
         const part = parts[i];
         const separator = i > 0 ? parts[i - 1] : '';
-        if (tableDepth > 0 && tableDepth <= MAX_JOINED_TABLE_DEPTH) {
-            let joins: boolean;
-            let markdown: boolean;
-            let depthChange = 0;
-            if (containers.innermostDisclosure) {
-                joins = true;
-                markdown = !startsHtmlBlock(part);
-                const newline = part.indexOf('\n');
-                if (markdown && indentColumn(newline === -1 ? part : part.slice(0, newline)) < 4) depthChange = applyContainerTags(part, containers, true);
-            } else {
-                const startsWithTag = /^[ \t]*</.test(part);
-                // A table in a disclosure: its Markdown pieces join, the disclosure holding them.
-                joins = startsWithTag || i <= joinMarkdownUntil || containers.anyDisclosure;
-                markdown = !startsWithTag && !TABLE_PART_TAG.test(part);
-            }
-            if (joins) {
-                if (markdown) markdownPieces.push(part);
-                rawBlocks[rawBlocks.length - 1] += separator + (markdown ? `\uE000${pieceNonce}:${markdownPieces.length - 1}\uE001` : part);
-                tableDepth += markdown ? depthChange : applyContainerTags(part, containers);
-                continue;
-            }
+        const startsWithTag = /^[ \t]*</.test(part);
+        if (tableDepth > 0 && tableDepth <= MAX_JOINED_TABLE_DEPTH && (startsWithTag || i <= joinMarkdownUntil)) {
+            const markdown = !startsWithTag && !TABLE_PART_TAG.test(part);
+            if (markdown) markdownPieces.push(part);
+            rawBlocks[rawBlocks.length - 1] += separator + (markdown ? `\uE000${pieceNonce}:${markdownPieces.length - 1}\uE001` : part);
+            tableDepth += markdown ? 0 : htmlTableDepthChange(part);
+            continue;
         }
         rawBlocks.push(part);
         rawSeparators.push(separator);
-        containers = new OpenContainers();
-        tableDepth = HTML_BLOCK_LINE.exec(part)?.index === 0 ? applyContainerTags(part, containers) : 0;
+        tableDepth = HTML_BLOCK_LINE.exec(part)?.index === 0 ? htmlTableDepthChange(part) : 0;
         joinMarkdownUntil = -1;
-        // Where a table the block opened closes, within MAX_TABLE_PIECES pieces (a disclosure needs none).
-        for (let j = i + 2, depth = tableDepth, n = 0; tableDepth > 0 && !containers.anyDisclosure && j < parts.length && n < MAX_TABLE_PIECES; j += 2, n++) {
-            depth += applyContainerTags(parts[j]);
+        for (let j = i + 2, depth = tableDepth, n = 0; tableDepth > 0 && j < parts.length && n < MAX_TABLE_PIECES; j += 2, n++) {
+            depth += htmlTableDepthChange(parts[j]);
             if (depth <= 0) { joinMarkdownUntil = j; break; }
         }
     }
@@ -2352,7 +2395,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             itemColumns.clear();
         }
     }
-    return mergedBlocks;
+    return groupDisclosures(mergedBlocks.map(text => ({ text, html: false })));
     };
 
     let listIdCounter = 1;
@@ -2579,6 +2622,30 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 });
                 continue;
             }
+        }
+
+        // A disclosure lifted out of the blocks (see groupDisclosures): its summary and attributes as the
+        // HTML parser reads its `<details>` tag, its body read as blocks of its own.
+        const disclosureIndex = placeholderIndex(block, 'DISCLOSURE');
+        if (disclosureIndex !== null && disclosureIndex < disclosureBodies.length) {
+            const { header, body } = disclosureBodies[disclosureIndex];
+            const shell = (await readHtmlBlock(`${header}</details>`)).content.find(node => node.type === 'disclosure');
+            const children: OfficeContentNode[] = [];
+            disclosureDepth++;
+            try {
+                await parseBlocks(groupDisclosures(body), children);
+            } finally {
+                disclosureDepth--;
+            }
+            foldAnchorPlaceholders(children);
+            content.push({ type: 'disclosure', metadata: shell?.metadata ?? {}, children });
+            continue;
+        }
+        // Raw HTML cut from an HTML block at a disclosure's tag (see groupDisclosures).
+        const rawHtmlIndex = placeholderIndex(block, 'RAW_HTML');
+        if (rawHtmlIndex !== null && rawHtmlIndex < rawHtmlParts.length) {
+            appendAll(content, (await readHtmlBlock(rawHtmlParts[rawHtmlIndex])).content);
+            continue;
         }
 
         // Source comment on its own lines, extracted to a placeholder above: a hidden note, kept verbatim
