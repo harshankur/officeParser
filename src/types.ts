@@ -172,6 +172,13 @@ export enum OfficeWarningType {
     PDF_ASSET_UNAVAILABLE = 'PDF_ASSET_UNAVAILABLE',
     /** `ocr: true` was set without `extractAttachments: true`; OCR runs over extracted images (in every format), so no OCR was performed */
     OCR_REQUIRES_ATTACHMENTS = 'OCR_REQUIRES_ATTACHMENTS',
+    /**
+     * A template holds text that looks like a tag but is not one (see `TemplateTextReason`), which a render
+     * writes as typed: `{{first name}}`, `{{ name }`, `｛｛nom｝｝`. Raised once by `OfficeTemplate.render` and
+     * `OfficeTemplate.check`, with each such text, its part and why in `details.texts`; `OfficeTemplate.tags`
+     * lists them as tags of kind `text`.
+     */
+    TEMPLATE_NOT_A_TAG = 'TEMPLATE_NOT_A_TAG',
     /** A template check found as many problems as it lists (`details.limit`: 1,000 for one data entry, or 10,000 in all for a batch, `details.batch`) and stopped there, in `details.entry` of a batch, with `details.unchecked` entries after it not checked; fix these and check again */
     TEMPLATE_CHECK_LIMITED = 'TEMPLATE_CHECK_LIMITED',
     /** A config option was passed that this version does not recognize (e.g. a key renamed in a major release); it had no effect */
@@ -2754,13 +2761,34 @@ export interface TemplateLoopPlace {
 }
 
 /**
+ * Why text that looks like a tag is not one (see {@link TemplateTagInfo}, kind `text`). Exactly these,
+ * and nothing else is reported (single braces, `{x}`, JSON, `{{}}` are not):
+ * - `space-in-name`: text between the delimiters that is a name with white space in it, made of letters,
+ *   digits, `_ . -` and white space, starting with a letter or `_`, at most 64 characters: `{{first name}}`
+ *   (a field's name has no spaces; `{{first_name}}` with a data key `first_name` is one).
+ * - `unknown-filter`: a field through a word after `|` that is no filter, built-in or in `formatters`:
+ *   `{{ total | fromat "0.00" }}`.
+ * - `missing-delimiter`: for delimiters of one character typed twice or more (the default `{{ }}`), a
+ *   name between a start delimiter and an end delimiter one of which is a character short: `{{ name }`,
+ *   `{ name }}` (a short start inside braces still open, as code nests them, is not reported).
+ * - `full-width`: a name between delimiters typed with full-width characters (U+FF01 to U+FF5E), as a
+ *   Japanese or Chinese keyboard types them: `｛｛nom｝｝`.
+ */
+export type TemplateTextReason = 'space-in-name' | 'unknown-filter' | 'missing-delimiter' | 'full-width';
+
+/**
  * A tag of a template, as {@link OfficeTemplate.tags} lists it: a field, or a block's opening or
- * branch tag (`endif` and `endfor` close what they open and are not listed). In the order of each part.
+ * branch tag (`endif` and `endfor` close what they open and are not listed); or (`kind: 'text'`) text
+ * that looks like a tag but is not one, which a render writes as typed. In the order of each part.
  */
 export interface TemplateTagInfo {
-    /** `field` (`{{ name }}`), `if`, `elseif`, `else` or `for`. */
-    kind: 'field' | 'if' | 'elseif' | 'else' | 'for';
-    /** The tag as typed, delimiters included (a very long one is cut short). */
+    /**
+     * `field` (`{{ name }}`), `if`, `elseif`, `else` or `for`; or `text`: text that looks like a tag but is
+     * not one (`{{first name}}`, `{{ name }`, `｛｛nom｝｝`), written as typed, with why in `reason`, no
+     * `fields`, and the loops it is inside.
+     */
+    kind: 'field' | 'if' | 'elseif' | 'else' | 'for' | 'text';
+    /** The tag as typed, delimiters included (a very long one is cut short); for `text`, the text as typed. */
     tag: string;
     /** The document part holding it, e.g. `word/document.xml` or `word/header1.xml`. */
     part: string;
@@ -2774,6 +2802,8 @@ export interface TemplateTagInfo {
     filters?: string[];
     /** A `for` tag's item name (`line` in `{{ for line in lines }}`). */
     item?: string;
+    /** For `text`: why it is not a tag. */
+    reason?: TemplateTextReason;
     /**
      * The `for` tags this tag is inside, outermost first, each as its item name and list as typed. A note
      * only loops refer to is listed as its part holds it, outside them: its fields may start with the

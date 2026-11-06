@@ -4400,6 +4400,73 @@ async function testOdtTemplateBlocks(): Promise<void> {
 }
 
 /**
+ * Text that looks like a tag but is not one (`{{first name}}`, `{{ name }`, full-width braces, a word
+ * after `|` that is no filter) is listed by tags() as kind `text`, among the tags with its loops, and
+ * reported once by render() and check() (`TEMPLATE_NOT_A_TAG`), in every part a tag can be, in DOCX and
+ * ODT; a render writes it as typed. Ordinary braces in prose and code are never reported.
+ */
+async function testTemplateNearTags(): Promise<void> {
+    const { W, p, r, docx } = ooxmlHelpers();
+    const near = (tags: any[]) => tags.filter(t => t.kind === 'text').map(t => `${t.reason} ${t.part} ${t.tag}`);
+    const FW = (s: string) => s.replace(/[{}]/g, c => String.fromCharCode(c.charCodeAt(0) + 0xFEE0));
+
+    // ODT fixture: in the body, a heading, a table, a list, a footnote, a text box, a comment, the header and footer.
+    const fixture = path.join(__dirname, 'files', 'template', 'near-tags.odt');
+    const tags = await OfficeTemplate.tags(fixture);
+    assert.deepStrictEqual(near(tags), [
+        'space-in-name content.xml {{first name}}', 'missing-delimiter content.xml {{ order }', 'unknown-filter content.xml {{ total | fromat "0.00" }}',
+        `full-width content.xml ${FW('{{')}nom${FW('}}')}`, 'missing-delimiter content.xml { client }}', 'space-in-name content.xml {{ cell value }}',
+        'space-in-name content.xml {{ list item }}', 'space-in-name content.xml {{ note name }}', 'space-in-name content.xml {{ box name }}',
+        'space-in-name content.xml {{ comment name }}', 'space-in-name styles.xml {{header name}}', 'missing-delimiter styles.xml {{ footer }',
+    ], `each text that looks like a tag, in order, in every part; got ${JSON.stringify(near(tags))}`);
+    assert.deepStrictEqual(tags.filter(t => t.kind !== 'text').map(t => t.tag), ['{{ ok }}', '{{ ok }}'], 'the tags themselves are listed as before');
+    assert.ok(tags.filter(t => t.kind === 'text').every(t => t.fields.length === 0 && t.loops.length === 0), 'such text reads no field');
+    const warnings: any[] = [];
+    const rendered = await OfficeTemplate.render(fixture, { data: { ok: 'OK' }, onWarning: (w: any) => warnings.push(w) }) as Uint8Array;
+    assert.deepStrictEqual(warnings.map(w => [w.code, w.details.texts.length]), [['TEMPLATE_NOT_A_TAG', 12]], 'a render warns once, with every such text');
+    assert.deepStrictEqual(warnings[0].details.texts[0], { text: '{{first name}}', part: 'content.xml', reason: 'space-in-name' }, 'each with its text, part and reason');
+    assert.ok(/12 texts that look like template tags/.test(warnings[0].message) && warnings[0].message.includes("'{{first name}}' in content.xml"), `the message names them; got ${warnings[0].message}`);
+    const content = strFromU8(unzipSync(rendered)['content.xml']);
+    assert.ok(content.includes('Dear {{first name}},') && content.includes('{{ order }is') && content.includes('Use { and } freely: {x}, {"a": {"b": 1}}, f(x) {return x;}, {{}} and OK.'), 'a render writes such text as typed');
+    const checked: any[] = [];
+    assert.deepStrictEqual(await OfficeTemplate.check(fixture, { data: { ok: 1 }, onWarning: (w: any) => checked.push(w.code) }), [], 'a check finds no problem with the data');
+    assert.deepStrictEqual(checked, ['TEMPLATE_NOT_A_TAG'], 'and warns once');
+
+    // DOCX: the same shapes, split across runs, in every part a tag can be.
+    const hdr = `<?xml version="1.0"?><w:hdr ${W}>${p('{{ header name }}')}</w:hdr>`;
+    const ftr = `<?xml version="1.0"?><w:ftr ${W}>${p('{{ footer }')}</w:ftr>`;
+    const notes = `<?xml version="1.0"?><w:footnotes ${W}><w:footnote w:id="1">${p('{{ note name }}')}</w:footnote></w:footnotes>`;
+    const comments = `<?xml version="1.0"?><w:comments ${W}><w:comment w:id="0" w:author="A">${p(FW('{{nom}}'))}</w:comment></w:comments>`;
+    const box = `<w:p><w:r><w:drawing><w:txbxContent>${p('{{ box name }}')}</w:txbxContent></w:drawing></w:r></w:p>`;
+    const doc = docx(`<w:p>${r('Dear {{first')}${r(' name}}, {{ a }}')}</w:p>${p('{{ for x in xs }}{{ x | uper }} {{ x }}{{ endfor }}')}${box}<w:p><w:r><w:footnoteReference w:id="1"/></w:r></w:p>`,
+        { 'word/header1.xml': hdr, 'word/footer1.xml': ftr, 'word/footnotes.xml': notes, 'word/comments.xml': comments });
+    const docxTags = await OfficeTemplate.tags(doc);
+    assert.deepStrictEqual(docxTags.map(t => `${t.kind} ${t.part} ${t.tag} ${t.loops.map(l => l.item).join()}`), [
+        'text word/document.xml {{first name}} ', 'field word/document.xml {{ a }} ', 'for word/document.xml {{ for x in xs }} ',
+        'text word/document.xml {{ x | uper }} x', 'field word/document.xml {{ x }} x', 'text word/document.xml {{ box name }} ',
+        'text word/header1.xml {{ header name }} ', 'text word/footer1.xml {{ footer } ', 'text word/footnotes.xml {{ note name }} ', `text word/comments.xml ${FW('{{nom}}')} `,
+    ], `DOCX: across runs, inside a loop with its loops, in a text box, header, footer, footnote and comment; got ${JSON.stringify(docxTags.map(t => t.tag))}`);
+    const docxWarnings: any[] = [];
+    const docxOut = await OfficeTemplate.render(doc, { data: { a: 'A', xs: ['1', '2'] }, onWarning: (w: any) => docxWarnings.push(w) }) as Uint8Array;
+    assert.deepStrictEqual(docxWarnings.map(w => [w.code, w.details.texts.length]), [['TEMPLATE_NOT_A_TAG', 7]], 'once per render, each text once, though it sits in a loop');
+    assert.ok(strFromU8(unzipSync(docxOut)['word/document.xml']).replace(/<[^>]+>/g, '').includes('Dear {{first name}}, A{{ x | uper }} 1{{ x | uper }} 2'), 'written as typed');
+
+    // Ordinary braces: none reported.
+    for (const prose of ['{', '}', '{x}', '{ x }', '{"a": {"b": 1}}', 'if (a) { b(); }', 'const o = {a: {b}};', '\\frac{a}{\\sqrt{b}}', '{{}}', '{{ }}', 'a {{ b', 'c }} d',
+        '{{ 1 2 }}', '{{ - }}', '$5 for {{ x }} and $6', '{{ if you have questions, call us }}', `{{ ${'a b '.repeat(40)}}}`, '{{a}}}', '{{{a}}', FW('{x}'), '{{ x | upper }}']) {
+        const listed = near(await OfficeTemplate.tags(docx(p(prose.replace(/</g, '&lt;')))));
+        assert.deepStrictEqual(listed, [], `${prose}: not reported; got ${JSON.stringify(listed)}`);
+    }
+    // Delimiters of the caller's own: one character doubled can be a character short; one character cannot.
+    const custom = near(await OfficeTemplate.tags(docx(p('&lt;&lt; a b &gt;&gt; &lt;&lt; name &gt; and $ x $ $ y')), { delimiters: { start: '<<', end: '>>' } }));
+    assert.deepStrictEqual(custom, ['space-in-name word/document.xml << a b >>', 'missing-delimiter word/document.xml << name >'], `with << >>; got ${JSON.stringify(custom)}`);
+    assert.deepStrictEqual(near(await OfficeTemplate.tags(docx(p('$a b$ costs $5, $6 for $ name')), { delimiters: { start: '$', end: '$' } })), ['space-in-name word/document.xml $a b$'], 'with $, a name with spaces only');
+    // A filter of the caller's own is a filter.
+    assert.deepStrictEqual(near(await OfficeTemplate.tags(docx(p('{{ x | mine }}')), { formatters: { mine: (v: any) => v } })), [], 'a formatter of the caller\'s own is no unknown filter');
+    console.log('  Template near-tags: All assertions passed ✓');
+}
+
+/**
  * DOCX templating with block tags: `if`/`else if`/`else`/`endif` and `for`/`endfor`, in each of their
  * scopes (inline, paragraphs, table rows), their conditions, the data they read, the errors they raise,
  * and the document they leave (balanced XML, unique ids, every cell ending in a paragraph).
@@ -12688,6 +12755,7 @@ async function runTests(): Promise<void> {
         ['Template numbers as text', testTemplateNumbersAsText],
         ['ODT template', testOdtTemplate],
         ['ODT template blocks', testOdtTemplateBlocks],
+        ['Template near-tags', testTemplateNearTags],
         ['Chart scripts', testChartScripts],
         ['Markdown header rows', testMarkdownHeaderRows],
         ['RTF header rows', testRtfHeaderRows],

@@ -280,6 +280,12 @@ async function prepareTemplate(template: TemplateInput, config: Omit<TemplateCon
         : { compiled: compileTemplate(entries, options, DOCX_DIALECT), options, errCfg, write: renderDocxTemplate };
 }
 
+/** Reports the template's text that looks like a tag and is not one (`TEMPLATE_NOT_A_TAG`), once, all of it. */
+function warnNotATag(compiled: CompiledTemplate, options: TemplateOptions, errCfg: OfficeParserConfig): void {
+    const texts = templateTags(compiled, options).filter(t => t.kind === 'text').map(t => ({ text: t.tag, part: t.part, reason: t.reason! }));
+    if (texts.length) logWarning(OfficeWarningType.TEMPLATE_NOT_A_TAG, errCfg, { texts });
+}
+
 /** The data given: one object, or an array of objects, refused (typed) otherwise. */
 function dataRows(config: TemplateConfig, errCfg: OfficeParserConfig): TemplateData[] {
     if (!config || config.data == null) throw getOfficeError(OfficeErrorType.IMPROPER_ARGUMENTS, errCfg, 'data is required: an object, or an array of objects');
@@ -306,6 +312,7 @@ export class OfficeTemplate {
         const errCfg: OfficeParserConfig = { onWarning: config?.onWarning };
         const rows = dataRows(config, errCfg);
         const { compiled, options, write } = await prepareTemplate(template, config, errCfg);
+        warnNotATag(compiled, options, errCfg);
         const renderOne = (data: TemplateData): Uint8Array => write(compiled, data, options);
         return Array.isArray(config.data) ? rows.map(renderOne) : renderOne(config.data);
     }
@@ -342,6 +349,7 @@ export class OfficeTemplate {
         const errCfg: OfficeParserConfig = { onWarning: config?.onWarning };
         const rows = dataRows(config, errCfg);
         const { compiled, options } = await prepareTemplate(template, config, errCfg);
+        warnNotATag(compiled, options, errCfg);
         // What problems share, made once: each text's number (a key holds numbers, not the texts, which a
         // template can make long), and each field's or tag's message.
         const numbers = new Map<string, number>();
