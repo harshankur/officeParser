@@ -65,6 +65,36 @@ export const valuesLength = (values: object | undefined): number => {
     return length;
 };
 
+/** Formatting values a style gives every run it applies to. */
+const FORMATTING_VALUES = ['font', 'color', 'backgroundColor', 'size'] as const;
+/**
+ * Metadata values a definition gives every node naming it (a relationship's link target, a style name,
+ * a comment author). Identities (`noteId`, `commentId`, `attachmentName`, `url`, anchors) are not
+ * values: without them a reference breaks.
+ */
+const METADATA_VALUES = ['link', 'linkTitle', 'title', 'style', 'altText', 'author', 'initials', 'date', 'abbreviationTitle', 'backgroundColor', 'language', 'citationKey', 'label'] as const;
+
+const BOUNDED = { formatting: new Set<string>(FORMATTING_VALUES), metadata: new Set<string>(METADATA_VALUES) };
+
+/**
+ * What a value weighs on a fresh copy (a node made for the copy, holding a value an earlier node holds).
+ * boundRepeatedValues charges a value of a key it bounds (FORMATTING_VALUES, METADATA_VALUES) past
+ * REPEAT_ALLOWANCE characters on every node holding it but the first it meets, so the copy's own charge
+ * carries the rest of it, REPEAT_ALLOWANCE at most; any other string, which boundRepeatedValues never
+ * charges, it carries whole. So each character of each value a copy writes is charged once: left to
+ * boundRepeatedValues alone, a value of 64 characters or less was charged by neither, and 2,000 cells
+ * styled over one rich string of 500 runs wrote 13 times the budget as HTML.
+ */
+export const freshValueLength = (field: 'formatting' | 'metadata', key: string, value: unknown): number =>
+    typeof value !== 'string' ? 0 : BOUNDED[field].has(key) ? Math.min(value.length, REPEAT_ALLOWANCE) : value.length;
+
+/** What the values an object holds directly weigh on a fresh copy; see freshValueLength. */
+export const freshValuesLength = (field: 'formatting' | 'metadata', values: object | undefined): number => {
+    let length = 0;
+    if (values) for (const key in values) length += freshValueLength(field, key, (values as Record<string, unknown>)[key]);
+    return length;
+};
+
 /** The style flags a writer writes a tag pair for around a node's text (`<strong>`, `\textbf{}`, `\b ... \b0`, `"bold":true`). */
 const STYLE_FLAGS = ['bold', 'italic', 'underline', 'strikethrough', 'superscript', 'subscript', 'invisible'] as const;
 
@@ -91,8 +121,8 @@ export type ContentWeigher = (nodes: OfficeContentNode[] | undefined) => number;
  * per list so a shared subtree is summed once.
  *
  * It is the weight of content a copy shares (the same node objects), whose values boundRepeatedValues
- * sees once: the copy's charge must carry them. A copy made of fresh node objects is charged its text
- * and nodes only, and leaves its values to boundRepeatedValues.
+ * sees once: the copy's charge must carry them. A copy made of fresh node objects is charged its text,
+ * its nodes and flags, and its values as freshValuesLength weighs them.
  */
 export const contentWeigher = (): ContentWeigher => {
     const weights = new WeakMap<object, number>();
@@ -121,15 +151,6 @@ export const repeatPreview = (text: string): string => {
     const code = text.charCodeAt(REPEAT_ALLOWANCE - 1);
     return text.slice(0, code >= 0xD800 && code <= 0xDBFF ? REPEAT_ALLOWANCE - 1 : REPEAT_ALLOWANCE) + '…';
 };
-
-/** Formatting values a style gives every run it applies to. */
-const FORMATTING_VALUES = ['font', 'color', 'backgroundColor', 'size'] as const;
-/**
- * Metadata values a definition gives every node naming it (a relationship's link target, a style name,
- * a comment author). Identities (`noteId`, `commentId`, `attachmentName`, `url`, anchors) are not
- * values: without them a reference breaks.
- */
-const METADATA_VALUES = ['link', 'linkTitle', 'title', 'style', 'altText', 'author', 'initials', 'date', 'abbreviationTitle', 'backgroundColor', 'language', 'citationKey', 'label'] as const;
 
 /** The longest attachment name kept as it is (a longer one is shortened; see boundRepeatedValues). */
 const MAX_ATTACHMENT_NAME = 128;

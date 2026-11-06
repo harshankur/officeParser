@@ -4981,28 +4981,100 @@ async function headerPartWeightTests() {
 
 /**
  * A rich shared string shown in many cells: an unstyled, unlinked cell shares the string's runs, and is
- * charged their values; a styled or linked cell holds copies of them, whose values boundRepeatedValues
- * charges, so the cell is charged their text and nodes alone. Charged twice, a styled copy paid for its
- * run's font and then lost it: 1 run in 2,000 kept a 10,000-character font.
+ * charged their values; a styled or linked cell holds copies of them, and is charged their values as a
+ * fresh copy's (each up to 64 characters where boundRepeatedValues charges the rest, see
+ * freshValuesLength), so each character is charged once. Charged twice, a styled copy paid for its run's
+ * font and then lost it: 1 run in 2,000 kept a 10,000-character font. Left to boundRepeatedValues alone,
+ * values of 64 characters or less were charged by neither: 2,000 styled cells over one string of 500
+ * runs wrote 13 times the budget as HTML.
  */
 async function xlsxRichStringChargeTests() {
     console.log('- XLSX rich shared strings are charged each value once...');
+    const { boundRepeatedValues, flagsWeight, freshValuesLength, takeRepeats, valuesLength } = await import('../../src/utils/repeatUtils');
+    const { linkedRuns, restyledRuns, richCopyValues, richRunWeight } = await import('../../src/parsers/ExcelParser');
+
+    // Each character of a copy's value is charged once, between the copy's charge and boundRepeatedValues:
+    // 100 nodes holding one value, 99 of them copies, fit a budget of exactly 99 x (16 + its length).
+    for (const length of [1, 30, 64, 65, 200, 5_000]) {
+        const outcome = (slack: number) => {
+            const nodes = 100, codes: string[] = [];
+            const config: any = { decompressionLimits: { maxRepeatedContent: (nodes - 1) * (16 + length) + slack }, onWarning: (w: any) => codes.push(w.code) };
+            const value = 'v'.repeat(length), text = 't'.repeat(64);
+            const built: any[] = [];
+            for (let k = 0; k < nodes; k++) {
+                const formatting = { font: value };
+                if (k > 0 && takeRepeats(config, 1, text.length + 16 + freshValuesLength('formatting', formatting)) === 0) { built.push({ type: 'text', text: '' }); continue; }
+                built.push({ type: 'text', text, formatting });
+            }
+            boundRepeatedValues([built], [], config);
+            return { warned: codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), kept: built.filter(n => n.formatting?.font === value).length };
+        };
+        const exact = outcome(0), short = outcome(-1);
+        check(`repeat budget: 99 copies of a ${length}-character value fit a budget of exactly 99 x (16 + ${length}), and not one character less`,
+            !exact.warned && exact.kept === 100 && short.warned && short.kept === 99, `${JSON.stringify(exact)} ${JSON.stringify(short)}`);
+    }
+
+    // The weight of a cell's run copies, from the string's weight alone, against the copies the parser
+    // builds, weighed one by one: random runs, cell styles and links.
+    // (mulberry32, seeded: the same cases each run.)
+    let seed = 7;
+    const rnd = (n: number) => {
+        seed = (seed + 0x6D2B79F5) | 0;
+        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) % n;
+    };
+    const str = (n: number) => 'abcdefghij'.repeat(20).slice(0, n);
+    const maybe = (value: () => unknown) => rnd(2) ? value() : undefined;
+    const formattingOf = (): any => {
+        const formatting: any = {};
+        for (const [key, value] of Object.entries({
+            bold: maybe(() => true), italic: maybe(() => true), superscript: maybe(() => true),
+            font: maybe(() => str(1 + rnd(150))), size: maybe(() => str(1 + rnd(90))), color: maybe(() => `#${str(6)}`),
+            backgroundColor: maybe(() => str(1 + rnd(80))), alignment: maybe(() => ['center', 'right', 'justify', str(1 + rnd(70))][rnd(4)]),
+        })) if (value !== undefined && rnd(3)) formatting[key] = value;
+        return Object.keys(formatting).length ? formatting : undefined;
+    };
+    let mismatched = 0, first = '';
+    const cases = 3_000;
+    for (let k = 0; k < cases; k++) {
+        const runs: any[] = Array.from({ length: 1 + rnd(8) }, () => rnd(6) ? { type: 'text', text: str(1 + rnd(5)), formatting: formattingOf() } : { type: 'break', text: '', formatting: formattingOf(), metadata: maybe(() => ({ altText: str(1 + rnd(100)) })) });
+        const restyle = rnd(4) ? formattingOf() : undefined;
+        const link = rnd(2) ? { link: str(rnd(150)), linkType: rnd(2) ? 'internal' as const : 'external' as const } : undefined;
+        const weight = richRunWeight(runs);
+        const expected = weight.runs + richCopyValues(weight, runs.length, restyle, link);
+        const shared = new Set(runs);
+        let brute = 0;
+        for (const node of linkedRuns(restyledRuns(runs, restyle), link)) {
+            brute += 16 + flagsWeight(node.formatting) + (shared.has(node)
+                ? valuesLength(node.formatting) + valuesLength(node.metadata)
+                : freshValuesLength('formatting', node.formatting) + freshValuesLength('metadata', node.metadata));
+        }
+        if (brute !== expected && mismatched++ === 0) first = `${brute} built, ${expected} weighed: ${JSON.stringify({ runs, restyle, link })}`.slice(0, 400);
+    }
+    check(`xlsx: 3,000 random cells' rich-string copies weigh, from the string's weight alone, what their built runs weigh`, mismatched === 0, `${mismatched} mismatched; ${first}`);
+
     const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
-    const cells = 2_000, font = 10_000, textLength = 100, budget = 4_000_000;
-    const workbook = (styled: boolean, linked: boolean) => {
+    /** A workbook of `cells` cells showing the shared string `si`, in a filled style or not, linked to a place in the workbook (one range) or to a web address (each cell). */
+    const workbook = (si: string, cells: number, styled: boolean, linked: false | 'range' | 'each') => {
         const rows = Array.from({ length: cells }, (_, i) => `<row r="${i + 1}"><c r="A${i + 1}" t="s"${styled ? ' s="1"' : ''}><v>0</v></c></row>`).join('');
+        const hyperlinks = linked === 'range' ? `<hyperlinks><hyperlink ref="A1:A${cells}" location="S!B1"/></hyperlinks>`
+            : linked === 'each' ? `<hyperlinks>${Array.from({ length: cells }, (_, i) => `<hyperlink ref="A${i + 1}" r:id="rL"/>`).join('')}</hyperlinks>` : '';
         return Buffer.from(zipSync({
             '[Content_Types].xml': sizeEnc('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'),
             '_rels/.rels': sizeEnc(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${SIZE_REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>`),
             'xl/workbook.xml': sizeEnc(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`),
             'xl/_rels/workbook.xml.rels': sizeEnc(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${SIZE_REL}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${SIZE_REL}/sharedStrings" Target="sharedStrings.xml"/><Relationship Id="rId3" Type="${SIZE_REL}/styles" Target="styles.xml"/></Relationships>`),
-            'xl/sharedStrings.xml': sizeEnc(`<?xml version="1.0"?><sst ${ns}><si><r><rPr><rFont val="${'F'.repeat(font)}"/></rPr><t>${'x'.repeat(textLength)}</t></r></si></sst>`),
-            'xl/styles.xml': sizeEnc(`<?xml version="1.0"?><styleSheet ${ns}><fonts count="1"><font/></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFFF00"/></patternFill></fill></fills><cellXfs count="2"><xf fontId="0" fillId="0"/><xf fontId="0" fillId="2"/></cellXfs></styleSheet>`),
-            'xl/worksheets/sheet1.xml': sizeEnc(`<?xml version="1.0"?><worksheet ${ns}><sheetData>${rows}</sheetData>${linked ? `<hyperlinks><hyperlink ref="A1:A${cells}" location="S!B1"/></hyperlinks>` : ''}</worksheet>`),
+            'xl/worksheets/_rels/sheet1.xml.rels': sizeEnc(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rL" Type="${SIZE_REL}/hyperlink" Target="https://example.com/${'p'.repeat(40)}" TargetMode="External"/></Relationships>`),
+            'xl/sharedStrings.xml': sizeEnc(`<?xml version="1.0"?><sst ${ns}>${si}</sst>`),
+            'xl/styles.xml': sizeEnc(`<?xml version="1.0"?><styleSheet ${ns}><fonts count="1"><font/></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFFF00"/></patternFill></fill></fills><cellXfs count="2"><xf fontId="0" fillId="0"/><xf fontId="0" fillId="2" applyFill="1"/></cellXfs></styleSheet>`),
+            'xl/worksheets/sheet1.xml': sizeEnc(`<?xml version="1.0"?><worksheet ${ns}><sheetData>${rows}</sheetData>${hyperlinks}</worksheet>`),
         }, { level: 9 }));
     };
+
+    const cells = 2_000, font = 10_000, textLength = 100, budget = 4_000_000;
     const shown = async (styled: boolean, linked: boolean) => {
-        const bytes = workbook(styled, linked);
+        const bytes = workbook(`<si><r><rPr><rFont val="${'F'.repeat(font)}"/></rPr><t>${'x'.repeat(textLength)}</t></r></si>`, cells, styled, linked && 'range');
         const parsed = await sizeParse(bytes, 'xlsx', { decompressionLimits: { maxRepeatedContent: budget } });
         let whole = 0, withFont = 0;
         const walk = (nodes: any[] | undefined) => nodes?.forEach(node => {
@@ -5025,6 +5097,32 @@ async function xlsxRichStringChargeTests() {
             !copies.error && copies.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && copies.whole === cells && copies.withFont >= 350 && copies.json < 3 * (budget + 16 * copies.bytes),
             `${copies.error} ${copies.whole} whole, ${copies.withFont} with the font, json ${copies.json}`);
     }
+
+    // Many runs of short values, styled or linked copies in every cell: what each writer writes, to the
+    // repeated content budget, at or below what 8.6.0 wrote (JSON, HTML, RTF: 1.88, 1.62, 0.47 styled;
+    // 2.44, 2.19, 1.16 linked; 2.64, 2.28, 1.24 both). Uncharged, 13.1 (HTML, styled) to 8.6 (RTF, both).
+    const runsOf = (runs: number, fontLength: number, size: boolean) => `<si>${Array.from({ length: runs }, (_, k) => `<r><rPr>${size ? `<sz val="${'9'.repeat(62)}"/>` : ''}<rFont val="${('F' + (k % 7) + 'G'.repeat(fontLength)).slice(0, fontLength)}"/><color rgb="FF${(k * 4097 % 0xFFFFFF).toString(16).padStart(6, '0').toUpperCase()}"/></rPr><t>x</t></r>`).join('')}</si>`;
+    const ratios = async (si: string, cellCount: number, styled: boolean, linked: boolean, limits?: object) => {
+        const bytes = workbook(si, cellCount, styled, linked && 'each');
+        const parsed = await sizeParse(bytes, 'xlsx', { decompressionLimits: limits ?? { maxRepeatedContent: 2_000_000 } });
+        const of = limits ? repeatedBudgetFor(bytes.length) : 2_000_000 + 16 * bytes.length;
+        const out: Record<string, number> = { json: parsed.ast ? JSON.stringify(parsed.ast).length / of : Infinity };
+        for (const format of ['html', 'rtf']) { const written = await sizeWrite(parsed.ast, format); out[format] = written.startsWith('threw') ? Infinity : written.length / of; }
+        return { ...parsed, out, shown: Object.entries(out).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(', ') };
+    };
+    const shortRuns = runsOf(500, 64, true);
+    for (const [label, styled, linked, json, html, rtf] of [['styled', true, false, 1.88, 1.62, 0.47], ['linked', false, true, 2.44, 2.19, 1.16], ['styled and linked', true, true, 2.64, 2.28, 1.24]] as const) {
+        const r = await ratios(shortRuns, cells, styled, linked);
+        check(`xlsx: 2,000 ${label} cells showing a string of 500 runs in fonts and sizes of 64 characters write no more of the budget than 8.6.0 (JSON ${json}, HTML ${html}, RTF ${rtf}), with REPEATED_CONTENT_LIMIT_EXCEEDED`,
+            !r.error && r.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && r.out.json <= json && r.out.html <= html && r.out.rtf <= rtf, `${r.error} ${r.shown}`);
+        const long = await ratios(runsOf(50, 2_000, false), cells, styled, linked);
+        check(`xlsx: 2,000 ${label} cells showing a string of 50 runs in 2,000-character fonts write under 2.5 times the budget as JSON, 2 as HTML and 1.5 as RTF, with REPEATED_CONTENT_LIMIT_EXCEEDED`,
+            !long.error && long.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && long.out.json < 2.5 && long.out.html < 2 && long.out.rtf < 1.5, `${long.error} ${long.shown}`);
+    }
+    // The same string in 2,400 styled cells under the default budget wrote 220 MB of HTML.
+    const byDefault = await ratios(shortRuns, 2_400, true, false, {});
+    check('xlsx: 2,400 styled cells showing a string of 500 short-valued runs write under 2 times the default budget as HTML, with REPEATED_CONTENT_LIMIT_EXCEEDED',
+        !byDefault.error && byDefault.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && byDefault.out.html < 2, `${byDefault.error} ${byDefault.shown}`);
 }
 
 /**
