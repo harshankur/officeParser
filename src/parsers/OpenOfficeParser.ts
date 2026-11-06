@@ -32,7 +32,7 @@ import { cellSpan, clampRepeat, MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numb
 import { TextBuilder } from '../utils/textUtils.js';
 import { lookupTable, plainRecord } from '../utils/lookupUtils.js';
 import { lengthToPt } from '../utils/officeGenUtils.js';
-import { bulletCharacter, formatListNumber, odfNumberFormat } from '../utils/listMarkers.js';
+import { bulletCharacter, formatListNumber, odfNoteNumber, odfNumberFormat } from '../utils/listMarkers.js';
 
 /**
  * Tracks how many table cells a single document has been allowed to materialize.
@@ -803,28 +803,81 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     // (a reference inside one stays its citation, so no note can come to hold itself).
     const documentNoteIds = new Set<string>();
     /**
-     * How each kind of note is numbered (`text:notes-configuration`, in styles.xml), as LibreOffice
-     * reads it: its format (`style:num-format`: `1` where a configuration gives none, and footnotes `1`
-     * and endnotes `i` where there is no configuration), the number before the first (`text:start-value`,
+     * How each kind of note is numbered (`text:notes-configuration` in `office:styles`, in styles.xml), as
+     * LibreOffice reads it: its format (`style:num-format`: `1` where a configuration gives none or an
+     * empty one, and footnotes `1` and endnotes `i` where there is no configuration), whether letters
+     * repeat (`style:num-letter-sync`: aa, bb), the number before the first (`text:start-value`,
      * an offset: the first note shows `start + 1`), and whether footnote numbers run through the document
      * (`text:start-numbering-at="document"`) or restart per chapter or page (any other value, or none),
      * which only a layout knows.
      */
     const noteNumbering = {
-        footnote: { format: '1', start: 0, perDocument: true },
-        endnote: { format: 'i', start: 0, perDocument: true },
+        footnote: { format: '1', start: 0, perDocument: true, letterSync: false },
+        endnote: { format: 'i', start: 0, perDocument: true, letterSync: false },
     };
+    /**
+     * A section's own notes configuration (`text:notes-configuration` in its style's
+     * `style:section-properties`: LibreOffice collects the section's notes at its end) of each kind, by
+     * section style name. With a start value it numbers the section's notes on their own, from that value
+     * (1 for 0), in its format where it gives one (else the document's), as LibreOffice does; without
+     * one they run on with the document's. A section with none of a kind takes its parent section's.
+     */
+    type SectionNotes = { restart: boolean; start: number; format?: string; letterSync: boolean };
+    const sectionNotes = new Map<string, { footnote?: SectionNotes; endnote?: SectionNotes }>();
+    /**
+     * Where a note stands, for its number: outside the text LibreOffice numbers notes in (a frame, text
+     * box or other drawing, a header or footer, a comment, another note: LibreOffice drops the first and
+     * opens no document holding the others), or in which section's own numbering of each kind (the
+     * section element, whose notes are numbered apart). Computed once per element, from its parent's.
+     */
+    type SectionScope = { config?: SectionNotes; owner?: Element; numbering?: SectionNotes };
+    type NoteScope = { outside: boolean; footnote?: SectionScope; endnote?: SectionScope };
+    const noteScopes = new Map<Node, NoteScope>();
+    const ROOT_SCOPE: NoteScope = { outside: false };
+    const noteScopeOf = (element: Element): NoteScope => {
+        const chain: Element[] = [];
+        let node: Node | null = element.parentNode;
+        while (node && node.nodeType === 1 && !noteScopes.has(node)) { chain.push(node as Element); node = node.parentNode; }
+        let scope = (node && noteScopes.get(node)) || ROOT_SCOPE;
+        for (let i = chain.length - 1; i >= 0; i--) {
+            const el = chain[i];
+            const tag = el.tagName;
+            if (scope.outside) {
+                // (stays outside)
+            } else if (tag.startsWith('draw:') || tag === 'office:annotation' || tag === 'text:note-body' || tag === 'style:master-page'
+                || tag.startsWith('style:header') || tag.startsWith('style:footer') || tag.startsWith('presentation:')) {
+                scope = { outside: true };
+            } else if (tag === 'text:section') {
+                const own = sectionNotes.get(el.getAttribute('text:style-name') || '');
+                // Its own configuration, else its parent's; one restarting makes the section number its notes
+                // on its own (a section inside it with none takes it, and numbers apart too), else they are
+                // numbered with the parent's (a configuration not restarting does not leave its numbering).
+                const kind = (k: 'footnote' | 'endnote') => {
+                    const config = own?.[k] ?? scope[k]?.config;
+                    return config?.restart ? { config, owner: el, numbering: config } : { config, owner: scope[k]?.owner, numbering: scope[k]?.numbering };
+                };
+                scope = { outside: false, footnote: kind('footnote'), endnote: kind('endnote') };
+            }
+            noteScopes.set(el, scope);
+        }
+        return scope;
+    };
+    /** The notes numbered so far in each section numbering its own. */
+    const sectionNoteCounts = new Map<Element, number>();
     /** The notes numbered so far, per kind, and each note element's number (a note read twice keeps its number). */
     const noteCounts = { footnote: 0, endnote: 0 };
-    const noteNumbers = new Map<Element, number>();
+    const noteNumbers = new Map<Element, string>();
     const collectNoteIds = (dom: Document) => {
         for (const note of getAllElementsByTagName(dom, 'text:note')) {
             const id = note.getAttribute('text:id');
             if (id) documentNoteIds.add(id);
         }
-        for (const configuration of getAllElementsByTagName(dom, 'text:notes-configuration')) {
+        // The document's configurations only (office:styles'): a section's own is the section's (see sectionNotes).
+        const officeStyles = getAllElementsByTagName(dom, 'office:styles');
+        for (const configuration of officeStyles.flatMap(styles => getDirectChildren(styles, 'text:notes-configuration'))) {
             const numbering = configuration.getAttribute('text:note-class') === 'endnote' ? noteNumbering.endnote : noteNumbering.footnote;
-            numbering.format = configuration.getAttribute('style:num-format') ?? '1';
+            numbering.format = configuration.getAttribute('style:num-format') || '1';
+            numbering.letterSync = configuration.getAttribute('style:num-letter-sync') === 'true';
             const start = Number(configuration.getAttribute('text:start-value') ?? 0);
             numbering.start = Number.isInteger(start) && start >= 0 && start < 1_000_000 ? start : 0;
             if (numbering === noteNumbering.footnote) numbering.perDocument = configuration.getAttribute('text:start-numbering-at') === 'document';
@@ -865,6 +918,20 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 if (!sectionColumns.has(name)) {
                     const cols = sectionProps ? getDirectChildren(sectionProps, "style:columns")[0] : undefined;
                     sectionColumns.set(name, cols && Math.round(Number(cols.getAttribute("fo:column-count")) || 0) >= 2 ? cols : undefined);
+                }
+                if (!sectionNotes.has(name)) {
+                    const own: { footnote?: SectionNotes; endnote?: SectionNotes } = {};
+                    for (const configuration of sectionProps ? getDirectChildren(sectionProps, "text:notes-configuration") : []) {
+                        const startValue = configuration.getAttribute('text:start-value');
+                        const start = Number(startValue);
+                        own[configuration.getAttribute('text:note-class') === 'endnote' ? 'endnote' : 'footnote'] = {
+                            restart: startValue !== null && Number.isInteger(start),
+                            start: Number.isInteger(start) && start >= 1 && start < 1_000_000 ? start : 1,
+                            format: configuration.getAttribute('style:num-format') ?? undefined,
+                            letterSync: configuration.getAttribute('style:num-letter-sync') === 'true',
+                        };
+                    }
+                    sectionNotes.set(name, own);
                 }
                 continue;
             }
@@ -1293,11 +1360,26 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     const citation = getDirectChildren(element, "text:note-citation")[0];
                     const label = citation?.getAttribute('text:label') || '';
                     const kind = noteClass === 'endnote' ? 'endnote' : 'footnote';
-                    let number = noteNumbers.get(element);
-                    if (number === undefined && !label.trim()) noteNumbers.set(element, number = ++noteCounts[kind]);
-                    const numbering = noteNumbering[kind];
-                    const numbered = number !== undefined && numbering.perDocument && /^[1aAiI]$/.test(numbering.format)
-                        ? formatListNumber(numbering.start + number, odfNumberFormat(numbering.format)) : '';
+                    let numbered = noteNumbers.get(element);
+                    if (numbered === undefined) {
+                        numbered = '';
+                        const scope = label.trim() ? undefined : noteScopeOf(element);
+                        const section = scope?.[kind];
+                        const numbering = noteNumbering[kind];
+                        if (!scope || scope.outside) {
+                            // No number: the label, or the citation cached.
+                        } else if (section?.owner && section.numbering) {
+                            const count = (sectionNoteCounts.get(section.owner) ?? 0) + 1;
+                            sectionNoteCounts.set(section.owner, count);
+                            const own = section.numbering.format !== undefined;
+                            numbered = odfNoteNumber(section.numbering.start - 1 + count, own ? section.numbering.format! : numbering.format,
+                                own ? section.numbering.letterSync : numbering.letterSync) ?? '';
+                        } else {
+                            const count = ++noteCounts[kind];
+                            if (numbering.perDocument) numbered = odfNoteNumber(numbering.start + count, numbering.format, numbering.letterSync) ?? '';
+                        }
+                        noteNumbers.set(element, numbered);
+                    }
                     const mark = (label || numbered || citation?.textContent || '').trim();
 
                     if (noteBody) {

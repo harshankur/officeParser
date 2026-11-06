@@ -9,7 +9,7 @@ import { withinTime } from './helpers/timing';
 import { digestOf, docxTemplateCases } from './helpers/docxTemplateCases';
 import { testUnicodeChunks } from './generator/unicodeChunks';
 import { testBrotliGuard } from './security/brotliGuard';
-import { testDisclosuresAndKeyboard, testFigureCaptions, testSheetsAsTables, testNoteMarks, testQuoteParagraphs, testRtfListTypesPerLevel, testXhtmlReadAsHtml, testNestedFiguresReadOnce, testDisclosureCarriesNoText, testDoctypeAndDeclarations, testQuoteIdsAcrossParts, testMarkdownDisclosureBodies, testOdtNoteMarksFromConfiguration, testMarkdownDisclosureSubDocuments, testMarkdownWithoutDisclosuresUnchanged } from './generator/documentShapes';
+import { testDisclosuresAndKeyboard, testFigureCaptions, testSheetsAsTables, testNoteMarks, testQuoteParagraphs, testRtfListTypesPerLevel, testXhtmlReadAsHtml, testNestedFiguresReadOnce, testDisclosureCarriesNoText, testDoctypeAndDeclarations, testQuoteIdsAcrossParts, testMarkdownDisclosureBodies, testOdtNoteMarksFromConfiguration, testMarkdownDisclosureSubDocuments, testMarkdownWithoutDisclosuresUnchanged, testOdtNoteMarksAsLibreOffice } from './generator/documentShapes';
 import { OfficeGenerator } from '../src/OfficeGenerator';
 import { bulletCharacter, formatListNumber, readMarkerLabels } from '../src/utils/listMarkers';
 import { decodeBmp, decodeGif } from '../src/utils/rasterUtils';
@@ -13067,6 +13067,7 @@ async function runTests(): Promise<void> {
         ['ODT note marks from the notes configuration', testOdtNoteMarksFromConfiguration],
         ['Markdown disclosure as a sub-document', testMarkdownDisclosureSubDocuments],
         ['Markdown without disclosures unchanged', testMarkdownWithoutDisclosuresUnchanged],
+        ['ODT note marks as LibreOffice shows them', testOdtNoteMarksAsLibreOffice],
         ['Cancellation', testCancellation],
     ];
 

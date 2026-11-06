@@ -302,10 +302,11 @@
             <code>node.notes[]</code>. Carries <code>NoteMetadata</code>: <code>noteType</code>
             (<code>'footnote' | 'endnote'</code>), <code>noteId</code> (the source's internal key, such as DOCX's
             <code>w:id</code> or ODT's <code>ftn1</code>, which writers use in ids and links and never show), and
-            <code>mark</code>, the mark the reference shows where the source records one (ODT's number as its
-            <code>text:notes-configuration</code> gives it, format and start value, as LibreOffice shows it; for
-            footnotes numbered per page or chapter, the cached <code>text:note-citation</code>; the text of an HTML
-            or EPUB note reference). <code>customMark: true</code>
+            <code>mark</code>, the mark the reference shows where the source records one (ODT's number as the
+            document's <code>text:notes-configuration</code> gives it, or a section's own where that numbers the
+            section's notes, format and start value, as LibreOffice shows it; for footnotes the document numbers
+            per page or chapter, and for a note in a text box, drawing, header, footer, comment or another note,
+            the cached <code>text:note-citation</code>; the text of an HTML or EPUB note reference). <code>customMark: true</code>
             says the author chose that mark (<code>*</code>: ODT's <code>text:label</code>, DOCX's
             <code>w:customMarkFollows</code>); DOCX and ODT write it as their own custom mark. Where no mark is
             recorded, writers show the note's ordinal within its kind: footnotes <code>1, 2, 3</code>, endnotes

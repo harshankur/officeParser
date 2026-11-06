@@ -142,6 +142,41 @@ export function wordNumberFormat(numFmt: string | undefined): NumberFormat {
     }
 }
 
+/**
+ * The most letters a note's mark is written in with `style:num-letter-sync` (LibreOffice writes the letter
+ * n / 26 times, rounded up, so its marks grow with their number): as LibreOffice to 64 letters (note 1664),
+ * digits past that, so a start value up to 999999 cannot make each mark thousands of characters long.
+ */
+const MAX_SYNCED_NOTE_LETTERS = 64;
+
+/**
+ * A note's number as LibreOffice writes it in an ODF `style:num-format` (`1`, `a`, `A`, `i`, `I`; empty
+ * is `1`), or undefined for any other format, which only the writing application knows. Letters run
+ * a..z, aa, ab, .. (as a spreadsheet's columns), or with `style:num-letter-sync` a..z, aa, bb, .., the
+ * letter written once more for each 26 (`oooooooooooo` for 301), up to MAX_SYNCED_NOTE_LETTERS letters;
+ * numerals past 3999 repeat the thousands (`mmmm`). Past MAX_NUMBER, digits: a mark stays short whatever
+ * the start value.
+ */
+export function odfNoteNumber(n: number, numFormat: string, letterSync: boolean): string | undefined {
+    if (numFormat === '' || numFormat === '1') return String(n);
+    if (!/^[aAiI]$/.test(numFormat)) return undefined;
+    if (!Number.isInteger(n) || n < 1 || n > MAX_NUMBER) return String(n);
+    const upper = numFormat === 'A' || numFormat === 'I';
+    if (numFormat === 'i' || numFormat === 'I') {
+        const text = 'm'.repeat(Math.floor(n / 1000)) + (n % 1000 ? formatListNumber(n % 1000, 'lowerRoman') : '');
+        return upper ? text.toUpperCase() : text;
+    }
+    if (letterSync) {
+        const count = Math.ceil(n / 26);
+        if (count > MAX_SYNCED_NOTE_LETTERS) return String(n);
+        const text = String.fromCharCode(97 + ((n - 1) % 26)).repeat(count);
+        return upper ? text.toUpperCase() : text;
+    }
+    let text = '';
+    for (let rest = n; rest > 0; rest = Math.floor((rest - 1) / 26)) text = String.fromCharCode(97 + ((rest - 1) % 26)) + text;
+    return upper ? text.toUpperCase() : text;
+}
+
 /** ODF's `style:num-format` (`1`, `a`, `A`, `i`, `I`, or empty for none) as a NumberFormat. */
 export function odfNumberFormat(numFormat: string | null | undefined): NumberFormat {
     switch (numFormat) {

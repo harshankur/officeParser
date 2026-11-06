@@ -806,3 +806,136 @@ export async function testMarkdownWithoutDisclosuresUnchanged(): Promise<void> {
     console.log(`✓ Markdown without disclosures unchanged (${documents.length} documents)`);
 }
 
+/** ODF namespaces of a note test file. */
+const ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/"';
+
+/**
+ * An ODT of notes: `styles` the document's `office:styles` (its notes configurations), `body` its text,
+ * `auto` its automatic styles (section styles), `header` the page style's header. A page style is given,
+ * as LibreOffice needs one to number by a configuration.
+ */
+function notesOdt(styles: string, body: string, auto = '', header = ''): Buffer {
+    return Buffer.from(zipSync({
+        mimetype: [strToU8('application/vnd.oasis.opendocument.text'), { level: 0 }],
+        'META-INF/manifest.xml': strToU8('<?xml version="1.0" encoding="UTF-8"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2"><manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.text"/><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/><manifest:file-entry manifest:full-path="styles.xml" manifest:media-type="text/xml"/></manifest:manifest>'),
+        'styles.xml': strToU8(`<?xml version="1.0" encoding="UTF-8"?><office:document-styles ${ODF_NS} office:version="1.2"><office:styles>${styles}</office:styles><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1">${header}</style:master-page></office:master-styles></office:document-styles>`),
+        'content.xml': strToU8(`<?xml version="1.0" encoding="UTF-8"?><office:document-content ${ODF_NS} office:version="1.2"><office:automatic-styles>${auto}</office:automatic-styles><office:body><office:text>${body}</office:text></office:body></office:document-content>`),
+    }));
+}
+
+/** Every note's `kind:mark` in reading order, a note's own notes after it. */
+function noteMarksOf(nodes: OfficeContentNode[] | undefined, out: string[] = []): string[] {
+    for (const node of nodes ?? []) {
+        for (const note of node.notes ?? []) {
+            out.push(`${(note.metadata as NoteMetadata).noteType?.[0]}:${(note.metadata as NoteMetadata).mark}`);
+            noteMarksOf(note.children, out);
+        }
+        noteMarksOf(node.children, out);
+    }
+    return out;
+}
+
+/**
+ * An ODT note's mark is its number as LibreOffice shows it (LibreOffice 7.3 converting each file to HTML,
+ * one at a time): only `office:styles`' configurations are the document's, an empty format is decimal,
+ * a section whose own configuration gives a start value numbers its notes on its own (sections inside it
+ * inheriting), letters run aa, ab (aa, bb with letter sync, the letter repeated as far as 64 letters,
+ * digits past that), numerals repeat `m` past 3999. A note in a text box, drawing, header, footer,
+ * comment or note keeps its cached citation and takes no number from the text's. Linear in the notes.
+ */
+export async function testOdtNoteMarksAsLibreOffice(): Promise<void> {
+    let k = 0;
+    const note = (kind: 'footnote' | 'endnote', citation = '9', label?: string) => `<text:note text:id="n${++k}" text:note-class="${kind}"><text:note-citation${label === undefined ? '' : ` text:label="${label}"`}>${citation}</text:note-citation><text:note-body><text:p>${kind[0].toUpperCase()}${k}</text:p></text:note-body></text:note>`;
+    const fn = (citation?: string, label?: string) => note('footnote', citation, label);
+    const en = (citation?: string, label?: string) => note('endnote', citation, label);
+    const cfg = (kind: string, attrs: string) => `<text:notes-configuration text:note-class="${kind}" ${attrs}/>`;
+    const p = (text: string) => `<text:p>${text}</text:p>`;
+    const sect = (name: string, inner: string, style = 'Sect1') => `<text:section text:style-name="${style}" text:name="${name}">${inner}</text:section>`;
+    const sectStyle = (configs: string, name = 'Sect1') => `<style:style style:name="${name}" style:family="section"><style:section-properties>${configs}</style:section-properties></style:style>`;
+    const many = (count: number, make: () => string) => p(Array.from({ length: count }, (_, i) => `w${i}${make()}`).join(''));
+    const letters = (from: number, count: number, upper = false) => Array.from({ length: count }, (_, i) => {
+        let text = '';
+        for (let rest = from + i; rest > 0; rest = Math.floor((rest - 1) / 26)) text = String.fromCharCode(97 + ((rest - 1) % 26)) + text;
+        return upper ? text.toUpperCase() : text;
+    });
+    const repeated = (n: number, upper = false) => String.fromCharCode((upper ? 65 : 97) + ((n - 1) % 26)).repeat(Math.ceil(n / 26));
+    // Each: its files' parts, and the marks LibreOffice shows (where it shows none, what is kept and why).
+    const cases: [string, () => Buffer, string[]][] = [
+        // Section configurations (in the section style's properties).
+        ['secCollect', () => notesOdt('', p(`a${en()}b${fn()}`) + sect('S1', p(`c${en()}d${fn()}`)) + p(`e${en()}f${fn()}`), sectStyle(cfg('footnote', '') + cfg('endnote', ''))), ['e:i', 'f:1', 'e:ii', 'f:2', 'e:iii', 'f:3']],
+        ['secPlain', () => notesOdt('', p(`a${en()}b${fn()}`) + sect('S1', p(`c${en()}d${fn()}`)) + p(`e${en()}f${fn()}`), '<style:style style:name="Sect1" style:family="section"><style:section-properties fo:background-color="#eeeeee"/></style:style>'), ['e:i', 'f:1', 'e:ii', 'f:2', 'e:iii', 'f:3']],
+        ['sectionEn', () => notesOdt(cfg('endnote', 'style:num-format="i" text:start-value="0"'), p(`a${en()}`) + sect('S1', p(`b${en()}c${en()}`)) + p(`d${en()}`), sectStyle(cfg('endnote', 'style:num-format="A" text:start-value="0"'))), ['e:i', 'e:A', 'e:B', 'e:ii']],
+        ['secRestart', () => notesOdt('', p(`a${en()}`) + sect('S1', p(`b${en()}c${en()}`)) + p(`d${en()}`), sectStyle(cfg('endnote', 'text:start-value="0"'))), ['e:i', 'e:i', 'e:ii', 'e:ii']],
+        ['secRestart1', () => notesOdt('', p(`a${en()}`) + sect('S1', p(`b${en()}c${en()}`)) + p(`d${en()}`), sectStyle(cfg('endnote', 'text:start-value="1"'))), ['e:i', 'e:i', 'e:ii', 'e:ii']],
+        ['secRestart2', () => notesOdt('', p(`a${en()}`) + sect('S1', p(`b${en()}c${en()}`)) + p(`d${en()}`), sectStyle(cfg('endnote', 'text:start-value="2"'))), ['e:i', 'e:ii', 'e:iii', 'e:ii']],
+        ['secRestart3', () => notesOdt('', p(`a${en()}`) + sect('S1', p(`b${en()}c${en()}`)) + p(`d${en()}`), sectStyle(cfg('endnote', 'text:start-value="3"'))), ['e:i', 'e:iii', 'e:iv', 'e:ii']],
+        ['secFmtOnly', () => notesOdt('', p(`a${en()}`) + sect('S1', p(`b${en()}c${en()}`)) + p(`d${en()}`), sectStyle(cfg('endnote', 'style:num-format="A"'))), ['e:i', 'e:ii', 'e:iii', 'e:iv']],
+        ['secPrefixOnly', () => notesOdt('', p(`a${en()}`) + sect('S1', p(`b${en()}c${en()}`)) + p(`d${en()}`), sectStyle(cfg('endnote', 'style:num-prefix="["'))), ['e:i', 'e:ii', 'e:iii', 'e:iv']],
+        ['secDocFmt', () => notesOdt(cfg('endnote', 'style:num-format="I"'), p(`a${en()}`) + sect('S1', p(`b${en()}c${en()}`)) + p(`d${en()}`), sectStyle(cfg('endnote', 'text:start-value="0"'))), ['e:I', 'e:I', 'e:II', 'e:II']],
+        ['secFnOwn', () => notesOdt(cfg('footnote', 'style:num-format="1" text:start-numbering-at="document"'), p(`a${fn()}`) + sect('S1', p(`b${fn()}c${fn()}`)) + p(`d${fn()}`), sectStyle(cfg('footnote', 'style:num-format="A" text:start-value="0"'))), ['f:1', 'f:A', 'f:B', 'f:2']],
+        ['secFnRestart', () => notesOdt(cfg('footnote', 'style:num-format="1" text:start-numbering-at="document"'), p(`a${fn()}`) + sect('S1', p(`b${fn()}c${fn()}`)) + p(`d${fn()}`), sectStyle(cfg('footnote', 'text:start-value="0"'))), ['f:1', 'f:1', 'f:2', 'f:2']],
+        // Footnotes numbered per page: a section numbering its own is numbered, the rest keep their cached citations (LibreOffice: 0 a b 0 on one page).
+        ['secFnPage', () => notesOdt(cfg('footnote', 'style:num-format="1"'), p(`a${fn('7')}`) + sect('S1', p(`b${fn()}c${fn()}`)) + p(`d${fn('8')}`), sectStyle(cfg('footnote', 'style:num-format="a" text:start-value="0"'))), ['f:7', 'f:a', 'f:b', 'f:8']],
+        ['secNested', () => notesOdt('', p(`a${en()}`) + sect('S1', p(`b${en()}`) + sect('S2', p(`c${en()}`), 'Sect2') + p(`d${en()}`)) + p(`e${en()}`), sectStyle(cfg('endnote', 'style:num-format="A" text:start-value="0"')) + sectStyle('', 'Sect2')), ['e:i', 'e:A', 'e:A', 'e:B', 'e:ii']],
+        ['secNestedOwn', () => notesOdt('', p(`a${en()}`) + sect('S1', p(`b${en()}`) + sect('S2', p(`c${en()}`), 'Sect2') + p(`d${en()}`)) + p(`e${en()}`), sectStyle(cfg('endnote', 'style:num-format="A" text:start-value="0"')) + sectStyle(cfg('endnote', 'style:num-format="a" text:start-value="0"'), 'Sect2')), ['e:i', 'e:A', 'e:a', 'e:B', 'e:ii']],
+        ['secNestedCollect', () => notesOdt('', p(`a${en()}`) + sect('S1', p(`b${en()}`) + sect('S2', p(`c${en()}`), 'Sect2') + p(`d${en()}`)) + p(`e${en()}`), sectStyle(cfg('endnote', 'style:num-format="A" text:start-value="0"')) + sectStyle(cfg('endnote', ''), 'Sect2')), ['e:i', 'e:A', 'e:B', 'e:C', 'e:ii']],
+        ['secTwo', () => notesOdt('', p(`a${en()}`) + sect('S1', p(`b${en()}c${en()}`)) + p(`d${en()}`) + sect('S3', p(`e${en()}`)) + p(`f${en()}`), sectStyle(cfg('endnote', 'style:num-format="A" text:start-value="0"'))), ['e:i', 'e:A', 'e:B', 'e:ii', 'e:A', 'e:iii']],
+        ['secAlpha', () => notesOdt('', p(`a${en()}`) + sect('S1', many(28, () => en())) + p(`d${en()}`), sectStyle(cfg('endnote', 'style:num-format="a" text:start-value="0"'))), ['e:i', ...letters(1, 28).map(m => `e:${m}`), 'e:ii']],
+        // The document's configuration.
+        ['fa2', () => notesOdt(cfg('footnote', 'style:num-format="a" text:start-value="2" text:start-numbering-at="document"') + cfg('endnote', 'style:num-format="A" text:start-value="0"'), p(`a${fn()}b${en()}c${fn()}d${en()}`)), ['f:c', 'e:A', 'f:d', 'e:B']],
+        ['fa2b', () => notesOdt('<text:notes-configuration text:note-class="footnote" text:citation-style-name="FootnoteReference" text:citation-body-style-name="FootnoteReference" text:start-value="2" style:num-format="a" text:start-numbering-at="document" text:footnotes-position="page"/><text:notes-configuration text:note-class="endnote" text:citation-style-name="EndnoteReference" text:citation-body-style-name="EndnoteReference" text:start-value="0" style:num-format="A" text:start-numbering-at="document" text:footnotes-position="document"/>', p(`a${fn()}b${en()}c${fn()}d${en()}`)), ['f:c', 'e:A', 'f:d', 'e:B']],
+        ['fa2c', () => notesOdt(cfg('footnote', 'style:num-format="a" text:start-value="2" text:start-numbering-at="document" text:footnotes-position="page"') + cfg('endnote', 'style:num-format="A" text:start-value="0" text:footnotes-position="document"'), p(`a${fn()}b${en()}c${fn()}d${en()}`)), ['f:c', 'e:A', 'f:d', 'e:B']],
+        ['none', () => notesOdt('', p(`a${fn()}b${en()}c${fn()}d${en()}e${fn()}`)), ['f:1', 'e:i', 'f:2', 'e:ii', 'f:3']],
+        ['enNoFmt', () => notesOdt(cfg('endnote', ''), p(`a${en()}b${en()}`)), ['e:1', 'e:2']],
+        ['label', () => notesOdt('', p(`a${fn()}b${fn('*', '*')}c${fn()}d${en('x', 'x')}e${en()}`)), ['f:1', 'f:*', 'f:2', 'e:x', 'e:i']],
+        ['prefix', () => notesOdt(cfg('footnote', 'style:num-format="1" style:num-prefix="[" style:num-suffix="]" text:start-numbering-at="document"'), p(`a${fn()}b${fn()}`)), ['f:1', 'f:2']],
+        ['startVal1', () => notesOdt(cfg('footnote', 'style:num-format="1" text:start-value="1" text:start-numbering-at="document"') + cfg('endnote', 'style:num-format="I" text:start-value="4"'), p(`a${fn()}b${fn()}c${en()}`)), ['f:2', 'f:3', 'e:V']],
+        ['emptyFmt', () => notesOdt(cfg('footnote', 'style:num-format="" text:start-numbering-at="document"'), p(`a${fn('5')}b${fn('6')}`)), ['f:1', 'f:2']],
+        ['emptyFmtEn', () => notesOdt(cfg('endnote', 'style:num-format=""'), p(`a${en('5')}b${en('6')}`)), ['e:1', 'e:2']],
+        ['table', () => notesOdt('', p(`a${fn()}`) + `<table:table table:name="T"><table:table-column/><table:table-row><table:table-cell>${p(`c${fn()}`)}</table:table-cell></table:table-row></table:table>` + p(`d${fn()}`)), ['f:1', 'f:2', 'f:3']],
+        ['heading', () => notesOdt('', `<text:h text:outline-level="1">H${fn()}</text:h><text:list><text:list-item>${p(`l${fn()}`)}</text:list-item></text:list>` + p(`d${fn()}`)), ['f:1', 'f:2', 'f:3']],
+        // Letters and numerals.
+        ['alpha30', () => notesOdt(cfg('footnote', 'style:num-format="a" text:start-value="0" text:start-numbering-at="document"'), many(30, () => fn())), letters(1, 30).map(m => `f:${m}`)],
+        ['upper30', () => notesOdt(cfg('footnote', 'style:num-format="A" text:start-numbering-at="document"'), many(30, () => fn())), letters(1, 30, true).map(m => `f:${m}`)],
+        ['enAlpha30', () => notesOdt(cfg('endnote', 'style:num-format="a"'), many(30, () => en())), letters(1, 30).map(m => `e:${m}`)],
+        ['alpha700', () => notesOdt(cfg('footnote', 'style:num-format="a" text:start-value="700" text:start-numbering-at="document"'), p(`a${fn()}b${fn()}`)), ['f:zy', 'f:zz']],
+        ['alphaSync', () => notesOdt(cfg('footnote', 'style:num-format="a" style:num-letter-sync="true" text:start-value="0" text:start-numbering-at="document"'), many(30, () => fn())), Array.from({ length: 30 }, (_, i) => `f:${repeated(i + 1)}`)],
+        ['alphaSync300', () => notesOdt(cfg('footnote', 'style:num-format="a" style:num-letter-sync="true" text:start-value="300" text:start-numbering-at="document"'), p(`a${fn()}b${fn()}`)), ['f:oooooooooooo', 'f:pppppppppppp']],
+        ['alphaSync1661', () => notesOdt(cfg('footnote', 'style:num-format="a" style:num-letter-sync="true" text:start-value="1661" text:start-numbering-at="document"'), p(`a${fn()}b${fn()}c${fn()}`)), ['f:' + 'x'.repeat(64), 'f:' + 'y'.repeat(64), 'f:' + 'z'.repeat(64)]],
+        // LibreOffice writes the letter 65 times for note 1665; past 64 letters the mark is digits.
+        ['alphaSync1662', () => notesOdt(cfg('footnote', 'style:num-format="A" style:num-letter-sync="true" text:start-value="1662" text:start-numbering-at="document"'), p(`a${fn()}b${fn()}c${fn()}`)), ['f:' + 'Y'.repeat(64), 'f:' + 'Z'.repeat(64), 'f:1665']],
+        ['romanBig', () => notesOdt(cfg('footnote', 'style:num-format="i" text:start-value="3998" text:start-numbering-at="document"'), p(`a${fn()}b${fn()}c${fn()}`)), ['f:mmmcmxcix', 'f:mmmm', 'f:mmmmi']],
+        ['roman5k', () => notesOdt(cfg('footnote', 'style:num-format="I" text:start-value="4998" text:start-numbering-at="document"'), p(`a${fn()}b${fn()}`)), ['f:MMMMCMXCIX', 'f:MMMMM']],
+        // Notes outside the text LibreOffice numbers: LibreOffice drops a text box's note (1 2) and opens no
+        // file with a note in a header, comment or note; theirs keep the cached citation, nothing lost.
+        ['frame', () => notesOdt('', p(`a${fn()}<draw:frame text:anchor-type="as-char" svg:width="3cm" svg:height="1cm"><draw:text-box>${p(`t${fn()}`)}</draw:text-box></draw:frame>z${fn()}`)), ['f:1', 'f:9', 'f:2']],
+        ['framePara', () => notesOdt('', p(`a${fn()}`) + p(`<draw:frame text:anchor-type="paragraph" svg:width="3cm" svg:height="1cm"><draw:text-box>${p(`t${fn()}`)}</draw:text-box></draw:frame>m`) + p(`z${fn()}`)), ['f:1', 'f:9', 'f:2']],
+        ['header', () => notesOdt('', p(`a${fn()}b${fn()}`), '', `<style:header>${p(`h${fn()}`)}</style:header>`), ['f:1', 'f:2']],
+        ['annot', () => notesOdt('', p(`a${fn()}<office:annotation><dc:creator>x</dc:creator>${p(`c${fn()}`)}</office:annotation>b${fn()}`)), ['f:1', 'f:2']],
+        ['noteInNote', () => notesOdt('', p(`a<text:note text:id="nn" text:note-class="footnote"><text:note-citation>9</text:note-citation><text:note-body><text:p>outer${fn()}</text:p></text:note-body></text:note>b${fn()}`)), ['f:1', 'f:9', 'f:2']],
+    ];
+    for (const [name, make, expected] of cases) {
+        k = 0;
+        const ast = await OfficeParser.parseOffice(make(), { fileType: 'odt' });
+        assert.deepStrictEqual(noteMarksOf(ast.content), expected, `ODT note marks as LibreOffice: ${name}`);
+    }
+    // The text box's note is kept, with its cached citation and its text.
+    k = 0;
+    const frame = await OfficeParser.parseOffice(cases.find(c => c[0] === 'framePara')![1](), { fileType: 'odt' });
+    assert.ok(/--- Notes ---\nF1\nF2\nF3/.test((await frame.to('text')).value), 'ODT note marks as LibreOffice: a text box\'s note kept');
+    // Linear: many notes in nested sections and in text boxes, against as many in one paragraph.
+    const many_ = 8000;
+    const endnotes = (count: number) => Array.from({ length: count }, (_, i) => `w<text:note text:id="n${i}" text:note-class="endnote"><text:note-citation>9</text:note-citation><text:note-body><text:p>E</text:p></text:note-body></text:note>`).join('');
+    const ownNumbering = sectStyle(cfg('endnote', 'text:start-value="0" style:num-format="a"'), 'S');
+    for (const [name, body] of [
+        ['nested sections', '<text:section text:style-name="S" text:name="s">'.repeat(100) + p(endnotes(many_)) + '</text:section>'.repeat(100)],
+        ['text boxes', p(Array.from({ length: many_ }, (_, i) => `<draw:frame svg:width="1cm"><draw:text-box><text:p>x<text:note text:id="n${i}" text:note-class="endnote"><text:note-citation>9</text:note-citation><text:note-body><text:p>E</text:p></text:note-body></text:note></text:p></draw:text-box></draw:frame>`).join(''))],
+    ]) {
+        const file = notesOdt('', body, ownNumbering);
+        const plain = notesOdt('', p(endnotes(many_)) + p('x'.repeat(body.length - endnotes(many_).length)));
+        const { within, time, plain: baseline } = await linearAgainst(() => OfficeParser.parseOffice(file, { fileType: 'odt' }), () => OfficeParser.parseOffice(plain, { fileType: 'odt' }));
+        assert.ok(within, `ODT note marks as LibreOffice: ${many_} notes in ${name} in ${time.toFixed(0)} ms, in one paragraph ${baseline.toFixed(0)} ms`);
+    }
+    console.log('✓ ODT note marks as LibreOffice shows them');
+}
+

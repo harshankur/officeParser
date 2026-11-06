@@ -1491,8 +1491,10 @@ console.log(extractNotes(ast.content));
 ```
 
 `noteId` is the source's internal key (DOCX's `w:id`, ODT's `ftn1`), used in ids and links. The mark a
-reader sees is `metadata.mark` where the source records one (ODT's number as its notes configuration gives
-it, the text of an HTML or EPUB note reference, a custom mark such as `*`, flagged `customMark: true`);
+reader sees is `metadata.mark` where the source records one (ODT's number as LibreOffice shows it, by the
+notes configuration of the document or of a section numbering its own notes, and for a note in a text box,
+drawing, header, footer, comment or another note the citation the file caches; the text of an HTML or EPUB
+note reference; a custom mark such as `*`, flagged `customMark: true`);
 otherwise writers show the note's ordinal within its kind (footnotes `1, 2, 3`, endnotes `i, ii, iii`).
 HTML, EPUB, the native PDF engine and slides print that mark; DOCX and ODT number notes themselves and
 keep a custom mark as their own.
