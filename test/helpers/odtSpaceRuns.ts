@@ -26,7 +26,10 @@ export type OdtRender = (bytes: Uint8Array, config: any) => Promise<Uint8Array>;
 
 /** Runs `cases` random paragraphs; returns the failures (at most 8), described. */
 export async function checkOdtSpaceRuns(render: OdtRender, cases: number, seed = 1): Promise<string[]> {
-    const rnd = (): number => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    // The C library generator, modulo 2^31 in integer arithmetic, which has its full period: multiplied
+    // in floating point the product passed 2^53, lost its low bits, and every seed fell into one cycle
+    // of 10,466 values. Divided by 2^31, a draw is under 1, so a pick stays inside its list.
+    const rnd = (): number => { seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff; return seed / 0x80000000; };
     const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)];
     const int = (n: number): number => Math.floor(rnd() * n);
     type Piece = { xml: string; typed: string };

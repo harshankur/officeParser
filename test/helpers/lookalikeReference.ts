@@ -105,7 +105,10 @@ export type LookalikeScan = (joined: string, start: string, end: string, room: n
  * first `room` and count the rest exactly. Returns the failures (at most 10), described.
  */
 export function checkLookalikeScan(scan: LookalikeScan, cases: number, seed = 1): { withLookalikes: number; failures: string[] } {
-    const rnd = (): number => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    // The C library generator, modulo 2^31 in integer arithmetic, which has its full period: multiplied
+    // in floating point the product passed 2^53, lost its low bits, and every seed fell into one cycle
+    // of 10,466 values. Divided by 2^31, a draw is under 1, so a pick stays inside its list.
+    const rnd = (): number => { seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff; return seed / 0x80000000; };
     const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)];
     const CHARS = ['{', '}', '[', ']', '<', '>', '&', '$', '%', '|', '(', ')', ' ', 'a', '«', '»', '#'];
     const delimiters = (): { start: string; end: string } => {
