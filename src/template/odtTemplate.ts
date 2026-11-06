@@ -4,8 +4,9 @@
  * repair after loops and branches, and the package it writes.
  *
  * - Text is the character data of a paragraph (`text:p`, `text:h`) and the spans and links in it,
- *   with `<text:s/>` read as the spaces it stands for. A tag split across spans (as LibreOffice splits
- *   text at every change of attribute or edit) is one tag. Text in fields (`text:date`), in a note's
+ *   with `<text:s/>` read as the spaces it stands for (a run of more than 16 is read as 16, and written
+ *   back whole). A tag split across spans (as LibreOffice splits text at every change of attribute or
+ *   edit) is one tag. Text in fields (`text:date`), in a note's
  *   citation, in a comment's author and date, and deleted text kept for tracked changes is not read.
  * - Tags are filled in `content.xml` and in `styles.xml`, whose master pages hold the headers and footers.
  *   Notes (`text:note`), comments (`office:annotation`) and text boxes (`draw:text-box`) live inside the
@@ -42,8 +43,15 @@ const UNREAD = new Set(['text:tracked-changes']);
 /** The element standing for spaces (`text:c` of them, one when it has none). */
 const SPACE = 'text:s';
 
-/** The most spaces one `<text:s/>` is read as: past it, it is read as none (no tag holds a run that long). */
-const MAX_SPACE_RUN = 256;
+/**
+ * The most spaces one `<text:s/>` is read as: a longer run is read as this many, and written back whole
+ * (see TextRun.spaces). So a run's text is never longer than the XML it is read from (`<text:s/>` is 9
+ * characters and reads 1; any `<text:s text:c="N"/>` is at least 20 and reads at most 16), and a
+ * paragraph's text is at most its XML, as in a Word document: every bound on the part's size bounds it.
+ */
+const MAX_SPACE_RUN = 16;
+/** The text a `<text:s/>` is read as, by its count: shared, one string for each. */
+const SPACE_TEXT: readonly string[] = Array.from({ length: MAX_SPACE_RUN + 1 }, (_, n) => ' '.repeat(n));
 
 /** List elements a paragraph of a paragraph block may sit in, below the block's container. */
 const LIST_WRAPPERS = new Set(['text:list', 'text:list-item', 'text:list-header']);
@@ -81,7 +89,7 @@ function spacesXml(count: number): string {
 }
 
 /** How a marker's piece of a `<text:s/>` is written back: as the spaces it stood for. */
-const ODT_SPACES = { spacesXml: (spaces: string): string => spaces ? spacesXml(spaces.length) : '' };
+const ODT_SPACES = { spacesXml: (count: number): string => count ? spacesXml(count) : '' };
 
 /** Whether a part may hold a tag, or text that looks like one: it has a character such text starts with. */
 function mayHoldTag(xml: string, ctx: PartContext): boolean {
@@ -109,7 +117,22 @@ function markOdtPart(xml: string, ctx: PartContext): string {
         if (pieces) {
             runs.forEach((run, i) => {
                 // A `<text:s/>` with a marker in it is written as its markers, and the spaces around them as `<text:s/>`.
-                const text = run.spaces ? pieces[i].map(piece => piece.startsWith(ctx.open) ? piece : ODT_SPACES.spacesXml(piece)).join('') : pieces[i].join('');
+                let text: string;
+                if (run.spaces === undefined) text = pieces[i].join('');
+                else {
+                    // A run read as fewer spaces than it stands for: the rest go with its first piece outside a
+                    // tag, or after its last piece when every piece is in a tag and it is split (a delimiter
+                    // that starts or ends with a space); a run wholly in one tag is written back by the tag.
+                    let extra = run.spaces - run.inner.length;
+                    const parts = pieces[i].map(piece => {
+                        if (piece.startsWith(ctx.open)) return piece;
+                        const spaces = ODT_SPACES.spacesXml(piece.length + extra);
+                        extra = 0;
+                        return spaces;
+                    });
+                    if (extra && pieces[i].length > 1) parts.push(ODT_SPACES.spacesXml(extra));
+                    text = parts.join('');
+                }
                 out.push(xml.slice(copied, run.start), text);
                 copied = run.end;
             });
@@ -152,7 +175,7 @@ function markOdtPart(xml: string, ctx: PartContext): string {
         if (PARAGRAPHS.has(name)) flush();
         if (name === SPACE && selfClosing && inText()) {
             const count = spaceCount(xml.slice(lt, gt + 1));
-            if (count <= MAX_SPACE_RUN) runs.push({ start: lt, end: gt + 1, inner: ' '.repeat(count), spaces: true });
+            runs.push({ start: lt, end: gt + 1, inner: SPACE_TEXT[Math.min(count, MAX_SPACE_RUN)], spaces: count });
         }
         if (!selfClosing) {
             open.push(name);

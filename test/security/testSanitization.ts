@@ -5846,6 +5846,42 @@ async function odtTemplateHardeningTests() {
     check('ODT template: an entry past the decompression limit is refused, typed', !!bombed.code && bombed.code !== 'TEMPLATE_UNSUPPORTED_FORMAT', String(bombed.code));
 }
 
+/**
+ * Template text bounded by the XML it is read from: a `<text:s text:c="N"/>` is read as at most 16
+ * spaces, so an ODT paragraph's text is never longer than its XML, and every later pass over it costs
+ * what the same text costs in a Word document.
+ */
+async function templateTextBoundTests() {
+    console.log('- Templates: text read no longer than its XML, the look-alike scan and its list bounded...');
+    const enc = (s: string) => new TextEncoder().encode(s);
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"';
+    const odtOf = (body: string) => Buffer.from(zipSync({
+        mimetype: [enc('application/vnd.oasis.opendocument.text'), { level: 0 }],
+        'META-INF/manifest.xml': enc('<?xml version="1.0"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.text"/></manifest:manifest>'),
+        'content.xml': enc(`<?xml version="1.0"?><office:document-content ${NS}><office:body><office:text>${body}</office:text></office:body></office:document-content>`),
+    }));
+    const docxOf = (body: string) => Buffer.from(zipSync({
+        '[Content_Types].xml': enc('<Types/>'),
+        'word/document.xml': enc(`<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`),
+    }));
+    const renderQuiet = async (bytes: Buffer, data: any, cfg: any = {}) => {
+        const warnings: any[] = [];
+        try { return { out: await OfficeTemplate.render(bytes, { data, onWarning: (w: any) => warnings.push(w), ...cfg }) as Uint8Array, code: undefined, warnings }; }
+        catch (e: any) { return { out: undefined, code: e?.officeIssue?.code ?? String(e), warnings }; }
+    };
+    const p = (t: string) => `<text:p>${t}</text:p>`;
+    const wp = (t: string) => `<w:p><w:r><w:t xml:space="preserve">${t}</w:t></w:r></w:p>`;
+
+    // 22 bytes of XML read as 256 spaces made every later pass run over 11.6 times the text the limits allowed.
+    const longSpaces = () => odtOf(p('{{' + '<text:s text:c="256"/>'.repeat(n(400_000)) + 'a}}'));
+    let spaced: Awaited<ReturnType<typeof renderQuiet>> | undefined;
+    await linear('template: an ODT paragraph of 400,000 <text:s text:c="256"/> inside a tag', async () => { spaced = await renderQuiet(longSpaces(), { a: 1 }); },
+        { label: 'template: an ODT paragraph of 400,000 <text:s text:c="256"/> inside a tag, its heap', limit: 600_000_000 });
+    check('template: an ODT paragraph of 400,000 <text:s text:c="256"/> inside a tag renders', spaced?.out instanceof Uint8Array, String(spaced?.code));
+    const spacedRun = await withinTime(4000, () => renderQuiet(longSpaces(), { a: 1 }));
+    check('template: an ODT paragraph of 400,000 <text:s text:c="256"/> inside a tag, read at most as long as its XML', spacedRun.within, `${spacedRun.ms}ms`);
+}
+
 async function main() {
     console.log('Running sanitization security tests...\n');
     unitTests();
@@ -5888,6 +5924,7 @@ async function main() {
     await odtBreakLinkTests();
     await styleFlagWeightTests();
     await latexHighlightSizeTests();
+    await templateTextBoundTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);

@@ -4300,6 +4300,28 @@ async function testOdtTemplate(): Promise<void> {
 }
 
 /**
+ * ODT templates: a `<text:s text:c="N"/>` of more than 16 spaces is read as 16 (its text is never longer
+ * than its XML) and written back with every space it stood for, whole, wholly in a tag, or split by a
+ * delimiter that starts or ends with a space.
+ */
+async function testOdtTemplateLongSpaceRuns(): Promise<void> {
+    const { p, odt, body } = odtHelpers();
+    assert.strictEqual(await body(p('a<text:s text:c="300"/>b {{ v }}'), { v: 'V' }), p('a<text:s text:c="300"/>b V'), 'a long run outside any tag is written back as typed');
+    assert.strictEqual(await body(p('{{ v<text:s text:c="40"/>}}'), { v: 'V' }), p('V'), 'a tag padded with a long run is filled');
+    assert.strictEqual(await body(p('{{ v<text:s text:c="40"/>}}'), {}, { onMissing: 'keep' }), p('{{ v<text:s text:c="40"/>}}'), 'kept as typed, with all of its spaces');
+    const tags = await OfficeTemplate.tags(odt(p('{{ a<text:s text:c="300"/>b }}')));
+    assert.deepStrictEqual(tags.map(t => [t.kind, t.reason]), [['text', 'space-in-name']], `a long run inside a name is white space; got ${JSON.stringify(tags)}`);
+    assert.strictEqual(await body(p('x<text:s text:c="300"/>[[ v ]]y'), { v: 'V' }, { delimiters: { start: ' [[', end: ']]' } }), p('x<text:s text:c="299"/>Vy'),
+        'a delimiter starting with a space takes one; the rest are written back');
+    assert.strictEqual(await body(p('x[[ v ]]<text:s text:c="300"/>y'), { v: 'V' }, { delimiters: { start: '[[', end: ']] ' } }), p('xV<text:s text:c="299"/>y'),
+        'a delimiter ending with a space takes one; the rest are written back');
+    assert.strictEqual(await body(p('x[[ v ]]<text:s text:c="300"/>y'), {}, { delimiters: { start: '[[', end: ']] ' }, onMissing: 'keep' }), p('x[[ v ]]<text:s/><text:s text:c="299"/>y'),
+        'kept as typed: the tag\'s space and the rest, every one of the 300');
+    assert.strictEqual(await body(p('a<text:s text:c="3"/>{{ v }}<text:s/>b'), { v: 'V' }), p('a<text:s text:c="3"/>V<text:s/>b'), 'short runs as before');
+    console.log('  ODT template long space runs: All assertions passed ✓');
+}
+
+/**
  * ODT templates' blocks in each of their scopes, the ids a copy renumbers, and the document left valid:
  * fixture `test/files/template/shapes.odt` and small documents built around one case each.
  */
@@ -12761,6 +12783,7 @@ async function runTests(): Promise<void> {
         ['Template numbers as text', testTemplateNumbersAsText],
         ['ODT template', testOdtTemplate],
         ['ODT template blocks', testOdtTemplateBlocks],
+        ['ODT template long space runs', testOdtTemplateLongSpaceRuns],
         ['Template near-tags', testTemplateNearTags],
         ['Chart scripts', testChartScripts],
         ['Markdown header rows', testMarkdownHeaderRows],

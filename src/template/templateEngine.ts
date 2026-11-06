@@ -574,13 +574,14 @@ function typedOf(record: TagRecord, opts: TemplateOptions): string {
 
 /**
  * One run of a paragraph's text, as the part stores it (XML-escaped): where it starts and ends in the
- * part, and its text. `spaces` is set on a run that stands for spaces (ODT's `<text:s/>`), whose text
- * a marker's piece is written back as with {@link TemplateDialectSpaces.spacesXml}.
+ * part, and its text. `spaces` is set on a run that stands for spaces (ODT's `<text:s/>`): how many it
+ * stands for, which its text may hold fewer of (a long run is read short), and which a marker's piece
+ * of the whole run is written back as with {@link TemplateDialectSpaces.spacesXml}.
  */
-export interface TextRun { start: number; end: number; inner: string; spaces?: boolean }
+export interface TextRun { start: number; end: number; inner: string; spaces?: number }
 
-/** How a dialect writes back spaces that a run of spaces stood for. */
-export interface TemplateDialectSpaces { spacesXml(spaces: string): string }
+/** How a dialect writes back a number of spaces that a run of spaces stood for. */
+export interface TemplateDialectSpaces { spacesXml(count: number): string }
 
 /**
  * Finds the tags in one paragraph's runs of text, joined, records them in `ctx`, and returns each
@@ -641,7 +642,9 @@ export function markRuns(segs: TextRun[], ctx: PartContext, spaces?: TemplateDia
             const markerIndex = ctx.markerTag.push(tagIndex) - 1;
             ctx.markerPiece.push(piece);
             const text = joined.slice(at, end);
-            ctx.pieceText.push(spaces && segs[si].spaces ? spaces.spacesXml(text) : text);
+            // A piece of spaces that is the whole run is written back as all the spaces it stood for.
+            const seg = segs[si];
+            ctx.pieceText.push(spaces && seg.spaces !== undefined ? spaces.spacesXml(text.length === seg.inner.length ? seg.spaces : text.length) : text);
             pieces[si].push(`${ctx.open}${markerIndex}${ctx.close}`);
             at = end;
         }
