@@ -482,6 +482,30 @@ export function withLatexMathMacros(latex: string): string {
 }
 
 /**
+ * The commands the LaTeX generator defines for itself: a background colour's, `ophl` and its six hex
+ * digits as the letters `a` to `p` (see LatexGenerator.highlightRef), and the DVI driver option
+ * `officeparserdriver` of its preamble. A formula's command of such a name is another command: it is
+ * written as its name in place (see withoutGeneratorCommands) and given no definition (see
+ * planLatexMath), which would be the generator's, or would take the name from it.
+ */
+export const GENERATOR_COMMAND = /^(?:ophl[a-p]{6}|officeparserdriver)$/;
+
+/** A formula with each command of a name the generator defines for itself (GENERATOR_COMMAND) written as its name, as an undefined command's definition prints it. */
+export function withoutGeneratorCommands(latex: string): string {
+    if (!latex.includes('\\ophl') && !latex.includes('\\officeparserdriver')) return latex;
+    const parts: string[] = [];
+    let from = 0;
+    eachMathCommand(latex, (name, start, end) => {
+        if (!GENERATOR_COMMAND.test(name)) return;
+        parts.push(latex.slice(from, start), `\\texttt{\\textbackslash ${name}}`);
+        from = end;
+    });
+    if (from === 0) return latex;
+    parts.push(latex.slice(from));
+    return parts.join('');
+}
+
+/**
  * What the math a document holds needs beyond amsmath and amssymb: the packages its commands come
  * from (in load order, with their options), and the commands nothing the output loads defines, with
  * a definition for each that prints its own name, so the document compiles and shows where it is.
@@ -503,7 +527,8 @@ export function planLatexMath(commands: Iterable<string>): LatexMathPlan {
     const undefinedCommands = names.filter(name => !MATH_PACKAGE_OF[name] && !LATEX_MATH_COMMANDS.has(name) && !(needed.has('siunitx') && SIUNITX_UNITS.has(name)));
     return {
         packages: MATH_PACKAGES.filter(p => needed.has(p.name)).map(p => ({ name: p.name, ...(p.options ? { options: p.options } : {}) })),
-        definitions: undefinedCommands.map(name => `\\providecommand{\\${name}}{\\texttt{\\textbackslash ${name}}}`),
+        // (A name the generator defines for itself is written as its name in place: see GENERATOR_COMMAND.)
+        definitions: undefinedCommands.filter(name => !GENERATOR_COMMAND.test(name)).map(name => `\\providecommand{\\${name}}{\\texttt{\\textbackslash ${name}}}`),
         undefinedCommands,
     };
 }

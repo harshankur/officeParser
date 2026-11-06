@@ -9,7 +9,7 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { onDocumentPage } from '../utils/pageLimits.js';
 import { clampInt } from '../utils/numberUtils.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
-import { LatexMathPlan, LatexScripts, LatexUnicodePlan, LISTINGS_LANGUAGES, mathCommandsOf, planLatexMath, planLatexUnicode, withLatexMathMacros } from '../utils/latexUtils.js';
+import { LatexMathPlan, LatexScripts, LatexUnicodePlan, LISTINGS_LANGUAGES, mathCommandsOf, planLatexMath, planLatexUnicode, withLatexMathMacros, withoutGeneratorCommands } from '../utils/latexUtils.js';
 import { escapeLatex, latexComment, latexSourceComment, sanitizeLatexImagePath, sanitizeLatexMath, sanitizeLatexUrl } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { contentHash, imageToTextPdf, newDecodeBudget } from '../utils/textPdf.js';
@@ -1148,7 +1148,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     private mathLatex(latex: string): string {
         const out = withLatexMathMacros(latex);
         mathCommandsOf(out, this.mathCommands);
-        return out;
+        // (A command named as one the generator defines for itself is another: written as its name, see GENERATOR_COMMAND.)
+        return withoutGeneratorCommands(out);
     }
 
     private inlineMath(source: string): string {

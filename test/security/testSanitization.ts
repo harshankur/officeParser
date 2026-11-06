@@ -5530,6 +5530,36 @@ async function latexHighlightSizeTests() {
     const read = await OfficeParser.parseOffice(Buffer.from(written), { fileType: 'tex', onWarning: () => {} } as any);
     const before = highlighted(docx.content), after = highlighted(read.content);
     check('latex: test.docx\'s highlighted words read back from its LaTeX in their colours', before.length > 0 && JSON.stringify(before) === JSON.stringify(after), `${before.length} written, ${after.length} read: ${before.filter((w, i) => w !== after[i]).slice(0, 3)}`);
+
+    // A formula's command named as one the generator defines for itself (a colour's, or the driver
+    // option) is written as its name in place and given no definition: given the highlight's, the
+    // formula took its next `$` as an argument and the document did not compile.
+    const texWith = async (md: string, standalone: boolean) => {
+        const ast = await OfficeParser.parseOffice(Buffer.from(md), { fileType: 'md', onWarning: () => {} } as any);
+        const result = await ast.to('tex', { texConfig: { standalone }, onWarning: () => {} } as any);
+        return { tex: result.value as string, warned: (result.messages ?? []).map((m: any) => JSON.stringify(m.details ?? m.message ?? '')).join(' ') };
+    };
+    const count = (text: string, part: string) => text.split(part).length - 1;
+    for (const standalone of [true, false]) {
+        const label = standalone ? 'standalone' : 'as a fragment';
+        const clash = await texWith('Text ==hi there== and $\\ophlppppaa{x} + \\ophlppppaa$ end.\n', standalone);
+        check(`latex (${label}): a formula naming a highlight's command writes it as its name, beside the highlight's one definition, and names it in the warning`,
+            count(clash.tex, '\\providecommand{\\ophlppppaa}') === 1 && clash.tex.includes('\\providecommand{\\ophlppppaa}[1]')
+            && clash.tex.includes('$\\texttt{\\textbackslash ophlppppaa}{x} + \\texttt{\\textbackslash ophlppppaa}$') && clash.tex.includes('\\ophlppppaa{hi} \\ophlppppaa{there}')
+            && clash.warned.includes('\\\\ophlppppaa'), `${clash.tex.split('\n').filter(l => l.includes('ophl')).join(' | ')} ${clash.warned}`);
+        const driver = await texWith('Driver $\\officeparserdriver + x$ end.\n', standalone);
+        check(`latex (${label}): a formula naming the driver option writes it as its name, gives it no definition, and names it in the warning`,
+            driver.tex.includes('$\\texttt{\\textbackslash officeparserdriver} + x$') && !driver.tex.includes('\\providecommand{\\officeparserdriver}')
+            && count(driver.tex, '\\def\\officeparserdriver{}') === (standalone ? 1 : 0) && driver.warned.includes('\\\\officeparserdriver'),
+            `${driver.tex.split('\n').filter(l => l.includes('officeparserdriver')).join(' | ')} ${driver.warned}`);
+        const lineBreak = await texWith('Text ==hi== and $$\\begin{matrix} a \\\\ophlppppaa \\end{matrix}$$\n', standalone);
+        check(`latex (${label}): a line break followed by a highlight's name is left as it is`,
+            lineBreak.tex.includes('\\begin{matrix} a \\\\ophlppppaa \\end{matrix}') && !lineBreak.tex.includes('textbackslash ophl'), lineBreak.tex.split('\n').filter(l => l.includes('ophl')).join(' | '));
+        const near = await texWith('Text ==hi== and $\\ophlppppaab{x} + \\ophl$ end.\n', standalone);
+        check(`latex (${label}): names beside a highlight's (seven letters, none) keep their own definitions`,
+            near.tex.includes('\\providecommand{\\ophlppppaab}{\\texttt{\\textbackslash ophlppppaab}}') && near.tex.includes('\\providecommand{\\ophl}{\\texttt{\\textbackslash ophl}}') && near.tex.includes('$\\ophlppppaab{x} + \\ophl$'),
+            near.tex.split('\n').filter(l => l.includes('ophl')).join(' | '));
+    }
 }
 
 /**
