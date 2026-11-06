@@ -939,3 +939,48 @@ export async function testOdtNoteMarksAsLibreOffice(): Promise<void> {
     console.log('✓ ODT note marks as LibreOffice shows them');
 }
 
+/**
+ * The XHTML sniffer reads the start of an XML document, twice as much each time its prolog runs past
+ * it, so its answer is the whole document's: a comment, instruction or internal subset longer than the
+ * first read, or a root name across it, still finds an XHTML page; an `<html>` in an entity value of a
+ * long subset is no root. Linear in the prolog's length.
+ */
+export async function testXhtmlSniffedPastFirstRead(): Promise<void> {
+    const K = 64 * 1024;
+    const decl = '<?xml version="1.0"?>';
+    const page = '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>A</p></body></html>';
+    const pad = (prefix: string, filler: (n: number) => string, suffix: string) => prefix + filler(Math.max(0, K - prefix.length - 3)) + suffix;
+    const readAs = async (source: string): Promise<string> => {
+        try {
+            const ast = await OfficeParser.parseOffice(Buffer.from(source));
+            return `${ast.type}:${(await ast.to('text')).value.trim().split('\n')[0]}`;
+        } catch (error: any) {
+            return /supports/.test(error.message) ? 'refused' : `error ${error.message}`;
+        }
+    };
+    for (const [name, source, expected] of [
+        ['a comment across the first read', decl + '<!--' + 'c'.repeat(K) + '-->' + page, 'html:A'],
+        ['an instruction across it', decl + '<?pi ' + 'p'.repeat(K) + '?>' + page, 'html:A'],
+        ['a subset across it', decl + '<!DOCTYPE html [<!ENTITY e "' + 'x'.repeat(K) + '">]>' + page, 'html:A'],
+        ['an <html> in an entity value of a long subset', decl + '<!DOCTYPE r [ <!ENTITY x "a>  <html>"><!ENTITY e "' + 'x'.repeat(70000) + '"> ]><r>data</r>', 'refused'],
+        ['the same, the entity last', decl + '<!DOCTYPE r [<!ENTITY e "' + 'x'.repeat(70000) + '"><!ENTITY x "a> <html>"> ]><r>data</r>', 'refused'],
+        ['a root name across it', pad(decl, n => ' '.repeat(n), page), 'html:A'],
+        ['white space to it, then another root', pad(decl, n => ' '.repeat(n + 10), '<r>data</r>'), 'refused'],
+        ['a plain DOCTYPE and a long body', decl + '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "x.dtd">' + page.replace('<p>A</p>', '<p>A</p>' + '<p>b</p>'.repeat(20000)), 'html:A'],
+        ['a malformed subset, then the page', decl + '<!DOCTYPE html [ junk ' + 'x'.repeat(K) + ' >' + page, 'html:A'],
+        ['an unclosed comment', decl + '<!--' + 'c'.repeat(2 * K), 'refused'],
+    ]) {
+        assert.strictEqual(await readAs(source), expected, `XHTML sniffing: ${name}`);
+    }
+    // Linear: a prolog four times as long takes about four times as long, not sixteen.
+    const prolog = (bytes: number) => Buffer.from(decl + '<?a b?>'.repeat(Math.floor(bytes / 7)) + '<r/>');
+    const subset = (bytes: number) => Buffer.from(decl + '<!DOCTYPE r [' + '<!ENTITY a "x">'.repeat(Math.floor(bytes / 15)));
+    for (const [name, make] of [['instructions', prolog], ['an open subset', subset]] as const) {
+        const small = make(2 * 1024 * 1024);
+        const big = make(8 * 1024 * 1024);
+        const refuse = (buffer: Buffer) => OfficeParser.parseOffice(buffer).then(() => assert.fail(`XHTML sniffing: ${name} read`), () => undefined);
+        const { within, time, plain } = await linearAgainst(() => refuse(big), async () => { for (let i = 0; i < 4; i++) await refuse(small); });
+        assert.ok(within, `XHTML sniffing: ${name}, 8 MB in ${time.toFixed(0)} ms, 2 MB four times in ${plain.toFixed(0)} ms`);
+    }
+    console.log('✓ XHTML sniffed past its first read');
+}

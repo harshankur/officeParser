@@ -19,16 +19,24 @@ const PARAMETER_ENTITY = /%[A-Za-z_:][\w.:-]*;/y;
  * quoted public id included). One forward pass from `start`, each search resuming where the last ended,
  * so a caller reading one DOCTYPE per document stays linear.
  */
-export const doctypeSubsetEnd = (text: string, start: number): number => {
+export const doctypeSubsetEnd = (text: string, start: number): number => Math.max(-1, doctypeSubsetScan(text, start));
+
+/**
+ * doctypeSubsetEnd's reading of a text that may be the start of a document only (the type sniffer's):
+ * where the DOCTYPE's subset ends, -1 where it is not well formed, and -2 where the text ends before
+ * the DOCTYPE does (more of the document decides).
+ */
+export const doctypeSubsetScan = (text: string, start: number): number => {
     const n = text.length;
     let i = start + 9;
     // The name and external id, to the subset's `[`: a quoted literal may hold `[` or `>`.
     for (; i < n && text[i] !== '[' && text[i] !== '>'; i++) {
         if (text[i] === '"' || text[i] === '\'') {
             i = text.indexOf(text[i], i + 1);
-            if (i === -1) return -1;
+            if (i === -1) return -2;
         }
     }
+    if (i >= n) return -2;
     if (text[i] !== '[') return -1;
     i++;
     while (i < n) {
@@ -37,22 +45,23 @@ export const doctypeSubsetEnd = (text: string, start: number): number => {
         if (c === ']') {
             i++;
             while (isXmlSpace(text[i])) i++;
-            return text[i] === '>' ? i + 1 : -1;
+            return i >= n ? -2 : text[i] === '>' ? i + 1 : -1;
         }
         if (c === '%') {
             PARAMETER_ENTITY.lastIndex = i;
-            if (!PARAMETER_ENTITY.test(text)) return -1;
+            if (!PARAMETER_ENTITY.test(text)) return /^%[A-Za-z_:]?[\w.:-]*$/.test(text.slice(i)) ? -2 : -1;
             i = PARAMETER_ENTITY.lastIndex;
             continue;
         }
         if (c !== '<') return -1;
+        if (i + 3 >= n) return -2;
         if (text.startsWith('<!--', i)) {
             const end = text.indexOf('-->', i + 4);
-            if (end === -1) return -1;
+            if (end === -1) return -2;
             i = end + 3;
         } else if (text[i + 1] === '?') {
             const end = text.indexOf('?>', i + 2);
-            if (end === -1) return -1;
+            if (end === -1) return -2;
             i = end + 2;
         } else if (text[i + 1] === '!' && /[A-Za-z]/.test(text[i + 2] ?? '')) {
             // `<!ENTITY`, `<!ELEMENT`, `<!ATTLIST`, `<!NOTATION`: to its `>`, quoted values passed over whole.
@@ -60,14 +69,14 @@ export const doctypeSubsetEnd = (text: string, start: number): number => {
             for (; j < n && text[j] !== '>'; j++) {
                 if (text[j] === '"' || text[j] === '\'') {
                     j = text.indexOf(text[j], j + 1);
-                    if (j === -1) return -1;
+                    if (j === -1) return -2;
                 }
             }
-            if (j >= n) return -1;
+            if (j >= n) return -2;
             i = j + 1;
         } else {
             return -1;
         }
     }
-    return -1;
+    return -2;
 };

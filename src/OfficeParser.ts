@@ -54,7 +54,7 @@ import { noteDocumentBytes } from './utils/budgetUtils.js';
 import { assertNode, isBrowser } from './utils/envUtils.js';
 import { checkAbortSignal, getOfficeError, getWrappedError, logWarning } from './utils/errorUtils.js';
 import { decryptIfNeeded } from './crypto/decryptContainer.js';
-import { doctypeSubsetEnd } from './utils/doctypeSubset.js';
+import { doctypeSubsetScan } from './utils/doctypeSubset.js';
 import { loadFileType } from './utils/moduleLoader.js';
 import { terminateOcr } from './utils/ocrUtils.js';
 import { detectOfficeTypeFromZip } from './utils/zipUtils.js';
@@ -68,7 +68,7 @@ const ZIP_BACKED_FILE_TYPES: ReadonlySet<string> = new Set(['docx', 'xlsx', 'ppt
 /** What magic-byte sniffing reports for any document that starts with an XML declaration. */
 const XML_EXTENSION = 'xml';
 
-/** How much of an XML document is read to find its root element (the prolog is short in practice). */
+/** How much of an XML document is read first to find its root element (the prolog is short in practice; see hasXhtmlRoot). */
 const XML_ROOT_SCAN_BYTES = 64 * 1024;
 
 /**
@@ -83,7 +83,20 @@ const XML_ROOT_SCAN_BYTES = 64 * 1024;
  * @returns True when the root element is `html`
  */
 const hasXhtmlRoot = (buffer: Buffer): boolean => {
-    const head = buffer.subarray(0, XML_ROOT_SCAN_BYTES);
+    // Read from a start XML_ROOT_SCAN_BYTES long, twice as long each time the prolog runs past it, to the
+    // whole document: the answer is the whole document's wherever a start was cut, in time linear in
+    // what is read.
+    for (let size = XML_ROOT_SCAN_BYTES; ; size *= 2) {
+        const whole = size >= buffer.length;
+        const answer = xmlRootIsHtml(buffer.subarray(0, size), whole);
+        if (answer !== undefined || whole) return answer === true;
+    }
+};
+
+/** hasXhtmlRoot's reading of the start of a document: undefined where the answer lies past it (it is not the whole). */
+const xmlRootIsHtml = (head: Buffer, whole: boolean): boolean | undefined => {
+    /** What a construct the text ends in means: not XHTML at the document's end, else read on. */
+    const unfinished = whole ? false : undefined;
     const isUtf16le = head[0] === 0xFF && head[1] === 0xFE;
     const isUtf16be = head[0] === 0xFE && head[1] === 0xFF;
     let text: string;
@@ -100,32 +113,35 @@ const hasXhtmlRoot = (buffer: Buffer): boolean => {
         const c = text[i];
         if (c === ' ' || c === '\t' || c === '\r' || c === '\n') { i++; continue; }
         if (c !== '<') return false;
+        if (i + 3 >= n && !whole) return undefined;
         if (text.startsWith('<?', i)) {
             const end = text.indexOf('?>', i + 2);
-            if (end < 0) return false;
+            if (end < 0) return unfinished;
             i = end + 2;
         } else if (text.startsWith('<!--', i)) {
             const end = text.indexOf('-->', i + 4);
-            if (end < 0) return false;
+            if (end < 0) return unfinished;
             i = end + 3;
         } else if (text.startsWith('<!', i)) {
             // A declaration ends at its first `>`; the document's DOCTYPE, when it carries a well-formed
             // internal subset (whose entity values may hold `>` and `]`), after that subset's `]>`.
             const doctype = !doctypeSeen && /^<!doctype/i.test(text.substring(i, i + 9));
             if (doctype) doctypeSeen = true;
-            const subsetEnd = doctype ? doctypeSubsetEnd(text, i) : -1;
-            const end = subsetEnd !== -1 ? subsetEnd - 1 : text.indexOf('>', i + 2);
-            if (end < 0) return false;
+            const subsetEnd = doctype ? doctypeSubsetScan(text, i) : -1;
+            if (subsetEnd === -2 && !whole) return undefined;
+            const end = subsetEnd >= 0 ? subsetEnd - 1 : text.indexOf('>', i + 2);
+            if (end < 0) return unfinished;
             i = end + 1;
         } else {
             let j = i + 1;
             while (j < n && !/[\s/>]/.test(text[j])) j++;
+            if (j >= n && !whole) return undefined;
             const name = text.slice(i + 1, j);
             const local = name.includes(':') ? name.slice(name.lastIndexOf(':') + 1) : name;
             return local.toLowerCase() === 'html';
         }
     }
-    return false;
+    return unfinished;
 };
 
 /**
