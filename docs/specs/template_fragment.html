@@ -4,8 +4,9 @@
         <a href="#spec/generator">OfficeGenerator</a> &middot;
         <a href="#spec/converter">OfficeConverter</a></p>
     <h1>OfficeTemplate Specification</h1>
-    <p><code>OfficeTemplate.render()</code> (alias <code>renderTemplate</code>) fills a <strong>DOCX template</strong>'s
-        tags from your data and returns a new <code>.docx</code>: <code>{{placeholder}}</code> fields,
+    <p><code>OfficeTemplate.render()</code> (alias <code>renderTemplate</code>) fills a <strong>Word (<code>.docx</code>) or
+        OpenDocument text (<code>.odt</code>, <code>.ott</code>) template</strong>'s tags from your data and returns a new
+        document of its format (a <code>.docx</code>, or an <code>.odt</code>): <code>{{placeholder}}</code> fields,
         <code>{{ if }}</code> conditions that keep or drop content, and <code>{{ for }}</code> loops that repeat it, down
         to one table row per item. It is a lightweight mail-merge / document-generation entry point: a zero-dependency
         take on Adobe's Document Generation API, built on the bundled <code>fflate</code>.</p>
@@ -76,10 +77,10 @@ docs.forEach((d, i) => writeFileSync(`invoice-${i}.docx`, d));</code></pre>
             </tr>
             <tr>
                 <td><code>fileType</code></td>
-                <td><code>'docx'</code></td>
+                <td><code>'docx' | 'odt' | 'ott'</code></td>
                 <td><code>(none)</code></td>
-                <td>Optional format hint. Only <code>'docx'</code> is currently supported; it is surfaced in the
-                    unsupported-format error message when a non-DOCX template is passed.</td>
+                <td>Optional format hint. The format is always read from the bytes; the hint only words the
+                    unsupported-format error when a template of another format is passed.</td>
             </tr>
             <tr>
                 <td><code>delimiters</code></td>
@@ -106,6 +107,19 @@ docs.forEach((d, i) => writeFileSync(`invoice-${i}.docx`, d));</code></pre>
                 <td><code>{ decimal: '.', group: ',' }</code></td>
                 <td>What a number picture writes for its point and groups (<code>{ decimal: ',', group: '.' }</code> writes
                     <code>1.250,50</code>).</td>
+            </tr>
+            <tr>
+                <td><code>dataNumberSeparators</code></td>
+                <td><code>{ decimal?: string; group?: string }</code></td>
+                <td><code>(none)</code></td>
+                <td>How a number written as text in the data is read, by a number picture and where a condition compares
+                    it with a number: <code>{ decimal: ',', group: '.' }</code> reads <code>12,50</code> and
+                    <code>1.234,50</code>. Each separator is one character (<code>group</code> may be <code>''</code>, the
+                    default, for none; <code>decimal</code> defaults to <code>.</code>); a space group separator matches a
+                    no-break space too. A group separator must be followed by groups of three digits, so an ambiguous text
+                    (<code>1.5</code> with <code>.</code> for groups) is no number rather than a wrong one. Not given, text
+                    is read as before: <code>.</code> for the point and no groups (<code>1250.5</code>).
+                    <code>numberSeparators</code> says how numbers are written, this how they are read.</td>
             </tr>
             <tr>
                 <td><code>dateNames</code></td>
@@ -173,7 +187,8 @@ docs.forEach((d, i) => writeFileSync(`invoice-${i}.docx`, d));</code></pre>
     </table>
 
     <h2>OfficeTemplate.tags() and OfficeTemplate.check()</h2>
-    <pre><code>// What the template reads: each field, and each tag opening a block or branch, in the order of each part.
+    <pre><code>// What the template reads: each field, and each tag opening a block or branch, in the order of each part
+// (and text that looks like a tag but is not one, as kind 'text').
 const tags = await OfficeTemplate.tags('invoice-template.docx');
 
 // Check data before rendering: every problem a render with onMissing: 'error' would reject for.
@@ -191,15 +206,42 @@ if (problems.length === 0) await OfficeTemplate.render('invoice-template.docx', 
             </tr>
         </thead>
         <tbody>
-            <tr><td><code>kind</code></td><td><code>'field' | 'if' | 'elseif' | 'else' | 'for'</code></td><td>The tag's kind; <code>endif</code> and <code>endfor</code> close what they open and are not listed.</td></tr>
-            <tr><td><code>tag</code></td><td><code>string</code></td><td>The tag as typed, delimiters included (a very long one is cut short).</td></tr>
-            <tr><td><code>part</code></td><td><code>string</code></td><td>The document part holding it: <code>word/document.xml</code>, <code>word/header1.xml</code>, ...</td></tr>
+            <tr><td><code>kind</code></td><td><code>'field' | 'if' | 'elseif' | 'else' | 'for' | 'text'</code></td><td>The tag's kind; <code>endif</code> and <code>endfor</code> close what they open and are not listed. <code>text</code> is text that looks like a tag but is not one (see below), written as typed.</td></tr>
+            <tr><td><code>tag</code></td><td><code>string</code></td><td>The tag as typed, delimiters included (a very long one is cut short); for <code>text</code>, the text as typed.</td></tr>
+            <tr><td><code>part</code></td><td><code>string</code></td><td>The document part holding it: <code>word/document.xml</code>, <code>word/header1.xml</code>, ...; in an ODT <code>content.xml</code>, or <code>styles.xml</code> for headers and footers.</td></tr>
             <tr><td><code>fields</code></td><td><code>string[]</code></td><td>What it reads from the data, each as typed: a field's path, every path in a condition, a loop's list. A path may start with a loop's item (<code>line.qty</code>) or <code>loop</code>.</td></tr>
             <tr><td><code>filters</code></td><td><code>string[]</code></td><td>A field's filters, by name, in order.</td></tr>
             <tr><td><code>item</code></td><td><code>string</code></td><td>A <code>for</code> tag's item name (<code>line</code> in <code>{{ for line in lines }}</code>).</td></tr>
+            <tr><td><code>reason</code></td><td><code>TemplateTextReason</code></td><td>For <code>text</code>: why it is not a tag (below).</td></tr>
             <tr><td><code>loops</code></td><td><code>{ item, list }[]</code></td><td>The <code>for</code> tags it is inside, outermost first.</td></tr>
         </tbody>
     </table>
+    <h3>Text that looks like a tag</h3>
+    <p>Text a person meant as a tag that is not one is listed by <code>tags()</code> as <code>kind: 'text'</code>, in its
+        place among the tags (its part, its loops, no <code>fields</code>), and <code>render()</code> and
+        <code>check()</code> report it once per call with a <code>TEMPLATE_NOT_A_TAG</code> warning whose
+        <code>details.texts</code> holds each one's <code>text</code>, <code>part</code> and <code>reason</code>. A render
+        writes it as typed. It is found in every part a tag can be in: body, headers, footers, notes, comments, text boxes.
+        Exactly these count (<code>TemplateTextReason</code>):</p>
+    <table>
+        <thead>
+            <tr>
+                <th><code>reason</code></th>
+                <th>What</th>
+                <th>Example</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td><code>space-in-name</code></td><td>Text between the delimiters that is a name with white space in it: letters, digits, <code>_ . -</code> and white space, starting with a letter or <code>_</code>, at most 64 characters.</td><td><code>{{first name}}</code></td></tr>
+            <tr><td><code>unknown-filter</code></td><td>A field through a word after <code>|</code> that is no filter, built in or in <code>formatters</code>.</td><td><code>{{ total | fromat "0.00" }}</code></td></tr>
+            <tr><td><code>missing-delimiter</code></td><td>For delimiters of one character typed twice or more (the default), a name between delimiters one of which is a character short. A short start inside braces still open (code nesting them) is not reported.</td><td><code>{{ name }</code>, <code>{ name }}</code></td></tr>
+            <tr><td><code>full-width</code></td><td>A name between delimiters typed with full-width characters (U+FF01 to U+FF5E), as a Japanese or Chinese keyboard types them.</td><td><code>&#xFF5B;&#xFF5B;nom&#xFF5D;&#xFF5D;</code></td></tr>
+        </tbody>
+    </table>
+    <p>Never reported: a single brace, <code>{x}</code>, <code>{ x }</code>, JSON (<code>{"a": {"b": 1}}</code>), code that
+        nests braces (<code>{a: {b}}</code>), an empty <code>{{}}</code>, prose that starts like a block tag (the pairing
+        errors name it where it matters), and with single-character delimiters (<code>$</code>) anything but a name with
+        spaces.</p>
     <p><code>check(template, config)</code> reads <code>config.data</code> as a render with <code>onMissing: 'error'</code>
         reads it, whatever <code>onMissing</code> says, without writing a document: each field, condition and loop the
         data leads to, every pass of every loop, and the branch each condition picks (a field only another branch uses is
@@ -271,8 +313,12 @@ Please pay {{ amount }} by {{ due }}.
             </tr>
         </tbody>
     </table>
-    <p>Tags that cannot enclose content together (one in a table and the other outside it, one in a text box and the other
-        not, one inside a tracked change, one in a Word field and the other outside it) reject with <code>TEMPLATE_SYNTAX</code> rather than writing broken XML. A text
+    <p>In an ODT, tags in items of one list cover the items between them, a tag's item going with it when the tag is all it
+        holds; rows inside a table's heading rows (<code>table:table-header-rows</code>) repeat there, and rows in
+        <code>table:table-rows</code> or a row group widen to it.</p>
+    <p>Tags that cannot enclose content together (one in a table and the other outside it, one in a text box, note or
+        comment and the other not, one inside a tracked change, one in a Word field and the other outside it, one in a
+        table's heading rows and the other in its body, two at different levels of a list) reject with <code>TEMPLATE_SYNTAX</code> rather than writing broken XML. A text
         box holds blocks of its own, in any of the three scopes.</p>
     <p>Text that starts like a block tag but is not one (<code>{{ If you have questions, call us }}</code>) stays text, as
         prose between the delimiters always has. When the blocks around it then fail to pair, the error names it and why it
@@ -287,9 +333,11 @@ Please pay {{ amount }} by {{ due }}.
         <li><code>false</code>, <code>null</code>, <code>""</code>, <code>0</code>, an empty list and an invalid date count as
             false; everything else, the text <code>"0"</code> included, as true.</li>
         <li>A comparison takes two values of the same kind (two numbers, two strings, two dates, two booleans) or an empty
-            one, which equals only another empty one and is never less or greater. Comparing the text <code>"150"</code>
-            with the number <code>100</code> rejects with <code>TEMPLATE_DATA_INVALID</code> rather than silently picking a
-            branch.</li>
+            one, which equals only another empty one and is never less or greater. Text that is a number, compared with
+            a number, compares as that number (<code>{{ if total &gt; 100 }}</code> with <code>total: '250'</code>, as a
+            form or a spreadsheet gives it), read with <code>dataNumberSeparators</code> when set; other text compared
+            with a number (<code>"150 EUR"</code>) rejects with <code>TEMPLATE_DATA_INVALID</code> rather than silently
+            picking a branch. Two texts compare as text.</li>
         <li>Keywords are case-insensitive (<code>{{ If paid }}</code>, as AutoCorrect may capitalize it), and a string may
             be quoted with straight or curly quotes, which AutoCorrect writes in Word.</li>
     </ul>
@@ -309,6 +357,12 @@ Please pay {{ amount }} by {{ due }}.
             field in it reads the pass's item. A table a
             loop or a branch left with no row is removed, and a cell or content control left without a paragraph gets an
             empty one.</li>
+        <li>In an ODT, copies get fresh <code>xml:id</code>s and <code>draw:id</code>s (one value per element), note
+            ids, and names for bookmarks, reference marks, index marks, comments, frames, tables and sections (a range's
+            end follows its start; a range across a loop's edge is written once). Notes, comments and text boxes live in
+            their paragraph and are copied with it, reading the pass's item. A table or group of rows left with no row is
+            removed; a cell, header, footer, note, text box or comment left with no paragraph keeps an empty one; a
+            bookmark range whose end a branch removed is closed at its start, and an end whose start went is removed.</li>
     </ul>
     <h3>Formatting values</h3>
     <p>A field can be written through filters after <code>|</code>. <code>format</code> takes a picture, as Word's own
@@ -325,7 +379,7 @@ Please pay {{ amount }} by {{ due }}.
             there is one), <code>,</code> (groups of three), <code>.</code> (the point), <code>%</code> (a percentage); up to
             three sections, <code>positive;negative;zero</code>; text in <code>'quotes'</code> or after <code>\</code> is
             written as is. Values are rounded half away from zero, as Word and Excel do; text that is a number is taken
-            too.</li>
+            too, read with <code>dataNumberSeparators</code> when set (<code>"1.234,50"</code>).</li>
         <li><strong>Date pictures:</strong> <code>d</code>&ndash;<code>dddd</code>, <code>M</code>&ndash;<code>MMMM</code>,
             <code>yy</code>, <code>yyyy</code>, <code>h</code>/<code>hh</code> (12-hour), <code>H</code>/<code>HH</code>,
             <code>m</code>/<code>mm</code>, <code>s</code>/<code>ss</code>, <code>AM/PM</code> (<code>am/pm</code>,
@@ -362,7 +416,10 @@ Please pay {{ amount }} by {{ due }}.
                 <td>Blocks do not pair: a block is never closed, a closing tag or <code>else</code> has no block, or a
                     closing tag closes another kind of block (where a tag that could not be read is why, it is named, with
                     <code>unreadable</code>); or a block's tags cannot enclose content together. <code>details.tag</code> is
-                    the tag as typed and <code>details.part</code> the part holding it.</td>
+                    the tag as typed and <code>details.part</code> the part holding it. A block keyword spelt as other
+                    template languages spell it (<code>elseif</code>, <code>elsif</code>, <code>elif</code>,
+                    <code>end if</code>, <code>end for</code>) is refused at once, with <code>details.suggestion</code>: the
+                    tag as it should be typed (<code>{{ else if x }}</code>, <code>{{ endif }}</code>), its spacing kept.</td>
             </tr>
             <tr>
                 <td><code>TEMPLATE_DATA_INVALID</code></td>
@@ -387,26 +444,32 @@ Please pay {{ amount }} by {{ due }}.
     <h2>How substitution works</h2>
     <ul>
         <li><strong>Run-aware.</strong> Word often splits a typed <code>{{name}}</code> across several runs
-            (<code>{{</code>, <code>na</code>, <code>me}}</code>); it is filled anyway, and a value adopts the
+            (<code>{{</code>, <code>na</code>, <code>me}}</code>), and LibreOffice across spans; it is filled anyway, and a value adopts the
             <strong>formatting of the run its placeholder began in</strong> (a bold <code>{{amount}}</code> renders bold).
-            Block tags are found the same way.</li>
-        <li><strong>Everywhere text lives.</strong> Tags in the body, headers, footers, footnotes/endnotes and comments are
-            all filled.</li>
+            Block tags are found the same way. In an ODT, spaces kept as <code>&lt;text:s/&gt;</code> read as the spaces
+            they stand for.</li>
+        <li><strong>Everywhere text lives.</strong> Tags in the body, headers, footers, footnotes/endnotes, comments and
+            text boxes are all filled. Deleted text kept for tracked changes, and in an ODT the text of fields, note
+            citations and comment authors, is not read.</li>
         <li><strong>Field names</strong> are Unicode letters and digits plus <code>_</code>, <code>.</code>,
             <code>-</code> (e.g. <code>{{invoice.total}}</code>, <code>{{customer-name}}</code>). <code>if</code>,
             <code>else</code>, <code>endif</code>, <code>for</code> and <code>endfor</code> are the block tags' own words.
             Other text between the delimiters, such as prose with spaces, is left as literal text, so it is never mistaken
             for a field.</li>
         <li><strong>Values</strong> are XML-escaped; a newline (<code>\n</code>, <code>\r\n</code>, a lone <code>\r</code>,
-            or the Unicode line/paragraph separators) becomes a real line break; XML-illegal control characters are stripped.</li>
+            or the Unicode line/paragraph separators) becomes a real line break; XML-illegal control characters are stripped.
+            In an ODT, a tab is a <code>&lt;text:tab/&gt;</code> and a run of spaces is kept with <code>&lt;text:s/&gt;</code>.</li>
         <li><strong>Deterministic.</strong> The same template + data renders byte-identical output (pinned zip timestamps),
             in any timezone.</li>
     </ul>
 
     <blockquote>
         [!NOTE]
-        Templating currently supports <strong>DOCX</strong> (<code>.docx</code>). The run-aware substitution generalizes to
-        the other OOXML/ODF text formats and they will follow. A non-DOCX template rejects with
+        Templating supports <strong>Word</strong> (<code>.docx</code>) and <strong>OpenDocument text</strong>
+        (<code>.odt</code>, and <code>.ott</code>, which renders to an <code>.odt</code>: its <code>mimetype</code> and its
+        manifest's root media type say so, nothing else in the manifest or <code>meta.xml</code> changes). An ODT is
+        written as OpenDocument requires, <code>mimetype</code> first and stored. An encrypted template is decrypted with
+        <code>password</code> or <code>onPassword</code>, and the document written is plain. Another format rejects with
         <code>TEMPLATE_UNSUPPORTED_FORMAT</code>.
     </blockquote>
 
