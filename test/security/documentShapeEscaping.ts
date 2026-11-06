@@ -61,6 +61,10 @@ export async function documentShapeEscapingTests(check: Check): Promise<void> {
     check('keyboard: HTML escaped', !live(kbdHtml), kbdHtml);
     const kbdMd = String((await OfficeGenerator.generate(keyed, 'md', silent as any)).value);
     check('keyboard: Markdown escaped, on one line', !live(kbdMd) && !kbdMd.includes('\n# h'), kbdMd);
+    // A sheet's name as a heading, with sheets as tables.
+    const sheets = { type: 'xlsx', metadata: {}, attachments: [], content: [{ type: 'sheet', metadata: { sheetName: HOSTILE }, children: [{ type: 'row', children: [{ type: 'cell', metadata: { row: 0, col: 0 }, children: [{ type: 'text', text: 'v' }] }] }] }] } as any;
+    const sheetHtml = String((await OfficeGenerator.generate(sheets, 'html', { htmlConfig: { standalone: false, sheetLayout: 'tables' }, ...silent } as any)).value);
+    check('sheet name: heading escaped with sheets as tables', !live(sheetHtml), sheetHtml);
     const kbdBack = await OfficeParser.parseOffice(Buffer.from(kbdMd), { fileType: 'md' });
     const kbdRun = kbdBack.content[0]?.children?.find(c => c.formatting?.keyboard);
     check('keyboard: Markdown reads back as keyboard input', !!kbdRun && kbdRun.text === HOSTILE.replace(/[\r\n]+/g, ' '), JSON.stringify(kbdRun?.text));

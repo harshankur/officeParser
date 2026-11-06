@@ -241,6 +241,19 @@
                     near-black/near-white run colours are dropped; a deliberately-coloured run is emitted unchanged (Word's
                     <code>w:val="auto"</code> already carries no colour). Off by default; the output is unchanged.</td>
             </tr>
+            <tr>
+                <td><code>sheetLayout</code></td>
+                <td><code>'viewer' | 'tables'</code></td>
+                <td><code>'viewer'</code></td>
+                <td>How a spreadsheet's sheets (XLSX, ODS, CSV) are written. <code>'viewer'</code>: a spreadsheet viewer (column
+                    letters, row numbers, tabs, and a resizing script where scripts are written). <code>'tables'</code>: as a
+                    document holds them, for a host embedding a workbook in a document: each sheet an <code>&lt;h2&gt;</code>
+                    with its name and a plain table, merged cells as spans, empty rows and columns kept in place, the first row a
+                    header only where the source marks it (a header-styled or all-bold row), with no tabs, letters, numbers or
+                    script, and without the workbook's own font and size (what most of the cells' text has) on every cell; a cell
+                    set apart keeps its own. An unknown value is reported (<code>INVALID_CONFIG_VALUE</code>) and the viewer
+                    used.</td>
+            </tr>
         </tbody>
     </table>
 

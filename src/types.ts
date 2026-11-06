@@ -1647,6 +1647,18 @@ export interface HtmlGeneratorConfig {
      * default-ish colour. Off by default; the default output is unchanged.
      */
     omitDefaultTextColor?: boolean;
+    /**
+     * How a spreadsheet's sheets (XLSX, ODS, CSV) are written:
+     * - `'viewer'` (default): a spreadsheet viewer, each sheet a grid with column letters and row
+     *   numbers, the sheets switched by tabs (a script resizes columns where scripts are written).
+     * - `'tables'`: as a document holds them, for a host that embeds a workbook in a document: each
+     *   sheet a heading with its name (`<h2>`) and a plain table of its cells, merged cells as spans,
+     *   its empty rows and columns kept in place, its first row a header only where the source marks
+     *   it so (a header-styled or all-bold row); no tabs, column letters, row numbers or script, and
+     *   not the workbook's own font and size on every cell (the font and size most of the cells' text
+     *   has is the workbook's, and is left to the page; a cell set apart keeps its own).
+     */
+    sheetLayout?: 'viewer' | 'tables';
 }
 
 /**

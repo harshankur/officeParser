@@ -1,9 +1,9 @@
-import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, DisclosureMetadata, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, DisclosureMetadata, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageMetadata, SheetMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
 import { captionOf } from '../utils/figureCaptions.js';
 import { quoteIdOf, sameQuote } from '../utils/quoteGroups.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
-import { base64ByteLength, documentLanguage, isHeaderRow, resolveEmbed, writableSpacing } from '../utils/officeGenUtils.js';
+import { base64ByteLength, documentLanguage, fillSheetRowGaps, isHeaderRow, resolveEmbed, writableSpacing } from '../utils/officeGenUtils.js';
 import { escapeHtml, isSafeHtmlAttributeName, isSafeStyleMapTag, sanitizeCommentText, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
 import { isDefaultHighlight } from '../utils/colorUtils.js';
 import { cssListMarker } from '../utils/listMarkers.js';
@@ -28,6 +28,37 @@ const MAX_NO_SCRIPT_TAB_RULES = 200;
  * out, so a paragraph holding a table or a video wrote a <div> inside its <p>, which a DOM parser
  * closes the paragraph at and XHTML (EPUB's) rejects.
  */
+/**
+ * The font and size most of the sheets' text has: the workbook's own (a spreadsheet gives every cell its
+ * default font, which a reader of the sheets as a document's tables has no use for on each cell). Each
+ * is the one more than half the sheets' runs of text have, else none. Read to a bounded depth.
+ */
+function workbookTextOf(content: OfficeContentNode[]): { font?: string; size?: string } {
+    const fonts = new Map<string, number>();
+    const sizes = new Map<string, number>();
+    let runs = 0;
+    const walk = (nodes: OfficeContentNode[] | undefined, depth: number) => {
+        if (!nodes || depth > 8) return;
+        for (const node of nodes) {
+            if (node.type === 'text' && (node.text ?? '').trim()) {
+                runs++;
+                const f = node.formatting;
+                if (typeof f?.font === 'string') fonts.set(f.font, (fonts.get(f.font) ?? 0) + 1);
+                if (typeof f?.size === 'string') sizes.set(f.size, (sizes.get(f.size) ?? 0) + 1);
+            }
+            walk(node.children, depth + 1);
+        }
+    };
+    walk(content.filter(n => n.type === 'sheet'), 0);
+    const most = (counts: Map<string, number>) => {
+        for (const [value, count] of counts) if (count * 2 > runs) return value;
+        return undefined;
+    };
+    const font = most(fonts);
+    const size = most(sizes);
+    return { ...(font !== undefined && font !== 'monospace' ? { font } : {}), ...(size !== undefined ? { size } : {}) };
+}
+
 const isBlockInParagraph = (child: OfficeContentNode): boolean =>
     BLOCK_TYPES.has(child.type)
     // A captioned picture is a <figure>, a block.
@@ -217,6 +248,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
      */
     private readonly chartDataIds = new Map<object, string>();
     private isSpreadsheetMode = false;
+    /** Sheets are written as headings and plain tables (htmlConfig.sheetLayout 'tables'). */
+    private sheetsAsTables = false;
+    /** The font and size most of the sheets' text has (the workbook's own), left to the page with sheets as tables. */
+    private workbookText: { font?: string; size?: string } = {};
     /**
      * Set while rendering a heading's children, so `formatText` can drop the run-level bold and
      * font-size the `<hN>` already establishes. See the note there, and the identical flag in
@@ -252,7 +287,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
      * @returns An HTML string
      */
     async generate(): Promise<ConversionResult<'html'>> {
-        this.isSpreadsheetMode = this.ast.content.some(n => n.type === 'sheet');
+        // Sheets as a document's tables (htmlConfig.sheetLayout 'tables'): no viewer around them.
+        this.sheetsAsTables = this.config.htmlConfig.sheetLayout === 'tables';
+        if (this.sheetsAsTables) this.workbookText = workbookTextOf(this.ast.content);
+        this.isSpreadsheetMode = !this.sheetsAsTables && this.ast.content.some(n => n.type === 'sheet');
         const isPresentation = this.ast.content.some(n => n.type === 'slide');
         // Key off the source format, not "has a page node": ODG (Draw) also emits `page` nodes but is
         // not a PDF, so it should not get the PDF container class or premium PDF styles.
@@ -1655,6 +1693,15 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             case 'sheet': {
                 const rows = node.children || [];
 
+                // As a document holds it: its name as a heading, then its cells as a plain table, its empty
+                // rows filled in (each cell keeps its column), then its pictures and charts.
+                if (this.sheetsAsTables) {
+                    const name = (node.metadata as SheetMetadata | undefined)?.sheetName || `Sheet ${Math.max(0, this.sheetIndex(node)) + 1}`;
+                    const heading = { type: 'heading', text: name, metadata: { level: 2, ...(anchorIds.length ? { anchorIds } : {}) }, children: [{ type: 'text', text: name }] } as OfficeContentNode;
+                    const table = { type: 'table', children: fillSheetRowGaps(rows.filter(c => c.type === 'row'), n => this.takeGridPositions(n)) } as OfficeContentNode;
+                    return this.processNodeArray([heading, ...(table.children!.length ? [table] : []), ...rows.filter(c => c.type !== 'row')]);
+                }
+
                 // Each cell's place in the grid: the row and column a spreadsheet parser gives it, else
                 // (a sheet built by hand) the next free place in reading order, past the cells a merge
                 // above covers. A cell with no place was left out of the grid, and with it the sheet.
@@ -2162,10 +2209,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             // Highlights are emitted as <mark> by formatText (see there); when that path owns the
             // background it passes skipBackgroundColor so the colour is not also duplicated here.
             if (f.backgroundColor && !options.skipBackgroundColor) pushSafe('background-color', f.backgroundColor);
-            if (f.size && !options.skipFontSize) pushSafe('font-size', f.size);
+            // (With sheets as tables, the workbook's own font and size are the page's: see workbookTextOf.)
+            if (f.size && !options.skipFontSize && f.size !== this.workbookText.size) pushSafe('font-size', f.size);
             // A monospace run is emitted as <code> by formatText, so it must not also become a
             // font-family style here (that was the old, non-semantic inline-code shape).
-            if (f.font && f.font !== 'monospace') {
+            if (f.font && f.font !== 'monospace' && f.font !== this.workbookText.font) {
                 const safeFont = sanitizeCssValue(f.font);
                 if (safeFont) styles.push(`font-family: ${safeFont}, sans-serif`);
             }

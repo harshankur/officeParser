@@ -5,6 +5,7 @@
  */
 import * as assert from 'assert';
 import { unzipSync } from 'fflate';
+import { OfficeGenerator } from '../../src/OfficeGenerator';
 import { OfficeParser } from '../../src/OfficeParser';
 import type { ImageMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, ParagraphMetadata } from '../../src/types';
 
@@ -203,6 +204,46 @@ export async function testDisclosuresAndKeyboard(): Promise<void> {
     assert.ok(/^- \*\*S\*\* Body/m.test(itemMd.value), `Disclosure: in a list item, its summary in bold: ${itemMd.value}`);
     assert.ok(itemMd.messages.some(m => m.code === 'CONTENT_NOT_REPRESENTABLE'), 'Disclosure: and that is reported');
     console.log('✓ Disclosures and keyboard input');
+}
+
+/**
+ * htmlConfig.sheetLayout 'tables': each sheet a heading and a plain table (merged cells as spans, empty
+ * rows kept, a header only where the source marks one, not the workbook's font on every cell); the
+ * default 'viewer' unchanged.
+ */
+export async function testSheetsAsTables(): Promise<void> {
+    const run = (text: string, extra: Record<string, unknown> = {}) => ({ type: 'text', text, formatting: { font: 'Arial', size: '10pt', ...extra } });
+    const cell = (row: number, col: number, text: string, extra: Record<string, unknown> = {}, meta: Record<string, unknown> = {}) => ({ type: 'cell', metadata: { row, col, ...meta }, children: [run(text, extra)] });
+    const ast = {
+        type: 'xlsx', metadata: {}, attachments: [], content: [
+            { type: 'sheet', metadata: { sheetName: 'Data <1>' }, children: [
+                { type: 'row', children: [cell(0, 0, 'Region', { bold: true }), cell(0, 1, 'Visits', { bold: true })] },
+                { type: 'row', children: [cell(1, 0, 'Both', {}, { colSpan: 2 })] },
+                { type: 'row', children: [cell(3, 0, 'North'), cell(3, 1, 'Big', { font: 'Georgia', size: '14pt' })] },
+            ] },
+            { type: 'sheet', metadata: { sheetName: 'Notes' }, children: [{ type: 'row', children: [cell(0, 0, 'Plain'), cell(0, 2, 'Far')] }] },
+        ],
+    } as unknown as OfficeParserAST;
+    const tables = (await OfficeGenerator.generate(ast, 'html', { htmlConfig: { standalone: { document: false, styles: 'none' }, sheetLayout: 'tables' } })).value;
+    assert.ok(/<h2 id="sheet-0">Data &lt;1&gt;<\/h2>/.test(tables), `Sheets as tables: the sheet's name as a heading: ${tables}`);
+    assert.ok(/<thead><tr><th><b>Region<\/b><\/th><th><b>Visits<\/b><\/th><\/tr><\/thead>/.test(tables), 'Sheets as tables: a bold first row is the header');
+    assert.ok(tables.includes('<td colspan="2">Both</td>'), 'Sheets as tables: merged cells as spans');
+    assert.ok(/<tr><td><\/td><td><\/td><\/tr>/.test(tables), 'Sheets as tables: an empty row kept in its place');
+    assert.ok(/<td>North<\/td><td><span style="font-size: 14pt; font-family: Georgia[^"]*">Big<\/span><\/td>/.test(tables), 'Sheets as tables: a cell set apart keeps its own font');
+    assert.ok(!/Arial|10pt|excel-|spreadsheet-|<script|sheet-tab/.test(tables), 'Sheets as tables: no viewer, no workbook font on every cell');
+    assert.ok(/<h2 id="sheet-1">Notes<\/h2>\s*<table><tr><td>Plain<\/td><td><\/td><td>Far<\/td><\/tr>/.test(tables), 'Sheets as tables: no header unless marked, cells keep their columns');
+    // The default is the viewer, as before.
+    const viewer = (await OfficeGenerator.generate(ast, 'html', { htmlConfig: { standalone: { document: false, styles: 'none' } } })).value;
+    assert.ok(viewer.includes('excel-col-header') && viewer.includes('spreadsheet-tab'), 'Sheets as tables: the viewer stays the default');
+    // A workbook read from XLSX and ODS, and a bad value reported.
+    for (const format of ['xlsx', 'ods'] as const) {
+        const back = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(ast, format)).value as Uint8Array));
+        const html = (await back.to('html', { htmlConfig: { standalone: false, sheetLayout: 'tables' } })).value;
+        assert.ok(html.includes('Data &lt;1&gt;</h2>') && html.includes('colspan="2"') && !html.includes('excel-col-header'), `Sheets as tables: from ${format}: ${html}`);
+    }
+    const bad = await OfficeGenerator.generate(ast, 'html', { htmlConfig: { standalone: false, sheetLayout: 'grid' as any } });
+    assert.ok(bad.messages.some(m => m.code === 'INVALID_CONFIG_VALUE') && bad.value.includes('excel-col-header'), 'Sheets as tables: an unknown layout is reported, the viewer used');
+    console.log('✓ Sheets as tables');
 }
 
 /** Every note in an AST, in reference order, once each. */

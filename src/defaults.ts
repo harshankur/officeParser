@@ -168,6 +168,7 @@ const DEFAULT_HTML_GENERATOR_CONFIG: DeepRequired<HtmlGeneratorConfig> = {
     sourceAttributes: false,
     gatedEmbeds: false,
     omitDefaultTextColor: false,
+    sheetLayout: 'viewer',
 };
 
 /**
