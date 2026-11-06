@@ -484,20 +484,25 @@ export function withLatexMathMacros(latex: string): string {
 /**
  * The commands the LaTeX generator defines for itself: a background colour's, `ophl` and its six hex
  * digits as the letters `a` to `p` (see LatexGenerator.highlightRef), and the DVI driver option
- * `officeparserdriver` of its preamble. A formula's command of such a name is another command: it is
+ * `officeparserdriver` of its preamble, and a note's number referred to again, `opNote` and lowercase
+ * letters (see LatexGenerator.noteMark). A formula's command of such a name is another command: it is
  * written as its name in place (see withoutGeneratorCommands) and given no definition (see
  * planLatexMath), which would be the generator's, or would take the name from it.
  */
-export const GENERATOR_COMMAND = /^(?:ophl[a-p]{6}|officeparserdriver)$/;
+export const GENERATOR_COMMAND = /^(?:ophl[a-p]{6}|officeparserdriver|opNote[a-z]+)$/;
 
-/** A formula with each command of a name the generator defines for itself (GENERATOR_COMMAND) written as its name, as an undefined command's definition prints it. */
+/**
+ * A formula with each command of a name the generator defines for itself (GENERATOR_COMMAND) written as its
+ * name, as an undefined command's definition prints it, in braces: one argument, as the command was (bare,
+ * `\frac\ophlppppaa 2` gave `\texttt` alone to `\frac`, and the document did not compile).
+ */
 export function withoutGeneratorCommands(latex: string): string {
-    if (!latex.includes('\\ophl') && !latex.includes('\\officeparserdriver')) return latex;
+    if (!latex.includes('\\ophl') && !latex.includes('\\officeparserdriver') && !latex.includes('\\opNote')) return latex;
     const parts: string[] = [];
     let from = 0;
     eachMathCommand(latex, (name, start, end) => {
         if (!GENERATOR_COMMAND.test(name)) return;
-        parts.push(latex.slice(from, start), `\\texttt{\\textbackslash ${name}}`);
+        parts.push(latex.slice(from, start), `{\\texttt{\\textbackslash ${name}}}`);
         from = end;
     });
     if (from === 0) return latex;

@@ -5634,9 +5634,10 @@ async function latexHighlightSizeTests() {
     const before = highlighted(docx.content), after = highlighted(read.content);
     check('latex: test.docx\'s highlighted words read back from its LaTeX in their colours', before.length > 0 && JSON.stringify(before) === JSON.stringify(after), `${before.length} written, ${after.length} read: ${before.filter((w, i) => w !== after[i]).slice(0, 3)}`);
 
-    // A formula's command named as one the generator defines for itself (a colour's, or the driver
-    // option) is written as its name in place and given no definition: given the highlight's, the
-    // formula took its next `$` as an argument and the document did not compile.
+    // A formula's command named as one the generator defines for itself (a colour's, the driver option,
+    // or a note's number referred to again) is written as its name in place, in braces, and given no
+    // definition: given the highlight's, the formula took its next `$` as an argument and the document
+    // did not compile; unbraced, `\frac` took `\texttt` alone as its first argument.
     const texWith = async (md: string, standalone: boolean) => {
         const ast = await OfficeParser.parseOffice(Buffer.from(md), { fileType: 'md', onWarning: () => {} } as any);
         const result = await ast.to('tex', { texConfig: { standalone }, onWarning: () => {} } as any);
@@ -5648,11 +5649,11 @@ async function latexHighlightSizeTests() {
         const clash = await texWith('Text ==hi there== and $\\ophlppppaa{x} + \\ophlppppaa$ end.\n', standalone);
         check(`latex (${label}): a formula naming a highlight's command writes it as its name, beside the highlight's one definition, and names it in the warning`,
             count(clash.tex, '\\providecommand{\\ophlppppaa}') === 1 && clash.tex.includes('\\providecommand{\\ophlppppaa}[1]')
-            && clash.tex.includes('$\\texttt{\\textbackslash ophlppppaa}{x} + \\texttt{\\textbackslash ophlppppaa}$') && clash.tex.includes('\\ophlppppaa{hi} \\ophlppppaa{there}')
+            && clash.tex.includes('${\\texttt{\\textbackslash ophlppppaa}}{x} + {\\texttt{\\textbackslash ophlppppaa}}$') && clash.tex.includes('\\ophlppppaa{hi} \\ophlppppaa{there}')
             && clash.warned.includes('\\\\ophlppppaa'), `${clash.tex.split('\n').filter(l => l.includes('ophl')).join(' | ')} ${clash.warned}`);
         const driver = await texWith('Driver $\\officeparserdriver + x$ end.\n', standalone);
         check(`latex (${label}): a formula naming the driver option writes it as its name, gives it no definition, and names it in the warning`,
-            driver.tex.includes('$\\texttt{\\textbackslash officeparserdriver} + x$') && !driver.tex.includes('\\providecommand{\\officeparserdriver}')
+            driver.tex.includes('${\\texttt{\\textbackslash officeparserdriver}} + x$') && !driver.tex.includes('\\providecommand{\\officeparserdriver}')
             && count(driver.tex, '\\def\\officeparserdriver{}') === (standalone ? 1 : 0) && driver.warned.includes('\\\\officeparserdriver'),
             `${driver.tex.split('\n').filter(l => l.includes('officeparserdriver')).join(' | ')} ${driver.warned}`);
         const lineBreak = await texWith('Text ==hi== and $$\\begin{matrix} a \\\\ophlppppaa \\end{matrix}$$\n', standalone);
@@ -5662,6 +5663,18 @@ async function latexHighlightSizeTests() {
         check(`latex (${label}): names beside a highlight's (seven letters, none) keep their own definitions`,
             near.tex.includes('\\providecommand{\\ophlppppaab}{\\texttt{\\textbackslash ophlppppaab}}') && near.tex.includes('\\providecommand{\\ophl}{\\texttt{\\textbackslash ophl}}') && near.tex.includes('$\\ophlppppaab{x} + \\ophl$'),
             near.tex.split('\n').filter(l => l.includes('ophl')).join(' | '));
+        const argument = await texWith('A $\\frac\\ophlppppaa 2$ end.\n', standalone);
+        check(`latex (${label}): a generator's name read as a command's argument is written as one argument`,
+            argument.tex.includes('$\\frac{\\texttt{\\textbackslash ophlppppaa}} 2$'), argument.tex.split('\n').filter(l => l.includes('frac')).join(' | '));
+        const note = await texWith('First $\\opNotea$ ref[^n] and again[^n] then $x+\\opNotea$ end.\n\n[^n]: The note.\n', standalone);
+        check(`latex (${label}): a formula naming a note's number referred to again writes it as its name, gives it no definition, and names it in the warning`,
+            count(note.tex, '{\\texttt{\\textbackslash opNotea}}') === 2 && !note.tex.includes('\\providecommand{\\opNotea}')
+            && note.tex.includes('\\xdef\\opNotea{') && note.tex.includes('\\footnotemark[\\opNotea]') && note.warned.includes('\\\\opNotea'),
+            `${note.tex.split('\n').filter(l => l.includes('opNote')).join(' | ')} ${note.warned}`);
+        const nearNote = await texWith('Text $\\opNote + \\opNoteA$ end.\n', standalone);
+        check(`latex (${label}): names beside a note's number (no letters, a capital) keep their own definitions`,
+            nearNote.tex.includes('\\providecommand{\\opNote}{\\texttt{\\textbackslash opNote}}') && nearNote.tex.includes('\\providecommand{\\opNoteA}{\\texttt{\\textbackslash opNoteA}}') && nearNote.tex.includes('$\\opNote + \\opNoteA$'),
+            nearNote.tex.split('\n').filter(l => l.includes('opNote')).join(' | '));
     }
 }
 
