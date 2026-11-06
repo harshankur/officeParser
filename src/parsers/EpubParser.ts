@@ -170,6 +170,9 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
     }
 
     const content: OfficeContentNode[] = [];
+    // The book's quotes, numbered across its chapters (see HtmlPartContext.quoteId).
+    let quoteCount = 0;
+    const quoteId = () => `html-quote-${++quoteCount}`;
     const attachments: OfficeAttachment[] = [];
 
     // The package's files by path: each image the manifest lists and each chapter the spine lists is
@@ -250,7 +253,7 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
         // A chapter's own inline pictures (data URIs) are numbered from 1 in each chapter: each is named
         // as it is read, so no two of the book's attachments share a name. (Named again afterwards, by
         // name, a picture of the book's own named `image_1.png` was renamed with the chapter's first.)
-        const chapterAst = await parseHtml(xhtmlFile.content, config, { imageAttachment, attachmentName: uniqueName });
+        const chapterAst = await parseHtml(xhtmlFile.content, config, { imageAttachment, attachmentName: uniqueName, quoteId });
         appendAll(attachments, chapterAst.attachments);
         appendAll(content, chapterAst.content);
     }

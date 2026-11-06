@@ -995,6 +995,13 @@ export interface HtmlPartContext {
      * chapter's first data picture were both renamed.
      */
     attachmentName?: (proposed: string) => string;
+    /**
+     * The id of the next quote the part reads (see ParagraphMetadata.quoteId), given by the container
+     * that reads several parts into one document (Markdown's HTML blocks, an EPUB's chapters, a DOCX's
+     * imported HTML), so no two of its quotes share one; a part read alone numbers its own. Numbered
+     * from 1 in every part, two quotes of two parts that met were written as one.
+     */
+    quoteId?: () => string;
 }
 
 /** The first picture a `srcset` names (`a.png 1x, b.png 2x` names a.png), for an <img> with no `src`. */
@@ -1784,7 +1791,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 const kids = parseChildren(node, newFormatting, listContext);
                 const isBlock = (t: string) => t === 'paragraph' || t === 'heading' || t === 'list';
                 // The quote's paragraphs share its id: `<blockquote><p>a</p><p>b</p></blockquote>` is one quote.
-                const quoteId = `html-quote-${++quoteCount}`;
+                const quoteId = part.quoteId ? part.quoteId() : `html-quote-${++quoteCount}`;
                 if (!kids.some(k => isBlock(k.type))) {
                     return { type: 'paragraph', metadata: { style: 'Quote', quoteId, ...(anchorIds.length > 0 && { anchorIds }) } as any, children: kids };
                 }

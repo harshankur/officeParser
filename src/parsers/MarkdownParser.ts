@@ -1996,7 +1996,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // Its comments are kept, as Markdown's are (the HTML parser drops them unless asked, and a
     // comment in an HTML table or block was lost).
     const readHtmlBlock = async (block: string): Promise<OfficeParserAST> => {
-        const html = await parseHtml(Buffer.from(block), { ...config, htmlParserConfig: { ...config.htmlParserConfig, preserveComments: true } });
+        // Its quotes are numbered with this document's (an id per block, from 1, made two quotes one).
+        const html = await parseHtml(Buffer.from(block), { ...config, htmlParserConfig: { ...config.htmlParserConfig, preserveComments: true } },
+            { quoteId: () => `md-quote-${++quoteCount}` });
         if (markdownPieces.length) {
             html.content = await restoreMarkdownPieces(html.content);
             restoreRawPieces(html.content);

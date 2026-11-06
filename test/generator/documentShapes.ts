@@ -4,7 +4,7 @@
  * written as document tables.
  */
 import * as assert from 'assert';
-import { unzipSync } from 'fflate';
+import { strToU8, unzipSync, zipSync } from 'fflate';
 import { OfficeGenerator } from '../../src/OfficeGenerator';
 import { OfficeParser } from '../../src/OfficeParser';
 import type { ImageMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, ParagraphMetadata } from '../../src/types';
@@ -447,4 +447,49 @@ export async function testDoctypeAndDeclarations(): Promise<void> {
         assert.ok(time < 3 * baseline + 200, `DOCTYPE: ${name} (${source.length} bytes) in ${time.toFixed(0)} ms, plain text in ${baseline.toFixed(0)} ms`);
     }
     console.log('✓ DOCTYPE and declarations');
+}
+
+/** The quote ids of a document's quote paragraphs, in order. */
+function quoteIds(ast: OfficeParserAST): (string | undefined)[] {
+    return ast.content.filter(n => (n.metadata as ParagraphMetadata | undefined)?.style === 'Quote').map(n => (n.metadata as ParagraphMetadata).quoteId);
+}
+
+/**
+ * The quotes of a document read as several HTML parts (Markdown's HTML blocks, an EPUB's chapters, a
+ * DOCX's imported HTML) are numbered across the document: two quotes of two parts stay two quotes.
+ */
+export async function testQuoteIdsAcrossParts(): Promise<void> {
+    const md = await OfficeParser.parseOffice(Buffer.from('<blockquote>alpha</blockquote>\n\n<blockquote>beta</blockquote>\n'), { fileType: 'md' });
+    assert.deepStrictEqual(quoteIds(md), ['md-quote-1', 'md-quote-2'], 'Quote ids: Markdown\'s HTML blocks numbered with the document');
+    assert.strictEqual((await md.to('md')).value, '> alpha\n\n> beta', 'Quote ids: two quotes in Markdown');
+    assert.strictEqual((await md.to('html', { htmlConfig: { standalone: false } })).value.match(/<blockquote>/g)?.length, 2, 'Quote ids: two quotes in HTML');
+    const mixed = await OfficeParser.parseOffice(Buffer.from('> one\n\n<blockquote>two</blockquote>\n\n> three\n'), { fileType: 'md' });
+    assert.strictEqual(new Set(quoteIds(mixed)).size, 3, `Quote ids: Markdown and HTML quotes share one numbering: ${quoteIds(mixed)}`);
+    // An EPUB whose first chapter ends and second starts with a quote.
+    const chapter = (body: string) => `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>c</title></head><body>${body}</body></html>`;
+    const epub = Buffer.from(zipSync({
+        mimetype: strToU8('application/epub+zip'),
+        'META-INF/container.xml': strToU8('<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'),
+        'OEBPS/content.opf': strToU8('<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title></metadata>'
+            + '<manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="c2.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/><itemref idref="c2"/></spine></package>'),
+        'OEBPS/c1.xhtml': strToU8(chapter('<p>One</p><blockquote><p>First</p></blockquote>')),
+        'OEBPS/c2.xhtml': strToU8(chapter('<blockquote><p>Second</p></blockquote><p>Two</p>')),
+    }));
+    const book = await OfficeParser.parseOffice(epub);
+    assert.deepStrictEqual(quoteIds(book), ['html-quote-1', 'html-quote-2'], 'Quote ids: an EPUB\'s chapters numbered across the book');
+    assert.ok((await book.to('md')).value.includes('> First\n\n> Second'), 'Quote ids: two quotes from two chapters');
+    // A DOCX with two HTML chunks, each one quote.
+    const relationship = (id: string, target: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk" Target="${target}"/>`;
+    const docx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        'word/document.xml': strToU8('<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            + '<w:body><w:altChunk r:id="c1"/><w:altChunk r:id="c2"/></w:body></w:document>'),
+        'word/_rels/document.xml.rels': strToU8(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${relationship('c1', 'a.htm')}${relationship('c2', 'b.htm')}</Relationships>`),
+        'word/a.htm': strToU8('<blockquote><p>First</p></blockquote>'),
+        'word/b.htm': strToU8('<blockquote><p>Second</p></blockquote>'),
+    }));
+    const word = await OfficeParser.parseOffice(docx);
+    assert.deepStrictEqual(quoteIds(word), ['html-quote-1', 'html-quote-2'], 'Quote ids: a DOCX\'s HTML chunks numbered across the document');
+    assert.strictEqual((await word.to('md')).value, '> First\n\n> Second', 'Quote ids: two quotes from two chunks');
+    console.log('✓ Quote ids across parts');
 }

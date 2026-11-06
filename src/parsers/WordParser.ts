@@ -90,6 +90,8 @@ import { parseRtf } from './RtfParser.js';
 interface WordChunk {
     bytesLeft: number;
     bytesUsed: number;
+    /** The document's quote ids (see HtmlPartContext.quoteId), shared with the chunks it holds. */
+    quoteId: () => string;
 }
 
 /** SmartArt data parts (see readDiagram). */
@@ -745,6 +747,9 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
     };
     // What a DOCX chunk may inflate: what this document left of the limit, shared by all its chunks.
     let chunkBytesLeft = byteLimit - inflatedBytes;
+    // The quotes of its imported HTML, numbered across the document and the chunks it holds (see HtmlPartContext.quoteId).
+    let chunkQuotes = 0;
+    const chunkQuoteId = chunk?.quoteId ?? (() => `html-quote-${++chunkQuotes}`);
     const adoptChunk = (ast: OfficeParserAST): OfficeContentNode[] => {
         const renamed = new Map<string, string>();
         for (const attachment of ast.attachments) {
@@ -758,7 +763,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
     /** A chunk part's content, read by its kind (`extension`). */
     const readChunkPart = async (content: Buffer, path: string, extension: string): Promise<OfficeContentNode[]> => {
         if (extension === 'docx') {
-            const nested: WordChunk = { bytesLeft: Math.max(0, chunkBytesLeft), bytesUsed: 0 };
+            const nested: WordChunk = { bytesLeft: Math.max(0, chunkBytesLeft), bytesUsed: 0, quoteId: chunkQuoteId };
             try {
                 return adoptChunk(await parseWord(content, config, nested));
             } finally {
@@ -811,7 +816,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         }
         // Its elements count against the document's budget, as an EPUB chapter's do (see maxXmlElements).
         takeXmlElements(html, config);
-        return adoptChunk(await parseHtml(Buffer.from(html, 'utf8'), config, { imageAttachment }));
+        return adoptChunk(await parseHtml(Buffer.from(html, 'utf8'), config, { imageAttachment, quoteId: chunkQuoteId }));
     };
     /**
      * The content of the chunk `element` stands for, its relationship looked up in `rels` (those of the
