@@ -377,3 +377,38 @@ export async function testNestedFiguresReadOnce(): Promise<void> {
 function nodeText(node: OfficeContentNode): string {
     return node.text ?? (node.children ?? []).map(nodeText).join('');
 }
+
+/** The length of every `text` in a tree of nodes. */
+function textLength(nodes: OfficeContentNode[] | undefined): number {
+    let length = 0;
+    for (const node of nodes ?? []) length += (node.text?.length ?? 0) + textLength(node.children);
+    return length;
+}
+
+/**
+ * A disclosure carries no text of its own: its summary is its metadata and its body its children, so a
+ * disclosure with no body is not written with its summary as content, and nested ones copy nothing.
+ */
+export async function testDisclosureCarriesNoText(): Promise<void> {
+    const empty = '<details><summary>Only summary</summary></details><p>x</p>';
+    const ast = await OfficeParser.parseOffice(Buffer.from(empty), { fileType: 'html' });
+    assert.deepStrictEqual(ast.content[0], { type: 'disclosure', metadata: { summary: 'Only summary' }, children: [] }, 'Disclosure: no text of its own');
+    assert.strictEqual((await ast.to('text')).value.trim(), 'Only summary\nx', 'Disclosure: text shows its summary once');
+    const html = await passesOf(empty, 'html', 'html');
+    assert.ok(html[0].includes('<details><summary>Only summary</summary></details>'), `Disclosure: an empty one written empty: ${html[0]}`);
+    assert.deepStrictEqual(html, [html[0], html[0], html[0]], 'Disclosure: HTML to HTML is stable over three passes');
+    const md = await passesOf((await ast.to('md')).value, 'md', 'md');
+    assert.deepStrictEqual(md, [md[0], md[0], md[0]], 'Disclosure: Markdown to Markdown is stable over three passes');
+    // Nested disclosures hold their body's text once, as nested divs do.
+    const levels = 200;
+    const body = '<p>' + 'word '.repeat(50_000) + '</p>';
+    const disclosures = '<details><summary>s</summary>'.repeat(levels) + body + '</details>'.repeat(levels);
+    const divs = '<div><p>s</p>'.repeat(levels) + body + '</div>'.repeat(levels);
+    let nested: OfficeParserAST | undefined;
+    let flat: OfficeParserAST | undefined;
+    const nestedTime = await timed(async () => { nested = await OfficeParser.parseOffice(Buffer.from(disclosures), { fileType: 'html' }); });
+    const flatTime = await timed(async () => { flat = await OfficeParser.parseOffice(Buffer.from(divs), { fileType: 'html' }); });
+    assert.ok(textLength(nested!.content) < 2 * textLength(flat!.content), `Disclosure: nested ones hold ${textLength(nested!.content)} characters of text, divs ${textLength(flat!.content)}`);
+    assert.ok(nestedTime < 3 * flatTime + 200, `Disclosure: ${levels} levels in ${nestedTime.toFixed(0)} ms, divs in ${flatTime.toFixed(0)} ms`);
+    console.log('✓ Disclosure carries no text');
+}

@@ -1837,7 +1837,10 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     ...(node.attributes?.open !== undefined ? { open: true } : {}),
                     ...(anchorIds.length ? { anchorIds } : {}),
                 };
-                return { type: 'disclosure', text: [summary, ...body.map(b => b.text ?? nodesText([b]))].filter(Boolean).join('\n'), metadata: meta, children: body };
+                // No text of its own, as a quote or an admonition has none: its blocks hold its text. A copy of
+                // its summary and body, made again at every level of nesting, was 200 times the input, and a
+                // writer gave a disclosure with no body its summary again as content.
+                return { type: 'disclosure', metadata: meta, children: body };
             }
             // A figure of one picture and its caption: the caption is the picture's (ImageMetadata.caption),
             // not a paragraph after it. A caption of more than text (a link, formatting, a block) stays a
