@@ -37,6 +37,7 @@ import { fontkitUnbrotli, nativeUnbrotli, sfntOf } from '../../src/generators/pd
 import { toWoff, toWoff2 } from '../helpers/webFontWriter';
 import { BOX, cffTable, type CffSpec, charString, EMPTY, withCffOutlines } from '../helpers/cffFontWriter';
 import { checkLookalikeScan } from '../helpers/lookalikeReference';
+import { checkDisclosureReference } from '../helpers/disclosureReference';
 import { checkOdtSpaceRuns } from '../helpers/odtSpaceRuns';
 import { OfficeTemplate } from '../../src/OfficeTemplate';
 import { findLookalikeTags, PartContext, triggersOf } from '../../src/template/templateEngine.js';
@@ -2830,6 +2831,30 @@ async function runTemplatePropertyTests(): Promise<GenFeatureTest[]> {
 }
 
 /**
+ * Markdown disclosures against a reference written independently of the Markdown reader
+ * (test/helpers/disclosureReference.ts: CommonMark's blocks, then a browser's tree building) on random
+ * Markdown mixing disclosures with every block kind: each text's disclosure tree is the reference's, and
+ * stays so over three round trips, the Markdown settled. Fast mode runs fewer texts.
+ */
+async function runMarkdownDisclosureReferenceTests(): Promise<GenFeatureTest[]> {
+    const cases = FAST_MODE ? 1_000 : 10_000;
+    const started = Date.now();
+    const { checked, outOfDomain, mismatches, unstable } = await checkDisclosureReference(
+        markdown => OfficeParser.parseOffice(Buffer.from(markdown), { fileType: 'md' }),
+        async ast => String((await ast.to('md')).value), cases, 1);
+    const failures = [...mismatches, ...unstable];
+    return [{
+        category: 'Markdown Disclosures', feature: `disclosure trees are the reference's and keep over three round trips (${cases} texts, ${checked} in its domain)`,
+        sourceFormat: 'md', destFormat: 'md',
+        result: {
+            status: failures.length ? 'FAIL' : 'PASS', expected: 'no difference',
+            actual: failures.length ? `${mismatches.length} differ, ${unstable.length} unsettled` : 'none',
+            details: failures.length ? failures.slice(0, 3).join('\n') : `${outOfDomain} texts out of its domain`, duration: Date.now() - started,
+        },
+    }];
+}
+
+/**
  * The spreadsheet viewer (HTML output of a workbook) in hosts that limit it: a frame with scripts but no
  * storage, where any localStorage access throws, and a host with scripts off, where the sheet tabs switch
  * by CSS `:target` alone. What a browser does with these was checked in one; here, what the HTML says.
@@ -3267,6 +3292,12 @@ async function runAllTests(): Promise<void> {
     const templatePropertyResults = await runTemplatePropertyTests();
     allResults.push(...templatePropertyResults);
     console.log(templatePropertyResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' \u2717' : ' \u2713');
+
+    // Markdown disclosures against a plain reference on random inputs
+    process.stdout.write('  markdown disclosure reference...');
+    const disclosureReferenceResults = await runMarkdownDisclosureReferenceTests();
+    allResults.push(...disclosureReferenceResults);
+    console.log(disclosureReferenceResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' \u2717' : ' \u2713');
 
     // Degrade fidelity: over-cap images, unembeddable pictures, notes, OCR line breaks
     process.stdout.write('  degrade fidelity...');

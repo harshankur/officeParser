@@ -977,6 +977,72 @@ export async function testMarkdownDisclosureFlattenedPastDepth(): Promise<void> 
     console.log('✓ Markdown disclosures flattened past 16 levels');
 }
 
+/** Hostile Markdown shapes for disclosures, each `n` times over: the review's and the fix design's. */
+const DISCLOSURE_SHAPES: Record<string, (n: number) => string> = {
+    unclosedBlank: n => '<details>\n<summary>S</summary>\n\nbody\n\n'.repeat(n),
+    strayClose: n => 'p\n\n</details>\n\n'.repeat(n),
+    inlineOneBlock: n => 'x <details><summary>s</summary> y '.repeat(n),
+    htmlOneBlock: n => '<details><summary>s\n'.repeat(n),
+    htmlOneBlockClosed: n => '<details><summary>s</summary>\n'.repeat(n) + '</details>\n'.repeat(n),
+    siblings: n => '<details>\n<summary>S</summary>\n\nBody *x*\n\n</details>\n\n'.repeat(n),
+    longBody: n => '<details>\n<summary>S</summary>\n\n' + 'para *x* `c`\n\n'.repeat(n) + '</details>\n',
+    interleaved: n => '<details>\n\n<table><tr><td>\n\n</details>\n\n</td></tr></table>\n\n'.repeat(n),
+    codeSpans: n => ('`<details>` ' + '`'.repeat(3) + ' a ').repeat(n) + '\n\n</details>\n',
+    backtickRuns: n => '<details>\n\n' + Array.from({ length: n }, (_, i) => '`'.repeat(1 + (i % 50)) + ' <details> ').join('') + '\n\n</details>',
+    noGt: n => '<details\n'.repeat(n) + '\n\n' + 'x'.repeat(n),
+    summaryNoClose: n => ('<details><summary>' + 'a'.repeat(50) + '\n').repeat(n),
+    summaryBlankLead: n => '<details>\n\n<summary>s\n\nb\n\n'.repeat(n),
+    nested16x: n => ('<details>\n\n'.repeat(16) + 'b\n\n' + '</details>\n\n'.repeat(16)).repeat(Math.max(1, n / 32)),
+    deepNest: n => '<details>\n\nb\n\n'.repeat(n) + '</details>\n\n'.repeat(n),
+    deepInline: n => 'p <details> q\n\n'.repeat(n) + 'p </details> q\n\n'.repeat(n),
+    quoteSwallow: n => '<details>\n\n> q\n</details>\n\n'.repeat(n),
+    escaped: n => '\\'.repeat(n) + '<details>\n\nx\n\n</details>',
+    quoteClose: n => '<details>\n\n> a </details>\n\n'.repeat(n),
+    quoteLineClose: n => '<details>\n\n> a\n> </details>\n> b\n\n'.repeat(n),
+    listInQuoteClose: n => '<details>\n\n> - a\n>   </details>\n> - b\n\n'.repeat(n),
+    listClose: n => '<details>\n\n- a\n  </details>\n- b\n\n'.repeat(n),
+    headingClose: n => '<details>\n\n## h </details> t\n\n'.repeat(n),
+    manyOpenOneQuote: n => '<details>\n\n'.repeat(n) + '> ' + '</details> '.repeat(n) + '\n',
+    manyOpenQuoteLines: n => '<details>\n\n'.repeat(n) + '> x\n> </details>\n'.repeat(n),
+    nestedContainers: n => '<details>\n\n'.repeat(16) + '> - '.repeat(Math.min(n, 2000)) + 'x </details>\n',
+    quoteOpensConfined: n => '<details>\n\n' + '> <details> a\n'.repeat(n) + '> </details>\n',
+    listItemsConfined: n => '<details>\n\n' + '- <details> a\n'.repeat(n) + '- </details>\n',
+    unclosedAttrHtml: n => '<details title="'.repeat(n) + '\n\nx\n',
+    unclosedAttrInline: n => 'x ' + '<details a="'.repeat(n) + '\n\nx\n',
+    unclosedAttrQuote: n => '<details>\n\n> ' + '<details a="'.repeat(n) + '\n',
+    attrWithGt: n => '<details title="a>b">\n<summary title="c>d">s</summary>\n\nbody\n\n</details>\n\n'.repeat(n),
+    summaryOpenAcross: n => '<details><summary>\n\nx\n\n'.repeat(n),
+    summaryFarClose: n => '<details><summary>\n\n' + '<details>\n\n'.repeat(n) + '</summary>\n\nbody\n\n</details>\n',
+    summaryAcrossSiblings: n => '<details>\n<summary>\n\n### S\n\n</summary>\n\nBody\n\n</details>\n\n'.repeat(n),
+    lazyAfterHtmlQuote: n => '<details>\n\n' + '> <details>\nlazy\n'.repeat(n),
+    summaryInQuoteClose: n => '<details>\n<summary>\n\n> s\n> </summary>\n\nbody\n\n</details>\n\n'.repeat(n),
+};
+
+/**
+ * Markdown disclosures are read and written back in time linear in the text, on every hostile shape the
+ * review and the fix design found: closing tags in quotes, list items and headings, many opened, values
+ * never closed, summaries across blocks. Each against plain paragraphs of the same size; a shape the
+ * HTML reader's nesting limit refuses (one HTML block of a thousand open disclosures) is held to the
+ * same time.
+ */
+export async function testMarkdownDisclosureShapesLinear(): Promise<void> {
+    const n = 4000;
+    const plain = (length: number) => 'Some *plain* text here.\n\n'.repeat(Math.ceil(length / 25));
+    const readAndWrite = async (source: string): Promise<void> => {
+        try {
+            await (await OfficeParser.parseOffice(Buffer.from(source), { fileType: 'md' })).to('md');
+        } catch (error) {
+            if (!/nesting depth/i.test((error as Error).message)) throw error;
+        }
+    };
+    for (const [name, shape] of Object.entries(DISCLOSURE_SHAPES)) {
+        const source = shape(n);
+        const { within, time, plain: baseline } = await linearAgainst(() => readAndWrite(source), () => readAndWrite(plain(source.length)));
+        assert.ok(within, `Disclosure shapes: ${name} (${source.length} bytes) in ${time.toFixed(0)} ms, paragraphs in ${baseline.toFixed(0)} ms`);
+    }
+    console.log(`✓ Markdown disclosure shapes in linear time (${Object.keys(DISCLOSURE_SHAPES).length} shapes)`);
+}
+
 /** ODF namespaces of a note test file. */
 const ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/"';
 
