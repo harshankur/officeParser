@@ -3749,8 +3749,10 @@ export interface NoteMetadata {
      */
     noteId?: string;
     /**
-     * The mark the note's reference shows, as the source records it: ODT's `text:note-citation`, the
-     * text of an HTML or EPUB note reference, a custom mark (see `customMark`). `noteId` is an internal
+     * The mark the note's reference shows, as the source records it: ODT's number as its
+     * `text:notes-configuration` gives it (format and start value, as LibreOffice shows it; the cached
+     * `text:note-citation` for footnotes numbered per page or chapter), the text of an HTML or EPUB note
+     * reference, a custom mark (see `customMark`). `noteId` is an internal
      * key (DOCX's `w:id`, ODT's `ftn1`) and never shown. Absent where the source numbers its notes
      * itself and records no mark (DOCX, RTF, Markdown, LaTeX): writers then show the note's ordinal
      * within its kind, footnotes `1, 2, 3` and endnotes `i, ii, iii`, as word processors number them.

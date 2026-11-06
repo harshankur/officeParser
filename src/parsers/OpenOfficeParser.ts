@@ -802,10 +802,32 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     // notes read so far, the runs waiting for a note read later, and how many note bodies are being read
     // (a reference inside one stays its citation, so no note can come to hold itself).
     const documentNoteIds = new Set<string>();
+    /**
+     * How each kind of note is numbered (`text:notes-configuration`, in styles.xml), as LibreOffice
+     * reads it: its format (`style:num-format`: `1` where a configuration gives none, and footnotes `1`
+     * and endnotes `i` where there is no configuration), the number before the first (`text:start-value`,
+     * an offset: the first note shows `start + 1`), and whether footnote numbers run through the document
+     * (`text:start-numbering-at="document"`) or restart per chapter or page (any other value, or none),
+     * which only a layout knows.
+     */
+    const noteNumbering = {
+        footnote: { format: '1', start: 0, perDocument: true },
+        endnote: { format: 'i', start: 0, perDocument: true },
+    };
+    /** The notes numbered so far, per kind, and each note element's number (a note read twice keeps its number). */
+    const noteCounts = { footnote: 0, endnote: 0 };
+    const noteNumbers = new Map<Element, number>();
     const collectNoteIds = (dom: Document) => {
         for (const note of getAllElementsByTagName(dom, 'text:note')) {
             const id = note.getAttribute('text:id');
             if (id) documentNoteIds.add(id);
+        }
+        for (const configuration of getAllElementsByTagName(dom, 'text:notes-configuration')) {
+            const numbering = configuration.getAttribute('text:note-class') === 'endnote' ? noteNumbering.endnote : noteNumbering.footnote;
+            numbering.format = configuration.getAttribute('style:num-format') ?? '1';
+            const start = Number(configuration.getAttribute('text:start-value') ?? 0);
+            numbering.start = Number.isInteger(start) && start >= 0 && start < 1_000_000 ? start : 0;
+            if (numbering === noteNumbering.footnote) numbering.perDocument = configuration.getAttribute('text:start-numbering-at') === 'document';
         }
     };
     if (stylesDom) collectNoteIds(stylesDom);
@@ -1262,11 +1284,21 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     const noteClass = (element.getAttribute('text:note-class') || 'footnote') as 'footnote' | 'endnote';
                     const noteId = element.getAttribute('text:id') || element.getAttribute('xml:id') || undefined;
                     const noteBody = getFirstElementByTagName(element, "text:note-body");
-                    // The mark the reference shows (`text:note-citation`: the number the application gave it,
-                    // or the author's own mark in `text:label`). The id is internal and never shown.
+                    // The mark the reference shows: the author's own in `text:label`, else its number as the
+                    // notes configuration gives it (LibreOffice numbers notes so and never reads the citation
+                    // cached in `text:note-citation`, which any writer may have filled: `1` for an endnote
+                    // shown as `i`). A note with a label takes no number. Numbers restarting per chapter or
+                    // page, and formats other than 1, a, A, i and I, are the cached citation's: only a
+                    // layout or the writing application knows them. The id is internal and never shown.
                     const citation = getDirectChildren(element, "text:note-citation")[0];
                     const label = citation?.getAttribute('text:label') || '';
-                    const mark = (label || citation?.textContent || '').trim();
+                    const kind = noteClass === 'endnote' ? 'endnote' : 'footnote';
+                    let number = noteNumbers.get(element);
+                    if (number === undefined && !label.trim()) noteNumbers.set(element, number = ++noteCounts[kind]);
+                    const numbering = noteNumbering[kind];
+                    const numbered = number !== undefined && numbering.perDocument && /^[1aAiI]$/.test(numbering.format)
+                        ? formatListNumber(numbering.start + number, odfNumberFormat(numbering.format)) : '';
+                    const mark = (label || numbered || citation?.textContent || '').trim();
 
                     if (noteBody) {
                         // Extract note content recursively

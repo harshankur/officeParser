@@ -9,7 +9,7 @@ import { withinTime } from './helpers/timing';
 import { digestOf, docxTemplateCases } from './helpers/docxTemplateCases';
 import { testUnicodeChunks } from './generator/unicodeChunks';
 import { testBrotliGuard } from './security/brotliGuard';
-import { testDisclosuresAndKeyboard, testFigureCaptions, testSheetsAsTables, testNoteMarks, testQuoteParagraphs, testRtfListTypesPerLevel, testXhtmlReadAsHtml, testNestedFiguresReadOnce, testDisclosureCarriesNoText, testDoctypeAndDeclarations, testQuoteIdsAcrossParts, testMarkdownDisclosureBodies } from './generator/documentShapes';
+import { testDisclosuresAndKeyboard, testFigureCaptions, testSheetsAsTables, testNoteMarks, testQuoteParagraphs, testRtfListTypesPerLevel, testXhtmlReadAsHtml, testNestedFiguresReadOnce, testDisclosureCarriesNoText, testDoctypeAndDeclarations, testQuoteIdsAcrossParts, testMarkdownDisclosureBodies, testOdtNoteMarksFromConfiguration } from './generator/documentShapes';
 import { OfficeGenerator } from '../src/OfficeGenerator';
 import { bulletCharacter, formatListNumber, readMarkerLabels } from '../src/utils/listMarkers';
 import { decodeBmp, decodeGif } from '../src/utils/rasterUtils';
@@ -13004,6 +13004,7 @@ async function runTests(): Promise<void> {
         ['DOCTYPE and declarations', testDoctypeAndDeclarations],
         ['Quote ids across parts', testQuoteIdsAcrossParts],
         ['Markdown disclosure bodies', testMarkdownDisclosureBodies],
+        ['ODT note marks from the notes configuration', testOdtNoteMarksFromConfiguration],
         ['Cancellation', testCancellation],
     ];
 

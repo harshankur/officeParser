@@ -4,6 +4,7 @@
  * written as document tables.
  */
 import * as assert from 'assert';
+import * as fs from 'fs';
 import { strToU8, unzipSync, zipSync } from 'fflate';
 import { OfficeGenerator } from '../../src/OfficeGenerator';
 import { OfficeParser } from '../../src/OfficeParser';
@@ -558,4 +559,46 @@ export async function testMarkdownDisclosureBodies(): Promise<void> {
         assert.ok(time < 3 * baseline + 200, `Markdown disclosure: ${name} (${source.length} bytes) in ${time.toFixed(0)} ms, paragraphs in ${baseline.toFixed(0)} ms`);
     }
     console.log('✓ Markdown disclosure bodies');
+}
+
+/** The marks of an ODT's notes, in reference order: each `kind:mark`. */
+async function odtNoteMarks(odt: Uint8Array): Promise<string[]> {
+    const ast = await OfficeParser.parseOffice(Buffer.from(odt), { fileType: 'odt' });
+    return notesOf(ast).map(note => `${(note.metadata as NoteMetadata).noteType}:${(note.metadata as NoteMetadata).mark}`);
+}
+
+/**
+ * An ODT note's mark is its number as the notes configuration gives it (format and start value), as
+ * LibreOffice shows it, not the citation a writer cached; a note with a label keeps it and takes no
+ * number; footnotes numbered per page or chapter keep the cached citation.
+ */
+export async function testOdtNoteMarksFromConfiguration(): Promise<void> {
+    const sample = new Uint8Array(fs.readFileSync('test/files/test.odt'));
+    assert.deepStrictEqual(await odtNoteMarks(sample), ['footnote:1', 'endnote:i'], 'ODT note marks: an endnote is numbered i, as LibreOffice shows it');
+    const sampleAst = await OfficeParser.parseOffice(Buffer.from(sample), { fileType: 'odt' });
+    assert.deepStrictEqual(referenceMarks((await sampleAst.to('html', { htmlConfig: { standalone: false } })).value).map(r => r[1]), ['1', 'i'], 'ODT note marks: and HTML shows them');
+    // Our own ODT of two footnotes, an endnote and a custom mark, its citations cached as 9 and a configuration added.
+    const md = await OfficeParser.parseOffice(Buffer.from('A[^a] B[^b] C[^c] D[^d].\n\n[^a]: First.\n[^b]: Second.\n[^c]: Third.\n[^d]: Fourth.\n'), { fileType: 'md' });
+    const [, b, c] = notesOf(md);
+    (b.metadata as NoteMetadata).noteType = 'endnote';
+    Object.assign(c.metadata as NoteMetadata, { mark: '*', customMark: true });
+    const files = unzipSync((await md.to('odt')).value as Uint8Array);
+    const decode = (name: string) => new TextDecoder().decode(files[name]);
+    const content = decode('content.xml').replace(/<text:note-citation>[^<]*<\/text:note-citation>/g, '<text:note-citation>9</text:note-citation>');
+    const configured = (footnote: string, endnote: string) => {
+        const styles = decode('styles.xml').replace('</office:styles>', `<text:notes-configuration text:note-class="footnote" ${footnote}/><text:notes-configuration text:note-class="endnote" ${endnote}/></office:styles>`);
+        return zipSync({ ...files, 'content.xml': strToU8(content), 'styles.xml': strToU8(styles) });
+    };
+    assert.deepStrictEqual(await odtNoteMarks(zipSync({ ...files, 'content.xml': strToU8(content) })), ['footnote:1', 'endnote:i', 'footnote:*', 'footnote:2'],
+        'ODT note marks: with no configuration, footnotes 1, 2 and endnotes i; a label takes no number');
+    // Each as LibreOffice 26 numbers the same file (saved again, its citations are these).
+    assert.deepStrictEqual(await odtNoteMarks(configured('style:num-format="a" text:start-value="2" text:start-numbering-at="document"', 'text:start-value="4"')), ['footnote:c', 'endnote:5', 'footnote:*', 'footnote:d'],
+        'ODT note marks: the format and the start value (an offset); a configuration with no format numbers 1, 2, 3');
+    assert.deepStrictEqual(await odtNoteMarks(configured('text:start-numbering-at="document" text:start-value="1"', 'style:num-format="a"')), ['footnote:2', 'endnote:a', 'footnote:*', 'footnote:3'],
+        'ODT note marks: footnotes numbered from 2, endnotes by letter');
+    assert.deepStrictEqual(await odtNoteMarks(configured('style:num-format="A" text:start-numbering-at="page"', 'style:num-format="I"')), ['footnote:9', 'endnote:I', 'footnote:*', 'footnote:9'],
+        'ODT note marks: footnotes numbered per page keep the cached citation');
+    assert.deepStrictEqual(await odtNoteMarks(configured('style:num-format="a"', 'style:num-format="i"')), ['footnote:9', 'endnote:i', 'footnote:*', 'footnote:9'],
+        'ODT note marks: a footnote configuration naming no restart restarts per page, as LibreOffice reads it');
+    console.log('✓ ODT note marks from the notes configuration');
 }
