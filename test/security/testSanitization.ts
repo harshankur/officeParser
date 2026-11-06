@@ -23,6 +23,7 @@ import {
     sanitizeCommentText, latexSourceComment
 } from '../../src/utils/sanitize';
 import { extractFiles } from '../../src/utils/zipUtils';
+import { cssColorHex } from '../../src/utils/colorUtils';
 import { parseXmlString } from '../../src/utils/xmlUtils';
 import { getOfficeError, getWrappedError } from '../../src/utils/errorUtils';
 import { terminateOcr } from '../../src/utils/ocrUtils';
@@ -5216,6 +5217,115 @@ async function chunkSplitterTests() {
 }
 
 /**
+ * The native PDF engine holds what it draws compressed, not as pdf-lib's objects (about ten operators a
+ * word, each number and name an object, kept until the file was saved: 250 MB of heap for 300,000
+ * characters), and lays a paragraph out from its pieces one at a time. The file is the same, byte for
+ * byte, folded at every operator or never; the pieces are the ones the listing builder gave, kept here.
+ */
+async function nativePdfMemoryTests() {
+    console.log('- The native PDF engine holds its drawing compressed, and a paragraph\'s pieces one at a time...');
+    const engine = await import('../../src/generators/pdf/nativePdfEngine');
+    const para = (runs: any[]) => ({ type: 'paragraph', text: runs.map(r => r.text).join(''), children: runs });
+    const t = (text: string, formatting: any = {}) => ({ type: 'text', text, formatting });
+    const native = async (content: any[]) => (await OfficeGenerator.generate(astWith(content), 'pdf', { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any)).value as Uint8Array;
+    const document = [
+        para([t('Bold ', { bold: true }), t('italic ', { italic: true }), t('up', { superscript: true }), t(' marked ', { color: '#FF0000', backgroundColor: '#FFFF00', underline: true }), t('x'.repeat(2000)), t(' tail\tend\nnext\fpage')]),
+        ...Array.from({ length: 120 }, (_, i) => para([t(`word${i} `.repeat(30))])),
+        para([t('\u05E9\u05DC\u05D5\u05DD abc 123 '.repeat(40))]),
+    ];
+    const was = engine.setOperatorFoldThreshold(0);
+    let never: Uint8Array, every: Uint8Array, usual: Uint8Array;
+    try {
+        never = await native(document);
+        engine.setOperatorFoldThreshold(1);
+        every = await native(document);
+    } finally { engine.setOperatorFoldThreshold(was); }
+    usual = await native(document);
+    const same = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((byte, i) => byte === b[i]);
+    check('pdf (native): a document is the same file, byte for byte, folded at every operator, as usual, or never', same(never, every) && same(never, usual), `${never.length} ${every.length} ${usual.length}`);
+
+    // The pieces: given one at a time, the ones listed before any was placed (the builder as it was).
+    let layout: any;
+    engine.setNativeLayoutObserver(made => { layout = made; });
+    try { await native([para([t('x')])]); } finally { engine.setNativeLayoutObserver(); }
+    const clusters = (text: string): Iterable<string> => {
+        const Segmenter = (Intl as any).Segmenter;
+        if (!Segmenter || !/\p{M}/u.test(text)) return text;
+        const segments = new Segmenter(undefined, { granularity: 'grapheme' }).segment(text);
+        return { *[Symbol.iterator]() { for (const { segment } of segments) yield segment; } };
+    };
+    const splitToWidth = (text: string, measure: (text: string) => number, width: number): string[] => {
+        if (width <= 0 || measure(text) <= width) return [text];
+        const chunks: string[] = [];
+        let cur = '', curWidth = 0;
+        for (const ch of clusters(text)) {
+            const chWidth = measure(ch);
+            if (cur && curWidth + chWidth > width) { chunks.push(cur); cur = ch; curWidth = chWidth; } else { cur += ch; curWidth += chWidth; }
+        }
+        if (cur) chunks.push(cur);
+        return chunks.length ? chunks : [text];
+    };
+    const listedPieces = (runs: any[], width: number, mono: boolean, pictureRoom: number) => {
+        const pieces: any[] = [];
+        for (const run of runs) {
+            const face = layout.faceFor(run.fmt, mono);
+            const baseSize = parseFloat(run.fmt.size) || (mono ? 10 : 11);
+            const shifted = !!(run.fmt.superscript || run.fmt.subscript);
+            const size = shifted ? baseSize * 0.65 : baseSize;
+            const rise = run.fmt.superscript ? baseSize * 0.35 : run.fmt.subscript ? -baseSize * 0.12 : 0;
+            const color = run.link ? layout.lib.rgb(0.1, 0.32, 0.72) : (layout.color(run.fmt.color) ?? layout.lib.rgb(0.12, 0.12, 0.12));
+            const invisible = !!run.fmt.invisible;
+            const underline = !invisible && !!(run.fmt.underline || run.link);
+            const background = invisible ? undefined : cssColorHex(run.fmt.backgroundColor) ?? undefined;
+            if (run.picture) {
+                const scale = Math.min(1, width / run.picture.w, pictureRoom / run.picture.h);
+                pieces.push({ p: { text: '', face, size, color, underline: false, link: run.link, picture: { img: run.picture.img, w: run.picture.w * scale, h: run.picture.h * scale } }, space: false });
+                continue;
+            }
+            run.text.split(/(\r\n|[\n\r\f])/).forEach((segment: string, at: number) => {
+                if (at % 2) { pieces.push({ p: { text: '', face, size, color, underline: false }, space: false, brk: segment === '\f' ? 'page' : 'line' }); return; }
+                for (const w of layout.enc(segment, face, false).split(/(\s+)/)) {
+                    if (w === '') continue;
+                    if (/^\s+$/.test(w)) { const last = pieces[pieces.length - 1]; if (last && !last.brk) last.space = true; continue; }
+                    for (const chunk of splitToWidth(w, (s: string) => layout.widthOf(s, face, size), width)) {
+                        pieces.push({ p: { text: chunk, face, size, color, underline, link: run.link, background, rise, note: run.note, ...(invisible ? { invisible } : {}) }, space: false });
+                    }
+                }
+            });
+        }
+        while (pieces.length && pieces[pieces.length - 1].brk) pieces.pop();
+        return pieces;
+    };
+    let seed = 777;
+    const random = (n: number) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+    const bits = ['a', 'word', 'longerword', ' ', '  ', '\t', '\n', '\r\n', '\r', '\f', '\n\n', 'x'.repeat(90), 'e\u0301', '\u05E9\u05DC', '\u0627\u0644', ' . ', '\u00A0', '\u2003'];
+    const formats = [{}, { bold: true }, { italic: true, size: '8pt' }, { superscript: true }, { backgroundColor: '#FFFF00', underline: true }, { invisible: true }, { color: '#336699' }];
+    const differences: string[] = [];
+    for (let k = 0; k < 400; k++) {
+        const runs = Array.from({ length: 1 + random(4) }, () => ({
+            text: Array.from({ length: random(12) }, () => bits[random(bits.length)]).join(''),
+            fmt: formats[random(formats.length)],
+            ...(random(5) === 0 ? { link: 'https://example.com/' } : {}),
+            ...(random(9) === 0 ? { picture: { img: {}, w: 400 + random(400), h: 300 + random(900) } } : {}),
+        }));
+        const width = 40 + random(400), mono = random(4) === 0;
+        const expected = JSON.stringify(listedPieces(runs, width, mono, 600));
+        const actual = JSON.stringify([...layout.piecesOf(runs, width, mono, 600)]);
+        if (expected !== actual && differences.length < 2) differences.push(`${JSON.stringify(runs)} width ${width}: ${expected.slice(0, 200)} against ${actual.slice(0, 200)}`);
+    }
+    check('pdf (native): a paragraph\'s pieces, given one at a time, are the ones listed, on 400 random paragraphs', differences.length === 0, differences.join(' | '));
+
+    // 300,000 characters of short words in one paragraph, drawn under a 128 MB heap (it took 250 MB).
+    const capped = runCappedChild(128, [
+        `const text = Array.from({ length: 100_000 }, () => 'o').join(', ');`,
+        `const ast = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', text, children: [{ type: 'text', text }] }] };`,
+        `const pdf = (await OfficeGenerator.generate(ast, 'pdf', { pdfConfig: { engine: 'native' }, onWarning: () => {} })).value;`,
+        `console.log(JSON.stringify({ bytes: pdf.length }));`,
+    ]);
+    check('pdf (native): one paragraph of 300,000 characters is drawn under a 128 MB heap', capped.status === 0 && /"bytes":\d{5,}/.test(capped.stdout), `status ${capped.status} ${capped.stdout.slice(0, 100)} ${capped.stderr}`);
+}
+
+/**
  * The files pdf.js loads for a PDF (its CMaps and image decoders) are read only as asked for by name,
  * from inside their folder, bounded in size and time, never from the built-in CDN address under
  * `allowRemoteAssets: false`; and nothing waiting on one outlives its bound or the parse's abortSignal.
@@ -5555,6 +5665,7 @@ async function main() {
     await xlsxRichStringChargeTests();
     await nestedTextBoxTests();
     await chunkSplitterTests();
+    await nativePdfMemoryTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);
