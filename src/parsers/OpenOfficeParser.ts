@@ -53,7 +53,7 @@ import { bulletCharacter, formatListNumber, odfNumberFormat } from '../utils/lis
 class CellBudget {
     private remaining: number;
     private warned = false;
-    private readonly weights = new WeakMap<object, number>();
+    private readonly weigh = contentWeigher();
     constructor(private limit: number, private config: OfficeParserConfig) {
         this.remaining = limit;
     }
@@ -68,33 +68,9 @@ class CellBudget {
     takeRepeats(repeats: number, weight: number): number {
         return takeRepeats(this.config, repeats, weight);
     }
-    /**
-     * What one copy of a cell writes: its text, and for each node it holds the node's text, formatting
-     * and metadata values (a style's 64 KB font is written with every copy) plus 16 for the node itself
-     * (a generator spends on a node what it spends on a dozen or two characters of text).
-     */
+    /** What one copy of a cell writes: its text, and its content and comments weighed by contentWeigher. */
     weighCell(text: string, children: OfficeContentNode[] | undefined, comments: OfficeContentNode[] | undefined): number {
         return text.length + this.weigh(children) + this.weigh(comments);
-    }
-    /**
-     * Counted along every path, as a generator writes a shared node each time it meets it (a nested
-     * table's repeated cells share their content), and memoized so a shared subtree is summed once.
-     */
-    private weigh(nodes: OfficeContentNode[] | undefined): number {
-        if (!nodes || nodes.length === 0) return 0;
-        let total = this.weights.get(nodes);
-        if (total !== undefined) return total;
-        total = 0;
-        for (const node of nodes) {
-            let weight = this.weights.get(node);
-            if (weight === undefined) {
-                weight = 16 + (node.text?.length ?? 0) + valuesLength(node.formatting) + valuesLength(node.metadata) + this.weigh(node.children) + this.weigh(node.comments) + this.weigh(node.notes);
-                this.weights.set(node, weight);
-            }
-            total += weight;
-        }
-        this.weights.set(nodes, total);
-        return total;
     }
     /** How many of `wanted` may be created; 0 once exhausted. */
     take(wanted: number): number {
@@ -391,7 +367,7 @@ const toRepeatCount = (attr: string | null): number => {
 };
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { repeatPreview, takeRepeats, valuesLength } from '../utils/repeatUtils.js';
+import { contentWeigher, repeatPreview, takeRepeats } from '../utils/repeatUtils.js';
 import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
 import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString, takeNodes } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
@@ -3226,6 +3202,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         // sections alternating two master pages read their parts again for each section, gigabytes for a
         // document of kilobytes.
         const readParts = new Map<Element, { children: OfficeContentNode[]; text: string; weight: number }>();
+        const weighPart = contentWeigher();
         const inForce = new Map<string, Element | null>();
         masters.forEach((name, section) => {
             if (section > 0 && name === masters[section - 1]) return;
@@ -3271,10 +3248,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     // attachment linkage): without it a picture in a header would render blank.
                     if (children.length) assignAttachmentData(children);
                     const text = children.map(c => c.text || '').join('\n');
-                    let count = 0;
-                    const stack = [...children];
-                    while (stack.length) { const n = stack.pop()!; count++; for (const c of n.children ?? []) stack.push(c); }
-                    readParts.set(el, part = { children, text, weight: text.length + 16 * count });
+                    // A later showing shares these blocks, whose values boundRepeatedValues sees once: its
+                    // charge carries them (a 2 KB document showing a header in a 50,000-character font
+                    // 2,000 times made 200 MB of JSON, unwarned).
+                    readParts.set(el, part = { children, text, weight: text.length + weighPart(children) });
                 }
                 const kept = part && (!repeat || takeRepeats(config, 1, part.weight) > 0);
                 (kind === 'header' ? headers : footers).push({ type: kind, text: kept ? part!.text : '', children: kept ? part!.children : [],

@@ -4895,6 +4895,87 @@ function runChildScript(lines: string[], browser = false): any {
     }
 }
 
+/*
+ * Output and memory bounds of content a document repeats: shared parts weighed with their values, and
+ * the writers and the chunker holding what they write rather than everything they walk.
+ */
+const SIZE_ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:form="urn:oasis:names:tc:opendocument:xmlns:form:1.0"';
+const sizeEnc = (s: string) => new TextEncoder().encode(s);
+/** An ODF package of `body` in the given kind, with automatic styles and a styles.xml when given. */
+const sizeOdf = (kind: 'text' | 'spreadsheet', body: string, automatic = '', styles = ''): Buffer => {
+    const mime = `application/vnd.oasis.opendocument.${kind}`;
+    const files: Record<string, Uint8Array> = {
+        mimetype: sizeEnc(mime),
+        'META-INF/manifest.xml': sizeEnc(`<?xml version="1.0"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:file-entry manifest:full-path="/" manifest:media-type="${mime}"/></manifest:manifest>`),
+        'content.xml': sizeEnc(`<?xml version="1.0" encoding="UTF-8"?><office:document-content ${SIZE_ODF_NS}><office:automatic-styles>${automatic}</office:automatic-styles><office:body><office:${kind}>${body}</office:${kind}></office:body></office:document-content>`),
+    };
+    if (styles) files['styles.xml'] = sizeEnc(`<?xml version="1.0" encoding="UTF-8"?><office:document-styles ${SIZE_ODF_NS}>${styles}</office:document-styles>`);
+    return Buffer.from(zipSync(files, { level: 9 }));
+};
+const SIZE_W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+const SIZE_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+/** A DOCX of `body` with header parts (`word/<name>`, related as `id`) and a final section. */
+const sizeDocx = (body: string, headers: { name: string; id: string; xml: string }[], sectPr: string): Buffer => {
+    const files: Record<string, Uint8Array> = {
+        '[Content_Types].xml': sizeEnc(`<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>${headers.map(h => `<Override PartName="/word/${h.name}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>`).join('')}</Types>`),
+        '_rels/.rels': sizeEnc(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${SIZE_REL}/officeDocument" Target="word/document.xml"/></Relationships>`),
+        'word/document.xml': sizeEnc(`<?xml version="1.0"?><w:document ${SIZE_W}><w:body>${body}${sectPr}</w:body></w:document>`),
+        'word/_rels/document.xml.rels': sizeEnc(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${headers.map(h => `<Relationship Id="${h.id}" Type="${SIZE_REL}/header" Target="${h.name}"/>`).join('')}</Relationships>`),
+    };
+    for (const h of headers) files[`word/${h.name}`] = sizeEnc(h.xml);
+    return Buffer.from(zipSync(files, { level: 9 }));
+};
+/** Parses `buffer`, collecting warning codes; an error is returned, not thrown. */
+const sizeParse = async (buffer: Buffer, fileType: string, extra: object = {}): Promise<{ ast?: OfficeParserAST; codes: string[]; error: string }> => {
+    const codes: string[] = [];
+    try { return { ast: await OfficeParser.parseOffice(buffer, { fileType, onWarning: (w: any) => codes.push(w.code), ...extra } as any), codes, error: '' }; }
+    catch (e: any) { return { codes, error: String(e?.message ?? e) }; }
+};
+/** What a writer returns (a binary output as its length), or `threw` and its error's message. */
+const sizeWrite = async (ast: OfficeParserAST | undefined, format: string): Promise<string> => {
+    if (!ast) return 'threw: no AST';
+    try { const value = (await ast.to(format as any)).value as any; return typeof value === 'string' ? value : `${value.length} bytes`; }
+    catch (e: any) { return `threw ${String(e?.message ?? e).slice(0, 80)}`; }
+};
+/** The default repeated-content budget of a document of `bytes` bytes (see repeatUtils). */
+const repeatedBudgetFor = (bytes: number) => 16 * 1024 * 1024 + 16 * bytes;
+
+/**
+ * A header or footer part a document shows in many sections shares its blocks among their header
+ * nodes; each showing after the first is charged with the blocks' values (a font of 50,000 characters
+ * on its run), which boundRepeatedValues sees once. Weighed by text and nodes alone, 2 KB of ODT made
+ * 200 MB of JSON and every writer failed, unwarned; 8 KB of DOCX, 100 MB.
+ */
+async function headerPartWeightTests() {
+    console.log('- Header and footer parts shown again are charged with their values...');
+    const odtHeaders = (alternations: number, font: number) => {
+        const styles = `<office:automatic-styles><style:page-layout style:name="pm1"/><style:style style:name="T1" style:family="text"><style:text-properties style:font-name="${'F'.repeat(font)}"/></style:style></office:automatic-styles><office:master-styles>${['A', 'B'].map(m => `<style:master-page style:name="${m}" style:page-layout-name="pm1"><style:header><text:p><text:span text:style-name="T1">${m}</text:span></text:p></style:header></style:master-page>`).join('')}</office:master-styles>`;
+        const automatic = '<style:style style:name="PA" style:family="paragraph" style:master-page-name="A"/><style:style style:name="PB" style:family="paragraph" style:master-page-name="B"/>';
+        return sizeOdf('text', '<text:p text:style-name="PA">a</text:p><text:p text:style-name="PB">b</text:p>'.repeat(alternations), automatic, styles);
+    };
+    const docxHeaders = (alternations: number, font: number) => {
+        const hdr = (t: string) => `<?xml version="1.0"?><w:hdr ${SIZE_W}><w:p><w:r><w:rPr><w:rFonts w:ascii="${'F'.repeat(font)}"/></w:rPr><w:t>${t}</w:t></w:r></w:p></w:hdr>`;
+        const sect = (id: string) => `<w:sectPr><w:headerReference w:type="default" r:id="${id}"/></w:sectPr>`;
+        let body = '';
+        for (let i = 0; i < alternations; i++) body += `<w:p><w:pPr>${sect(i % 2 ? 'rH2' : 'rH1')}</w:pPr><w:r><w:t>s${i}</w:t></w:r></w:p>`;
+        return sizeDocx(body + '<w:p><w:r><w:t>end</w:t></w:r></w:p>', [{ name: 'header1.xml', id: 'rH1', xml: hdr('A') }, { name: 'header2.xml', id: 'rH2', xml: hdr('B') }], sect('rH1'));
+    };
+    for (const [format, build] of [['odt', odtHeaders], ['docx', docxHeaders]] as const) {
+        const bytes = build(2_000, 50_000);
+        const parsed = await sizeParse(bytes, format);
+        const json = parsed.ast ? JSON.stringify(parsed.ast).length : 0;
+        const html = await sizeWrite(parsed.ast, 'html');
+        check(`${format}: two headers in a 50,000-character font alternated 2,000 times are charged with the font, with REPEATED_CONTENT_LIMIT_EXCEEDED`,
+            !parsed.error && parsed.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && json > 0 && json < 3 * repeatedBudgetFor(bytes.length) && !html.startsWith('threw') && html.length > 0,
+            `${parsed.error} ${parsed.codes} json ${json}, html ${html.slice(0, 80)}`);
+        const small = await sizeParse(build(200, 100), format);
+        const headers = small.ast?.auxiliary?.headers ?? [];
+        check(`${format}: two headers in a 100-character font alternated 200 times are all kept, unwarned`,
+            !small.error && !small.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && headers.length >= 200 && headers.every(h => (h.children?.[0]?.children?.[0]?.formatting?.font?.length ?? 0) === 100),
+            `${small.error} ${small.codes} ${headers.length} headers, ${headers.filter(h => !h.children?.length).length} empty`);
+    }
+}
+
 /**
  * The files pdf.js loads for a PDF (its CMaps and image decoders) are read only as asked for by name,
  * from inside their folder, bounded in size and time, never from the built-in CDN address under
@@ -5231,6 +5312,7 @@ async function main() {
     await parserHardeningTests();
     await htmlReadingTests();
     await fontFileTests();
+    await headerPartWeightTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);

@@ -60,7 +60,7 @@
  * @see https://learn.microsoft.com/en-us/openspecs/office_standards/ms-docx/ [MS-DOCX] Specification
  */
 
-import { attachmentLookup, takeRepeats } from '../utils/repeatUtils.js';
+import { attachmentLookup, contentWeigher, takeRepeats } from '../utils/repeatUtils.js';
 import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, ShapeMetadata, PageNumberFormat, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { MAX_PAGE_PT } from '../utils/pageLimits.js';
 import { lengthToPt, titlePagesTakeHiddenFirsts } from '../utils/officeGenUtils.js';
@@ -2029,6 +2029,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         // is charged to the repeated content budget, going without its blocks once that is spent.
         const byPath = new Map(files.map(f => [f.path, f]));
         const read = new Map<string, { children: OfficeContentNode[]; text: string; weight: number } | null>();
+        const weighPart = contentWeigher();
         const given = new Set<string>();
         const inForce = new Map<string, string>();
         const readInto = async (path: string, kind: 'header' | 'footer', metadata: HeaderFooterMetadata) => {
@@ -2050,10 +2051,10 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 const blocks: OfficeContentNode[] = [];
                 await readPart(partFile.path, partDoc.documentElement, () => readBlocks(partDoc.documentElement, partXml, blocks));
                 const text = blocks.map(c => c.text || '').join('\n');
-                let count = 0;
-                const stack = [...blocks];
-                while (stack.length) { const n = stack.pop()!; count++; for (const c of n.children ?? []) stack.push(c); }
-                read.set(path, part = { children: blocks, text, weight: text.length + 16 * count });
+                // A later showing shares these blocks, whose values boundRepeatedValues sees once: its charge
+                // carries them (an 8 KB document showing a header in a 50,000-character font 2,000 times made
+                // 100 MB of JSON, unwarned).
+                read.set(path, part = { children: blocks, text, weight: text.length + weighPart(blocks) });
             }
             if (!part) return;
             const kept = !repeat || takeRepeats(config, 1, part.weight) > 0;

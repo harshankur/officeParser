@@ -65,6 +65,42 @@ export const valuesLength = (values: object | undefined): number => {
     return length;
 };
 
+/** Weighs node lists; see contentWeigher. */
+export type ContentWeigher = (nodes: OfficeContentNode[] | undefined) => number;
+
+/**
+ * A weigher of shared content: what one more path to `nodes` writes. For each node, 16 for the node
+ * itself (a generator spends on a node what it spends on a dozen or two characters of text), its text,
+ * its formatting and metadata values (a style's 64 KB font is written with every copy), and its
+ * children, comments and notes. Counted along every path, as a generator writes a shared node each
+ * time it meets it (a nested table's repeated cells share their content), and memoized per node and
+ * per list so a shared subtree is summed once.
+ *
+ * It is the weight of content a copy shares (the same node objects), whose values boundRepeatedValues
+ * sees once: the copy's charge must carry them. A copy made of fresh node objects is charged its text
+ * and nodes only, and leaves its values to boundRepeatedValues.
+ */
+export const contentWeigher = (): ContentWeigher => {
+    const weights = new WeakMap<object, number>();
+    const weigh: ContentWeigher = nodes => {
+        if (!nodes || nodes.length === 0) return 0;
+        let total = weights.get(nodes);
+        if (total !== undefined) return total;
+        total = 0;
+        for (const node of nodes) {
+            let weight = weights.get(node);
+            if (weight === undefined) {
+                weight = 16 + (node.text?.length ?? 0) + valuesLength(node.formatting) + valuesLength(node.metadata) + weigh(node.children) + weigh(node.comments) + weigh(node.notes);
+                weights.set(node, weight);
+            }
+            total += weight;
+        }
+        weights.set(nodes, total);
+        return total;
+    };
+    return weigh;
+};
+
 /** The start of `text` a copy past the budget keeps: REPEAT_ALLOWANCE characters, not splitting a surrogate pair. */
 export const repeatPreview = (text: string): string => {
     if (text.length <= REPEAT_ALLOWANCE) return text;
