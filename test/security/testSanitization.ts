@@ -5808,8 +5808,9 @@ async function odtTemplateHardeningTests() {
         ['ODT: 200,000 { name }} in braces never closed', () => [odtOf(p('{'.repeat(n(200000)) + '{ name }}'.repeat(n(200000)))), {}, undefined]],
         ['ODT: 200,000 full-width {{ starts', () => [odtOf(p('\uFF5B\uFF5B nom '.repeat(n(200000)))), {}, undefined]],
         ['ODT: 200,000 names with spaces between delimiters', () => [odtOf(p('{{a b}}'.repeat(n(200000)))), {}, undefined]],
-        ['ODT: 1,000,000 full-width names', () => [odtOf(p('\uFF5B\uFF5Ba\uFF5D\uFF5D'.repeat(n(1_000_000)))), {}, undefined, { decompressionLimits: { maxXmlElements: 4_000_000 } }]],
-        ['ODT: 3,000,000 full-width names, the bound 2,000,000', () => [odtOf(p('\uFF5B\uFF5Ba\uFF5D\uFF5D'.repeat(n(3_000_000)))), {}, 'XML_ELEMENT_LIMIT_EXCEEDED']],
+        ['ODT: 1,000,000 full-width names', () => [odtOf(p('\uFF5B\uFF5Ba\uFF5D\uFF5D'.repeat(n(1_000_000)))), {}, undefined]],
+        // Look-alikes are no elements: past the 1,000 a template lists, they are counted and not kept.
+        ['ODT: 3,000,000 full-width names, 1,000 of them listed', () => [odtOf(p('\uFF5B\uFF5Ba\uFF5D\uFF5D'.repeat(n(3_000_000)))), {}, undefined]],
         ['ODT: a name of 1,000,000 characters a brace short', () => [odtOf(p('{{ ' + 'a'.repeat(n(1_000_000)) + ' }')), {}, undefined]],
         ['DOCX: 200,000 unclosed {{ a', () => [docxOf(wp('{{ a '.repeat(n(200000)))), {}, undefined]],
         ['DOCX: 200,000 { name }} in braces never closed', () => [docxOf(wp('{'.repeat(n(200000)) + '{ name }}'.repeat(n(200000)))), {}, undefined]],
@@ -5880,6 +5881,36 @@ async function templateTextBoundTests() {
     check('template: an ODT paragraph of 400,000 <text:s text:c="256"/> inside a tag renders', spaced?.out instanceof Uint8Array, String(spaced?.code));
     const spacedRun = await withinTime(4000, () => renderQuiet(longSpaces(), { a: 1 }));
     check('template: an ODT paragraph of 400,000 <text:s text:c="256"/> inside a tag, read at most as long as its XML', spacedRun.within, `${spacedRun.ms}ms`);
+
+    // The look-alike scan stops only where a delimiter can start: over text with no brace it costs about
+    // what reading the text does (it allocated at every character, five times the reading).
+    const spaces = ' '.repeat(20_000_000);
+    const scanned = await withinTime(30_000, () => renderQuiet(docxOf(wp(`{{a}}${spaces}`)), { a: 1 }));
+    const unscanned = await withinTime(30_000, () => renderQuiet(docxOf(wp('{{a}}') + wp(spaces)), { a: 1 }));
+    check('template: the look-alike scan of a paragraph of 20,000,000 spaces costs about what reading it does',
+        !scanned.result.code && !unscanned.result.code && scanned.ms <= 1.5 * unscanned.ms + 250, `${scanned.ms}ms with a brace in the paragraph, ${unscanned.ms}ms without; ${scanned.result.code ?? unscanned.result.code ?? ''}`);
+    // Text made of braces, the scan's worst case: linear, each a few compares.
+    for (const [label, make, texts] of [
+        ['10,000,000 {} in one paragraph', () => docxOf(wp('{{ v }}') + wp('{}'.repeat(n(10_000_000)))), 0],
+        ['20,000,000 full-width { in one paragraph', () => docxOf(wp('{{ v }}') + wp('\uFF5B'.repeat(n(20_000_000)))), 0],
+        ['5,000,000 {a}} in one paragraph', () => docxOf(wp('{{ v }}') + wp('{a}}'.repeat(n(5_000_000)))), 1000],
+        // Look-alikes are not XML elements: 8.6.0 rendered this at the default limits, and so does this.
+        ['2,100,000 {a}} in one paragraph at the default limits', () => docxOf(wp('{{ v }}') + wp('{a}}'.repeat(n(2_100_000)))), 1000],
+    ] as [string, () => Buffer, number][]) {
+        let result: Awaited<ReturnType<typeof renderQuiet>> | undefined;
+        await linear(`template: ${label}`, async () => { result = await renderQuiet(make(), { v: 1 }); },
+            { label: `template: ${label}, its heap`, limit: 400_000_000 });
+        const listed = result?.warnings.find(w => w.code === 'TEMPLATE_NOT_A_TAG')?.details.texts.length ?? 0;
+        check(`template: ${label} renders, listing ${texts} look-alikes`, result?.out instanceof Uint8Array && listed === texts, `${result?.code ?? ''} listed ${listed}`);
+    }
+    // A template lists at most 1,000 look-alikes, and says how many it found.
+    const many = await renderQuiet(docxOf(wp('{{ v }}') + wp('{a}}'.repeat(2_100_000))), { v: 1 });
+    const manyWarning = many.warnings.find(w => w.code === 'TEMPLATE_NOT_A_TAG');
+    check('template: 2,100,000 look-alikes are listed 1,000 times and counted in full', manyWarning?.details.texts.length === 1000 && manyWarning?.details.found === 2_100_000 && /2100000 texts .*only the first 1000 are listed/.test(manyWarning?.message ?? ''),
+        JSON.stringify(manyWarning?.details.found));
+    const wide = await renderQuiet(odtOf(p('\uFF5B\uFF5Ba\uFF5D\uFF5D'.repeat(3000))), {});
+    const wideWarning = wide.warnings.find(w => w.code === 'TEMPLATE_NOT_A_TAG');
+    check('template: ODT, 3,000 full-width names are listed 1,000 times and counted in full', wideWarning?.details.texts.length === 1000 && wideWarning?.details.found === 3000, JSON.stringify(wideWarning?.details.found));
 }
 
 async function main() {

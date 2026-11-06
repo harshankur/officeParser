@@ -33,7 +33,7 @@
 
 import { decryptIfNeeded } from './crypto/decryptContainer.js';
 import { DEFAULT_OFFICE_PARSER_CONFIG, DEFAULT_TEMPLATE_CONFIG } from './defaults.js';
-import { CompiledTemplate, compileTemplate, DOCX_DIALECT, openPackage, renderDocxTemplate, renderParts, TAG_SKIPPED, TemplateOptions, TemplatePlace, templateTags } from './template/templateEngine.js';
+import { CompiledTemplate, compileTemplate, DOCX_DIALECT, openPackage, renderDocxTemplate, renderParts, TAG_SKIPPED, TemplateOptions, TemplatePlace, templateTags, unlistedNearTags } from './template/templateEngine.js';
 import { ODT_DIALECT, odtEntries, renderOdtTemplate } from './template/odtTemplate.js';
 import { BlobLike, OfficeErrorType, OfficeParserConfig, OfficeWarningType, TemplateConfig, TemplateData, TemplateDataDetails, TemplateFormatter, TemplateProblem, TemplateSyntaxDetails, TemplateTagInfo } from './types.js';
 import { NumberTextSeparators, PictureSettings } from './template/templateFormat.js';
@@ -280,10 +280,15 @@ async function prepareTemplate(template: TemplateInput, config: Omit<TemplateCon
         : { compiled: compileTemplate(entries, options, DOCX_DIALECT), options, errCfg, write: renderDocxTemplate };
 }
 
-/** Reports the template's text that looks like a tag and is not one (`TEMPLATE_NOT_A_TAG`), once, all of it. */
-function warnNotATag(compiled: CompiledTemplate, options: TemplateOptions, errCfg: OfficeParserConfig): void {
-    const texts = templateTags(compiled, options).filter(t => t.kind === 'text').map(t => ({ text: t.tag, part: t.part, reason: t.reason! }));
-    if (texts.length) logWarning(OfficeWarningType.TEMPLATE_NOT_A_TAG, errCfg, { texts });
+/**
+ * Reports the template's text that looks like a tag and is not one (`TEMPLATE_NOT_A_TAG`), once: each
+ * text listed (at most 1,000), and how many were found in all (`found`). With `onlyWhenCut`, only when
+ * more were found than listed: `tags()` lists them itself, and is told only that its list was cut.
+ */
+function warnNotATag(compiled: CompiledTemplate, tags: TemplateTagInfo[], errCfg: OfficeParserConfig, onlyWhenCut = false): void {
+    const texts = tags.filter(t => t.kind === 'text').map(t => ({ text: t.tag, part: t.part, reason: t.reason! }));
+    const found = texts.length + unlistedNearTags(compiled);
+    if (found && (!onlyWhenCut || found > texts.length)) logWarning(OfficeWarningType.TEMPLATE_NOT_A_TAG, errCfg, { texts, found });
 }
 
 /** The data given: one object, or an array of objects, refused (typed) otherwise. */
@@ -312,7 +317,7 @@ export class OfficeTemplate {
         const errCfg: OfficeParserConfig = { onWarning: config?.onWarning };
         const rows = dataRows(config, errCfg);
         const { compiled, options, write } = await prepareTemplate(template, config, errCfg);
-        warnNotATag(compiled, options, errCfg);
+        warnNotATag(compiled, templateTags(compiled, options), errCfg);
         const renderOne = (data: TemplateData): Uint8Array => write(compiled, data, options);
         return Array.isArray(config.data) ? rows.map(renderOne) : renderOne(config.data);
     }
@@ -320,12 +325,17 @@ export class OfficeTemplate {
     /**
      * Lists a template's tags: each field, and each tag that opens a block or a branch, with the part
      * holding it, what it reads from the data, and the loops it is inside. The template is read as a
-     * render reads it, so a tag error rejects as a render's would. No data is needed.
+     * render reads it, so a tag error rejects as a render's would. No data is needed. Text that looks like
+     * a tag is listed at most 1,000 times: when the template holds more, a `TEMPLATE_NOT_A_TAG` warning
+     * says how many (`details.found`).
      */
     static async tags(template: TemplateInput, config: Omit<TemplateConfig, 'data'> = {}): Promise<TemplateTagInfo[]> {
         const errCfg: OfficeParserConfig = { onWarning: config?.onWarning };
         const { compiled, options } = await prepareTemplate(template, config ?? {}, errCfg);
-        return templateTags(compiled, options);
+        const tags = templateTags(compiled, options);
+        // Text that looks like a tag is listed up to 1,000 times: past that, the warning says how many there were.
+        warnNotATag(compiled, tags, errCfg, true);
+        return tags;
     }
 
     /** Checks one data map against a template: every problem a render with `onMissing: 'error'` would reject for, none when the data is enough. */
@@ -349,7 +359,7 @@ export class OfficeTemplate {
         const errCfg: OfficeParserConfig = { onWarning: config?.onWarning };
         const rows = dataRows(config, errCfg);
         const { compiled, options } = await prepareTemplate(template, config, errCfg);
-        warnNotATag(compiled, options, errCfg);
+        warnNotATag(compiled, templateTags(compiled, options), errCfg);
         // What problems share, made once: each text's number (a key holds numbers, not the texts, which a
         // template can make long), and each field's or tag's message.
         const numbers = new Map<string, number>();

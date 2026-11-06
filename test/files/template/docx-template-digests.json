@@ -1,0 +1,18 @@
+{
+    "fields and spaces": "353c5d756a3f834fca0662efbecdc23d337baf32e756a056d5dab893017fb3e2",
+    "a tag across runs": "15521af0361f6d6432bb909efea6c295fe51e620ae03a44e2ee1f88755ea6691",
+    "look-alikes beside a field": "4f0087699819a198d1c419915641386b732e2cfc370f8d8bc1f84369107dd1a5",
+    "look-alikes only": "a3bed73613f589246b840c3b1bc0521f0b181abab7f518d0f8cd70d934a955e4",
+    "braces of every kind": "c2bf66ebd2321f77b574aa0c32ed4f3b0baea3428142344fdfd638a4bc4cbf31",
+    "an inline if cut through a bold run": "8f34630f60fb5573c450de068e072d38162952c77b930da655c1228c88cd57e6",
+    "an inline loop in a link": "2b5891a83546daea00c063c6fabfaafd8199126dc3cefa66ced5e7f1c5747b63",
+    "a paragraph loop with ids": "c57a80726d9b425eab0e2c23235f9b121a1d75a25307c4fc7e2c9135b0ac03b4",
+    "a bookmark across a loop edge": "12b5234b0e9ef01e7dd197ad1e33a40c27fd64eb3b9b1512ab46835acdf08bbc",
+    "a comment range across a loop edge": "64120d47189a42bba4f1c4007dfe19a7c8c80d196db11c033e49a176cea5ca9a",
+    "a footnote in a loop": "fa78960c442df9e905cb7d31c66998b280b388f0bc6f70c306ce19e778b0748e",
+    "a table row loop": "2d570891ca8f2e110c2484944c46e573651fb555f385ae51683b7acf8f8b16fc",
+    "a picture in a loop": "782abcc3695db892d8d330ca772bc19f9330b49b69344e49f828b053b3e2af37",
+    "a header and footer": "cf793e701805473f13ee4fde552dea6e029e046a98e076be60cc16e0a47c9fb8",
+    "a kept block": "c237bff228f0e70f4e608cda467b5a56f04e5597cfb01b4c1ca43e2713d5497d",
+    "an empty loop and a missing field": "ba060eb29bcc0ef0cd8a098f9c7d4d19b225d855ae2f9c34dc8944e01bfd25b0"
+}

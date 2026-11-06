@@ -6,6 +6,7 @@
 
 import { OfficeParser } from '../src/OfficeParser';
 import { withinTime } from './helpers/timing';
+import { digestOf, docxTemplateCases } from './helpers/docxTemplateCases';
 import { testUnicodeChunks } from './generator/unicodeChunks';
 import { testBrotliGuard } from './security/brotliGuard';
 import { testDisclosuresAndKeyboard, testFigureCaptions, testSheetsAsTables, testNoteMarks, testQuoteParagraphs, testRtfListTypesPerLevel, testXhtmlReadAsHtml } from './generator/documentShapes';
@@ -4490,6 +4491,60 @@ async function testTemplateNearTags(): Promise<void> {
     // A filter of the caller's own is a filter.
     assert.deepStrictEqual(near(await OfficeTemplate.tags(docx(p('{{ x | mine }}')), { formatters: { mine: (v: any) => v } })), [], 'a formatter of the caller\'s own is no unknown filter');
     console.log('  Template near-tags: All assertions passed ✓');
+}
+
+/**
+ * A Word template renders as officeParser 8.6.0 rendered it: each case of `test/helpers/docxTemplateCases.ts`
+ * against 8.6.0's digest of its parts. A change to how ODT or look-alike text is read leaves Word output alone.
+ */
+async function testDocxTemplatesAsBefore(): Promise<void> {
+    const before = JSON.parse(fs.readFileSync(path.join(__dirname, 'files', 'template', 'docx-template-digests.json'), 'utf8')) as Record<string, string>;
+    const cases = docxTemplateCases();
+    assert.deepStrictEqual(cases.map(c => c.name), Object.keys(before), 'every case has its 8.6.0 digest');
+    for (const c of cases) {
+        let digest: string;
+        try { digest = digestOf(await OfficeTemplate.render(Buffer.from(c.bytes), { data: c.data, onWarning: () => { } }) as Uint8Array); }
+        catch (e: any) { digest = `error ${e?.officeIssue?.code ?? String(e)}`; }
+        assert.strictEqual(digest, before[c.name], `${c.name}: rendered as 8.6.0 rendered it`);
+    }
+    console.log('  DOCX templates as before: All assertions passed ✓');
+}
+
+/**
+ * Text that looks like a tag, read with its braces: a short delimiter is reported only when the braces
+ * around it do not balance; look-alikes are no XML elements; and a template lists at most 1,000 of them,
+ * saying how many it found.
+ */
+async function testTemplateNearTagsBalanceAndLimit(): Promise<void> {
+    const { p, docx } = ooxmlHelpers();
+    const near = async (text: string) => (await OfficeTemplate.tags(docx(p(text)))).filter(t => t.kind === 'text').map(t => `${t.reason} ${t.tag}`);
+    for (const [text, expected] of [
+        ['{{x}, {y}}', []], ['{{ a } { b }}', []], ['{{ name } }', []], ['{a: {b}}', []],
+        ['{{ name }', ['missing-delimiter {{ name }']], ['{ name }}', ['missing-delimiter { name }}']],
+        ['Dear {{ name }, thanks for {{ order }}', ['missing-delimiter {{ name }']],
+        ['{{ a }, {{ b }', ['missing-delimiter {{ a }', 'missing-delimiter {{ b }']],
+        ['x {y}} and {{z}', ['missing-delimiter {y}}', 'missing-delimiter {{z}']],
+    ] as [string, string[]][]) {
+        assert.deepStrictEqual(await near(text), expected, `${text}: ${JSON.stringify(expected)}; got ${JSON.stringify(await near(text))}`);
+    }
+    // No look-alike is an XML element: plain text 8.6.0 rendered renders.
+    const warnings: any[] = [];
+    await OfficeTemplate.render(docx(p('{{ x }}') + p('{a}}'.repeat(200))), { data: { x: 1 }, decompressionLimits: { maxXmlElements: 100 }, onWarning: (w: any) => warnings.push(w) });
+    assert.deepStrictEqual(warnings.map(w => [w.code, w.details.texts.length, w.details.found]), [['TEMPLATE_NOT_A_TAG', 200, 200]], 'look-alikes are not charged as elements, and warned of once');
+    // At most 1,000 listed, and the count of all of them given.
+    const many = docx(p('{{ a }'.repeat(2000)));
+    const tagWarnings: any[] = [];
+    const listed = (await OfficeTemplate.tags(many, { onWarning: (w: any) => tagWarnings.push(w) })).filter(t => t.kind === 'text');
+    assert.strictEqual(listed.length, 1000, 'tags() lists the first 1,000');
+    assert.deepStrictEqual(tagWarnings.map(w => [w.code, w.details.texts.length, w.details.found]), [['TEMPLATE_NOT_A_TAG', 1000, 2000]], 'and says it found 2,000');
+    const rendered: any[] = [];
+    await OfficeTemplate.render(many, { data: {}, onWarning: (w: any) => rendered.push(w) });
+    assert.deepStrictEqual(rendered.map(w => [w.code, w.details.texts.length, w.details.found]), [['TEMPLATE_NOT_A_TAG', 1000, 2000]], 'a render lists 1,000 and counts 2,000');
+    assert.ok(/^2000 texts that look like template tags .* \(only the first 1000 are listed\): .*, and 1995 more\.$/.test(rendered[0].message), `the message says so; got ${rendered[0].message}`);
+    const few: any[] = [];
+    await OfficeTemplate.tags(docx(p('{{ a }')), { onWarning: (w: any) => few.push(w) });
+    assert.deepStrictEqual(few, [], 'tags() warns only when its list is cut');
+    console.log('  Template near-tags balance and limit: All assertions passed ✓');
 }
 
 /**
@@ -12785,6 +12840,8 @@ async function runTests(): Promise<void> {
         ['ODT template blocks', testOdtTemplateBlocks],
         ['ODT template long space runs', testOdtTemplateLongSpaceRuns],
         ['Template near-tags', testTemplateNearTags],
+        ['Template near-tags balance and limit', testTemplateNearTagsBalanceAndLimit],
+        ['DOCX templates as before', testDocxTemplatesAsBefore],
         ['Chart scripts', testChartScripts],
         ['Markdown header rows', testMarkdownHeaderRows],
         ['RTF header rows', testRtfHeaderRows],

@@ -175,8 +175,9 @@ export enum OfficeWarningType {
     /**
      * A template holds text that looks like a tag but is not one (see `TemplateTextReason`), which a render
      * writes as typed: `{{first name}}`, `{{ name }`, `｛｛nom｝｝`. Raised once by `OfficeTemplate.render` and
-     * `OfficeTemplate.check`, with each such text, its part and why in `details.texts`; `OfficeTemplate.tags`
-     * lists them as tags of kind `text`.
+     * `OfficeTemplate.check`, with each such text, its part and why in `details.texts` (at most 1,000) and
+     * how many there are in `details.found`; `OfficeTemplate.tags` lists them as tags of kind `text`, and
+     * raises it only when it found more than it lists.
      */
     TEMPLATE_NOT_A_TAG = 'TEMPLATE_NOT_A_TAG',
     /** A template check found as many problems as it lists (`details.limit`: 1,000 for one data entry, or 10,000 in all for a batch, `details.batch`) and stopped there, in `details.entry` of a batch, with `details.unchecked` entries after it not checked; fix these and check again */
@@ -2782,7 +2783,8 @@ export interface TemplateLoopPlace {
  *   `{{ total | fromat "0.00" }}`.
  * - `missing-delimiter`: for delimiters of one character typed twice or more (the default `{{ }}`), a
  *   name between a start delimiter and an end delimiter one of which is a character short: `{{ name }`,
- *   `{ name }}` (a short start inside braces still open, as code nests them, is not reported).
+ *   `{ name }}` (a short start inside braces still open, or a short end whose brace a later one closes,
+ *   as code nests them, is not reported).
  * - `full-width`: a name between delimiters typed with full-width characters (U+FF01 to U+FF5E), as a
  *   Japanese or Chinese keyboard types them: `｛｛nom｝｝`.
  */
@@ -2797,7 +2799,8 @@ export interface TemplateTagInfo {
     /**
      * `field` (`{{ name }}`), `if`, `elseif`, `else` or `for`; or `text`: text that looks like a tag but is
      * not one (`{{first name}}`, `{{ name }`, `｛｛nom｝｝`), written as typed, with why in `reason`, no
-     * `fields`, and the loops it is inside.
+     * `fields`, and the loops it is inside. At most 1,000 such texts are listed for a template; when there
+     * are more, a `TEMPLATE_NOT_A_TAG` warning says how many (`details.found`).
      */
     kind: 'field' | 'if' | 'elseif' | 'else' | 'for' | 'text';
     /** The tag as typed, delimiters included (a very long one is cut short); for `text`, the text as typed. */

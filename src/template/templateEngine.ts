@@ -343,10 +343,10 @@ export interface IdSlot {
  * A note compiled on its own, to be written per reference: its nodes (null with no tag), its text, and
  * the ranges across its own loops, written once in each copy of it.
  */
-interface NoteTemplate { nodes: TemplateNode[] | null; xml: string; rangesAcross: Set<string>; nearTags: NearTag[] }
+interface NoteTemplate { nodes: TemplateNode[] | null; xml: string; rangesAcross: Set<string>; nearTags: NearTag[]; nearUnlisted: number }
 
 /** A part, compiled: its nodes, or null when it holds no tag (copied byte for byte). */
-interface CompiledPart { name: string; nodes: TemplateNode[] | null; hasBlocks: boolean; nearTags: NearTag[] }
+interface CompiledPart { name: string; nodes: TemplateNode[] | null; hasBlocks: boolean; nearTags: NearTag[]; nearUnlisted: number }
 
 /**
  * Text that looks like a tag and is not one (see {@link findNearTags}): as typed, why it is not a tag,
@@ -381,8 +381,11 @@ export interface CompiledTemplate {
 
 // ─── Phase 1: tags in text ──────────────────────────────────────────────────
 
-/** What a template may hold, counted as it is read (see PartContext.elements). */
-interface ElementBudget { left: number; textRuns: number }
+/**
+ * What a template may hold, counted as it is read (see PartContext.elements); `nearTags` is how many more
+ * texts that look like a tag it lists (see {@link MAX_NEAR_TAGS}).
+ */
+interface ElementBudget { left: number; textRuns: number; nearTags: number }
 
 /** Per-part compile state. */
 export interface PartContext {
@@ -417,6 +420,8 @@ export interface PartContext {
     unreadable: { inner: string; reason: string; beforeTag: number; word: string }[];
     /** Text that looks like a tag and is not one, in document order. */
     nearTags: NearTag[];
+    /** How many more such texts the part holds than it lists, past the template's room (see {@link MAX_NEAR_TAGS}). */
+    nearUnlisted: number;
     /** Characters a run of text holds when it may hold a tag, or text that looks like one. */
     triggers: string[];
 }
@@ -672,11 +677,15 @@ function fullWidthOf(c: string): string | null {
     return c.length === 1 && code >= 0x21 && code <= 0x7E ? String.fromCharCode(code + 0xFEE0) : null;
 }
 
+const NAME_CHAR_OR_SPACE = /^[\p{L}\p{N}_.\-\s]$/u;
+/** Which ASCII characters {@link NAME_CHAR_OR_SPACE} matches, looked up rather than matched. */
+const ASCII_NAME_CHAR = Uint8Array.from({ length: 0x80 }, (_, code) => NAME_CHAR_OR_SPACE.test(String.fromCharCode(code)) ? 1 : 0);
+
 /** Whether a character may be in a name text that looks like a tag holds (a full-width letter is a letter). */
 function isNameChar(c: string): boolean {
-    return NAME_CHAR_OR_SPACE.test(c);
+    const code = c.charCodeAt(0);
+    return code < 0x80 ? ASCII_NAME_CHAR[code] === 1 : NAME_CHAR_OR_SPACE.test(c);
 }
-const NAME_CHAR_OR_SPACE = /^[\p{L}\p{N}_.\-\s]$/u;
 
 /** The characters a run of text holds when it may hold a tag, or text that looks like one (see {@link findLookalikeTags}). */
 function triggersOf(opts: TemplateOptions): string[] {
@@ -692,16 +701,17 @@ function formsOf(c: string): { plain: string; wide: string | null } {
 
 /**
  * Where a delimiter typed with these characters, each as stored or full-width, ends when it starts at
- * `at` in `text`, and whether any was full-width; null when it does not start there.
+ * `at` in `text`, -1 when it does not start there; `hit.wide` is told how many were typed full-width.
+ * Nothing is made per call: the scan calls it at every character that can start a delimiter.
  */
-function matchDelimiter(text: string, at: number, chars: { plain: string; wide: string | null }[]): { end: number; wide: boolean } | null {
-    let wide = false;
+function matchDelimiter(text: string, at: number, chars: readonly { plain: string; wide: string | null }[], hit: { wide: number }): number {
+    hit.wide = 0;
     for (const c of chars) {
         if (text.startsWith(c.plain, at)) at += c.plain.length;
-        else if (c.wide && text.startsWith(c.wide, at)) { at += c.wide.length; wide = true; }
-        else return null;
+        else if (c.wide && text.startsWith(c.wide, at)) { at += c.wide.length; hit.wide++; }
+        else return -1;
     }
-    return { end: at, wide };
+    return at;
 }
 
 /** Whether a delimiter is one character typed twice or more (`{{`), whose missing character can be told. */
@@ -710,61 +720,145 @@ function doubled(chars: string[]): boolean {
 }
 
 /**
+ * The most texts that look like a tag a template lists (in `tags()` and the `TEMPLATE_NOT_A_TAG`
+ * warning): each takes a few hundred bytes to list, for a few characters of text. Past it they are
+ * counted, not listed, and the warning says how many there were.
+ */
+const MAX_NEAR_TAGS = 1000;
+
+/**
+ * Depths of a stack of missing ends past the room to list them (see findLookalikeTags): only counted,
+ * each by the depth before it, a bit per depth. A depth is held at most once, and the depth falls a
+ * delimiter's length at most at a time, so each fall looks at a few bits.
+ */
+class DepthSet {
+    private bits = new Uint32Array(0);
+    size = 0;
+    add(depth: number): void {
+        const word = depth >>> 5;
+        if (word >= this.bits.length) {
+            const grown = new Uint32Array(Math.max(word + 1, this.bits.length * 2));
+            grown.set(this.bits);
+            this.bits = grown;
+        }
+        this.bits[word] |= 1 << (depth & 31);
+        this.size++;
+    }
+    /** Removes every depth from `from` up to (not including) `to`. */
+    removeFrom(from: number, to: number): void {
+        for (let depth = Math.max(0, from); depth < to && this.size > 0; depth++) {
+            const word = depth >>> 5;
+            if (word >= this.bits.length) return;
+            const bit = 1 << (depth & 31);
+            if (this.bits[word] & bit) { this.bits[word] &= ~bit; this.size--; }
+        }
+    }
+}
+
+/**
  * Text in a paragraph that looks like a tag but whose delimiters are not the delimiters: around a name
  * (as {@link NAME_WITH_SPACES} reads one, spaces optional), a start delimiter typed with full-width
  * characters (`｛｛nom｝｝`, `full-width`), or, for delimiters of one character typed twice or more, one
- * that is missing a character: `{{ name }` or `{ name }}` (`missing-delimiter`). `{ name }` (both
- * missing) is ordinary braces, as is a missing start inside a brace still open (`{a: {b}}` in code).
- * Tags themselves, and text between whole delimiters, are not this (see findTagSpans). One forward
- * pass; each start looks at most a name's length ahead.
+ * that is missing a character: `{{ name }` or `{ name }}` (`missing-delimiter`). Braces that balance are
+ * code, never this: a missing start inside a brace still open (`{a: {b}}`), and a missing end whose
+ * brace a later one closes (`{{x}, {y}}`). `{ name }` (both missing) is ordinary braces. Tags
+ * themselves, and text between whole delimiters, are not this (see findTagSpans).
+ *
+ * One forward pass that stops only at a character a delimiter starts with (and, braces being counted,
+ * at a closing brace); each stop looks at most a name's length ahead and makes nothing. At most what is
+ * left of the template's room is returned; the rest are counted in `ctx.nearUnlisted`.
  */
 function findLookalikeTags(joined: string, ctx: PartContext): { start: number; end: number; reason: TemplateTextReason }[] {
     const found: { start: number; end: number; reason: TemplateTextReason }[] = [];
     if (!ctx.triggers.some(t => joined.includes(t))) return found;
+    const room = ctx.elements.nearTags;
     const start = Array.from(ctx.opts.start);
     const end = Array.from(ctx.opts.end);
     const startForms = start.map(formsOf);
     const endForms = end.map(formsOf);
     const canMiss = doubled(start) && doubled(end);
+    const startShort = startForms.slice(1);
+    const endShort = endForms.slice(0, -1);
     const opener = startForms[0];
     const closer = endForms[endForms.length - 1];
+    // The characters a stop starts with: the start's first, as stored and full-width, and (braces being counted) the end's last.
+    const c1 = opener.plain.charCodeAt(0);
+    const c2 = opener.wide ? opener.wide.charCodeAt(0) : -1;
+    const c3 = canMiss ? closer.plain.charCodeAt(0) : -1;
+    const hit = { wide: 0 };
     // How many of the start delimiter's characters are open, typed as stored (code nests braces).
     let depth = 0;
+    // Missing ends (`{{ name }`) whose brace is still open, as start, end and the depth before each:
+    // reported only if never closed. Past the room they are only counted, by their depths.
+    const pending: number[] = [];
+    let unlistedPending: DepthSet | null = null;
+    let unlisted = 0;
+    const listed = (): number => found.length + pending.length / 3;
+    const closeTo = (to: number): void => {
+        const before = depth;
+        depth = Math.max(0, to);
+        while (pending.length && pending[pending.length - 1] >= depth) pending.length -= 3;
+        unlistedPending?.removeFrom(depth, before);
+    };
+    const brace = (i: number): void => {
+        if (!canMiss) return;
+        if (joined.startsWith(opener.plain, i)) depth++;
+        else if (depth > 0 && joined.startsWith(closer.plain, i)) closeTo(depth - 1);
+    };
     for (let i = 0; i < joined.length; i++) {
-        let open = matchDelimiter(joined, i, startForms);
+        const c = joined.charCodeAt(i);
+        if (c !== c1 && c !== c2) {
+            // Only a delimiter's first character starts one: the end's last is a brace that may close one.
+            if (c === c3 && depth > 0 && joined.startsWith(closer.plain, i)) closeTo(depth - 1);
+            continue;
+        }
+        let openEnd = matchDelimiter(joined, i, startForms, hit);
+        let openWide = hit.wide;
+        let openChars = startForms.length;
         let missingStart = false;
-        if (!open && canMiss) {
-            open = matchDelimiter(joined, i, startForms.slice(1));
-            const before = i > 0 && (joined.endsWith(opener.plain, i) || (opener.wide !== null && joined.endsWith(opener.wide, i)));
-            if (open && (before || depth > 0 || open.wide)) open = null;
-            missingStart = open !== null;
+        if (openEnd < 0 && canMiss) {
+            openEnd = matchDelimiter(joined, i, startShort, hit);
+            openWide = hit.wide;
+            openChars = startShort.length;
+            if (openEnd >= 0 && (depth > 0 || openWide || (i > 0 && (joined.endsWith(opener.plain, i) || (opener.wide !== null && joined.endsWith(opener.wide, i)))))) openEnd = -1;
+            missingStart = openEnd >= 0;
         }
-        if (!open) {
-            if (canMiss && joined.startsWith(opener.plain, i)) depth++;
-            else if (canMiss && joined.startsWith(closer.plain, i) && depth > 0) depth--;
-            continue;
-        }
-        let at = open.end;
-        while (at < joined.length && at - open.end < MAX_NEAR_NAME && isNameChar(joined[at])) at++;
-        const name = joined.slice(open.end, at).trim();
-        let close = name && /^[\p{L}_]/u.test(name) ? matchDelimiter(joined, at, endForms) : null;
+        if (openEnd < 0) { brace(i); continue; }
+        let at = openEnd;
+        while (at < joined.length && at - openEnd < MAX_NEAR_NAME && isNameChar(joined[at])) at++;
+        const name = joined.slice(openEnd, at).trim();
+        const named = name !== '' && /^[\p{L}_]/u.test(name);
+        let closeEnd = named ? matchDelimiter(joined, at, endForms, hit) : -1;
+        let closeWide = hit.wide;
+        let closeChars = endForms.length;
         let missingEnd = false;
-        if (!close && name && /^[\p{L}_]/u.test(name) && canMiss && !missingStart) {
-            close = matchDelimiter(joined, at, endForms.slice(0, -1));
-            if (close?.wide) close = null;
-            missingEnd = close !== null;
+        if (closeEnd < 0 && named && canMiss && !missingStart) {
+            closeEnd = matchDelimiter(joined, at, endShort, hit);
+            closeWide = hit.wide;
+            closeChars = endShort.length;
+            if (closeWide) closeEnd = -1;
+            missingEnd = closeEnd >= 0;
         }
-        if (!close) {
-            if (canMiss && joined.startsWith(opener.plain, i)) depth++;
-            continue;
+        if (closeEnd < 0) { brace(i); continue; }
+        const wide = openWide > 0 || closeWide > 0;
+        // Whole delimiters as stored: a tag, or text between the delimiters, which findTagSpans reads. Its braces balance.
+        if (!wide && !missingStart && !missingEnd) { i = closeEnd - 1; continue; }
+        // The braces it opens and closes, typed as stored, counted as any others.
+        const net = canMiss ? (openChars - openWide) - (closeChars - closeWide) : 0;
+        if (missingEnd && !wide) {
+            if (listed() < room) pending.push(i, closeEnd, depth);
+            else (unlistedPending ??= new DepthSet()).add(depth);
+            depth += net;
+        } else {
+            if (listed() < room) found.push({ start: i, end: closeEnd, reason: wide ? 'full-width' : 'missing-delimiter' });
+            else unlisted++;
+            if (net < 0) closeTo(depth + net); else depth += net;
         }
-        const wide = open.wide || close.wide;
-        // Whole delimiters as stored: a tag, or text between the delimiters, which findTagSpans reads.
-        if (!wide && !missingStart && !missingEnd) { i = close.end - 1; continue; }
-        if (--ctx.elements.left < 0) ctx.opts.onElementLimit();
-        found.push({ start: i, end: close.end, reason: wide ? 'full-width' : 'missing-delimiter' });
-        i = close.end - 1;
+        i = closeEnd - 1;
     }
+    for (let k = 0; k < pending.length; k += 3) found.push({ start: pending[k], end: pending[k + 1], reason: 'missing-delimiter' });
+    // (Those still pending come last, out of document order: noteNearTags sorts them in.)
+    ctx.nearUnlisted += unlisted + (unlistedPending?.size ?? 0);
     return found;
 }
 
@@ -782,7 +876,10 @@ function noteNearTags(lookalikes: { start: number; end: number; reason: Template
     near.sort((a, b) => a.start - b.start);
     let tags = 0;
     let next = 0;
-    for (const item of near) {
+    for (const [index, item] of near.entries()) {
+        // Listed up to the template's room; the rest counted.
+        if (ctx.elements.nearTags <= 0) { ctx.nearUnlisted += near.length - index; return; }
+        ctx.elements.nearTags--;
         while (next < spans.length && spans[next].start < item.start) { if (spans[next].tag) tags++; next++; }
         const text = decodeXmlText(joined.slice(item.start, Math.min(item.end, item.start + MAX_NEAR_TEXT * 8)));
         ctx.nearTags.push({ text: text.length > MAX_NEAR_TEXT ? `${text.slice(0, MAX_NEAR_TEXT)}...` : text, reason: item.reason, beforeTag: ctx.tags.length + tags });
@@ -2116,23 +2213,23 @@ function compilePart(name: string, xml: string, opts: TemplateOptions, d: Templa
     const markerChars = chooseMarkerChars(xml);
     // A part using every noncharacter and private-use character cannot be marked; it holds no tags we
     // could tell from its own text, so it is copied as is (only a crafted part reaches this).
-    if (!markerChars) return { part: { name, nodes: null, hasBlocks: false, nearTags: [] }, literals: 0 };
+    if (!markerChars) return { part: { name, nodes: null, hasBlocks: false, nearTags: [], nearUnlisted: 0 }, literals: 0 };
     const ctx: PartContext = {
         part: name, opts, dialect: d, startText: escapeXmlText(opts.start), endText: escapeXmlText(opts.end),
         tags: [], markerTag: [], markerPiece: [], pieceText: [], open: markerChars[0], close: markerChars[1], hasBlocks: false, unreadable: [], inert: [], elements,
-        nearTags: [], triggers: triggersOf(opts),
+        nearTags: [], nearUnlisted: 0, triggers: triggersOf(opts),
     };
     const marked = d.markPart(xml, ctx);
-    if (!ctx.tags.length) return { part: { name, nodes: null, hasBlocks: false, nearTags: ctx.nearTags }, literals: 0 };
+    if (!ctx.tags.length) return { part: { name, nodes: null, hasBlocks: false, nearTags: ctx.nearTags, nearUnlisted: ctx.nearUnlisted }, literals: 0 };
     const builder = new NodeBuilder(ctx, literalBase, copies);
-    if (!ctx.hasBlocks) return { part: { name, nodes: buildFlatNodes(marked, ctx, builder), hasBlocks: false, nearTags: ctx.nearTags }, literals: builder.count };
+    if (!ctx.hasBlocks) return { part: { name, nodes: buildFlatNodes(marked, ctx, builder), hasBlocks: false, nearTags: ctx.nearTags, nearUnlisted: ctx.nearUnlisted }, literals: builder.count };
     const occurrences = scanStructure(marked, ctx);
     const blocks = pairBlocks(occurrences, ctx);
     resolveScopes(blocks, ctx);
     const removable = removableParagraphs(blocks, ctx.dialect);
     placeCuts(blocks, removable, marked, ctx);
     const nodes = buildTree(marked, occurrences, blocks, removable, ctx, builder);
-    return { part: { name, nodes, hasBlocks: true, nearTags: ctx.nearTags }, literals: builder.count };
+    return { part: { name, nodes, hasBlocks: true, nearTags: ctx.nearTags, nearUnlisted: ctx.nearUnlisted }, literals: builder.count };
 }
 
 /** The paths a condition reads, each as typed, in order, once each. */
@@ -2149,6 +2246,19 @@ function conditionFields(expression: TemplateExpression, out: string[]): void {
             case 'compare': todo.push(e.right, e.left); break;
         }
     }
+}
+
+/**
+ * How many texts that look like a tag the template holds past those {@link templateTags} lists (it lists
+ * at most {@link MAX_NEAR_TAGS}), in the parts and notes it lists.
+ */
+export function unlistedNearTags(compiled: CompiledTemplate): number {
+    let unlisted = 0;
+    for (const [name, part] of compiled.parts) {
+        unlisted += part.nearUnlisted;
+        for (const id of compiled.loopNotes.get(name) ?? []) unlisted += compiled.noteTemplates.get(name)?.get(id)?.nearUnlisted ?? 0;
+    }
+    return unlisted;
 }
 
 /**
@@ -2219,7 +2329,7 @@ export function compileTemplate(entries: Record<string, Uint8Array>, opts: Templ
     let repeatsIds = false;
     const copies = { left: opts.maxRepeatedContent };
     // Each element read costs memory, as when parsing: the template as a whole is held to the parser's bound.
-    const elements: ElementBudget = { left: opts.maxXmlElements, textRuns: opts.maxXmlElements };
+    const elements: ElementBudget = { left: opts.maxXmlElements, textRuns: opts.maxXmlElements, nearTags: MAX_NEAR_TAGS };
     for (const [name, bytes] of Object.entries(entries)) {
         if (!d.isTextPart(name)) continue;
         const { part, literals } = compilePart(name, Buffer.from(bytes).toString('utf8'), opts, d, literalCount, copies, elements);
@@ -2237,7 +2347,7 @@ export function compileTemplate(entries: Record<string, Uint8Array>, opts: Templ
     const noteTemplates = new Map<string, Map<string, NoteTemplate>>();
     const notesPartXml = new Map<string, string>();
     const loopNotes = new Map<string, string[]>();
-    const noteElements: ElementBudget = { left: opts.maxXmlElements, textRuns: opts.maxXmlElements };
+    const noteElements: ElementBudget = { left: opts.maxXmlElements, textRuns: opts.maxXmlElements, nearTags: MAX_NEAR_TAGS };
     const NOTE_PARTS = d.noteParts;
     if (repeatsIds && NOTE_PARTS) {
         // Each note on its own, to be rendered in the scope of a reference to it inside a loop. Its
@@ -2253,7 +2363,7 @@ export function compileTemplate(entries: Record<string, Uint8Array>, opts: Templ
                 const compiledNote = compilePart(part, noteXml, opts, d, literalCount, copies, noteElements);
                 literalCount += compiledNote.literals;
                 if (compiledNote.part.nodes && compiledNote.part.hasBlocks) markRepeatedIds(compiledNote.part.nodes, false, d);
-                templates.set(id, { nodes: compiledNote.part.nodes, xml: noteXml, rangesAcross: compiledNote.part.nodes ? rangesAcrossLoops(compiledNote.part.nodes, d) : new Set(), nearTags: compiledNote.part.nearTags });
+                templates.set(id, { nodes: compiledNote.part.nodes, xml: noteXml, rangesAcross: compiledNote.part.nodes ? rangesAcrossLoops(compiledNote.part.nodes, d) : new Set(), nearTags: compiledNote.part.nearTags, nearUnlisted: compiledNote.part.nearUnlisted });
             }
             noteTemplates.set(part, templates);
         }

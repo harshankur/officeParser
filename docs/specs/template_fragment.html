@@ -220,7 +220,10 @@ if (problems.length === 0) await OfficeTemplate.render('invoice-template.docx', 
     <p>Text a person meant as a tag that is not one is listed by <code>tags()</code> as <code>kind: 'text'</code>, in its
         place among the tags (its part, its loops, no <code>fields</code>), and <code>render()</code> and
         <code>check()</code> report it once per call with a <code>TEMPLATE_NOT_A_TAG</code> warning whose
-        <code>details.texts</code> holds each one's <code>text</code>, <code>part</code> and <code>reason</code>. A render
+        <code>details.texts</code> holds each one's <code>text</code>, <code>part</code> and <code>reason</code>, and
+        <code>details.found</code> how many there are. At most 1,000 such texts are listed for a template, by
+        <code>tags()</code> and in the warning: past them they are only counted, the warning's message says how many
+        were found, and <code>tags()</code> reports the warning when its list was cut. A render
         writes it as typed. It is found in every part a tag can be in: body, headers, footers, notes, comments, text boxes.
         Exactly these count (<code>TemplateTextReason</code>):</p>
     <table>
@@ -234,7 +237,7 @@ if (problems.length === 0) await OfficeTemplate.render('invoice-template.docx', 
         <tbody>
             <tr><td><code>space-in-name</code></td><td>Text between the delimiters that is a name with white space in it: letters, digits, <code>_ . -</code> and white space, starting with a letter or <code>_</code>, at most 64 characters.</td><td><code>{{first name}}</code></td></tr>
             <tr><td><code>unknown-filter</code></td><td>A field through a word after <code>|</code> that is no filter, built in or in <code>formatters</code>.</td><td><code>{{ total | fromat "0.00" }}</code></td></tr>
-            <tr><td><code>missing-delimiter</code></td><td>For delimiters of one character typed twice or more (the default), a name between delimiters one of which is a character short. A short start inside braces still open (code nesting them) is not reported.</td><td><code>{{ name }</code>, <code>{ name }}</code></td></tr>
+            <tr><td><code>missing-delimiter</code></td><td>For delimiters of one character typed twice or more (the default), a name between delimiters one of which is a character short. A short start inside braces still open, or a short end whose brace a later one closes (code nesting them), is not reported.</td><td><code>{{ name }</code>, <code>{ name }}</code></td></tr>
             <tr><td><code>full-width</code></td><td>A name between delimiters typed with full-width characters (U+FF01 to U+FF5E), as a Japanese or Chinese keyboard types them.</td><td><code>&#xFF5B;&#xFF5B;nom&#xFF5D;&#xFF5D;</code></td></tr>
         </tbody>
     </table>
