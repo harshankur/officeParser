@@ -686,7 +686,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         read.lines.forEach((line, k) => {
             if (k > 0) {
                 out.text += '\n';
-                out.children.push({ type: 'break', formatting, metadata: { breakType: 'textWrapping', ...(link || {}) } as BreakMetadata });
+                // (A break holds no link, as no writer writes one on it: see text:line-break.)
+                out.children.push({ type: 'break', formatting, metadata: { breakType: 'textWrapping' } as BreakMetadata });
             }
             if (line) run(line);
         });
@@ -1202,12 +1203,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     // A line break: a `break` node, as a DOCX `w:br` and an HTML `<br>` are, whatever
                     // includeBreakNodes says (a typed line break is content). As a "\n" text run, only
                     // the text, ODT and LaTeX writers showed it: Markdown and HTML wrote a space, and
-                    // RTF and DOCX joined the words.
+                    // RTF and DOCX joined the words. It holds no link, as another reader's break holds none
+                    // and no writer writes one on it: in a long link, each break's copy of it was charged to
+                    // the repeated content budget, and the text runs, whose links are written, lost theirs.
                     fullText += '\n';
                     children.push({
                         type: 'break',
                         formatting: parentFormatting,
-                        metadata: { breakType: 'textWrapping', ...(linkMetadata || {}) } as BreakMetadata
+                        metadata: { breakType: 'textWrapping' } as BreakMetadata
                     });
                 } else if (tagName === 'text:page-number' || tagName === 'text:page-count') {
                     // A page field: its text is the number when the file was saved, marked so that each

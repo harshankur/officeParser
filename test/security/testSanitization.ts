@@ -5326,6 +5326,52 @@ async function nativePdfMemoryTests() {
 }
 
 /**
+ * An ODT line break in a link holds no link of its own, as no writer writes one on it: each break's copy
+ * of a long link was charged to the repeated content budget, and the text runs, whose links are
+ * written, lost theirs (886 of 5,000 kept a 1,019-character link with four breaks between lines).
+ */
+async function odtBreakLinkTests() {
+    console.log('- ODT line breaks in a link hold no copy of it...');
+    const lines = Array.from({ length: 5_000 }, (_, i) => `l${i}`).join('<text:line-break/>'.repeat(4));
+    const bytes = sizeOdf('text', `<text:p><text:a xlink:type="simple" xlink:href="https://example.com/${'u'.repeat(1_000)}">${lines}</text:a></text:p>`);
+    const parsed = await sizeParse(bytes, 'odt', { decompressionLimits: { maxRepeatedContent: 8_000_000 } });
+    let runs = 0, linked = 0, breaks = 0, linkedBreaks = 0;
+    const walk = (nodes: any[] | undefined) => nodes?.forEach(node => {
+        if (node.type === 'text') { runs++; if (node.metadata?.link) linked++; }
+        if (node.type === 'break') { breaks++; if (node.metadata?.link) linkedBreaks++; }
+        walk(node.children);
+    });
+    walk(parsed.ast?.content);
+    check('odt: 5,000 lines of a 1,019-character link, four breaks between each, keep the link on every line, unwarned',
+        !parsed.error && !parsed.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && runs === 5_000 && linked === 5_000 && breaks === 19_996 && linkedBreaks === 0,
+        `${parsed.error} ${parsed.codes} ${linked}/${runs} runs linked, ${linkedBreaks}/${breaks} breaks linked`);
+    // Every writer writes the same with the link on the breaks (as they were read before) or not.
+    const formNs = 'xmlns:form="urn:oasis:names:tc:opendocument:xmlns:form:1.0"';
+    const small = await sizeParse(sizeOdf('text', `<office:forms ${formNs}><form:form form:name="F"><form:textarea form:id="c1" form:current-value="l1&#10;l2&#10;&#10;l3"/></form:form></office:forms>`
+        + '<text:p>before <text:a xlink:type="simple" xlink:href="https://example.com/a">one<text:line-break/>two<text:line-break/><text:line-break/>three</text:a> after</text:p>'
+        + '<text:p><text:a xlink:type="simple" xlink:href="https://example.com/b">x <draw:control draw:control="c1"/> y</text:a></text:p>'), 'odt');
+    const relinked = JSON.parse(JSON.stringify(small.ast?.content ?? []));
+    let breaksRelinked = 0;
+    for (const paragraph of relinked) {
+        const children: any[] = paragraph.children ?? [];
+        children.forEach((child, i) => {
+            const around = children[i - 1]?.metadata?.link ? children[i - 1] : undefined;
+            if (child.type === 'break' && around) { child.metadata = { ...child.metadata, link: around.metadata.link, linkType: around.metadata.linkType }; breaksRelinked++; }
+        });
+    }
+    const outputOf = async (content: any[], format: string) => {
+        const value = (await OfficeGenerator.generate({ ...small.ast!, content } as OfficeParserAST, format as any, { onWarning: () => {} } as any)).value as any;
+        if (typeof value === 'string') return value;
+        const files = unzipSync(value);
+        return strFromU8(files['word/document.xml'] ?? files['content.xml']);
+    };
+    const differing: string[] = [];
+    for (const format of ['html', 'md', 'text', 'rtf', 'tex', 'docx', 'odt']) if (await outputOf(small.ast?.content ?? [], format) !== await outputOf(relinked, format)) differing.push(format);
+    check('odt: a linked paragraph and a linked text area with line breaks are written the same with or without a link on the breaks',
+        !small.error && breaksRelinked === 6 && differing.length === 0, `${small.error} ${breaksRelinked} breaks relinked, differing: ${differing}`);
+}
+
+/**
  * The files pdf.js loads for a PDF (its CMaps and image decoders) are read only as asked for by name,
  * from inside their folder, bounded in size and time, never from the built-in CDN address under
  * `allowRemoteAssets: false`; and nothing waiting on one outlives its bound or the parse's abortSignal.
@@ -5666,6 +5712,7 @@ async function main() {
     await nestedTextBoxTests();
     await chunkSplitterTests();
     await nativePdfMemoryTests();
+    await odtBreakLinkTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);
