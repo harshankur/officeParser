@@ -4301,6 +4301,30 @@ async function testOdtTemplate(): Promise<void> {
 }
 
 /**
+ * ODT templates: a range across a loop's edge is written once, and an element of it that each pass must
+ * write (a comment, which holds its text) gets a name of its own in the later passes, so no comment is lost.
+ */
+async function testOdtTemplateCommentAcrossLoopEdge(): Promise<void> {
+    const { p, body } = odtHelpers();
+    const items = [1, 2, 3];
+    const comment = (text: string) => `<office:annotation office:name="c"><dc:creator>me</dc:creator>${p(text)}</office:annotation>`;
+    const startIn = await body(p(`{{ for i in items }}${comment('c')}X{{ i }}{{ endfor }}after<office:annotation-end office:name="c"/>`), { items });
+    assert.deepStrictEqual([...startIn.matchAll(/<office:annotation office:name="([^"]+)"/g)].map(m => m[1]), ['c', 'c_2', 'c_3'], `each pass's comment has a name of its own, the first the typed one; got ${startIn}`);
+    assert.deepStrictEqual([...startIn.matchAll(/<office:annotation-end office:name="([^"]+)"/g)].map(m => m[1]), ['c'], 'the range is closed once, by the first');
+    assert.strictEqual([...startIn.matchAll(/<text:p>c<\/text:p>/g)].length, 3, 'every comment keeps its text');
+    const reading = await body(p(`{{ for i in items }}${comment('note {{ i }}')}X{{ endfor }}after<office:annotation-end office:name="c"/>`), { items });
+    assert.deepStrictEqual([...reading.matchAll(/<text:p>note (\d)<\/text:p>/g)].map(m => m[1]), ['1', '2', '3'], `a comment across the edge reads each pass's item; got ${reading}`);
+    // The empty elements of such a range are left out after the first pass, as before.
+    assert.strictEqual(await body(p('{{ for i in items }}<text:bookmark-start text:name="b"/>X{{ i }}{{ endfor }}') + p('after<text:bookmark-end text:name="b"/>'), { items }),
+        p('<text:bookmark-start text:name="b"/>X1X2X3') + p('after<text:bookmark-end text:name="b"/>'), 'a bookmark start in the loop is written once');
+    assert.strictEqual(await body(p('<text:bookmark-start text:name="b"/>{{ for i in items }}X{{ i }}<text:bookmark-end text:name="b"/>{{ endfor }}'), { items }),
+        p('<text:bookmark-start text:name="b"/>X1<text:bookmark-end text:name="b"/>X2X3'), 'a bookmark end in the loop is written once');
+    assert.strictEqual(await body(p(`${comment('c')}{{ for i in items }}X{{ i }}<office:annotation-end office:name="c"/>{{ endfor }}`), { items }),
+        p(`${comment('c')}X1<office:annotation-end office:name="c"/>X2X3`), 'a comment end in the loop is written once');
+    console.log('  ODT template comment across a loop edge: All assertions passed ✓');
+}
+
+/**
  * ODT templates: a `<text:s text:c="N"/>` of more than 16 spaces is read as 16 (its text is never longer
  * than its XML) and written back with every space it stood for, whole, wholly in a tag, or split by a
  * delimiter that starts or ends with a space.
@@ -12862,6 +12886,7 @@ async function runTests(): Promise<void> {
         ['ODT template', testOdtTemplate],
         ['ODT template blocks', testOdtTemplateBlocks],
         ['ODT template long space runs', testOdtTemplateLongSpaceRuns],
+        ['ODT template comment across a loop edge', testOdtTemplateCommentAcrossLoopEdge],
         ['Template near-tags', testTemplateNearTags],
         ['Template near-tags balance and limit', testTemplateNearTagsBalanceAndLimit],
         ['DOCX templates as before', testDocxTemplatesAsBefore],

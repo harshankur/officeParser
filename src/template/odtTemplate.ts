@@ -349,6 +349,8 @@ class OdtIds implements TemplateIds {
     private readonly made = new Map<string, Set<string>>();
     private readonly pending = new Map<string, string>();
     private across = new Set<string>();
+    /** The kinds of element of a range across a loop's edge taken already (`<range>:<kind>`). */
+    private readonly takenAcross = new Set<string>();
     private number = 2;
     /** The last start tag an id was taken in, and what its ids were written as, so its `xml:id` and `draw:id` stay one. */
     private lastSlot: IdSlot | null = null;
@@ -365,7 +367,13 @@ class OdtIds implements TemplateIds {
         const space = slot.space ?? 'id';
         if (kind === 'odfRangeStart' || kind === 'odfRangeEnd') {
             const range = `${space}:${value}`;
-            if (this.rangesAcross.has(range)) return value;
+            if (this.rangesAcross.has(range)) {
+                // Written once, under its own name: an element of it written again (one that cannot be left
+                // out, as a comment with its text) is a range of its own, on a point, closed by nothing.
+                const key = `${range}:${kind}`;
+                if (!this.takenAcross.has(key)) { this.takenAcross.add(key); return value; }
+                return this.fresh(space, value);
+            }
             if (kind === 'odfRangeStart') {
                 const id = this.first(space, value) ? value : this.fresh(space, value);
                 this.pending.set(range, id);

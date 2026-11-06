@@ -363,7 +363,8 @@ Please pay {{ amount }} by {{ due }}.
             empty one.</li>
         <li>In an ODT, copies get fresh <code>xml:id</code>s and <code>draw:id</code>s (one value per element), note
             ids, and names for bookmarks, reference marks, index marks, comments, frames, tables and sections (a range's
-            end follows its start; a range across a loop's edge is written once). Notes, comments and text boxes live in
+            end follows its start; a range across a loop's edge is written once, and a comment in the loop is still
+            copied with each pass, the later copies on a point). Notes, comments and text boxes live in
             their paragraph and are copied with it, reading the pass's item. A table or group of rows left with no row is
             removed; a cell, header, footer, note, text box or comment left with no paragraph keeps an empty one; a
             bookmark range whose end a branch removed is closed at its start, and an end whose start went is removed.</li>
