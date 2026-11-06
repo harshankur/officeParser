@@ -826,6 +826,34 @@ export async function testMarkdownDisclosurePreBlock(): Promise<void> {
     console.log('✓ Markdown disclosure <pre> block');
 }
 
+/**
+ * A disclosure's or summary's tag is read whole, an attribute's quoted value holding `>` included, as a
+ * browser reads HTML and CommonMark reads raw HTML in a paragraph; a tag never closed holds the rest of
+ * its HTML block. Linear in the number of unclosed values.
+ */
+export async function testMarkdownDisclosureTagAttributes(): Promise<void> {
+    const attribute = await markdownRead('<details title="a>b">\n<summary>S</summary>\n\nBody\n\n</details>\n\nAfter\n');
+    assert.strictEqual(attribute.shape, 'disclosure[S](paragraph(text)),paragraph(text)', 'Disclosure tag: a quoted value with > in a block tag');
+    assert.strictEqual(attribute.text, 'S\nBody\nAfter', 'Disclosure tag: no attribute text read as body');
+    const inline = await markdownRead('Text <details title="a>b"> inline\n\nBody\n\n</details> tail\n');
+    assert.strictEqual(inline.shape, 'paragraph(text),disclosure[](paragraph(text),paragraph(text)),paragraph(text)', 'Disclosure tag: a quoted value with > inline');
+    assert.strictEqual(inline.text, 'Text\nDetails\ninline\nBody\ntail', 'Disclosure tag: inline, its text in order');
+    const upper = await markdownRead('<DETAILS OPEN>\n<SUMMARY>S</SUMMARY>\n\nBody\n\n</DETAILS >\n\nAfter\n');
+    assert.strictEqual(upper.shape, 'disclosure[S](paragraph(text)),paragraph(text)', 'Disclosure tag: upper case');
+    const n = 4000;
+    const plain = (length: number) => 'Some *plain* text here.\n\n'.repeat(Math.ceil(length / 25));
+    for (const [name, source] of [
+        ['unclosed values in HTML', '<details title="'.repeat(n) + '\n\nx\n'],
+        ['unclosed values inline', 'x ' + '<details a="'.repeat(n) + '\n\nx\n'],
+        ['values with >', '<details title="a>b">\n\nbody\n\n</details>\n\n'.repeat(n)],
+    ]) {
+        const { within, time, plain: baseline } = await linearAgainst(() => OfficeParser.parseOffice(Buffer.from(source), { fileType: 'md' }),
+            () => OfficeParser.parseOffice(Buffer.from(plain(source.length)), { fileType: 'md' }));
+        assert.ok(within, `Disclosure tag: ${name} (${source.length} bytes) in ${time.toFixed(0)} ms, paragraphs in ${baseline.toFixed(0)} ms`);
+    }
+    console.log('✓ Markdown disclosure tags with attributes');
+}
+
 /** ODF namespaces of a note test file. */
 const ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/"';
 

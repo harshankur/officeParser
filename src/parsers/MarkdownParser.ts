@@ -679,10 +679,6 @@ function htmlTableDepthChange(text: string): number {
 /** How deeply disclosures nest in Markdown (see groupDisclosures): deeper, a `<details>` is the HTML block it stands in. */
 const MAX_DISCLOSURE_DEPTH = 16;
 
-/** A whole `<details>` opening tag (no `<` or `>` in it), read where it starts. */
-const DETAILS_OPEN_TAG = /<details(?:[\s/][^<>]*)?>/iy;
-/** A `</details>` closing tag, read where it starts. */
-const DETAILS_CLOSE_TAG = /<\/details\s*>/iy;
 /** A `</table>` closing tag, read where it starts. */
 const TABLE_CLOSE_TAG = /<\/table\s*>/iy;
 /** White space, then a whole `<summary>` opening tag, read where the white space starts. */
@@ -700,11 +696,96 @@ interface BlockPart { text: string; html: boolean }
 interface DisclosureTag { at: number; end: number; open: boolean }
 
 /**
+ * The next `"` and `'` after each place in a text, found once for the whole text when first asked
+ * for: a quoted attribute value ends at the next quote of its kind, and reading each value with its
+ * own search scanned a long run of unclosed values once per tag.
+ */
+class QuoteFinder {
+    private next: { '"'?: Int32Array; "'"?: Int32Array } = {};
+    constructor(private readonly text: string) {}
+    /** Where the first `quote` at or after `from` is, or -1. */
+    find(quote: '"' | "'", from: number): number {
+        let table = this.next[quote];
+        if (!table) {
+            table = new Int32Array(this.text.length + 1);
+            let at = -1;
+            for (let i = this.text.length; i >= 0; i--) {
+                if (this.text[i] === quote) at = i;
+                table[i] = at;
+            }
+            this.next[quote] = table;
+        }
+        return from >= table.length ? -1 : table[from];
+    }
+}
+
+/** Whether a character is HTML white space. */
+const isHtmlSpace = (ch: string | undefined): boolean => ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f';
+
+/**
+ * Where the tag starting at `at` (a `<` or `</`, then a name of `nameLength` characters) ends, after
+ * its `>`, or -1 when it is no whole tag. `strict` reads it as CommonMark reads raw HTML in a
+ * paragraph (attributes of names, then values unquoted, `'single'` or `"double"` quoted); otherwise
+ * as a browser reads HTML (anything between attributes, a quoted value running to its closing quote).
+ * Either way a quoted value may hold `>`. With no `>` before the text ends the tag is not whole.
+ */
+function tagEnd(text: string, at: number, close: boolean, nameLength: number, strict: boolean, quotes: QuoteFinder): number {
+    let i = at + (close ? 2 : 1) + nameLength;
+    const after = text[i];
+    if (!(after === '>' || after === '/' || isHtmlSpace(after))) return -1;
+    if (close && strict) {
+        while (isHtmlSpace(text[i])) i++;
+        return text[i] === '>' ? i + 1 : -1;
+    }
+    if (!strict) {
+        while (i < text.length) {
+            const ch = text[i];
+            if (ch === '>') return i + 1;
+            if (ch === '=') {
+                i++;
+                while (isHtmlSpace(text[i])) i++;
+                if (text[i] === '"' || text[i] === "'") {
+                    const end = quotes.find(text[i] as '"' | "'", i + 1);
+                    if (end === -1) return -1;
+                    i = end + 1;
+                }
+                continue;
+            }
+            i++;
+        }
+        return -1;
+    }
+    for (;;) {
+        const spaceFrom = i;
+        while (isHtmlSpace(text[i])) i++;
+        if (text[i] === '>') return i + 1;
+        if (text[i] === '/' && text[i + 1] === '>') return i + 2;
+        if (i === spaceFrom || !/[A-Za-z_:]/.test(text[i] ?? '')) return -1;
+        while (/[A-Za-z0-9_.:-]/.test(text[i] ?? '')) i++;
+        let j = i;
+        while (isHtmlSpace(text[j])) j++;
+        if (text[j] !== '=') continue;
+        j++;
+        while (isHtmlSpace(text[j])) j++;
+        if (text[j] === '"' || text[j] === "'") {
+            const end = quotes.find(text[j] as '"' | "'", j + 1);
+            if (end === -1) return -1;
+            i = end + 1;
+        } else {
+            const from = j;
+            while (j < text.length && !isHtmlSpace(text[j]) && !'"\'=<>`'.includes(text[j])) j++;
+            if (j === from) return -1;
+            i = j;
+        }
+    }
+}
+
+/**
  * The `<details>` and `</details>` tags of a block that open and close disclosures where it stands, in
  * order, and where its raw HTML starts (see groupDisclosures). As a browser has a renderer's output: a
- * tag in a paragraph (inline HTML: not in a code span, not escaped) or in an HTML block (not in a table,
- * which closes what opens in it; an HTML block that a `<pre>` starts is one whether or not the block
- * closes it); none in a list item, quote, heading, pipe table or indented code,
+ * tag in a paragraph (inline HTML: not in a code span, not escaped, whole by CommonMark's grammar) or
+ * in an HTML block (as a browser reads a tag, not in a table, which closes what opens in it; an HTML
+ * block that a `<pre>` starts is one whether or not the block closes it); none in a list item, quote, heading, pipe table or indented code,
  * whose element closes what opens in it (a quote's text is read as blocks of its own). Linear in the
  * block's length.
  */
@@ -723,10 +804,14 @@ function disclosureTags(part: BlockPart): { tags: DisclosureTag[]; htmlFrom: num
         if (htmlFrom === text.length && text.includes('|') && hasTableDelimiterRow(text)) return { tags: [], htmlFrom };
     }
     const blanked = htmlFrom > 0 ? blankCodeSpans(text.slice(0, htmlFrom)) : '';
+    const quotes = new QuoteFinder(text);
     const tags: DisclosureTag[] = [];
     let tables = 0;
+    // Where the last whole tag in HTML ended: a tag's name inside another tag is none.
+    let insideTag = 0;
     for (const m of text.matchAll(/<(\/?)(details|table)\b/gi)) {
         const at = m.index!;
+        if (at < insideTag) continue;
         if (m[2].length === 5) {
             // A table's tags count in HTML only.
             if (at < htmlFrom) continue;
@@ -734,7 +819,8 @@ function disclosureTags(part: BlockPart): { tags: DisclosureTag[]; htmlFrom: num
             else if (tables > 0) { TABLE_CLOSE_TAG.lastIndex = at; if (TABLE_CLOSE_TAG.test(text)) tables--; }
             continue;
         }
-        if (at >= htmlFrom) {
+        const html = at >= htmlFrom;
+        if (html) {
             if (tables > 0) continue;
         } else {
             if (blanked[at] !== '<') continue;
@@ -742,9 +828,14 @@ function disclosureTags(part: BlockPart): { tags: DisclosureTag[]; htmlFrom: num
             while (text[at - 1 - slashes] === '\\') slashes++;
             if (slashes % 2 === 1) continue;
         }
-        const tag = m[1] ? DETAILS_CLOSE_TAG : DETAILS_OPEN_TAG;
-        tag.lastIndex = at;
-        if (tag.test(text)) tags.push({ at, end: tag.lastIndex, open: !m[1] });
+        const end = tagEnd(text, at, !!m[1], m[2].length, !html, quotes);
+        if (end === -1) {
+            // In HTML, a tag that never ends holds the rest of the block: no tag after it.
+            if (html) break;
+            continue;
+        }
+        if (html) insideTag = end;
+        tags.push({ at, end, open: !m[1] });
     }
     return { tags, htmlFrom };
 }
