@@ -361,7 +361,8 @@ Please pay {{ amount }} by {{ due }}.
             field in it reads the pass's item. A table a
             loop or a branch left with no row is removed, and a cell or content control left without a paragraph gets an
             empty one.</li>
-        <li>In an ODT, copies get fresh <code>xml:id</code>s and <code>draw:id</code>s (one value per element), note
+        <li>In an ODT, copies get fresh <code>xml:id</code>s and <code>draw:id</code>s (one value per element, and the
+            half of a span, link or meta after a block's cut through it gets one too), note
             ids, and names for bookmarks, reference marks, index marks, comments, frames, tables and sections (a range's
             end follows its start; a range across a loop's edge is written once, and a comment in the loop is still
             copied with each pass, the later copies on a point). Notes, comments and text boxes live in

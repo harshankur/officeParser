@@ -5853,7 +5853,7 @@ async function odtTemplateHardeningTests() {
  * what the same text costs in a Word document.
  */
 async function templateTextBoundTests() {
-    console.log('- Templates: text read no longer than its XML, the look-alike scan and its list bounded...');
+    console.log('- Templates: text read no longer than its XML, the look-alike scan and its list bounded, cut ids renewed...');
     const enc = (s: string) => new TextEncoder().encode(s);
     const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"';
     const odtOf = (body: string) => Buffer.from(zipSync({
@@ -5910,6 +5910,15 @@ async function templateTextBoundTests() {
         JSON.stringify(manyWarning?.details.found));
     const wide = await renderQuiet(odtOf(p('\uFF5B\uFF5Ba\uFF5D\uFF5D'.repeat(3000))), {});
     const wideWarning = wide.warnings.find(w => w.code === 'TEMPLATE_NOT_A_TAG');
+    // The half of a meta after a block's cut gets a fresh id: found once per cut, written once per pass.
+    for (const [label, make, data] of [
+        ['ODT: 20,000 inline blocks each cutting a meta with an id', () => odtOf(p('<text:meta xml:id="m">a{{ if x }}b</text:meta>c{{ endif }}'.repeat(n(20_000)))), { x: true }],
+        ['ODT: a loop of 2,000 passes cutting 20 metas with ids', () => odtOf(p('{{ for i in xs }}' + '<text:meta xml:id="m">a{{ if x }}b</text:meta>c{{ endif }}'.repeat(20) + '{{ endfor }}')), { x: true, xs: Array(n(2000)).fill(0) }],
+    ] as [string, () => Buffer, any][]) {
+        let cut: Awaited<ReturnType<typeof renderQuiet>> | undefined;
+        await linear(`template: ${label}`, async () => { cut = await renderQuiet(make(), data); });
+        check(`template: ${label} renders`, cut?.out instanceof Uint8Array, String(cut?.code));
+    }
     check('template: ODT, 3,000 full-width names are listed 1,000 times and counted in full', wideWarning?.details.texts.length === 1000 && wideWarning?.details.found === 3000, JSON.stringify(wideWarning?.details.found));
 }
 

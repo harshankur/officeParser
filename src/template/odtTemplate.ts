@@ -389,11 +389,12 @@ class OdtIds implements TemplateIds {
             this.lastSlot = slot;
             const known = this.inTag.get(value);
             if (known !== undefined) return known;
-            const id = this.first(space, value) ? value : this.fresh(space, value);
+            // (In a cut's opening half, which continues an element written already, always fresh.)
+            const id = !slot.renew && this.first(space, value) ? value : this.fresh(space, value);
             this.inTag.set(value, id);
             return id;
         }
-        return this.first(space, value) ? value : this.fresh(space, value);
+        return !slot.renew && this.first(space, value) ? value : this.fresh(space, value);
     }
     /** Ids written as typed, in a block kept as typed outside any loop: copies made after them are fresh. */
     keep(kind: IdKind, value: string, slot: IdSlot): void {

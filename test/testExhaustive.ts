@@ -4325,6 +4325,43 @@ async function testOdtTemplateCommentAcrossLoopEdge(): Promise<void> {
 }
 
 /**
+ * A block cut through a span, link or meta: the half after the cut continues the element, so its
+ * `xml:id` (and any id that must be unique) is written fresh, in or out of a loop, and the first half
+ * keeps the typed one. When nothing of the element came before the cut, its typed id goes after it.
+ */
+async function testOdtTemplateCutIds(): Promise<void> {
+    const { p, body } = odtHelpers();
+    const items = [{ n: 'A' }, { n: 'B' }];
+    const ids = (xml: string) => [...xml.matchAll(/xml:id="([^"]+)"/g)].map(m => m[1]);
+    const link = (inner: string) => `<text:a xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://x" office:name="L1" xml:id="a1">${inner}</text:a>`;
+    for (const [label, xml, data, expected] of [
+        ['a meta cut by an if', p('<text:meta xml:id="m1">a{{ if x }}b</text:meta>c{{ endif }}d'), { x: true }, p('<text:meta xml:id="m1">a</text:meta><text:meta xml:id="m1_2">b</text:meta>cd')],
+        ['a meta cut by a loop', p('<text:meta xml:id="m1">a{{ for i in items }}b{{ i.n }}</text:meta>c{{ endfor }}d'), { items }, p('<text:meta xml:id="m1">a</text:meta><text:meta xml:id="m1_2">bA</text:meta>c<text:meta xml:id="m1_3">bB</text:meta>cd')],
+        ['a link cut by a loop', p(link('a{{ for i in items }}b{{ i.n }}') + 'c{{ endfor }}d'), { items },
+            p(link('a') + link('bA').replace('a1', 'a1_2') + 'c' + link('bB').replace('a1', 'a1_3') + 'cd')],
+        ['a meta cut where it starts', p('<text:meta xml:id="m1">{{ if x }}b</text:meta>c{{ endif }}d'), { x: true }, p('<text:meta xml:id="m1">b</text:meta>cd')],
+        ['a meta cut by a loop where it starts', p('<text:meta xml:id="m1">{{ for i in items }}b{{ i.n }}</text:meta>c{{ endfor }}d'), { items }, p('<text:meta xml:id="m1">bA</text:meta>c<text:meta xml:id="m1_2">bB</text:meta>cd')],
+        ['a branch not taken', p('<text:meta xml:id="m1">a{{ if x }}b</text:meta>c{{ endif }}d'), { x: false }, p('<text:meta xml:id="m1">a</text:meta>d')],
+        ['a span holds no id', p('<text:span text:style-name="T1">x{{ for i in items }}</text:span><text:span text:style-name="T2">{{ i.n }}{{ endfor }}y</text:span>'), { items },
+            p('<text:span text:style-name="T1">x</text:span><text:span text:style-name="T2">A</text:span><text:span text:style-name="T2">B</text:span><text:span text:style-name="T2">y</text:span>')],
+    ] as [string, string, any, string][]) {
+        const out = await body(xml, data);
+        assert.strictEqual(out, expected, `${label}: the half after the cut has an id of its own`);
+        assert.strictEqual(new Set(ids(out)).size, ids(out).length, `${label}: every xml:id is unique`);
+    }
+    // A block kept as typed (its data missing) writes the half after the cut with a fresh id too.
+    const kept = await body(p('<text:meta xml:id="m1">a{{ if missing }}b</text:meta>c{{ endif }}d'), {}, { onMissing: 'keep' });
+    assert.strictEqual(kept, p('<text:meta xml:id="m1">a</text:meta><text:meta xml:id="m1_2">{{ if missing }}b</text:meta>c{{ endif }}d'), 'kept as typed');
+    assert.strictEqual(await body(p('<text:meta xml:id="m1">{{ if missing }}b</text:meta>c{{ endif }}d'), {}, { onMissing: 'keep' }), p('<text:meta xml:id="m1">{{ if missing }}b</text:meta>c{{ endif }}d'), 'kept as typed, from where it starts');
+    // Word: a run carrying a paragraph id (a crafted one) cut by a block gets a fresh one after the cut.
+    const { docx } = ooxmlHelpers();
+    const word = await OfficeTemplate.render(docx('<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:r w14:paraId="0A0A0A0A"><w:t>a{{ if x }}b</w:t></w:r><w:r><w:t>c{{ endif }}d</w:t></w:r></w:p>'), { data: { x: true } }) as Uint8Array;
+    const paraIds = [...strFromU8(unzipSync(word)['word/document.xml']).matchAll(/w14:paraId="([^"]+)"/g)].map(m => m[1]);
+    assert.deepStrictEqual(paraIds, ['0A0A0A0A', '0A0A0A0B'], `DOCX: the run's second half has an id of its own; got ${paraIds}`);
+    console.log('  ODT template cut ids: All assertions passed ✓');
+}
+
+/**
  * ODT templates: a `<text:s text:c="N"/>` of more than 16 spaces is read as 16 (its text is never longer
  * than its XML) and written back with every space it stood for, whole, wholly in a tag, or split by a
  * delimiter that starts or ends with a space.
@@ -12887,6 +12924,7 @@ async function runTests(): Promise<void> {
         ['ODT template blocks', testOdtTemplateBlocks],
         ['ODT template long space runs', testOdtTemplateLongSpaceRuns],
         ['ODT template comment across a loop edge', testOdtTemplateCommentAcrossLoopEdge],
+        ['ODT template cut ids', testOdtTemplateCutIds],
         ['Template near-tags', testTemplateNearTags],
         ['Template near-tags balance and limit', testTemplateNearTagsBalanceAndLimit],
         ['DOCX templates as before', testDocxTemplatesAsBefore],

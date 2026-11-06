@@ -312,8 +312,12 @@ interface TagRecord {
     filters?: CompiledFilter[];
 }
 
-/** Literal XML, written as is (with its unique ids renumbered in a repeated copy). */
-interface LiteralNode { kind: 'literal'; xml: string; id: number; slots: IdSlot[] | null }
+/**
+ * Literal XML, written as is (with its unique ids renumbered in a repeated copy). `renew` holds where the
+ * unique ids of the opening halves of cuts in it start: such a half continues an element written before
+ * the cut, so its ids are written fresh every time (see {@link CutHalves}).
+ */
+interface LiteralNode { kind: 'literal'; xml: string; id: number; slots: IdSlot[] | null; renew: number[] | null }
 /**
  * One `<w:t>` of a field: the value in its first, nothing (or the kept text) in the rest. `id` tracks
  * its first write (a kept field written again is a repeat), `cost` what evaluating it is charged.
@@ -328,7 +332,7 @@ interface ForNode { kind: 'for'; name: string; list: TemplatePath; listText: str
  * back as the text it stands for. Made only when a block is kept, never stored: made up front, blocks
  * nested 64 deep would each hold a copy of everything inside them.
  */
-interface KeptSpan { from: number; to: number; open: string; close: string; xml: string; ctx: PartContext; id: number; lastId: number; inLoop: boolean; firstTag: number; lastTag: number }
+interface KeptSpan { from: number; to: number; open: string; renew: readonly number[]; close: string; xml: string; ctx: PartContext; id: number; lastId: number; inLoop: boolean; firstTag: number; lastTag: number }
 type TemplateNode = LiteralNode | FieldNode | IfNode | ForNode;
 
 /** An id in a literal that a repeated copy renumbers. */
@@ -337,6 +341,8 @@ export interface IdSlot {
     start: number; end: number; kind: IdKind; value: string; tag: number; gt: number;
     /** The names an OpenDocument id or name must be unique among (`bookmark`, `table`, ...), as its element says. */
     space?: string;
+    /** In the opening half of a cut, which continues an element written already: written fresh every time. */
+    renew?: true;
 }
 
 /**
@@ -1247,8 +1253,11 @@ function firstBlockTag(ctx: PartContext): string {
 
 // ─── Phase 3: blocks ────────────────────────────────────────────────────────
 
-/** Where a tag cuts its block: content before `a` gets `close`, content after `b` gets `open`; `[a, b)` is dropped. */
-interface Cut { a: number; b: number; close: string; open: string }
+/**
+ * Where a tag cuts its block: content before `a` gets `close`, content after `b` gets `open`; `[a, b)` is
+ * dropped. `renew` is where the unique ids in `open` start (see {@link CutHalves}).
+ */
+interface Cut { a: number; b: number; close: string; open: string; renew: readonly number[] }
 
 interface Block {
     kind: 'if' | 'for';
@@ -1514,8 +1523,16 @@ function removableParagraphs(blocks: Block[], d: TemplateDialect): Set<Frame> {
     return removable;
 }
 
-/** The closing and opening halves of cuts, by the `<w:t>` cut and where the cut stops: tags in one run share them. */
-type CutCache = Map<Frame, Map<Frame, { close: string; open: string }>>;
+/**
+ * The closing and opening halves of a cut, and where each unique id in the opening half starts. The
+ * opening half repeats the start tags of the elements cut, ids and all: it continues elements written
+ * already, so those ids are written fresh every time it is written (a second `xml:id="m1"`, or a loop's
+ * first copy written as the typed id, left two elements with one id).
+ */
+interface CutHalves { close: string; open: string; renew: readonly number[] }
+
+/** The halves of cuts, by the `<w:t>` cut and where the cut stops: tags in one run share them. */
+type CutCache = Map<Frame, Map<Frame, CutHalves>>;
 
 /** A cut through the elements between a marker's `<w:t>` and `stop`: each closed before and opened after. */
 function splitCut(occurrence: Occurrence, stop: Frame, xml: string, ctx: PartContext, cache: CutCache): Cut {
@@ -1523,10 +1540,10 @@ function splitCut(occurrence: Occurrence, stop: Frame, xml: string, ctx: PartCon
     if (!byStop) cache.set(occurrence.frame, byStop = new Map());
     let halves = byStop.get(stop);
     if (!halves) byStop.set(stop, halves = cutHalves(occurrence, stop, xml, ctx));
-    return { a: occurrence.at, b: occurrence.at + occurrence.length, close: halves.close, open: halves.open };
+    return { a: occurrence.at, b: occurrence.at + occurrence.length, close: halves.close, open: halves.open, renew: halves.renew };
 }
 
-function cutHalves(occurrence: Occurrence, stop: Frame, xml: string, ctx: PartContext): { close: string; open: string } {
+function cutHalves(occurrence: Occurrence, stop: Frame, xml: string, ctx: PartContext): CutHalves {
     const chain: Frame[] = [];
     for (let f: Frame | null = occurrence.frame; f && f !== stop; f = f.parent) {
         if (chain.length >= MAX_CUT_DEPTH) {
@@ -1543,7 +1560,9 @@ function cutHalves(occurrence: Occurrence, stop: Frame, xml: string, ctx: PartCo
     const close = chain.map(f => `</${f.name}>`).join('');
     // A run's properties come with it (rPr is only ever set on a run).
     const open = chain.reverse().map(f => xml.slice(f.start, f.tagEnd) + (f.rPr ? xml.slice(f.rPr[0], f.rPr[1]) : '')).join('');
-    return { close, open };
+    const renew: number[] = [];
+    if (open) visitIds(open, ctx.dialect, slot => { renew.push(slot.start); });
+    return { close, open, renew };
 }
 
 /** Each block's cuts, from its scope. */
@@ -1557,13 +1576,13 @@ function placeCuts(blocks: Block[], removable: Set<Frame>, xml: string, ctx: Par
         } else if (block.mode === 'paragraph') {
             block.cuts = block.tags.map(t => {
                 const p = t.frame.para!;
-                return removable.has(p) ? { a: p.unit.start, b: p.unit.end, close: '', open: '' } : splitCut(t, p, xml, ctx, cache);
+                return removable.has(p) ? { a: p.unit.start, b: p.unit.end, close: '', open: '', renew: [] } : splitCut(t, p, xml, ctx, cache);
             });
         } else {
             const last = block.tags.length - 1;
             block.cuts = block.units.map((unit, i) => {
                 const at = i === last ? unit.end : unit.start;
-                return { a: at, b: at, close: '', open: '' };
+                return { a: at, b: at, close: '', open: '', renew: [] };
             });
         }
     }
@@ -1586,9 +1605,14 @@ class NodeBuilder {
     count = 0;
     /** The cut whose opening a sequence ends with, until anything else is added to it. */
     private readonly opened = new WeakMap<TemplateNode[], Cut>();
+    /**
+     * A cut whose closing half dropped the start tags of elements it cut as typed, where they held nothing
+     * before it: its opening half then starts those elements (where `own` says, in it), under their own ids.
+     */
+    private reopened: { cut: Cut; own: Set<number> } | null = null;
     /** `copies` is shared by every part of the template: what cuts copy is budgeted for the template as a whole. */
     constructor(private readonly ctx: PartContext, private readonly literalBase: number, private readonly copies: { left: number }) { }
-    literal(xml: string): LiteralNode { return { kind: 'literal', xml, id: this.reserve(), slots: null }; }
+    literal(xml: string): LiteralNode { return { kind: 'literal', xml, id: this.reserve(), slots: null, renew: null }; }
     /** A fresh literal id. */
     reserve(): number { return this.literalBase + this.count++; }
     /** The last id reserved. */
@@ -1598,7 +1622,7 @@ class NodeBuilder {
         const opened = this.opened.get(seq);
         if (opened) {
             this.opened.delete(seq);
-            if (opened.close && xml.startsWith(opened.close) && this.dropEnding(seq, opened.open)) xml = xml.slice(opened.close.length);
+            if (opened.close && xml.startsWith(opened.close) && this.dropEnding(seq, opened.open) !== null) xml = xml.slice(opened.close.length);
             if (!xml) return;
         }
         const last = seq[seq.length - 1];
@@ -1612,13 +1636,32 @@ class NodeBuilder {
     /** Writes the closing half of a cut: or, when the sequence ends with the cut's own opening, drops that. */
     close(seq: TemplateNode[], cut: Cut): void {
         this.opened.delete(seq);
+        this.reopened = null;
         if (!cut.close) return;
-        if (!this.dropEnding(seq, cut.open)) { this.copied(cut.close.length); this.push(seq, cut.close); }
+        const dropped = this.dropEnding(seq, cut.open);
+        if (dropped === null) { this.copied(cut.close.length); this.push(seq, cut.close); return; }
+        // What it dropped as typed (not an opening half written before) is the elements' own start.
+        const own = cut.renew.filter(at => !dropped.includes(at));
+        if (own.length) this.reopened = { cut, own: new Set(own) };
+    }
+    /** Where the ids in a cut's opening half start that are written fresh (see {@link CutHalves}): those that continue an element. */
+    renewOf(cut: Cut): readonly number[] {
+        const reopened = this.reopened;
+        return reopened?.cut === cut ? cut.renew.filter(at => !reopened.own.has(at)) : cut.renew;
     }
     open(seq: TemplateNode[], cut: Cut): void {
+        const renew = this.renewOf(cut);
+        this.reopened = null;
         this.copied(cut.open.length);
         this.push(seq, cut.open);
-        if (cut.open) this.opened.set(seq, cut);
+        if (!cut.open) return;
+        this.opened.set(seq, cut);
+        if (!renew.length) return;
+        // The literal ends with the opening half: where its ids start, there.
+        const last = seq[seq.length - 1] as LiteralNode;
+        const base = last.xml.length - cut.open.length;
+        last.renew ??= [];
+        for (const at of renew) last.renew.push(base + at);
     }
     /**
      * What cuts copy into the template: each opening half repeats its run's start tag and properties,
@@ -1628,13 +1671,24 @@ class NodeBuilder {
     private copied(amount: number): void {
         if ((this.copies.left -= amount) < 0) this.ctx.opts.onRepeatLimit();
     }
-    /** Removes `ending` from the end of the sequence's last literal, if it ends with it. */
-    private dropEnding(seq: TemplateNode[], ending: string): boolean {
+    /**
+     * Removes `ending` from the end of the sequence's last literal, if it ends with it: null when it does
+     * not, else where in `ending` the ids of opening halves it held started (see {@link CutHalves}).
+     */
+    private dropEnding(seq: TemplateNode[], ending: string): number[] | null {
         const last = seq[seq.length - 1];
-        if (!ending || last?.kind !== 'literal' || !last.xml.endsWith(ending)) return false;
+        if (!ending || last?.kind !== 'literal' || !last.xml.endsWith(ending)) return null;
         last.xml = last.xml.slice(0, last.xml.length - ending.length);
+        // An opening half dropped takes its ids with it.
+        const dropped: number[] = [];
+        if (last.renew) {
+            const length = last.xml.length;
+            for (const at of last.renew) if (at >= length) dropped.push(at - length);
+            last.renew = last.renew.filter(at => at < length);
+            if (!last.renew.length) last.renew = null;
+        }
         if (!last.xml) seq.pop();
-        return true;
+        return dropped;
     }
     field(markerIndex: number): FieldNode {
         const record = this.ctx.tags[this.ctx.markerTag[markerIndex]];
@@ -1755,7 +1809,7 @@ function blockNode(block: Block, xml: string, ctx: PartContext, builder: NodeBui
     const first = block.cuts[0];
     const last = block.cuts[block.cuts.length - 1];
     const kept: KeptSpan = {
-        from: first.a, to: last.b, open: first.open, close: last.close, xml, ctx, id: builder.reserve(), lastId: -1, inLoop: false,
+        from: first.a, to: last.b, open: first.open, renew: builder.renewOf(first), close: last.close, xml, ctx, id: builder.reserve(), lastId: -1, inLoop: false,
         firstTag: block.tags[0].tagIndex, lastTag: block.tags[block.tags.length - 1].tagIndex,
     };
     const tags = block.tags.map(t => ctx.tags[t.tagIndex]);
@@ -1887,14 +1941,22 @@ function seedDocxIds(entries: Record<string, Uint8Array>, chargeFor: (part: stri
     return seeds;
 }
 
-/** Gives every literal inside a loop its id slots. */
+/**
+ * Gives every literal inside a loop its id slots, and every literal outside loops the slots of the ids of
+ * cuts' opening halves in it (written fresh every time, see {@link CutHalves}).
+ */
 function markRepeatedIds(nodes: TemplateNode[], inLoop: boolean, d: TemplateDialect): boolean {
     let found = false;
     for (const node of nodes) {
         switch (node.kind) {
             case 'literal':
-                if (inLoop) {
-                    const slots = findIds(node.xml, d);
+                if (inLoop || node.renew) {
+                    let slots = findIds(node.xml, d);
+                    if (node.renew) {
+                        const renew = new Set(node.renew);
+                        for (const slot of slots) if (renew.has(slot.start)) slot.renew = true;
+                        if (!inLoop) slots = slots.filter(slot => slot.renew);
+                    }
                     if (slots.length) { node.slots = slots; found = true; }
                 }
                 break;
@@ -1903,10 +1965,12 @@ function markRepeatedIds(nodes: TemplateNode[], inLoop: boolean, d: TemplateDial
                 for (const section of node.sections) found = markRepeatedIds(section, inLoop, d) || found;
                 // A kept block's ids are found when it is written (see renderKept); it may hold some.
                 if (inLoop) node.kept.inLoop = found = true;
+                else if (node.kept.renew.length) found = true;
                 break;
             case 'for':
                 found = markRepeatedIds(node.body, true, d) || found;
                 if (inLoop) node.kept.inLoop = found = true;
+                else if (node.kept.renew.length) found = true;
                 break;
         }
     }
@@ -1977,7 +2041,7 @@ class IdState implements TemplateIds {
         this.across.add(key);
         return false;
     }
-    take(kind: IdKind, value: string, scope: Scope | null): string {
+    take(kind: IdKind, value: string, scope: Scope | null, slot?: IdSlot): string {
         const range = kind === 'bookmarkStart' || kind === 'bookmarkEnd' ? `bookmark:${value}`
             : kind === 'commentStart' || kind === 'commentEnd' || kind === 'commentRef' ? `comment:${value}` : null;
         if (range && this.rangesAcross.has(range)) return value;
@@ -2003,8 +2067,9 @@ class IdState implements TemplateIds {
             case 'endnoteRef': return this.copyNote(kind, value, scope);
             case 'docPr': return this.first(kind, value) ? value : this.freshDocPr();
             case 'sdt': return this.first(kind, value) ? value : String(this.sdt++);
+            // (In a cut's opening half, which continues an element written already, always fresh.)
             case 'paraId':
-            case 'textId': return this.first(kind, value) ? value : this.freshPara();
+            case 'textId': return !slot?.renew && this.first(kind, value) ? value : this.freshPara();
             // OpenDocument's kinds are never found in a Word document (see docxIdAttributes).
             case 'odfId': case 'odfNoteId': case 'odfName': case 'odfRangeStart': case 'odfRangeEnd': return value;
         }
@@ -2457,7 +2522,8 @@ function rangesAcrossLoops(nodes: TemplateNode[], d: TemplateDialect): Set<strin
     const visit = (list: TemplateNode[], loop: ForNode | null): void => {
         for (const node of list) {
             if (node.kind === 'literal') {
-                for (const slot of node.slots ?? (loop ? [] : findIds(node.xml, d))) {
+                // (Outside loops a literal's slots are only its cuts' ids, when it has any: all of them read.)
+                for (const slot of loop ? node.slots ?? [] : findIds(node.xml, d)) {
                     const range = d.rangeOf(slot);
                     if (!range) continue;
                     let loops = where.get(range);
@@ -2527,11 +2593,11 @@ function writeSlots(xml: string, slots: IdSlot[], scope: Scope | null, state: Re
 }
 
 /** Calls `visit` with the id slots of every literal inside a loop (the slots markRepeatedIds gave them). */
-function forEachLoopSlots(nodes: TemplateNode[], visit: (slots: IdSlot[]) => void): void {
+function forEachLoopSlots(nodes: TemplateNode[], visit: (slots: IdSlot[]) => void, inLoop = false): void {
     for (const node of nodes) {
-        if (node.kind === 'literal') { if (node.slots) visit(node.slots); }
-        else if (node.kind === 'if') node.sections.forEach(section => forEachLoopSlots(section, visit));
-        else if (node.kind === 'for') forEachLoopSlots(node.body, visit);
+        if (node.kind === 'literal') { if (inLoop && node.slots) visit(node.slots); }
+        else if (node.kind === 'if') node.sections.forEach(section => forEachLoopSlots(section, visit, inLoop));
+        else if (node.kind === 'for') forEachLoopSlots(node.body, visit, true);
     }
 }
 
@@ -2689,14 +2755,20 @@ function renderKept(span: KeptSpan, scope: Scope | null, state: RenderState, out
     if (repeat) state.charge(Math.max(xml.length, span.to - span.from));
     state.written.fill(1, span.id, span.lastId + 1);
     if (!state.ids) { state.emit(out, xml); return; }
-    if (!span.inLoop) {
+    const ids = state.ids;
+    if (!span.inLoop && !span.renew.length) {
         // Written once, under the ids it was typed with; a note it refers to is written with it.
-        const ids = state.ids;
         visitIds(xml, state.dialect, slot => ids.keep(slot.kind, slot.value, slot));
         state.emit(out, xml);
         return;
     }
-    writeSlots(xml, findIds(xml, state.dialect), scope, state, out);
+    // Its opening half (at its start) continues elements written before it: their ids are written fresh.
+    const slots = findIds(xml, state.dialect);
+    const renew = new Set(span.renew);
+    for (const slot of slots) if (renew.has(slot.start)) slot.renew = true;
+    if (span.inLoop) { writeSlots(xml, slots, scope, state, out); return; }
+    for (const slot of slots) if (!slot.renew) ids.keep(slot.kind, slot.value, slot);
+    writeSlots(xml, slots.filter(slot => slot.renew), scope, state, out);
 }
 
 function renderLiteral(node: LiteralNode, scope: Scope | null, state: RenderState, out: string[]): void {
