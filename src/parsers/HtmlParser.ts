@@ -9,6 +9,7 @@ import { iframeAllowed, isCssLength, isSafeHtmlAttributeName, isVideoId } from '
 import { setOwn } from '../utils/lookupUtils.js';
 import { cellSpan, MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
+import { doctypeSubsetEnd } from '../utils/doctypeSubset.js';
 import { textDecoder } from '../utils/encodingUtils.js';
 import { lengthToPt } from '../utils/officeGenUtils.js';
 import { cssColorHex } from '../utils/colorUtils.js';
@@ -848,6 +849,9 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
         closeTo(target.parent!);
     };
 
+    // Nothing but white space, comments, processing instructions and declarations read yet (the
+    // document's prolog), and no DOCTYPE: only a DOCTYPE read here may carry an internal subset.
+    let prolog = true;
     while (cursor < html.length) {
         const tagStart = html.indexOf('<', cursor);
 
@@ -860,6 +864,7 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
         if (tagStart > cursor) {
             const text = html.substring(cursor, tagStart);
             if (text) pushText(text);
+            if (prolog && /[^\t\n\f\r \uFEFF]/.test(text)) prolog = false;
         }
         cursor = tagStart;
 
@@ -883,6 +888,7 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
                 const end = html.indexOf(']]>', tagStart + 9);
                 const text = html.substring(tagStart + 9, end === -1 ? html.length : end);
                 if (text) pushText(text.replace(/&/g, '&amp;'));
+                prolog = false;
                 cursor = end === -1 ? html.length : end + 3;
                 continue;
             }
@@ -890,13 +896,15 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
             // markers `<![if !supportLists]>` and `<![endif]>`): markup read as nothing, as a browser reads
             // it, and what stands between the markers is kept.
             let end = html.indexOf('>', tagStart + 2);
-            // An XML DOCTYPE (an XHTML page) may carry an internal subset in brackets, whose entity
-            // values can hold `>`: the declaration ends at the `>` after the closing bracket.
-            const subset = html.indexOf('[', tagStart + 2);
-            if (subset !== -1 && end !== -1 && subset < end && /^<!doctype/i.test(html.substring(tagStart, tagStart + 9))) {
-                const close = html.indexOf(']', subset + 1);
-                const after = close === -1 ? -1 : html.indexOf('>', close + 1);
-                if (after !== -1) end = after;
+            // An XML DOCTYPE (an XHTML page) may carry an internal subset in brackets, whose entity values
+            // can hold `>`: read as XML only for the document's DOCTYPE, in its prolog, and only when the
+            // subset is well formed (see doctypeSubsetEnd). Any other declaration ends at its first `>`, as
+            // HTML has it: searched for a `[` to the end of the document, and then for a `]` anywhere after
+            // it, each declaration cost the rest of the document, and a `[` swallowed the page.
+            if (prolog && end !== -1 && /^<!doctype/i.test(html.substring(tagStart, tagStart + 9))) {
+                prolog = false;
+                const subsetEnd = doctypeSubsetEnd(html, tagStart);
+                if (subsetEnd !== -1) end = subsetEnd - 1;
             }
             cursor = end === -1 ? html.length : end + 1;
             continue;
@@ -912,10 +920,12 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
         } else if (!isAsciiLetter(next)) {
             // A `<` that starts no tag (`a < b`, `<5`) is text.
             pushText('<');
+            prolog = false;
             cursor = tagStart + 1;
             continue;
         }
 
+        prolog = false;
         // Scan for the tag's closing '>', skipping any that appear inside a quoted attribute value.
         // Browsers do NOT escape '>' inside attribute values on serialization, so a literal '>' there
         // (e.g. a mermaid diagram's `-->` in data-mermaid) must not be read as the tag end. The scan

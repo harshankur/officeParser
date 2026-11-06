@@ -54,6 +54,7 @@ import { noteDocumentBytes } from './utils/budgetUtils.js';
 import { assertNode, isBrowser } from './utils/envUtils.js';
 import { checkAbortSignal, getOfficeError, getWrappedError, logWarning } from './utils/errorUtils.js';
 import { decryptIfNeeded } from './crypto/decryptContainer.js';
+import { doctypeSubsetEnd } from './utils/doctypeSubset.js';
 import { loadFileType } from './utils/moduleLoader.js';
 import { terminateOcr } from './utils/ocrUtils.js';
 import { detectOfficeTypeFromZip } from './utils/zipUtils.js';
@@ -93,6 +94,8 @@ const hasXhtmlRoot = (buffer: Buffer): boolean => {
     }
     let i = text.charCodeAt(0) === 0xFEFF ? 1 : 0;
     const n = text.length;
+    // Only the first DOCTYPE may carry an internal subset (XML allows one), read once.
+    let doctypeSeen = false;
     while (i < n) {
         const c = text[i];
         if (c === ' ' || c === '\t' || c === '\r' || c === '\n') { i++; continue; }
@@ -106,17 +109,14 @@ const hasXhtmlRoot = (buffer: Buffer): boolean => {
             if (end < 0) return false;
             i = end + 3;
         } else if (text.startsWith('<!', i)) {
-            // A DOCTYPE, whose internal subset in brackets may itself hold `>`.
-            let j = i + 2;
-            let depth = 0;
-            for (; j < n; j++) {
-                const d = text[j];
-                if (d === '[') depth++;
-                else if (d === ']') depth = Math.max(0, depth - 1);
-                else if (d === '>' && depth === 0) break;
-            }
-            if (j >= n) return false;
-            i = j + 1;
+            // A declaration ends at its first `>`; the document's DOCTYPE, when it carries a well-formed
+            // internal subset (whose entity values may hold `>` and `]`), after that subset's `]>`.
+            const doctype = !doctypeSeen && /^<!doctype/i.test(text.substring(i, i + 9));
+            if (doctype) doctypeSeen = true;
+            const subsetEnd = doctype ? doctypeSubsetEnd(text, i) : -1;
+            const end = subsetEnd !== -1 ? subsetEnd - 1 : text.indexOf('>', i + 2);
+            if (end < 0) return false;
+            i = end + 1;
         } else {
             let j = i + 1;
             while (j < n && !/[\s/>]/.test(text[j])) j++;

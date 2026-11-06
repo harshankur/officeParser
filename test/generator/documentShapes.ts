@@ -412,3 +412,39 @@ export async function testDisclosureCarriesNoText(): Promise<void> {
     assert.ok(nestedTime < 3 * flatTime + 200, `Disclosure: ${levels} levels in ${nestedTime.toFixed(0)} ms, divs in ${flatTime.toFixed(0)} ms`);
     console.log('✓ Disclosure carries no text');
 }
+
+/**
+ * A declaration ends at its first `>`, as HTML has it; only the document's DOCTYPE, in its prolog, may
+ * carry an XML internal subset, read when well formed. The reading is linear whatever the declarations.
+ */
+export async function testDoctypeAndDeclarations(): Promise<void> {
+    const textOf = async (source: string, config: { fileType?: 'html' } = { fileType: 'html' }) => {
+        const ast = await OfficeParser.parseOffice(Buffer.from(source), config);
+        return [ast.type, (await ast.to('text')).value.trim()];
+    };
+    assert.deepStrictEqual(await textOf('<!DOCTYPE html [><html><body><p>Visible</p><p>Item a[0] is ok</p><p>Tail</p></body></html>'),
+        ['html', 'Visible\nItem a[0] is ok\nTail'], 'DOCTYPE: a `[` that opens no subset ends at the first `>`');
+    assert.deepStrictEqual(await textOf('<!DOCTYPE html PUBLIC "x[y" "z"><p>Pub</p><p>b[1]</p>'), ['html', 'Pub\nb[1]'], 'DOCTYPE: a `[` in a quoted public id opens no subset');
+    // XHTML: a subset whose entity values, comments and instructions hold `>`, and a parameter entity.
+    assert.deepStrictEqual(await textOf('<?xml version="1.0"?>\n<!DOCTYPE html [<!ENTITY a ">"> <!-- c > --> <?pi > ?> %pe; ]>\n'
+        + '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>X</p></body></html>', {}), ['html', 'X'], 'DOCTYPE: an XHTML subset read whole');
+    assert.deepStrictEqual(await textOf('<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "]>">]><x:html xmlns:x="http://www.w3.org/1999/xhtml"><x:body><x:p>Q</x:p></x:body></x:html>', {}),
+        ['html', 'Q'], 'DOCTYPE: an entity value holding `]>` leaves the file XHTML');
+    // A DOCTYPE after content is a declaration to its first `>`; Word's conditional markers are nothing.
+    assert.deepStrictEqual(await textOf('<p>Before</p><!DOCTYPE html [<!ENTITY a ">">]><p>After</p>'), ['html', 'Before\n">]>\nAfter'], 'DOCTYPE: one after content ends at its first `>`');
+    assert.deepStrictEqual(await textOf('<!DOCTYPE html>\n<p>Plain</p><![if !supportLists]>1.<![endif]> item'), ['html', 'Plain\n1. item'], 'DOCTYPE: conditional markers unchanged');
+    // Linear: each against plain paragraphs of the same size, in the same run.
+    const n = 160_000;
+    const plain = (length: number) => '<p>' + 'a'.repeat(length) + '</p>';
+    for (const [name, source] of [
+        ['declarations', '<p>x</p>' + '<!a>'.repeat(2 * n) + '<p>y</p>'],
+        ['repeated DOCTYPEs', '<!DOCTYPE a [<!ENTITY x "> '.repeat(n) + '<p>y</p>'],
+        ['an unclosed subset', '<!DOCTYPE a [' + '<!ENTITY x "a">'.repeat(n) + '<p>y</p>'],
+        ['brackets in text', '<!DOCTYPE html><p>' + 'a[b] <!x[> '.repeat(n) + '</p>'],
+    ]) {
+        const time = await timed(() => OfficeParser.parseOffice(Buffer.from(source), { fileType: 'html' }));
+        const baseline = await timed(() => OfficeParser.parseOffice(Buffer.from(plain(source.length)), { fileType: 'html' }));
+        assert.ok(time < 3 * baseline + 200, `DOCTYPE: ${name} (${source.length} bytes) in ${time.toFixed(0)} ms, plain text in ${baseline.toFixed(0)} ms`);
+    }
+    console.log('✓ DOCTYPE and declarations');
+}
