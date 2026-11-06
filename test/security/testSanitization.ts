@@ -4977,6 +4977,54 @@ async function headerPartWeightTests() {
 }
 
 /**
+ * A rich shared string shown in many cells: an unstyled, unlinked cell shares the string's runs, and is
+ * charged their values; a styled or linked cell holds copies of them, whose values boundRepeatedValues
+ * charges, so the cell is charged their text and nodes alone. Charged twice, a styled copy paid for its
+ * run's font and then lost it: 1 run in 2,000 kept a 10,000-character font.
+ */
+async function xlsxRichStringChargeTests() {
+    console.log('- XLSX rich shared strings are charged each value once...');
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const cells = 2_000, font = 10_000, textLength = 100, budget = 4_000_000;
+    const workbook = (styled: boolean, linked: boolean) => {
+        const rows = Array.from({ length: cells }, (_, i) => `<row r="${i + 1}"><c r="A${i + 1}" t="s"${styled ? ' s="1"' : ''}><v>0</v></c></row>`).join('');
+        return Buffer.from(zipSync({
+            '[Content_Types].xml': sizeEnc('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'),
+            '_rels/.rels': sizeEnc(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${SIZE_REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>`),
+            'xl/workbook.xml': sizeEnc(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+            'xl/_rels/workbook.xml.rels': sizeEnc(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${SIZE_REL}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${SIZE_REL}/sharedStrings" Target="sharedStrings.xml"/><Relationship Id="rId3" Type="${SIZE_REL}/styles" Target="styles.xml"/></Relationships>`),
+            'xl/sharedStrings.xml': sizeEnc(`<?xml version="1.0"?><sst ${ns}><si><r><rPr><rFont val="${'F'.repeat(font)}"/></rPr><t>${'x'.repeat(textLength)}</t></r></si></sst>`),
+            'xl/styles.xml': sizeEnc(`<?xml version="1.0"?><styleSheet ${ns}><fonts count="1"><font/></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFFF00"/></patternFill></fill></fills><cellXfs count="2"><xf fontId="0" fillId="0"/><xf fontId="0" fillId="2"/></cellXfs></styleSheet>`),
+            'xl/worksheets/sheet1.xml': sizeEnc(`<?xml version="1.0"?><worksheet ${ns}><sheetData>${rows}</sheetData>${linked ? `<hyperlinks><hyperlink ref="A1:A${cells}" location="S!B1"/></hyperlinks>` : ''}</worksheet>`),
+        }, { level: 9 }));
+    };
+    const shown = async (styled: boolean, linked: boolean) => {
+        const bytes = workbook(styled, linked);
+        const parsed = await sizeParse(bytes, 'xlsx', { decompressionLimits: { maxRepeatedContent: budget } });
+        let whole = 0, withFont = 0;
+        const walk = (nodes: any[] | undefined) => nodes?.forEach(node => {
+            if (node.type === 'cell') {
+                if (node.text.length === textLength) whole++;
+                if (node.children?.some((c: any) => c.formatting?.font?.length === font)) withFont++;
+            }
+            walk(node.children);
+        });
+        walk(parsed.ast?.content);
+        return { ...parsed, whole, withFont, json: parsed.ast ? JSON.stringify(parsed.ast).length : 0, bytes: bytes.length };
+    };
+    const shared = await shown(false, false);
+    check('xlsx: a rich string in a 10,000-character font shown in 2,000 unstyled cells keeps text and font together as far as the budget goes',
+        !shared.error && shared.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && shared.whole > 350 && shared.whole < 500 && shared.withFont === shared.whole,
+        `${shared.error} ${shared.whole} whole, ${shared.withFont} with the font`);
+    for (const [label, styled, linked] of [['styled', true, false], ['linked', false, true]] as const) {
+        const copies = await shown(styled, linked);
+        check(`xlsx: a rich string in a 10,000-character font shown in 2,000 ${label} cells keeps every cell's text and the font on at least 350, with REPEATED_CONTENT_LIMIT_EXCEEDED`,
+            !copies.error && copies.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && copies.whole === cells && copies.withFont >= 350 && copies.json < 3 * (budget + 16 * copies.bytes),
+            `${copies.error} ${copies.whole} whole, ${copies.withFont} with the font, json ${copies.json}`);
+    }
+}
+
+/**
  * The files pdf.js loads for a PDF (its CMaps and image decoders) are read only as asked for by name,
  * from inside their folder, bounded in size and time, never from the built-in CDN address under
  * `allowRemoteAssets: false`; and nothing waiting on one outlives its bound or the parse's abortSignal.
@@ -5313,6 +5361,7 @@ async function main() {
     await htmlReadingTests();
     await fontFileTests();
     await headerPartWeightTests();
+    await xlsxRichStringChargeTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);
