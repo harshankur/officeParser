@@ -152,6 +152,59 @@ export async function testFigureCaptions(): Promise<void> {
     console.log('✓ Figure captions');
 }
 
+/**
+ * `<details>`/`<summary>` is a disclosure node, written back as `<details>` in HTML, EPUB and Markdown
+ * (an HTML block holding Markdown) and as a bold summary line and its body elsewhere; `<kbd>` is keyboard
+ * input, `<kbd>` in HTML and Markdown and code elsewhere.
+ */
+export async function testDisclosuresAndKeyboard(): Promise<void> {
+    const source = 'Before\n\n<details open>\n<summary>Click me</summary>\n\nSome *body* text.\n\n- a\n- b\n\n```js\nconst x = 1;\n\nconst y = 2;\n```\n\n'
+        + '<details>\n<summary>Inner</summary>\n\nNested.\n\n</details>\n\n</details>\n\nPress <kbd>Ctrl</kbd>+<kbd>*C*</kbd> to copy.\n\nAfter';
+    const ast = await OfficeParser.parseOffice(Buffer.from(source), { fileType: 'md' });
+    const outer = ast.content[1];
+    assert.strictEqual(outer.type, 'disclosure', 'Disclosure: a details block is a disclosure');
+    assert.deepStrictEqual(outer.metadata, { summary: 'Click me', open: true }, 'Disclosure: its summary and open state');
+    assert.deepStrictEqual(outer.children!.map(c => c.type), ['paragraph', 'list', 'list', 'code', 'disclosure'], 'Disclosure: its body read as Markdown, a nested one too');
+    const keys = ast.content[2].children!.filter(c => c.formatting?.keyboard).map(c => [c.text, c.formatting?.font]);
+    assert.deepStrictEqual(keys, [['Ctrl', 'monospace'], ['*C*', 'monospace']], 'Keyboard: <kbd> is keyboard input, monospace too');
+    // Markdown to editor HTML and back, three times: the same Markdown, kbd's Markdown characters as references.
+    const expected = source.replace('<kbd>*C*</kbd>', '<kbd>&#42;C&#42;</kbd>');
+    const { html, md } = await markdownThroughHtml(source);
+    assert.deepStrictEqual(md, [expected, expected, expected], 'Disclosure: Markdown to HTML to Markdown is stable over three passes');
+    assert.ok(html[0].includes('<details open=""><summary>Click me</summary><p>Some <i>body</i> text.</p>'), `Disclosure: HTML writes <details>: ${html[0]}`);
+    assert.ok(html[0].includes('<details><summary>Inner</summary><p>Nested.</p>'), 'Disclosure: a nested one, closed');
+    assert.ok(html[0].includes('Press <kbd>Ctrl</kbd>+<kbd>*C*</kbd> to copy.'), 'Keyboard: HTML writes <kbd>');
+    // The HTML reader: loose text in a disclosure is a paragraph; one with no summary has none.
+    const loose = await OfficeParser.parseOffice(Buffer.from('<details><summary>S</summary>Loose <b>text</b></details><details><p>x</p></details>'), { fileType: 'html' });
+    assert.deepStrictEqual(loose.content.map(n => [n.type, n.metadata, n.children?.map(c => c.type)]), [
+        ['disclosure', { summary: 'S' }, ['paragraph']], ['disclosure', {}, ['paragraph']],
+    ], 'Disclosure: HTML read as disclosures');
+    assert.ok((await loose.to('html', { htmlConfig: { standalone: false } })).value.includes('<details><p>x</p>'), 'Disclosure: none written where none was given');
+    // EPUB: XHTML's open attribute, read back.
+    const epub = await OfficeParser.parseOffice(Buffer.from((await ast.to('epub')).value as Uint8Array));
+    const epubOuter = epub.content.find(n => n.type === 'disclosure');
+    assert.deepStrictEqual(epubOuter?.metadata, { summary: 'Click me', open: true }, 'Disclosure: EPUB keeps it');
+    // Elsewhere: the summary as a bold line, then the body, nothing hidden or lost.
+    const text = (await ast.to('text')).value;
+    assert.ok(text.includes('Click me\nSome body text.\n- a\n- b\nconst x = 1;\n\nconst y = 2;\nInner\nNested.'), `Disclosure: text writes it open: ${text}`);
+    assert.ok(/Details\nx/.test((await loose.to('text')).value), 'Disclosure: one with no summary is "Details", as a browser shows it');
+    for (const format of ['docx', 'odt', 'rtf', 'tex', 'pptx'] as const) {
+        const back = await OfficeParser.parseOffice(Buffer.from((await ast.to(format)).value as Uint8Array), format === 'tex' ? { fileType: 'tex' } : {});
+        const backMd = (await back.to('md')).value;
+        assert.ok(/\*\*Click me\*\*[\s\S]*Some \*body\* text\.[\s\S]*\*\*Inner\*\*[\s\S]*Nested\./.test(backMd), `Disclosure: ${format} writes its summary in bold and its body: ${backMd}`);
+        if (format === 'docx' || format === 'odt' || format === 'tex') assert.ok(backMd.includes('`Ctrl`'), `Keyboard: ${format} writes keyboard input as code: ${backMd}`);
+    }
+    assert.ok(/\{\\f2 Ctrl\}/.test((await ast.to('rtf')).value) && (await ast.to('rtf')).value.includes('\\f2\\fmodern\\fcharset0 Courier New;'), 'Keyboard: RTF writes keyboard input in the monospace font');
+    const pdf = await OfficeParser.parseOffice(Buffer.from((await ast.to('pdf', { pdfConfig: { engine: 'native' } })).value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } });
+    assert.ok(/Click me[\s\S]*Nested\./.test((await pdf.to('text')).value), 'Disclosure: the native PDF engine draws it open');
+    // In a list item, where no block goes: its summary in bold, then its body, reported.
+    const inItem = await OfficeParser.parseOffice(Buffer.from('<ul><li><details><summary>S</summary><p>Body</p></details></li></ul>'), { fileType: 'html' });
+    const itemMd = await inItem.to('md');
+    assert.ok(/^- \*\*S\*\* Body/m.test(itemMd.value), `Disclosure: in a list item, its summary in bold: ${itemMd.value}`);
+    assert.ok(itemMd.messages.some(m => m.code === 'CONTENT_NOT_REPRESENTABLE'), 'Disclosure: and that is reported');
+    console.log('✓ Disclosures and keyboard input');
+}
+
 /** Every note in an AST, in reference order, once each. */
 function notesOf(ast: OfficeParserAST): OfficeContentNode[] {
     const out: OfficeContentNode[] = [];

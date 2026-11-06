@@ -1,5 +1,6 @@
 import { BaseGenerator } from './generators/BaseGenerator.js';
 import { withCaptionParagraphs } from './utils/figureCaptions.js';
+import { withDisclosuresOpened } from './utils/disclosures.js';
 import { sharedNodeVisits } from './utils/nodeListUtils.js';
 import { ChunkingGenerator } from './generators/ChunkingGenerator.js';
 import { CsvGenerator } from './generators/CsvGenerator.js';
@@ -123,6 +124,10 @@ export class OfficeGenerator {
             const writesFigures = normalizedDestination === 'html' || normalizedDestination === 'md' || normalizedDestination === 'epub'
                 || (normalizedDestination === 'pdf' && (config as GeneratorConfig<'pdf'> | undefined)?.pdfConfig?.engine !== 'native');
             if (!writesFigures) input = withCaptionParagraphs(input, { tree });
+            // A disclosure (<details>) is one in HTML, EPUB and Markdown; every other writer, a printed page
+            // too (where a closed one would hide its body), is given its summary as a bold line and its body.
+            const writesDisclosures = normalizedDestination === 'html' || normalizedDestination === 'md' || normalizedDestination === 'epub';
+            if (!writesDisclosures) input = withDisclosuresOpened(input, { tree });
             noteDocumentBytes(input, documentBytesOf(ast));
             // A table's grid is held to the grid budget once, and its empty positions are written along
             // every path to it: 1,000 cells along a diagonal, shared 1,000 times, filled a billion. An AST

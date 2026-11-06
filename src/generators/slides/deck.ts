@@ -868,7 +868,7 @@ async function flowDeck(content: OfficeContentNode[], metadata: OfficeMetadata, 
         // The pictures and charts in its cells, which a slide's table cannot hold, on slides of their own after
         // it (its rows' alone: a sheet's own pictures and charts, beside its rows, follow it as blocks of their own,
         // and were on two slides each).
-        await pictureSlides({ type: node.type, children: (node.children ?? []).filter(c => c.type === 'row') });
+        await pictureSlides({ type: node.type, children: (node.children ?? []).filter(c => c.type === 'row') } as OfficeContentNode);
     };
     const add = (p: DeckParagraph) => {
         const size = BODY_SIZE;

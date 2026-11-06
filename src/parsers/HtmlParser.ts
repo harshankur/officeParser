@@ -1,4 +1,4 @@
-import { AdmonitionMetadata, CellMetadata, CodeMetadata, CommentMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, ParagraphMetadata, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, CellMetadata, CodeMetadata, CommentMetadata, DisclosureMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, ParagraphMetadata, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { anchorMark, isAnchorMark, resolveAnchorMarks } from '../utils/anchorUtils.js';
 import { createAST } from '../utils/astUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
@@ -139,7 +139,7 @@ const isSheetChrome = (node: HtmlNode): boolean => node.type === 'element' && (n
     && (node.attributes?.class || '').split(/\s+/).some(name => SHEET_CHROME_CLASSES.has(name));
 
 /** Node types that are blocks, wherever they stand: a caption holding one is not wrapped in a paragraph. */
-const BLOCK_NODE_TYPES = new Set<string>(['paragraph', 'heading', 'list', 'table', 'chart', 'embed', 'admonition', 'definitionList']);
+const BLOCK_NODE_TYPES = new Set<string>(['paragraph', 'heading', 'list', 'table', 'chart', 'embed', 'admonition', 'disclosure', 'definitionList']);
 
 /** Whether `node` is a block: one of BLOCK_NODE_TYPES, a code block or display equation, or a rule or page break. */
 const isBlockNode = (node: OfficeContentNode): boolean => BLOCK_NODE_TYPES.has(node.type)
@@ -1387,6 +1387,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
             if (tagName === 'sub') newFormatting.subscript = true;
             if (tagName === 'sup') newFormatting.superscript = true;
             if (tagName === 'code') newFormatting.font = 'monospace';
+            // Keyboard input: its own mark, and monospace for every format with no such mark.
+            if (tagName === 'kbd') { newFormatting.keyboard = true; newFormatting.font = 'monospace'; }
             if (tagName === 'mark') {
                 // <mark> is a highlight. Use its data-color when present (an inline
                 // background-color style, read below, still wins); a bare <mark> falls back to the
@@ -1808,6 +1810,30 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
             // save. Any other caption, a <figcaption> and a table's <caption> (which the table's branch puts
             // before it), is a block of its own, which must not run into the picture before it.
             const isClass = (name: string) => (node.attributes?.class || '').split(/\s+/).includes(name);
+            // A <details>: a disclosure, its <summary> (the first) as text and the rest its blocks, a run of
+            // loose inline content among them a paragraph. Read as its text before, the collapsing was lost.
+            if (tagName === 'details') {
+                const summaryElement = node.children.find(c => c.type === 'element' && c.tagName === 'summary');
+                const summary = summaryElement ? plainTextOf(parseChildren(summaryElement, newFormatting, listContext)).replace(/\s+/g, ' ').trim() : '';
+                const kids = parseChildren({ ...node, children: node.children.filter(c => c !== summaryElement) }, newFormatting, listContext);
+                const body: OfficeContentNode[] = [];
+                let run: OfficeContentNode[] = [];
+                const flush = () => {
+                    const children = config.preserveXmlWhitespace ? run : trimBlockEdges(collapseSpacesAcrossNodes(run));
+                    if (children.some(c => c.type !== 'text' || c.text?.trim() || c.notes?.length)) body.push({ type: 'paragraph', children });
+                    run = [];
+                };
+                for (const kid of kids) {
+                    if (isBlockNode(kid)) { flush(); body.push(kid); } else run.push(kid);
+                }
+                flush();
+                const meta: DisclosureMetadata = {
+                    ...(summary ? { summary } : {}),
+                    ...(node.attributes?.open !== undefined ? { open: true } : {}),
+                    ...(anchorIds.length ? { anchorIds } : {}),
+                };
+                return { type: 'disclosure', text: [summary, ...body.map(b => b.text ?? nodesText([b]))].filter(Boolean).join('\n'), metadata: meta, children: body };
+            }
             // A figure of one picture and its caption: the caption is the picture's (ImageMetadata.caption),
             // not a paragraph after it. A caption of more than text (a link, formatting, a block) stays a
             // paragraph after the picture, where nothing of it is lost; so does one under a figure of
@@ -1879,7 +1905,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 const children = parseChildren(node, newFormatting, listContext);
 
                 // If it's a div and contains block elements, return children directly
-                const hasBlockElements = children.some(c => ['paragraph', 'table', 'heading', 'list', 'image', 'chart', 'code', 'embed', 'admonition', 'definitionList'].includes(c.type));
+                const hasBlockElements = children.some(c => ['paragraph', 'table', 'heading', 'list', 'image', 'chart', 'code', 'embed', 'admonition', 'disclosure', 'definitionList'].includes(c.type));
                 // A div of blocks is read through; its id marks its first block (HtmlGenerator puts a
                 // picture's there, and a page's section or sheet is linked to by it).
                 if (tagName === 'div' && hasBlockElements) {

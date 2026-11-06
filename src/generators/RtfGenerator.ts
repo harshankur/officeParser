@@ -246,6 +246,9 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                         if (f.italic) { prefix += '\\i '; suffix = '\\i0 ' + suffix; }
                         if (f.underline) { prefix += '\\ul '; suffix = '\\ul0 ' + suffix; }
                         if (f.strikethrough) { prefix += '\\strike '; suffix = '\\strike0 ' + suffix; }
+                        // Inline code and keyboard input in the monospace font, as a code block is (it was
+                        // written in the body's font, nothing left of it being code).
+                        if (f.font === 'monospace') { this.usedMonospace = true; text = `{\\f2 ${text}}`; }
 
                         // Colours as six hex digits, whatever CSS form the AST holds them in (see hexColor):
                         // a named or three-digit one wrote \redNaN into the colour table, and RTF readers
@@ -509,6 +512,8 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                 case 'slideMaster':
                 case 'admonition':
                 case 'definitionList':
+                // (A disclosure is opened before this writer sees it, see disclosures: its summary a bold line, then its body.)
+                case 'disclosure':
                     return childrenOutput;
             }
         };

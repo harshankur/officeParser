@@ -7,12 +7,12 @@ import { OfficeContentNode, OfficeParserAST } from '../types.js';
  * string, or a union of string literals.
  */
 const NUMBER_FIELDS = new Set(['level', 'indentation', 'itemIndex', 'row', 'col', 'rowSpan', 'colSpan', 'slideNumber', 'pageNumber', 'pageWidth', 'pageHeight', 'rotation', 'pages']);
-const BOOLEAN_FIELDS = new Set(['isTask', 'checked', 'unreferenced', 'wikilink', 'bold', 'italic', 'underline', 'strikethrough', 'subscript', 'superscript', 'invisible']);
+const BOOLEAN_FIELDS = new Set(['isTask', 'checked', 'unreferenced', 'wikilink', 'bold', 'italic', 'underline', 'strikethrough', 'subscript', 'superscript', 'invisible', 'keyboard', 'customMark', 'open']);
 const STRING_FIELDS = new Set([
     'style', 'alignment', 'listType', 'listId', 'noteId', 'sheetName', 'align', 'backgroundColor', 'color', 'size', 'font',
     'attachmentName', 'altText', 'url', 'width', 'height', 'title', 'link', 'linkType', 'linkTitle', 'embedType', 'videoId', 'label',
     'admonitionType', 'sourceSyntax', 'pageLabel', 'pageName', 'abbreviationTitle', 'citationKey', 'noteType', 'breakType',
-    'clear', 'language', 'math', 'author', 'initials', 'date', 'commentId', 'type', 'chartType',
+    'clear', 'language', 'math', 'author', 'initials', 'date', 'commentId', 'type', 'chartType', 'mark', 'quoteId', 'caption', 'summary',
 ]);
 /** `paragraphIndentation`'s fields, all numbers (points). */
 const INDENTATION_FIELDS = ['left', 'right', 'firstLine', 'hanging'];
@@ -20,7 +20,7 @@ const INDENTATION_FIELDS = ['left', 'right', 'firstLine', 'hanging'];
 const isPrimitive = (value: unknown): value is string | number | boolean => typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
 
 /** The formatting fields the AST defines (TextFormatting); no writer reads another. */
-const FORMATTING_FIELDS = new Set(['bold', 'italic', 'underline', 'strikethrough', 'color', 'backgroundColor', 'size', 'font', 'subscript', 'superscript', 'alignment', 'invisible']);
+const FORMATTING_FIELDS = new Set(['bold', 'italic', 'underline', 'strikethrough', 'color', 'backgroundColor', 'size', 'font', 'subscript', 'superscript', 'alignment', 'invisible', 'keyboard']);
 /** Metadata fields kept, besides the typed ones above, when a record holds more fields than any node's does (MAX_METADATA_FIELDS). */
 const OTHER_METADATA_FIELDS = new Set(['anchorIds', 'paragraphIndentation', 'bounds', 'isLineBreak', 'hidden', 'rawText', 'formula', 'value', 'valueType', 'target', 'targetMode']);
 /** More fields than any node's metadata holds: past it only the fields the AST defines are kept. */

@@ -1,4 +1,4 @@
-import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, DisclosureMetadata, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
 import { captionOf } from '../utils/figureCaptions.js';
 import { quoteIdOf, sameQuote } from '../utils/quoteGroups.js';
 import { BaseGenerator } from './BaseGenerator.js';
@@ -13,7 +13,7 @@ import { appendAll } from '../utils/nodeListUtils.js';
 import { MAX_LAYOUT_COLUMNS } from '../utils/tableLayout.js';
 
 /** Node types written as block elements (a <div>, <table>, <ul>, <dl>, <section>...), which a <p> cannot hold. */
-const BLOCK_TYPES = new Set<string>(['paragraph', 'heading', 'list', 'table', 'sheet', 'row', 'cell', 'chart', 'embed', 'admonition',
+const BLOCK_TYPES = new Set<string>(['paragraph', 'heading', 'list', 'table', 'sheet', 'row', 'cell', 'chart', 'embed', 'admonition', 'disclosure',
     'definitionList', 'definitionTerm', 'definitionDescription', 'slide', 'page', 'note']);
 
 /** Node types written as their children alone: blocks when one of their children is. */
@@ -1940,6 +1940,16 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             case 'definitionDescription':
                 return `${extraAnchors}<dd${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</dd>`;
 
+            case 'disclosure': {
+                // A <details>: its summary (none where the source gave none, which a browser shows as
+                // "Details"), then its blocks; open as the document opens where it was.
+                const meta = node.metadata as DisclosureMetadata | undefined;
+                const summary = typeof meta?.summary === 'string' ? meta.summary.replace(/\s+/g, ' ').trim() : '';
+                // (`open=""`, which XHTML, EPUB's, reads as well as HTML: a bare `open` is not well-formed XML.)
+                const open = meta?.open ? ' open=""' : '';
+                return `${extraAnchors}<details${idAttr}${className}${mappedAttrs}${styleAttr}${open}>${summary ? `<summary>${this.escape(summary)}</summary>` : ''}${childrenOutput}</details>`;
+            }
+
             // Rendered through their children only. Listed explicitly, with no `default`, so that
             // under `noImplicitReturns` a new OfficeContentNodeType fails to compile until it is
             // classified here rather than silently degrading to its children.
@@ -1994,6 +2004,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             case 'definitionList':
             case 'definitionTerm':
             case 'definitionDescription':
+            case 'disclosure':
                 return 'div';
         }
     }
@@ -2006,7 +2017,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             // Inline code: a monospace run becomes `<code>`, not a `font-family: monospace` span, so
             // an editor keying on <code> sees it and it re-imports as inline code (HtmlParser maps
             // <code> back to a monospace run). Innermost, so bold/italic wrap it (`<b><code>…`).
-            if (f.font === 'monospace') result = `<code>${result}</code>`;
+            // Keyboard input is <kbd> (TextFormatting.keyboard), itself monospace.
+            if (f.keyboard) result = `<kbd>${result}</kbd>`;
+            else if (f.font === 'monospace') result = `<code>${result}</code>`;
             // Inside an `<hN>`, the heading's own styling is authoritative. A run that also carries
             // bold and a font size - the normal case for ODF, where a heading's paragraph style is
             // inherited by its runs - would wrap the text in `<b>` the heading already implies and,

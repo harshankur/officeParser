@@ -2931,7 +2931,7 @@ export interface BlobLike {
 /**
  * Types of content nodes in the AST.
  */
-export type OfficeContentNodeType = 'paragraph' | 'heading' | 'table' | 'list' | 'text' | 'image' | 'chart' | 'drawing' | 'slide' | 'note' | 'sheet' | 'row' | 'cell' | 'page' | 'break' | 'code' | 'comment' | 'header' | 'footer' | 'slideMaster' | 'embed' | 'admonition' | 'definitionList' | 'definitionTerm' | 'definitionDescription';
+export type OfficeContentNodeType = 'paragraph' | 'heading' | 'table' | 'list' | 'text' | 'image' | 'chart' | 'drawing' | 'slide' | 'note' | 'sheet' | 'row' | 'cell' | 'page' | 'break' | 'code' | 'comment' | 'header' | 'footer' | 'slideMaster' | 'embed' | 'admonition' | 'definitionList' | 'definitionTerm' | 'definitionDescription' | 'disclosure';
 
 /**
  * Supported MIME types for attachments.
@@ -3046,6 +3046,12 @@ export interface TextFormatting {
      * @example "center", "right"
      */
     alignment?: TextAlignment;
+
+    /**
+     * The text is keyboard input (`<kbd>` in HTML and Markdown): written as `<kbd>` there, read with
+     * `font: 'monospace'` too, so every format without the notion shows it as code.
+     */
+    keyboard?: boolean;
 
     /**
      * The text is drawn invisibly, to be found and copied but not seen: a PDF's text in rendering mode
@@ -3535,6 +3541,24 @@ export interface AdmonitionMetadata {
 }
 
 /**
+ * Metadata for a `disclosure` node: a block a reader opens and closes (HTML `<details>`, its summary in
+ * `<summary>`), in HTML, EPUB and Markdown (where it is that HTML, its body Markdown). Its `children`
+ * are the blocks it shows when open. HTML, EPUB and Markdown write it back as `<details>`; every other
+ * writer, which has no such block, writes its summary as a bold line followed by the body, all shown.
+ */
+export interface DisclosureMetadata {
+    /**
+     * The summary shown while it is closed, as text (`<summary>`); absent where the source gives none,
+     * where a browser shows "Details" and writers without the block write that.
+     */
+    summary?: string;
+    /** It is open (shows its body) as the document opens (`<details open>`). */
+    open?: boolean;
+    /** Unique anchor IDs for internal linking. */
+    anchorIds?: string[];
+}
+
+/**
  * Metadata for a definition list and its terms and descriptions (`<dl>`, `<dt>`, `<dd>`).
  */
 export interface DefinitionMetadata {
@@ -3996,6 +4020,7 @@ export type OfficeContentNode = BaseContentNode & (
     | { type: 'definitionList'; metadata?: DefinitionMetadata }
     | { type: 'definitionTerm'; metadata?: DefinitionMetadata }
     | { type: 'definitionDescription'; metadata?: DefinitionMetadata }
+    | { type: 'disclosure'; metadata?: DisclosureMetadata }
 );
 
 /**

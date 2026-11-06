@@ -1,5 +1,6 @@
-import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, EmbedSyntax, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, StrikethroughSyntax, TableMetadata, TextFormatting, TextMetadata, WikilinkSyntax } from '../types.js';
+import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, DisclosureMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, EmbedSyntax, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, StrikethroughSyntax, TableMetadata, TextFormatting, TextMetadata, WikilinkSyntax } from '../types.js';
 import { captionOf } from '../utils/figureCaptions.js';
+import { disclosureSummary } from '../utils/disclosures.js';
 import { sameQuote } from '../utils/quoteGroups.js';
 import { escapeHtml, isCssLength, isVideoId, markdownEscapeInline, markdownEscapePlain, markdownEscapeTags, markdownEscapeText, sanitizeCommentText, sanitizeCssValue, sanitizeImageUrl, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
 import { isDefaultHighlight } from '../utils/colorUtils.js';
@@ -71,7 +72,7 @@ const markdownTitle = (title: unknown): string => ` "${markdownEscapePlain(foldL
 const SEPARATED_BLOCK_TYPES = new Set(['code', 'table', 'sheet', 'slide', 'page', 'embed', 'break']);
 
 /** Nodes that are blocks of their own in Markdown (the parts of a definition list are laid out by it). */
-const BLOCK_NODE_TYPES = new Set(['paragraph', 'heading', 'list', 'table', 'sheet', 'slide', 'page', 'admonition', 'definitionList', 'embed', 'header', 'footer', 'chart', 'drawing', 'slideMaster']);
+const BLOCK_NODE_TYPES = new Set(['paragraph', 'heading', 'list', 'table', 'sheet', 'slide', 'page', 'admonition', 'disclosure', 'definitionList', 'embed', 'header', 'footer', 'chart', 'drawing', 'slideMaster']);
 
 /**
  * `text` as a code span: fenced by one backtick more than its longest run of them, and padded with a
@@ -121,6 +122,10 @@ const isBlankRun = (node: OfficeContentNode): boolean =>
     node.type === 'text' && !node.metadata && !node.notes?.length && !node.comments?.length && !trimAsciiWhitespace(node.text ?? '');
 
 /** A block written in the middle of a paragraph's children: a rule, a code block or display math. */
+/** Keyboard input's text inside `<kbd>`: HTML-escaped, its Markdown characters as character references. */
+const keyboardText = (text: string): string =>
+    escapeHtml(text).replace(/[\\`*_[\]~=$|{}]/g, ch => `&#${ch.charCodeAt(0)};`).replace(/[\r\n]+/g, ' ');
+
 const isBlockInLine = (node: OfficeContentNode): boolean =>
     (node.type === 'break' && (node.metadata as BreakMetadata | undefined)?.breakType === 'thematic')
     || (node.type === 'code' && (node.metadata as CodeMetadata | undefined)?.math !== 'inline')
@@ -704,7 +709,12 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         // backtick can't close the span early, padded when the content touches a
                         // backtick. Done before emphasis so bold/italic wrap the span (`**`code`**`).
                         // Previously a monospace text node emitted its bare text, dropping the code.
-                        if (node.formatting.font === 'monospace') {
+                        if (node.formatting.keyboard) {
+                            // Keyboard input is <kbd> (Markdown has no syntax of its own for it), its text
+                            // HTML-escaped and its Markdown characters written as references, which a
+                            // renderer and the parser both read back as the characters.
+                            text = `<kbd>${keyboardText(node.text || '')}</kbd>`;
+                        } else if (node.formatting.font === 'monospace') {
                             // A reader strips one space from each end of a span that has one at both
                             // (and is not all spaces), so such content is padded too, to keep its spaces.
                             text = codeSpan(node.text || '');
@@ -713,7 +723,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         // stays outside: a delimiter next to a space cannot open or close emphasis
                         // (CommonMark's flanking rule), so `**Note: **` would not be bold at all.
                         // Whitespace alone takes no delimiters.
-                        const core = node.formatting.font === 'monospace' ? text : text.trim();
+                        const core = node.formatting.font === 'monospace' || node.formatting.keyboard ? text : text.trim();
                         const lead = core === text ? '' : text.slice(0, text.length - text.trimStart().length);
                         const trail = core === text || !core ? '' : text.slice(text.trimEnd().length);
                         // A backslash that ended in a space (so was left as it is) now stands before the
@@ -1285,6 +1295,22 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     }
                 }
 
+                case 'disclosure': {
+                    // An HTML <details> block, as CommonMark has it: the tag and its summary, a blank line,
+                    // the body as Markdown, a blank line, the closing tag (each a block of its own, so the
+                    // body is read as Markdown). In one line of Markdown (a list item, a cell), where no
+                    // block goes, its summary in bold and then its body, reported.
+                    const meta = node.metadata as DisclosureMetadata | undefined;
+                    const summary = typeof meta?.summary === 'string' ? meta.summary.replace(/\s+/g, ' ').trim() : '';
+                    const body = trimAsciiWhitespace(childrenOutput);
+                    if (this.inOneLine) {
+                        this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'md', feature: 'a disclosure (<details>) in a list item or table cell (written open, its summary in bold)' });
+                        return `${this.deferAnchors(meta)}**${markdownEscapeInline(disclosureSummary(node))}** ${body}\n\n`;
+                    }
+                    const open = `<details${meta?.open ? ' open' : ''}>\n${summary ? `<summary>${this.escapeInHtmlBlock(summary)}</summary>\n` : ''}`;
+                    return `${this.anchorsBefore(meta)}${open}${body ? `\n${body}\n\n` : ''}</details>\n\n`;
+                }
+
                 case 'definitionList':
                     // In a list item, cell or definition (one line of Markdown) it is its lines (see below).
                     if (this.inOneLine) return `${this.deferAnchors(node.metadata)}${childrenOutput}\n`;
@@ -1643,7 +1669,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         if (!f || !this.config.includeFormatting) return '';
         const html = this.resolvedFallbackToHtml;
         return JSON.stringify([
-            f.font === 'monospace', !!f.bold, !!f.italic, !!f.strikethrough, f.backgroundColor ?? null,
+            f.font === 'monospace', !!f.keyboard, !!f.bold, !!f.italic, !!f.strikethrough, f.backgroundColor ?? null,
             html.textFormatting && [!!f.underline, !!f.subscript, !!f.superscript],
             html.inlineFormatting && [f.color ?? null, f.size ?? null],
         ]);
@@ -1869,7 +1895,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 const f = n.formatting;
                 const html = this.resolvedFallbackToHtml;
                 if (this.config.includeFormatting && f) {
-                    if (f.font === 'monospace') text = `<code>${text}</code>`;
+                    if (f.keyboard) text = `<kbd>${text}</kbd>`;
+                    else if (f.font === 'monospace') text = `<code>${text}</code>`;
                     if (f.bold && !this.inImplicitBold) text = `<b>${text}</b>`;
                     if (f.italic) text = `<i>${text}</i>`;
                     if (f.underline && html.textFormatting) text = `<u>${text}</u>`;
@@ -1970,6 +1997,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             case 'definitionTerm':
             case 'definitionDescription':
                 return co;
+            case 'disclosure': {
+                const meta = n.metadata as DisclosureMetadata | undefined;
+                const summary = typeof meta?.summary === 'string' ? meta.summary.replace(/\s+/g, ' ').trim() : '';
+                return `<details${meta?.open ? ' open' : ''}>${summary ? `<summary>${esc(summary)}</summary>` : ''}${co}</details>`;
+            }
         }
     }
 

@@ -1,4 +1,5 @@
 import { zipSync, Zippable } from 'fflate';
+import { openedDisclosure } from '../utils/disclosures.js';
 import { UniqueNames } from '../utils/uniqueNames.js';
 import { clampInt } from '../utils/numberUtils.js';
 import { layoutTableRows } from '../utils/tableLayout.js';
@@ -397,6 +398,8 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
                 return `<text:p>${await this.renderInline([node])}</text:p>`;
             case 'page': case 'slide': case 'drawing': case 'definitionList':
                 return this.renderBlocks(node.children);
+            // (Opened before any writer but HTML's and Markdown's sees it, see disclosures: its summary in bold, then its body.)
+            case 'disclosure': return this.renderBlocks(openedDisclosure(node));
             case 'slideMaster': return ''; // template furniture, dropped
             default: {
                 const _exhaustive: never = node;

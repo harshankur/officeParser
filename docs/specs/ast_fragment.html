@@ -335,11 +335,19 @@
             <strong><code>definitionDescription</code></strong>: Markdown Extra-style definition lists
             (<code>Term\n: Definition</code>). The list node's <code>children</code> alternate term and
             description nodes. Each may carry <code>DefinitionMetadata.anchorIds</code>.</li>
+        <li><strong><code>disclosure</code></strong>: A block a reader opens and closes (HTML <code>&lt;details&gt;</code>,
+            in HTML, EPUB and Markdown, where it is that HTML block with Markdown inside). Carries
+            <code>DisclosureMetadata</code>: <code>summary</code> (the <code>&lt;summary&gt;</code> text), <code>open</code>
+            and <code>anchorIds</code>; its <code>children</code> are the blocks it shows when open. Written back as
+            <code>&lt;details&gt;</code> in HTML, EPUB and Markdown; every other writer writes its summary as a bold line
+            followed by its body, all shown.</li>
         <li><strong><code>list</code></strong> task-list items: <code>ListMetadata.isTask</code> and
             <code>.checked</code> mark a GFM task-list item (<code>- [x] Done</code>).</li>
         <li>Text-node metadata additions: <code>TextMetadata.citationKey</code> (Pandoc/MultiMarkdown
             <code>[@key]</code>), <code>.wikilink</code> (Obsidian <code>[[page]]</code>), and
-            <code>.abbreviationTitle</code> (Markdown Extra <code>*[HTML]: ...</code> abbreviations).</li>
+            <code>.abbreviationTitle</code> (Markdown Extra <code>*[HTML]: ...</code> abbreviations), and
+            <code>TextFormatting.keyboard</code> for keyboard input (<code>&lt;kbd&gt;</code>, read with
+            <code>font: 'monospace'</code> so formats without the notion write it as code).</li>
         <li><strong>Equations</strong> are <code>code</code> nodes carrying
             <code>CodeMetadata.math</code> (<code>'inline' | 'block'</code>), with
             <code>node.text</code> holding bare LaTeX. Every format that can carry an equation

@@ -1,4 +1,5 @@
 import { zipSync, Zippable } from 'fflate';
+import { openedDisclosure } from '../utils/disclosures.js';
 import { UniqueNames } from '../utils/uniqueNames.js';
 import { layoutTableRows } from '../utils/tableLayout.js';
 import { BreakMetadata, ConversionResult, DocxGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, TextFormatting, TextMetadata } from '../types.js';
@@ -288,6 +289,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
                 return this.wrapP(await this.renderInline([node]));
             case 'page': case 'slide': case 'drawing': case 'definitionList':
                 return this.renderBlocks(node.children); // containers: flatten (page/slide breaks handled by caller sequence)
+            // (Opened before any writer but HTML's and Markdown's sees it, see disclosures: its summary in bold, then its body.)
+            case 'disclosure': return this.renderBlocks(openedDisclosure(node));
             case 'slideMaster': return ''; // template furniture, dropped
             default: {
                 // Exhaustiveness guard: a new OfficeContentNodeType must be classified here.

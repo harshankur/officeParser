@@ -12,6 +12,7 @@ import * as path from 'path';
 import { strFromU8, Unzlib, unzipSync, unzlibSync, zipSync, zlibSync } from 'fflate';
 import { PDFDocument, PDFName, PDFRawStream } from 'pdf-lib';
 import { OfficeGenerator } from '../../src/OfficeGenerator';
+import { documentShapeEscapingTests } from './documentShapeEscaping';
 import { OfficeParser } from '../../src/OfficeParser';
 import { OfficeTemplate } from '../../src/OfficeTemplate';
 import { OfficeParserAST, OfficeWarningType } from '../../src/types';
@@ -5231,6 +5232,7 @@ async function main() {
     await parserHardeningTests();
     await htmlReadingTests();
     await fontFileTests();
+    await documentShapeEscapingTests(check);
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);

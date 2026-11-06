@@ -8,7 +8,7 @@ import { OfficeParser } from '../src/OfficeParser';
 import { withinTime } from './helpers/timing';
 import { testUnicodeChunks } from './generator/unicodeChunks';
 import { testBrotliGuard } from './security/brotliGuard';
-import { testFigureCaptions, testNoteMarks, testQuoteParagraphs, testRtfListTypesPerLevel, testXhtmlReadAsHtml } from './generator/documentShapes';
+import { testDisclosuresAndKeyboard, testFigureCaptions, testNoteMarks, testQuoteParagraphs, testRtfListTypesPerLevel, testXhtmlReadAsHtml } from './generator/documentShapes';
 import { OfficeGenerator } from '../src/OfficeGenerator';
 import { bulletCharacter, formatListNumber, readMarkerLabels } from '../src/utils/listMarkers';
 import { decodeBmp, decodeGif } from '../src/utils/rasterUtils';
@@ -11457,9 +11457,10 @@ async function testSecondReview(): Promise<void> {
     for (const [src, expected] of [
         ['<p align="center">\n  <img src="logo.png" width="200" alt="Logo">\n</p>\n', '<div style="text-align: center">![Logo](logo.png){width=200}</div>'],
         ['<h1 align="center">Title</h1>\n', '<div style="text-align: center">\n\n# Title\n\n</div>'],
-        ['<details>\n<summary>More</summary>\n\nHidden text\n\n</details>\n', 'More\n\nHidden text'],
+        // (A disclosure and keyboard input are their own shapes now, written back as they were: see testDisclosuresAndKeyboard.)
+        ['<details>\n<summary>More</summary>\n\nHidden text\n\n</details>\n', '<details>\n<summary>More</summary>\n\nHidden text\n\n</details>'],
         ['Intro line\n<p>Para</p>\n', 'Intro line\n\nPara'],
-        ['Press <kbd>Ctrl</kbd>+<kbd>C</kbd>, <b>bold</b>, <i>it</i>, <code>x &lt; y</code>, <sup class="n">2</sup>.', 'Press `Ctrl`+`C`, **bold**, *it*, `x < y`, <sup>2</sup>.'],
+        ['Press <kbd>Ctrl</kbd>+<kbd>C</kbd>, <b>bold</b>, <i>it</i>, <code>x &lt; y</code>, <sup class="n">2</sup>.', 'Press <kbd>Ctrl</kbd>+<kbd>C</kbd>, **bold**, *it*, `x < y`, <sup>2</sup>.'],
         ['See <a href="https://e.com">the site</a> and <img src="a.png" alt="A"> here.', 'See [the site](https://e.com) and ![A](a.png) here.'],
         ['Unknown <foo>tag</foo>, unclosed <b>bold, a lone </i>.', 'Unknown &lt;foo>tag&lt;/foo>, unclosed &lt;b>bold, a lone &lt;/i>.'],
         ['Code `<b>x</b>` stays code.', 'Code `<b>x</b>` stays code.'],
@@ -12429,6 +12430,7 @@ async function runTests(): Promise<void> {
         ['Note marks', testNoteMarks],
         ['Quote paragraphs', testQuoteParagraphs],
         ['Figure captions', testFigureCaptions],
+        ['Disclosures and keyboard input', testDisclosuresAndKeyboard],
         ['Cancellation', testCancellation],
     ];
 

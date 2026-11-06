@@ -1,4 +1,5 @@
 import { zipSync, Zippable } from 'fflate';
+import { openedDisclosure } from '../utils/disclosures.js';
 import { sameQuote } from '../utils/quoteGroups.js';
 import { UniqueNames } from '../utils/uniqueNames.js';
 import { trimEndChars } from '../utils/textUtils.js';
@@ -745,6 +746,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             case 'note': return this.standaloneNote(node);
             case 'comment': return (isSourceComment(node) ? latexSourceComment(node.text || '') : this.commentLines(node)).trimEnd();
             case 'admonition': return this.admonition(node);
+            // (Opened before any writer but HTML's and Markdown's sees it, see disclosures: its summary in bold, then its body.)
+            case 'disclosure': return this.renderFlow(openedDisclosure(node));
             case 'chart': return this.chart(node);
             case 'embed': return this.embed(node);
             case 'definitionList': return this.renderDescriptionRun(node.children || []);

@@ -659,8 +659,8 @@ const WRAPPER_OPEN = /^<(div|p|center|section|article|aside|header|footer|main|n
 /** The closing tag of a block wrapper standing alone in its block. */
 const WRAPPER_CLOSE = /^<\/(?:div|p|center|section|article|aside|header|footer|main|nav|figure)\s*>$/i;
 
-/** A table's own tags: a piece holding one is HTML, not Markdown in a cell (see splitIntoBlocks). */
-const TABLE_PART_TAG = /<\/?(?:table|thead|tbody|tfoot|tr|td|th|caption|colgroup|col)\b/i;
+/** A table's own tags, and a disclosure's: a piece holding one is HTML, not Markdown in a cell or disclosure (see splitIntoBlocks). */
+const TABLE_PART_TAG = /<\/?(?:table|thead|tbody|tfoot|tr|td|th|caption|colgroup|col|details|summary)\b/i;
 
 /** How many blank-line-separated pieces an HTML table may run across while Markdown in its cells joins it (see splitIntoBlocks). */
 const MAX_TABLE_PIECES = 64;
@@ -669,11 +669,13 @@ const MAX_TABLE_PIECES = 64;
 const MAX_JOINED_TABLE_DEPTH = 16;
 
 /**
- * The change in how many HTML tables are open over `text`: its `<table` tags less its `</table>` tags.
+ * The change in how many HTML tables and disclosures (`<details>`) are open over `text`: their opening
+ * tags less their closing tags. Markdown between blank lines inside either is read into it (the way
+ * GitHub documents writing a disclosure: `<details>`, `<summary>`, a blank line, Markdown, `</details>`).
  */
 function htmlTableDepthChange(text: string): number {
-    if (!/<\/?table/i.test(text)) return 0;
-    return (text.match(/<table\b/gi)?.length ?? 0) - (text.match(/<\/table\s*>/gi)?.length ?? 0);
+    if (!/<\/?(?:table|details)/i.test(text)) return 0;
+    return (text.match(/<(?:table|details)\b/gi)?.length ?? 0) - (text.match(/<\/(?:table|details)\s*>/gi)?.length ?? 0);
 }
 
 /** The column a line's text starts at, a tab advancing to the next multiple of four. */
@@ -802,16 +804,16 @@ const LINK_DESTINATION = (() => {
  * content is code (read as written, references decoded); an element with no formatting of its own
  * (`<span>`, `<small>`) is its content. `<a>`, `<abbr>`, `<q>` and `<img>` are read in inlineHtml.
  */
-const HTML_INLINE_ELEMENTS: Readonly<Record<string, TextFormatting | 'code'>> = lookupTable({
+const HTML_INLINE_ELEMENTS: Readonly<Record<string, TextFormatting | 'code' | 'keyboard'>> = lookupTable({
     b: { bold: true }, strong: { bold: true },
     i: { italic: true }, em: { italic: true }, cite: { italic: true }, var: { italic: true }, dfn: { italic: true },
     s: { strikethrough: true }, strike: { strikethrough: true }, del: { strikethrough: true },
     u: { underline: true }, ins: { underline: true },
     sub: { subscript: true }, sup: { superscript: true },
     mark: { backgroundColor: '#ffff00' },
-    code: 'code', kbd: 'code', samp: 'code', tt: 'code',
+    code: 'code', kbd: 'keyboard', samp: 'code', tt: 'code',
     span: {}, small: {}, big: {}, font: {}, bdi: {}, bdo: {}, time: {}, data: {}, a: {}, abbr: {}, q: {},
-} as Record<string, TextFormatting | 'code'>);
+} as Record<string, TextFormatting | 'code' | 'keyboard'>);
 
 /** An HTML tag's attributes (`name="value"`, `name='value'`, `name=value`, `name`), names lowercased and values decoded. */
 function htmlAttributes(source: string): Map<string, string> {
@@ -1494,6 +1496,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             }
             const element = HTML_INLINE_ELEMENTS[tag];
             if (element === 'code') return [{ type: 'text', text: decodeCharacterReferences(inner), formatting: { ...currentFormatting, font: 'monospace' } }];
+            // Keyboard input is its own mark (TextFormatting.keyboard), monospace like code, its content as written.
+            if (element === 'keyboard') return [{ type: 'text', text: decodeCharacterReferences(inner), formatting: { ...currentFormatting, font: 'monospace', keyboard: true } }];
             const content = parseInline(inner, { ...currentFormatting, ...element });
             if (tag === 'a') {
                 const href = attrs.get('href');
