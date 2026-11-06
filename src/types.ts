@@ -2906,8 +2906,8 @@ export interface TemplateConfig {
      * `{ decimal: ',', group: '.' }` reads `12,50` and `1.234,50`; `{ decimal: ',', group: ' ' }` reads
      * `1 234,50` (a space separator matches a no-break space too). Each is one character; `group` may be
      * `''` (the default when left out) for none, and `decimal` defaults to `.`. A group separator where
-     * groups of three do not follow makes the text no number (`1.5` with `.` for groups), so an ambiguous
-     * text is refused rather than misread. Not given (the default), text is read with `.` for the point and
+     * groups of three do not follow makes the text no number (`1.5` with `.` for groups), nor is one
+     * after a first group starting with 0 (`0.500`), so an ambiguous text is refused rather than misread. Not given (the default), text is read with `.` for the point and
      * no group separator (`1250.5`). `numberSeparators` says how numbers are written, this how they are
      * read, so data written one way can fill a document written another. A value of the wrong shape is
      * refused (`IMPROPER_ARGUMENTS`).

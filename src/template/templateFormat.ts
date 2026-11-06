@@ -367,7 +367,8 @@ function readNumberText(text: string, separators: NumberTextSeparators): number 
     let integer = text.slice(at, next);
     at = next;
     if (at < end && isGroup(text[at])) {
-        if (integer.length < 1 || integer.length > 3) return NaN;
+        // A first group of one to three digits, not starting with 0: `0.500` with `.` for groups is no number (0.5 or 500?).
+        if (integer.length < 1 || integer.length > 3 || integer[0] === '0') return NaN;
         while (at < end && isGroup(text[at])) {
             next = digitsFrom(at + 1);
             if (next - at - 1 !== 3) return NaN;

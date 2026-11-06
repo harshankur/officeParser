@@ -117,7 +117,8 @@ docs.forEach((d, i) => writeFileSync(`invoice-${i}.docx`, d));</code></pre>
                     <code>1.234,50</code>. Each separator is one character (<code>group</code> may be <code>''</code>, the
                     default, for none; <code>decimal</code> defaults to <code>.</code>); a space group separator matches a
                     no-break space too. A group separator must be followed by groups of three digits, so an ambiguous text
-                    (<code>1.5</code> with <code>.</code> for groups) is no number rather than a wrong one. Not given, text
+                    (<code>1.5</code> with <code>.</code> for groups) is no number rather than a wrong one (nor is
+                    <code>0.500</code>: a first group never starts with 0). Not given, text
                     is read as before: <code>.</code> for the point and no groups (<code>1250.5</code>).
                     <code>numberSeparators</code> says how numbers are written, this how they are read.</td>
             </tr>

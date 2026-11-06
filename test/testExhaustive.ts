@@ -4494,6 +4494,28 @@ async function testTemplateNearTags(): Promise<void> {
 }
 
 /**
+ * Numbers written as text read with a group separator: a first group never starts with 0, so `0.500` with
+ * `.` for groups is no number (0.5 or 500?), refused as `1.5` is, while a grouped or decimal text reads.
+ */
+async function testTemplateNumbersZeroFirstGroup(): Promise<void> {
+    const { p, docx } = ooxmlHelpers();
+    const sep = { dataNumberSeparators: { decimal: ',', group: '.' } };
+    const formatted = docx(p('{{ v | format "0.000" }}'));
+    for (const v of ['0.001', '0.500', '00.500', '-0.500', '0 500']) {
+        const config = v === '0 500' ? { dataNumberSeparators: { decimal: ',', group: ' ' } } : sep;
+        const problems = await OfficeTemplate.check(formatted, { data: { v }, ...config });
+        assert.deepStrictEqual(problems.map(x => x.details?.reason), ['unformattable'], `${JSON.stringify(v)} is no number with ${JSON.stringify(config.dataNumberSeparators.group)} for groups`);
+        const compared = await OfficeTemplate.check(docx(p('{{ if v > 1 }}y{{ endif }}')), { data: { v }, ...config });
+        assert.deepStrictEqual(compared.map(x => x.details?.reason), ['incomparable'], `${JSON.stringify(v)} compared with a number is no number`);
+    }
+    for (const [v, expected] of [['1.234,50', '1234.500'], ['12.345', '12345.000'], ['0,5', '0.500'], ['0', '0.000'], ['-0,25', '-0.250']]) {
+        const out = await OfficeTemplate.render(formatted, { data: { v }, ...sep }) as Uint8Array;
+        assert.strictEqual(strFromU8(unzipSync(out)['word/document.xml']).replace(/<[^>]+>/g, ''), expected, `${JSON.stringify(v)} reads as ${expected}`);
+    }
+    console.log('  Template numbers, a first group starting with 0: All assertions passed ✓');
+}
+
+/**
  * A Word template renders as officeParser 8.6.0 rendered it: each case of `test/helpers/docxTemplateCases.ts`
  * against 8.6.0's digest of its parts. A change to how ODT or look-alike text is read leaves Word output alone.
  */
@@ -12836,6 +12858,7 @@ async function runTests(): Promise<void> {
         ['Template tags and check', testTemplateTagsAndCheck],
         ['Template suggestions', testTemplateSuggestions],
         ['Template numbers as text', testTemplateNumbersAsText],
+        ['Template numbers, a first group starting with 0', testTemplateNumbersZeroFirstGroup],
         ['ODT template', testOdtTemplate],
         ['ODT template blocks', testOdtTemplateBlocks],
         ['ODT template long space runs', testOdtTemplateLongSpaceRuns],
