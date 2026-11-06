@@ -4,8 +4,8 @@
  * repair after loops and branches, and the package it writes.
  *
  * - Text is the character data of a paragraph (`text:p`, `text:h`) and the spans and links in it,
- *   with `<text:s/>` read as the spaces it stands for (a run of more than 16 is read as 16, and written
- *   back whole). A tag split across spans (as LibreOffice splits text at every change of attribute or
+ *   with `<text:s/>` read as the spaces it stands for (a long run is read as 16 spaces, or more than
+ *   twice the longest run of spaces in a delimiter, and written back whole). A tag split across spans (as LibreOffice splits text at every change of attribute or
  *   edit) is one tag. Text in fields (`text:date`), in a note's
  *   citation, in a comment's author and date, and deleted text kept for tracked changes is not read.
  * - Tags are filled in `content.xml` and in `styles.xml`, whose master pages hold the headers and footers.
@@ -48,8 +48,23 @@ const SPACE = 'text:s';
  * (see TextRun.spaces). So a run's text is never longer than the XML it is read from (`<text:s/>` is 9
  * characters and reads 1; any `<text:s text:c="N"/>` is at least 20 and reads at most 16), and a
  * paragraph's text is at most its XML, as in a Word document: every bound on the part's size bounds it.
+ * Delimiters with more than 7 spaces in a row raise it to `2s + 1` (see spaceReadLimit): a run's text
+ * stays at most its XML while `s <= 9`, and past that at most `(2s + 1) / 20` times it, a bound the
+ * caller's own delimiters set.
  */
 const MAX_SPACE_RUN = 16;
+/**
+ * The most spaces one `<text:s/>` is read as with these delimiters: {@link MAX_SPACE_RUN}, or more than
+ * twice the longest run of spaces in a delimiter. A run read short is then never wholly a delimiter's
+ * edge, nor the edges of two tags, which match as they would in all of it, so the spaces not read have
+ * a place outside every tag (see markOdtPart). Only delimiters with more than 7 spaces in a row raise it.
+ */
+function spaceReadLimit(opts: { start: string; end: string }): number {
+    let longest = 0;
+    for (const delimiter of [opts.start, opts.end]) for (const run of delimiter.match(/ +/g) ?? []) longest = Math.max(longest, run.length);
+    return Math.max(MAX_SPACE_RUN, 2 * longest + 1);
+}
+
 /** The text a `<text:s/>` is read as, by its count: shared, one string for each. */
 const SPACE_TEXT: readonly string[] = Array.from({ length: MAX_SPACE_RUN + 1 }, (_, n) => ' '.repeat(n));
 
@@ -105,6 +120,8 @@ function mayHoldTag(xml: string, ctx: PartContext): boolean {
  */
 function markOdtPart(xml: string, ctx: PartContext): string {
     if (!mayHoldTag(xml, ctx)) return xml;
+    const readLimit = spaceReadLimit(ctx.opts);
+    const longSpaces = readLimit > MAX_SPACE_RUN ? ' '.repeat(readLimit) : '';
     const out: string[] = [];
     let copied = 0;
     const open: string[] = [];
@@ -120,17 +137,14 @@ function markOdtPart(xml: string, ctx: PartContext): string {
                 let text: string;
                 if (run.spaces === undefined) text = pieces[i].join('');
                 else {
-                    // A run read as fewer spaces than it stands for: the rest go with its first piece outside a
-                    // tag, or after its last piece when every piece is in a tag and it is split (a delimiter
-                    // that starts or ends with a space); a run wholly in one tag is written back by the tag.
-                    let extra = run.spaces - run.inner.length;
-                    const parts = pieces[i].map(piece => {
-                        if (piece.startsWith(ctx.open)) return piece;
-                        const spaces = ODT_SPACES.spacesXml(piece.length + extra);
-                        extra = 0;
-                        return spaces;
-                    });
-                    if (extra && pieces[i].length > 1) parts.push(ODT_SPACES.spacesXml(extra));
+                    // A run read as fewer spaces than it stands for (see spaceReadLimit): the spaces not read
+                    // are where no tag is, in its text outside tags, or, when it has none, between the tag
+                    // ending in it and the tag starting in it. A run wholly in one tag is written back by it.
+                    const list = pieces[i];
+                    const extra = run.spaces - run.inner.length;
+                    const free = list.findIndex(piece => !piece.startsWith(ctx.open));
+                    const parts = list.map((piece, k) => piece.startsWith(ctx.open) ? piece : ODT_SPACES.spacesXml(piece.length + (k === free ? extra : 0)));
+                    if (free < 0 && list.length > 1) parts.splice(1, 0, ODT_SPACES.spacesXml(extra));
                     text = parts.join('');
                 }
                 out.push(xml.slice(copied, run.start), text);
@@ -175,7 +189,8 @@ function markOdtPart(xml: string, ctx: PartContext): string {
         if (PARAGRAPHS.has(name)) flush();
         if (name === SPACE && selfClosing && inText()) {
             const count = spaceCount(xml.slice(lt, gt + 1));
-            runs.push({ start: lt, end: gt + 1, inner: SPACE_TEXT[Math.min(count, MAX_SPACE_RUN)], spaces: count });
+            const read = Math.min(count, readLimit);
+            runs.push({ start: lt, end: gt + 1, inner: read <= MAX_SPACE_RUN ? SPACE_TEXT[read] : longSpaces.slice(0, read), spaces: count });
         }
         if (!selfClosing) {
             open.push(name);

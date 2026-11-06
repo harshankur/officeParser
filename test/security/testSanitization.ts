@@ -5977,8 +5977,8 @@ async function odtTemplateHardeningTests() {
 
 /**
  * Template text bounded by the XML it is read from: a `<text:s text:c="N"/>` is read as at most 16
- * spaces, so an ODT paragraph's text is never longer than its XML, and every later pass over it costs
- * what the same text costs in a Word document.
+ * spaces with delimiters of at most 7 spaces in a row, so an ODT paragraph's text is never longer than its
+ * XML, and every later pass over it costs what the same text costs in a Word document.
  */
 async function templateTextBoundTests() {
     console.log('- Templates: text read no longer than its XML, the look-alike scan and its list bounded, cut ids renewed...');

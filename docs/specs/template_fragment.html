@@ -453,7 +453,8 @@ Please pay {{ amount }} by {{ due }}.
             (<code>{{</code>, <code>na</code>, <code>me}}</code>), and LibreOffice across spans; it is filled anyway, and a value adopts the
             <strong>formatting of the run its placeholder began in</strong> (a bold <code>{{amount}}</code> renders bold).
             Block tags are found the same way. In an ODT, spaces kept as <code>&lt;text:s/&gt;</code> read as the spaces
-            they stand for (a run of more than 16 is read as 16, and written back whole).</li>
+            they stand for (a long run is read as 16 spaces, or more than twice the longest run of spaces in a
+            delimiter, and written back whole).</li>
         <li><strong>Everywhere text lives.</strong> Tags in the body, headers, footers, footnotes/endnotes, comments and
             text boxes are all filled. Deleted text kept for tracked changes, and in an ODT the text of fields, note
             citations and comment authors, is not read.</li>

@@ -37,6 +37,8 @@ import { fontkitUnbrotli, nativeUnbrotli, sfntOf } from '../../src/generators/pd
 import { toWoff, toWoff2 } from '../helpers/webFontWriter';
 import { BOX, cffTable, type CffSpec, charString, EMPTY, withCffOutlines } from '../helpers/cffFontWriter';
 import { checkLookalikeScan } from '../helpers/lookalikeReference';
+import { checkOdtSpaceRuns } from '../helpers/odtSpaceRuns';
+import { OfficeTemplate } from '../../src/OfficeTemplate';
 import { findLookalikeTags, PartContext, triggersOf } from '../../src/template/templateEngine.js';
 
 // ============================================================================
@@ -2796,7 +2798,8 @@ async function runTableGeometryTests(): Promise<GenFeatureTest[]> {
 
 /**
  * The template engine's readings checked against plain references on random inputs: the look-alike scan
- * (text that looks like a tag) against test/helpers/lookalikeReference.ts. Fast mode runs a tenth of the cases.
+ * (text that looks like a tag) against test/helpers/lookalikeReference.ts, and spaces kept as `<text:s/>` in
+ * an ODT read as if typed out (test/helpers/odtSpaceRuns.ts). Fast mode runs fewer cases.
  */
 async function runTemplatePropertyTests(): Promise<GenFeatureTest[]> {
     const results: GenFeatureTest[] = [];
@@ -2815,6 +2818,14 @@ async function runTemplatePropertyTests(): Promise<GenFeatureTest[]> {
     results.push(mk(`the look-alike scan lists and counts what the reference finds (${cases} texts, rooms 0 to 3 and 1,000)`,
         'no difference', failures.length ? `${failures.length} differences` : 'none', failures.length === 0,
         failures.length ? failures.slice(0, 3).join('\n') : `${withLookalikes} texts with look-alikes`, Date.now() - started));
+    const paragraphs = FAST_MODE ? 1_000 : 4_000;
+    const odtStarted = Date.now();
+    const odtFailures = await checkOdtSpaceRuns((bytes, config) => OfficeTemplate.render(bytes, config) as Promise<Uint8Array>, paragraphs, 1);
+    results.push({
+        category: 'Template Properties', feature: `ODT spaces as <text:s/> render as typed out, next to tags with space edges (${paragraphs} paragraphs)`,
+        sourceFormat: 'synthetic', destFormat: 'odt',
+        result: { status: odtFailures.length ? 'FAIL' : 'PASS', expected: 'no difference', actual: odtFailures.length ? `${odtFailures.length} differences` : 'none', details: odtFailures.slice(0, 3).join('\n'), duration: Date.now() - odtStarted },
+    });
     return results;
 }
 

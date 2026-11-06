@@ -4362,9 +4362,10 @@ async function testOdtTemplateCutIds(): Promise<void> {
 }
 
 /**
- * ODT templates: a `<text:s text:c="N"/>` of more than 16 spaces is read as 16 (its text is never longer
- * than its XML) and written back with every space it stood for, whole, wholly in a tag, or split by a
- * delimiter that starts or ends with a space.
+ * ODT templates: a long `<text:s text:c="N"/>` is read as 16 spaces, or more than twice the longest run of
+ * spaces in a delimiter (its text is never much longer than its XML), and written back with every space it
+ * stood for, whole, wholly in a tag, or split by delimiters that start or end with spaces, the spaces not
+ * read always between the tags around it.
  */
 async function testOdtTemplateLongSpaceRuns(): Promise<void> {
     const { p, odt, body } = odtHelpers();
@@ -4380,6 +4381,17 @@ async function testOdtTemplateLongSpaceRuns(): Promise<void> {
     assert.strictEqual(await body(p('x[[ v ]]<text:s text:c="300"/>y'), {}, { delimiters: { start: '[[', end: ']] ' }, onMissing: 'keep' }), p('x[[ v ]]<text:s/><text:s text:c="299"/>y'),
         'kept as typed: the tag\'s space and the rest, every one of the 300');
     assert.strictEqual(await body(p('a<text:s text:c="3"/>{{ v }}<text:s/>b'), { v: 'V' }), p('a<text:s text:c="3"/>V<text:s/>b'), 'short runs as before');
+    // A run used up by the space edges of the tag ending in it and the tag starting in it, and edges longer
+    // than half of 16: the spaces not read stay between the two tags, and both tags are read.
+    const S = (count: number) => `<text:s text:c="${count}"/>`;
+    for (const [template, delimiters, filled, kept] of [
+        [`x [[ a ]]${S(300)}[[ b ]] y`, { start: ' [[', end: ']] ' }, `xA${S(298)}By`, `x [[ a ]]<text:s/>${S(298)}<text:s/>[[ b ]] y`],
+        [`x${S(8)}[[ a ]]${S(300)}[[ b ]]${S(8)}y`, { start: ' '.repeat(8) + '[[', end: ']]' + ' '.repeat(8) }, `xA${S(284)}By`, `x${S(8)}[[ a ]]${S(8)}${S(284)}${S(8)}[[ b ]]${S(8)}y`],
+        [`x${S(12)}[[ a ]]${S(300)}[[ b ]]${S(12)}y`, { start: ' '.repeat(12) + '[[', end: ']]' + ' '.repeat(12) }, `xA${S(276)}By`, `x${S(12)}[[ a ]]${S(12)}${S(276)}${S(12)}[[ b ]]${S(12)}y`],
+    ] as [string, { start: string; end: string }, string, string][]) {
+        assert.strictEqual(await body(p(template), { a: 'A', b: 'B' }, { delimiters }), p(filled), `${template} with ${JSON.stringify(delimiters)}, filled`);
+        assert.strictEqual(await body(p(template), {}, { delimiters, onMissing: 'keep' }), p(kept), `${template} with ${JSON.stringify(delimiters)}, kept`);
+    }
     console.log('  ODT template long space runs: All assertions passed ✓');
 }
 
