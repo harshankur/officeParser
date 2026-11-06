@@ -753,7 +753,7 @@ export async function testMarkdownDisclosureSubDocuments(): Promise<void> {
     }
     const raw = (await OfficeParser.parseOffice(Buffer.from(cases[6][2]), { fileType: 'md' })).content[0].children!;
     assert.strictEqual(nodeText(raw[0]), 'Raw *not md* line', 'Disclosure sub-document: raw HTML after the summary keeps its Markdown literal, as GitHub shows it');
-    // 20 disclosures nested: 16 read as nested, deeper ones a disclosure of their summary followed by their body; all text kept, stable.
+    // 20 disclosures nested: 16 read as nested, deeper ones flattened to their summary and body as text; all text kept, stable.
     let nested = '';
     for (let i = 0; i < 20; i++) nested += `<details>\n<summary>L${i}</summary>\n\nText ${i}\n\n`;
     nested += '</details>\n\n'.repeat(20) + 'After\n';
@@ -938,6 +938,43 @@ export async function testMarkdownDisclosureContainerCloses(): Promise<void> {
         assert.ok(name.includes('code span') || !read.text.includes('</details>'), `Disclosure close: ${name}, no closing tag in its text: ${read.text}`);
     }
     console.log('✓ Markdown disclosure closed in quotes, list items and headings');
+}
+
+/**
+ * Past 16 levels of nesting a Markdown disclosure is flattened, inline or as a block: its tags go, its
+ * summary and body stay as text in order, with no tag written as text, and the text and Markdown are
+ * the same over three round trips.
+ */
+export async function testMarkdownDisclosureFlattenedPastDepth(): Promise<void> {
+    for (const levels of [16, 17, 20]) for (const inline of [true, false]) {
+        let source = '';
+        for (let i = 0; i < levels; i++) source += inline ? `T${i} <details><summary>S${i}</summary> B${i} *x*\n\n` : `<details>\n<summary>S${i}</summary>\n\nB${i} *x*\n\n`;
+        source += 'CORE\n\n';
+        for (let i = levels - 1; i >= 0; i--) source += `</details>\n\nA${i}\n\n`;
+        const name = `${levels} levels${inline ? ' inline' : ''}`;
+        let ast = await OfficeParser.parseOffice(Buffer.from(source), { fileType: 'md' });
+        const text = (await ast.to('text')).value;
+        const words = source.match(/\b[TSBA]\d+\b|CORE/g)!;
+        assert.deepStrictEqual(words.filter(word => !new RegExp(`\\b${word}\\b`).test(text)), [], `Disclosure depth: ${name}, nothing dropped`);
+        assert.ok(!/<\/?(?:details|summary)|&lt;/i.test(text), `Disclosure depth: ${name}, no tag as text: ${text.slice(text.indexOf('T15'), text.indexOf('T15') + 120)}`);
+        const markdown: string[] = [];
+        for (let pass = 0; pass < 3; pass++) {
+            markdown.push((await ast.to('md')).value);
+            ast = await OfficeParser.parseOffice(Buffer.from(markdown[pass]), { fileType: 'md' });
+        }
+        assert.strictEqual((await ast.to('text')).value, text, `Disclosure depth: ${name}, the same text over three round trips`);
+        assert.strictEqual(markdown[2], markdown[1], `Disclosure depth: ${name}, the Markdown settles`);
+        let depth = 0;
+        const walk = (nodes: OfficeContentNode[] | undefined, level: number): void => {
+            for (const node of nodes ?? []) {
+                if (node.type === 'disclosure') depth = Math.max(depth, level + 1);
+                walk(node.children, level + (node.type === 'disclosure' ? 1 : 0));
+            }
+        };
+        walk(ast.content, 0);
+        assert.strictEqual(depth, 16, `Disclosure depth: ${name}, 16 levels nested`);
+    }
+    console.log('✓ Markdown disclosures flattened past 16 levels');
 }
 
 /** ODF namespaces of a note test file. */

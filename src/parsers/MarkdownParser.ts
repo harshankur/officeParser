@@ -676,7 +676,7 @@ function htmlTableDepthChange(text: string): number {
     return (text.match(/<table\b/gi)?.length ?? 0) - (text.match(/<\/table\s*>/gi)?.length ?? 0);
 }
 
-/** How deeply disclosures nest in Markdown (see groupDisclosures): deeper, a `<details>` is the HTML block it stands in. */
+/** How deeply disclosures nest in Markdown (see groupDisclosures): deeper, a disclosure's tags go and its text stays. */
 const MAX_DISCLOSURE_DEPTH = 16;
 
 /** A `</table>` closing tag, read where it starts. */
@@ -2421,8 +2421,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // block: its body is not taken into it. Text before a disclosure's tag and after its closing tag in
     // their blocks stays where it stands; a disclosure opened and closed in one HTML block is that
     // block's HTML. Each block's tags are found once at each level of nesting, and nesting stops at
-    // MAX_DISCLOSURE_DEPTH (a `<details>` deeper is the HTML block it is in, its body the blocks after
-    // it), so the work is linear in the text's length.
+    // MAX_DISCLOSURE_DEPTH (deeper, a disclosure's tags go, its text staying in the one holding it), so
+    // the work is linear in the text's length.
     const groupDisclosures = (parts: BlockPart[]): string[] => {
         const out: string[] = [];
         const emit = (part: BlockPart) => {
@@ -2432,8 +2432,23 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 rawHtmlParts.push(part.text);
             } else out.push(part.text);
         };
-        if (disclosureDepth >= MAX_DISCLOSURE_DEPTH || !parts.some(part => part.tag || MAY_HOLD_DISCLOSURE_TAG.test(part.text))) {
+        if (!parts.some(part => part.tag || MAY_HOLD_DISCLOSURE_TAG.test(part.text))) {
             for (const part of parts) emit(part);
+            return out;
+        }
+        if (disclosureDepth >= MAX_DISCLOSURE_DEPTH) {
+            // Flattened: the tags go, their text stays, read as the block was (HTML where it was).
+            for (const part of parts) {
+                const { tags, htmlFrom } = tagsOf(part);
+                let text = '';
+                let last = 0;
+                for (const tag of tags) {
+                    if (tag.escape) continue;
+                    text += part.text.slice(last, tag.at);
+                    last = tag.end;
+                }
+                emit(last === 0 ? part : { text: text + part.text.slice(last), html: part.html || htmlFrom === 0 });
+            }
             return out;
         }
         // A part of a block, from `from` (blank lines at its start left out), raw HTML where the block's is.
