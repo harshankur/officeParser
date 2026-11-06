@@ -493,3 +493,69 @@ export async function testQuoteIdsAcrossParts(): Promise<void> {
     assert.strictEqual((await word.to('md')).value, '> First\n\n> Second', 'Quote ids: two quotes from two chunks');
     console.log('✓ Quote ids across parts');
 }
+
+/** A Markdown document's blocks, each its type and its children's types. */
+async function markdownShape(markdown: string): Promise<[string, string[] | undefined][]> {
+    const ast = await OfficeParser.parseOffice(Buffer.from(markdown), { fileType: 'md' });
+    return ast.content.map(n => [n.type, n.children?.map(c => c.type)]);
+}
+
+/**
+ * A `<details>` block's body in Markdown: Markdown but for pieces CommonMark starts an HTML block with;
+ * a disclosure's tags in code spans and indented code are text; it holds everything up to its close
+ * however long; tables are joined as before.
+ */
+export async function testMarkdownDisclosureBodies(): Promise<void> {
+    for (const body of ['Use the `<details>` element.', 'Use the `<summary>` element.', 'Plain *body*.']) {
+        const source = `<details>\n<summary>Help</summary>\n\n${body}\n\n</details>\n\nAfter\n`;
+        const ast = await OfficeParser.parseOffice(Buffer.from(source), { fileType: 'md' });
+        assert.deepStrictEqual(ast.content.map(n => [n.type, n.children?.map(c => c.type)]), [['disclosure', ['paragraph']], ['paragraph', ['text']]], `Markdown disclosure: ${body} is one paragraph in it`);
+        const html = (await ast.to('html', { htmlConfig: { standalone: false } })).value;
+        if (body.includes('`')) assert.ok(/<code>&lt;(details|summary)&gt;<\/code>/.test(html), `Markdown disclosure: the code span kept: ${html}`);
+    }
+    // Our own Markdown of a disclosure mentioning its tag, in a code span and in code.
+    const help = await OfficeParser.parseOffice(Buffer.from('<details><summary>Help</summary><p>Use <code>&lt;details&gt;</code> to fold.</p><pre><code>x\n&lt;/details&gt;\ny</code></pre><p>Inner end</p></details><p>After</p>'), { fileType: 'html' });
+    const helpMd = (await help.to('md')).value;
+    assert.deepStrictEqual(await markdownShape(helpMd), [['disclosure', ['paragraph', 'code', 'paragraph']], ['paragraph', ['text']]], `Markdown disclosure: code mentioning its tag stays in it: ${helpMd}`);
+    // A body starting with an inline tag is a paragraph; indented code is code; nested code spans are text.
+    const keys = await OfficeParser.parseOffice(Buffer.from('<details>\n<summary>Keys</summary>\n\n<kbd>Ctrl</kbd> and *bold*.\n\n</details>\n\nAfter\n'), { fileType: 'md' });
+    const paragraph = keys.content[0].children![0];
+    assert.ok(paragraph.type === 'paragraph' && paragraph.children!.some(c => c.formatting?.keyboard) && paragraph.children!.some(c => c.formatting?.italic), 'Markdown disclosure: <kbd> and emphasis in a paragraph');
+    assert.deepStrictEqual(await markdownShape('<details>\n<summary>Keys</summary>\n\n    <details> in indented code\n\n</details>\n\nAfter\n'), [['disclosure', ['code']], ['paragraph', ['text']]], 'Markdown disclosure: indented code is code');
+    assert.deepStrictEqual(await markdownShape('<details>\n<summary>S</summary>\n\nA ``x `<details>` y`` b and `</details>` c.\n\nMore\n\n</details>\n\nAfter\n'),
+        [['disclosure', ['paragraph', 'paragraph']], ['paragraph', ['text']]], 'Markdown disclosure: tags in code spans are text');
+    // A closing tag on a paragraph's last line closes it, as a browser has it.
+    assert.deepStrictEqual(await markdownShape('<details>\n<summary>S</summary>\n\n*Body*\n</details>\n\nAfter\n'), [['disclosure', ['paragraph']], ['paragraph', ['text']]], 'Markdown disclosure: an inline closing tag closes it');
+    // Through HTML and Markdown: stable over three passes.
+    const kbdHtml = await OfficeParser.parseOffice(Buffer.from('<details><summary>K</summary><p><kbd>Ctrl</kbd> then <b>bold</b></p></details>'), { fileType: 'html' });
+    const kbdPasses = await passesOf((await kbdHtml.to('md')).value, 'md', 'md');
+    assert.ok(kbdPasses[0].includes('<kbd>Ctrl</kbd> then **bold**'), `Markdown disclosure: <kbd> written: ${kbdPasses[0]}`);
+    assert.deepStrictEqual(kbdPasses, [kbdPasses[0], kbdPasses[0], kbdPasses[0]], 'Markdown disclosure: <kbd> in a body is stable over three passes');
+    // A long body, whatever its length.
+    for (const count of [70, 500]) {
+        const long = await OfficeParser.parseOffice(Buffer.from('<details><summary>S</summary>' + Array.from({ length: count }, (_, i) => `<p>para ${i}</p>`).join('') + '</details><p>After</p>'), { fileType: 'html' });
+        const longMd = (await long.to('md')).value;
+        const back = await OfficeParser.parseOffice(Buffer.from(longMd), { fileType: 'md' });
+        assert.deepStrictEqual(back.content.map(n => [n.type, n.children?.length]), [['disclosure', count], ['paragraph', 1]], `Markdown disclosure: ${count} paragraphs stay in it`);
+        const passes = await passesOf(longMd, 'md', 'md');
+        assert.deepStrictEqual(passes, [longMd, longMd, longMd], `Markdown disclosure: ${count} paragraphs stable over three passes`);
+    }
+    // Tables as before: Markdown between a cell's tags is the cell's.
+    assert.deepStrictEqual(await markdownShape('<table><tr><td>\n\ncell *x*\n\n</td></tr></table>\n'), [['table', ['row']]], 'Markdown disclosure: a table joined as before');
+    // Linear: each against plain paragraphs of the same size, in the same run.
+    const n = 4000;
+    const plain = (length: number) => 'Some *plain* text here.\n\n'.repeat(Math.ceil(length / 25));
+    for (const [name, source] of [
+        ['openings', '<details>\n<summary>s</summary>\n\n'.repeat(n)],
+        ['code spans', '<details>\n<summary>s</summary>\n\n' + ('`<details>` ``` x\n\n').repeat(2 * n) + '</details>\n'],
+        ['unclosed code spans', '<details>\n\n' + 'a ```` <details> '.repeat(n) + '\n\n</details>\n'],
+        ['lone tag lines', '<details>\n\n' + ('<a' + ' b'.repeat(2000) + '\n\n').repeat(25) + '</details>\n'],
+        ['closers of the other kind', '<details>\n\n' + '<table></details>\n\n'.repeat(2 * n) + '</table>\n'],
+        ['inline closers', '<details>\n\n' + 'a `x` </details> <details>\n\n'.repeat(2 * n) + '</details>\n'],
+    ]) {
+        const time = await timed(() => OfficeParser.parseOffice(Buffer.from(source), { fileType: 'md' }));
+        const baseline = await timed(() => OfficeParser.parseOffice(Buffer.from(plain(source.length)), { fileType: 'md' }));
+        assert.ok(time < 3 * baseline + 200, `Markdown disclosure: ${name} (${source.length} bytes) in ${time.toFixed(0)} ms, paragraphs in ${baseline.toFixed(0)} ms`);
+    }
+    console.log('✓ Markdown disclosure bodies');
+}

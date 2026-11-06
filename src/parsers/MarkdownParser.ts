@@ -659,8 +659,8 @@ const WRAPPER_OPEN = /^<(div|p|center|section|article|aside|header|footer|main|n
 /** The closing tag of a block wrapper standing alone in its block. */
 const WRAPPER_CLOSE = /^<\/(?:div|p|center|section|article|aside|header|footer|main|nav|figure)\s*>$/i;
 
-/** A table's own tags, and a disclosure's: a piece holding one is HTML, not Markdown in a cell or disclosure (see splitIntoBlocks). */
-const TABLE_PART_TAG = /<\/?(?:table|thead|tbody|tfoot|tr|td|th|caption|colgroup|col|details|summary)\b/i;
+/** A table's own tags: a piece holding one is HTML, not Markdown in a cell (see splitIntoBlocks). */
+const TABLE_PART_TAG = /<\/?(?:table|thead|tbody|tfoot|tr|td|th|caption|colgroup|col)\b/i;
 
 /** How many blank-line-separated pieces an HTML table may run across while Markdown in its cells joins it (see splitIntoBlocks). */
 const MAX_TABLE_PIECES = 64;
@@ -668,14 +668,132 @@ const MAX_TABLE_PIECES = 64;
 /** How deeply nested an HTML table that blank lines run through may be, for its pieces to join (see splitIntoBlocks). */
 const MAX_JOINED_TABLE_DEPTH = 16;
 
+/** CommonMark's HTML block start conditions 1 to 6 (7 is startsHtmlBlock's), up to three spaces in. */
+const HTML_BLOCK_START = new RegExp('^ {0,3}(?:<(?:pre|script|style|textarea)(?:[\\s>]|$)|<!--|<\\?|<![A-Za-z]|<!\\[CDATA\\[|<\\/?(?:'
+    + 'address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|'
+    + 'h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul'
+    + ')(?:[\\s>]|\\/>|$))', 'i');
+
+/** CommonMark's HTML block start condition 7: one complete open or closing tag, and only white space after it on the line. */
+const HTML_BLOCK_LONE_TAG = /^ {0,3}(?:<[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][\w.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*\/?>|<\/[A-Za-z][A-Za-z0-9-]*\s*>)[ \t]*$/;
+
 /**
- * The change in how many HTML tables and disclosures (`<details>`) are open over `text`: their opening
- * tags less their closing tags. Markdown between blank lines inside either is read into it (the way
- * GitHub documents writing a disclosure: `<details>`, `<summary>`, a blank line, Markdown, `</details>`).
+ * Whether a piece (what a blank line starts) starts an HTML block, as CommonMark reads its first line:
+ * in a disclosure's body, any other piece is Markdown (`<kbd>Ctrl</kbd> and *bold*` is a paragraph).
  */
-function htmlTableDepthChange(text: string): number {
-    if (!/<\/?(?:table|details)/i.test(text)) return 0;
-    return (text.match(/<(?:table|details)\b/gi)?.length ?? 0) - (text.match(/<\/(?:table|details)\s*>/gi)?.length ?? 0);
+function startsHtmlBlock(piece: string): boolean {
+    const newline = piece.indexOf('\n');
+    const line = newline === -1 ? piece : piece.slice(0, newline);
+    if (HTML_BLOCK_START.test(line)) return true;
+    const lone = /^ {0,3}<\/?([A-Za-z][A-Za-z0-9-]*)/.exec(line);
+    return !!lone && !/^(?:pre|script|style|textarea)$/i.test(lone[1]) && HTML_BLOCK_LONE_TAG.test(line);
+}
+
+/**
+ * `text` with what each code span holds blanked (the same length), as CommonMark reads code spans
+ * (see codeSpanCloser; a backslash-escaped backtick opens none): a tag written in one is text. Linear
+ * in the text's length.
+ */
+function blankCodeSpans(text: string): string {
+    if (!text.includes('`')) return text;
+    const closeAt = codeSpanCloser(text);
+    let out = '';
+    let last = 0;
+    for (let start = text.indexOf('`'); start !== -1;) {
+        let end = start + 1;
+        while (text[end] === '`') end++;
+        let slashes = 0;
+        while (text[start - 1 - slashes] === '\\') slashes++;
+        const from = slashes % 2 === 1 ? start + 1 : start;
+        const close = from < end ? closeAt(end, end - from) : -1;
+        if (close === -1) { start = text.indexOf('`', end); continue; }
+        out += text.slice(last, end) + ' '.repeat(close - end);
+        last = close;
+        start = text.indexOf('`', close + (end - from));
+    }
+    return out + text.slice(last);
+}
+
+/**
+ * The tables and disclosures a piece opens and closes, in order: a table's tags as they are written
+ * (as 8.6.0 counted them), a disclosure's outside code spans (`` `<details>` `` is text). Of a piece
+ * read as Markdown, only a disclosure's tags, its inline HTML, and not one escaped (`\<details>`).
+ */
+function containerTags(text: string, markdown = false): { details: boolean; open: boolean }[] {
+    if (!(markdown ? /<\/?details/i : /<\/?(?:table|details)/i).test(text)) return [];
+    const blanked = /<\/?details/i.test(text) ? blankCodeSpans(text) : text;
+    const tags: { details: boolean; open: boolean }[] = [];
+    for (const m of text.matchAll(/<(\/?)(table|details)\b(\s*>)?/gi)) {
+        const details = m[2].toLowerCase() === 'details';
+        if (details && blanked[m.index] !== '<') continue;
+        if (m[1] && m[3] === undefined) continue;
+        if (markdown) {
+            if (!details) continue;
+            let slashes = 0;
+            while (text[m.index - 1 - slashes] === '\\') slashes++;
+            if (slashes % 2 === 1) continue;
+        }
+        tags.push({ details, open: !m[1] });
+    }
+    return tags;
+}
+
+/**
+ * The tables and disclosures open (see splitIntoBlocks), innermost last. A closing tag closes the
+ * innermost container of its kind and none when none of its kind is open; each takes constant time
+ * (amortized), so a piece of many tags of both kinds costs time linear in its length.
+ */
+class OpenContainers {
+    /** The kinds opened (true for a disclosure), in order, and whether each is still open. */
+    private readonly kinds: boolean[] = [];
+    private readonly open: boolean[] = [];
+    /** The places in `kinds` of the open tables (0) and disclosures (1), innermost last. */
+    private readonly places: [number[], number[]] = [[], []];
+
+    push(details: boolean): void {
+        this.places[details ? 1 : 0].push(this.kinds.length);
+        this.kinds.push(details);
+        this.open.push(true);
+    }
+
+    close(details: boolean): void {
+        const at = this.places[details ? 1 : 0].pop();
+        if (at === undefined) return;
+        this.open[at] = false;
+        while (this.kinds.length > 0 && !this.open[this.open.length - 1]) {
+            this.kinds.pop();
+            this.open.pop();
+        }
+    }
+
+    /** Whether the innermost container open is a disclosure. */
+    get innermostDisclosure(): boolean {
+        return this.kinds.length > 0 && this.kinds[this.kinds.length - 1];
+    }
+
+    /** Whether any disclosure is open. */
+    get anyDisclosure(): boolean {
+        return this.places[1].length > 0;
+    }
+}
+
+/**
+ * What a piece changes in the open containers (see splitIntoBlocks): the change in their depth, its
+ * opening tags less its closing ones (as 8.6.0 counted a table's), each also applied to `containers`
+ * when given. Of a piece read as Markdown, only its inline disclosure tags count (see containerTags).
+ */
+function applyContainerTags(text: string, containers?: OpenContainers, markdown = false): number {
+    let change = 0;
+    for (const tag of containerTags(text, markdown)) {
+        if (tag.open) {
+            containers?.push(tag.details);
+            change++;
+        } else {
+            containers?.close(tag.details);
+            change--;
+        }
+    }
+    return change;
 }
 
 /** The column a line's text starts at, a tab advancing to the next multiple of four. */
@@ -2040,25 +2158,49 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // within MAX_TABLE_PIECES pieces, pieces of Markdown between (the GitHub way of writing a cell:
     // `<td>`, a blank line, `Some *text*`, a blank line, `</td>`) join it too, read as Markdown into
     // their cell (see restoreMarkdownPieces); they were a paragraph, and the rest escaped text.
+    // Inside a disclosure (the innermost container open a <details>), everything up to its close is in
+    // it, as a browser shows an HTML block's <details> (one never closed holds the rest of the
+    // document): no look ahead, so no limit on its pieces. A piece there is HTML where CommonMark
+    // starts an HTML block, else Markdown (`<kbd>Ctrl</kbd> and *bold*` is a paragraph), whose inline
+    // `</details>` (`*Body*` and `</details>` on the next line) still closes the disclosure, as a
+    // browser has it. A disclosure's tags in code spans, indented code and fenced code (lifted before)
+    // are text. Inside a table, as before.
     let tableDepth = 0;
     let joinMarkdownUntil = -1;
+    let containers = new OpenContainers();
     for (let i = 0; i < parts.length; i += 2) {
         const part = parts[i];
         const separator = i > 0 ? parts[i - 1] : '';
-        const startsWithTag = /^[ \t]*</.test(part);
-        if (tableDepth > 0 && tableDepth <= MAX_JOINED_TABLE_DEPTH && (startsWithTag || i <= joinMarkdownUntil)) {
-            const markdown = !startsWithTag && !TABLE_PART_TAG.test(part);
-            if (markdown) markdownPieces.push(part);
-            rawBlocks[rawBlocks.length - 1] += separator + (markdown ? `\uE000${pieceNonce}:${markdownPieces.length - 1}\uE001` : part);
-            tableDepth += markdown ? 0 : htmlTableDepthChange(part);
-            continue;
+        if (tableDepth > 0 && tableDepth <= MAX_JOINED_TABLE_DEPTH) {
+            let joins: boolean;
+            let markdown: boolean;
+            let depthChange = 0;
+            if (containers.innermostDisclosure) {
+                joins = true;
+                markdown = !startsHtmlBlock(part);
+                const newline = part.indexOf('\n');
+                if (markdown && indentColumn(newline === -1 ? part : part.slice(0, newline)) < 4) depthChange = applyContainerTags(part, containers, true);
+            } else {
+                const startsWithTag = /^[ \t]*</.test(part);
+                // A table in a disclosure: its Markdown pieces join, the disclosure holding them.
+                joins = startsWithTag || i <= joinMarkdownUntil || containers.anyDisclosure;
+                markdown = !startsWithTag && !TABLE_PART_TAG.test(part);
+            }
+            if (joins) {
+                if (markdown) markdownPieces.push(part);
+                rawBlocks[rawBlocks.length - 1] += separator + (markdown ? `\uE000${pieceNonce}:${markdownPieces.length - 1}\uE001` : part);
+                tableDepth += markdown ? depthChange : applyContainerTags(part, containers);
+                continue;
+            }
         }
         rawBlocks.push(part);
         rawSeparators.push(separator);
-        tableDepth = HTML_BLOCK_LINE.exec(part)?.index === 0 ? htmlTableDepthChange(part) : 0;
+        containers = new OpenContainers();
+        tableDepth = HTML_BLOCK_LINE.exec(part)?.index === 0 ? applyContainerTags(part, containers) : 0;
         joinMarkdownUntil = -1;
-        for (let j = i + 2, depth = tableDepth, n = 0; tableDepth > 0 && j < parts.length && n < MAX_TABLE_PIECES; j += 2, n++) {
-            depth += htmlTableDepthChange(parts[j]);
+        // Where a table the block opened closes, within MAX_TABLE_PIECES pieces (a disclosure needs none).
+        for (let j = i + 2, depth = tableDepth, n = 0; tableDepth > 0 && !containers.anyDisclosure && j < parts.length && n < MAX_TABLE_PIECES; j += 2, n++) {
+            depth += applyContainerTags(parts[j]);
             if (depth <= 0) { joinMarkdownUntil = j; break; }
         }
     }
