@@ -9,7 +9,7 @@ import { withinTime } from './helpers/timing';
 import { digestOf, docxTemplateCases } from './helpers/docxTemplateCases';
 import { testUnicodeChunks } from './generator/unicodeChunks';
 import { testBrotliGuard } from './security/brotliGuard';
-import { testDisclosuresAndKeyboard, testFigureCaptions, testSheetsAsTables, testNoteMarks, testQuoteParagraphs, testRtfListTypesPerLevel, testXhtmlReadAsHtml, testNestedFiguresReadOnce, testDisclosureCarriesNoText, testDoctypeAndDeclarations, testQuoteIdsAcrossParts, testMarkdownDisclosureBodies, testOdtNoteMarksFromConfiguration, testMarkdownDisclosureSubDocuments, testMarkdownWithoutDisclosuresUnchanged, testOdtNoteMarksAsLibreOffice, testXhtmlSniffedPastFirstRead, testMarkdownDisclosurePreBlock, testMarkdownDisclosureTagAttributes, testMarkdownDisclosureSummaries, testMarkdownDisclosureContainerCloses, testMarkdownDisclosureFlattenedPastDepth, testMarkdownDisclosureShapesLinear, testMarkdownDisclosureNamesRenamed, testMarkdownDisclosureRound9Findings, testMarkdownDisclosureInItemsAndCells } from './generator/documentShapes';
+import { testDisclosuresAndKeyboard, testFigureCaptions, testSheetsAsTables, testNoteMarks, testQuoteParagraphs, testRtfListTypesPerLevel, testXhtmlReadAsHtml, testNestedFiguresReadOnce, testDisclosureCarriesNoText, testDoctypeAndDeclarations, testQuoteIdsAcrossParts, testMarkdownDisclosureBodies, testOdtNoteMarksFromConfiguration, testMarkdownDisclosureSubDocuments, testMarkdownWithoutDisclosuresUnchanged, testOdtNoteMarksAsLibreOffice, testXhtmlSniffedPastFirstRead, testMarkdownDisclosurePreBlock, testMarkdownDisclosureTagAttributes, testMarkdownDisclosureSummaries, testMarkdownDisclosureContainerCloses, testMarkdownDisclosureFlattenedPastDepth, testMarkdownDisclosureShapesLinear, testMarkdownDisclosureNamesRenamed, testMarkdownDisclosureRound9Findings, testMarkdownDisclosureInItemsAndCells, testMarkdownDisclosureRound10Findings, testDisclosureSummaryShapesLinear } from './generator/documentShapes';
 import { OfficeGenerator } from '../src/OfficeGenerator';
 import { bulletCharacter, formatListNumber, readMarkerLabels } from '../src/utils/listMarkers';
 import { decodeBmp, decodeGif } from '../src/utils/rasterUtils';
@@ -13078,6 +13078,8 @@ async function runTests(): Promise<void> {
         ['Markdown disclosure names renamed read the same', testMarkdownDisclosureNamesRenamed],
         ['Markdown disclosure round 9 findings', testMarkdownDisclosureRound9Findings],
         ['Markdown disclosures in list items and cells', testMarkdownDisclosureInItemsAndCells],
+        ['Markdown disclosure round 10 findings', testMarkdownDisclosureRound10Findings],
+        ['Summary and disclosure shapes in linear time', testDisclosureSummaryShapesLinear],
         ['Cancellation', testCancellation],
     ];
 

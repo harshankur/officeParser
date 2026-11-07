@@ -39,6 +39,8 @@ import { BOX, cffTable, type CffSpec, charString, EMPTY, withCffOutlines } from 
 import { checkLookalikeScan } from '../helpers/lookalikeReference';
 import { checkDisclosureReference } from '../helpers/disclosureReference';
 import { checkDisclosureAstRoundTrip } from '../helpers/disclosureAstRoundTrip';
+import { checkMarkdownLineLoss } from '../helpers/markdownLineLoss';
+import { checkHtmlPathRoundTrip, HTML_PATH_KINDS } from '../helpers/htmlPathRoundTrip';
 import { checkOdtSpaceRuns } from '../helpers/odtSpaceRuns';
 import { OfficeTemplate } from '../../src/OfficeTemplate';
 import { findLookalikeTags, PartContext, triggersOf } from '../../src/template/templateEngine.js';
@@ -2896,6 +2898,71 @@ async function runDisclosureAstRoundTripTests(): Promise<GenFeatureTest[]> {
 }
 
 /**
+ * No line of Markdown is lost (test/helpers/markdownLineLoss.ts): random texts of quotes, list markers,
+ * empty items, blank and quoted blank lines, indented and leading blank lines, disclosure tags, summaries,
+ * divs, headings and setext lines keep every word in their text, and after a Markdown round trip. The
+ * generator has a full period, so each seed draws its own texts; the distinct ones are counted. Fast mode
+ * runs one seed of 4,000 texts, the full run three of 10,000.
+ */
+async function runMarkdownLineLossTests(): Promise<GenFeatureTest[]> {
+    const perSeed = FAST_MODE ? 4_000 : 10_000;
+    const seeds = FAST_MODE ? [1] : [1, 2, 3];
+    const results: GenFeatureTest[] = [];
+    for (const seed of seeds) {
+        const started = Date.now();
+        const result = await checkMarkdownLineLoss(
+            markdown => OfficeParser.parseOffice(Buffer.from(markdown), { fileType: 'md' }),
+            async ast => String((await ast.to('text')).value),
+            async ast => String((await ast.to('md')).value), perSeed, seed);
+        const failed = result.lost + result.lostAfterRoundTrip;
+        console.log(`\n    seed ${seed}: ${perSeed} texts, ${result.distinct} distinct, ${result.lost} lose words, ${result.lostAfterRoundTrip} lose words after the round trip, ${result.joined} with a word joined`);
+        results.push({
+            category: 'Markdown Lines', feature: `no word of a Markdown text is lost, read or written back (seed ${seed}: ${perSeed} texts, ${result.distinct} distinct)`,
+            sourceFormat: 'md', destFormat: 'md',
+            result: {
+                status: failed ? 'FAIL' : 'PASS', expected: 'no word lost',
+                actual: failed ? `${result.lost} lose words, ${result.lostAfterRoundTrip} after the round trip` : 'none',
+                details: failed ? result.failures.join('\n') : `${result.joined} texts with a word joined (a <summary> outside any disclosure)`, duration: Date.now() - started,
+            },
+        });
+    }
+    return results;
+}
+
+/**
+ * List items and table cells written as HTML in Markdown keep what they hold (test/helpers/htmlPathRoundTrip.ts):
+ * random ASTs of list items holding a disclosure and tables with a merged cell, holding every node kind,
+ * written as Markdown and read back three times: no word lost or joined, no anchor id lost, the Markdown
+ * settled. The generator has a full period, so each seed draws its own ASTs; the distinct ones are
+ * counted. Fast mode runs one seed of 1,000 ASTs, the full run twelve of 2,000.
+ */
+async function runHtmlPathRoundTripTests(): Promise<GenFeatureTest[]> {
+    const perSeed = FAST_MODE ? 1_000 : 2_000;
+    const seeds = FAST_MODE ? [1] : Array.from({ length: 12 }, (_, i) => i + 1);
+    const results: GenFeatureTest[] = [];
+    for (const seed of seeds) {
+        const started = Date.now();
+        const result = await checkHtmlPathRoundTrip(
+            async ast => String((await OfficeGenerator.generate(ast, 'md')).value),
+            markdown => OfficeParser.parseOffice(Buffer.from(markdown), { fileType: 'md' }),
+            async ast => String((await ast.to('text')).value), perSeed, seed);
+        const failed = result.lost + result.joined + result.anchorsLost + result.unsettled;
+        const allKinds = result.kinds === HTML_PATH_KINDS.length;
+        console.log(`\n    seed ${seed}: ${perSeed} ASTs, ${result.distinct} distinct, ${result.kinds} of ${HTML_PATH_KINDS.length} kinds, ${result.lost} lose words, ${result.joined} join words, ${result.anchorsLost} lose anchors, ${result.unsettled} unsettled`);
+        results.push({
+            category: 'Markdown HTML Items and Cells', feature: `list items and cells written as HTML keep every node kind over three round trips (seed ${seed}: ${perSeed} ASTs, ${result.distinct} distinct)`,
+            sourceFormat: 'synthetic', destFormat: 'md',
+            result: {
+                status: failed || !allKinds ? 'FAIL' : 'PASS', expected: `no difference, all ${HTML_PATH_KINDS.length} kinds drawn`,
+                actual: failed || !allKinds ? `${result.lost} lose words, ${result.joined} join words, ${result.anchorsLost} lose anchors, ${result.unsettled} unsettled, ${result.kinds} kinds` : 'none',
+                details: result.failures.join('\n').slice(0, 6000), duration: Date.now() - started,
+            },
+        });
+    }
+    return results;
+}
+
+/**
  * The spreadsheet viewer (HTML output of a workbook) in hosts that limit it: a frame with scripts but no
  * storage, where any localStorage access throws, and a host with scripts off, where the sheet tabs switch
  * by CSS `:target` alone. What a browser does with these was checked in one; here, what the HTML says.
@@ -3345,6 +3412,18 @@ async function runAllTests(): Promise<void> {
     const disclosureRoundTripResults = await runDisclosureAstRoundTripTests();
     allResults.push(...disclosureRoundTripResults);
     console.log(disclosureRoundTripResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' \u2717' : ' \u2713');
+
+    // No line of Markdown lost, on random texts of quotes, list markers and blank lines
+    process.stdout.write('  markdown line loss...');
+    const lineLossResults = await runMarkdownLineLossTests();
+    allResults.push(...lineLossResults);
+    console.log(lineLossResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' \u2717' : ' \u2713');
+
+    // List items and cells written as HTML in Markdown, on random ASTs of every node kind
+    process.stdout.write('  markdown HTML items and cells...');
+    const htmlPathResults = await runHtmlPathRoundTripTests();
+    allResults.push(...htmlPathResults);
+    console.log(htmlPathResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' \u2717' : ' \u2713');
 
     // Degrade fidelity: over-cap images, unembeddable pictures, notes, OCR line breaks
     process.stdout.write('  degrade fidelity...');

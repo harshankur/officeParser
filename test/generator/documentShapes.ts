@@ -967,6 +967,121 @@ export async function testMarkdownDisclosureInItemsAndCells(): Promise<void> {
     console.log('✓ Markdown disclosures in list items and cells');
 }
 
+/**
+ * Round 10's findings, each read and written back. Markdown: no line after a closed quote's blank line
+ * and an empty list item is lost, nor after a leading blank line, an indented first line or anchors
+ * before an item (S2); an anchor before a disclosure stays on it (L2). A list item or table cell written
+ * as HTML keeps a definition list, an admonition (its kind and title), a disclosure's id, a stray summary,
+ * an embed and a paragraph holding a figure apart and whole (S3, M1, L3, L5).
+ */
+export async function testMarkdownDisclosureRound10Findings(): Promise<void> {
+    const wordsIn = (s: string): string[] => s.match(/(?<![A-Za-z0-9])w\d+(?![0-9])/g) ?? [];
+    const read = (source: string, fileType: 'md' | 'html' = 'md') => OfficeParser.parseOffice(Buffer.from(source), { fileType });
+    const textOf = async (ast: OfficeParserAST): Promise<string> => (await ast.to('text')).value;
+    const mdOf = async (ast: OfficeParserAST): Promise<string> => (await OfficeGenerator.generate(ast, 'md')).value as string;
+    const astOf = (content: any[]): OfficeParserAST => ({ type: 'md', metadata: {}, attachments: [], content } as unknown as OfficeParserAST);
+    const t = (text: string, extra: object = {}): any => ({ type: 'text', text, ...extra });
+    const p = (...children: any[]): any => ({ type: 'paragraph', children });
+    const disclosure = (summary: string, ...body: any[]): any => ({ type: 'disclosure', children: [{ type: 'summary', children: [p(t(summary))] }, ...body] });
+    const item = (...children: any[]): any => ({ type: 'list', metadata: { listType: 'unordered', indentation: 0, listId: 'L' }, children });
+    const cellTable = (...children: any[]): any => ({ type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children }] }] });
+    /** Writes `ast` as Markdown and reads it back `passes` times: each pass's Markdown, and the last tree. */
+    const passes = async (ast: OfficeParserAST, count = 3): Promise<{ md: string[]; last: OfficeParserAST }> => {
+        const md: string[] = [];
+        let current = ast;
+        for (let pass = 0; pass < count; pass++) {
+            md.push(await mdOf(current));
+            current = await read(md[pass]);
+        }
+        return { md, last: current };
+    };
+    const allWords = async (source: string, name: string): Promise<void> => {
+        const text = await textOf(await read(source));
+        assert.deepStrictEqual(wordsIn(source).filter(w => !wordsIn(text).includes(w)), [], `Round 10: ${name}, every word kept: ${JSON.stringify(source)} read ${JSON.stringify(text)}`);
+    };
+
+    // S2 (q13, q20): the text after a disclosure closed in a quote, its blank quote line and an empty item.
+    const q13 = await textOf(await read('<details>\n<summary>Notes</summary>\n\n> quoted </details>\n>\n1.\nThis paragraph is lost.\nSo is this line.\n\nNext paragraph kept.\n'));
+    assert.ok(q13.includes('This paragraph is lost. So is this line.') && q13.includes('Next paragraph kept.'), `Round 10: the lines after an empty item kept: ${JSON.stringify(q13)}`);
+    for (const [source, words] of [['<details>\n\n> a </details>\n>\n-\nlost line\n', 'lost line'], ['<details>\n\n> a </details>\n>\n> - \nlazy line\n', 'lazy line'],
+        ['<div>\n\n<details>\n\n> a </div>\n>\n1.\nlast words\n', 'last words']]) {
+        assert.ok((await textOf(await read(source))).includes(words), `Round 10: ${JSON.stringify(words)} kept after an empty item`);
+    }
+    for (const source of ['<details>\n\n> a </details>\n>\n> *\n> w1 w2\n', '<div>\n\n> a </div>\n>\n> 1.\n> w1\n', '<details>\n\n> a\n> </details>\n>\n> 1.\n> w1\n',
+        '<details>\n\n> > a </details>\n> >\n> > 1.\n> > w1\n', '<details>\n\n- a </details>\n\n  *\n  w1\n']) await allWords(source, 'a quoted empty item');
+    // A leading blank line, an indented first line and anchors before an item: every word kept, and with a
+    // leading blank line the reading of the text without it.
+    for (const [source, without] of [['\n1.\nw1', '1.\nw1'], [' \n1.\nw1', '1.\nw1'], ['>\n1.\nw1', '1.\nw1'], ['\n2. a\nw1', '2. a\nw1']]) {
+        await allWords(source, 'a leading blank line');
+        const [ast, plain] = [await read(source), await read(without)];
+        assert.strictEqual(treeShape(ast.content), treeShape(plain.content), `Round 10: ${JSON.stringify(source)} read as ${JSON.stringify(without)}`);
+        assert.strictEqual(await textOf(ast), await textOf(plain), `Round 10: ${JSON.stringify(source)}, the text of ${JSON.stringify(without)}`);
+    }
+    for (const source of ['\t1.\nw2', '    1. a\nw2', '<a id="x"></a>\n1.\nw2']) await allWords(source, 'an item read after its indentation or anchors');
+
+    // L2 (q17, q18): an anchor before a disclosure stays on it, and HTML gets the disclosure's id.
+    for (const [source, name] of [['<blockquote><p>x</p><details id="w5"><summary>s</summary><p>y</p></details></blockquote><h2>h</h2>', 'after a quote'],
+        ['<details id="w5"><summary>s</summary><p>y</p></details><h2>h</h2>', 'before a heading'], ['<p><a href="#w5">go</a></p><details id="w5"><summary>s</summary><p>y</p></details>', 'linked to']]) {
+        const { md, last } = await passes(await read(source, 'html'));
+        assert.ok(md.every(m => m.includes('<a id="w5"></a>\n\n<details>')), `Round 10: an anchor before a disclosure ${name} stays before it: ${JSON.stringify(md)}`);
+        assert.strictEqual(new Set(md).size, 1, `Round 10: an anchor before a disclosure ${name}, the Markdown settled`);
+        assert.ok((await last.to('html', { htmlConfig: { standalone: false } })).value.includes('<details id="w5">'), `Round 10: an anchor before a disclosure ${name}, the disclosure's id in HTML`);
+    }
+
+    // S3 (q1, q21): a definition list in an item or cell written as HTML, its words apart.
+    const q1 = await mdOf(await read('<ul><li>alpha<dl><dt>beta</dt><dd>gamma</dd></dl><details><summary>s</summary><p>delta</p></details></li></ul>', 'html'));
+    assert.ok(q1.includes('<dl><dt>beta</dt><dd>gamma</dd></dl>'), `Round 10: a definition list in an HTML item: ${q1}`);
+    assert.ok(/alpha\s+beta\s+gamma\s+s\s+delta/.test(await textOf(await read(q1))), 'Round 10: a definition list in an HTML item, its words apart');
+    const q1Cell = await mdOf(await read('<table><tr><td>alpha<dl><dt>beta</dt><dd>gamma</dd></dl></td><td colspan="2">x</td></tr></table>', 'html'));
+    assert.ok(/alpha beta gamma/.test(await textOf(await read(q1Cell))), `Round 10: a definition list in an HTML cell, its words apart: ${q1Cell}`);
+    const q21 = await mdOf(await read('<table><tr><th>h</th></tr><tr><td><details><summary>s</summary><dl><dt>alpha</dt><dd>beta</dd></dl></details></td></tr></table>', 'html'));
+    assert.ok(/s alpha beta/.test(await textOf(await read(q21))), `Round 10: a definition list in a disclosure in a cell: ${q21}`);
+
+    // M1 (q2): a disclosure's id in an item and in a cell, so a link to it resolves.
+    const anchoredDisclosure = { ...disclosure('s', p(t('w3'))), metadata: { anchorIds: ['tgt'] } };
+    const link = p(t('go', { metadata: { link: '#tgt', linkType: 'internal' } }));
+    for (const [content, name] of [[[link, item(t('w1'), anchoredDisclosure)], 'item'], [[link, cellTable(p(t('w1')), anchoredDisclosure)], 'cell']] as [any[], string][]) {
+        const md = await mdOf(astOf(content));
+        assert.ok(md.includes('<details id="tgt">'), `Round 10: a disclosure's id in an HTML ${name}: ${md}`);
+        const found: OfficeContentNode[] = [];
+        const walk = (nodes: OfficeContentNode[] | undefined) => { for (const n of nodes ?? []) { if (n.type === 'disclosure') found.push(n); walk(n.children); } };
+        walk((await read(md)).content);
+        assert.deepStrictEqual(found.map(n => (n.metadata as { anchorIds?: string[] } | undefined)?.anchorIds), [['tgt']], `Round 10: a disclosure's id in an HTML ${name}, read back`);
+    }
+
+    // L3 (l1): an admonition in an item holding a disclosure keeps its kind, and settles.
+    const admonitionItem = await passes(astOf([item(t('w1'), { type: 'admonition', metadata: { admonitionType: 'note', sourceSyntax: 'github' }, children: [disclosure('s', p(t('w3')))] })]), 4);
+    assert.strictEqual(treeShape(admonitionItem.last.content), 'list(text,admonition(disclosure[s](paragraph(text))))', `Round 10: an admonition in an HTML item: ${admonitionItem.md[0]}`);
+    assert.strictEqual(admonitionItem.md[2], admonitionItem.md[3], 'Round 10: an admonition in an HTML item, the Markdown settled');
+    // Its custom title in a cell, a bold first line, written as it reads back.
+    const titled = await passes(astOf([cellTable(p(t('w1')), disclosure('s', p(t('w2'))), { type: 'admonition', metadata: { admonitionType: 'warning', title: 'w8' }, children: [p(t('w9'))] })]), 2);
+    assert.ok(titled.md[0].includes('data-type="warning"><p><b>w8</b></p>\n<p>w9</p></div>'), `Round 10: an admonition's title in an HTML cell: ${titled.md[0]}`);
+    assert.strictEqual(titled.md[1], titled.md[0], 'Round 10: an admonition\'s title in an HTML cell, the Markdown settled');
+    assert.ok(/w8 w9/.test(await textOf(titled.last)), 'Round 10: an admonition\'s title in an HTML cell, its words apart');
+    // An admonition ending in a table: no line of a lone </div>, and the rest of the item stays in it.
+    const tableEnd = await passes(astOf([item(t('w1'), disclosure('s', p(t('w2'))), { type: 'admonition', metadata: { admonitionType: 'note' }, children: [p(t('w3')), cellTable(p(t('w4')))] }, p(t('w5')))]), 2);
+    assert.ok(!/^<\/div>$/m.test(tableEnd.md[0]), `Round 10: an admonition ending in a table in an HTML item, no lone </div> line: ${tableEnd.md[0]}`);
+    assert.strictEqual(treeShape(tableEnd.last.content), 'list(text,disclosure[s](paragraph(text)),admonition(paragraph(text),table(row(cell(paragraph(text))))),paragraph(text))',
+        'Round 10: an admonition ending in a table in an HTML item, the item whole');
+    assert.strictEqual(tableEnd.md[1], tableEnd.md[0], 'Round 10: an admonition ending in a table in an HTML item, the Markdown settled');
+
+    // L5 (s2): a summary that is no disclosure's, set apart in a one-line item and in an HTML item.
+    const stray = await mdOf(astOf([item(t('w0'), { type: 'summary', children: [p(t('w1'))] })]));
+    assert.strictEqual(stray, '- w0<br>**w1**', 'Round 10: a stray summary in a one-line item');
+    assert.ok(/w0\s+w1/.test(await textOf(await read(stray))), 'Round 10: a stray summary in a one-line item, its words apart');
+    const strayHtml = await mdOf(astOf([item(t('w0'), { type: 'summary', children: [p(t('w1'))] }, disclosure('s', p(t('w2'))))]));
+    assert.ok(strayHtml.includes('<div><p>w1</p></div>') && /w0\s+w1\s+s\s+w2/.test(await textOf(await read(strayHtml))), `Round 10: a stray summary in an HTML item, a block: ${strayHtml}`);
+
+    // An embed after an item's text, in a paragraph of its own.
+    const embed = await passes(astOf([item(t('w5'), { type: 'embed', metadata: { url: 'https://e.x/v', label: 'w6' } }, disclosure('s', p(t('w7'))))]), 2);
+    assert.ok(/w5\s+w6/.test(await textOf(embed.last)), `Round 10: an embed after an HTML item's text, apart: ${embed.md[0]}`);
+    // A paragraph holding a figure in a disclosure in a cell: split at it, no empty paragraph added on a save.
+    const figure = await passes(astOf([cellTable(p(t('w1')), disclosure('s', p(t('w2'), { type: 'image', metadata: { url: 'https://e.x/f.png', altText: 'alt', caption: 'w3' } }, t('w4'))))]), 3);
+    assert.ok(figure.md[0].includes('<p>w2</p>\n<figure>') && figure.md[0].includes('</figure>\n<p>w4</p>'), `Round 10: a paragraph holding a figure in an HTML cell, split: ${figure.md[0]}`);
+    assert.strictEqual(new Set(figure.md).size, 1, `Round 10: a paragraph holding a figure in an HTML cell, the Markdown settled: ${JSON.stringify(figure.md)}`);
+    console.log('✓ Markdown disclosure round 10 findings');
+}
+
 /** Markdown read and written back as Markdown, and its tree's shape (see treeShape). */
 async function markdownRead(markdown: string): Promise<{ shape: string; md: string; text: string }> {
     const ast = await OfficeParser.parseOffice(Buffer.from(markdown), { fileType: 'md' });
@@ -1256,6 +1371,64 @@ export async function testMarkdownDisclosureShapesLinear(): Promise<void> {
         assert.ok(large <= 8 * small + 250, `Disclosure shapes: ${name} at ${n} in ${large.toFixed(0)} ms, at ${n / 4} in ${small.toFixed(0)} ms`);
     }
     console.log(`✓ Markdown disclosure shapes in linear time (${Object.keys(DISCLOSURE_SHAPES).length} shapes, n against 4n)`);
+}
+
+/** Hostile shapes of summaries, disclosures and Markdown lines, each `n` times over: round 10's review and fix design. */
+const SUMMARY_SHAPES: Record<string, ['html' | 'md', (n: number) => string, number?]> = {
+    // (At 32,000 for summaries after content: at 4,000, a quadratic reading of them still took under 8 times its time at 1,000.)
+    textThenSummaries: ['html', n => '<details>' + 'a<br>'.repeat(n) + '<summary>s</summary>'.repeat(n) + '</details>', 32000],
+    inlineThenSummaries: ['html', n => '<details>' + '<i>x</i>'.repeat(n) + '<summary>s</summary>'.repeat(n) + '</details>', 32000],
+    blocksThenSummaries: ['html', n => '<details>' + '<p>a</p>'.repeat(n) + '<summary>s</summary>'.repeat(n) + '</details>', 32000],
+    deepSummaries: ['html', n => '<details>a' + '<div>'.repeat(200) + 'b<br>'.repeat(n) + '<summary>s</summary>'.repeat(n) + '</details>', 32000],
+    nestedSummaryRuns: ['html', n => '<details><summary>t</summary>' + ('<summary>'.repeat(50) + 'x' + '</summary>'.repeat(50)).repeat(n / 50) + '</details>'],
+    manyDetails: ['html', n => '<details><summary>a</summary><summary>b</summary>x</details>'.repeat(n)],
+    nestedDetails: ['html', n => ('<details>' + 'a<br>'.repeat(n / 100) + '<summary>s</summary>'.repeat(n / 100)).repeat(100) + '</details>'.repeat(100)],
+    listItems: ['html', n => '<ul>' + '<li>i <details><summary>s</summary>x</details></li>'.repeat(n) + '</ul>'],
+    tableCells: ['html', n => '<table><tr>' + '<td>c<details><summary>s</summary>x</details></td>'.repeat(n) + '</tr></table>'],
+    itemAdmonitions: ['html', n => '<ul><li>i<details><summary>s</summary>x</details>'
+        + '<div class="admonition" data-type="note"><dl><dt>t</dt><dd>d<figure><img src="x.png"><figcaption>c</figcaption></figure></dd></dl></div>'.repeat(n) + '</li></ul>'],
+    deepCellNesting: ['html', n => ('<table><tr><td colspan="2"><div class="admonition" data-type="note">' + 'x '.repeat(n / 50)).repeat(50) + '</div></td></tr></table>'.repeat(50)],
+    mdSummaries: ['md', n => '<details>\n' + 'a\n\n'.repeat(n) + '<summary>s</summary>\n\n'.repeat(n) + '</details>\n'],
+    mdQuoted: ['md', n => '> <details>\n> <summary>s</summary>\n> x </details>\n>\n'.repeat(n)],
+    mdSpansThenCloses: ['md', n => '<details>\n\n' + '<span>'.repeat(n) + '</details>'.repeat(n) + '\n'],
+    mdSummaryRuns: ['md', n => '<details>\n' + '<summary>s</summary>\n'.repeat(n) + 'x\n</details>\n'],
+    mdQuoteBlankItems: ['md', n => '<details>\n\n> q </details>\n>\n1.\nw\n'.repeat(n)],
+    mdLeadingBlankLists: ['md', n => '\t1.\nw\n# h\n'.repeat(n)],
+    mdLazyLines: ['md', n => '\t1.\n' + 'w\n'.repeat(n)],
+    mdItems: ['md', n => '- <details><summary>s</summary>x</details>\n'.repeat(n)],
+};
+
+/**
+ * Summaries and disclosures are read and written in time linear in the text, on round 10's shapes: extra
+ * summaries after text, inline runs, blocks and 200 nested divs (each found its disclosure's first summary
+ * by a scan of its children), nested summary runs, many and nested disclosures, disclosures in list items
+ * and cells, admonitions, definitions and figures in an HTML item, deep cell nesting, and Markdown
+ * summaries, quotes, closing runs, quote-blank-item runs, leading-blank lists and lazy lines. Each read and
+ * written as Markdown, HTML and text, at n against 4n (at most 8 times the time: a quadratic reading takes 16;
+ * n is 4,000, and 32,000 for the summaries after content, whose reading was quadratic).
+ */
+export async function testDisclosureSummaryShapesLinear(): Promise<void> {
+    const readAndWrite = async (fileType: 'html' | 'md', source: string): Promise<void> => {
+        try {
+            const ast = await OfficeParser.parseOffice(Buffer.from(source), { fileType });
+            await ast.to('md');
+            await ast.to('html', { htmlConfig: { standalone: false } });
+            await ast.to('text');
+        } catch (error) {
+            if (!/nesting depth/i.test((error as Error).message)) throw error;
+        }
+    };
+    for (const [name, [fileType, shape, n = 4000]] of Object.entries(SUMMARY_SHAPES)) {
+        const [source, quarter] = [shape(n), shape(n / 4)];
+        let small = await timed(() => readAndWrite(fileType, quarter));
+        let large = await timed(() => readAndWrite(fileType, source));
+        if (large > 8 * small + 250) {
+            small = Math.max(small, await timed(() => readAndWrite(fileType, quarter)));
+            large = Math.min(large, await timed(() => readAndWrite(fileType, source)));
+        }
+        assert.ok(large <= 8 * small + 250, `Summary shapes: ${name} at ${n} (${source.length} bytes) in ${large.toFixed(0)} ms, at ${n / 4} in ${small.toFixed(0)} ms`);
+    }
+    console.log(`✓ Summary and disclosure shapes in linear time (${Object.keys(SUMMARY_SHAPES).length} shapes, n against 4n)`);
 }
 
 /** ODF namespaces of a note test file. */
