@@ -10,6 +10,18 @@ import { OfficeGenerator } from '../../src/OfficeGenerator';
 import { OfficeParser } from '../../src/OfficeParser';
 import type { ImageMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, ParagraphMetadata } from '../../src/types';
 import { MARKDOWN_FINGERPRINTS_FILE, markdownFingerprints, markdownWithoutDisclosures } from '../helpers/markdownFingerprints';
+import { referenceHasDisclosureElement } from '../helpers/disclosureReference';
+
+/** The text of a node: a line's runs joined, blocks set apart by a space. */
+const wordsOfNode = (node: OfficeContentNode): string => node.children?.length
+    ? node.children.map(wordsOfNode).join(['paragraph', 'heading', 'text'].includes(node.type) ? '' : ' ')
+    : node.text ?? '';
+
+/** A disclosure's summary as text (its first child, a `summary` node), white space collapsed; '' where it has none. */
+const summaryText = (node: OfficeContentNode): string => (node.children?.[0]?.type === 'summary' ? wordsOfNode(node.children[0]).replace(/\s+/g, ' ').trim() : '');
+
+/** A disclosure's body: its children after its summary. */
+const bodyOf = (node: OfficeContentNode): OfficeContentNode[] => (node.children?.[0]?.type === 'summary' ? node.children.slice(1) : node.children ?? []);
 
 /** An XML document whose root is `html` (XHTML, as office suites export HTML) is read as HTML. */
 export async function testXhtmlReadAsHtml(): Promise<void> {
@@ -166,27 +178,29 @@ export async function testDisclosuresAndKeyboard(): Promise<void> {
     const ast = await OfficeParser.parseOffice(Buffer.from(source), { fileType: 'md' });
     const outer = ast.content[1];
     assert.strictEqual(outer.type, 'disclosure', 'Disclosure: a details block is a disclosure');
-    assert.deepStrictEqual(outer.metadata, { summary: 'Click me', open: true }, 'Disclosure: its summary and open state');
-    assert.deepStrictEqual(outer.children!.map(c => c.type), ['paragraph', 'list', 'list', 'code', 'disclosure'], 'Disclosure: its body read as Markdown, a nested one too');
+    assert.deepStrictEqual(outer.metadata, { open: true }, 'Disclosure: its open state');
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(outer.children![0])), { type: 'summary', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'Click me' }] }] }, 'Disclosure: its summary, its first child');
+    assert.deepStrictEqual(outer.children!.map(c => c.type), ['summary', 'paragraph', 'list', 'list', 'code', 'disclosure'], 'Disclosure: its body read as Markdown, a nested one too');
     const keys = ast.content[2].children!.filter(c => c.formatting?.keyboard).map(c => [c.text, c.formatting?.font]);
     assert.deepStrictEqual(keys, [['Ctrl', 'monospace'], ['*C*', 'monospace']], 'Keyboard: <kbd> is keyboard input, monospace too');
     // Markdown to editor HTML and back, three times: the same Markdown, kbd's Markdown characters as references.
     const expected = source.replace('<kbd>*C*</kbd>', '<kbd>&#42;C&#42;</kbd>');
     const { html, md } = await markdownThroughHtml(source);
     assert.deepStrictEqual(md, [expected, expected, expected], 'Disclosure: Markdown to HTML to Markdown is stable over three passes');
-    assert.ok(html[0].includes('<details open=""><summary>Click me</summary><p>Some <i>body</i> text.</p>'), `Disclosure: HTML writes <details>: ${html[0]}`);
-    assert.ok(html[0].includes('<details><summary>Inner</summary><p>Nested.</p>'), 'Disclosure: a nested one, closed');
+    assert.ok(/<details open=""><summary>Click me<\/summary>\s*<p>Some <i>body<\/i> text\.<\/p>/.test(html[0]), `Disclosure: HTML writes <details>: ${html[0]}`);
+    assert.ok(/<details><summary>Inner<\/summary>\s*<p>Nested\.<\/p>/.test(html[0]), 'Disclosure: a nested one, closed');
     assert.ok(html[0].includes('Press <kbd>Ctrl</kbd>+<kbd>*C*</kbd> to copy.'), 'Keyboard: HTML writes <kbd>');
     // The HTML reader: loose text in a disclosure is a paragraph; one with no summary has none.
     const loose = await OfficeParser.parseOffice(Buffer.from('<details><summary>S</summary>Loose <b>text</b></details><details><p>x</p></details>'), { fileType: 'html' });
     assert.deepStrictEqual(loose.content.map(n => [n.type, n.metadata, n.children?.map(c => c.type)]), [
-        ['disclosure', { summary: 'S' }, ['paragraph']], ['disclosure', {}, ['paragraph']],
+        ['disclosure', {}, ['summary', 'paragraph']], ['disclosure', {}, ['paragraph']],
     ], 'Disclosure: HTML read as disclosures');
+    assert.strictEqual(summaryText(loose.content[0]), 'S', 'Disclosure: HTML, its summary');
     assert.ok((await loose.to('html', { htmlConfig: { standalone: false } })).value.includes('<details><p>x</p>'), 'Disclosure: none written where none was given');
     // EPUB: XHTML's open attribute, read back.
     const epub = await OfficeParser.parseOffice(Buffer.from((await ast.to('epub')).value as Uint8Array));
     const epubOuter = epub.content.find(n => n.type === 'disclosure');
-    assert.deepStrictEqual(epubOuter?.metadata, { summary: 'Click me', open: true }, 'Disclosure: EPUB keeps it');
+    assert.deepStrictEqual([epubOuter?.metadata, summaryText(epubOuter!)], [{ open: true }, 'Click me'], 'Disclosure: EPUB keeps it');
     // Elsewhere: the summary as a bold line, then the body, nothing hidden or lost.
     const text = (await ast.to('text')).value;
     assert.ok(text.includes('Click me\nSome body text.\n- a\n- b\nconst x = 1;\n\nconst y = 2;\nInner\nNested.'), `Disclosure: text writes it open: ${text}`);
@@ -200,11 +214,16 @@ export async function testDisclosuresAndKeyboard(): Promise<void> {
     assert.ok(/\{\\f2 Ctrl\}/.test((await ast.to('rtf')).value) && (await ast.to('rtf')).value.includes('\\f2\\fmodern\\fcharset0 Courier New;'), 'Keyboard: RTF writes keyboard input in the monospace font');
     const pdf = await OfficeParser.parseOffice(Buffer.from((await ast.to('pdf', { pdfConfig: { engine: 'native' } })).value as Uint8Array), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } });
     assert.ok(/Click me[\s\S]*Nested\./.test((await pdf.to('text')).value), 'Disclosure: the native PDF engine draws it open');
-    // In a list item, where no block goes: its summary in bold, then its body, reported.
-    const inItem = await OfficeParser.parseOffice(Buffer.from('<ul><li><details><summary>S</summary><p>Body</p></details></li></ul>'), { fileType: 'html' });
+    // In a list item, whose one line of Markdown holds no block: the item written as an HTML list, read back the same.
+    const inItem = await OfficeParser.parseOffice(Buffer.from('<ul><li>x<details><summary>S <b>b</b></summary><p>Body</p></details></li></ul>'), { fileType: 'html' });
     const itemMd = await inItem.to('md');
-    assert.ok(/^- \*\*S\*\* Body/m.test(itemMd.value), `Disclosure: in a list item, its summary in bold: ${itemMd.value}`);
-    assert.ok(itemMd.messages.some(m => m.code === 'CONTENT_NOT_REPRESENTABLE'), 'Disclosure: and that is reported');
+    assert.strictEqual(itemMd.value, '<ul><li>x<details><summary>S <b>b</b></summary>\n<p>Body</p></details></li></ul>', 'Disclosure: in a list item, the item as HTML');
+    assert.deepStrictEqual((await OfficeParser.parseOffice(Buffer.from(itemMd.value), { fileType: 'md' })).content, inItem.content, 'Disclosure: in a list item, read back the same');
+    // In a definition, where no block goes either: its summary in bold, then its body, reported.
+    const inDefinition = await OfficeGenerator.generate({ type: 'md', metadata: {}, attachments: [], content: [{ type: 'definitionList', children: [{ type: 'definitionTerm', children: [{ type: 'text', text: 'T' }] },
+        { type: 'definitionDescription', children: [{ type: 'disclosure', children: [{ type: 'summary', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'S' }] }] }, { type: 'paragraph', children: [{ type: 'text', text: 'Body' }] }] }] }] }] } as unknown as OfficeParserAST, 'md');
+    assert.ok(/\*\*S\*\*(?: |<br>)Body/.test(String(inDefinition.value)), `Disclosure: in a definition, its summary in bold: ${inDefinition.value}`);
+    assert.ok(inDefinition.messages.some(m => m.code === 'CONTENT_NOT_REPRESENTABLE'), 'Disclosure: and that is reported');
     console.log('✓ Disclosures and keyboard input');
 }
 
@@ -388,16 +407,16 @@ function textLength(nodes: OfficeContentNode[] | undefined): number {
 }
 
 /**
- * A disclosure carries no text of its own: its summary is its metadata and its body its children, so a
+ * A disclosure carries no text of its own: its summary is its first child and its body the rest, so a
  * disclosure with no body is not written with its summary as content, and nested ones copy nothing.
  */
 export async function testDisclosureCarriesNoText(): Promise<void> {
     const empty = '<details><summary>Only summary</summary></details><p>x</p>';
     const ast = await OfficeParser.parseOffice(Buffer.from(empty), { fileType: 'html' });
-    assert.deepStrictEqual(ast.content[0], { type: 'disclosure', metadata: { summary: 'Only summary' }, children: [] }, 'Disclosure: no text of its own');
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(ast.content[0])), { type: 'disclosure', metadata: {}, children: [{ type: 'summary', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'Only summary' }] }] }] }, 'Disclosure: no text of its own');
     assert.strictEqual((await ast.to('text')).value.trim(), 'Only summary\nx', 'Disclosure: text shows its summary once');
     const html = await passesOf(empty, 'html', 'html');
-    assert.ok(html[0].includes('<details><summary>Only summary</summary></details>'), `Disclosure: an empty one written empty: ${html[0]}`);
+    assert.ok(/<details><summary>Only summary<\/summary>\s*<\/details>/.test(html[0]), `Disclosure: an empty one written empty: ${html[0]}`);
     assert.deepStrictEqual(html, [html[0], html[0], html[0]], 'Disclosure: HTML to HTML is stable over three passes');
     const md = await passesOf((await ast.to('md')).value, 'md', 'md');
     assert.deepStrictEqual(md, [md[0], md[0], md[0]], 'Disclosure: Markdown to Markdown is stable over three passes');
@@ -511,23 +530,23 @@ export async function testMarkdownDisclosureBodies(): Promise<void> {
     for (const body of ['Use the `<details>` element.', 'Use the `<summary>` element.', 'Plain *body*.']) {
         const source = `<details>\n<summary>Help</summary>\n\n${body}\n\n</details>\n\nAfter\n`;
         const ast = await OfficeParser.parseOffice(Buffer.from(source), { fileType: 'md' });
-        assert.deepStrictEqual(ast.content.map(n => [n.type, n.children?.map(c => c.type)]), [['disclosure', ['paragraph']], ['paragraph', ['text']]], `Markdown disclosure: ${body} is one paragraph in it`);
+        assert.deepStrictEqual(ast.content.map(n => [n.type, n.children?.map(c => c.type)]), [['disclosure', ['summary', 'paragraph']], ['paragraph', ['text']]], `Markdown disclosure: ${body} is one paragraph in it`);
         const html = (await ast.to('html', { htmlConfig: { standalone: false } })).value;
         if (body.includes('`')) assert.ok(/<code>&lt;(details|summary)&gt;<\/code>/.test(html), `Markdown disclosure: the code span kept: ${html}`);
     }
     // Our own Markdown of a disclosure mentioning its tag, in a code span and in code.
     const help = await OfficeParser.parseOffice(Buffer.from('<details><summary>Help</summary><p>Use <code>&lt;details&gt;</code> to fold.</p><pre><code>x\n&lt;/details&gt;\ny</code></pre><p>Inner end</p></details><p>After</p>'), { fileType: 'html' });
     const helpMd = (await help.to('md')).value;
-    assert.deepStrictEqual(await markdownShape(helpMd), [['disclosure', ['paragraph', 'code', 'paragraph']], ['paragraph', ['text']]], `Markdown disclosure: code mentioning its tag stays in it: ${helpMd}`);
+    assert.deepStrictEqual(await markdownShape(helpMd), [['disclosure', ['summary', 'paragraph', 'code', 'paragraph']], ['paragraph', ['text']]], `Markdown disclosure: code mentioning its tag stays in it: ${helpMd}`);
     // A body starting with an inline tag is a paragraph; indented code is code; nested code spans are text.
     const keys = await OfficeParser.parseOffice(Buffer.from('<details>\n<summary>Keys</summary>\n\n<kbd>Ctrl</kbd> and *bold*.\n\n</details>\n\nAfter\n'), { fileType: 'md' });
-    const paragraph = keys.content[0].children![0];
+    const paragraph = keys.content[0].children![1];
     assert.ok(paragraph.type === 'paragraph' && paragraph.children!.some(c => c.formatting?.keyboard) && paragraph.children!.some(c => c.formatting?.italic), 'Markdown disclosure: <kbd> and emphasis in a paragraph');
-    assert.deepStrictEqual(await markdownShape('<details>\n<summary>Keys</summary>\n\n    <details> in indented code\n\n</details>\n\nAfter\n'), [['disclosure', ['code']], ['paragraph', ['text']]], 'Markdown disclosure: indented code is code');
+    assert.deepStrictEqual(await markdownShape('<details>\n<summary>Keys</summary>\n\n    <details> in indented code\n\n</details>\n\nAfter\n'), [['disclosure', ['summary', 'code']], ['paragraph', ['text']]], 'Markdown disclosure: indented code is code');
     assert.deepStrictEqual(await markdownShape('<details>\n<summary>S</summary>\n\nA ``x `<details>` y`` b and `</details>` c.\n\nMore\n\n</details>\n\nAfter\n'),
-        [['disclosure', ['paragraph', 'paragraph']], ['paragraph', ['text']]], 'Markdown disclosure: tags in code spans are text');
+        [['disclosure', ['summary', 'paragraph', 'paragraph']], ['paragraph', ['text']]], 'Markdown disclosure: tags in code spans are text');
     // A closing tag on a paragraph's last line closes it, as a browser has it.
-    assert.deepStrictEqual(await markdownShape('<details>\n<summary>S</summary>\n\n*Body*\n</details>\n\nAfter\n'), [['disclosure', ['paragraph']], ['paragraph', ['text']]], 'Markdown disclosure: an inline closing tag closes it');
+    assert.deepStrictEqual(await markdownShape('<details>\n<summary>S</summary>\n\n*Body*\n</details>\n\nAfter\n'), [['disclosure', ['summary', 'paragraph']], ['paragraph', ['text']]], 'Markdown disclosure: an inline closing tag closes it');
     // Through HTML and Markdown: stable over three passes.
     const kbdHtml = await OfficeParser.parseOffice(Buffer.from('<details><summary>K</summary><p><kbd>Ctrl</kbd> then <b>bold</b></p></details>'), { fileType: 'html' });
     const kbdPasses = await passesOf((await kbdHtml.to('md')).value, 'md', 'md');
@@ -538,7 +557,7 @@ export async function testMarkdownDisclosureBodies(): Promise<void> {
         const long = await OfficeParser.parseOffice(Buffer.from('<details><summary>S</summary>' + Array.from({ length: count }, (_, i) => `<p>para ${i}</p>`).join('') + '</details><p>After</p>'), { fileType: 'html' });
         const longMd = (await long.to('md')).value;
         const back = await OfficeParser.parseOffice(Buffer.from(longMd), { fileType: 'md' });
-        assert.deepStrictEqual(back.content.map(n => [n.type, n.children?.length]), [['disclosure', count], ['paragraph', 1]], `Markdown disclosure: ${count} paragraphs stay in it`);
+        assert.deepStrictEqual(back.content.map(n => [n.type, n.children?.length]), [['disclosure', count + 1], ['paragraph', 1]], `Markdown disclosure: ${count} paragraphs stay in it, after its summary`);
         const passes = await passesOf(longMd, 'md', 'md');
         assert.deepStrictEqual(passes, [longMd, longMd, longMd], `Markdown disclosure: ${count} paragraphs stable over three passes`);
     }
@@ -633,10 +652,12 @@ async function passesWithText(text: string, fileType: 'html' | 'md', format: 'ht
     return { out, text: [first, ...texts] };
 }
 
-/** A tree's shape: each node's type, a disclosure's summary in brackets, and its children's in parentheses. */
+/** A tree's shape: each node's type, a disclosure's summary's text in brackets, and its children's (a disclosure's body's) in parentheses. */
 function treeShape(nodes: OfficeContentNode[] | undefined): string {
-    return (nodes ?? []).map(n => n.type + (n.type === 'disclosure' ? `[${(n.metadata as { summary?: string } | undefined)?.summary ?? ''}]` : '')
-        + (n.type !== 'text' && n.children?.length ? `(${treeShape(n.children)})` : '')).join(',');
+    return (nodes ?? []).map(n => {
+        const children = n.type === 'disclosure' ? bodyOf(n) : n.children;
+        return n.type + (n.type === 'disclosure' ? `[${summaryText(n)}]` : '') + (n.type !== 'text' && children?.length ? `(${treeShape(children)})` : '');
+    }).join(',');
 }
 
 /** Every block kind in a disclosure's body, from Markdown. */
@@ -703,17 +724,18 @@ export async function testMarkdownDisclosureSubDocuments(): Promise<void> {
     assert.strictEqual(await textOf('<details>\n<summary>S</summary>\n\n<div style="text-align: center">Centered **bold**</div>\n\n</details>'), 'S\nCentered bold',
         'Disclosure sub-document: a one-line aligned div\'s Markdown is read');
     // A <div> holding Markdown, an aligned one, and an aligned paragraph tag around a picture.
+    const SUMMARY_S = { type: 'summary', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'S' }] }] };
     const shapes: [string, unknown][] = [
         ['<details>\n<summary>S</summary>\n\n<div>\n\n*md in div*\n\n</div>\n\nBody\n\n</details>\n\nAfter\n', [
-            { type: 'disclosure', metadata: { summary: 'S' }, children: [
+            { type: 'disclosure', metadata: {}, children: [SUMMARY_S,
                 { type: 'paragraph', metadata: {}, children: [{ type: 'text', text: 'md in div', formatting: { italic: true } }] },
                 { type: 'paragraph', metadata: {}, children: [{ type: 'text', text: 'Body' }] }] },
             { type: 'paragraph', metadata: {}, children: [{ type: 'text', text: 'After' }] }]],
         ['<details>\n<summary>S</summary>\n\n<div align="center">\n\n*centered*\n\n</div>\n\n</details>\n', [
-            { type: 'disclosure', metadata: { summary: 'S' }, children: [
+            { type: 'disclosure', metadata: {}, children: [SUMMARY_S,
                 { type: 'paragraph', metadata: { alignment: 'center' }, children: [{ type: 'text', text: 'centered', formatting: { italic: true } }] }] }]],
         ['<details>\n<summary>S</summary>\n\n<p align="center">\n\n![x](a.png)\n\n</p>\n\nBody\n\n</details>\n', [
-            { type: 'disclosure', metadata: { summary: 'S' }, children: [
+            { type: 'disclosure', metadata: {}, children: [SUMMARY_S,
                 { type: 'paragraph', metadata: { alignment: 'center' }, children: [{ type: 'image', metadata: { url: 'a.png', altText: 'x' } }] },
                 { type: 'paragraph', metadata: {}, children: [{ type: 'text', text: 'Body' }] }] }]],
     ];
@@ -740,7 +762,7 @@ export async function testMarkdownDisclosureSubDocuments(): Promise<void> {
         ['an anchor before it', 'md', '<a id="d1"></a>\n<details>\n<summary>S</summary>\n\nBody\n\n</details>\n\nAfter\n', 'disclosure[S](paragraph),paragraph'],
     ];
     const blockShape = (nodes: OfficeContentNode[] | undefined): string => (nodes ?? []).filter(n => n.type !== 'text')
-        .map(n => n.type + (n.type === 'disclosure' ? `[${(n.metadata as { summary?: string }).summary ?? ''}](${blockShape(n.children)})` : '')).join(',');
+        .map(n => n.type + (n.type === 'disclosure' ? `[${summaryText(n)}](${blockShape(bodyOf(n))})` : '')).join(',');
     for (const [name, fileType, source, shape] of cases) {
         if (shape) assert.strictEqual(blockShape((await OfficeParser.parseOffice(Buffer.from(source), { fileType })).content), shape, `Disclosure sub-document: ${name}, its blocks`);
         // HTML: a pipe table's HTML gains white space between cells on its second pass (8.6.0 the same), so only Markdown for it.
@@ -751,7 +773,7 @@ export async function testMarkdownDisclosureSubDocuments(): Promise<void> {
             assert.ok(!token.test(out[0]), `Disclosure sub-document: ${name}, no piece token in ${format}: ${out[0]}`);
         }
     }
-    const raw = (await OfficeParser.parseOffice(Buffer.from(cases[6][2]), { fileType: 'md' })).content[0].children!;
+    const raw = bodyOf((await OfficeParser.parseOffice(Buffer.from(cases[6][2]), { fileType: 'md' })).content[0]);
     assert.strictEqual(nodeText(raw[0]), 'Raw *not md* line', 'Disclosure sub-document: raw HTML after the summary keeps its Markdown literal, as GitHub shows it');
     // 20 disclosures nested: 16 read as nested, deeper ones flattened to their summary and body as text; all text kept, stable.
     let nested = '';
@@ -760,7 +782,7 @@ export async function testMarkdownDisclosureSubDocuments(): Promise<void> {
     const nestedAst = await OfficeParser.parseOffice(Buffer.from(nested), { fileType: 'md' });
     let level = nestedAst.content[0];
     for (let i = 0; i < 16; i++) {
-        assert.ok(level.type === 'disclosure' && (level.metadata as { summary?: string }).summary === `L${i}` && nodeText(level.children![0]) === `Text ${i}`, `Disclosure sub-document: level ${i} nested`);
+        assert.ok(level.type === 'disclosure' && summaryText(level) === `L${i}` && nodeText(bodyOf(level)[0]) === `Text ${i}`, `Disclosure sub-document: level ${i} nested`);
         level = level.children![level.children!.length - 1];
     }
     const allText = Array.from({ length: 20 }, (_, i) => `L${i}\nText ${i}`).join('\n') + '\nAfter';
@@ -804,6 +826,145 @@ export async function testMarkdownWithoutDisclosuresUnchanged(): Promise<void> {
     const changed = fingerprints.map((fingerprint, i) => fingerprint === kept[i] ? -1 : i).filter(i => i >= 0);
     assert.deepStrictEqual(changed, [], `Markdown without disclosures: read as before, but ${changed.length} differ, the first ${JSON.stringify(documents[changed[0]]?.slice(0, 300))}`);
     console.log(`✓ Markdown without disclosures unchanged (${documents.length} documents)`);
+}
+
+/**
+ * Markdown with no disclosure reads the same whatever names stand where no tag is read: documents of
+ * fragments holding `details` in other tags' attribute values, comments, code spans, code, link tails,
+ * escapes, wrappers and lone `<summary>` elements (none a disclosure as GitHub shows it), read again with
+ * `details` renamed `detailx`, give the same tree, Markdown and text but for that name. A name read as a
+ * tag where a browser reads none, or a reading hanging on it, would part the two.
+ */
+export async function testMarkdownDisclosureNamesRenamed(): Promise<void> {
+    const FRAGMENTS = ['The <abbr title="the <details> element">disclosure</abbr> widget.', '<span title="</details>">end</span> key', '<p title="</details>">x</p>',
+        "<span data-x='<details open>'>s</span> t", '- item <abbr title="<details>">a</abbr>\n- two', '> q <b title="</details>">b</b>', '## H <i title="<details>">i</i>',
+        '<summary>s</summary>', '<summary>a</summary><summary>b</summary>', 'x <!-- <details> --> y', '<!-- <details> -->', '`<details>` code', '\\<details> esc',
+        '<div style="text-align: center">Use `</details>` here</div>', '<div align="center">\n\n*c*\n\n</div>', '| a | <b title="<details>">b</b> |\n| - | - |\n| 1 | 2 |',
+        '[x](</details>) link', '[y](u "</details>") t', '<table><tr><td>c <abbr title="<details>">d</abbr></td></tr></table>', '```\n<details>\n```',
+        '<div>\n<p title="<details>">p</p>\n</div>', 'Para *em* `c`', '1. one\n2. two', 'Note[^1]', '[^1]: N', 'Title\n===', '---',
+        '<section data-x="</details>">s</section>', '<details-like>x</details-like>', '<summary title="<details>">s</summary>', '> quoted\n<summary>lazy</summary>'];
+    let seed = 99;
+    const rnd = (n: number): number => { seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff; return seed % n; };
+    const rename = (text: string): string => text.replace(/(detail)(s)/gi, (_, name: string, s: string) => name + (s === 'S' ? 'X' : 'x'));
+    const read = async (markdown: string): Promise<string> => {
+        const ast = await OfficeParser.parseOffice(Buffer.from(markdown), { fileType: 'md' });
+        return [JSON.stringify(ast.content).replace(/,?"quoteId":"md-quote-\d+"/g, ''), (await ast.to('md')).value, (await ast.to('text')).value].join('\n---\n');
+    };
+    let documents = 0;
+    for (let k = 0; k < 400; k++) {
+        const doc = Array.from({ length: 2 + rnd(9) }, () => FRAGMENTS[rnd(FRAGMENTS.length)]).map(p => p + (rnd(3) ? '\n\n' : '\n')).join('');
+        // (Joined tight, two fragments can make a disclosure as GitHub shows it: left out.)
+        if (referenceHasDisclosureElement(doc)) continue;
+        documents++;
+        const [named, renamed] = [await read(doc), await read(rename(doc))];
+        assert.strictEqual(rename(named), renamed, `Disclosure names renamed: ${JSON.stringify(doc)}`);
+    }
+    assert.ok(documents > 300, `Disclosure names renamed: ${documents} documents`);
+    console.log(`✓ Markdown disclosure names renamed read the same (${documents} documents)`);
+}
+
+/**
+ * Round 9's findings, each read and written back: a summary of more than text keeps its content (2, 4);
+ * a tag's name in another tag's quoted value is no tag (3); the writer's aligned wrapper reads as written
+ * (5); text cut after a tag stays the paragraph text it was (6); an enclosing element's end tag closes a
+ * disclosure opened in it (7); a summary after a disclosure's first is a block of its own, and a
+ * `</summary>` closes a disclosure opened in its summary (8). Then a lone `<summary>` line ends no quote or
+ * list item in Markdown with no disclosure, as 8.6.0 read it.
+ */
+export async function testMarkdownDisclosureRound9Findings(): Promise<void> {
+    const settled = async (source: string, fileType: 'md' | 'html', shape: string, name: string): Promise<OfficeParserAST> => {
+        const ast = await OfficeParser.parseOffice(Buffer.from(source), { fileType });
+        assert.strictEqual(treeShape(ast.content), shape, `Round 9: ${name}`);
+        let md = (await ast.to('md')).value;
+        for (let pass = 0; pass < 2; pass++) {
+            const back = await OfficeParser.parseOffice(Buffer.from(md), { fileType: 'md' });
+            assert.strictEqual(treeShape(back.content), shape, `Round 9: ${name}, the same tree after pass ${pass + 1}: ${md}`);
+            const again = (await back.to('md')).value;
+            if (pass) assert.strictEqual(again, md, `Round 9: ${name}, the Markdown settled`);
+            md = again;
+        }
+        return ast;
+    };
+    const summaryOf = (ast: OfficeParserAST): OfficeContentNode => ast.content.find(n => n.type === 'disclosure')!.children![0];
+    // 2: what a summary holds, block elements and all.
+    const blocks = await settled('<details><summary><b>Title</b><div>sub</div></summary><p>body</p></details>', 'html', 'disclosure[Title sub](paragraph(text))', 'a summary holding a block');
+    assert.deepStrictEqual(summaryOf(blocks).children!.map(n => n.type), ['paragraph', 'paragraph'], 'Round 9: a summary holding a block, its blocks');
+    const heading = await settled('<details><summary><h2>Installation</h2></summary><p>body</p></details>', 'html', 'disclosure[Installation](paragraph(text))', 'a heading summary');
+    assert.deepStrictEqual(summaryOf(heading).children!.map(n => n.type), ['heading'], 'Round 9: a heading summary is a heading');
+    const table = await settled('<details><summary>A<table><tr><td>t1</td></tr></table></summary><p>body</p></details>', 'html', 'disclosure[A t1](paragraph(text))', 'a table in a summary');
+    assert.deepStrictEqual(summaryOf(table).children!.map(n => n.type), ['paragraph', 'table'], 'Round 9: a table in a summary');
+    // 4: a link, a picture, a line break and a note in a Markdown summary.
+    const rich = await settled('<details>\n<summary>\n\nSee [docs](https://ex.com/docs) ![logo](logo.png) one  \ntwo[^1]\n\n</summary>\n\nbody\n</details>\n\n[^1]: the note\n', 'md',
+        'disclosure[See docs onetwo](paragraph(text))', 'a summary of a link, a picture, a break and a note');
+    const line = summaryOf(rich).children![0];
+    assert.ok(line.children!.some(n => (n.metadata as { link?: string } | undefined)?.link === 'https://ex.com/docs'), 'Round 9: the summary\'s link');
+    assert.ok(line.children!.some(n => n.type === 'image') && line.children!.some(n => n.type === 'break'), 'Round 9: the summary\'s picture and line break');
+    assert.ok(line.children!.some(n => n.notes?.some(note => nodeText(note) === 'the note')), 'Round 9: the summary\'s note');
+    assert.ok(/one\ntwo/.test((await rich.to('text')).value), 'Round 9: the summary\'s line break in its text');
+    // 3: a tag's name in a quoted value.
+    await settled('The <abbr title="the <details> element">disclosure</abbr> widget folds text.\n\nNext para.\n', 'md', 'paragraph(text),paragraph(text)', 'a name in an inline tag\'s value');
+    await settled('<details>\n<summary>Notes</summary>\n\n- Close it with <kbd title="</details>">end</kbd> tag\n- second item\n\nStill inside.\n\n</details>\n\nAfter.\n', 'md',
+        'disclosure[Notes](list(text),list(text),paragraph(text)),paragraph(text)', 'a name in a value in a list item');
+    // 5: the aligned wrapper, read as the writer writes it.
+    await settled('<details><summary>S</summary><p style="text-align:center">Use <code>&lt;/details&gt;</code> w5</p><p>w6</p></details><p>after</p>', 'html',
+        'disclosure[S](paragraph(text,text,text),paragraph(text)),paragraph(text)', 'a code span closing tag in an aligned paragraph');
+    // 6: the text after a tag, a paragraph's text, its code span and link tail text.
+    const cut = await settled('See <details><summary>more</summary><p>Use `</details>` to fold</p> w9\n\nw10\n\n</details>\n\nend\n', 'md',
+        'paragraph(text),disclosure[more](paragraph(text,text,text),paragraph(text)),paragraph(text)', 'text after a tag');
+    assert.ok((await cut.to('text')).value.includes('Use </details> to fold'), 'Round 9: text after a tag, its code span kept');
+    await settled('<details>\n<summary>S</summary>\n\n[x](</details>) w2\n\n</details>\n\nafter\n', 'md', 'disclosure[S](paragraph(text,text)),paragraph(text)', 'a closing tag in a link\'s destination');
+    // 7: an enclosing element's end tag.
+    await settled('<div>\n<details>\n<summary>S</summary>\nx\n</div>\n\nafter\n\n## Next\n', 'md', 'disclosure[S](paragraph(text)),paragraph(text),heading(text)', 'a </div> closing a disclosure opened in its div');
+    await settled('<div align="center">\n<details><summary>S</summary>\n\nbody\n\n</div>\n\nafter\n', 'md', 'disclosure[S](paragraph(text)),paragraph(text)', 'a </div> in a later block');
+    // 8: summaries after the first, and a disclosure opened in a summary.
+    await settled('<details><summary>A</summary><summary>w7</summary><summary>w8</summary></details>', 'html', 'disclosure[A](paragraph(text),paragraph(text))', 'summaries side by side (HTML)');
+    await settled('<details>\n<summary>A</summary>\n<summary>w7</summary><summary>w8</summary>\n</details>\n', 'md', 'disclosure[A](paragraph(text),paragraph(text))', 'summaries side by side (Markdown)');
+    await settled('<details>\n<summary>S <details>x</summary>\n\nbody\n', 'md', 'disclosure[S x](paragraph(text))', 'a disclosure opened in a summary, closed by its </summary>');
+    // A lone <summary> line after a quote's or a list item's text is their lazy text, as 8.6.0 read it.
+    assert.strictEqual(treeShape((await OfficeParser.parseOffice(Buffer.from('> q\n<summary>s</summary>\n'), { fileType: 'md' })).content), 'paragraph(text),paragraph(text)', 'Round 9: a <summary> line after a quote');
+    const quoted = (await OfficeParser.parseOffice(Buffer.from('> q\n<summary>s</summary>\n'), { fileType: 'md' })).content;
+    assert.deepStrictEqual(quoted.map(n => (n.metadata as ParagraphMetadata | undefined)?.style), ['Quote', 'Quote'], 'Round 9: a <summary> line after a quote stays in it');
+    const afterQuoted = (await OfficeParser.parseOffice(Buffer.from('> <summary>s</summary>\nw\n'), { fileType: 'md' })).content;
+    assert.deepStrictEqual(afterQuoted.map(n => (n.metadata as ParagraphMetadata | undefined)?.style), ['Quote', 'Quote'], 'Round 9: a line after a quote\'s <summary> line stays in it');
+    const item = (await OfficeParser.parseOffice(Buffer.from('1.  a\n  <summary>s</summary>\n'), { fileType: 'md' })).content;
+    assert.deepStrictEqual(item.map(n => [n.type, nodeText(n)]), [['list', 'a <summary>s</summary>']], 'Round 9: a <summary> line after a list item is its text');
+    // (A disclosure's tags still end them.)
+    assert.strictEqual(treeShape((await OfficeParser.parseOffice(Buffer.from('> q\n<details>\n<summary>s</summary>\n\nb\n\n</details>\n'), { fileType: 'md' })).content),
+        'paragraph(text),disclosure[s](paragraph(text))', 'Round 9: a <details> line after a quote ends it');
+    console.log('✓ Markdown disclosure round 9 findings');
+}
+
+/**
+ * A disclosure in a list item or table cell, whose one line of Markdown holds no block, is written as HTML
+ * (the item as an HTML list, nested items after it too; the table as an HTML table) and read back the same:
+ * its summary, rich or plain, its body, its item's depth, number and task box. In a pipe-table cell with
+ * the HTML table fallback off, or a definition, its summary in bold and its body, reported.
+ */
+export async function testMarkdownDisclosureInItemsAndCells(): Promise<void> {
+    const same = async (html: string, name: string, expectedMd?: string): Promise<string> => {
+        const ast = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' });
+        const md = (await ast.to('md')).value;
+        if (expectedMd !== undefined) assert.strictEqual(md, expectedMd, `In items and cells: ${name}, its Markdown`);
+        const back = await OfficeParser.parseOffice(Buffer.from(md), { fileType: 'md' });
+        // (Which list an item is in, and a bullet's place in it, which Markdown restarts after an HTML block, aside.)
+        const keep = (nodes: OfficeContentNode[]) => JSON.stringify(nodes, function (this: any, key, value) {
+            return key === 'listId' || (key === 'itemIndex' && this.listType === 'unordered') ? undefined : value;
+        });
+        assert.strictEqual(keep(back.content), keep(ast.content), `In items and cells: ${name}, read back the same: ${md}`);
+        assert.strictEqual((await back.to('md')).value, md, `In items and cells: ${name}, the Markdown settled`);
+        return md;
+    };
+    await same('<ul><li>x <details><summary>s <b>b</b></summary><p>body</p></details></li><li>y<ul><li>z <details open></details></li><li>after</li></ul></li></ul><ol start="3"><li>n <details><summary>t</summary><p>u</p></details></li></ol>',
+        'list items', '<ul><li>x <details><summary>s <b>b</b></summary>\n<p>body</p></details></li></ul>\n\n- y\n\n<ul><ul><li>z <details open></details></li></ul></ul>\n\n<ul><ul><li>after</li></ul></ul>\n\n<ol start="3"><li>n <details><summary>t</summary>\n<p>u</p></details></li></ol>');
+    await same('<ul data-type="taskList"><li data-checked="true">done <details><summary><h3>S</h3></summary><p>b</p></details></li></ul>', 'a task item');
+    await same('<table><tr><td>h</td></tr><tr><td>c <details><summary><h3>S</h3><p>more</p></summary><p>b1</p><ul><li>li</li></ul></details></td></tr></table>', 'a table cell',
+        '<table>\n  <tr>\n    <td>h</td>\n  </tr>\n  <tr>\n    <td>c <details><summary><h3>S</h3>\n<p>more</p></summary>\n<p>b1</p>\n<ul><li>li</li></ul></details></td>\n  </tr>\n</table>');
+    await same('<table><tr><td>w17 <details></td></tr></table>', 'an empty disclosure in a cell', '<table>\n  <tr>\n    <td>w17 <details></details></td>\n  </tr>\n</table>');
+    // With the HTML table fallback off: a pipe table, its summary in bold, reported.
+    const cell = await OfficeParser.parseOffice(Buffer.from('<table><tr><td>c <details><summary>S</summary><p>b</p></details></td></tr></table>'), { fileType: 'html' });
+    const pipe = await cell.to('md', { mdConfig: { fallbackToHtml: { tables: false } } });
+    assert.ok(/^\| c<br>\*\*S\*\*(?: |<br>)b \|/m.test(pipe.value) && pipe.messages.some(m => m.code === 'CONTENT_NOT_REPRESENTABLE'), `In items and cells: a pipe-table cell, its summary in bold, reported: ${pipe.value}`);
+    console.log('✓ Markdown disclosures in list items and cells');
 }
 
 /** Markdown read and written back as Markdown, and its tree's shape (see treeShape). */
@@ -882,7 +1043,8 @@ export async function testMarkdownDisclosureSummaries(): Promise<void> {
         assert.strictEqual(again.shape, shape, `Disclosure summary: ${name}, the same tree read back`);
     }
     const open = await OfficeParser.parseOffice(Buffer.from('<details open>\n<summary>\n\nS\n\n</summary>\n\nB\n\n</details>\n'), { fileType: 'md' });
-    assert.strictEqual(JSON.stringify(open.content[0].metadata), '{"summary":"S","open":true}', 'Disclosure summary: the summary first in the metadata, as the HTML reader writes it');
+    assert.strictEqual(JSON.stringify(open.content[0].metadata), '{"open":true}', 'Disclosure summary: its metadata as the HTML reader writes it');
+    assert.strictEqual(JSON.stringify(open.content[0].children![0]), '{"type":"summary","children":[{"type":"paragraph","metadata":{},"children":[{"type":"text","text":"S"}]}]}', 'Disclosure summary: a summary node, its first child');
     console.log('✓ Markdown disclosure summaries');
 }
 
@@ -1016,14 +1178,58 @@ const DISCLOSURE_SHAPES: Record<string, (n: number) => string> = {
     summaryAcrossSiblings: n => '<details>\n<summary>\n\n### S\n\n</summary>\n\nBody\n\n</details>\n\n'.repeat(n),
     lazyAfterHtmlQuote: n => '<details>\n\n' + '> <details>\nlazy\n'.repeat(n),
     summaryInQuoteClose: n => '<details>\n<summary>\n\n> s\n> </summary>\n\nbody\n\n</details>\n\n'.repeat(n),
+    // Round 9's review: a close after each open in one block, in quotes, list items and headings.
+    inlinePairs: n => 'a <details>x</details> '.repeat(n) + '\n',
+    inlinePairsSum: n => 'a <details><summary>s</summary>x</details> '.repeat(n) + '\n',
+    headingPairs: n => '## h ' + '<details>x</details> '.repeat(n) + '\n',
+    quoteCloses: n => '<details>\n\n' + '> a </details> <details>\n'.repeat(n),
+    quoteLines: n => '<details>\n\n> q\n' + '> </details>\n> <details>\n> x\n'.repeat(n),
+    listItems: n => '<details>\n\n' + '- a </details> <details>\n'.repeat(n),
+    listNested: n => '<details>\n\n' + '- a\n  - b\n    </details><details>\n'.repeat(n),
+    sumAcross: n => '<details>\n<summary>\n\n' + 'p\n\n'.repeat(n) + '</summary>\n\nbody\n</details>\n',
+    sumUnclosed: n => '<details><summary>s\n\n'.repeat(n) + '</details>\n'.repeat(n),
+    strayCloses: n => '<details>' + ' </summary>'.repeat(n) + '\n\nbody\n',
+    attrQuotes: n => '<details>\n\n' + 'x <details title="a '.repeat(n) + '\n',
+    attrQuotes2: n => 'x <span title="' + '<details a='.repeat(n) + '\n',
+    quoteFence: n => '<details>\n\n' + '> ```\n> </details>\n> ```\n'.repeat(n),
+    quoteHtml: n => '<details>\n\n' + '> <div>\n> </details>\n> <details>\n>\n'.repeat(n),
+    // Round 9's fix design: every path of the tag scanner, the tree builder and the cut pass.
+    attrTagNames: n => 'The <abbr title="the <details> element">x</abbr> w '.repeat(n) + '\n',
+    attrTagNamesHtml: n => '<p title="</details>">x</p>\n'.repeat(n),
+    commentsUnclosedInline: n => 'x ' + '<!-- <details> '.repeat(n) + '\n',
+    commentsUnclosedHtml: n => '<div>\n' + '<!-- <details> '.repeat(n) + '\n',
+    declarationsInline: n => 'x ' + '<!a <details> '.repeat(n) + '\n',
+    rawTextUnclosed: n => '<div>\n' + '<script> <details> '.repeat(n) + '\n',
+    linkTails: n => '<details>\n\n' + '[a](</details> [b](<x '.repeat(n) + '\n',
+    linkTitles: n => '<details>\n\n' + '[a](u "</details>) '.repeat(n) + '\n',
+    backtickRunsInBody: n => '<details>\n\n' + Array.from({ length: n }, (_, i) => '`'.repeat(1 + (i % 40)) + ' <details> ').join('') + '\n',
+    divCloses: n => '<div>\n\n' + '<details>\n\nx\n\n</div>\n\n<div>\n\n'.repeat(n),
+    divEnclosingInline: n => '<div>\n\n' + 'a <details> b </div> <div> '.repeat(n) + '\n',
+    wrapperCode: n => '<details>\n\n' + '<div style="text-align: center">Use `</details>` w</div>\n\n'.repeat(n) + '</details>\n',
+    wrapperCloses: n => '<details>\n\n<div style="text-align: center">' + 'a <details> b </div> '.repeat(n) + '</div>\n',
+    summaryBlocksMany: n => '<details>\n<summary>\n\n' + '### h\n\n| a | b |\n| - | - |\n| c | d |\n\n'.repeat(n) + '</summary>\n\nbody\n\n</details>\n',
+    summariesSideBySide: n => '<details>\n<summary>A</summary>' + '<summary>w</summary>'.repeat(n) + '\n</details>\n',
+    listDeepEscapes: n => '<details>\n\n'.repeat(16) + Array.from({ length: Math.min(n, 400) }, (_, i) => '  '.repeat(i) + '- a </details> <details>').join('\n') + '\n',
+    listEscapesLong: n => '<details>\n\n' + '- a\n  more text here\n  </details> b <details>\n'.repeat(n),
+    quoteListEscapes: n => '<details>\n\n' + '> - a </details> <details>\n> - b\n'.repeat(n),
+    itemHtmlRunOn: n => '<details>\n\n- <div>\n' + '  - x </details> <details>\n'.repeat(n),
+    inlineAfterTagCode: n => 'See <details><summary>more</summary>' + 'Use `</details>` and \\</details> x '.repeat(n) + '</details>\n',
+    nested16Inline: n => ('a <details> '.repeat(20) + 'b ' + '</details> '.repeat(20)).repeat(Math.max(1, n / 20)) + '\n',
+    openMany: n => '<details>\n\n'.repeat(n) + 'x\n',
+    closeManyOneQuote: n => '<details>\n\n'.repeat(n) + '> ' + '</details> '.repeat(n) + '\n',
+    summaryUnclosedNested: n => '<details><summary>s <details>x\n\n'.repeat(n) + 'body\n',
+    // Disclosures in list items and table cells, which the Markdown writer writes as HTML lists and tables.
+    itemsHoldingDisclosures: n => '<ul>' + '<li>x <details><summary>s <b>b</b></summary>y</details><ul><li>z <details>w</details></li></ul></li>'.repeat(n) + '</ul>\n',
+    cellsHoldingDisclosures: n => '<table>' + '<tr><td>x <details><summary>s</summary>y</details></td><td>z</td></tr>'.repeat(n) + '</table>\n',
 };
 
 /**
  * Markdown disclosures are read and written back in time linear in the text, on every hostile shape the
- * review and the fix design found: closing tags in quotes, list items and headings, many opened, values
- * never closed, summaries across blocks. Each against plain paragraphs of the same size; a shape the
- * HTML reader's nesting limit refuses (one HTML block of a thousand open disclosures) is held to the
- * same time.
+ * reviews and the fix designs found: closing tags in quotes, list items and headings, many opened, values
+ * never closed, summaries across blocks, tags in attributes, comments and link tails, enclosing elements,
+ * disclosures in list items and cells. Each against plain paragraphs of the same size, and at n against
+ * 4n (at most 8 times the time: a quadratic reading takes 16); a shape the HTML reader's nesting limit
+ * refuses (one HTML block of a thousand open disclosures) is held to the same time.
  */
 export async function testMarkdownDisclosureShapesLinear(): Promise<void> {
     const n = 4000;
@@ -1039,8 +1245,17 @@ export async function testMarkdownDisclosureShapesLinear(): Promise<void> {
         const source = shape(n);
         const { within, time, plain: baseline } = await linearAgainst(() => readAndWrite(source), () => readAndWrite(plain(source.length)));
         assert.ok(within, `Disclosure shapes: ${name} (${source.length} bytes) in ${time.toFixed(0)} ms, paragraphs in ${baseline.toFixed(0)} ms`);
+        // n against 4n: the time at 4000 against the time at 1000, taken again once where it is over.
+        const quarter = shape(n / 4);
+        let small = await timed(() => readAndWrite(quarter));
+        let large = time;
+        if (large > 8 * small + 250) {
+            small = Math.max(small, await timed(() => readAndWrite(quarter)));
+            large = Math.min(large, await timed(() => readAndWrite(source)));
+        }
+        assert.ok(large <= 8 * small + 250, `Disclosure shapes: ${name} at ${n} in ${large.toFixed(0)} ms, at ${n / 4} in ${small.toFixed(0)} ms`);
     }
-    console.log(`✓ Markdown disclosure shapes in linear time (${Object.keys(DISCLOSURE_SHAPES).length} shapes)`);
+    console.log(`✓ Markdown disclosure shapes in linear time (${Object.keys(DISCLOSURE_SHAPES).length} shapes, n against 4n)`);
 }
 
 /** ODF namespaces of a note test file. */

@@ -45,7 +45,7 @@ export async function documentShapeEscapingTests(check: Check): Promise<void> {
     const figureBack = await OfficeParser.parseOffice(Buffer.from(figureMd), { fileType: 'md' });
     check('caption: Markdown figure reads back as the same text', (figureBack.content[0]?.metadata as any)?.caption === HOSTILE.replace(/\s+/g, ' ').trim());
     // A disclosure's summary: HTML's and Markdown's <summary>.
-    const disclosed = astOf([{ type: 'disclosure', metadata: { summary: HOSTILE, open: true }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'body' }] }] }]);
+    const disclosed = astOf([{ type: 'disclosure', metadata: { open: true }, children: [{ type: 'summary', children: [{ type: 'paragraph', children: [{ type: 'text', text: HOSTILE }] }] }, { type: 'paragraph', children: [{ type: 'text', text: 'body' }] }] }]);
     // An open state that is not a boolean (an AST built in code) writes nothing of itself.
     const badOpen = String((await OfficeGenerator.generate(astOf([{ type: 'disclosure', metadata: { open: '"><script>' }, children: [] }]), 'html', { htmlConfig: { standalone: false }, ...silent } as any)).value);
     check('disclosure: a non-boolean open state writes no markup', !live(badOpen), badOpen);
@@ -54,7 +54,25 @@ export async function documentShapeEscapingTests(check: Check): Promise<void> {
     const detailsMd = String((await OfficeGenerator.generate(disclosed, 'md', silent as any)).value);
     check('summary: Markdown escaped, the block not ended early', !live(detailsMd) && /^<details open>\n<summary>[^\n]*<\/summary>\n\nbody\n\n<\/details>/.test(detailsMd), detailsMd);
     const detailsBack = await OfficeParser.parseOffice(Buffer.from(detailsMd), { fileType: 'md' });
-    check('summary: Markdown reads back as the same text', (detailsBack.content[0]?.metadata as any)?.summary === HOSTILE.replace(/\s+/g, ' ').trim());
+    const summaryBack = detailsBack.content[0]?.children?.[0];
+    const summaryWords = (nodes: any[] | undefined): string => (nodes ?? []).map((n: any) => (n.children?.length ? summaryWords(n.children) : n.text ?? '')).join('');
+    check('summary: Markdown reads back as the same text', summaryBack?.type === 'summary' && summaryWords(summaryBack.children).replace(/\s+/g, ' ').trim() === HOSTILE.replace(/\s+/g, ' ').trim(), JSON.stringify(summaryBack));
+    // A summary of more than plain text (written as Markdown between `<summary>` and `</summary>` lines,
+    // in a list item as an HTML list): escaped, and its text read back in it.
+    for (const [name, content] of [
+        ['a rich summary', [{ type: 'disclosure', children: [{ type: 'summary', children: [{ type: 'heading', metadata: { level: 3 }, children: [{ type: 'text', text: HOSTILE, formatting: { bold: true } }] }] }, { type: 'paragraph', children: [{ type: 'text', text: 'body' }] }] }]],
+        ['a disclosure in a list item', [{ type: 'list', metadata: { listType: 'unordered', indentation: 0, itemIndex: 0 }, children: [{ type: 'text', text: 'x ' }, { type: 'disclosure', children: [{ type: 'summary', children: [{ type: 'paragraph', children: [{ type: 'text', text: HOSTILE, formatting: { italic: true } }] }] }] }] }]],
+    ] as const) {
+        const richHtml = String((await OfficeGenerator.generate(astOf(content as any), 'html', { htmlConfig: { standalone: false }, ...silent } as any)).value);
+        check(`summary: ${name}, HTML escaped`, !live(richHtml), richHtml);
+        const richMd = String((await OfficeGenerator.generate(astOf(content as any), 'md', silent as any)).value);
+        check(`summary: ${name}, Markdown escaped`, !live(richMd), richMd);
+        const richBack = await OfficeParser.parseOffice(Buffer.from(richMd), { fileType: 'md' });
+        const disclosure = name === 'a rich summary' ? richBack.content[0] : richBack.content[0]?.children?.find(c => c.type === 'disclosure');
+        const words = (nodes: any[] | undefined): string => (nodes ?? []).map((n: any) => (n.children?.length ? words(n.children) : n.type === 'break' ? ' ' : n.text ?? '')).join('');
+        check(`summary: ${name}, Markdown reads back as the same text in its summary`, disclosure?.children?.[0]?.type === 'summary'
+            && words(disclosure.children[0].children).replace(/\s+/g, ' ').trim() === HOSTILE.replace(/\s+/g, ' ').trim(), JSON.stringify(richBack.content));
+    }
     // Keyboard input: HTML's and Markdown's <kbd>.
     const keyed = astOf([{ type: 'paragraph', children: [{ type: 'text', text: HOSTILE, formatting: { keyboard: true, font: 'monospace' } }] }]);
     const kbdHtml = String((await OfficeGenerator.generate(keyed, 'html', { htmlConfig: { standalone: false }, ...silent } as any)).value);

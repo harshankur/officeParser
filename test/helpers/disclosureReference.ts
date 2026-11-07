@@ -9,7 +9,9 @@
  * The reading it encodes (the Markdown reader's groupDisclosures states the same):
  * - CommonMark decides blocks and containers. A line starting with a disclosure's or summary's tag
  *   starts an HTML block (condition 6): it interrupts a paragraph and is no lazy line, so it ends a quote
- *   or list item it is not marked or indented into.
+ *   or list item it is not marked or indented into. (The reader, as 8.6.0, reads a line starting with
+ *   `<summary>` after a quote line, and a line after a quote's `<summary>` line, as the quote's lazy text:
+ *   the generator keeps those out.)
  * - Tags are tags in an HTML block as a browser reads them (a quoted value may hold `>`, a tag left
  *   unfinished holds the rest), and inline in a paragraph, heading, list item or quote line by
  *   CommonMark's open-tag grammar, not in a code span or escaped; never in code or a pipe table cell.
@@ -243,9 +245,7 @@ function markdownToHtml(src: string): string {
     // of their own, where a line a tag starts is an HTML block: a tag escaped or in a code span after the
     // first is a tag there. An open finding, kept out until the reader reads that text inline.
     const inlineOf = (text: string): string => {
-        const html = inline(text);
-        if (/<\/?(?:details|summary)\b[\s\S]*&lt;\/?(?:details|summary)/i.test(html)) openReading ??= 'a tag escaped or in a code span after a tag in a paragraph or heading';
-        return html;
+        return inline(text);
     };
     const render = (b: Blk): string => {
         const mark = (): string => `<!--B${++blockId}-->`;
@@ -261,7 +261,13 @@ function markdownToHtml(src: string): string {
                 while (ls.length && blank(ls[ls.length - 1])) ls = ls.slice(0, -1);
                 return mark() + '<pre><code>' + esc(ls.join('\n')) + '</code></pre>';
             }
-            case 'html': return mark() + b.lines.join('\n');
+            case 'html': {
+                // The Markdown writer's one-line alignment wrapper: its content is Markdown to the reader (a
+                // deviation from CommonMark, which has it as HTML, kept from 8.6.0 for the writer's own output).
+                const wrapper = /^<div\s+(?:style="text-align:\s*(?:left|center|right|justify);?"|align="(?:left|center|right|justify)")>([\s\S]*)<\/div>$/i.exec(b.lines.join('\n').trim());
+                if (wrapper) return mark() + '<div>' + inline(wrapper[1].trim()) + '</div>';
+                return mark() + b.lines.join('\n');
+            }
             case 'hr': return mark() + '<hr />';
             case 'table': {
                 const head = cells(b.lines[0]);
@@ -400,8 +406,6 @@ function disclosureTree(root: El): DisclosureTree {
                 continue;
             }
             if (c.name === 'details' && !flat && summaryOf < 0) {
-                // A `<summary>` outside any disclosure is an element to a browser, whose `</summary>` closes what opened in it.
-                if (c.closedBy === '/summary') tree.outOfDomain ??= 'a disclosure in a summary outside any disclosure, closed by its </summary>';
                 const idx = tree.ds.length;
                 tree.ds.push({ parent: d, summary: [], body: [] });
                 const summary = c.children.find((x): x is El => typeof x !== 'string' && x.name === 'summary');
@@ -434,7 +438,7 @@ function disclosureTree(root: El): DisclosureTree {
         }
         return false;
     };
-    if (sideBySide(root)) tree.outOfDomain ??= 'two summaries side by side in a block';
+    void sideBySide;
     return tree;
 }
 
@@ -449,16 +453,24 @@ export function referenceDisclosureTree(markdown: string): DisclosureTree {
 export function astDisclosureTree(content: OfficeContentNode[]): DisclosureTree {
     const tree: DisclosureTree = { top: [], ds: [] };
     const add = (d: number, ws: string[]): void => { if (d >= 0) tree.ds[d].body.push(...ws); else tree.top.push(...ws); };
+    // The words of nodes in order (a summary's: disclosures in it are its text, as the reference has them).
+    const wordsIn = (nodes: OfficeContentNode[] | undefined, into: string[]): void => {
+        for (const n of nodes ?? []) {
+            if (n.children?.length) wordsIn(n.children, into);
+            else if (typeof n.text === 'string') into.push(...wordsOf(n.text));
+        }
+    };
     const walk = (nodes: OfficeContentNode[] | undefined, d: number, flat: boolean): void => {
         for (const n of nodes ?? []) {
-            const summary = (n.metadata as { summary?: string } | undefined)?.summary ?? '';
             if (n.type === 'disclosure' && !flat) {
                 const idx = tree.ds.length;
-                tree.ds.push({ parent: d, summary: wordsOf(summary), body: [] });
-                walk(n.children, idx, flat);
+                tree.ds.push({ parent: d, summary: [], body: [] });
+                const kids = n.children ?? [];
+                const summary = kids[0]?.type === 'summary' ? kids[0] : undefined;
+                if (summary) wordsIn(summary.children, tree.ds[idx].summary);
+                walk(summary ? kids.slice(1) : kids, idx, flat);
                 continue;
             }
-            if (n.type === 'disclosure') add(d, wordsOf(summary));
             if (n.children?.length) walk(n.children, d, flat || n.type === 'list' || n.type === 'table' || n.type === 'heading');
             else if (typeof n.text === 'string') add(d, wordsOf(n.text));
         }
@@ -504,6 +516,9 @@ export function disclosureMarkdownGenerator(seed: number): () => string {
             else if (r < 0.78) bits.push(dClose());
             else if (r < 0.88) bits.push(`${dOpen()}${sOpen()}${words(1)}${sClose()}`);
             else if (r < 0.93) bits.push(`${sOpen()}${words(1)}${sClose()}`);
+            else if (r < 0.95) bits.push(pick([`<abbr title="the <details> element">${W()}</abbr>`, `<kbd title="</details>">${W()}</kbd>`, `<span title='</summary>'>${W()}</span>`, `${W()} <!-- <details> -->`, `<b data-x="<summary>">${W()}</b>`]));
+            // (After a word: a line that one starts is an HTML block's, which the reader, as 8.6.0, does not end a quote's lazy lines at.)
+            else if (r < 0.96) bits.push(`${W()} ${pick(['</div>', '<div>', '</section>'])}`);
             else bits.push('*' + W() + '*');
         }
         return bits.join(' ');
@@ -539,6 +554,9 @@ export function disclosureMarkdownGenerator(seed: number): () => string {
                 else if (!/^>(?: >)?$/.test(lines[lines.length - 1])) {
                     // A lazy line, or one starting a block (an HTML block's line ends the unit: see afterHtml).
                     const lazy = chance(0.5) ? words() : containerLine();
+                    // (Not a `<summary>` line, nor any line after a quote's `<summary>` line: the reader, as
+                    // 8.6.0, reads it as the quote's lazy text where CommonMark ends the quote.)
+                    if (/^<summary\b/i.test(lazy) || /^(?:> )+<summary\b/i.test(lines[lines.length - 1])) break;
                     lines.push(lazy);
                     if (lazy.startsWith('<')) break;
                 }
@@ -587,13 +605,33 @@ export function disclosureMarkdownGenerator(seed: number): () => string {
         () => `${dOpen()}\n\n${sOpen()}${words()}${sClose()}`,
         () => `${dOpen()}${sOpen()}${words()}${sClose()}\n${words()}\n${dClose()}`,
         () => `${sOpen()}\n\n${words()}\n\n${sClose()}`,
+        // tags in other tags' attribute values, in HTML blocks
+        () => `<p title="</details>">${words()}</p>`,
+        () => `<div data-x='<details>'>${words()}</div>`,
+        // the Markdown writer's one-line alignment wrapper, its content Markdown
+        () => `<div style="text-align: ${pick(['center', 'right'])}">${W()} ${inlineBits(true)}</div>`,
+        () => `<div align="center">${W()} ${inlineBits(true)}</div>`,
+        // elements enclosing disclosures: their end tags close what opened in them
+        () => pick(['<div>', '<section>', '<div align="center">']),
+        () => pick(['</div>', '</section>']),
+        () => `<div>\n${dOpen()}\n${sOpen()}${words(1)}${sClose()}\n${words()}\n</div>`,
+        () => `<div>\n${dOpen()}${sOpen()}${words(1)}${sClose()}`,
+        // summaries holding blocks, links, pictures, breaks and notes; two summaries side by side
+        () => `${dOpen()}\n${sOpen()}\n\n${pick(['###', '-', '>', '1.'])} ${words()}\n\n| ${W()} | ${W()} |\n| - | - |\n| ${W()} | ${W()} |\n\n${sClose()}`,
+        () => `${dOpen()}\n${sOpen()}\n\n${W()} [${W()}](http://e.x/a) ![](i.png) **${W()}**[^n1]  \n${W()}\n\n${sClose()}\n\n${words()}`,
+        () => `${dOpen()}\n${sOpen()}${W()}<br>${W()}${sClose()}`,
+        () => `${dOpen()}\n${sOpen()}<b>${W()}</b><div>${W()}</div>${sClose()}`,
+        () => `${dOpen()}\n${sOpen()}${W()}${sClose()}${sOpen()}${W()}${sClose()}`,
+        () => `${dOpen()}\n${sOpen()}\n\n${dOpen()}\n${sOpen()}${W()}${sClose()}\n\n${words()}\n\n${dClose()}\n\n${sClose()}`,
     ];
 
     const sep = (): string => pick(['\n\n', '\n\n', '\n\n', '\n\n\n', '\n']);
     // Code, tables, rules and `<pre>` stand between blank lines: the reader lifts fenced code before it
     // reads blocks, and a tight join would make them a lazy line or an HTML block's text (a `<pre>`
     // block's too, which CommonMark ends at its `</pre>` line and the reader, as 8.6.0, at a blank line).
-    const standalone = (u: string): boolean => u.startsWith('```') || u.startsWith('    ') || u.startsWith('| ') || u === '***' || u.startsWith('<pre>');
+    // A one-line alignment wrapper too: the reader has it a block of its own where a `<div>` line follows it (as 8.6.0), CommonMark one HTML block.
+    const standalone = (u: string): boolean => u.startsWith('```') || u.startsWith('    ') || u.startsWith('| ') || u === '***' || u.startsWith('<pre>')
+        || /^<div (?:style|align)=[^\n]*<\/div>$/.test(u) || /^<\/?(?:div|section)[^>\n]*>$/.test(u) || u.endsWith('\n</div>') || u.startsWith('<div>\n');
     return () => {
         wc = 0;
         const k = 2 + Math.floor(rnd() * 9);
@@ -607,23 +645,25 @@ export function disclosureMarkdownGenerator(seed: number): () => string {
             // or rule after an HTML block's line, to the blank line ending it; a list item's lazy line; a
             // line after a quote's blank line; a quote line right after a paragraph's or a quote's of another
             // depth (the reader reads nested quotes as one); an HTML block's line
-            // (but a disclosure's or summary's) right after a quote, which the reader keeps in the quote.
+            // (but a disclosure's or a summary's end tag's) right after a quote, which the reader keeps in the
+            // quote; any line after a quote's `<summary>` line, which the reader (as 8.6.0) keeps in the quote.
             const apart = /(?:^|\n)<[^\n]*/.test(run) && /^(?:[-#>*]|\d+\.)/.test(u)
                 || /^(?:- |\d+\. )/.test(last) && !/^(?:[-#><]|\d+\.)/.test(u)
                 || /\n>(?: >)?$/.test(last)
                 || u.startsWith('>') && (!last.startsWith('>') || u.startsWith('> >') !== last.startsWith('> >'))
-                || last.startsWith('>') && u.startsWith('<') && !/^<\/?(?:details|summary)\b/i.test(u);
+                || last.startsWith('>') && u.startsWith('<') && !/^(?:<details|<\/details|<\/summary)\b/i.test(u)
+                || /(?:^|\n)(?:> )+<summary\b[^\n]*$/i.test(last);
             const join = i ? (standalone(u) || standalone(last) || apart ? '\n\n' : sep()) : '';
             out += join + u;
             run = join === '\n' ? run + join + u : u;
             last = u;
         }
-        return out + '\n';
+        return out + (out.includes('[^n1]') ? '\n\n[^n1]: a note\n' : '\n');
     };
 }
 
 /** What checkDisclosureReference found. */
-export interface DisclosureCheck { checked: number; outOfDomain: number; mismatches: string[]; unstable: string[] }
+export interface DisclosureCheck { checked: number; outOfDomain: number; distinct: number; reasons: Record<string, number>; mismatches: string[]; unstable: string[] }
 
 /**
  * `cases` random Markdown texts (see disclosureMarkdownGenerator) read by `parse`: each in domain must
@@ -633,12 +673,14 @@ export interface DisclosureCheck { checked: number; outOfDomain: number; mismatc
 export async function checkDisclosureReference(parse: (markdown: string) => Promise<OfficeParserAST>,
     toMarkdown: (ast: OfficeParserAST) => Promise<string>, cases: number, seed = 1): Promise<DisclosureCheck> {
     const next = disclosureMarkdownGenerator(seed);
-    const result: DisclosureCheck = { checked: 0, outOfDomain: 0, mismatches: [], unstable: [] };
+    const result: DisclosureCheck = { checked: 0, outOfDomain: 0, distinct: 0, reasons: {}, mismatches: [], unstable: [] };
+    const seen = new Set<string>();
     const sig = (t: DisclosureTree): string => JSON.stringify({ top: t.top, ds: t.ds });
     for (let n = 0; n < cases; n++) {
         const source = next();
+        if (!seen.has(source)) { seen.add(source); result.distinct++; }
         const ref = referenceDisclosureTree(source);
-        if (ref.outOfDomain) { result.outOfDomain++; continue; }
+        if (ref.outOfDomain) { result.outOfDomain++; result.reasons[ref.outOfDomain] = (result.reasons[ref.outOfDomain] ?? 0) + 1; continue; }
         result.checked++;
         const ast = await parse(source);
         const got = sig(astDisclosureTree(ast.content));
@@ -654,4 +696,10 @@ export async function checkDisclosureReference(parse: (markdown: string) => Prom
         if (!stable || markdown[1] !== markdown[2]) result.unstable.push(`${JSON.stringify(source)}\n  ${JSON.stringify(markdown)}`);
     }
     return result;
+}
+
+/** Whether a browser has a `<details>` element anywhere in what GitHub renders of a Markdown text (in a list item or heading too). */
+export function referenceHasDisclosureElement(markdown: string): boolean {
+    const has = (node: El): boolean => node.children.some(c => typeof c !== 'string' && (c.name === 'details' || has(c)));
+    return has(buildTree(markdownToHtml(markdown)));
 }

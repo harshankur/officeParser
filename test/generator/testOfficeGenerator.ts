@@ -38,6 +38,7 @@ import { toWoff, toWoff2 } from '../helpers/webFontWriter';
 import { BOX, cffTable, type CffSpec, charString, EMPTY, withCffOutlines } from '../helpers/cffFontWriter';
 import { checkLookalikeScan } from '../helpers/lookalikeReference';
 import { checkDisclosureReference } from '../helpers/disclosureReference';
+import { checkDisclosureAstRoundTrip } from '../helpers/disclosureAstRoundTrip';
 import { checkOdtSpaceRuns } from '../helpers/odtSpaceRuns';
 import { OfficeTemplate } from '../../src/OfficeTemplate';
 import { findLookalikeTags, PartContext, triggersOf } from '../../src/template/templateEngine.js';
@@ -2833,25 +2834,65 @@ async function runTemplatePropertyTests(): Promise<GenFeatureTest[]> {
 /**
  * Markdown disclosures against a reference written independently of the Markdown reader
  * (test/helpers/disclosureReference.ts: CommonMark's blocks, then a browser's tree building) on random
- * Markdown mixing disclosures with every block kind: each text's disclosure tree is the reference's, and
- * stays so over three round trips, the Markdown settled. Fast mode runs fewer texts.
+ * Markdown mixing disclosures with every block kind (tag names in attributes, comments, enclosing
+ * elements, summaries holding blocks, links, pictures, breaks and notes among them): each text's
+ * disclosure tree is the reference's, and stays so over three round trips, the Markdown settled. The
+ * generator has a full period, so each seed draws its own texts; the distinct ones are counted. Fast
+ * mode runs one seed of 1,000 texts, the full run three of 10,000.
  */
 async function runMarkdownDisclosureReferenceTests(): Promise<GenFeatureTest[]> {
-    const cases = FAST_MODE ? 1_000 : 10_000;
-    const started = Date.now();
-    const { checked, outOfDomain, mismatches, unstable } = await checkDisclosureReference(
-        markdown => OfficeParser.parseOffice(Buffer.from(markdown), { fileType: 'md' }),
-        async ast => String((await ast.to('md')).value), cases, 1);
-    const failures = [...mismatches, ...unstable];
-    return [{
-        category: 'Markdown Disclosures', feature: `disclosure trees are the reference's and keep over three round trips (${cases} texts, ${checked} in its domain)`,
-        sourceFormat: 'md', destFormat: 'md',
-        result: {
-            status: failures.length ? 'FAIL' : 'PASS', expected: 'no difference',
-            actual: failures.length ? `${mismatches.length} differ, ${unstable.length} unsettled` : 'none',
-            details: failures.length ? failures.slice(0, 3).join('\n') : `${outOfDomain} texts out of its domain`, duration: Date.now() - started,
-        },
-    }];
+    const perSeed = FAST_MODE ? 1_000 : 10_000;
+    const seeds = FAST_MODE ? [1] : [1, 2, 3];
+    const results: GenFeatureTest[] = [];
+    for (const seed of seeds) {
+        const started = Date.now();
+        const { checked, outOfDomain, distinct, reasons, mismatches, unstable } = await checkDisclosureReference(
+            markdown => OfficeParser.parseOffice(Buffer.from(markdown), { fileType: 'md' }),
+            async ast => String((await ast.to('md')).value), perSeed, seed);
+        const failures = [...mismatches, ...unstable];
+        console.log(`\n    seed ${seed}: ${perSeed} texts, ${distinct} distinct, ${checked} in the reference's domain, ${mismatches.length} differ, ${unstable.length} unsettled`);
+        results.push({
+            category: 'Markdown Disclosures', feature: `disclosure trees are the reference's and keep over three round trips (seed ${seed}: ${perSeed} texts, ${distinct} distinct, ${checked} in its domain)`,
+            sourceFormat: 'md', destFormat: 'md',
+            result: {
+                status: failures.length ? 'FAIL' : 'PASS', expected: 'no difference',
+                actual: failures.length ? `${mismatches.length} differ, ${unstable.length} unsettled` : 'none',
+                details: failures.length ? failures.slice(0, 3).join('\n') : `${outOfDomain} texts out of its domain: ${JSON.stringify(reasons)}`, duration: Date.now() - started,
+            },
+        });
+    }
+    return results;
+}
+
+/**
+ * Disclosures from the AST through Markdown and HTML and back (test/helpers/disclosureAstRoundTrip.ts):
+ * random ASTs of disclosures whose summaries hold every kind of content (formatting, links, notes, line
+ * breaks, headings, tables, lists, nested disclosures), whose bodies hold every block kind, and which
+ * stand in list items and table cells too, written and read back over three passes (HTML four): the same
+ * disclosure tree after every pass, no word or note lost, the output settled. Fast mode draws 2,000 ASTs
+ * for Markdown and 500 for HTML, the full run 20,000 and 3,000.
+ */
+async function runDisclosureAstRoundTripTests(): Promise<GenFeatureTest[]> {
+    const results: GenFeatureTest[] = [];
+    for (const [format, count] of [['md', FAST_MODE ? 2_000 : 20_000], ['html', FAST_MODE ? 500 : 3_000]] as const) {
+        const started = Date.now();
+        const result = await checkDisclosureAstRoundTrip(
+            async ast => String((await OfficeGenerator.generate(ast, format, format === 'html' ? { htmlConfig: { standalone: false } } : undefined)).value),
+            output => OfficeParser.parseOffice(Buffer.from(output), { fileType: format }),
+            async ast => String((await ast.to('text')).value), count, 1, format === 'html' ? 4 : 3);
+        const failed = result.treeDiffers + result.wordsLost + result.notesLost + result.unsettled;
+        console.log(`\n    ${format}: ${count} ASTs, ${result.distinct} distinct, ${result.treeDiffers} trees differ, ${result.wordsLost} lose words, ${result.notesLost} lose notes, ${result.unsettled} unsettled`);
+        results.push({
+            category: 'Markdown Disclosures', feature: `disclosures from the AST through ${format} and back keep their tree, words and notes (${count} ASTs, ${result.distinct} distinct)`,
+            sourceFormat: 'synthetic', destFormat: format,
+            result: {
+                status: failed ? 'FAIL' : 'PASS', expected: 'no difference',
+                actual: failed ? `${result.treeDiffers} trees differ, ${result.wordsLost} lose words, ${result.notesLost} lose notes, ${result.unsettled} unsettled` : 'none',
+                details: result.failures.join('\n').slice(0, 6000), duration: Date.now() - started,
+            },
+        });
+    }
+    return results;
 }
 
 /**
@@ -3298,6 +3339,12 @@ async function runAllTests(): Promise<void> {
     const disclosureReferenceResults = await runMarkdownDisclosureReferenceTests();
     allResults.push(...disclosureReferenceResults);
     console.log(disclosureReferenceResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' \u2717' : ' \u2713');
+
+    // Disclosures from the AST through Markdown and HTML and back, on random ASTs
+    process.stdout.write('  disclosure AST round trip...');
+    const disclosureRoundTripResults = await runDisclosureAstRoundTripTests();
+    allResults.push(...disclosureRoundTripResults);
+    console.log(disclosureRoundTripResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' \u2717' : ' \u2713');
 
     // Degrade fidelity: over-cap images, unembeddable pictures, notes, OCR line breaks
     process.stdout.write('  degrade fidelity...');
