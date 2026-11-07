@@ -31,6 +31,7 @@ const TEXT_NODE_CLASS: Readonly<Record<OfficeContentNodeType, 'block' | 'inline'
     admonition: 'block', definitionList: 'block', definitionTerm: 'block', definitionDescription: 'block',
     // (A disclosure reaches plain text opened, its summary a line of its own: see disclosures.)
     disclosure: 'block',
+    summary: 'block',
     text: 'inline', image: 'inline', chart: 'inline', drawing: 'inline', cell: 'inline', page: 'inline',
     break: 'inline', comment: 'inline', header: 'inline', footer: 'inline', slideMaster: 'inline',
     embed: 'inline',

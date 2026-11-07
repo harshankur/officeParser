@@ -6,14 +6,14 @@ const KNOWN_NODE_TYPES: Record<OfficeContentNodeType, true> = {
     paragraph: true, heading: true, table: true, list: true, text: true, image: true, chart: true, drawing: true,
     slide: true, note: true, sheet: true, row: true, cell: true, page: true, break: true, code: true, comment: true,
     header: true, footer: true, slideMaster: true, embed: true, admonition: true, definitionList: true,
-    definitionTerm: true, definitionDescription: true, disclosure: true,
+    definitionTerm: true, definitionDescription: true, disclosure: true, summary: true,
 };
 
 /** Where a node sits: among blocks, in a line of text, among a table's rows, or among a row's cells. */
 type Place = 'block' | 'inline' | 'table' | 'row';
 
 /** Nodes whose children are blocks (paragraphs, tables, lists) rather than a line of text. */
-const BLOCK_CONTAINERS = new Set<string>(['page', 'slide', 'note', 'admonition', 'disclosure', 'cell', 'header', 'footer', 'slideMaster', 'chart', 'drawing', 'comment']);
+const BLOCK_CONTAINERS = new Set<string>(['page', 'slide', 'note', 'admonition', 'disclosure', 'summary', 'cell', 'header', 'footer', 'slideMaster', 'chart', 'drawing', 'comment']);
 
 /** Nodes that sit in a line of text; among blocks, a run of them is a paragraph. */
 const INLINE_TYPES = new Set<string>(['text', 'image', 'break']);

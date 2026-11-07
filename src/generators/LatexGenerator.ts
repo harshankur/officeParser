@@ -776,6 +776,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             case 'admonition': return this.admonition(node);
             // (Opened before any writer but HTML's and Markdown's sees it, see disclosures: its summary in bold, then its body.)
             case 'disclosure': return this.renderFlow(openedDisclosure(node));
+            // (A disclosure's summary is written by its disclosure; one standing alone is its blocks.)
+            case 'summary': return this.renderFlow(node.children || []);
             case 'chart': return this.chart(node);
             case 'embed': return this.embed(node);
             case 'definitionList': return this.renderDescriptionRun(node.children || []);

@@ -340,10 +340,17 @@
             description nodes. Each may carry <code>DefinitionMetadata.anchorIds</code>.</li>
         <li><strong><code>disclosure</code></strong>: A block a reader opens and closes (HTML <code>&lt;details&gt;</code>,
             in HTML, EPUB and Markdown, where it is that HTML block with Markdown inside). Carries
-            <code>DisclosureMetadata</code>: <code>summary</code> (the <code>&lt;summary&gt;</code> text), <code>open</code>
-            and <code>anchorIds</code>; its <code>children</code> are the blocks it shows when open. Written back as
-            <code>&lt;details&gt;</code> in HTML, EPUB and Markdown; every other writer writes its summary as a bold line
-            followed by its body, all shown.</li>
+            <code>DisclosureMetadata</code>: <code>open</code> and <code>anchorIds</code>. Its <code>children</code> are its
+            summary, a <code>summary</code> node first where it has one, then the blocks it shows when open. Written back as
+            <code>&lt;details&gt;</code> in HTML, EPUB and Markdown; every other writer writes its summary in bold followed by
+            its body, all shown.</li>
+        <li><strong><code>summary</code></strong>: A disclosure's summary (<code>&lt;summary&gt;</code>), what it shows while
+            closed: its first child, with no metadata. Its <code>children</code> are blocks, as <code>&lt;summary&gt;</code>
+            holds any content: a paragraph for a line of text (its formatting, links, pictures, notes and line breaks kept),
+            and headings, lists, tables or a nested disclosure. A disclosure with none is shown as "Details". Markdown writes
+            a line of plain text as <code>&lt;summary&gt;text&lt;/summary&gt;</code> and anything else as Markdown between a
+            <code>&lt;summary&gt;</code> line and a <code>&lt;/summary&gt;</code> line; formats without the block write its
+            paragraphs' text in bold and its other blocks as they are.</li>
         <li><strong><code>list</code></strong> task-list items: <code>ListMetadata.isTask</code> and
             <code>.checked</code> mark a GFM task-list item (<code>- [x] Done</code>).</li>
         <li>Text-node metadata additions: <code>TextMetadata.citationKey</code> (Pandoc/MultiMarkdown

@@ -1,4 +1,4 @@
-import { AdmonitionMetadata, BreakMetadata, CodeMetadata, CommentMetadata, DisclosureMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, BreakMetadata, CodeMetadata, CommentMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { anchorMark, resolveAnchorMarks } from '../utils/anchorUtils.js';
 import { createAST } from '../utils/astUtils.js';
 import { parseHtml } from './HtmlParser.js';
@@ -1846,21 +1846,6 @@ function liftFencedCode(text: string, replace: (lang: string, code: string) => s
 /** Plain text of parsed inline nodes, leaving out source comments: a hidden note is not text. */
 const plainTextOf = (nodes: OfficeContentNode[]): string => nodes.map(n => (isSourceComment(n) ? '' : n.text || '')).join('');
 
-/** Nodes that stand in a line of text: a summary's text runs them together, and puts a space around anything else (a block). */
-const INLINE_NODE_TYPES = new Set<string>(['text', 'break', 'image', 'note', 'drawing', 'comment']);
-
-/**
- * The text of a summary read as blocks (see groupDisclosures): inline nodes run together, blocks set
- * apart by a space, a disclosure in it giving its summary and body. Its nodes nest no deeper than
- * the blocks they were read from.
- */
-const summaryTextOf = (nodes: OfficeContentNode[]): string => nodes.map(node => {
-    if (isSourceComment(node)) return '';
-    const text = node.type === 'disclosure' ? `${(node.metadata as DisclosureMetadata | undefined)?.summary ?? ''} ${summaryTextOf(node.children ?? [])}`
-        : node.text || summaryTextOf(node.children ?? []);
-    return INLINE_NODE_TYPES.has(node.type) ? text : ` ${text} `;
-}).join('');
-
 export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
     // Honour cancellation requests before the line-by-line Markdown scanning loop begins.
     // Markdown parsing is entirely synchronous and CPU-bound, so failing fast avoids
@@ -2854,7 +2839,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     const readHtmlBlock = async (block: string): Promise<OfficeParserAST> => {
         // Its quotes are numbered with this document's (an id per block, from 1, made two quotes one).
         const html = await parseHtml(Buffer.from(block), { ...config, htmlParserConfig: { ...config.htmlParserConfig, preserveComments: true } },
-            { quoteId: () => `md-quote-${++quoteCount}` });
+            { quoteId: () => `md-quote-${++quoteCount}`, ...(disclosureDepth > 0 ? { inDisclosure: true } : {}) });
         if (markdownPieces.length) {
             html.content = await restoreMarkdownPieces(html.content);
             restoreRawPieces(html.content);
@@ -3517,7 +3502,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
 
         // A disclosure lifted out of the blocks (see groupDisclosures): its attributes as the HTML parser
         // reads its `<details>` tag, its summary's blocks and its body's read as they were lifted (nested
-        // disclosures placeholders in them). Its summary is the text of its summary's blocks.
+        // disclosures placeholders in them). Its summary is its first child, a `summary` node holding them.
         const disclosureIndex = placeholderIndex(block, 'DISCLOSURE');
         if (disclosureIndex !== null && disclosureIndex < disclosureBodies.length) {
             const { tag, summary, body } = disclosureBodies[disclosureIndex];
@@ -3531,10 +3516,10 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             } finally {
                 disclosureDepth--;
             }
+            foldAnchorPlaceholders(summaryNodes);
             foldAnchorPlaceholders(children);
-            const summaryText = summaryTextOf(summaryNodes).replace(/\s+/g, ' ').trim();
-            const { summary: _shellSummary, ...attributes } = (shell?.metadata ?? {}) as DisclosureMetadata;
-            content.push({ type: 'disclosure', metadata: { ...(summaryText ? { summary: summaryText } : {}), ...attributes }, children });
+            if (summaryNodes.length) children.unshift({ type: 'summary', children: summaryNodes });
+            content.push({ type: 'disclosure', ...(shell?.metadata ? { metadata: shell.metadata } : {}), children });
             continue;
         }
         // A paragraph's text cut from it at a disclosure's tag (see groupDisclosures): a paragraph's text.

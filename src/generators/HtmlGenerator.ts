@@ -1,5 +1,6 @@
 import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, DisclosureMetadata, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageMetadata, SheetMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
 import { captionOf } from '../utils/figureCaptions.js';
+import { summaryLine } from '../utils/disclosures.js';
 import { quoteIdOf, sameQuote } from '../utils/quoteGroups.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
@@ -13,7 +14,7 @@ import { appendAll } from '../utils/nodeListUtils.js';
 import { MAX_LAYOUT_COLUMNS } from '../utils/tableLayout.js';
 
 /** Node types written as block elements (a <div>, <table>, <ul>, <dl>, <section>...), which a <p> cannot hold. */
-const BLOCK_TYPES = new Set<string>(['paragraph', 'heading', 'list', 'table', 'sheet', 'row', 'cell', 'chart', 'embed', 'admonition', 'disclosure',
+const BLOCK_TYPES = new Set<string>(['paragraph', 'heading', 'list', 'table', 'sheet', 'row', 'cell', 'chart', 'embed', 'admonition', 'disclosure', 'summary',
     'definitionList', 'definitionTerm', 'definitionDescription', 'slide', 'page', 'note']);
 
 /** Node types written as their children alone: blocks when one of their children is. */
@@ -972,6 +973,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
      */
     private rendersOwnChildren(node: OfficeContentNode): boolean {
         if (node.type === 'sheet') return true;
+        if (node.type === 'summary') return !!summaryLine(node);
         if (node.type === 'table') return this.tableHasRowSpan(node) || this.firstRowIsHeader(node);
         if (node.type === 'row') {
             const cells = (node.children || []).filter(c => c.type === 'cell');
@@ -1988,13 +1990,26 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 return `${extraAnchors}<dd${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</dd>`;
 
             case 'disclosure': {
-                // A <details>: its summary (none where the source gave none, which a browser shows as
-                // "Details"), then its blocks; open as the document opens where it was.
+                // A <details>: its summary (its first child, see the summary case; none where the source gave
+                // none, which a browser shows as "Details"), then its blocks; open as the document opens where it was.
                 const meta = node.metadata as DisclosureMetadata | undefined;
-                const summary = typeof meta?.summary === 'string' ? meta.summary.replace(/\s+/g, ' ').trim() : '';
                 // (`open=""`, which XHTML, EPUB's, reads as well as HTML: a bare `open` is not well-formed XML.)
                 const open = meta?.open ? ' open=""' : '';
-                return `${extraAnchors}<details${idAttr}${className}${mappedAttrs}${styleAttr}${open}>${summary ? `<summary>${this.escape(summary)}</summary>` : ''}${childrenOutput}</details>`;
+                return `${extraAnchors}<details${idAttr}${className}${mappedAttrs}${styleAttr}${open}>${childrenOutput}</details>`;
+            }
+
+            case 'summary': {
+                // A <summary>: one line of text in it as that line (a <p> in it would put the line under the
+                // marker), anything else as its blocks.
+                const line = summaryLine(node);
+                if (!line) return `${extraAnchors}<summary${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</summary>`;
+                this.inlineDepth++;
+                try {
+                    const inline = line.children?.length ? await this.processNodeArray(line.children) : this.escape(line.text ?? '');
+                    return `${extraAnchors}<summary${idAttr}${className}${mappedAttrs}${styleAttr}>${inline}</summary>`;
+                } finally {
+                    this.inlineDepth--;
+                }
             }
 
             // Rendered through their children only. Listed explicitly, with no `default`, so that
@@ -2053,6 +2068,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             case 'definitionDescription':
             case 'disclosure':
                 return 'div';
+            case 'summary':
+                return 'summary';
         }
     }
 

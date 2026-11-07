@@ -2995,7 +2995,7 @@ export interface BlobLike {
 /**
  * Types of content nodes in the AST.
  */
-export type OfficeContentNodeType = 'paragraph' | 'heading' | 'table' | 'list' | 'text' | 'image' | 'chart' | 'drawing' | 'slide' | 'note' | 'sheet' | 'row' | 'cell' | 'page' | 'break' | 'code' | 'comment' | 'header' | 'footer' | 'slideMaster' | 'embed' | 'admonition' | 'definitionList' | 'definitionTerm' | 'definitionDescription' | 'disclosure';
+export type OfficeContentNodeType = 'paragraph' | 'heading' | 'table' | 'list' | 'text' | 'image' | 'chart' | 'drawing' | 'slide' | 'note' | 'sheet' | 'row' | 'cell' | 'page' | 'break' | 'code' | 'comment' | 'header' | 'footer' | 'slideMaster' | 'embed' | 'admonition' | 'definitionList' | 'definitionTerm' | 'definitionDescription' | 'disclosure' | 'summary';
 
 /**
  * Supported MIME types for attachments.
@@ -3605,17 +3605,15 @@ export interface AdmonitionMetadata {
 }
 
 /**
- * Metadata for a `disclosure` node: a block a reader opens and closes (HTML `<details>`, its summary in
- * `<summary>`), in HTML, EPUB and Markdown (where it is that HTML, its body Markdown). Its `children`
- * are the blocks it shows when open. HTML, EPUB and Markdown write it back as `<details>`; every other
- * writer, which has no such block, writes its summary as a bold line followed by the body, all shown.
+ * Metadata for a `disclosure` node: a block a reader opens and closes (HTML `<details>`), in HTML, EPUB
+ * and Markdown (where it is that HTML, its body Markdown). Its `children` are its summary, a `summary`
+ * node first (what it shows while closed: blocks, as `<summary>` holds any content, a heading, a link, a
+ * picture, a note, a line break, a nested disclosure), then the blocks it shows when open. With no
+ * `summary` child a browser shows "Details", and writers without the block write that. HTML, EPUB and
+ * Markdown write it back as `<details>`; every other writer, which has no such block, writes its summary
+ * in bold (its paragraphs' text bold, its other blocks as they are) followed by the body, all shown.
  */
 export interface DisclosureMetadata {
-    /**
-     * The summary shown while it is closed, as text (`<summary>`); absent where the source gives none,
-     * where a browser shows "Details" and writers without the block write that.
-     */
-    summary?: string;
     /** It is open (shows its body) as the document opens (`<details open>`). */
     open?: boolean;
     /** Unique anchor IDs for internal linking. */
@@ -4087,6 +4085,8 @@ export type OfficeContentNode = BaseContentNode & (
     | { type: 'definitionTerm'; metadata?: DefinitionMetadata }
     | { type: 'definitionDescription'; metadata?: DefinitionMetadata }
     | { type: 'disclosure'; metadata?: DisclosureMetadata }
+    /** A disclosure's summary (`<summary>`), its first child: blocks, with no metadata (see DisclosureMetadata). */
+    | { type: 'summary'; metadata?: undefined }
 );
 
 /**

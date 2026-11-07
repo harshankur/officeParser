@@ -291,6 +291,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
                 return this.renderBlocks(node.children); // containers: flatten (page/slide breaks handled by caller sequence)
             // (Opened before any writer but HTML's and Markdown's sees it, see disclosures: its summary in bold, then its body.)
             case 'disclosure': return this.renderBlocks(openedDisclosure(node));
+            // (A disclosure's summary is written by its disclosure; one standing alone is its blocks.)
+            case 'summary': return this.renderBlocks(node.children);
             case 'slideMaster': return ''; // template furniture, dropped
             default: {
                 // Exhaustiveness guard: a new OfficeContentNodeType must be classified here.

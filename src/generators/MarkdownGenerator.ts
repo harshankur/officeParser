@@ -1,6 +1,6 @@
 import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, DisclosureMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, EmbedSyntax, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, StrikethroughSyntax, TableMetadata, TextFormatting, TextMetadata, WikilinkSyntax } from '../types.js';
 import { captionOf } from '../utils/figureCaptions.js';
-import { disclosureSummary } from '../utils/disclosures.js';
+import { plainSummaryText, summaryLine } from '../utils/disclosures.js';
 import { sameQuote } from '../utils/quoteGroups.js';
 import { escapeHtml, isCssLength, isVideoId, markdownEscapeInline, markdownEscapePlain, markdownEscapeTags, markdownEscapeText, sanitizeCommentText, sanitizeCssValue, sanitizeImageUrl, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
 import { isDefaultHighlight } from '../utils/colorUtils.js';
@@ -1296,19 +1296,31 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 }
 
                 case 'disclosure': {
-                    // An HTML <details> block, as CommonMark has it: the tag and its summary, a blank line,
-                    // the body as Markdown, a blank line, the closing tag (each a block of its own, so the
-                    // body is read as Markdown). In one line of Markdown (a list item, a cell), where no
-                    // block goes, its summary in bold and then its body, reported.
+                    // An HTML <details> block, as CommonMark has it: the tag, its summary (see the summary
+                    // case), a blank line, the body as Markdown, a blank line, the closing tag (each a block
+                    // of its own, so the body is read as Markdown). In one line of Markdown (a list item, a
+                    // cell), where no block goes, its summary and then its body, reported.
                     const meta = node.metadata as DisclosureMetadata | undefined;
-                    const summary = typeof meta?.summary === 'string' ? meta.summary.replace(/\s+/g, ' ').trim() : '';
                     const body = trimAsciiWhitespace(childrenOutput);
+                    const summarized = node.children?.[0]?.type === 'summary';
                     if (this.inOneLine) {
                         this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'md', feature: 'a disclosure (<details>) in a list item or table cell (written open, its summary in bold)' });
-                        return `${this.deferAnchors(meta)}**${markdownEscapeInline(disclosureSummary(node))}** ${body}\n\n`;
+                        return `${this.deferAnchors(meta)}${summarized ? '' : '**Details** '}${body}\n\n`;
                     }
-                    const open = `<details${meta?.open ? ' open' : ''}>\n${summary ? `<summary>${this.escapeInHtmlBlock(summary)}</summary>\n` : ''}`;
-                    return `${this.anchorsBefore(meta)}${open}${body ? `\n${body}\n\n` : ''}</details>\n\n`;
+                    return `${this.anchorsBefore(meta)}<details${meta?.open ? ' open' : ''}>\n${body ? `${summarized ? '' : '\n'}${body}\n\n` : ''}</details>\n\n`;
+                }
+
+                case 'summary': {
+                    // A disclosure's summary: one line of plain text in a `<summary>` on the line after the
+                    // `<details>` tag; anything else (formatting, a link, a picture, a note, a line break, a
+                    // heading, a nested disclosure) as Markdown between a `<summary>` line and a `</summary>`
+                    // line, blank lines around it, which CommonMark reads as Markdown. In one line of Markdown,
+                    // plain text in bold, anything else as it is written there.
+                    const content = trimAsciiWhitespace(childrenOutput);
+                    const plain = plainSummaryText(node);
+                    if (this.inOneLine) return plain !== undefined ? (plain ? `**${markdownEscapeInline(plain)}** ` : '') : content ? `${content} ` : '';
+                    if (plain !== undefined) return plain ? `<summary>${this.escapeInHtmlBlock(plain)}</summary>\n\n` : '';
+                    return content ? `<summary>\n\n${content}\n\n</summary>\n\n` : '';
                 }
 
                 case 'definitionList':
@@ -1999,9 +2011,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 return co;
             case 'disclosure': {
                 const meta = n.metadata as DisclosureMetadata | undefined;
-                const summary = typeof meta?.summary === 'string' ? meta.summary.replace(/\s+/g, ' ').trim() : '';
-                return `<details${meta?.open ? ' open' : ''}>${summary ? `<summary>${esc(summary)}</summary>` : ''}${co}</details>`;
+                return `<details${meta?.open ? ' open' : ''}>${co}</details>`;
             }
+            case 'summary':
+                // (A lone plain paragraph as the summary's line, as HtmlGenerator writes it: a <p> in it puts the line under the marker.)
+                return `<summary>${summaryLine(n) && co.startsWith('<p>') && co.endsWith('</p>') ? co.slice(3, -4) : co}</summary>`;
         }
     }
 

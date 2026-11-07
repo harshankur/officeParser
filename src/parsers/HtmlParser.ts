@@ -982,6 +982,11 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
 /** What a container whose parts are HTML (an EPUB's chapters) tells the reading of each part. */
 export interface HtmlPartContext {
     /**
+     * The HTML stands in a disclosure's summary or body (a piece of a Markdown disclosure): a `<summary>` in
+     * it is no disclosure's summary, and is a block of its own, as one in a `<details>` is.
+     */
+    inDisclosure?: boolean;
+    /**
      * The name of the attachment a picture's `src` shows, when the container holds that picture as
      * a file of its own; undefined for any other source. The container makes the attachment, once
      * however many pictures show it: an EPUB's images were written into each chapter as data, a copy
@@ -1832,32 +1837,71 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
             // save. Any other caption, a <figcaption> and a table's <caption> (which the table's branch puts
             // before it), is a block of its own, which must not run into the picture before it.
             const isClass = (name: string) => (node.attributes?.class || '').split(/\s+/).includes(name);
-            // A <details>: a disclosure, its <summary> (the first) as text and the rest its blocks, a run of
-            // loose inline content among them a paragraph. Read as its text before, the collapsing was lost.
-            if (tagName === 'details') {
-                const summaryElement = node.children.find(c => c.type === 'element' && c.tagName === 'summary');
-                const summary = summaryElement ? plainTextOf(parseChildren(summaryElement, newFormatting, listContext)).replace(/\s+/g, ' ').trim() : '';
-                const kids = parseChildren({ ...node, children: node.children.filter(c => c !== summaryElement) }, newFormatting, listContext);
-                const body: OfficeContentNode[] = [];
+            // A <details>: a disclosure, its <summary> (the first) its first child, a `summary` node holding what
+            // the summary holds (a line of text, formatting, links, pictures, notes, breaks, headings, tables,
+            // nested disclosures), then the rest its blocks. In each, a run of loose inline content is a
+            // paragraph, and a block element (another <summary>, a <div>) stands apart from the text around it.
+            // Read as its text before, the collapsing was lost; its summary read as text lost all but its text.
+            // A <summary> that is no disclosure's summary, in a disclosure (one after its first, or in a piece of
+            // a Markdown disclosure): a block of its own, as a browser shows it, never run into the text around it.
+            if (tagName === 'summary' && (part.inDisclosure || (() => {
+                for (let up = node.parent; up; up = up.parent) if (up.type === 'element' && up.tagName === 'details') return up.children.find(c => c.type === 'element' && c.tagName === 'summary') !== node;
+                return false;
+            })())) {
+                const kids = parseChildren(node, newFormatting, listContext);
+                const blocks: OfficeContentNode[] = [];
                 let run: OfficeContentNode[] = [];
                 const flush = () => {
-                    const children = config.preserveXmlWhitespace ? run : trimBlockEdges(collapseSpacesAcrossNodes(run));
-                    if (children.some(c => c.type !== 'text' || c.text?.trim() || c.notes?.length)) body.push({ type: 'paragraph', children });
+                    const kept = config.preserveXmlWhitespace ? run : trimBlockEdges(collapseSpacesAcrossNodes(run));
+                    if (kept.some(c => c.type !== 'text' || c.text?.trim() || c.notes?.length)) blocks.push({ type: 'paragraph', children: kept });
                     run = [];
                 };
-                for (const kid of kids) {
-                    if (isBlockNode(kid)) { flush(); body.push(kid); } else run.push(kid);
-                }
+                for (const kid of kids) { if (isBlockNode(kid)) { flush(); blocks.push(kid); } else run.push(kid); }
                 flush();
+                return blocks;
+            }
+            if (tagName === 'details') {
+                const summaryElement = node.children.find(c => c.type === 'element' && c.tagName === 'summary');
+                const blocksOf = (children: HtmlNode[], holder: HtmlNode): OfficeContentNode[] => {
+                    const blocks: OfficeContentNode[] = [];
+                    let run: OfficeContentNode[] = [];
+                    const flush = () => {
+                        const kept = config.preserveXmlWhitespace ? run : trimBlockEdges(collapseSpacesAcrossNodes(run));
+                        if (kept.some(c => c.type !== 'text' || c.text?.trim() || c.notes?.length)) blocks.push({ type: 'paragraph', children: kept });
+                        run = [];
+                    };
+                    // Each run of inline children read at once (as one text: white space between them joins),
+                    // each block element on its own.
+                    let inline: HtmlNode[] = [];
+                    const read = (group: HtmlNode[]) => {
+                        if (!group.length) return;
+                        for (const kid of parseChildren({ ...holder, children: group }, newFormatting, listContext)) {
+                            if (isBlockNode(kid)) { flush(); blocks.push(kid); } else run.push(kid);
+                        }
+                    };
+                    for (const child of children) {
+                        if (child.type === 'element' && BLOCK_LEVEL_TAGS.has(child.tagName!)) {
+                            read(inline);
+                            inline = [];
+                            flush();
+                            read([child]);
+                            flush();
+                        } else inline.push(child);
+                    }
+                    read(inline);
+                    flush();
+                    return blocks;
+                };
+                const summary = summaryElement ? blocksOf(summaryElement.children, summaryElement) : [];
+                const body = blocksOf(node.children.filter(c => c !== summaryElement), node);
                 const meta: DisclosureMetadata = {
-                    ...(summary ? { summary } : {}),
                     ...(node.attributes?.open !== undefined ? { open: true } : {}),
                     ...(anchorIds.length ? { anchorIds } : {}),
                 };
                 // No text of its own, as a quote or an admonition has none: its blocks hold its text. A copy of
                 // its summary and body, made again at every level of nesting, was 200 times the input, and a
                 // writer gave a disclosure with no body its summary again as content.
-                return { type: 'disclosure', metadata: meta, children: body };
+                return { type: 'disclosure', metadata: meta, children: summary.length ? [{ type: 'summary', children: summary }, ...body] : body };
             }
             // A figure of one picture and its caption: the caption is the picture's (ImageMetadata.caption),
             // not a paragraph after it. A caption of more than text (a link, formatting, a block) stays a

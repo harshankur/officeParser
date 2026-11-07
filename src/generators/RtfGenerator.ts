@@ -514,6 +514,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                 case 'definitionList':
                 // (A disclosure is opened before this writer sees it, see disclosures: its summary a bold line, then its body.)
                 case 'disclosure':
+                case 'summary':
                     return childrenOutput;
             }
         };
