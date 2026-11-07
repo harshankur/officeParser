@@ -644,7 +644,7 @@ function unwrapAlignDivs(text: string): { text: string; align?: 'left' | 'center
 }
 
 /** Nodes the generator writes anchors for: waiting anchors go to the next of these. */
-const ANCHOR_HOLDERS = new Set<string>(['paragraph', 'heading', 'list', 'image', 'table', 'sheet', 'slide', 'page', 'code', 'break', 'admonition', 'definitionList']);
+const ANCHOR_HOLDERS = new Set<string>(['paragraph', 'heading', 'list', 'image', 'table', 'sheet', 'slide', 'page', 'code', 'break', 'admonition', 'definitionList', 'disclosure']);
 
 /**
  * A line starting an HTML block that can hold a table (CommonMark's HTML block start 6: a block-level
