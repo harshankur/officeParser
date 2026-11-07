@@ -2331,7 +2331,7 @@ export interface FallbackToHtmlConfig {
     alignment?: boolean;
     /** Internal-link/heading `<a id>`/`<a name>` anchor tags. */
     anchors?: boolean;
-    /** Nested-table and merged-cell (colspan/rowspan) HTML `<table>` fallback. */
+    /** Nested-table, merged-cell (colspan/rowspan) and disclosure-holding (`<details>` in a cell) HTML `<table>` fallback. */
     tables?: boolean;
     /**
      * YouTube embed `<div data-youtube-video>` vs. a plain link.
@@ -3610,8 +3610,9 @@ export interface AdmonitionMetadata {
  * node first (what it shows while closed: blocks, as `<summary>` holds any content, a heading, a link, a
  * picture, a note, a line break, a nested disclosure), then the blocks it shows when open. With no
  * `summary` child a browser shows "Details", and writers without the block write that. HTML, EPUB and
- * Markdown write it back as `<details>`; every other writer, which has no such block, writes its summary
- * in bold (its paragraphs' text bold, its other blocks as they are) followed by the body, all shown.
+ * Markdown write it back as `<details>` (Markdown: a list item or table holding one as HTML, whose cells
+ * and items hold blocks); every other writer, which has no such block, writes its summary in bold (its
+ * paragraphs' text bold, its other blocks as they are) followed by the body, all shown.
  */
 export interface DisclosureMetadata {
     /** It is open (shows its body) as the document opens (`<details open>`). */

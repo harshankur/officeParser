@@ -241,6 +241,9 @@ const trimBlockEdges = (markdown: string): string => trimEndChars(trimStartChars
 
 /** Appends a node's Markdown, leaving exactly one blank line before a separated block. */
 /** `html` with no line end that could end a Markdown HTML block: no blank line, no lone carriage return. */
+/** How deep holdsDisclosure looks for a disclosure among a node's descendants. */
+const MAX_DISCLOSURE_SEARCH_DEPTH = 256;
+
 const closedUpLines = (html: string): string => html.replace(/\r\n?/g, '\n').replace(/\n[ \t]*(?=\n)/g, '');
 
 const appendBlock = (output: TextBuilder, node: { type: string }, next: string): void =>
@@ -411,6 +414,10 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     private atLineStart = false;
     /** Rendering the cells of an HTML table (the fallback for merged cells, or the `html` table dialect): their content is HTML. */
     private inHtmlTable = 0;
+    /** Whether each node asked holds a disclosure (see holdsDisclosure). */
+    private disclosureHolders = new WeakMap<OfficeContentNode, boolean>();
+    /** List items written as HTML lists (see assignListDepths, writesItemAsHtml). */
+    private htmlItems = new WeakSet<OfficeContentNode>();
     /** The last character written before the node being rendered, within its parent ('' for none). */
     private previousOutputChar = '';
     /** The sibling after the node being rendered, if any. */
@@ -920,6 +927,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 }
 
                 case 'list': {
+                    if (this.writesItemAsHtml(node)) return await this.listItemAsHtml(node);
                     const meta = node.metadata as ListMetadata;
                     const indentSpaces = ' '.repeat(4);
                     // Clamp the nesting depth: `indentation` derives from an uncapped document `ilvl`,
@@ -1477,7 +1485,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             return override;
         }
 
-        const walkedByProcessor = node.type === 'table' || node.type === 'sheet';
+        const walkedByProcessor = node.type === 'table' || node.type === 'sheet' || this.writesItemAsHtml(node);
         const wasInImplicitBold = this.inImplicitBold;
         if (node.type === 'heading' && this.hasUniformFormatting(node, f => f?.bold === true)) this.inImplicitBold = true;
         let childrenOutput = '';
@@ -1593,13 +1601,18 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
      */
     private assignListDepths(siblings: OfficeContentNode[]): void {
         let previous = -1;
+        // Whether the item before was written as HTML (see writesItemAsHtml).
+        let previousHtml = false;
         for (const node of siblings) {
             if (node.type === 'list') {
                 const depth = Math.min(clampRepeat((node.metadata as ListMetadata | undefined)?.indentation || 0, 64), previous + 1);
                 this.listDepths.set(node, depth);
                 previous = depth;
+                previousHtml = this.holdsDisclosure(node) || (depth > 0 && previousHtml);
+                if (previousHtml) this.htmlItems.add(node);
             } else if (!isStandingNote(node)) {
                 previous = -1;
+                previousHtml = false;
             }
         }
     }
@@ -1697,8 +1710,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             return '\n' + await this.renderTableAsHtml(node) + '\n';
         }
 
-        // If table is complex, nested, or uses merges, fallback to HTML for high fidelity if allowed
-        const isComplex = this.hasNestedTable(node) || this.hasColspanOrRowspan(node);
+        // If table is complex, nested, uses merges or holds a disclosure (a block a pipe-table cell cannot
+        // hold, which an HTML cell does), fallback to HTML for high fidelity if allowed
+        const isComplex = this.hasNestedTable(node) || this.hasColspanOrRowspan(node) || this.holdsDisclosure(node);
         if (this.resolvedFallbackToHtml.tables && isComplex) {
             return '\n' + await this.renderTableAsHtml(node) + '\n';
         }
@@ -1854,6 +1868,59 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         }
 
         return `\n${tableOutput}\n`;
+    }
+
+    /** Whether a disclosure stands among a node's descendants (not its notes), each node asked once. */
+    private holdsDisclosure(node: OfficeContentNode, depth = 0): boolean {
+        let known = this.disclosureHolders.get(node);
+        if (known === undefined) {
+            known = false;
+            for (const child of node.children ?? []) {
+                if (child.type === 'disclosure' || (depth < MAX_DISCLOSURE_SEARCH_DEPTH && this.holdsDisclosure(child, depth + 1))) { known = true; break; }
+            }
+            this.disclosureHolders.set(node, known);
+        }
+        return known;
+    }
+
+    /**
+     * Whether a list item is written as an HTML list (see listItemAsHtml): one holding a disclosure, a block
+     * a Markdown item's one line cannot hold, and a nested item after one (a Markdown item cannot nest
+     * under HTML), where Markdown blocks go (not in a pipe-table cell, a definition or another item's line;
+     * an HTML cell writes its items as HTML already).
+     */
+    private writesItemAsHtml(node: OfficeContentNode): boolean {
+        return node.type === 'list' && !this.inOneLine && this.inHtmlTable === 0 && (this.htmlItems.has(node) || this.holdsDisclosure(node));
+    }
+
+    /**
+     * A list item holding a disclosure, as an HTML block of its own: its content as an HTML table cell's
+     * is written (a disclosure as `<details>` with its `<summary>`, whatever the summary holds), in a `<ul>`
+     * or `<ol start>` of its own (a task's in the editor's task list), nested in a `<ul>` for each level of
+     * its depth. The HTML parser reads it back as that item, its depth, number and task box, the disclosure in it. Written in the item's one
+     * line, the disclosure was its summary and body as text, which read back as no disclosure.
+     */
+    private async listItemAsHtml(node: OfficeContentNode): Promise<string> {
+        const meta = node.metadata as ListMetadata | undefined;
+        let content = '';
+        this.inHtmlTable++;
+        try {
+            for (const child of this.optimizeNodes(node.children ?? [])) {
+                content += await this.processNodeRecursive(child, (n, co) => this.htmlCellNode(n, co));
+            }
+        } finally {
+            this.inHtmlTable--;
+        }
+        const depth = this.listDepths.get(node) ?? clampRepeat(meta?.indentation || 0, 64);
+        // A task item as the HTML reader reads one back (the editor's task list), any other as an HTML cell's item.
+        let item: string;
+        if (meta?.isTask) {
+            const { attr, extra } = this.htmlIds(meta);
+            item = `<ul data-type="taskList"><li data-checked="${meta.checked ? 'true' : 'false'}"${attr}>${extra}${content}</li></ul>`;
+        } else item = await this.htmlCellNode(node, content);
+        // (Nothing in it can end the HTML block: its lines are closed up, and blank lines stand around it.)
+        item = closedUpLines(item);
+        return `\n${'<ul>'.repeat(depth)}${item}${'</ul>'.repeat(depth)}\n\n`;
     }
 
     private hasNestedTable(node: OfficeContentNode): boolean {

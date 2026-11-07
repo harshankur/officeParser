@@ -342,8 +342,8 @@
             in HTML, EPUB and Markdown, where it is that HTML block with Markdown inside). Carries
             <code>DisclosureMetadata</code>: <code>open</code> and <code>anchorIds</code>. Its <code>children</code> are its
             summary, a <code>summary</code> node first where it has one, then the blocks it shows when open. Written back as
-            <code>&lt;details&gt;</code> in HTML, EPUB and Markdown; every other writer writes its summary in bold followed by
-            its body, all shown.</li>
+            <code>&lt;details&gt;</code> in HTML, EPUB and Markdown (a Markdown list item or table holding one is written as
+            HTML); every other writer writes its summary in bold followed by its body, all shown.</li>
         <li><strong><code>summary</code></strong>: A disclosure's summary (<code>&lt;summary&gt;</code>), what it shows while
             closed: its first child, with no metadata. Its <code>children</code> are blocks, as <code>&lt;summary&gt;</code>
             holds any content: a paragraph for a line of text (its formatting, links, pictures, notes and line breaks kept),
