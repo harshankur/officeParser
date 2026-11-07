@@ -1,6 +1,6 @@
 import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, DisclosureMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, EmbedSyntax, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, StrikethroughSyntax, TableMetadata, TextFormatting, TextMetadata, WikilinkSyntax } from '../types.js';
 import { captionOf } from '../utils/figureCaptions.js';
-import { plainSummaryText, summaryLine } from '../utils/disclosures.js';
+import { plainSummaryText, summaryLine, summaryOf } from '../utils/disclosures.js';
 import { sameQuote } from '../utils/quoteGroups.js';
 import { escapeHtml, isCssLength, isVideoId, markdownEscapeInline, markdownEscapePlain, markdownEscapeTags, markdownEscapeText, sanitizeCommentText, sanitizeCssValue, sanitizeImageUrl, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
 import { isDefaultHighlight } from '../utils/colorUtils.js';
@@ -12,6 +12,7 @@ import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { TextBuilder, trimAsciiWhitespace, trimEndChars, trimStartChars } from '../utils/textUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
+import { isBlockInParagraph } from '../utils/nodeTypeUtils.js';
 
 /**
  * A fully-resolved dialect: every capability collapsed to its canonical syntax variant (or `'none'`).
@@ -72,7 +73,7 @@ const markdownTitle = (title: unknown): string => ` "${markdownEscapePlain(foldL
 const SEPARATED_BLOCK_TYPES = new Set(['code', 'table', 'sheet', 'slide', 'page', 'embed', 'break']);
 
 /** Nodes that are blocks of their own in Markdown (the parts of a definition list are laid out by it). */
-const BLOCK_NODE_TYPES = new Set(['paragraph', 'heading', 'list', 'table', 'sheet', 'slide', 'page', 'admonition', 'disclosure', 'definitionList', 'embed', 'header', 'footer', 'chart', 'drawing', 'slideMaster']);
+const BLOCK_NODE_TYPES = new Set(['paragraph', 'heading', 'list', 'table', 'sheet', 'slide', 'page', 'admonition', 'disclosure', 'summary', 'definitionList', 'embed', 'header', 'footer', 'chart', 'drawing', 'slideMaster']);
 
 /**
  * `text` as a code span: fenced by one backtick more than its longest run of them, and padded with a
@@ -131,6 +132,51 @@ const isBlockInLine = (node: OfficeContentNode): boolean =>
     || (node.type === 'code' && (node.metadata as CodeMetadata | undefined)?.math !== 'inline')
     // A captioned picture is a figure block.
     || (node.type === 'image' && !!captionOf(node));
+
+/** `text` without the line ends that end it. */
+const withoutTrailingLineEnds = (text: string): string => {
+    let end = text.length;
+    while (end > 0 && (text.charCodeAt(end - 1) === 10 || text.charCodeAt(end - 1) === 13)) end--;
+    return text.slice(0, end);
+};
+
+/**
+ * Blocks with each paragraph holding a block in HTML (see isBlockInParagraph) as its parts, as
+ * HtmlGenerator writes one: each run of inline content a paragraph, each block on its own. The first part
+ * takes the paragraph's ids, notes and comments (a block first, its ids joined to its own). Written whole in
+ * an HTML cell or item, the `<p>` closed at the block and the `</p>` after it read back as an empty paragraph,
+ * one more on every save in a disclosure.
+ */
+const paragraphsSplitAtBlocks = (nodes: OfficeContentNode[]): OfficeContentNode[] => {
+    let out: OfficeContentNode[] | undefined;
+    for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i];
+        if (node.type !== 'paragraph' || !node.children?.some(isBlockInParagraph)) { out?.push(node); continue; }
+        out ??= nodes.slice(0, i);
+        const anchorIds = (node.metadata as { anchorIds?: string[] } | undefined)?.anchorIds;
+        const later = { ...node, metadata: node.metadata ? { ...(node.metadata as object), anchorIds: undefined } as any : undefined, notes: undefined, comments: undefined };
+        let first = true;
+        let run: OfficeContentNode[] = [];
+        const flush = () => {
+            if (run.some(c => c.type !== 'text' || trimAsciiWhitespace(c.text ?? '') || c.notes?.length)) {
+                out!.push({ ...(first ? node : later), children: run });
+                first = false;
+            }
+            run = [];
+        };
+        for (const child of node.children) {
+            if (!isBlockInParagraph(child)) { run.push(child); continue; }
+            flush();
+            if (first && anchorIds?.length) {
+                const own = (child.metadata as { anchorIds?: string[] } | undefined)?.anchorIds ?? [];
+                out.push({ ...child, metadata: { ...(child.metadata as object), anchorIds: [...anchorIds, ...own] } as any });
+            } else out.push(child);
+            first = false;
+        }
+        flush();
+    }
+    return out ?? nodes;
+};
 
 /**
  * A paragraph's or heading's children without the line breaks (and blank runs among them) that end it
@@ -416,6 +462,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     private inHtmlTable = 0;
     /** Whether each node asked holds a disclosure (see holdsDisclosure). */
     private disclosureHolders = new WeakMap<OfficeContentNode, boolean>();
+    /** The summaries of the disclosures being written (each its first child): any other summary node is a block of its own (see htmlCellNode). */
+    private disclosureSummaries = new WeakSet<OfficeContentNode>();
     /** List items written as HTML lists (see assignListDepths, writesItemAsHtml). */
     private htmlItems = new WeakSet<OfficeContentNode>();
     /** The last character written before the node being rendered, within its parent ('' for none). */
@@ -1486,12 +1534,15 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         }
 
         const walkedByProcessor = node.type === 'table' || node.type === 'sheet' || this.writesItemAsHtml(node);
+        if (node.type === 'disclosure') { const summary = summaryOf(node); if (summary) this.disclosureSummaries.add(summary); }
         const wasInImplicitBold = this.inImplicitBold;
         if (node.type === 'heading' && this.hasUniformFormatting(node, f => f?.bold === true)) this.inImplicitBold = true;
         let childrenOutput = '';
         if (!walkedByProcessor && node.children && node.children.length > 0) {
             // Optimization: Merge adjacent text nodes with identical formatting
-            const optimizedChildren = this.optimizeNodes(node.type === 'paragraph' || node.type === 'heading' ? withoutBreaksAtBlocks(node.children) : node.children);
+            let optimizedChildren = this.optimizeNodes(node.type === 'paragraph' || node.type === 'heading' ? withoutBreaksAtBlocks(node.children) : node.children);
+            // (In an HTML cell or item, a container's paragraphs holding blocks as their parts: see paragraphsSplitAtBlocks.)
+            if (this.inHtmlTable > 0 && node.type !== 'paragraph' && node.type !== 'heading') optimizedChildren = paragraphsSplitAtBlocks(optimizedChildren);
             this.assignListDepths(optimizedChildren);
             // What a paragraph, list item or definition holds starts a line, where a block marker at
             // its start must be escaped (`- # x` is an item holding a heading); a heading or cell holds
@@ -1905,7 +1956,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         let content = '';
         this.inHtmlTable++;
         try {
-            for (const child of this.optimizeNodes(node.children ?? [])) {
+            for (const child of paragraphsSplitAtBlocks(this.optimizeNodes(node.children ?? []))) {
                 content += await this.processNodeRecursive(child, (n, co) => this.htmlCellNode(n, co));
             }
         } finally {
@@ -2055,7 +2106,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             case 'embed': {
                 const meta = n.metadata as EmbedMetadata | undefined;
                 const url = meta?.url || (meta?.videoId ? `https://youtu.be/${meta.videoId}` : '');
-                return url ? link(url, 'external', undefined, esc(meta?.label || url)) : co;
+                // (A block: in a paragraph of its own, never run into the text before it.)
+                return url ? `<p>${link(url, 'external', undefined, esc(meta?.label || url))}</p>` : co;
             }
             case 'comment':
                 if (isSourceComment(n)) return `<!--${closedUpLines(sanitizeCommentText(n.text || ''))}-->`;
@@ -2071,16 +2123,38 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             case 'header':
             case 'footer':
             case 'slideMaster':
-            case 'admonition':
+                return co;
+            // As HtmlGenerator writes them, with their ids: written as their content alone, a term, its
+            // description and the text around them ran together, and an admonition lost its kind.
+            case 'admonition': {
+                const meta = n.metadata as AdmonitionMetadata | undefined;
+                const rawType = String(meta?.admonitionType || 'note').toLowerCase();
+                const type = MD_ADMONITION_TYPES.has(rawType) ? rawType : 'note';
+                const { attr, extra } = this.htmlIds(meta);
+                // (Its end tag after its content on one line: a line of a lone `</div>`, after a nested table's
+                // last line, ends the Markdown block there, and the rest of the item is read as Markdown.)
+                const body = withoutTrailingLineEnds(co);
+                // A title, which the HTML reader has no place for, is its bold first line (as the fenced syntaxes
+                // write it), on a line of its own as the paragraph it reads back as is written.
+                const title = meta?.title ? `<p><b>${esc(foldLines(meta.title))}</b></p>${body ? '\n' : ''}` : '';
+                return `${extra}<div class="admonition admonition-${type}" data-type="${type}"${attr}>${title}${body}</div>`;
+            }
             case 'definitionList':
             case 'definitionTerm':
-            case 'definitionDescription':
-                return co;
+            case 'definitionDescription': {
+                const tag = n.type === 'definitionList' ? 'dl' : n.type === 'definitionTerm' ? 'dt' : 'dd';
+                const { attr, extra } = this.htmlIds(n.metadata);
+                return `${extra}<${tag}${attr}>${co}</${tag}>`;
+            }
             case 'disclosure': {
                 const meta = n.metadata as DisclosureMetadata | undefined;
-                return `<details${meta?.open ? ' open' : ''}>${co}</details>`;
+                const { attr, extra } = this.htmlIds(meta);
+                return `${extra}<details${attr}${meta?.open ? ' open' : ''}>${co}</details>`;
             }
             case 'summary':
+                // A summary that is no disclosure's (built by hand) is a block of its own, as a browser shows a
+                // <summary> outside a <details>: written as one, it ran into the text around it.
+                if (!this.disclosureSummaries.has(n)) return `<div>${withoutTrailingLineEnds(co)}</div>`;
                 // (A lone plain paragraph as the summary's line, as HtmlGenerator writes it: a <p> in it puts the line under the marker.)
                 return `<summary>${summaryLine(n) && co.startsWith('<p>') && co.endsWith('</p>') ? co.slice(3, -4) : co}</summary>`;
         }
@@ -2145,7 +2219,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 // Cell content as HTML, which is what the cell is (a Markdown renderer shows an HTML
                 // block as it is, and the parser reads it with the HTML parser): the markup
                 // HtmlGenerator writes for each inline construct, so nothing in a cell is dropped.
-                for (const child of this.optimizeNodes(node.children)) {
+                for (const child of paragraphsSplitAtBlocks(this.optimizeNodes(node.children))) {
                     content += await this.processNodeRecursive(child, (n, co) => this.htmlCellNode(n, co));
                 }
                 // (Whatever made it, the blocks of a cell standing apart or an onNode string: nothing in it can end the block.)

@@ -1,5 +1,27 @@
 import { mapNodeLists, NodeMemo, nodeMemo } from './nodeListUtils.js';
-import { OfficeContentNode, OfficeContentNodeType, OfficeParserAST } from '../types.js';
+import { BreakMetadata, CodeMetadata, OfficeContentNode, OfficeContentNodeType, OfficeParserAST } from '../types.js';
+import { captionOf } from './figureCaptions.js';
+import { isSourceComment } from './commentUtils.js';
+
+/** Node types written as block elements in HTML (a <div>, <table>, <ul>, <dl>, <section>...), which a <p> cannot hold. */
+const HTML_BLOCK_TYPES = new Set<string>(['paragraph', 'heading', 'list', 'table', 'sheet', 'row', 'cell', 'chart', 'embed', 'admonition', 'disclosure', 'summary',
+    'definitionList', 'definitionTerm', 'definitionDescription', 'slide', 'page', 'note']);
+
+/** Node types written in HTML as their children alone: blocks when one of their children is. */
+const HTML_TRANSPARENT_TYPES = new Set<string>(['drawing', 'header', 'footer', 'slideMaster']);
+
+/**
+ * Whether a paragraph's child is a block in HTML, which a `<p>` cannot hold: a block node, a captioned
+ * picture (a `<figure>`), a code block or display math, a rule or page break, or a node written as its
+ * children (or a comment) holding one. In a `<p>`, a browser and the HTML reader close the paragraph at
+ * it, and the `</p>` after it is an empty paragraph of its own; the writers of HTML set it apart.
+ */
+export const isBlockInParagraph = (child: OfficeContentNode): boolean =>
+    HTML_BLOCK_TYPES.has(child.type)
+    || (child.type === 'image' && !!captionOf(child))
+    || (child.type === 'code' && (child.metadata as CodeMetadata | undefined)?.math !== 'inline')
+    || (child.type === 'break' && ['thematic', 'page'].includes((child.metadata as BreakMetadata | undefined)?.breakType ?? ''))
+    || ((HTML_TRANSPARENT_TYPES.has(child.type) || (child.type === 'comment' && !isSourceComment(child))) && !!child.children?.some(isBlockInParagraph));
 
 /** Every node type the AST defines (a record, so a type added to the union must be added here). */
 const KNOWN_NODE_TYPES: Record<OfficeContentNodeType, true> = {

@@ -12,13 +12,8 @@ import { isSourceComment } from '../utils/commentUtils.js';
 import { clampInt } from '../utils/numberUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
 import { MAX_LAYOUT_COLUMNS } from '../utils/tableLayout.js';
+import { isBlockInParagraph } from '../utils/nodeTypeUtils.js';
 
-/** Node types written as block elements (a <div>, <table>, <ul>, <dl>, <section>...), which a <p> cannot hold. */
-const BLOCK_TYPES = new Set<string>(['paragraph', 'heading', 'list', 'table', 'sheet', 'row', 'cell', 'chart', 'embed', 'admonition', 'disclosure', 'summary',
-    'definitionList', 'definitionTerm', 'definitionDescription', 'slide', 'page', 'note']);
-
-/** Node types written as their children alone: blocks when one of their children is. */
-const TRANSPARENT_TYPES = new Set<string>(['drawing', 'header', 'footer', 'slideMaster']);
 /** The sheets whose tab is marked current without the script, each by a rule of its own (see sheetTabsWithoutScript). */
 const MAX_NO_SCRIPT_TAB_RULES = 200;
 
@@ -59,14 +54,6 @@ function workbookTextOf(content: OfficeContentNode[]): { font?: string; size?: s
     const size = most(sizes);
     return { ...(font !== undefined && font !== 'monospace' ? { font } : {}), ...(size !== undefined ? { size } : {}) };
 }
-
-const isBlockInParagraph = (child: OfficeContentNode): boolean =>
-    BLOCK_TYPES.has(child.type)
-    // A captioned picture is a <figure>, a block.
-    || (child.type === 'image' && !!captionOf(child))
-    || (child.type === 'code' && (child.metadata as CodeMetadata | undefined)?.math !== 'inline')
-    || (child.type === 'break' && ['thematic', 'page'].includes((child.metadata as { breakType?: string } | undefined)?.breakType ?? ''))
-    || ((TRANSPARENT_TYPES.has(child.type) || (child.type === 'comment' && !isSourceComment(child))) && !!child.children?.some(isBlockInParagraph));
 
 /**
  * Elements a styleMap can write a paragraph as that hold flow content (blocks included), so a block the
