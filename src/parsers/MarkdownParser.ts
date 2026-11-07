@@ -2914,6 +2914,14 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         };
         const pushBlocks = (text: string): void => {
             if (!trimAsciiWhitespace(text)) return;
+            // From its first line of content: the blank lines a closed container leaves before it are no block.
+            let start = 0;
+            for (let i = 0; i < text.length; i++) {
+                const c = text.charCodeAt(i);
+                if (c === 10) start = i + 1;
+                else if (c !== 32 && c !== 9 && c !== 13) break;
+            }
+            text = text.slice(start);
             out().push(placeholder('LIFTED_BLOCKS', liftedBlocks.length));
             liftedBlocks.push(text);
         };
@@ -3137,6 +3145,11 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         };
         for (const line of lines) {
             checkAbortSignal(config.abortSignal);
+            // A blank line before any block (a text's first lines: blank lines inside a raw block are its
+            // separators) starts none and opens no paragraph, as at the start of a document (CommonMark).
+            // Taken as paragraph text, it kept a list item after it in the block, whose lines the list
+            // branch dropped (`\n1.\nw1` lost `w1`).
+            if (!currentSubBlock.length && !trimAsciiWhitespace(line)) continue;
             // Paragraph text is open when the sub-block holds lines that are neither a list's nor a
             // table's: what follows it may continue it rather than start a block (CommonMark).
             const inParagraph: boolean = currentSubBlock.length > 0 && !inList && !inTable;
@@ -3851,9 +3864,11 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     };
                     content.push(listNode);
                     item = { node: listNode, lines: [itemText] };
-                } else if (item && trimAsciiWhitespace(line).length > 0 && /^(?: {2,}|\t)/.test(line)) {
-                    // Indented continuation line: part of the item's text (only lines of text: no
-                    // nested code, quote or paragraph).
+                } else if (item && trimAsciiWhitespace(line).length > 0) {
+                    // Indented continuation line, or a lazy one (CommonMark's): part of the item's text (only
+                    // lines of text: no nested code, quote or paragraph). A line in a list block is never
+                    // dropped: one that is neither (a block whose first line lost its indentation, or
+                    // anchors, before it was read as a list) was, with its text.
                     item.lines.push(trimStartChars(line, ' \t'));
                 }
             }
