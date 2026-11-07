@@ -676,34 +676,19 @@ function htmlTableDepthChange(text: string): number {
     return (text.match(/<table\b/gi)?.length ?? 0) - (text.match(/<\/table\s*>/gi)?.length ?? 0);
 }
 
-/** How deeply disclosures nest in Markdown (see groupDisclosures): deeper, a disclosure's tags go and its text stays. */
+/** How deeply disclosures nest in Markdown (see planDisclosures): deeper, a disclosure's tags go and its text stays. */
 const MAX_DISCLOSURE_DEPTH = 16;
-
-/** A `</table>` closing tag, read where it starts. */
-const TABLE_CLOSE_TAG = /<\/table\s*>/iy;
-
-/**
- * A block (see splitIntoBlocks), or a part of one cut at a disclosure's tag: its text, and whether all
- * of it is raw HTML. A part with `tag` stands for a closing tag a quote, list item or heading held and
- * that closes what was opened outside it (see containerTags): it has no text.
- */
-interface BlockPart { text: string; html: boolean; tag?: { summary: boolean } }
-
-/**
- * A disclosure's or summary's tag in a block: where it starts and ends, whether it opens one, and
- * whether it is a summary's. `escape` marks a closing tag inside a quote, list item or heading that
- * closes what was opened outside it (see containerTags).
- */
-interface DisclosureTag { at: number; end: number; open: boolean; summary: boolean; escape?: 'quote' | 'list' | 'heading'; htmlLine?: boolean }
-
-/** The tags of a block, and where its raw HTML starts (see disclosureTags). */
-interface BlockTags { tags: DisclosureTag[]; htmlFrom: number }
 
 /** Whether a text holds anything that may be a disclosure's or summary's tag. */
 const MAY_HOLD_DISCLOSURE_TAG = /<\/?(?:details|summary)/i;
 
-/** A line that is a disclosure's or summary's tag starting an HTML block (CommonMark's condition 6), up to three spaces in. */
-const DISCLOSURE_TAG_LINE = /^ {0,3}<\/?(?:details|summary)(?=[\s/>]|$)/i;
+/**
+ * A line that starts with a disclosure's tag or a summary's end tag, up to three spaces in (an HTML block,
+ * CommonMark's condition 6): it ends a list item or quote before it (see splitRaw). A `<summary>` line does
+ * not: one with no disclosure open is 8.6.0's text of the quote or item, and a disclosure's summary follows
+ * its `<details>` line, which ends them already.
+ */
+const DISCLOSURE_TAG_LINE = /^ {0,3}(?:<details|<\/details|<\/summary)(?=[\s/>]|$)/i;
 
 /** CommonMark's HTML block start condition 1, whose block a renderer passes through whole: a `<pre>` (or a raw-text element). */
 const RAW_HTML_BLOCK_START = /^ {0,3}<(?:pre|script|style|textarea)(?=[\s>]|$)/i;
@@ -732,163 +717,437 @@ class QuoteFinder {
     }
 }
 
+/**
+ * Where a string next occurs in one text, each string's last answer kept: asked again from a later place
+ * that answer still holds (none before it), so the openers of a run of comments, declarations or raw text
+ * elements that never end search the rest of the text once between them, not once each.
+ */
+class NeedleFinder {
+    private last = new Map<string, { from: number; at: number }>();
+    constructor(private readonly text: string) {}
+    find(needle: string, from: number): number {
+        const last = this.last.get(needle);
+        if (last && from >= last.from && (last.at === -1 || last.at >= from)) return last.at;
+        const at = this.text.indexOf(needle, from);
+        this.last.set(needle, { from, at });
+        return at;
+    }
+}
+
+/** A text's finders (see QuoteFinder, NeedleFinder), its ASCII lower case for end tags, and its code spans' closers. */
+class TextFinders {
+    readonly quotes: QuoteFinder;
+    readonly next: NeedleFinder;
+    private lowerNext?: NeedleFinder;
+    private closer?: (from: number, length: number) => number;
+    constructor(readonly text: string) {
+        this.quotes = new QuoteFinder(text);
+        this.next = new NeedleFinder(text);
+    }
+    /** Where `needle` (lower case) next occurs from `from`, ASCII case ignored. */
+    findLower(needle: string, from: number): number {
+        this.lowerNext ??= new NeedleFinder(this.text.replace(/[A-Z]+/g, s => s.toLowerCase()));
+        return this.lowerNext.find(needle, from);
+    }
+    /** Where the code span a run of `length` backticks ending at `from` opens closes (see codeSpanCloser), or -1. */
+    codeSpanClose(from: number, length: number): number {
+        this.closer ??= codeSpanCloser(this.text);
+        return this.closer(from, length);
+    }
+}
+
 /** Whether a character is HTML white space. */
 const isHtmlSpace = (ch: string | undefined): boolean => ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f';
 
+/** Whether a character is an ASCII letter. */
+const isAsciiLetter = (ch: string | undefined): boolean => ch !== undefined && ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z'));
+
 /**
- * Where the tag starting at `at` (a `<` or `</`, then a name of `nameLength` characters) ends, after
- * its `>`, or -1 when it is no whole tag. `strict` reads it as CommonMark reads raw HTML in a
- * paragraph (attributes of names, then values unquoted, `'single'` or `"double"` quoted); otherwise
- * as a browser reads HTML (anything between attributes, a quoted value running to its closing quote).
- * Either way a quoted value may hold `>`. With no `>` before the text ends the tag is not whole.
+ * The elements whose tags the disclosure tree builder follows (see DisclosureTreeBuilder): disclosures and
+ * summaries, and the elements that close what opened in them (CommonMark's block-level names, `<pre>`,
+ * list items, headings and tables). Every other tag is read past whole, its attributes with it.
  */
-function tagEnd(text: string, at: number, close: boolean, nameLength: number, strict: boolean, quotes: QuoteFinder): number {
-    let i = at + (close ? 2 : 1) + nameLength;
-    const after = text[i];
-    if (!(after === '>' || after === '/' || isHtmlSpace(after))) return -1;
-    if (close && strict) {
-        while (isHtmlSpace(text[i])) i++;
-        return text[i] === '>' ? i + 1 : -1;
+const TREE_TAG_NAMES = new Set(['details', 'summary', 'address', 'article', 'aside', 'blockquote', 'center', 'dialog', 'dir', 'div', 'dl',
+    'fieldset', 'figcaption', 'figure', 'footer', 'header', 'hgroup', 'main', 'menu', 'nav', 'ol', 'search', 'section', 'ul', 'pre', 'listing',
+    'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'table', 'caption', 'td', 'th', 'tr', 'tbody', 'thead', 'tfoot']);
+
+/** Elements whose content a browser reads as text to their end tag, no tags in it. */
+const RAW_TEXT_ELEMENTS = new Set(['script', 'style', 'textarea', 'title', 'xmp', 'iframe', 'noembed', 'noframes', 'noscript']);
+
+/** A tag the scanners found (see scanHtmlTags, scanInlineTags): where it is, its element and whether it ends one. */
+interface FoundTag { at: number; end: number; name: string; close: boolean }
+
+/**
+ * Where a tag a browser reads ends (after its `>`), from `i` just past its name, or -1 when it does not
+ * end before `to`: attributes as the tokenizer's states read them (a name, then `=` and a value quoted,
+ * which may hold `<` and `>`, or unquoted to white space or `>`). Each character is read once.
+ */
+function htmlTagEnd(text: string, i: number, to: number, quotes: QuoteFinder): number {
+    for (;;) {
+        while (i < to && (isHtmlSpace(text[i]) || text[i] === '/')) i++;
+        if (i >= to) return -1;
+        if (text[i] === '>') return i + 1;
+        // An attribute's name (a first `=` is part of it).
+        i++;
+        while (i < to && !isHtmlSpace(text[i]) && text[i] !== '/' && text[i] !== '>' && text[i] !== '=') i++;
+        while (i < to && isHtmlSpace(text[i])) i++;
+        if (text[i] !== '=') continue;
+        i++;
+        while (i < to && isHtmlSpace(text[i])) i++;
+        if (i >= to) return -1;
+        const quote = text[i];
+        if (quote === '"' || quote === "'") {
+            const end = quotes.find(quote, i + 1);
+            if (end === -1 || end >= to) return -1;
+            i = end + 1;
+        } else if (quote === '>') return i + 1;
+        else while (i < to && !isHtmlSpace(text[i]) && text[i] !== '>') i++;
     }
-    if (!strict) {
-        while (i < text.length) {
-            const ch = text[i];
-            if (ch === '>') return i + 1;
-            if (ch === '=') {
-                i++;
-                while (isHtmlSpace(text[i])) i++;
-                if (text[i] === '"' || text[i] === "'") {
-                    const end = quotes.find(text[i] as '"' | "'", i + 1);
-                    if (end === -1) return -1;
-                    i = end + 1;
-                }
-                continue;
-            }
-            i++;
+}
+
+/**
+ * The tags from `from` to `to` of a text as a browser's tokenizer reads HTML: every tag of any name with
+ * its attributes (`<abbr title="the <details> element">` is one tag, an abbr's), comments, declarations,
+ * processing instructions and stray `</` read past, and what a raw text element (`<script>`, `<textarea>`,
+ * ...) holds no tags. A tag, comment or raw text element left unfinished holds the rest of the range.
+ * Gives each tag of TREE_TAG_NAMES to `found`. Each character is read once; what is far is found by the
+ * text's finders.
+ */
+function scanHtmlTags(finders: TextFinders, from: number, to: number, found: (tag: FoundTag) => void): void {
+    const text = finders.text;
+    // The end of a comment or declaration from `at`: after `needle`, or -1 past the range.
+    const past = (needle: string, at: number): number => {
+        const end = finders.next.find(needle, at);
+        return end === -1 || end + needle.length > to ? -1 : end + needle.length;
+    };
+    for (let i = from; i < to;) {
+        const lt = finders.next.find('<', i);
+        if (lt === -1 || lt >= to) return;
+        const c = text[lt + 1];
+        if (c === '!' || c === '?') {
+            let end: number;
+            if (text.startsWith('<!--', lt)) {
+                end = text[lt + 4] === '>' ? lt + 5 : text.startsWith('->', lt + 4) ? lt + 6 : past('-->', lt + 4);
+            } else end = past('>', lt + 2);
+            if (end === -1) return;
+            i = end;
+            continue;
         }
-        return -1;
+        const close = c === '/';
+        const nameAt = close ? lt + 2 : lt + 1;
+        if (!isAsciiLetter(text[nameAt])) {
+            if (!close) { i = lt + 1; continue; }
+            // `</>` is nothing, `</` and anything else a comment to its `>`.
+            const end = text[nameAt] === '>' ? nameAt + 1 : past('>', nameAt);
+            if (end === -1) return;
+            i = end;
+            continue;
+        }
+        let n = nameAt + 1;
+        while (n < to && !isHtmlSpace(text[n]) && text[n] !== '/' && text[n] !== '>') n++;
+        const name = text.slice(nameAt, n).toLowerCase();
+        const end = htmlTagEnd(text, n, to, finders.quotes);
+        if (end === -1) return;
+        if (TREE_TAG_NAMES.has(name)) found({ at: lt, end, name, close });
+        i = end;
+        if (close) continue;
+        if (name === 'plaintext') return;
+        if (RAW_TEXT_ELEMENTS.has(name)) {
+            // To its end tag (`</name` then white space, `/` or `>`), which is then read as a tag.
+            let e = finders.findLower(`</${name}`, end);
+            while (e !== -1 && e < to && !(isHtmlSpace(text[e + name.length + 2]) || text[e + name.length + 2] === '/' || text[e + name.length + 2] === '>')) e = finders.findLower(`</${name}`, e + 1);
+            if (e === -1 || e >= to) return;
+            i = e;
+        }
+    }
+}
+
+/**
+ * Where a link's destination and title (CommonMark's inline link, from `i` after its `](`) end, after
+ * its `)`, or -1: an angle-bracketed destination, or one to white space or `)`; then a title quoted or in
+ * parentheses. What they hold (`[x](</details>)`) is no tag.
+ */
+function linkTailEnd(finders: TextFinders, i: number, to: number): number {
+    const text = finders.text;
+    const skipSpace = (at: number): number => { while (at < to && isHtmlSpace(text[at])) at++; return at; };
+    // The first of `chars` at or after `at`, or `to`.
+    const first = (at: number, chars: string[]): number => {
+        let end = to;
+        for (const ch of chars) { const e = finders.next.find(ch, at); if (e !== -1 && e < end) end = e; }
+        return end;
+    };
+    i = skipSpace(i);
+    if (text[i] === '<') {
+        const end = first(i + 1, ['>', '<', '\n']);
+        if (end >= to || text[end] !== '>') return -1;
+        i = end + 1;
+    } else i = first(i, [' ', '\t', '\n', ')']);
+    i = skipSpace(i);
+    const open = text[i];
+    if (open === '"' || open === "'" || open === '(') {
+        const end = open === '(' ? first(i + 1, [')']) : finders.quotes.find(open, i + 1);
+        if (end === -1 || end >= to) return -1;
+        i = skipSpace(end + 1);
+    }
+    return text[i] === ')' ? i + 1 : -1;
+}
+
+/**
+ * Where the raw HTML CommonMark reads at `lt` (a `<`) in a paragraph's text ends, and the tag's name
+ * when it is a tag: an open tag (a name, then attributes of names, values unquoted, `'single'` or
+ * `"double"` quoted, which may hold `>` and `<`), a closing tag, a comment, a processing instruction, a
+ * declaration or CDATA. Null when it is none (the `<` is text).
+ */
+function inlineHtmlAt(finders: TextFinders, lt: number, to: number): { end: number; name?: string; close?: boolean } | null {
+    const text = finders.text;
+    const past = (needle: string, at: number): number => {
+        const end = finders.next.find(needle, at);
+        return end === -1 || end + needle.length > to ? -1 : end + needle.length;
+    };
+    const c = text[lt + 1];
+    if (c === '!') {
+        let end = -1;
+        if (text.startsWith('<!--', lt)) end = text[lt + 4] === '>' ? lt + 5 : text.startsWith('->', lt + 4) ? lt + 6 : past('-->', lt + 4);
+        else if (text.startsWith('<![CDATA[', lt)) end = past(']]>', lt + 9);
+        else if (isAsciiLetter(text[lt + 2])) end = past('>', lt + 2);
+        return end === -1 ? null : { end };
+    }
+    if (c === '?') {
+        const end = past('?>', lt + 2);
+        return end === -1 ? null : { end };
+    }
+    const close = c === '/';
+    let i = close ? lt + 2 : lt + 1;
+    if (!isAsciiLetter(text[i])) return null;
+    const nameAt = i;
+    while (i < to && /[A-Za-z0-9-]/.test(text[i])) i++;
+    const name = text.slice(nameAt, i).toLowerCase();
+    if (close) {
+        while (i < to && isHtmlSpace(text[i])) i++;
+        return text[i] === '>' ? { end: i + 1, name, close } : null;
     }
     for (;;) {
         const spaceFrom = i;
-        while (isHtmlSpace(text[i])) i++;
-        if (text[i] === '>') return i + 1;
-        if (text[i] === '/' && text[i + 1] === '>') return i + 2;
-        if (i === spaceFrom || !/[A-Za-z_:]/.test(text[i] ?? '')) return -1;
-        while (/[A-Za-z0-9_.:-]/.test(text[i] ?? '')) i++;
+        while (i < to && isHtmlSpace(text[i])) i++;
+        if (i >= to) return null;
+        if (text[i] === '>') return { end: i + 1, name, close };
+        if (text[i] === '/' && text[i + 1] === '>') return { end: i + 2, name, close };
+        if (i === spaceFrom || !/[A-Za-z_:]/.test(text[i])) return null;
+        while (i < to && /[A-Za-z0-9_.:-]/.test(text[i])) i++;
         let j = i;
-        while (isHtmlSpace(text[j])) j++;
+        while (j < to && isHtmlSpace(text[j])) j++;
         if (text[j] !== '=') continue;
         j++;
-        while (isHtmlSpace(text[j])) j++;
+        while (j < to && isHtmlSpace(text[j])) j++;
         if (text[j] === '"' || text[j] === "'") {
-            const end = quotes.find(text[j] as '"' | "'", j + 1);
-            if (end === -1) return -1;
+            const end = finders.quotes.find(text[j] as '"' | "'", j + 1);
+            if (end === -1 || end >= to) return null;
             i = end + 1;
         } else {
-            const from = j;
-            while (j < text.length && !isHtmlSpace(text[j]) && !'"\'=<>`'.includes(text[j])) j++;
-            if (j === from) return -1;
+            const valueFrom = j;
+            while (j < to && !isHtmlSpace(text[j]) && !'"\'=<>`'.includes(text[j])) j++;
+            if (j === valueFrom) return null;
             i = j;
         }
     }
 }
 
 /**
- * The disclosure and summary tags of a block where it stands, in order, and where its raw HTML starts
- * (see groupDisclosures). As a browser has a renderer's output: a tag in a paragraph (inline HTML: not
- * in a code span, not escaped, whole by CommonMark's grammar) or in an HTML block (as a browser reads
- * a tag, not in a table, which closes what opens in it; an HTML block that a `<pre>` starts is one
- * whether or not the block closes it). A quote, list or heading closes what opens in it, so of one
- * only a closing tag that closes what was opened outside it counts (see containerTags); none in a pipe
- * table or indented code. Linear in the block's length.
+ * The tags from `from` to `to` of a paragraph's text (one inline run: a paragraph, a heading's text, a
+ * list item's or quote's paragraph, an aligned wrapper's content), read left to right as CommonMark reads
+ * it: a backslash escapes, a code span holds text, a link's destination and title hold text, and raw HTML
+ * (see inlineHtmlAt) is read whole, so a tag's name in another tag's quoted value is none. Gives each tag
+ * of TREE_TAG_NAMES to `found`. Each character is read a bounded number of times.
  */
-function disclosureTags(part: BlockPart, summaryOpen: boolean): BlockTags {
-    const text = part.text;
-    if (part.tag) return { tags: [{ at: 0, end: 0, open: false, summary: part.tag.summary }], htmlFrom: 0 };
-    if (!MAY_HOLD_DISCLOSURE_TAG.test(text)) return { tags: [], htmlFrom: text.length };
-    let htmlFrom = 0;
-    if (!part.html) {
-        const newline = text.indexOf('\n');
-        const firstLine = newline === -1 ? text : text.slice(0, newline);
-        if (/^ {0,3}>/.test(firstLine)) return { tags: containerTags(text, 'quote', summaryOpen), htmlFrom: text.length };
-        if (ATX_HEADING_START.test(firstLine)) return { tags: containerTags(text, 'heading', summaryOpen), htmlFrom: text.length };
-        if (LIST_ITEM_START.test(firstLine) && indentColumn(firstLine) < 4) return { tags: containerTags(text, 'list', summaryOpen), htmlFrom: text.length };
-        if (isIndentedCodeBlock(text)) return { tags: [], htmlFrom: text.length };
-        if (/^ {0,3}<(?:script|style|textarea)(?=[\s>]|$)/i.test(text)) return { tags: [], htmlFrom: text.length };
-        const start = RAW_HTML_BLOCK_START.test(text) ? { index: 0 } : HTML_BLOCK_LINE.exec(text);
-        htmlFrom = start ? start.index + (text[start.index] === '\n' ? 1 : 0) : text.length;
-        if (htmlFrom === text.length && text.includes('|') && hasTableDelimiterRow(text)) return { tags: [], htmlFrom };
-    }
-    const blanked = htmlFrom > 0 ? blankCodeSpans(text.slice(0, htmlFrom)) : '';
-    const quotes = new QuoteFinder(text);
-    const tags: DisclosureTag[] = [];
-    let tables = 0;
-    // Where the last whole tag in HTML ended: a tag's name inside another tag is none.
-    let insideTag = 0;
-    for (const m of text.matchAll(/<(\/?)(details|summary|table)\b/gi)) {
-        const at = m.index!;
-        if (at < insideTag) continue;
-        const name = m[2].toLowerCase();
-        if (name === 'table') {
-            // A table's tags count in HTML only.
-            if (at < htmlFrom) continue;
-            if (!m[1]) tables++;
-            else if (tables > 0) { TABLE_CLOSE_TAG.lastIndex = at; if (TABLE_CLOSE_TAG.test(text)) tables--; }
+function scanInlineTags(finders: TextFinders, from: number, to: number, found: (tag: FoundTag) => void): void {
+    const text = finders.text;
+    let brackets = 0;
+    for (let i = from; i < to;) {
+        const ch = text[i];
+        if (ch === '\\') { i += 2; continue; }
+        if (ch === '`') {
+            let end = i + 1;
+            while (end < to && text[end] === '`') end++;
+            const close = finders.codeSpanClose(end, end - i);
+            i = close !== -1 && close < to ? close + (end - i) : end;
             continue;
         }
-        const html = at >= htmlFrom;
-        if (html) {
-            if (tables > 0) continue;
-        } else {
-            if (blanked[at] !== '<') continue;
-            let slashes = 0;
-            while (text[at - 1 - slashes] === '\\') slashes++;
-            if (slashes % 2 === 1) continue;
-        }
-        const end = tagEnd(text, at, !!m[1], name.length, !html, quotes);
-        if (end === -1) {
-            // In HTML, a tag that never ends holds the rest of the block: no tag after it.
-            if (html) break;
+        if (ch === '[') { brackets++; i++; continue; }
+        if (ch === ']') {
+            if (brackets > 0) {
+                brackets--;
+                if (text[i + 1] === '(') {
+                    const end = linkTailEnd(finders, i + 2, to);
+                    if (end !== -1) { i = end; continue; }
+                }
+            }
+            i++;
             continue;
         }
-        if (html) insideTag = end;
-        tags.push({ at, end, open: !m[1], summary: name === 'summary' });
+        if (ch === '<') {
+            const html = inlineHtmlAt(finders, i, to);
+            if (!html) { i++; continue; }
+            if (html.name && TREE_TAG_NAMES.has(html.name)) found({ at: i, end: html.end, name: html.name, close: !!html.close });
+            i = html.end;
+            continue;
+        }
+        i++;
     }
-    return { tags, htmlFrom };
+}
+
+/** How a line of a block is read for tags (see analyzeBlock): Markdown text, HTML, code, or blank. */
+const enum LineKind { Inline, Html, Code, Blank }
+
+/** A line of a quote, list or heading block (see analyzeBlock). */
+interface BlockLine {
+    /** Where it starts in the block, and where its text starts (after a quote's markers and an item's marker). */
+    start: number; textAt: number;
+    /** How many characters a quote's markers take at its start. */
+    markers: number;
+    kind: LineKind;
+    /** The innermost list item it is in (see BlockItem), or -1. */
+    item: number;
+    /** Whether a list item starts on it. */
+    itemStart: boolean;
+    /** Whether a block starts on it inside the container (its first line, an item's, after a blank line, a heading, an HTML block). */
+    blockStart: boolean;
+}
+
+/** A list item in a quote or list block: its marker's indentation, its content's column, the item it is in. */
+interface BlockItem { indent: number; column: number; parent: number }
+
+/** A tag of a block for the tree builder, with the inline or HTML run it stands in and its line. */
+interface BlockTag extends FoundTag { run: number; html: boolean; line: number }
+
+/** How a block holds tags (see analyzeBlock). */
+interface BlockAnalysis {
+    text: string;
+    /** `plain`: paragraph text then HTML from htmlFrom; `container`: a quote, list or heading; `none`: no tags (code, a pipe table). */
+    kind: 'plain' | 'container' | 'none';
+    container?: 'quote' | 'list' | 'heading';
+    htmlFrom: number;
+    /** An aligned wrapper's content, read as Markdown (see alignedWrapperContent). */
+    wrapper?: { open: number; from: number; to: number; htmlFrom: number; alignment: 'left' | 'center' | 'right' | 'justify' };
+    lines?: BlockLine[];
+    items?: BlockItem[];
+    /** A container's text with what comes off each line blanked (see analyzeBlock): where white space is. */
+    content?: string;
+    tags: BlockTag[];
 }
 
 /**
- * The first closing tag in a quote, list or heading (`kind`) that closes what was opened outside it,
- * as a browser has a renderer's output: the element closes what opens in it (a `<details>` or
- * `<summary>` there is closed where it ends: a list item's where the item ends, by the next item at
- * its indentation or less), so a closing tag in it closes the nearest open element of its kind in it,
- * else the nearest outside, closing the quote, list or heading too. A `</summary>` counts only while a
- * summary is open outside (`summaryOpen`): else a browser ignores it. Tags are read in the text of
- * each line (after a quote's markers and a list item's marker), as in a paragraph, not in fenced code
- * or code spans, nor escaped. Linear in the block's length.
+ * The content of the generator's one-line alignment wrapper (`<div style="text-align: X">...</div>` or
+ * `<div align="X">...</div>`), as parseBlocks finds it in a block (after anchors before it): parseBlocks
+ * reads it as Markdown, so its tags are read as a paragraph's.
  */
-function containerTags(text: string, kind: 'quote' | 'list' | 'heading', summaryOpen: boolean): DisclosureTag[] {
-    // The text of each line, and where it starts in the block: one string, with what comes off each line blanked.
-    let content = '';
-    const lines = text.split('\n');
-    const itemIndents: number[] = [];
-    const htmlLines: boolean[] = [];
+function alignedWrapperContent(text: string): BlockAnalysis['wrapper'] | undefined {
+    let from = 0;
+    const anchors = /^\s*(?:<a\s[^>]*>\s*<\/a>[ \t]*)+\n?/i.exec(text);
+    if (anchors && trimAsciiWhitespace(text.slice(anchors[0].length))) from = anchors[0].length;
+    while (from < text.length && ASCII_WHITESPACE.includes(text[from])) from++;
+    let to = text.length;
+    while (to > from && ASCII_WHITESPACE.includes(text[to - 1])) to--;
+    if (text.slice(to - 6, to).toLowerCase() !== '</div>') return undefined;
+    const open = /^<div\s+(?:style="text-align:\s*(left|center|right|justify);?"|align="(left|center|right|justify)")>/i.exec(text.slice(from, Math.min(to, from + 200)));
+    if (!open || from + open[0].length > to - 6) return undefined;
+    // Its content as parseBlocks reads it, white space off its ends: Markdown text, then HTML from a line an HTML block starts.
+    let contentFrom = from + open[0].length;
+    while (contentFrom < to - 6 && ASCII_WHITESPACE.includes(text[contentFrom])) contentFrom++;
+    const content = text.slice(contentFrom, to - 6);
+    const html = RAW_HTML_BLOCK_START.test(content) ? { index: 0 } : HTML_BLOCK_LINE.exec(content);
+    const htmlFrom = html ? contentFrom + html.index + (content[html.index] === '\n' ? 1 : 0) : to - 6;
+    return { open: from, from: contentFrom, to: to - 6, htmlFrom, alignment: (open[1] || open[2]).toLowerCase() as 'left' | 'center' | 'right' | 'justify' };
+}
+
+/**
+ * Where tags are in a block, as GitHub has a renderer's output (CommonMark blocks, then a browser's
+ * tokenizer): in a paragraph's text by CommonMark's inline reading, in an HTML block by a browser's
+ * (scanInlineTags, scanHtmlTags), never in code or a pipe table. A quote, list or heading is read line by
+ * line: each line's text (after a quote's markers and an item's marker), whether it is Markdown, HTML (an
+ * HTML block a line in it starts, to a blank line) or fenced code, and the list item it is in; its tags are
+ * read run by run (a run: the lines of one paragraph, or of one HTML block). One pass over the block, then
+ * one over each run.
+ */
+function analyzeBlock(text: string): BlockAnalysis {
+    const none = (): BlockAnalysis => ({ text, kind: 'none', htmlFrom: text.length, tags: [] });
+    if (!text.includes('<')) return none();
+    const newline = text.indexOf('\n');
+    const firstLine = newline === -1 ? text : text.slice(0, newline);
+    let finders = new TextFinders(text);
+    const tags: BlockTag[] = [];
+    let run = 0;
+    const scan = (from: number, to: number, html: boolean, line: (at: number) => number): void => {
+        if (from >= to) return;
+        const r = run++;
+        (html ? scanHtmlTags : scanInlineTags)(finders, from, to, tag => tags.push({ ...tag, run: r, html, line: line(tag.at) }));
+    };
+    let container: BlockAnalysis['container'];
+    if (/^ {0,3}>/.test(firstLine)) container = 'quote';
+    else if (ATX_HEADING_START.test(firstLine)) container = 'heading';
+    else if (LIST_ITEM_START.test(firstLine) && indentColumn(firstLine) < 4) container = 'list';
+    else {
+        if (isIndentedCodeBlock(text)) return none();
+        if (/^ {0,3}<(?:script|style|textarea)(?=[\s>]|$)/i.test(text)) return none();
+        const start = RAW_HTML_BLOCK_START.test(text) ? { index: 0 } : HTML_BLOCK_LINE.exec(text);
+        const htmlFrom = start ? start.index + (text[start.index] === '\n' ? 1 : 0) : text.length;
+        if (htmlFrom === text.length && text.includes('|') && hasTableDelimiterRow(text)) return none();
+        const wrapper = alignedWrapperContent(text);
+        if (wrapper) {
+            // Its `<div>` and `</div>` are an element's tags (one in its content may close it), its content a paragraph's text.
+            tags.push({ at: wrapper.open, end: wrapper.from, name: 'div', close: false, run, html: false, line: 0 });
+            // A quote, list or heading in it is read as one (see parseBlocks), its tags its own.
+            if (!/^(?:>|#{1,6}(?:[ \t]|$)|[-*+](?:[ \t]|$)|\d{1,9}[.)](?:[ \t]|$))/.test(text.slice(wrapper.from, wrapper.to))) {
+                scan(wrapper.from, wrapper.htmlFrom, false, () => 0);
+                scan(wrapper.htmlFrom, wrapper.to, true, () => 0);
+            }
+            tags.push({ at: wrapper.to, end: wrapper.to + 6, name: 'div', close: true, run, html: false, line: 0 });
+            return { text, kind: 'plain', htmlFrom: text.length, wrapper, tags };
+        }
+        // Paragraph text whose last line is a setext underline is a heading's.
+        const lastLine = text.slice(text.lastIndexOf('\n') + 1);
+        if (htmlFrom === text.length && newline !== -1 && SETEXT_UNDERLINE.test(lastLine)) container = 'heading';
+        else {
+            // Lines indented four columns starting it are indented code (CommonMark), whatever follows them.
+            let textFrom = 0;
+            while (textFrom < htmlFrom && /^(?: {4}|\t| {0,3}\t)/.test(text.slice(textFrom, textFrom + 4))) {
+                const end = text.indexOf('\n', textFrom);
+                textFrom = end === -1 ? text.length : end + 1;
+            }
+            scan(textFrom, htmlFrom, false, () => 0);
+            scan(Math.max(textFrom, htmlFrom), text.length, true, () => 0);
+            return { text, kind: 'plain', htmlFrom, tags };
+        }
+    }
+    // A quote, list or heading: its lines.
+    const lines: BlockLine[] = [];
+    const items: BlockItem[] = [];
+    const itemStack: number[] = [];
     let html = false;
+    // The content column of the item the HTML block being read is in (0: none): a line indented to it goes on with the block.
+    let htmlColumn = 0;
     let fence: { ch: string; length: number } | undefined;
-    for (let l = 0; l < lines.length; l++) {
-        const line = lines[l];
+    let start = 0;
+    let previous: BlockLine | undefined;
+    // The block with what comes off each line (a quote's markers, an item's marker) and code blanked: the same length.
+    let content = '';
+    for (let l = 0; start <= text.length; l++) {
+        let end = text.indexOf('\n', start);
+        if (end === -1) end = text.length;
+        const line = text.slice(start, end);
         let from = 0;
-        if (kind === 'quote') from = /^(?: {0,3}>[ \t]?)*/.exec(line)![0].length;
-        else if (kind === 'heading') from = l === 0 ? /^(?:<a[^>]*><\/a>)* {0,3}#{1,6}[ \t]*/.exec(line)![0].length : line.length;
+        let markers = 0;
+        if (container === 'quote') from = markers = /^(?: {0,3}>[ \t]?)*/.exec(line)![0].length;
+        else if (container === 'heading') from = l === 0 && ATX_HEADING_START.test(line) ? /^(?:<a[^>]*><\/a>)* {0,3}#{1,6}[ \t]*/.exec(line)![0].length : 0;
         const rest = line.slice(from);
-        // A list item's marker (in a list, or in a quote): what was opened in an item at its indentation or deeper is closed.
-        const item = kind === 'heading' || fence ? null : LIST_ITEM_START.exec(rest);
-        let itemIndent = -1;
+        const item = container === 'heading' || fence || (html && trimAsciiWhitespace(rest) && indentColumn(rest) >= htmlColumn && htmlColumn > 0) ? null : LIST_ITEM_START.exec(rest);
         if (item) {
-            itemIndent = indentColumn(rest);
+            const indent = indentColumn(rest);
+            while (itemStack.length && items[itemStack[itemStack.length - 1]].indent >= indent) itemStack.pop();
+            const spaces = item[3] === undefined ? 1 : item[0].length - 1 - item[1].length - item[2].length;
+            items.push({ indent, column: indentColumn(item[1]) + item[2].length + (spaces > 4 ? 1 : spaces), parent: itemStack.length ? itemStack[itemStack.length - 1] : -1 });
+            itemStack.push(items.length - 1);
             from += item[3] === undefined ? rest.length : item[0].length - 1;
         }
-        itemIndents.push(itemIndent);
         const fenceMatch = /^ {0,3}(`{3,}|~{3,})/.exec(line.slice(from));
         let code = !!fence;
         if (fence) {
@@ -897,113 +1156,342 @@ function containerTags(text: string, kind: 'quote' | 'list' | 'heading', summary
             fence = { ch: fenceMatch[1][0], length: fenceMatch[1].length };
             code = true;
         }
-        content += (l ? '\n' : '') + ' '.repeat(from) + (code ? ' '.repeat(line.length - from) : line.slice(from));
-        // A line starting an HTML block (a block tag first in its text), and those after it to a blank line,
-        // are HTML; a heading's text is inline, an HTML block never starts in it.
         const lineText = code ? '' : line.slice(from);
-        if (!trimAsciiWhitespace(lineText) || item) html = false;
-        if (!code && kind !== 'heading' && HTML_BLOCK_LINE.exec(lineText)?.index === 0) html = true;
-        htmlLines.push(html);
+        const blank = !code && !trimAsciiWhitespace(lineText);
+        if (blank || item) html = false;
+        const startsHtml = !code && container !== 'heading' && HTML_BLOCK_LINE.exec(lineText)?.index === 0;
+        if (startsHtml && !html) htmlColumn = itemStack.length ? items[itemStack[itemStack.length - 1]].column : 0;
+        if (startsHtml) html = true;
+        const kind = code ? LineKind.Code : blank ? LineKind.Blank : html ? LineKind.Html : LineKind.Inline;
+        const blockStart = !previous || !!item || previous.kind !== kind || previous.kind === LineKind.Blank
+            || (kind === LineKind.Inline && (ATX_HEADING_START.test(lineText) || THEMATIC_BREAK.test(lineText) || /^ {0,3}>/.test(lineText)));
+        content += (l ? '\n' : '') + ' '.repeat(from) + (code ? ' '.repeat(line.length - from) : line.slice(from));
+        previous = { start, textAt: start + from, markers, kind, item: itemStack.length ? itemStack[itemStack.length - 1] : -1, itemStart: !!item, blockStart };
+        lines.push(previous);
+        start = end + 1;
     }
-    if (!MAY_HOLD_DISCLOSURE_TAG.test(content)) return [];
-    const blanked = blankCodeSpans(content);
-    const quotes = new QuoteFinder(text);
-    // The elements open in it: whether each is a summary, and the indentation of the list item it opened in (-1: none).
-    const open: { summary: boolean; item: number }[] = [];
-    let line = 0;
-    let item = itemIndents[0];
-    // Where the last whole tag in HTML ended: a tag's name inside another tag is none.
-    let insideTag = 0;
-    // How many HTML tables are open: a table closes what opens in it, and a closing tag in one closes nothing outside.
-    let tables = 0;
-    let lineEnd = content.indexOf('\n');
-    for (const m of content.matchAll(/<(\/?)(details|summary|table)\b/gi)) {
-        const at = m.index!;
-        for (; lineEnd !== -1 && lineEnd < at; lineEnd = content.indexOf('\n', lineEnd + 1)) {
-            line++;
-            if (itemIndents[line] >= 0) {
-                item = itemIndents[line];
-                while (open.length && open[open.length - 1].item >= item) open.pop();
-            }
+    // Its runs: the lines of one paragraph, or of one HTML block, read in the block's content (a quote's
+    // markers and an item's marker are white space there, as they are none of the text a renderer reads).
+    finders = new TextFinders(content);
+    for (let l = 0; l < lines.length;) {
+        const kind = lines[l].kind;
+        let m = l + 1;
+        while (m < lines.length && lines[m].kind === kind && !lines[m].blockStart) m++;
+        if (kind === LineKind.Inline || kind === LineKind.Html) {
+            const runEnd = m < lines.length ? lines[m].start - 1 : text.length;
+            const first = l;
+            // The line of a tag: lines from the run's first, in order.
+            let at = first;
+            scan(lines[l].textAt, runEnd, kind === LineKind.Html, position => {
+                while (at + 1 < m && lines[at + 1].start <= position) at++;
+                return at;
+            });
         }
-        if (m[2].length === 5) {
-            // A table's tags count in HTML only.
-            if (!htmlLines[line] || at < insideTag) continue;
-            if (!m[1]) tables++;
-            else if (tables > 0) { TABLE_CLOSE_TAG.lastIndex = at; if (TABLE_CLOSE_TAG.test(content)) tables--; }
-            continue;
-        }
-        if (tables > 0) continue;
-        if (!htmlLines[line]) {
-            if (blanked[at] !== '<') continue;
-            let slashes = 0;
-            while (content[at - 1 - slashes] === '\\') slashes++;
-            if (slashes % 2 === 1) continue;
-        }
-        if (at < insideTag) continue;
-        const summary = m[2].toLowerCase() === 'summary';
-        const end = tagEnd(text, at, !!m[1], m[2].length, !htmlLines[line], quotes);
-        if (end === -1) {
-            // In HTML, a tag that never ends holds the rest of the block: no tag after it.
-            if (htmlLines[line]) break;
-            continue;
-        }
-        if (htmlLines[line]) insideTag = end;
-        if (!m[1]) { open.push({ summary, item }); continue; }
-        let k = open.length - 1;
-        while (k >= 0 && open[k].summary !== summary) k--;
-        if (k >= 0) { open.length = k; continue; }
-        if (summary && !summaryOpen) continue;
-        return [{ at, end, open: false, summary, escape: kind, htmlLine: htmlLines[line] }];
+        l = m;
     }
-    return [];
+    return { text, kind: 'container', container, htmlFrom: text.length, lines, items, content, tags };
 }
 
+/** A disclosure or summary the tree builder lifts out of a level's blocks (see planDisclosures). */
+interface PlannedDisclosure {
+    /** Its `<details>` tag, read for its attributes. */
+    tag: string;
+    /** Its summary's block, whether a `</summary>` closed it, and where it was closed (block, place). */
+    summary?: { block: number; byTag: boolean; closedIn: number };
+}
+
+/** A place where a level's text is cut (see planDisclosures), in order: what starts or ends there. */
+interface DisclosureCut {
+    block: number; at: number; end: number;
+    kind: 'openDisclosure' | 'openSummary' | 'closeSummary' | 'closeDisclosure' | 'skip';
+    disclosure?: number;
+}
+
+/** What planDisclosures found in a level's blocks. */
+interface DisclosurePlan {
+    blocks: BlockAnalysis[];
+    cuts: DisclosureCut[];
+    disclosures: PlannedDisclosure[];
+    /** For each quote, list or heading block a tag closing what was opened outside ended: where it did, and where its items did. */
+    escapes: Map<number, { first: number; quote: number; items: Map<number, number> }>;
+}
+
+/** An element the tree builder has open (see planDisclosures). */
+interface OpenElement {
+    name: string;
+    /** `element`: an HTML element; `container`: a quote, list item or heading of the block being read; `disclosure`/`summary`: a lifted one's. */
+    kind: 'element' | 'container' | 'disclosure' | 'summary';
+    /** What opens in it is no disclosure of the AST's (a container, a table, an HTML list item or heading). */
+    flat: boolean;
+    /** It bounds the scope an end tag looks in (a table and its cells). */
+    boundary: boolean;
+    disclosure?: number;
+    /** A disclosure (or its summary) past MAX_DISCLOSURE_DEPTH: its tags go, its text stays. */
+    flattened?: boolean;
+    /** A container's list item (see BlockItem), or -1. */
+    item?: number;
+    /** Where it opened: block, run. */
+    block: number; run: number;
+    /** Its place on the stack while open; -1 once closed. */
+    index?: number;
+}
+
+/** The key an end tag finds an element by: any heading closes any heading. */
+const treeKey = (name: string): string => (/^h[1-6]$/.test(name) ? 'h' : name);
+
+/** Elements a list item, heading or table holds are no disclosures of the AST's: what opens in one is its text. */
+const FLAT_ELEMENTS = new Set(['li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'table', 'caption', 'td', 'th', 'tr', 'tbody', 'thead', 'tfoot']);
+
+/** Elements that bound the scope an end tag looks in. */
+const SCOPE_BOUNDARIES = new Set(['table', 'caption', 'td', 'th']);
+
 /**
- * What follows a closing tag that closed a quote, list or heading (see containerTags), as text of the
- * level it closed into: the rest of the tag's line, then the quote's lines without their markers, or
- * the list item's lines without its indentation (to the first line indented less) and the lines after
- * as they are, a block of their own (a browser has the list's later items after what the tag closed,
- * not in the text before them). Where the tag stands in an HTML block there (on a line of one, see
- * containerTags), the rest of that block (to a blank line, in the quote or item) is HTML.
- * The Markdown starts at its first line with text: a blank line left first would stand before its block,
- * which is then not read as the list, quote or heading it starts (see disclosureTags).
+ * The disclosures in a level's blocks (the document's, a quote's, a sub-document's), as a browser builds
+ * the tree of a renderer's output, in one pass over the blocks' tags (see analyzeBlock):
+ * - An element opens where its start tag is; an end tag closes the nearest open element of its name in
+ *   scope (a table and its cells bound it) and every element opened after it, or is ignored. So a
+ *   `</div>` closes a disclosure opened in its div, and a `</details>` the summary open in it.
+ * - A quote, list item or heading is an element of its block: it closes at the block's end (an item at
+ *   the next item at its indentation or less) what opened in it, and an end tag in it that closes what
+ *   was opened outside it closes it too; what follows in the block is then read at the level it closed
+ *   into, but for list items starting after, which are elements again.
+ * - A disclosure opened at the level (in no container, table, HTML list item or heading, where the AST
+ *   holds none: there it is that block's text) is lifted out: its summary is a `<summary>` first in it
+ *   (white space, blank lines and ignored end tags between), to where it closes. Past
+ *   MAX_DISCLOSURE_DEPTH its tags go. One opened and closed in one HTML block is lifted too (its pieces are HTML).
+ * Each element is opened and closed once, and an end tag finds its element by the counts of open
+ * elements of each name in the innermost scope, so the pass is linear in the number of tags; the blocks
+ * are read once each (analyzeBlock).
  */
-function containerRest(text: string, tag: DisclosureTag): { html: string; markdown: string } {
-    const lines = text.slice(tag.end).split('\n');
-    let lead = text.slice(text.lastIndexOf('\n', tag.at - 1) + 1, tag.at);
-    // The content column of the item the tag is in.
-    let column = 0;
-    if (tag.escape === 'quote') lead = lead.replace(/^(?: {0,3}>[ \t]?)*/, '');
-    else if (tag.escape === 'list') {
-        const before = text.slice(0, tag.at).split('\n');
-        for (let l = before.length - 1; l >= 0; l--) {
-            const item = LIST_ITEM_START.exec(before[l]);
-            if (!item) continue;
-            const spaces = item[3] === undefined ? 1 : item[0].length - 1 - item[1].length - item[2].length;
-            column = indentColumn(item[1]) + item[2].length + (spaces > 4 ? 1 : spaces);
-            break;
+function planDisclosures(texts: string[], depth: number): DisclosurePlan {
+    const blocks = texts.map(analyzeBlock);
+    const cuts: DisclosureCut[] = [];
+    const disclosures: PlannedDisclosure[] = [];
+    const escapes: DisclosurePlan['escapes'] = new Map();
+    const stack: OpenElement[] = [];
+    // Open elements of each key in each scope (innermost last), and the stack positions of each key's.
+    const scopes: Map<string, number>[] = [new Map()];
+    // The element bounding each scope but the outermost (see SCOPE_BOUNDARIES).
+    const owners: OpenElement[] = [];
+    const positions = new Map<string, number[]>();
+    // Open elements whose content is no disclosure's (see OpenElement.flat), open tables, and lifted disclosures.
+    let flat = 0;
+    let tables = 0;
+    let levels = 0;
+    // The block being read, and its containers open.
+    let current = 0;
+    let containersOpen = 0;
+    // A lifted disclosure whose summary may still come: from where only white space and ignored end tags may stand before it.
+    let awaiting: { disclosure: number; flattened: boolean; block: number; at: number } | undefined;
+
+    const push = (element: OpenElement): void => {
+        element.index = stack.length;
+        stack.push(element);
+        const key = treeKey(element.name);
+        if (element.boundary) { scopes.push(new Map()); owners.push(element); }
+        else scopes[scopes.length - 1].set(key, (scopes[scopes.length - 1].get(key) ?? 0) + 1);
+        let at = positions.get(key);
+        if (!at) positions.set(key, at = []);
+        at.push(stack.length - 1);
+        if (element.flat) flat++;
+        if (element.name === 'table') tables++;
+        if (element.kind === 'container') containersOpen++;
+        if (element.kind === 'disclosure' && !element.flattened) levels++;
+    };
+    const cut = (block: number, at: number, end: number, kind: DisclosureCut['kind'], disclosure?: number): void => {
+        cuts.push({ block, at, end, kind, disclosure });
+    };
+    // Closes the open element at `index` and every one opened after it, for an end tag (`by`) or the end of a container.
+    const closeTo = (index: number, by?: BlockTag): void => {
+        const target = stack[index];
+        let containersClosed = 0;
+        const items: number[] = [];
+        let quote = false;
+        while (stack.length > index) {
+            const element = stack.pop()!;
+            element.index = -1;
+            const key = treeKey(element.name);
+            if (element.boundary) { scopes.pop(); owners.pop(); }
+            else scopes[scopes.length - 1].set(key, scopes[scopes.length - 1].get(key)! - 1);
+            positions.get(key)!.pop();
+            if (element.flat) flat--;
+            if (element.name === 'table') tables--;
+            if (element.kind === 'container') {
+                containersOpen--;
+                containersClosed++;
+                if (element.item !== undefined && element.item >= 0) items.push(element.item);
+                if (element.name === '#quote') quote = true;
+            }
+            if (!by) continue;
+            // What the end tag closes at the level: it is taken out with the element of its name, and is a
+            // place of no width for what it closes on the way (`</div>` closing a disclosure opened in the div).
+            const own = element === target;
+            if (element.kind === 'disclosure' && element.flattened) { if (own) cut(current, by.at, by.end, 'skip'); continue; }
+            if (element.kind === 'summary' && element.flattened) { if (own) cut(current, by.at, by.end, 'skip'); continue; }
+            if (element.kind === 'summary') {
+                disclosures[element.disclosure!].summary!.byTag = own;
+                disclosures[element.disclosure!].summary!.closedIn = current;
+                cut(current, by.at, own ? by.end : by.at, 'closeSummary', element.disclosure);
+            } else if (element.kind === 'disclosure') {
+                levels--;
+                cut(current, by.at, own ? by.end : by.at, 'closeDisclosure', element.disclosure);
+            }
         }
-        const item = LIST_ITEM_START.exec(lead);
-        lead = item ? lead.slice(item[3] === undefined ? item[0].length : item[0].length - 1) : dedentLine(lead, column);
+        // An end tag that closed every container of the block: what follows is read at the level (see DisclosurePlan.escapes).
+        if (by && containersClosed && containersOpen === 0) {
+            let escape = escapes.get(current);
+            if (!escape) escapes.set(current, escape = { first: by.at, quote: -1, items: new Map() });
+            if (quote) escape.quote = by.at;
+            for (const item of items) escape.items.set(item, by.at);
+        }
+    };
+    const inScope = (key: string): boolean => (scopes[scopes.length - 1].get(key) ?? 0) > 0;
+    const top = (key: string): number => { const at = positions.get(key); return at?.length ? at[at.length - 1] : -1; };
+    // Whether only white space stands in `block` from `from` to `to`.
+    const blankBetween = (block: number, from: number, to: number): boolean => !trimAsciiWhitespace((blocks[block].content ?? blocks[block].text).slice(from, to));
+
+    for (current = 0; current < blocks.length; current++) {
+        const block = blocks[current];
+        if (awaiting && awaiting.block < current) {
+            // White space to the end of the block before: the summary may still come, from this block's start.
+            if (awaiting.block === current - 1 && blankBetween(awaiting.block, awaiting.at, blocks[awaiting.block].text.length)) awaiting = { ...awaiting, block: current, at: 0 };
+            else awaiting = undefined;
+        }
+        if (block.kind === 'none') continue;
+        // The block's containers opened: its quote or heading, and its list items (closed ones are left behind as they are met).
+        const containers: OpenElement[] = [];
+        if (block.kind === 'container' && block.container !== 'list') {
+            const element: OpenElement = { name: block.container === 'quote' ? '#quote' : '#heading', kind: 'container', flat: true, boundary: false, item: -1, block: current, run: -1 };
+            push(element);
+            containers.push(element);
+        }
+        const lines = block.lines;
+        let line = 0;
+        const itemsOpen: OpenElement[] = [];
+        const startItems = (to: number): void => {
+            if (!lines) return;
+            for (; line < lines.length && lines[line].start <= to; line++) {
+                if (!lines[line].itemStart) continue;
+                const item = lines[line].item;
+                const indent = block.items![item].indent;
+                // The item closes the open items of its indentation or more (what opened in them with them).
+                let close: OpenElement | undefined;
+                while (itemsOpen.length) {
+                    const last = itemsOpen[itemsOpen.length - 1];
+                    if (last.index !== -1 && block.items![last.item!].indent < indent) break;
+                    itemsOpen.pop();
+                    if (last.index !== -1) close = last;
+                }
+                if (close) closeTo(close.index!);
+                const element: OpenElement = { name: '#item', kind: 'container', flat: true, boundary: false, item, block: current, run: -1 };
+                push(element);
+                itemsOpen.push(element);
+                containers.push(element);
+                awaiting = undefined;
+            }
+        };
+        for (const tag of block.tags) {
+            startItems(tag.at);
+            if (awaiting) {
+                if (awaiting.block !== current || !blankBetween(current, awaiting.at, tag.at)) awaiting = undefined;
+            }
+            const key = treeKey(tag.name);
+            if (tag.close) {
+                let index = -1;
+                if (tag.name === 'table') index = tables > 0 ? top('table') : -1;
+                else if (SCOPE_BOUNDARIES.has(tag.name)) {
+                    // A cell or caption: the innermost scope's own.
+                    const owner = owners[owners.length - 1];
+                    if (owner?.name === tag.name) index = owner.index!;
+                } else if (inScope(key)) index = top(key);
+                if (index === -1) {
+                    // Ignored: a summary may still come after it.
+                    if (awaiting) awaiting = { ...awaiting, at: tag.end };
+                    continue;
+                }
+                awaiting = undefined;
+                closeTo(index, tag);
+                continue;
+            }
+            const was = awaiting;
+            awaiting = undefined;
+            if (tag.name === 'details') {
+                if (flat > 0) { push({ name: 'details', kind: 'element', flat: false, boundary: false, block: current, run: tag.run }); continue; }
+                const disclosure = disclosures.length;
+                const flattened = depth + levels >= MAX_DISCLOSURE_DEPTH;
+                disclosures.push({ tag: block.text.slice(tag.at, tag.end) });
+                cut(current, tag.at, tag.end, flattened ? 'skip' : 'openDisclosure', disclosure);
+                push({ name: 'details', kind: 'disclosure', flat: false, boundary: false, disclosure, flattened, block: current, run: tag.run });
+                awaiting = { disclosure, flattened, block: current, at: tag.end };
+                continue;
+            }
+            if (tag.name === 'summary') {
+                if (flat === 0 && was && was.block === current && stack[stack.length - 1]?.disclosure === was.disclosure) {
+                    if (!was.flattened) disclosures[was.disclosure].summary = { block: current, byTag: false, closedIn: -1 };
+                    cut(current, tag.at, tag.end, was.flattened ? 'skip' : 'openSummary', was.disclosure);
+                    push({ name: 'summary', kind: 'summary', flat: false, boundary: false, disclosure: was.disclosure, flattened: was.flattened, block: current, run: tag.run });
+                } else push({ name: 'summary', kind: 'element', flat: false, boundary: false, block: current, run: tag.run });
+                continue;
+            }
+            // Other elements, as a browser opens them (what each closes first, and whether it opens at all).
+            if (['td', 'th', 'tr', 'caption', 'tbody', 'thead', 'tfoot'].includes(tag.name) && tables === 0) continue;
+            if (key === 'h' && /^h[1-6]$/.test(stack[stack.length - 1]?.name ?? '')) closeTo(stack.length - 1);
+            if (tag.name === 'li' && stack[stack.length - 1]?.name === 'li') closeTo(stack.length - 1);
+            push({ name: tag.name, kind: 'element', flat: FLAT_ELEMENTS.has(tag.name), boundary: SCOPE_BOUNDARIES.has(tag.name), block: current, run: tag.run });
+        }
+        startItems(block.text.length);
+        // The block's end closes its containers still open, and what opened in them.
+        let lowest = stack.length;
+        for (const element of containers) if (element.index !== -1 && element.index! < lowest) lowest = element.index!;
+        if (lowest < stack.length) closeTo(lowest);
     }
-    let inHtml = tag.escape !== 'heading' && !!tag.htmlLine;
-    let htmlLines = inHtml ? 1 : 0;
-    // Where the list item's lines end: the lines after it are the list's own (its next items), no line of the text before.
-    let itemEnd = lines.length;
-    for (let l = 1; l < lines.length; l++) {
-        if (tag.escape === 'quote') lines[l] = lines[l].replace(/^(?: {0,3}>[ \t]?)+/, '');
-        else if (tag.escape === 'list') {
-            if (trimAsciiWhitespace(lines[l]) && indentColumn(lines[l]) < column) { itemEnd = l; break; }
-            lines[l] = dedentLine(lines[l], column);
-        }
-        if (inHtml) {
-            if (trimAsciiWhitespace(lines[l])) htmlLines = l + 1;
-            else inHtml = false;
-        }
+    // The end of the text closes what is open.
+    if (stack.length) {
+        const end: BlockTag = { at: blocks.length ? blocks[blocks.length - 1].text.length : 0, end: 0, name: '#end', close: true, run: -1, html: false, line: 0 };
+        end.end = end.at;
+        current = blocks.length - 1;
+        if (current >= 0) closeTo(0, end);
     }
-    const markdown = lines.slice(htmlLines, itemEnd).join('\n') + (itemEnd < lines.length ? '\n\n' + lines.slice(itemEnd).join('\n') : '');
-    return { html: lines.slice(0, htmlLines).join('\n'), markdown: markdown.replace(/^(?:[ \t]*\n)+/, '') };
+    return { blocks, cuts, disclosures, escapes };
+}
+
+
+/**
+ * For a quote, list or heading block an end tag closed (see DisclosurePlan.escapes): what each line loses
+ * as the level reads it after that (the quote's markers once the quote is closed, and the indentation of
+ * the innermost list item closed before it), and whether the line is text of the level (in no list item
+ * open). The items an end tag closes are every one open in the block, so those closed before a line are
+ * the outermost of the items it is in: one pass over the lines.
+ */
+function viewOf(info: BlockAnalysis, escape: { first: number; quote: number; items: Map<number, number> }): { removed: number[]; level: boolean[] } {
+    const lines = info.lines!;
+    const items = info.items!;
+    const positions = [...new Set([...escape.items.values(), ...(escape.quote >= 0 ? [escape.quote] : [])])].sort((x, y) => x - y);
+    const removed: number[] = [];
+    const level: boolean[] = [];
+    const open: number[] = [];
+    let closed = 0;
+    let p = 0;
+    for (let l = 0; l < lines.length; l++) {
+        const start = lines[l].start;
+        while (p < positions.length && positions[p] < start) { closed = open.length; p++; }
+        if (lines[l].itemStart) {
+            const indent = items[lines[l].item].indent;
+            while (open.length && items[open[open.length - 1]].indent >= indent) open.pop();
+            closed = Math.min(closed, open.length);
+            open.push(lines[l].item);
+        }
+        const quoteClosed = info.container === 'quote' && escape.quote >= 0 && escape.quote < start;
+        let cut = quoteClosed ? lines[l].markers : 0;
+        if (closed > 0) {
+            const lineEnd = l + 1 < lines.length ? lines[l + 1].start - 1 : info.text.length;
+            const rest = info.text.slice(start + cut, lineEnd);
+            cut += rest.length - dedentLine(rest, items[open[closed - 1]].column).length;
+        }
+        removed.push(cut);
+        level.push((info.container !== 'quote' || quoteClosed) && closed === open.length);
+    }
+    return { removed, level };
 }
 
 /**
@@ -2394,183 +2882,194 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return html;
     };
 
-    // Disclosures lifted out of blocks (see groupDisclosures): each its `<details>` tag, its summary's
-    // blocks and its body's blocks, read when its placeholder is; and raw HTML cut from an HTML block
-    // at a disclosure's tag, which is HTML whatever it starts with.
-    const disclosureBodies: { tag: string; summary: BlockPart[] | null; body: BlockPart[] }[] = [];
+    // Disclosures lifted out of blocks (see groupDisclosures): each its `<details>` tag and its summary's
+    // and body's blocks, read when its placeholder is; raw HTML cut from an HTML block, which is HTML
+    // whatever it starts with; a paragraph's text cut from it, which is a paragraph's text whatever it
+    // starts with; and a container's blocks after a tag closed it, read as blocks of the level.
+    const disclosureBodies: { tag: string; summary: string[] | null; body: string[] }[] = [];
     const rawHtmlParts: string[] = [];
+    const liftedTexts: { text: string; alignment?: 'left' | 'center' | 'right' | 'justify' }[] = [];
+    const liftedBlocks: string[] = [];
     /** How many disclosures' bodies are being read (see MAX_DISCLOSURE_DEPTH). */
     let disclosureDepth = 0;
-    // The tags of each part (see disclosureTags), found once: as read with a summary open outside, and not.
-    const tagCache = new WeakMap<BlockPart, [BlockTags | undefined, BlockTags | undefined]>();
-    const tagsOf = (part: BlockPart, summaryOpen = false): BlockTags => {
-        let cached = tagCache.get(part);
-        if (!cached) tagCache.set(part, cached = [undefined, undefined]);
-        return cached[summaryOpen ? 1 : 0] ??= disclosureTags(part, summaryOpen);
+
+    /**
+     * A level's blocks (see splitIntoBlocks) with its disclosures lifted out as planDisclosures finds them:
+     * each a placeholder for its tag, its summary's blocks and its body's blocks, nested ones placeholders in
+     * them. A block no cut falls in is kept as it is (Markdown with no disclosure reads as it did). The
+     * pieces of a block cut are read as what they were in it, never again as a text of their own: its
+     * start as the block it starts, a paragraph's text as a paragraph's (LIFTED_TEXT), an HTML block's as
+     * HTML (RAW_HTML), and what follows a closing tag in a quote, list item or heading as its lines without
+     * what that container takes off them (LIFTED_BLOCKS: its paragraph or HTML block on, then its blocks).
+     * A summary a `</summary>` did not close ends where its block does, unless its disclosure closes in
+     * that block. Every piece is a slice of one block, each block cut once: linear in the text.
+     */
+    const groupDisclosures = (texts: string[]): string[] => {
+        const kept = (): string[] => texts.filter(text => trimAsciiWhitespace(text));
+        if (!texts.some(text => MAY_HOLD_DISCLOSURE_TAG.test(text))) return kept();
+        const plan = planDisclosures(texts, disclosureDepth);
+        if (!plan.cuts.length) return kept();
+
+        type Frame = { out: string[]; disclosure?: number; summary?: boolean };
+        const top: string[] = [];
+        const frames: Frame[] = [{ out: top }];
+        const out = (): string[] => frames[frames.length - 1].out;
+        const lifted: { tag: string; summary: string[] | null; body: string[] }[] = [];
+        const pushText = (text: string): void => { if (trimAsciiWhitespace(text)) out().push(text); };
+        const pushHtml = (text: string): void => {
+            if (!trimAsciiWhitespace(text)) return;
+            if (HTML_BLOCK_LINE.exec(text)?.index === 0) { out().push(text); return; }
+            out().push(placeholder('RAW_HTML', rawHtmlParts.length));
+            rawHtmlParts.push(text);
+        };
+        const pushInline = (text: string, alignment?: 'left' | 'center' | 'right' | 'justify'): void => {
+            if (!trimAsciiWhitespace(text)) return;
+            out().push(placeholder('LIFTED_TEXT', liftedTexts.length));
+            liftedTexts.push({ text: trimAsciiWhitespace(text), alignment });
+        };
+        const pushBlocks = (text: string): void => {
+            if (!trimAsciiWhitespace(text)) return;
+            out().push(placeholder('LIFTED_BLOCKS', liftedBlocks.length));
+            liftedBlocks.push(text);
+        };
+
+        let cutAt = 0;
+        for (let b = 0; b < texts.length; b++) {
+            const text = texts[b];
+            const info = plan.blocks[b];
+            const cuts: DisclosureCut[] = [];
+            for (; cutAt < plan.cuts.length && plan.cuts[cutAt].block === b; cutAt++) cuts.push(plan.cuts[cutAt]);
+            if (!cuts.length) {
+                pushText(text);
+                endSummaries(b);
+                continue;
+            }
+            // `text` from `from` to `to`, the tags of disclosures flattened past MAX_DISCLOSURE_DEPTH left out.
+            const skips = cuts.filter(cut => cut.kind === 'skip');
+            let skipAt = 0;
+            const slice = (from: number, to: number): string => {
+                if (!skips.length) return text.slice(from, to);
+                while (skipAt > 0 && skips[skipAt - 1].end > from) skipAt--;
+                while (skipAt < skips.length && skips[skipAt].end <= from) skipAt++;
+                let result = '';
+                let at = from;
+                for (let s = skipAt; s < skips.length && skips[s].at < to; s++) {
+                    result += text.slice(at, Math.max(at, skips[s].at));
+                    at = Math.max(at, skips[s].end);
+                }
+                return result + text.slice(Math.min(at, to), to);
+            };
+            const escape = plan.escapes.get(b);
+            // A container's lines after a tag closed it, as the level reads them (see viewOf).
+            let view: { removed: number[]; level: boolean[] } | undefined;
+            const lineAt = (position: number): number => {
+                const lines = info.lines!;
+                let lo = 0, hi = lines.length - 1;
+                while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (lines[mid].start <= position) lo = mid; else hi = mid - 1; }
+                return lo;
+            };
+            // The container's text from `from` to `to`, each line after the first without what its closed containers take off it.
+            const viewText = (from: number, to: number): string => {
+                view ??= viewOf(info, escape!);
+                const lines = info.lines!;
+                let result = '';
+                const first = lineAt(from);
+                for (let l = first; l < lines.length && lines[l].start < to; l++) {
+                    const lineEnd = l + 1 < lines.length ? lines[l + 1].start - 1 : text.length;
+                    const start = Math.max(from, lines[l].start + view.removed[l]);
+                    if (l > first) {
+                        // A block that started on its line in the container starts one here: after an HTML block's
+                        // line (which the container's structure ended, and nothing would end here), and a list item
+                        // after text of the level (an ordered item does not interrupt a paragraph).
+                        const apart = lines[l].blockStart && lines[l].kind !== LineKind.Blank
+                            && (lines[l - 1].kind === LineKind.Html || (lines[l].itemStart && view.level[l - 1] && lines[l - 1].kind === LineKind.Inline));
+                        result += apart ? '\n\n' : '\n';
+                    }
+                    result += slice(start, Math.min(lineEnd, to));
+                }
+                return result;
+            };
+            const emit = (from: number, to: number): void => {
+                if (from >= to) return;
+                if (info.kind === 'container') {
+                    const first = escape ? escape.first : Infinity;
+                    if (from < first) {
+                        pushText(slice(from, Math.min(to, first)));
+                        if (to <= first) return;
+                        from = first;
+                    }
+                    // The rest of the line and of its paragraph or HTML block, read as it was; then the blocks after it.
+                    const lines = info.lines!;
+                    const l = lineAt(from);
+                    let next = l + 1;
+                    while (next < lines.length && !lines[next].blockStart) next++;
+                    const restEnd = Math.min(to, next < lines.length ? lines[next].start - 1 : text.length);
+                    const rest = viewText(from, restEnd);
+                    if (lines[l].kind === LineKind.Html) pushHtml(rest);
+                    else if (lines[l].kind === LineKind.Inline) pushInline(rest);
+                    else pushBlocks(rest);
+                    if (restEnd + 1 < to) pushBlocks(viewText(restEnd + 1, to));
+                    return;
+                }
+                if (info.wrapper) {
+                    const { from: start, htmlFrom, to: end, alignment } = info.wrapper;
+                    if (from < htmlFrom) pushInline(slice(Math.max(from, start), Math.min(to, htmlFrom)), alignment);
+                    if (to > htmlFrom) pushHtml(slice(Math.max(from, htmlFrom), Math.min(to, end)));
+                    return;
+                }
+                // The block's start is read as the block it starts; its paragraph text after a tag as a paragraph's; its HTML as HTML.
+                if (from < info.htmlFrom) {
+                    const text = slice(from, Math.min(to, info.htmlFrom));
+                    if (from === 0) pushText(text); else pushInline(text);
+                    from = info.htmlFrom;
+                }
+                if (from < to) pushHtml(slice(from, to));
+            };
+            let from = 0;
+            for (const cut of cuts) {
+                if (cut.kind === 'skip') continue;
+                emit(from, cut.at);
+                from = cut.end;
+                const d = cut.disclosure!;
+                if (cut.kind === 'openDisclosure') {
+                    const record = { tag: plan.disclosures[d].tag, summary: null as string[] | null, body: [] as string[] };
+                    lifted[d] = record;
+                    out().push(placeholder('DISCLOSURE', disclosureBodies.length));
+                    disclosureBodies.push(record);
+                    frames.push({ out: record.body, disclosure: d });
+                } else if (cut.kind === 'openSummary') {
+                    lifted[d].summary = [];
+                    frames.push({ out: lifted[d].summary!, disclosure: d, summary: true });
+                } else if (cut.kind === 'closeSummary') {
+                    const frame = frames[frames.length - 1];
+                    if (frame.disclosure === d && frame.summary) frames.pop();
+                } else if (cut.kind === 'closeDisclosure') {
+                    let k = frames.length - 1;
+                    while (k > 0 && !(frames[k].disclosure === d && !frames[k].summary)) k--;
+                    if (k > 0) frames.length = k;
+                }
+            }
+            emit(from, text.length);
+            endSummaries(b);
+        }
+        // At the end of block `b`: a summary that opened in it and that no `</summary>` closes ends there
+        // (but where its disclosure closes in that block), and what opened in it with it; its disclosure's body follows.
+        function endSummaries(b: number): void {
+            for (let k = 1; k < frames.length; k++) {
+                const frame = frames[k];
+                if (!frame.summary) continue;
+                const summary = plan.disclosures[frame.disclosure!].summary!;
+                if (summary.block !== b || summary.byTag || summary.closedIn === b) continue;
+                frames.length = k;
+                frames.push({ out: lifted[frame.disclosure!].body, disclosure: frame.disclosure });
+                return;
+            }
+        }
+        return top;
     };
 
-    // A disclosure (`<details>`) opened in a block where it stands (see disclosureTags), with the blocks
-    // up to its matching `</details>` (or to the end of the text: a browser shows one never closed
-    // holding the rest), is lifted out as one block: its summary (a `<summary>` first in it, to its
-    // `</summary>`, across blank lines and blocks) and its body are each read as a Markdown text of its
-    // own, by the same reading as the document (aligned wrappers, headings, tables, lists, quotes, code,
-    // nested disclosures). Tags open and close as a browser has them: a closing tag closes the nearest
-    // one of its kind open, and what opened in it; one in a quote, list item or heading closes that too,
-    // what follows it in there read at the level it closed into (see containerTags). A summary a
-    // `</summary>` does not close ends where its block does, unless its disclosure closes in that
-    // block: its body is not taken into it. Text before a disclosure's tag and after its closing tag in
-    // their blocks stays where it stands; a disclosure opened and closed in one HTML block is that
-    // block's HTML. Each block's tags are found once at each level of nesting, and nesting stops at
-    // MAX_DISCLOSURE_DEPTH (deeper, a disclosure's tags go, its text staying in the one holding it), so
-    // the work is linear in the text's length.
-    const groupDisclosures = (parts: BlockPart[]): string[] => {
-        const out: string[] = [];
-        const emit = (part: BlockPart) => {
-            if (!trimAsciiWhitespace(part.text)) return;
-            if (part.html && HTML_BLOCK_LINE.exec(part.text)?.index !== 0) {
-                out.push(placeholder('RAW_HTML', rawHtmlParts.length));
-                rawHtmlParts.push(part.text);
-            } else out.push(part.text);
-        };
-        if (!parts.some(part => part.tag || MAY_HOLD_DISCLOSURE_TAG.test(part.text))) {
-            for (const part of parts) emit(part);
-            return out;
-        }
-        if (disclosureDepth >= MAX_DISCLOSURE_DEPTH) {
-            // Flattened: the tags go, their text stays, read as the block was (HTML where it was).
-            for (const part of parts) {
-                const { tags, htmlFrom } = tagsOf(part);
-                let text = '';
-                let last = 0;
-                for (const tag of tags) {
-                    if (tag.escape) continue;
-                    text += part.text.slice(last, tag.at);
-                    last = tag.end;
-                }
-                emit(last === 0 ? part : { text: text + part.text.slice(last), html: part.html || htmlFrom === 0 });
-            }
-            return out;
-        }
-        // A part of a block, from `from` (blank lines at its start left out), raw HTML where the block's is.
-        const cut = (part: BlockPart, htmlFrom: number, from: number, to = part.text.length): BlockPart => {
-            const html = part.html || from >= htmlFrom;
-            while (from < to) {
-                const newline = part.text.indexOf('\n', from);
-                if (newline === -1 || newline >= to || trimAsciiWhitespace(part.text.slice(from, newline))) break;
-                from = newline + 1;
-            }
-            return { text: part.text.slice(from, to), html };
-        };
-        const queue = parts.slice();
-        // The parts from part `from.j` at `from.at` to part `to.j` at `to.at` (or to the end).
-        const between = (from: { j: number; at: number }, to?: { j: number; at: number }): BlockPart[] => {
-            const htmlFrom = (j: number) => tagsOf(queue[j]).htmlFrom;
-            if (to && to.j === from.j) return [cut(queue[from.j], htmlFrom(from.j), from.at, to.at)];
-            const last = to ? to.j : queue.length;
-            return [cut(queue[from.j], htmlFrom(from.j), from.at), ...queue.slice(from.j + 1, last), ...(to ? [cut(queue[to.j], htmlFrom(to.j), 0, to.at)] : [])];
-        };
-        // The first of `tags` from `t` on, past each `</summary>` with only white space before it (from
-        // `from`): a browser ignores one with no summary open. Where the white space before it starts.
-        const pastStrayCloses = (text: string, tags: DisclosureTag[], t: number, from: number): { tag?: DisclosureTag; from: number } => {
-            while (t < tags.length && !tags[t].open && tags[t].summary && !tags[t].escape && !trimAsciiWhitespace(text.slice(from, tags[t].at))) from = tags[t++].end;
-            return { tag: tags[t], from };
-        };
-        // A quote, list or heading at `j` holding a closing tag that closes what is open outside it (see
-        // containerTags) is split there: the part before the tag, the tag, and the blocks after it.
-        const openUp = (j: number, summaryOpen: boolean): void => {
-            const part = queue[j];
-            const tag = tagsOf(part, summaryOpen).tags[0];
-            if (!tag?.escape) return;
-            const { html, markdown } = containerRest(part.text, tag);
-            const rest = [...(trimAsciiWhitespace(html) ? [{ text: html, html: true }] : []), ...splitRaw(liftCode(markdown)).map(text => ({ text, html: false }))];
-            queue.splice(j, 1, { text: part.text.slice(0, tag.at), html: false }, { text: '', html: true, tag: { summary: tag.summary } }, ...rest);
-        };
-        for (let i = 0; i < queue.length; i++) {
-            const part = queue[i];
-            const { tags, htmlFrom } = tagsOf(part);
-            // The first disclosure opened in it at its level: in Markdown, or in HTML and not closed in it.
-            let opener = -1;
-            let first = -1;
-            for (let t = 0, depth = 0; t < tags.length; t++) {
-                const tag = tags[t];
-                if (tag.summary || tag.escape) continue;
-                if (tag.open) {
-                    if (depth === 0) {
-                        if (tag.at < htmlFrom) { opener = t; break; }
-                        first = t;
-                    }
-                    depth++;
-                } else if (depth > 0 && --depth === 0) first = -1;
-            }
-            if (opener === -1) opener = first;
-            if (opener === -1) { emit(part); continue; }
-            const open = tags[opener];
-            emit(cut(part, htmlFrom, 0, open.at));
-            // Its summary: a `<summary>` first after its tag, white space (blank lines too) between.
-            let summaryTag: { j: number; tag: DisclosureTag } | undefined;
-            const after = pastStrayCloses(part.text, tags, opener + 1, open.end);
-            const next = after.tag;
-            if (next?.open && next.summary && !trimAsciiWhitespace(part.text.slice(after.from, next.at))) summaryTag = { j: i, tag: next };
-            else if (!trimAsciiWhitespace(part.text.slice(after.from))) {
-                let k = i + 1;
-                while (k < queue.length && !queue[k].tag && !trimAsciiWhitespace(queue[k].text)) k++;
-                const first = k < queue.length ? pastStrayCloses(queue[k].text, tagsOf(queue[k]).tags, 0, 0) : undefined;
-                const lead = first?.tag;
-                if (lead?.open && lead.summary && !lead.escape && !trimAsciiWhitespace(queue[k].text.slice(first!.from, lead.at))) summaryTag = { j: k, tag: lead };
-            }
-            let summary: BlockPart[] | null = null;
-            let bodyFrom: { j: number; at: number } | undefined = { j: i, at: open.end };
-            let close: { j: number; tag: DisclosureTag } | undefined;
-            if (summaryTag) {
-                // It ends at its `</summary>` (closing what opened in it), else where its disclosure closes or the text ends.
-                let end: { j: number; tag: DisclosureTag } | undefined;
-                let details = 0;
-                let summaries = 0;
-                scan: for (let k = summaryTag.j; k < queue.length; k++) {
-                    openUp(k, true);
-                    for (const tag of tagsOf(queue[k], true).tags) {
-                        if (k === summaryTag.j && tag.at <= summaryTag.tag.at) continue;
-                        if (tag.open) { if (tag.summary) summaries++; else details++; continue; }
-                        if (tag.summary ? summaries > 0 : details > 0) { if (tag.summary) summaries--; else details--; continue; }
-                        end = { j: k, tag };
-                        break scan;
-                    }
-                }
-                const from = { j: summaryTag.j, at: summaryTag.tag.end };
-                if (end?.tag.summary) {
-                    summary = between(from, { j: end.j, at: end.tag.at });
-                    bodyFrom = { j: end.j, at: end.tag.end };
-                } else if (end && end.j === summaryTag.j) {
-                    // Closed with its disclosure in its block: all the disclosure holds after it.
-                    summary = between(from, { j: end.j, at: end.tag.at });
-                    bodyFrom = undefined;
-                    close = end;
-                } else {
-                    summary = between(from, { j: from.j, at: queue[from.j].text.length });
-                    bodyFrom = { j: from.j + 1, at: 0 };
-                }
-            }
-            // Its body: to its closing tag.
-            if (bodyFrom && !close) {
-                let depth = 1;
-                scan: for (let k = bodyFrom.j; k < queue.length; k++) {
-                    openUp(k, false);
-                    for (const tag of tagsOf(queue[k]).tags) {
-                        if ((k === bodyFrom.j && tag.at < bodyFrom.at) || tag.summary) continue;
-                        if (tag.open) depth++;
-                        else if (--depth === 0) { close = { j: k, tag }; break scan; }
-                    }
-                }
-            }
-            const body = !bodyFrom ? [] : bodyFrom.j >= queue.length ? [] : between(bodyFrom, close ? { j: close.j, at: close.tag.at } : undefined);
-            out.push(placeholder('DISCLOSURE', disclosureBodies.length));
-            disclosureBodies.push({ tag: part.text.slice(open.at, open.end), summary, body });
-            if (!close) break;
-            queue[close.j] = cut(queue[close.j], tagsOf(queue[close.j]).htmlFrom, close.tag.end);
-            i = close.j - 1;
-        }
-        return out;
-    };
+    // Reads blocks as text of their own: a level's (see groupDisclosures).
+    const splitIntoBlocks = (text: string): string[] => groupDisclosures(splitRaw(text));
 
     const splitRaw = (text: string): string[] => {
     // A line of only spaces and tabs is a blank line too (CommonMark). Each block keeps the blank
@@ -2676,9 +3175,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             // new construct. Scoped to a single such line at a time (no nested
             // code/blockquote/sub-list/multi-paragraph items - those require un-splitting
             // already-separated raw blocks, out of scope here).
-            // A disclosure's or summary's tag starting a line (an HTML block, CommonMark's condition 6) is
-            // no lazy continuation: indented less than the list's items' content, it ends the list, and
-            // after a quote it ends the quote (see disclosureTags).
+            // A disclosure's tag or a summary's end tag starting a line (an HTML block, see DISCLOSURE_TAG_LINE)
+            // is no lazy continuation: indented less than the list's items' content, it ends the list, and
+            // after a quote it ends the quote.
             const isDisclosureLine = DISCLOSURE_TAG_LINE.test(line);
             if (isList) {
                 const spaces = item![3] === undefined ? 1 : item![0].length - 1 - item![1].length - item![2].length;
@@ -2789,7 +3288,6 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     }
     return mergedBlocks;
     };
-    const splitIntoBlocks = (text: string): string[] => groupDisclosures(splitRaw(text).map(text => ({ text, html: false })));
 
     let listIdCounter = 1;
     /** The quotes read so far (each quote's paragraphs share an id, see ParagraphMetadata.quoteId). */
@@ -3017,8 +3515,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             }
         }
 
-        // A disclosure lifted out of the blocks (see groupDisclosures): its summary and attributes as the
-        // HTML parser reads its `<details>` tag, its body read as blocks of its own.
+        // A disclosure lifted out of the blocks (see groupDisclosures): its attributes as the HTML parser
+        // reads its `<details>` tag, its summary's blocks and its body's read as they were lifted (nested
+        // disclosures placeholders in them). Its summary is the text of its summary's blocks.
         const disclosureIndex = placeholderIndex(block, 'DISCLOSURE');
         if (disclosureIndex !== null && disclosureIndex < disclosureBodies.length) {
             const { tag, summary, body } = disclosureBodies[disclosureIndex];
@@ -3027,9 +3526,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             const summaryNodes: OfficeContentNode[] = [];
             disclosureDepth++;
             try {
-                // Its summary's text, read as its blocks are (Markdown, or HTML where it stands in an HTML block).
-                if (summary) await parseBlocks(groupDisclosures(summary), summaryNodes);
-                await parseBlocks(groupDisclosures(body), children);
+                if (summary) await parseBlocks(summary, summaryNodes);
+                await parseBlocks(body, children);
             } finally {
                 disclosureDepth--;
             }
@@ -3037,6 +3535,23 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             const summaryText = summaryTextOf(summaryNodes).replace(/\s+/g, ' ').trim();
             const { summary: _shellSummary, ...attributes } = (shell?.metadata ?? {}) as DisclosureMetadata;
             content.push({ type: 'disclosure', metadata: { ...(summaryText ? { summary: summaryText } : {}), ...attributes }, children });
+            continue;
+        }
+        // A paragraph's text cut from it at a disclosure's tag (see groupDisclosures): a paragraph's text.
+        const liftedTextIndex = placeholderIndex(block, 'LIFTED_TEXT');
+        if (liftedTextIndex !== null && liftedTextIndex < liftedTexts.length) {
+            const lifted = liftedTexts[liftedTextIndex];
+            appendAll(content, splitAtDisplayMath(splitParagraphLines(lifted.text), parts => ({
+                type: 'paragraph',
+                metadata: { alignment: lifted.alignment ?? alignment } as any,
+                children: parts
+            })));
+            continue;
+        }
+        // A container's lines after a tag in it closed it (see groupDisclosures): blocks of the level.
+        const liftedBlocksIndex = placeholderIndex(block, 'LIFTED_BLOCKS');
+        if (liftedBlocksIndex !== null && liftedBlocksIndex < liftedBlocks.length) {
+            await parseBlocks(splitIntoBlocks(liftCode(liftedBlocks[liftedBlocksIndex])), content);
             continue;
         }
         // Raw HTML cut from an HTML block at a disclosure's tag (see groupDisclosures).
