@@ -1256,6 +1256,33 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
      * registers its caption before reading its content, and the figcaption branch records its paragraph.
      */
     const figureCaptions = new Map<HtmlNode, OfficeContentNode[]>();
+    /**
+     * Each `<details>`'s summary (its first `<summary>` child, or null), found once per details: looked up
+     * again for each `<summary>` in it, a details of n children and n summaries took n^2 steps.
+     */
+    const detailsSummaries = new WeakMap<HtmlNode, HtmlNode | null>();
+    const summaryOfDetails = (details: HtmlNode): HtmlNode | null => {
+        let summary = detailsSummaries.get(details);
+        if (summary === undefined) {
+            summary = details.children.find(c => c.type === 'element' && c.tagName === 'summary') ?? null;
+            detailsSummaries.set(details, summary);
+        }
+        return summary;
+    };
+    /** The nearest `<details>` each element is in (or null), each element's found once (see enclosingDetails). */
+    const detailsAround = new WeakMap<HtmlNode, HtmlNode | null>();
+    const enclosingDetails = (node: HtmlNode): HtmlNode | null => {
+        const path: HtmlNode[] = [];
+        let found: HtmlNode | null = null;
+        for (let up = node.parent; up; up = up.parent) {
+            const known = detailsAround.get(up);
+            if (known !== undefined) { found = known; break; }
+            if (up.type === 'element' && up.tagName === 'details') { found = up; break; }
+            path.push(up);
+        }
+        for (const element of path) detailsAround.set(element, found);
+        return found;
+    };
     /** The ids of note references and of the elements holding them (an EPUB's `<sup id="calledF1">`), which a back-link targets. */
     const noteReferenceIds = new Set<string>();
     const isFootnoteBackLink = (node: HtmlNode): boolean => node.tagName === 'a' && (
@@ -1845,8 +1872,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
             // A <summary> that is no disclosure's summary, in a disclosure (one after its first, or in a piece of
             // a Markdown disclosure): a block of its own, as a browser shows it, never run into the text around it.
             if (tagName === 'summary' && (part.inDisclosure || (() => {
-                for (let up = node.parent; up; up = up.parent) if (up.type === 'element' && up.tagName === 'details') return up.children.find(c => c.type === 'element' && c.tagName === 'summary') !== node;
-                return false;
+                const details = enclosingDetails(node);
+                return !!details && summaryOfDetails(details) !== node;
             })())) {
                 const kids = parseChildren(node, newFormatting, listContext);
                 const blocks: OfficeContentNode[] = [];
@@ -1861,7 +1888,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 return blocks;
             }
             if (tagName === 'details') {
-                const summaryElement = node.children.find(c => c.type === 'element' && c.tagName === 'summary');
+                const summaryElement = summaryOfDetails(node) ?? undefined;
                 const blocksOf = (children: HtmlNode[], holder: HtmlNode): OfficeContentNode[] => {
                     const blocks: OfficeContentNode[] = [];
                     let run: OfficeContentNode[] = [];
