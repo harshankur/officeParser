@@ -2189,3 +2189,55 @@ export async function testXhtmlSniffedPastFirstRead(): Promise<void> {
     }
     console.log('✓ XHTML sniffed past its first read');
 }
+
+/**
+ * A summary holding only named anchors keeps each id once, in time linear in their number (each id was
+ * looked up in the list so far): 80,000 ids against 20,000.
+ */
+export async function testDisclosureSummaryAnchorsLinear(): Promise<void> {
+    const html = (n: number): string => {
+        let marks = '';
+        for (let i = 0; i < n; i++) marks += `<a id="a${i % (n - 5)}"></a>`;
+        return `<details><summary>${marks}</summary><p>body</p></details>`;
+    };
+    const read = async (n: number): Promise<OfficeParserAST> => OfficeParser.parseOffice(Buffer.from(html(n)), { fileType: 'html' });
+    let small = await timed(() => read(20000));
+    let large = await timed(() => read(80000));
+    if (large > 8 * small + 250) {
+        small = Math.max(small, await timed(() => read(20000)));
+        large = Math.min(large, await timed(() => read(80000)));
+    }
+    assert.ok(large <= 8 * small + 250, `Summary anchors: 80,000 in ${large.toFixed(0)} ms, 20,000 in ${small.toFixed(0)} ms`);
+    const ast = await read(80000);
+    const disclosure = ast.content[0];
+    const anchorIds = (disclosure.metadata as { anchorIds?: string[] }).anchorIds ?? [];
+    assert.strictEqual(anchorIds.length, 80000 - 5, 'each id is kept once');
+    assert.strictEqual(new Set(anchorIds).size, anchorIds.length, 'no id is repeated');
+    console.log('✓ A summary of 80,000 anchors is read in linear time and keeps each id once');
+}
+
+/** 130,000 ids waiting before a disclosure are all written to Markdown (a spread of them into a call failed past about 125,000). */
+export async function testMarkdownManyAnchorsBeforeDisclosure(): Promise<void> {
+    const n = 130000;
+    let marks = '';
+    for (let i = 0; i < n; i++) marks += `<a id="a${i}"></a>`;
+    const ast = await OfficeParser.parseOffice(Buffer.from(`<p>x</p><p>${marks}</p><details><summary>S</summary><p>b</p></details>`), { fileType: 'html' });
+    const md = String((await ast.to('md')).value);
+    assert.strictEqual((md.match(/<a id="/g) ?? []).length, n, 'every waiting id is written');
+    console.log('✓ 130,000 ids waiting before a disclosure are all written to Markdown');
+}
+
+/** A paragraph in a paragraph holding 130,000 captioned pictures writes every caption (a spread of them into a call failed). */
+export async function testNestedParagraphCaptionsMany(): Promise<void> {
+    const n = 130000;
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==';
+    const images = Array.from({ length: n }, (_, i) => ({ type: 'image', metadata: { attachmentName: 'p.png', caption: 'c' + i }, children: [] }));
+    const ast = {
+        type: 'html', metadata: {},
+        attachments: [{ type: 'image', name: 'p.png', extension: 'png', mimeType: 'image/png', data: png }],
+        content: [{ type: 'paragraph', children: [{ type: 'paragraph', children: images }] }],
+    } as unknown as OfficeParserAST;
+    const txt = String((await OfficeGenerator.generate(ast, 'txt')).value);
+    assert.strictEqual((txt.match(/c\d+/g) ?? []).length, n, 'every caption is written');
+    console.log('✓ 130,000 captions of a paragraph in a paragraph are all written to text');
+}
