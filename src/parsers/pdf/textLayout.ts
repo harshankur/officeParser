@@ -15,6 +15,7 @@ import { CellMetadata, ListMetadata, NodeBounds, OfficeContentNode, TextFormatti
 import { rotateBoundsToRendered, roundBounds, unionAll, unionBounds } from './geometry.js';
 import { PdfLayoutConfig, PdfLine, RawRun, TextFragment } from './pdfTypes.js';
 import { median } from '../../utils/numberUtils.js';
+import { CJK_CHAR, endsInWordHyphen } from '../../utils/lineJoins.js';
 import { appendAll } from '../../utils/nodeListUtils.js';
 import { MarkerRun, MarkerWord, markerWord, readMarkerWord } from '../../utils/listMarkers.js';
 
@@ -409,9 +410,6 @@ function segmentsOf(clusterRuns: RawRun[], cfg: PdfLayoutConfig, gutters: readon
     if (cur.length) segments.push(cur);
     return segments.filter(seg => seg.some(r => r.text.trim().length));
 }
-
-/** Chinese and Japanese characters (Han, kana, their punctuation and full-width forms): text set without spaces between words. */
-const CJK_CHAR = /[\u3000-\u303F\u3040-\u30FF\u31F0-\u31FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]/;
 
 /** Letters of the scripts written right to left (Hebrew, Arabic, Syriac, Thaana, NKo, and their presentation forms). */
 const RTL_LETTER = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
@@ -2160,9 +2158,7 @@ function paragraphNode(group: ParaGroup, page: PageContext, doc: DocContext, for
         if (li > 0) {
             // Join with the previous line: de-hyphenate or insert a space.
             const prevText = prev.fragments.map(f => f.text).join('');
-            const softHyphen = /­$/.test(prevText);
-            const hardHyphen = /-$/.test(prevText);
-            const nextStartsLower = /^[\p{Ll}]/u.test(line.fragments[0]?.text ?? '');
+            const wordHyphen = endsInWordHyphen(prevText, line.fragments[0]?.text ?? '');
             // A vertical stack of short glyphs at the same x is one token wrapped inside a narrow cell
             // (a "fancy" calendar draws "11" as two stacked "1"s, and "Sun" as "Su" over "n"), not two
             // words: joining with a space would give "1 1" / "Su n". Detect it: both this line and the
@@ -2190,7 +2186,7 @@ function paragraphNode(group: ParaGroup, page: PageContext, doc: DocContext, for
             const prevEnd = prevText.trimEnd();
             const cjkJoin = (CJK_CHAR.test(prevEnd.slice(-1)) && CJK_CHAR.test(curText.charAt(0)))
                 || (CJK_CHAR.test(prevEnd) && !/\s/.test(prevEnd.trim()) && /^[\p{L}\p{N}]/u.test(curText) && /[\p{L}\p{N}]$/u.test(prevEnd));
-            if (cfg.mergeHyphenatedWords && (softHyphen || (hardHyphen && nextStartsLower))) {
+            if (cfg.mergeHyphenatedWords && wordHyphen) {
                 // drop the trailing hyphen from the last emitted child and join with no space
                 const lastChild = children[children.length - 1];
                 if (lastChild?.text) { lastChild.text = lastChild.text.replace(/[-­]$/, ''); }

@@ -10,6 +10,7 @@ import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXml
 import { heldColumns } from '../utils/columnUtils.js';
 import { onDocumentPage } from '../utils/pageLimits.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, odfUserDefinedXml, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
+import { pictureKindOfBase64, picturesOfKind } from '../utils/imageUtils.js';
 import { formatListNumber, markerPattern, MarkerPattern, odfNumFormat } from '../utils/listMarkers.js';
 import { customNoteMark } from '../utils/noteMarks.js';
 import { BaseGenerator } from './BaseGenerator.js';
@@ -929,16 +930,16 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         const att = this.getAttachment(attachmentName);
         if (!att || !att.data) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName, reason: 'missing attachment' }); return null; }
         const ext = MIME_EXT[(att.mimeType || '').toLowerCase()];
-        if (!ext) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName, reason: 'unsupported mime' }); return null; }
+        if (!ext) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName, reason: `ODT output does not take ${picturesOfKind(pictureKindOfBase64(att.data, att.mimeType, att.extension))}` }); return null; }
         // Each attachment decoded and measured once, at the first picture showing it: decoded again at
         // every picture before the media was looked up, one 3 MB picture shown 20,000 times took 105 s.
-        if (this.mediaUndecodable.has(attachmentName)) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName }); return null; }
+        if (this.mediaUndecodable.has(attachmentName)) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName, reason: 'its data could not be decoded' }); return null; }
         let name = this.mediaByAttachment.get(attachmentName);
         if (!name) {
             let bytes: Uint8Array;
             try { bytes = decodeBase64(att.data); } catch {
                 this.mediaUndecodable.add(attachmentName);
-                this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName });
+                this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName, reason: 'its data could not be decoded' });
                 return null;
             }
             this.mediaIntrinsic.set(attachmentName, sniffImageSize(bytes));

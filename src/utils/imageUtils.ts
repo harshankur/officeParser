@@ -186,3 +186,45 @@ export const renameAttachments = (nodes: OfficeContentNode[], renamed: ReadonlyM
         }
     }
 };
+
+/**
+ * What a picture's bytes are, named for a message: its format by its signature (PNG, JPEG, GIF, BMP, TIFF,
+ * WebP, EMF, WMF, SVG, PDF), XML that is no picture, else the format its media type or extension names
+ * (`unknown` when none does). Only the first 512 bytes are read.
+ */
+export function pictureKindOf(bytes: Uint8Array, mimeType?: string, extension?: string): string {
+    const ascii = (from: number, to: number) => String.fromCharCode(...bytes.subarray(from, to));
+    const u32 = (at: number) => bytes.length >= at + 4 ? (bytes[at] | bytes[at + 1] << 8 | bytes[at + 2] << 16 | bytes[at + 3] << 24) >>> 0 : -1;
+    // (Read by index alone, so a Uint8Array serves where there is no Buffer.)
+    const mime = getMimeFromBytes(bytes as Buffer);
+    if (mime) return mime === 'application/pdf' ? 'PDF' : mime === 'image/webp' ? 'WebP' : mime.slice(6).toUpperCase();
+    if (u32(0) === 1 && ascii(40, 44) === ' EMF') return 'EMF';
+    if (u32(0) === 0x9AC6CDD7 || ((bytes[0] === 1 || bytes[0] === 2) && bytes[1] === 0 && bytes[2] === 9 && bytes[3] === 0)) return 'WMF';
+    // (A byte order mark read byte by byte is three characters.)
+    const head = ascii(0, Math.min(bytes.length, 512)).replace(/^\xEF\xBB\xBF/, '').trimStart();
+    if (/^(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*(<!DOCTYPE[^>]*>\s*)?<svg[\s>]/i.test(head)) return 'SVG';
+    if (head.startsWith('<')) return 'XML';
+    const named = (mimeType?.match(/^image\/(?:x-)?([\w.+-]+)$/i)?.[1] ?? extension ?? '').replace(/^svg\+xml$/i, 'svg');
+    const upper = named.toUpperCase();
+    return upper === 'JPG' ? 'JPEG' : upper === 'TIF' ? 'TIFF' : upper === 'WEBP' ? 'WebP' : upper || 'unknown';
+}
+
+/**
+ * {@link pictureKindOf} for a picture held as base64 (an attachment's `data`), decoding only the start of
+ * it, so a picture shown many times is not decoded whole at each. Never throws: data that is not base64
+ * is named by its media type or extension alone.
+ */
+export function pictureKindOfBase64(data: string | undefined, mimeType?: string, extension?: string): string {
+    let bytes = new Uint8Array(0);
+    try {
+        const head = (data ?? '').slice(0, 1024).replace(/[^A-Za-z0-9+/]/g, '');
+        const bin = atob(head.slice(0, head.length - head.length % 4));
+        bytes = Uint8Array.from(bin, ch => ch.charCodeAt(0));
+    } catch { /* named by its media type or extension */ }
+    return pictureKindOf(bytes, mimeType, extension);
+}
+
+/** Pictures of a kind {@link pictureKindOf} named, for a message: "EMF pictures", or "pictures of its kind" for `unknown`. */
+export function picturesOfKind(kind: string): string {
+    return kind === 'unknown' ? 'pictures of its kind' : `${kind} pictures`;
+}

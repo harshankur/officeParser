@@ -4,6 +4,7 @@ import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { DRAWINGML_PRESETS } from '../utils/shapeNames.js';
 import { decodeBase64, encUrl, hexColor, ooxmlCustomPropertiesXml, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
+import { pictureKindOf, picturesOfKind } from '../utils/imageUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { buildDeck, bulletMargin, Box, DeckItem, DeckParagraph, DeckRun, DeckSlide, unseenTable } from './slides/deck.js';
 
@@ -186,7 +187,7 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
         if (slide.picture) {
             const target = this.mediaFor(`background:${this.media.length}`, slide.picture, undefined);
             if (target) bg = `<p:bg><p:bgPr><a:blipFill dpi="0" rotWithShape="1"><a:blip r:embed="${rel('image', target)}"/><a:srcRect/><a:stretch><a:fillRect/></a:stretch></a:blipFill><a:effectLst/></p:bgPr></p:bg>`;
-            else this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { reason: 'a background picture that is not PNG, JPEG, GIF or BMP' });
+            else this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { reason: `PPTX output does not take ${picturesOfKind(pictureKindOf(slide.picture))} as a slide's background (it takes PNG, JPEG, GIF, BMP, EMF and WMF)` });
         } else if (slide.background && hexColor(slide.background)) {
             bg = `<p:bg><p:bgPr><a:solidFill><a:srgbClr val="${hexColor(slide.background)}"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>`;
         }
@@ -220,7 +221,12 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
                 // (An SVG picture PowerPoint shows only beside a PNG copy, which is not made here; another kind PPTX
                 // holds none of. Its alternative text in its place.)
                 const svg = /svg/i.test(a?.mimeType ?? '') || /\.svg$/i.test(item.attachment);
-                this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: item.attachment, reason: !a ? 'missing attachment' : svg ? 'an SVG picture (PPTX output holds one only with a PNG copy of it)' : 'a picture of a kind PPTX output does not hold (PNG, JPEG, GIF, BMP, TIFF, EMF and WMF it does)' });
+                const kind = bytes?.length ? pictureKindOf(bytes, a?.mimeType, a?.extension) : '';
+                this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, {
+                    name: item.attachment,
+                    reason: !a ? 'missing attachment' : !kind ? 'attachment has no data' : svg ? 'an SVG picture (PPTX output holds one only with a PNG copy of it)'
+                        : kind === 'XML' ? 'its data is XML, not a picture' : `PPTX output does not take ${picturesOfKind(kind)} (it takes PNG, JPEG, GIF, BMP, TIFF, EMF and WMF)`,
+                });
                 return item.alt ? this.itemXml({ kind: 'text', box: item.box, paragraphs: [{ runs: [{ text: item.alt }] }] }, next, rel) : '';
             }
             // Fitted into its box, keeping its shape, centred (unless it fills it, as its page drew it).

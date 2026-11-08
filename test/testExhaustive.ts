@@ -17,6 +17,9 @@ import { excelShownText } from '../src/utils/excelFormat';
 import { fillPageNumber, pageNumberText } from '../src/utils/pageNumbers';
 import { guardShaping } from '../src/generators/pdf/nativePdfEngine';
 import { OfficeTemplate } from '../src/OfficeTemplate';
+import { readTag } from '../src/template/templateTags';
+import { pictureKindOf, pictureKindOfBase64 } from '../src/utils/imageUtils';
+import { getWarningMessage } from '../src/utils/errorUtils';
 import { OfficeConverter } from '../src/OfficeConverter';
 import { zipSync, strToU8, unzipSync, unzlibSync, strFromU8 } from 'fflate';
 import { PDFDict, PDFDocument, PDFHexString, PDFName, PDFOperator, PDFRawStream, StandardFonts, TextAlignment, degrees, rgb } from 'pdf-lib';
@@ -24,6 +27,7 @@ import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
 import type { ImageMetadata, OfficeContentNode, OfficeParserAST, ShapeMetadata, SheetMetadata } from '../src/types';
+import { OfficeWarningType } from '../src/types';
 import { parseXmlString } from '../src/utils/xmlUtils';
 import { decodeWindows1252, textDecoder } from '../src/utils/encodingUtils';
 import { ocrTestHooks, performOcr, terminateOcr } from '../src/utils/ocrUtils';
@@ -8783,7 +8787,7 @@ async function testPresentationWriters(): Promise<void> {
             { type: 'paragraph', children: [{ type: 'image', metadata: { attachmentName: 'odd', altText: 'Odd' } }] }] } as any;
     const headedOut = await OfficeGenerator.generate(headed, 'pptx');
     const headedParts = Object.keys(unzipSync(new Uint8Array(headedOut.value as Uint8Array)));
-    assert.ok(headedParts.includes('ppt/media/image1.png') && headedParts.filter(p => p.startsWith('ppt/media/')).every(p => /^ppt\/media\/image\d+\.[a-z]+$/.test(p)) && headedOut.messages.some((m: any) => /kind PPTX output does not hold/.test(m.details?.reason ?? '')), `pptx: a heading's picture is written, a type no picture has reported; got ${headedParts}`);
+    assert.ok(headedParts.includes('ppt/media/image1.png') && headedParts.filter(p => p.startsWith('ppt/media/')).every(p => /^ppt\/media\/image\d+\.[a-z]+$/.test(p)) && headedOut.messages.some((m: any) => /^PPTX output does not take /.test(m.details?.reason ?? '')), `pptx: a heading's picture is written, a type no picture has reported; got ${headedParts}`);
     // EMF and WMF pictures are held, with their content types.
     const emf = new Uint8Array(88); emf[0] = 1; emf.set([0x20, 0x45, 0x4d, 0x46], 40);
     const emfOut = unzipSync(new Uint8Array((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [{ type: 'image', name: 'a.emf', mimeType: 'image/x-emf', extension: 'emf', data: Buffer.from(emf).toString('base64') }], content: [{ type: 'image', metadata: { attachmentName: 'a.emf' } }] } as any, 'pptx')).value as Uint8Array));
@@ -11476,6 +11480,258 @@ function abortWhenOcrListens(): { signal: AbortSignal; listened: () => boolean }
 }
 
 /**
+ * A word the PDF parser joined across a line break, taking off the hyphen that divided it (#145): the
+ * writers that keep the page's lines (layout text, PPTX, ODP) write the hyphen at the break again, as
+ * 7.x did and pdftotext does, while flowing text holds the word whole. A dash after a space, a second
+ * hyphen and a hyphen after a digit divide no word, and keep their place in every output.
+ */
+async function testPdfHyphenAtLineBreak(): Promise<void> {
+    // A PDF of pages, each a content stream; F1 Helvetica, F2 Helvetica-Bold.
+    const pdfOf = (pages: string[]): Buffer => {
+        const objs = ['<< /Type /Catalog /Pages 2 0 R >>', `<< /Type /Pages /Kids [${pages.map((_, i) => `${5 + i * 2} 0 R`).join(' ')}] /Count ${pages.length} >>`,
+            '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>'];
+        pages.forEach((c, i) => {
+            objs.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${6 + i * 2} 0 R >>`);
+            objs.push(`<< /Length ${Buffer.byteLength(c, 'latin1')} >>\nstream\n${c}\nendstream`);
+        });
+        let pdf = '%PDF-1.4\n';
+        const offsets = objs.map((o, i) => { const at = Buffer.byteLength(pdf, 'latin1'); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; return at; });
+        const xref = Buffer.byteLength(pdf, 'latin1');
+        pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`;
+        pdf += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+        return Buffer.from(pdf, 'latin1');
+    };
+    const lines = (x: number, y: number, texts: string[], lead = 14, font = 'F1', size = 12) =>
+        `BT /${font} ${size} Tf ${x} ${y} Td ${texts.map((l, i) => `${i ? `0 -${lead} Td ` : ''}(${l}) Tj`).join(' ')} ET`;
+    const read = (pages: string[], more: any = {}) => OfficeParser.parseOffice(pdfOf(pages), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false, ...more } } as any) as Promise<OfficeParserAST>;
+    const layout = async (ast: OfficeParserAST) => String((await ast.to('text')).value);
+    const flat = async (ast: OfficeParserAST) => String((await ast.to('text', { textConfig: { preserveLayout: false } } as any)).value);
+    const paragraphs = (ast: OfficeParserAST) => collectAllNodes(ast).filter(n => n.type === 'paragraph').map(n => n.text);
+
+    // The issue's page: two lines of Helvetica, "agree-" at the end of the first.
+    const issuePage = lines(72, 700, ['The committee reached an agree-', 'ment after a long debate.']);
+    const issue = await read([issuePage]);
+    assert.strictEqual(await layout(issue), 'The committee reached an agree-\nment after a long debate.', `#145: layout text keeps the hyphen at the break; got ${JSON.stringify(await layout(issue))}`);
+    assert.deepStrictEqual(paragraphs(issue), ['The committee reached an agreement after a long debate.'], 'the paragraph holds the word whole');
+    assert.strictEqual((await flat(issue)).trim(), 'The committee reached an agreement after a long debate.', 'flat text holds the word whole');
+    const md = String((await issue.to('md')).value);
+    assert.ok(md.includes('agreement') && !md.includes('agree-'), `Markdown holds the word whole; got ${JSON.stringify(md)}`);
+    assert.ok(!collectAllNodes(issue).some(n => n.type === 'text' && (n.text || '').endsWith('-')), 'the AST is as before: the run gave its hyphen up');
+
+    // Not merged: the line ends in the hyphen and a space, and the layout is the page's.
+    const unmerged = await read([issuePage], { mergeHyphenatedWords: false });
+    assert.strictEqual(await layout(unmerged), 'The committee reached an agree-\nment after a long debate.', 'mergeHyphenatedWords false: layout text as before');
+    assert.deepStrictEqual(paragraphs(unmerged), ['The committee reached an agree- ment after a long debate.'], 'mergeHyphenatedWords false: the paragraph as before');
+
+    // A compound broken at its hyphen: the page shows the hyphen, so layout text does.
+    const compound = await layout(await read([lines(72, 700, ['It is a fact that is well-', 'known to the whole committee.'])]));
+    assert.strictEqual(compound, 'It is a fact that is well-\nknown to the whole committee.', `a compound keeps its hyphen at the break; got ${JSON.stringify(compound)}`);
+
+    // Two columns, each with a word divided at a line end: each column's line ends in its hyphen, the columns apart.
+    const columns = await layout(await read([`${lines(72, 700, ['Left column text with an agree-', 'ment that wraps across lines', 'and goes on for a while longer.'])} ${lines(330, 700, ['Right column text that has a', 'deve-', 'lopment in it too, and more.'])}`]));
+    const columnRows = columns.split('\n').map(l => l.split(/ {3,}/));
+    assert.deepStrictEqual(columnRows.map(r => r[0]), ['Left column text with an agree-', 'ment that wraps across lines', 'and goes on for a while longer.'], `the left column's lines; got ${JSON.stringify(columns)}`);
+    assert.deepStrictEqual(columnRows.map(r => r[1]), ['Right column text that has a', 'deve-', 'lopment in it too, and more.'], `the right column's lines; got ${JSON.stringify(columns)}`);
+
+    // A ruled table: a cell's divided word keeps its hyphen in its cell.
+    const rules = '0.5 w 72 700 m 372 700 l S 72 650 m 372 650 l S 72 600 m 372 600 l S 72 600 m 72 700 l S 222 600 m 222 700 l S 372 600 m 372 700 l S';
+    const tableAst = await read([`${rules} ${lines(76, 685, ['Cell with agree-', 'ment inside'], 12, 'F1', 10)} ${lines(226, 685, ['Second', 'cell'], 12, 'F1', 10)} ${lines(76, 635, ['Row two', 'left'], 12, 'F1', 10)} ${lines(226, 635, ['Row two deve-', 'lopment'], 12, 'F1', 10)}`]);
+    const cells = collectAllNodes(tableAst).filter(n => n.type === 'cell').map(n => n.text);
+    assert.deepStrictEqual(cells, ['Cell with agreement inside', 'Second cell', 'Row two left', 'Row two development'], `the cells hold their words whole; got ${JSON.stringify(cells)}`);
+    const tableRows = (await layout(tableAst)).split('\n').filter(Boolean).map(l => l.split(/ {3,}/));
+    assert.deepStrictEqual(tableRows, [['Cell with agree-', 'Second'], ['ment inside', 'cell'], ['Row two', 'Row two deve-'], ['left', 'lopment']], `each cell keeps its lines and their hyphens; got ${JSON.stringify(tableRows)}`);
+
+    // A bold run, and a hyphen drawn as a run of its own in another font.
+    const bold = await layout(await read([`BT /F1 12 Tf 72 700 Td (The committee reached an ) Tj /F2 12 Tf (agree-) Tj ET ${lines(72, 686, ['ment after a long debate.'], 14, 'F2')}`]));
+    assert.strictEqual(bold, 'The committee reached an agree-\nment after a long debate.', `a bold run keeps its hyphen; got ${JSON.stringify(bold)}`);
+    const ownRun = await read([`BT /F1 12 Tf 72 700 Td (The committee reached an agree) Tj /F2 12 Tf (-) Tj ET ${lines(72, 686, ['ment after a long debate.'])}`]);
+    assert.strictEqual(await layout(ownRun), 'The committee reached an agree-\nment after a long debate.', `a hyphen in a run of its own is written once; got ${JSON.stringify(await layout(ownRun))}`);
+    assert.deepStrictEqual(paragraphs(ownRun), ['The committee reached an agreement after a long debate.'], 'and the word is whole');
+
+    // Dashes that divide no word: kept in the paragraph and in layout text.
+    for (const [first, second, joined] of [
+        ['Items one to four -', 'the rest come later in the day.', 'Items one to four - the rest come later in the day.'],
+        ['The committee reached nothing--', 'the debate went on all night.', 'The committee reached nothing-- the debate went on all night.'],
+        ['The trial measured COVID-19-', 'related outcomes in the clinic.', 'The trial measured COVID-19- related outcomes in the clinic.'],
+    ]) {
+        const dashed = await read([lines(72, 700, [first, second])]);
+        assert.deepStrictEqual(paragraphs(dashed), [joined], `"${first}" keeps every dash in the paragraph; got ${JSON.stringify(paragraphs(dashed))}`);
+        assert.strictEqual(await layout(dashed), `${first}\n${second}`, `"${first}" keeps every dash in layout text`);
+    }
+
+    // Joins without a space that are no hyphen's: stacked short glyphs, a subscript, Chinese and Japanese.
+    const stacked = await layout(await read(['BT /F1 10 Tf 300 700 Td (Su) Tj 0 -11 Td (n) Tj ET BT /F1 10 Tf 400 700 Td (1) Tj 0 -11 Td (1) Tj ET BT /F1 12 Tf 72 500 Td (Ordinary prose line that sits apart from the rest of it.) Tj ET']));
+    assert.ok(!stacked.includes('-'), `stacked glyphs take no hyphen; got ${JSON.stringify(stacked)}`);
+    const lowered = await layout(await read(['BT /F1 12 Tf 72 700 Td (The value of x) Tj -8 Ts /F1 7 Tf (i) Tj 0 Ts /F1 12 Tf ( is given) Tj ET']));
+    assert.ok(!lowered.includes('-'), `a subscript after a letter takes no hyphen; got ${JSON.stringify(lowered)}`);
+    const readFile = (name: string) => OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', name)), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as Promise<OfficeParserAST>;
+    assert.ok(!(await layout(await readFile('cjk_wrapped_chrome.pdf'))).includes('-'), 'wrapped Chinese and Japanese lines take no hyphen');
+
+    // PPTX and ODP keep a page's lines too: the first line ends in the hyphen.
+    const pptx = strFromU8(unzipSync(new Uint8Array((await issue.to('pptx')).value as Uint8Array))['ppt/slides/slide1.xml']);
+    assert.ok(/<a:t>The committee reached an agree-<\/a:t><\/a:r><a:br\b[^]*?<a:t>ment after a long debate\.<\/a:t>/.test(pptx), `PPTX: the first line ends in the hyphen; got ${JSON.stringify(pptx.match(/<a:t>[^<]*<\/a:t>/g))}`);
+    const odp = strFromU8(unzipSync(new Uint8Array((await issue.to('odp')).value as Uint8Array))['content.xml']);
+    assert.ok(/>The committee reached an agree-<\/text:span><text:line-break\/><text:span[^>]*>ment after a long debate\.</.test(odp), 'ODP: the first line ends in the hyphen');
+    const unmergedPptx = strFromU8(unzipSync(new Uint8Array((await unmerged.to('pptx')).value as Uint8Array))['ppt/slides/slide1.xml']);
+    assert.ok(unmergedPptx.includes('<a:t>The committee reached an agree-</a:t>') && !unmergedPptx.includes('agree--'), 'PPTX of an unmerged page: one hyphen');
+
+    // A pdfLaTeX page of two narrow columns: the line-end hyphens pdftotext -layout prints, in its order.
+    const latex = await layout(await readFile('two_columns_narrow_latex.pdf'));
+    const pdftotext = 'Mean- presen- sum- infor- ques- time- avail- af- dead- ques- time- com- quar- quar- bet- en- with- discus- intro- re- orga- di- sub- accord- of- in- in- facil- correc- meet- comple- intro-'.split(' ');
+    assert.deepStrictEqual(latex.match(/\p{L}+-(?= |$)/gmu), pdftotext, 'a pdfLaTeX page: the hyphens at its line ends are the ones pdftotext prints');
+
+    // Linear: a paragraph of many lines each divided at a hyphen, and one of many runs on a line, in layout
+    // text and PPTX, each at n against n / 4.
+    const run = (text: string, x: number, y: number, width: number) => ({ type: 'text', text, formatting: { font: 'Helvetica', size: '12pt' }, bounds: { x, y, width, height: 11, baseline: y + 9 } });
+    const pageOf = (runs: any[], height: number) => ({ type: 'pdf', metadata: { pages: 1, pageSetup: { width: 612, height } }, attachments: [], content: [{ type: 'page', metadata: { pageNumber: 1, pageWidth: 612, pageHeight: height }, children: [{ type: 'paragraph', text: runs.map(r => r.text).join(''), children: runs }] }] } as any);
+    const divided = (k: number) => pageOf(Array.from({ length: k }, (_, i) => run(i ? 'ment agree' : 'agree', 72, 20 + i * 14, 60)), 40 + k * 14);
+    assert.strictEqual(String((await OfficeGenerator.generate(divided(3), 'text')).value), 'agree-\nment agree-\nment agree', 'a hand-built page of divided lines');
+    const oneLine = (k: number) => pageOf(Array.from({ length: k }, (_, i) => run('w ', 72 + i * 0.05, 20, 0.05)), 100);
+    const timed = async (work: () => Promise<unknown>) => { const started = performance.now(); await work(); return performance.now() - started; };
+    const n = 10000;
+    for (const [name, shape] of [['divided lines', divided], ['runs on one line', oneLine]] as const) {
+        for (const format of ['text', 'pptx'] as const) {
+            const [large, quarter] = [shape(n), shape(n / 4)];
+            let small = await timed(() => OfficeGenerator.generate(quarter, format));
+            let big = await timed(() => OfficeGenerator.generate(large, format));
+            if (big > 8 * small + 250) {
+                small = Math.max(small, await timed(() => OfficeGenerator.generate(quarter, format)));
+                big = Math.min(big, await timed(() => OfficeGenerator.generate(large, format)));
+            }
+            assert.ok(big <= 8 * small + 250, `${name} to ${format}: ${n} in ${big.toFixed(0)} ms, ${n / 4} in ${small.toFixed(0)} ms`);
+        }
+    }
+    console.log('✓ PDF hyphen at a line break');
+}
+
+/**
+ * A condition written with an operator of another language (`|`, `&`, `||`, `&&`, `===`, `!==`, `=>`, `=<`,
+ * `=!`, `<>`) is refused with the operator as it was typed and what to write instead, not with the
+ * character found doubled or the `=` it starts with blamed.
+ */
+async function testTemplateMistypedOperators(): Promise<void> {
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+    const docx = (text: string): Buffer => Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        'word/document.xml': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W}><w:body><w:p><w:r><w:t xml:space="preserve">${text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</w:t></w:r></w:p></w:body></w:document>`),
+    }));
+    const data = { a: 1, b: 2, answer: 'YES' };
+    const refusal = async (tag: string) => {
+        let error: any;
+        try { await OfficeTemplate.render(docx(`${tag}T{{ endif }}`), { data }); } catch (e) { error = e; }
+        assert.strictEqual(error?.officeIssue?.code, 'TEMPLATE_SYNTAX', `${tag} is refused; got ${error}`);
+        assert.strictEqual(error.officeIssue.details?.reason, 'unreadable', `${tag}: reason unreadable`);
+        assert.ok(String(error.message).includes(tag), `${tag}: the message names the tag; got ${error.message}`);
+        return { detail: String(error.officeIssue.details.detail), message: String(error.message) };
+    };
+    for (const [tag, typed, write] of [
+        ['{{ if a && b }}', '&&', 'and'], ['{{ if a || b }}', '||', 'or'], ['{{ if a & b }}', '&', 'and'],
+        ['{{ if a === b }}', '===', '=='], ['{{ if a !== b }}', '!==', '!='], ['{{ if a <> 1 }}', '<>', '!='],
+        ['{{ if a => 1 }}', '=>', '>='], ['{{ if a =< 1 }}', '=<', '<='], ['{{ if a =! 1 }}', '=!', '!='],
+    ]) {
+        const { detail } = await refusal(tag);
+        assert.ok(detail.startsWith(`uses ${typed};`), `${tag}: the operator is named as typed; got ${detail}`);
+        assert.ok(new RegExp(`(write|use) ${write.replace(/[|=!<>]/g, '\\$&')} to`).test(detail), `${tag}: says to write ${write}; got ${detail}`);
+        assert.ok(!detail.includes('single ='), `${tag}: no single = is blamed; got ${detail}`);
+    }
+    // && names and alone, || or alone.
+    assert.ok(!(await refusal('{{ if a && b }}')).detail.includes(' or '), '&& does not name or');
+    assert.ok(!(await refusal('{{ if a || b }}')).detail.includes(' and '), '|| does not name and');
+    // A single bar: a filter where a condition takes none.
+    for (const tag of ['{{ if (answer | lower) == "yes" }}', '{{ if a | b }}']) {
+        const { detail, message } = await refusal(tag);
+        assert.ok(detail.startsWith('uses |,') && detail.includes('filter') && !detail.includes('||'), `${tag}: the single bar is named, as a filter; got ${detail}`);
+        assert.ok(message.includes('cannot be read: it uses |,'), `${tag}: the message reads whole; got ${message}`);
+    }
+    // An else if's condition is read alike (inside blocks that pair, it stays text as typed).
+    const elseIf = readTag('else if a | b');
+    assert.ok(elseIf?.ok === false && elseIf.reason.startsWith('uses |,') && !elseIf.reason.includes('||'), `an else if with a single bar names it; got ${JSON.stringify(elseIf)}`);
+    // What a condition does take is unchanged: a filter on a field, a bar inside a string.
+    const rendered = async (text: string) => {
+        const xml = strFromU8(unzipSync(new Uint8Array(await OfficeTemplate.render(docx(text), { data }) as Uint8Array))['word/document.xml']);
+        return xml.slice(xml.indexOf('<w:body>')).replace(/<[^>]+>/g, '');
+    };
+    assert.strictEqual(await rendered('{{ answer | lower }}'), 'yes', 'a filter on a field still fills');
+    assert.strictEqual(await rendered('{{ if answer == "x|y" }}T{{ else }}F{{ endif }}'), 'F', 'a bar inside a string is text');
+    assert.strictEqual(await rendered('{{ if a <= 1 and b >= 2 and a != b }}T{{ else }}F{{ endif }}'), 'T', 'the operators a condition takes still read');
+    console.log('✓ Template mistyped operators');
+}
+
+/**
+ * A picture a writer leaves out (IMAGE_PROCESSING_FAILED) is reported by its name and why: the kind its
+ * bytes are (EMF, WMF, TIFF, WebP, XML that is no picture, damaged data) and the output that does not
+ * take it, in a whole sentence. The words of the PDF parser's own use of the code, a picture pdf.js
+ * decoded whose pixels could not be read, stay as they are.
+ */
+async function testPicturesLeftOutNamed(): Promise<void> {
+    const emf = new Uint8Array(88); new DataView(emf.buffer).setUint32(0, 1, true); new DataView(emf.buffer).setUint32(4, 88, true); emf.set([0x20, 0x45, 0x4d, 0x46], 40);
+    const wmf = new Uint8Array([0xd7, 0xcd, 0xc6, 0x9a, ...new Array(40).fill(0)]);
+    const tiff = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0, 0, 0]);
+    const webp = new Uint8Array([...Buffer.from('RIFF'), 20, 0, 0, 0, ...Buffer.from('WEBPVP8 '), ...new Array(12).fill(0)]);
+    const xml = new Uint8Array(Buffer.from('<?xml version="1.0"?><root/>'));
+    // A PNG cut off inside its header (its size read, 1 x 1), and a JPEG of a few bytes.
+    const brokenPng = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1]);
+    const brokenJpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0, 1, 2, 3]);
+    const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64');
+    const pictures: [string, string, Uint8Array][] = [['image1.emf', 'image/x-emf', emf], ['image2.wmf', 'image/x-wmf', wmf], ['image3.tiff', 'image/tiff', tiff],
+        ['image4.webp', 'image/webp', webp], ['item1.xml', 'image/png', xml], ['broken.png', 'image/png', brokenPng], ['broken.jpg', 'image/jpeg', brokenJpeg]];
+    const docOf = (names: string[], attachments: any[]) => ({ type: 'docx', metadata: {}, content: names.map(name => ({ type: 'paragraph', children: [{ type: 'image', metadata: { attachmentName: name, altText: `Alt of ${name}` } }] })), attachments } as any);
+    const all = docOf(pictures.map(([name]) => name), pictures.map(([name, mimeType, bytes]) => ({ type: 'image', name, mimeType, extension: name.split('.').pop(), data: b64(bytes) })));
+    const leftOut = async (ast: any, format: string, config: any = {}) => {
+        const result = await OfficeGenerator.generate(ast, format as any, { ...config, onWarning: () => {} } as any);
+        return new Map(((result.messages ?? []) as any[]).filter(m => m.code === 'IMAGE_PROCESSING_FAILED').map(m => [m.details?.name as string, String(m.message)]));
+    };
+    const sentence = (message: string | undefined, name: string, why: string, where: string) => {
+        assert.ok(message, `${where}: ${name} is reported`);
+        assert.ok(message!.startsWith(`Picture '${name}' was left out of the output: `) && message!.includes(why), `${where}: ${name} says ${why}; got ${message}`);
+        assert.ok(!message!.includes('ImageBitmap'), `${where}: ${name} is not said to come from an ImageBitmap; got ${message}`);
+    };
+
+    // The native PDF engine: each kind it does not embed by name, XML as no picture, damaged data as such.
+    const native = await leftOut(all, 'pdf', { pdfConfig: { engine: 'native' } });
+    for (const [name, kind] of [['image1.emf', 'EMF'], ['image2.wmf', 'WMF'], ['image3.tiff', 'TIFF'], ['image4.webp', 'WebP']]) {
+        sentence(native.get(name), name, `the native PDF engine does not embed ${kind} pictures (it embeds PNG, JPEG, GIF, BMP and SVG)`, 'native PDF');
+    }
+    sentence(native.get('item1.xml'), 'item1.xml', 'its data is XML, not a picture', 'native PDF');
+    sentence(native.get('broken.png'), 'broken.png', 'its PNG data could not be read', 'native PDF');
+    sentence(native.get('broken.jpg'), 'broken.jpg', 'its JPEG data could not be read', 'native PDF');
+    assert.ok(native.get('image1.emf')!.endsWith('Its alternative text, where it has one, stands in its place.'), 'native PDF: the message says what stands in its place');
+    const badGif = await leftOut(docOf(['bad.gif'], [{ type: 'image', name: 'bad.gif', mimeType: 'image/gif', extension: 'gif', data: b64(new Uint8Array([...Buffer.from('GIF89a'), 1, 0, 1, 0, 0, 0, 0, 0x2c, 9, 9])) }]), 'pdf', { pdfConfig: { engine: 'native' } });
+    sentence(badGif.get('bad.gif'), 'bad.gif', 'its GIF data could not be read', 'native PDF');
+
+    // DOCX, ODT and LaTeX: an EMF or a WMF picture, which none of them takes, named with the output.
+    for (const [format, label] of [['docx', 'DOCX'], ['odt', 'ODT'], ['tex', 'LaTeX']]) {
+        const named = await leftOut(all, format);
+        sentence(named.get('image1.emf'), 'image1.emf', `${label} output does not take EMF pictures`, label);
+        sentence(named.get('image2.wmf'), 'image2.wmf', `${label} output does not take WMF pictures`, label);
+    }
+    // A type named but data that is no base64: DOCX and ODT say it could not be decoded.
+    const undecodable = docOf(['bad.png', 'bad.png'], [{ type: 'image', name: 'bad.png', mimeType: 'image/png', extension: 'png', data: '%%%' }]);
+    for (const [format, label] of [['docx', 'DOCX'], ['odt', 'ODT']]) sentence((await leftOut(undecodable, format)).get('bad.png'), 'bad.png', 'its data could not be decoded', label);
+    // An unknown type with no name to go by.
+    sentence((await leftOut(docOf(['blob'], [{ type: 'image', name: 'blob', mimeType: 'application/octet-stream', data: b64(new Uint8Array([1, 2, 3, 4, 5, 6])) }]), 'docx')).get('blob'), 'blob', 'DOCX output does not take pictures of its kind', 'DOCX');
+
+    // PPTX and ODP: a WebP picture, and a picture whose attachment is missing.
+    for (const [format, label, takes] of [['pptx', 'PPTX', 'PNG, JPEG, GIF, BMP, TIFF, EMF and WMF'], ['odp', 'ODP', 'PNG, JPEG, GIF, BMP, TIFF, EMF, WMF and SVG']]) {
+        const deck = await leftOut(docOf(['image4.webp', 'gone.png'], [{ type: 'image', name: 'image4.webp', mimeType: 'image/webp', extension: 'webp', data: b64(webp) }]), format);
+        sentence(deck.get('image4.webp'), 'image4.webp', `${label} output does not take WebP pictures (it takes ${takes})`, label);
+        sentence(deck.get('gone.png'), 'gone.png', 'missing attachment', label);
+    }
+
+    // The kinds, read from the bytes first.
+    assert.deepStrictEqual([emf, wmf, tiff, webp, xml, brokenPng].map(bytes => pictureKindOf(bytes)), ['EMF', 'WMF', 'TIFF', 'WebP', 'XML', 'PNG'], 'each kind by its signature');
+    assert.strictEqual(pictureKindOf(new Uint8Array(Buffer.from('<?xml version="1.0"?>\n<!-- drawn -->\n<svg xmlns="http://www.w3.org/2000/svg"/>'))), 'SVG', 'an SVG by its element');
+    assert.deepStrictEqual([pictureKindOf(new Uint8Array(0), 'image/x-emf'), pictureKindOf(new Uint8Array(0), undefined, 'jpg'), pictureKindOf(new Uint8Array(0))], ['EMF', 'JPEG', 'unknown'], 'else by its type or extension');
+    assert.strictEqual(pictureKindOfBase64(b64(emf)), 'EMF', 'base64 is read from its start');
+    assert.strictEqual(pictureKindOfBase64('%%% not base64 %%%', 'image/tiff'), 'TIFF', 'data that is no base64 is named by its type');
+
+    // The PDF parser's own use: no picture named, the ImageBitmap it could not read.
+    assert.strictEqual(getWarningMessage(OfficeWarningType.IMAGE_PROCESSING_FAILED), "A PDF picture's pixels could not be read from the ImageBitmap pdf.js decoded it into:", 'the parser\'s words are kept');
+    assert.strictEqual(getWarningMessage(OfficeWarningType.IMAGE_PROCESSING_FAILED, { reason: 'why' }), 'A picture was left out of the output: why.', 'a picture with no name');
+    console.log('✓ Pictures left out named');
+}
+
+/**
  * Cancellation: once a parse's signal has fired it rejects with AbortError and never resolves, in
  * every format that runs OCR, even when the abort lands while an image is being recognized (which
  * was taken for a failed recognition, so the parse resolved without the text). An OCR timeout is
@@ -13325,6 +13581,9 @@ async function runTests(): Promise<void> {
         ['A summary of many anchors is linear and keeps each id once', testDisclosureSummaryAnchorsLinear],
         ['Many ids waiting before a disclosure are all written', testMarkdownManyAnchorsBeforeDisclosure],
         ['Many captions in a nested paragraph are all written', testNestedParagraphCaptionsMany],
+        ['PDF hyphen at a line break', testPdfHyphenAtLineBreak],
+        ['Template mistyped operators', testTemplateMistypedOperators],
+        ['Pictures left out named', testPicturesLeftOutNamed],
         ['Cancellation', testCancellation],
     ];
 

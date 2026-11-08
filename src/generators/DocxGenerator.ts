@@ -10,6 +10,7 @@ import { onDocumentPage } from '../utils/pageLimits.js';
 import { pageFieldInstruction, wordFmtOf } from '../utils/pageNumbers.js';
 import { clampInt } from '../utils/numberUtils.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, ooxmlCustomPropertiesXml, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toBookmarkNameRaw, toW3CDTF, writableSpacing } from '../utils/officeGenUtils.js';
+import { pictureKindOfBase64, picturesOfKind } from '../utils/imageUtils.js';
 import { markerPattern, MarkerPattern } from '../utils/listMarkers.js';
 import { customNoteMark } from '../utils/noteMarks.js';
 import { BaseGenerator } from './BaseGenerator.js';
@@ -142,19 +143,19 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
             return null;
         }
         const ext = MIME_EXT[(att.mimeType || '').toLowerCase()];
-        if (!ext) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName, reason: 'unsupported mime' }); return null; }
+        if (!ext) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName, reason: `DOCX output does not take ${picturesOfKind(pictureKindOfBase64(att.data, att.mimeType, att.extension))}` }); return null; }
         // Word does not render an SVG referenced by a bare a:blip (it needs the asvg extension + a
         // raster fallback); emit nothing here so the caller degrades to alt text instead of a broken image.
         if (ext === 'svg') { this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'docx', feature: 'svg image' }); return null; }
         // Each attachment decoded and measured once, at the first picture showing it: decoded again at
         // every picture before the media was looked up, one 3 MB picture shown 20,000 times took 105 s.
-        if (this.mediaUndecodable.has(attachmentName)) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName }); return null; }
+        if (this.mediaUndecodable.has(attachmentName)) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName, reason: 'its data could not be decoded' }); return null; }
         let name = this.mediaByAttachment.get(attachmentName);
         if (!name) {
             let bytes: Uint8Array;
             try { bytes = decodeBase64(att.data); } catch {
                 this.mediaUndecodable.add(attachmentName);
-                this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName });
+                this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName, reason: 'its data could not be decoded' });
                 return null;
             }
             this.mediaIntrinsic.set(attachmentName, sniffImageSize(bytes));

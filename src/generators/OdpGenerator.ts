@@ -4,6 +4,7 @@ import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { PRESET_TO_ODF } from '../utils/shapeNames.js';
 import { decodeBase64, encUrl, hexColor, odfUserDefinedXml, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
+import { pictureKindOf, picturesOfKind } from '../utils/imageUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { buildDeck, bulletMargin, Box, DeckItem, DeckParagraph, DeckRun, DeckSlide, unseenTable } from './slides/deck.js';
 
@@ -146,7 +147,7 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
             // A background picture: a frame the page's size, under the rest.
             const href = this.mediaFor(`background:${index}`, slide.picture, undefined);
             if (href) under = `<draw:frame svg:x="0pt" svg:y="0pt" svg:width="${pt(width)}" svg:height="${pt(height)}"><draw:image xlink:href="${xmlText(href)}" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/></draw:frame>`;
-            else this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { reason: 'a background picture of a kind ODP output does not hold' });
+            else this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { reason: `ODP output does not take ${picturesOfKind(pictureKindOf(slide.picture))} as a slide's background (it takes PNG, JPEG, GIF, BMP, TIFF, EMF, WMF and SVG)` });
         } else if (slide.background && hexColor(slide.background)) {
             pageStyle = this.styleNamed(`dp|${hexColor(slide.background)}`, 'dp', name => `<style:style style:name="${name}" style:family="drawing-page"><style:drawing-page-properties draw:fill="solid" draw:fill-color="#${hexColor(slide.background)}" draw:background-size="border"/></style:style>`);
         }
@@ -200,7 +201,12 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
             const href = this.mediaFor(item.attachment, bytes ?? undefined, a?.mimeType);
             if (!href) {
                 // (Its alternative text in its place.)
-                this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: item.attachment, reason: a ? 'a picture of a kind ODP output does not hold (PNG, JPEG, GIF, BMP, TIFF, EMF, WMF and SVG it does)' : 'missing attachment' });
+                const kind = bytes?.length ? pictureKindOf(bytes, a?.mimeType, a?.extension) : '';
+                this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, {
+                    name: item.attachment,
+                    reason: !a ? 'missing attachment' : !kind ? 'attachment has no data'
+                        : kind === 'XML' ? 'its data is XML, not a picture' : `ODP output does not take ${picturesOfKind(kind)} (it takes PNG, JPEG, GIF, BMP, TIFF, EMF, WMF and SVG)`,
+                });
                 return item.alt ? this.itemXml({ kind: 'text', box: item.box, paragraphs: [{ runs: [{ text: item.alt }] }] }) : '';
             }
             const size = bytes ? sniffImageSize(bytes) : null;

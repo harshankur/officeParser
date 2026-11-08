@@ -24,6 +24,7 @@ import { hasPageSize, onDocumentPage } from '../../utils/pageLimits.js';
 import { getAbortError, getOfficeError } from '../../utils/errorUtils.js';
 import { documentLanguage, embedUrl, isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize, writableSpacing } from '../../utils/officeGenUtils.js';
 import { decodeBmp, decodeGif, encodePng } from '../../utils/rasterUtils.js';
+import { pictureKindOfBase64, picturesOfKind } from '../../utils/imageUtils.js';
 import { sanitizeOfficePackageUrl } from '../../utils/sanitize.js';
 import { cssColorHex } from '../../utils/colorUtils.js';
 import { formatListNumber } from '../../utils/listMarkers.js';
@@ -3065,7 +3066,7 @@ class NativeLayout {
                     if (isGif || isBmp) {
                         const raster = isGif ? decodeGif(bytes, MAX_IMAGE_PIXELS) : decodeBmp(bytes, MAX_IMAGE_PIXELS);
                         const png = raster ? encodePng(raster) : null;
-                        if (!png) return `unreadable ${isGif ? 'GIF' : 'BMP'} picture`;
+                        if (!png) return `its ${isGif ? 'GIF' : 'BMP'} data could not be read`;
                         return await this.pdf.embedPng(png);
                     }
                     return await this.pdf.embedPng(bytes);
@@ -3096,9 +3097,13 @@ class NativeLayout {
             }
             return { img, w: Math.max(1, w), h: Math.max(1, h) };
         } catch {
-            // pdf-lib embeds PNG and JPEG (and a GIF or BMP is turned into PNG), so a WebP, TIFF or SVG
-            // attachment lands here.
-            this.reportWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name, reason: 'unsupported image format (the native PDF engine embeds PNG, JPEG, GIF, BMP and SVG)' });
+            // pdf-lib embeds PNG and JPEG (and a GIF or BMP is turned into PNG), so an EMF, WMF, TIFF or WebP
+            // attachment lands here, and one whose data is no picture or is damaged: named by its bytes.
+            const kind = pictureKindOfBase64(attachment.data, attachment.mimeType, attachment.extension);
+            const reason = kind === 'XML' ? 'its data is XML, not a picture'
+                : ['PNG', 'JPEG', 'GIF', 'BMP', 'SVG'].includes(kind) ? `its ${kind} data could not be read`
+                : `the native PDF engine does not embed ${picturesOfKind(kind)} (it embeds PNG, JPEG, GIF, BMP and SVG)`;
+            this.reportWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name, reason });
             return null;
         }
     }
