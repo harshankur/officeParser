@@ -1971,8 +1971,11 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 // A caption of plain text is one paragraph of plain text runs.
                 const paragraph = read.length === 1 && read[0].type === 'paragraph' && !read[0].metadata ? read[0] : undefined;
                 const caption = paragraph?.children ?? [];
+                // (An alignment the figure's runs have, from the figure or a block around it, is the line's, not
+                // the caption's own: a caption in a centred block or a list item is still the picture's.)
                 const plain = caption.every(c => c.type === 'text' && !c.notes?.length && !c.comments?.length && !c.metadata
-                    && !Object.values(c.formatting ?? {}).some(v => v !== undefined && v !== false && v !== ''));
+                    && !Object.entries(c.formatting ?? {}).some(([key, v]) => v !== undefined && v !== false && v !== ''
+                        && !(key === 'alignment' && v === newFormatting.alignment)));
                 const text = plainTextOf(caption).replace(/\s+/g, ' ').trim();
                 if (!paragraph || !plain || !text) return all;
                 const kids = all.filter(kid => kid !== paragraph);
