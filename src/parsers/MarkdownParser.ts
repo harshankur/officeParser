@@ -3791,7 +3791,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
 
             for (const line of lines) {
                 // A marker alone on its line is an empty item.
-                const match = line.match(/^([ \t]*)([-*+]|\d+[.)])(?:[ \t]+(.*))?$/);
+                const match = line.match(/^([ \t]*)([-*+]|\d+[.)])(?:[ \t]+([^\n]*))?$/);
                 if (match) {
                     endItem();
                     const rawIndent = match[1].replace(/\t/g, '    ').length;
@@ -3835,7 +3835,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     let itemText = match[3] ?? '';
                     let isTask: boolean | undefined;
                     let checked: boolean | undefined;
-                    const taskMatch = itemText.match(/^\[([ xX])\](?:[ \t]+(.*))?$/);
+                    const taskMatch = itemText.match(/^\[([ xX])\](?:[ \t]+([^\n]*))?$/);
                     if (taskMatch) {
                         isTask = true;
                         checked = taskMatch[1].toLowerCase() === 'x';
