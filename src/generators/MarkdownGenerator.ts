@@ -127,11 +127,16 @@ const isBlankRun = (node: OfficeContentNode): boolean =>
 const keyboardText = (text: string): string =>
     escapeHtml(text).replace(/[\\`*_[\]~=$|{}]/g, ch => `&#${ch.charCodeAt(0)};`).replace(/[\r\n]+/g, ' ');
 
+/**
+ * A captioned picture: a figure, which is a block. Where no block can stand (a list item, a cell, a
+ * definition), its caption is the end of a line, as a block's last line is.
+ */
+const isFigure = (node: OfficeContentNode): boolean => node.type === 'image' && !!captionOf(node);
+
 const isBlockInLine = (node: OfficeContentNode): boolean =>
     (node.type === 'break' && (node.metadata as BreakMetadata | undefined)?.breakType === 'thematic')
     || (node.type === 'code' && (node.metadata as CodeMetadata | undefined)?.math !== 'inline')
-    // A captioned picture is a figure block.
-    || (node.type === 'image' && !!captionOf(node));
+    || isFigure(node);
 
 /** `text` without the line ends that end it. */
 const withoutTrailingLineEnds = (text: string): string => {
@@ -212,9 +217,9 @@ const isStandingNote = (node: OfficeContentNode): boolean => {
     return noteType === 'footnote' || noteType === 'endnote';
 };
 
-/** Whether `node` is a block (a code node is one unless it is inline math). */
+/** Whether `node` is a block (a code node is one unless it is inline math; a picture, when it is a figure). */
 const isBlockNode = (node: OfficeContentNode): boolean =>
-    BLOCK_NODE_TYPES.has(node.type) || (node.type === 'code' && (node.metadata as CodeMetadata | undefined)?.math !== 'inline');
+    BLOCK_NODE_TYPES.has(node.type) || (node.type === 'code' && (node.metadata as CodeMetadata | undefined)?.math !== 'inline') || isFigure(node);
 
 /**
  * Collapses each run of blank lines (whitespace-only lines count) to one empty line, outside fenced
@@ -446,6 +451,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     private inListItem = 0;
     /** How many definition terms or descriptions are being written: each is one line too. */
     private inDefinition = 0;
+    /** How many headings are being written: a heading is one line, where no figure can stand. */
+    private inHeading = 0;
     /** How many nodes holding a line of text (a paragraph, heading, item, cell, definition) are being written. */
     private lineDepth = 0;
     /** For each definition list being written, innermost last: whether it is in one line (see inOneLine). */
@@ -1035,14 +1042,15 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
 
                     // A captioned picture (ImageMetadata.caption) is a figure, which Markdown has no syntax
                     // for: an HTML <figure> block (CommonMark passes it through, and it reads back as one),
-                    // on lines of its own. In one line (a list item, a cell), where no block can go, its
-                    // caption follows it in the line, and that is reported.
+                    // on lines of its own. In one line (a list item, a cell, a definition, a heading), where
+                    // no block can go, its caption follows it in the line, ending a line as a block does
+                    // (see isBlockNode), and that is reported.
                     const caption = captionOf(node);
-                    if (caption && !this.inOneLine) {
+                    if (caption && !this.inOneLine && this.inHeading === 0) {
                         const figure = (await this.htmlCellNode(node, '')).trim();
                         return `${this.atLineStart ? '' : '\n\n'}${figure}\n\n`;
                     }
-                    if (caption) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'md', feature: 'a figure in a list item or table cell (its caption follows the picture as text)' });
+                    if (caption) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'md', feature: 'a figure in a list item, table cell, definition or heading (its caption follows the picture as text)' });
 
                     // Build the image markup: inline as a data URI when small, otherwise reference by
                     // name (never inline a multi-MB image, which would emit a single line that overflows
@@ -1553,6 +1561,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             if (holdsLine) this.lineDepth++;
             if (node.type === 'definitionList') this.definitionListsInLine.push(this.inOneLine);
             if (node.type === 'list') this.inListItem++;
+            if (node.type === 'heading') this.inHeading++;
             const definition = node.type === 'definitionTerm' || node.type === 'definitionDescription';
             if (definition) this.inDefinition++;
             const children = new TextBuilder();
@@ -1587,6 +1596,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             if (holdsLine) this.lineDepth--;
             if (node.type === 'definitionList') this.definitionListsInLine.pop();
             if (node.type === 'list') this.inListItem--;
+            if (node.type === 'heading') this.inHeading--;
             if (definition) this.inDefinition--;
         }
 
