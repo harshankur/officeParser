@@ -11,6 +11,7 @@ import { OfficeParser } from '../../src/OfficeParser';
 import type { ImageMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, ParagraphMetadata } from '../../src/types';
 import { MARKDOWN_FINGERPRINTS_FILE, markdownFingerprints, markdownWithoutDisclosures } from '../helpers/markdownFingerprints';
 import { referenceHasDisclosureElement } from '../helpers/disclosureReference';
+import { runFigureLineGenerator } from '../helpers/figureLineGenerator';
 
 /** The text of a node: a line's runs joined, blocks set apart by a space. */
 const wordsOfNode = (node: OfficeContentNode): string => node.children?.length
@@ -1429,6 +1430,50 @@ export async function testDisclosureSummaryShapesLinear(): Promise<void> {
         assert.ok(large <= 8 * small + 250, `Summary shapes: ${name} at ${n} (${source.length} bytes) in ${large.toFixed(0)} ms, at ${n / 4} in ${small.toFixed(0)} ms`);
     }
     console.log(`✓ Summary and disclosure shapes in linear time (${Object.keys(SUMMARY_SHAPES).length} shapes, n against 4n)`);
+}
+
+/**
+ * A captioned picture in a line (a list item, pipe-table cell, definition or heading) ends the line it is
+ * on: the words on both sides stay apart, no `<figure>` markup is written into a heading, and Markdown
+ * settles at the second save.
+ */
+export async function testFigureEndsItsLine(): Promise<void> {
+    const figure = '<figure><img src="a.png" alt="x"><figcaption>w1</figcaption></figure>';
+    const cases: Array<[string, string, RegExp]> = [
+        ['list item', `<ol><li>${figure}<a href="https://e.x">w2</a></li></ol>`, /^1\. !\[x\]\(a\.png\) w1<br>\[w2\]\(https:\/\/e\.x\)$/m],
+        ['list item, bold after', `<ol><li>${figure}<b>w2</b></li></ol>`, /^1\. !\[x\]\(a\.png\) w1<br>\*\*w2\*\*$/m],
+        ['list item, code after', `<ol><li>${figure}<code>w2</code></li></ol>`, /^1\. !\[x\]\(a\.png\) w1<br>`w2`$/m],
+        ['list item, text on both sides', `<ol><li>w0${figure}w2</li></ol>`, /^1\. w0<br>!\[x\]\(a\.png\) w1<br>w2( \{#[^}]*\})?$/m],
+        ['pipe cell', `<table><tr><td>${figure}<b>w2</b></td><td>w3</td></tr></table>`, /!\[x\]\(a\.png\) w1<br>\*\*w2\*\*/],
+        ['definition', `<dl><dt>w0</dt><dd>${figure}<b>w2</b></dd></dl>`, /!\[x\]\(a\.png\) w1<br>\*\*w2\*\*/],
+        ['heading', `<h2>w0${figure}w2</h2>`, /^## w0<br>!\[x\]\(a\.png\) w1<br>w2( \{#[^}]*\})?$/m],
+    ];
+    for (const [name, html, expected] of cases) {
+        const ast = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' });
+        const md = await ast.to('md');
+        assert.ok(expected.test(md.value), `Figure line: ${name}: ${JSON.stringify(md.value)}`);
+        assert.ok(!/<figure|&lt;/.test(md.value), `Figure line: ${name} writes no figure markup: ${JSON.stringify(md.value)}`);
+        assert.ok(md.messages.some(m => m.code === 'CONTENT_NOT_REPRESENTABLE'), `Figure line: ${name} is reported`);
+        const back = await OfficeParser.parseOffice(Buffer.from(md.value), { fileType: 'md' });
+        const text = (await back.to('text')).value;
+        assert.ok(!/<\/?[a-z]|&lt;/i.test(text), `Figure line: ${name} reads back with no markup as text: ${JSON.stringify(text)}`);
+        const tokens: string[] = String(text).match(/[A-Za-z0-9]+/g) ?? [];
+        for (const word of ['w1', 'w2'].filter(x => html.includes(`>${x}<`) || html.includes(`${x}</`))) assert.ok(tokens.includes(word), `Figure line: ${name} keeps ${word} apart: ${JSON.stringify(text)}`);
+        assert.strictEqual((await (await OfficeParser.parseOffice(Buffer.from(md.value), { fileType: 'md' })).to('md')).value, md.value, `Figure line: ${name} is stable at the second save`);
+    }
+    console.log(`✓ A captioned picture ends its line (${cases.length} shapes)`);
+}
+
+/** Generated figures and inline kinds in every line container: no joined, lost or markup words, settled by pass 3. */
+export async function testFigureLinesGenerated(): Promise<void> {
+    for (const [label, count, seed] of [['fast', 1500, 777], ['full', 12000, 31337]] as const) {
+        const started = Date.now();
+        const result = await runFigureLineGenerator(count, seed);
+        console.log(`  figure lines ${label}: docs=${result.docs} distinct ASTs=${result.distinctAsts} Markdown=${result.distinctMarkdown} kind pairs=${result.distinctKindPairs} config x container=${result.distinctConfigContainers} in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+        assert.deepStrictEqual(result.failures, {}, `Figure lines (${label}, seed ${seed}): ${JSON.stringify(result.examples)}`);
+        assert.ok(result.distinctAsts > count * 0.5 && result.distinctConfigContainers === 54, `Figure lines (${label}) cover the shapes: ${JSON.stringify(result)}`);
+    }
+    console.log('✓ Figure lines generated, no joined, lost or markup words, settled by pass 3');
 }
 
 /** ODF namespaces of a note test file. */
