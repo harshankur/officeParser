@@ -106,9 +106,12 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
     [OfficeWarningType.DEPENDENCY_LOAD_FAILED]: (dep: string) => `Failed to load dependency ${dep}:`,
     [OfficeWarningType.IMAGE_EXTRACTION_FAILED]: (context: string) => `Error extracting images ${context}:`,
     [OfficeWarningType.ANNOTATION_EXTRACTION_FAILED]: (page: number) => `Error extracting annotations from page ${page}:`,
-    [OfficeWarningType.IMAGE_PROCESSING_FAILED]: (info?: { name?: string; reason?: string }) => info && typeof info === 'object' && (info.name || info.reason)
-        ? `${info.name ? `Picture '${info.name}'` : 'A picture'} was left out of the output${info.reason ? `: ${info.reason}` : ''}.${info.name ? ' Its alternative text, where it has one, stands in its place.' : ''}`
-        : `A PDF picture's pixels could not be read from the ImageBitmap pdf.js decoded it into:`,
+    [OfficeWarningType.IMAGE_PROCESSING_FAILED]: (info?: { name?: string; reason?: string }) => {
+        if (!info || typeof info !== 'object' || !(info.name || info.reason)) return `A PDF picture's pixels could not be read from the ImageBitmap pdf.js decoded it into:`;
+        // (The picture's name, the document's, is shown to 80 characters: the details hold it whole.)
+        const name = info.name && String(info.name).length > 80 ? `${String(info.name).slice(0, 77)}...` : info.name;
+        return `${name ? `Picture '${name}'` : 'A picture'} was left out of the output${info.reason ? `: ${info.reason}` : ''}.${name ? ' Its alternative text, where it has one, stands in its place.' : ''}`;
+    },
     [OfficeWarningType.BROWSER_GENERATION_LIMITATION]: (msg: string) => msg,
     [OfficeWarningType.SHEET_RANGE_NOT_FOUND]: (range: string) => `No sheets found matching the range: ${range}`,
     [OfficeWarningType.BUFFER_TYPE_MISMATCH]: (info: { detected: string, expected: string }) => `File content type mismatch: Detected '${info.detected}' but expected/provided '${info.expected}'. Parsing will proceed with '${info.expected}' as requested.`,

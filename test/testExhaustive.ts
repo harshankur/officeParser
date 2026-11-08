@@ -11973,6 +11973,31 @@ async function testPicturesLeftOutNamed(): Promise<void> {
     assert.strictEqual(pictureKindOfBase64(b64(emf)), 'EMF', 'base64 is read from its start');
     assert.strictEqual(pictureKindOfBase64('%%% not base64 %%%', 'image/tiff'), 'TIFF', 'data that is no base64 is named by its type');
 
+    // A media type, an extension or a name of any length or characters: the kind is named only when it is a
+    // short word (else "pictures of its kind"), and the name is shown to 80 characters (the details hold it whole).
+    const plainText = b64(new Uint8Array(Buffer.from('plain text, no picture')));
+    const long = 100000;
+    for (const [label, attachment, kind] of [
+        ['a long media type', { name: 'a.bin', mimeType: `image/${'z'.repeat(long)}`, extension: 'png!' }, 'pictures of its kind'],
+        ['a long extension', { name: 'a.bin', mimeType: 'application/octet-stream', extension: 'q'.repeat(long) }, 'pictures of its kind'],
+        ['an extension with a line break', { name: 'a.bin', mimeType: 'application/octet-stream', extension: 'x\ny' }, 'pictures of its kind'],
+        ['a long name', { name: `${'n'.repeat(long)}.heic`, mimeType: 'image/heic', extension: 'heic' }, 'HEIC pictures'],
+    ] as const) {
+        const doc = docOf([attachment.name], [{ type: 'image', ...attachment, data: plainText }]);
+        for (const [format, config] of [['pdf', { pdfConfig: { engine: 'native' } }], ['docx', {}], ['odt', {}], ['pptx', {}], ['odp', {}], ['tex', {}]] as const) {
+            const result = await OfficeGenerator.generate(doc, format as any, { ...config, onWarning: () => {} } as any);
+            const reported = ((result.messages ?? []) as any[]).find(m => m.code === 'IMAGE_PROCESSING_FAILED');
+            assert.ok(reported && String(reported.message).length < 300 && String(reported.message).includes(kind), `${label}, ${format}: a message under 300 characters naming ${kind}; got ${String(reported?.message).slice(0, 200)} (${String(reported?.message).length} characters)`);
+            assert.strictEqual(reported.details?.name, attachment.name, `${label}, ${format}: the details hold the name whole`);
+        }
+    }
+    assert.deepStrictEqual([pictureKindOf(new Uint8Array(0), undefined, 'x\ny'), pictureKindOf(new Uint8Array(0), `image/${'z'.repeat(17)}`), pictureKindOf(new Uint8Array(0), `image/${'z'.repeat(16)}`)],
+        ['unknown', 'unknown', 'Z'.repeat(16)], 'a kind is a word of 1 to 16 characters');
+    assert.deepStrictEqual([pictureKindOf(new Uint8Array(0), 'image/heic'), pictureKindOf(new Uint8Array(0), 'image/x-icon'), pictureKindOf(new Uint8Array(0), 'image/svg+xml')], ['HEIC', 'ICON', 'SVG'], 'the kinds named before are named still');
+    const shown = getWarningMessage(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: 'n'.repeat(200), reason: 'why' });
+    assert.ok(shown.startsWith(`Picture '${'n'.repeat(77)}...' was left out`), `a name over 80 characters is shown to 77 and ...; got ${shown.slice(0, 120)}`);
+    assert.ok(getWarningMessage(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: 'n'.repeat(80), reason: 'why' }).startsWith(`Picture '${'n'.repeat(80)}' was left out`), 'a name of 80 characters is shown whole');
+
     // The PDF parser's own use: no picture named, the ImageBitmap it could not read.
     assert.strictEqual(getWarningMessage(OfficeWarningType.IMAGE_PROCESSING_FAILED), "A PDF picture's pixels could not be read from the ImageBitmap pdf.js decoded it into:", 'the parser\'s words are kept');
     assert.strictEqual(getWarningMessage(OfficeWarningType.IMAGE_PROCESSING_FAILED, { reason: 'why' }), 'A picture was left out of the output: why.', 'a picture with no name');

@@ -204,8 +204,10 @@ export function pictureKindOf(bytes: Uint8Array, mimeType?: string, extension?: 
     const head = ascii(0, Math.min(bytes.length, 512)).replace(/^\xEF\xBB\xBF/, '').trimStart();
     if (/^(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*(<!DOCTYPE[^>]*>\s*)?<svg[\s>]/i.test(head)) return 'SVG';
     if (head.startsWith('<')) return 'XML';
+    // (A name of a format is a short word: a media type or an extension of any other length or characters is
+    // none, and named no further into a message.)
     const named = (mimeType?.match(/^image\/(?:x-)?([\w.+-]+)$/i)?.[1] ?? extension ?? '').replace(/^svg\+xml$/i, 'svg');
-    const upper = named.toUpperCase();
+    const upper = /^[\w.+-]{1,16}$/.test(named) ? named.toUpperCase() : '';
     return upper === 'JPG' ? 'JPEG' : upper === 'TIF' ? 'TIFF' : upper === 'WEBP' ? 'WebP' : upper || 'unknown';
 }
 
