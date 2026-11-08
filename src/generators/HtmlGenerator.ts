@@ -18,6 +18,26 @@ import { isBlockInParagraph } from '../utils/nodeTypeUtils.js';
 const MAX_NO_SCRIPT_TAB_RULES = 200;
 
 /**
+ * Written markup with what shows nothing taken out: named anchors (a block's further ids) and source comments,
+ * as a comment or (under `sourceAttributes`) an empty span carrying its text. A line holding only those holds
+ * nothing yet (see processNodeArray's captioned pictures).
+ */
+const withoutHiddenMarkup = (html: string): string => {
+    // Comments found by indexOf, the first unclosed one ending the search: a run of unclosed ones (an onNode
+    // string) is scanned once, not once from each `<!--` to its end.
+    let shown = '';
+    let at = 0;
+    for (let start = html.indexOf('<!--'); start >= 0; start = html.indexOf('<!--', at)) {
+        const end = html.indexOf('-->', start + 4);
+        if (end < 0) break;
+        shown += html.slice(at, start);
+        at = end + 3;
+    }
+    shown += html.slice(at);
+    return shown.replace(/<a id="[^"]*" name="[^"]*"><\/a>|<span data-html-comment="[^"]*"><\/span>/g, '');
+};
+
+/**
  * Whether `node`, written in a line, starts (or with `last`, ends) with a captioned picture: one, or a node
  * written as its children (a comment's range, a drawing) whose first (last) child that is not white space does.
  */
@@ -27,7 +47,7 @@ function figureAtEdge(node: OfficeContentNode, last: boolean): boolean {
         if (current.type === 'image') return !!captionOf(current);
         const throughChildren = (current.type === 'comment' && !isSourceComment(current)) || ['drawing', 'header', 'footer', 'slideMaster'].includes(current.type);
         if (!throughChildren) return false;
-        const kids: OfficeContentNode[] = (current.children ?? []).filter(child => child.type !== 'text' || !!child.text?.trim() || !!child.notes?.length);
+        const kids: OfficeContentNode[] = (current.children ?? []).filter(child => !isSourceComment(child) && (child.type !== 'text' || !!child.text?.trim() || !!child.notes?.length));
         current = last ? kids[kids.length - 1] : kids[0];
     }
     return false;
@@ -784,15 +804,19 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         // picture: what follows it starts a line of its own (see the captioned picture's line break below).
         let afterFigure = false;
         // What the line holds so far, kept as each piece is written (looking through `html` at each node took
-        // time quadratic in a long line): whether anything but named anchors and white space is written, and
-        // whether the last piece that is not white space ends in a line break.
+        // time quadratic in a long line): whether anything but hidden markup (named anchors, source comments)
+        // and white space is written, and whether the last piece holding more ends in a line break. A piece of
+        // hidden markup alone neither gives the line content nor ends it: a source comment between a line
+        // break and a captioned picture left the picture a break of its own.
         let lineHasContent = false;
         let lineEndsWithBreak = false;
         const write = (piece: string): void => {
             html += piece;
             if (!piece.trim()) return;
-            if (!lineHasContent && piece.replace(/<a id="[^"]*" name="[^"]*"><\/a>/g, '').trim()) lineHasContent = true;
-            lineEndsWithBreak = piece.trimEnd().endsWith('<br>');
+            const shown = withoutHiddenMarkup(piece);
+            if (!shown.trim()) return;
+            lineHasContent = true;
+            lineEndsWithBreak = shown.trimEnd().endsWith('<br>');
         };
         // The node written before this one (see afterPage).
         let previous: OfficeContentNode | undefined;
@@ -935,7 +959,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // what the line holds, and one after it before more, so its caption, its recognized text and
                 // the words beside it are never one run of text ('w1<span class="caption">c</span>w2' read back
                 // as `w1cw2`). Where the line starts or breaks already, none.
-                if (this.inlineDepth > 0 && result.trim()) {
+                if (this.inlineDepth > 0 && withoutHiddenMarkup(result).trim()) {
                     const atLineStart = !lineHasContent || lineEndsWithBreak;
                     if ((afterFigure || figureAtEdge(node, false)) && !atLineStart && !result.startsWith('<br>')) result = `<br>${result}`;
                     afterFigure = figureAtEdge(node, true);
