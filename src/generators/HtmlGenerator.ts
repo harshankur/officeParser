@@ -1298,10 +1298,32 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
             case 'image': {
                 const mode = this.imageMode();
-                if (mode === 'none') return '';
                 const meta = node.metadata as ImageMetadata;
                 const attachmentName = meta?.attachmentName;
                 const ocr = (node.text || '').trim();
+                // A picture's caption (ImageMetadata.caption) is written in every image mode: 8.6.0 wrote a
+                // figure's caption as a paragraph whatever the mode, and the text and Markdown writers do
+                // (see MarkdownGenerator.pictureParts). What is written, by mode, for a captioned picture:
+                //
+                //   mode            | of the picture                 | among blocks                              | in a line (a heading)
+                //   none            | nothing                        | <p>caption</p>                            | <span class="caption">
+                //   ocr-text-only   | its recognized text, if any    | <figure><pre class="ocr-text"><figcaption> | the <pre>, then the span
+                //                   | (none)                         | <p>caption</p>                            | <span class="caption">
+                //   image-only      | <img>                          | <figure><img><figcaption>                 | <img>, then the span
+                //   image+ocr-text  | <img> and its recognized text  | <figure><img><pre class="ocr-text"><figcaption> | <img><br><span class="ocr-text">, then the span
+                //
+                // A <figure> where a picture or its recognized text is written; the caption alone where nothing
+                // else of the picture is, carrying the picture's ids. A picture without a caption is as in 8.6.0.
+                const caption = captionOf(node);
+                const captionHtml = caption ? this.escape(caption) : '';
+                const captionInLine = caption ? ` <span class="caption">${captionHtml}</span>` : '';
+                if (mode === 'none' || (mode === 'ocr-text-only' && !ocr)) {
+                    if (!caption) return '';
+                    // (In a line its ids are named anchors before it: a span's id is not read back.)
+                    return this.inlineDepth > 0
+                        ? `${this.namedAnchors(node)}<span class="caption">${captionHtml}</span>`
+                        : `${extraAnchors}<p${idAttr}>${captionHtml}</p>`;
+                }
 
                 // ocr-text-only: emit the recognized text as a visible block, no <img>. A <pre>
                 // preserves the 2-D column layout the OCR reconstruction encodes with spaces. Carry the
@@ -1309,9 +1331,12 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // attributes and inline style through too, so this mode is not the one image emission
                 // site that silently drops them.
                 if (mode === 'ocr-text-only') {
-                    if (!ocr) return '';
                     const preClass = ` class="${this.escape(['ocr-text', ...classes].join(' '))}"`;
-                    return `${extraAnchors}<pre${preClass}${mappedAttrs}${idAttr}${styleAttr}>${this.escape(ocr)}</pre>`;
+                    const pre = `<pre${preClass}${mappedAttrs}${idAttr}${styleAttr}>${this.escape(ocr)}</pre>`;
+                    if (!caption) return `${extraAnchors}${pre}`;
+                    // A captioned picture's recognized text is a figure with its caption, as its picture is.
+                    if (this.inlineDepth > 0) return `${extraAnchors}${pre}${captionInLine}`;
+                    return `${extraAnchors}<figure>${pre}<figcaption>${captionHtml}</figcaption></figure>`;
                 }
 
                 let src = meta?.url || attachmentName || '';
@@ -1381,17 +1406,15 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     const ocrText = mode === 'image+ocr-text' && ocr ? `<br><span class="ocr-text">${this.escape(ocr)}</span>` : '';
                     // (A paragraph's captioned picture is a figure among its blocks; in a heading, where no
                     // block goes, its caption follows it in the line.)
-                    const inlineCaption = captionOf(node) ? ` <span class="caption">${this.escape(captionOf(node)!)}</span>` : '';
-                    return `${extraAnchors}${imgWithId(idAttr)}${ocrText}${inlineCaption}`;
+                    return `${extraAnchors}${imgWithId(idAttr)}${ocrText}${captionInLine}`;
                 }
                 // Among the blocks too its id is on the <img>, after the anchors of its other ids, as they
                 // are read back: on the wrapper it was read after them, and the order flipped each save.
                 const img = imgWithId(idAttr);
                 // A picture with a caption (ImageMetadata.caption) is a figure: the picture, then its caption.
-                const caption = captionOf(node);
                 if (caption) {
                     const ocrBlock = mode === 'image+ocr-text' && ocr ? `<pre class="ocr-text">${this.escape(ocr)}</pre>` : '';
-                    return `${extraAnchors}<figure>${img}${ocrBlock}<figcaption>${this.escape(caption)}</figcaption></figure>`;
+                    return `${extraAnchors}<figure>${img}${ocrBlock}<figcaption>${captionHtml}</figcaption></figure>`;
                 }
                 // No caption under it otherwise: its file name is not one, and no other writer shows it.
                 let content = this.config.includeFormatting ? `<div class="image-container">${img}</div>` : img;
