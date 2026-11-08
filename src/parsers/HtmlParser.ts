@@ -320,6 +320,23 @@ const markedBefore = (ids: string[], nodes: OfficeContentNode[]): OfficeContentN
     return nodes;
 };
 
+/**
+ * A run of inline content read among blocks (a disclosure's, its summary's, a caption's) as a paragraph,
+ * added to `blocks`, `keep` saying whether it holds anything; the named anchors ending it (all it holds,
+ * when it holds nothing else) stand among the blocks after it, where they mark the next block, as the
+ * body's runs are read (see flushInlineRun) and as HtmlGenerator writes a block's ids. Read as a paragraph,
+ * a heading's generated id written before it in a disclosure was an empty paragraph, one more each save.
+ */
+const pushRun = (blocks: OfficeContentNode[], run: OfficeContentNode[], preserveWhitespace: boolean, keep: (node: OfficeContentNode) => boolean): void => {
+    let end = run.length;
+    while (end > 0 && (isAnchorMark(run[end - 1]) || (run[end - 1].type === 'text' && !run[end - 1].text?.trim() && !run[end - 1].notes?.length && !run[end - 1].comments?.length))) end--;
+    const marks = run.slice(end).filter(isAnchorMark);
+    const head = marks.length ? run.slice(0, end) : run;
+    const kept = preserveWhitespace ? head : trimBlockEdges(collapseSpacesAcrossNodes(head));
+    if (kept.some(keep)) blocks.push({ type: 'paragraph', children: kept });
+    for (const mark of marks) blocks.push(mark);
+};
+
 /** Holds a list item's place at the start of its nested lists until the item itself is built. */
 const selfNodePlaceholder: OfficeContentNode = { type: 'text', text: '' };
 
@@ -1879,8 +1896,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 const blocks: OfficeContentNode[] = [];
                 let run: OfficeContentNode[] = [];
                 const flush = () => {
-                    const kept = config.preserveXmlWhitespace ? run : trimBlockEdges(collapseSpacesAcrossNodes(run));
-                    if (kept.some(c => c.type !== 'text' || c.text?.trim() || c.notes?.length)) blocks.push({ type: 'paragraph', children: kept });
+                    pushRun(blocks, run, !!config.preserveXmlWhitespace, c => c.type !== 'text' || !!c.text?.trim() || !!c.notes?.length);
                     run = [];
                 };
                 for (const kid of kids) { if (isBlockNode(kid)) { flush(); blocks.push(kid); } else run.push(kid); }
@@ -1893,8 +1909,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     const blocks: OfficeContentNode[] = [];
                     let run: OfficeContentNode[] = [];
                     const flush = () => {
-                        const kept = config.preserveXmlWhitespace ? run : trimBlockEdges(collapseSpacesAcrossNodes(run));
-                        if (kept.some(c => c.type !== 'text' || c.text?.trim() || c.notes?.length)) blocks.push({ type: 'paragraph', children: kept });
+                        pushRun(blocks, run, !!config.preserveXmlWhitespace, c => c.type !== 'text' || !!c.text?.trim() || !!c.notes?.length);
                         run = [];
                     };
                     // Each run of inline children read at once (as one text: white space between them joins),
@@ -1984,8 +1999,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 let run: OfficeContentNode[] = [];
                 const flush = () => {
                     // Each run's edges trimmed, as a block's are (a space before the block it stood by stayed).
-                    const children = config.preserveXmlWhitespace ? run : trimBlockEdges(collapseSpacesAcrossNodes(run));
-                    if (children.some(c => c.type !== 'text' || c.text?.trim())) parts.push({ type: 'paragraph', children });
+                    pushRun(parts, run, !!config.preserveXmlWhitespace, c => c.type !== 'text' || !!c.text?.trim());
                     run = [];
                 };
                 for (const child of caption) {
