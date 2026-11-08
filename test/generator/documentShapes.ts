@@ -12,6 +12,7 @@ import type { ImageMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, P
 import { MARKDOWN_FINGERPRINTS_FILE, markdownFingerprints, markdownWithoutDisclosures } from '../helpers/markdownFingerprints';
 import { referenceHasDisclosureElement } from '../helpers/disclosureReference';
 import { runFigureLineGenerator } from '../helpers/figureLineGenerator';
+import { PICTURE_MATRIX_FINGERPRINTS_FILE, type PictureMatrixIo, runPictureMatrix } from '../helpers/pictureMatrixGenerator';
 
 /** The text of a node: a line's runs joined, blocks set apart by a space. */
 const wordsOfNode = (node: OfficeContentNode): string => node.children?.length
@@ -1474,6 +1475,187 @@ export async function testFigureLinesGenerated(): Promise<void> {
         assert.ok(result.distinctAsts > count * 0.5 && result.distinctConfigContainers === 54, `Figure lines (${label}) cover the shapes: ${JSON.stringify(result)}`);
     }
     console.log('✓ Figure lines generated, no joined, lost or markup words, settled by pass 3');
+}
+
+/** A Markdown round trip of `content`: the first save, the text read back from it, and the second and third saves. */
+async function pictureRoundTrip(content: unknown[], config?: Record<string, unknown>, attachments: unknown[] = []): Promise<{ md: string; text: string; md2: string; md3: string }> {
+    const ast = { type: 'md', metadata: {}, attachments, content } as unknown as OfficeParserAST;
+    const md = (await OfficeGenerator.generate(ast, 'md', config as any)).value as string;
+    const back = await OfficeParser.parseOffice(Buffer.from(md), { fileType: 'md' });
+    const md2 = (await OfficeGenerator.generate(back, 'md', config as any)).value as string;
+    const md3 = (await OfficeGenerator.generate(await OfficeParser.parseOffice(Buffer.from(md2), { fileType: 'md' }), 'md', config as any)).value as string;
+    return { md, text: String((await back.to('text')).value), md2, md3 };
+}
+
+/** Each of `words` is a word of its own in `text`, none joined to another, and no markup is shown as text. */
+function assertWordsApart(text: string, words: string[], name: string): void {
+    const tokens: string[] = text.match(/[A-Za-z0-9]+/g) ?? [];
+    for (const word of words) assert.ok(tokens.includes(word), `${name}: keeps ${word} apart: ${JSON.stringify(text)}`);
+    assert.ok(!/<\/?[a-z]|&lt;|&#/i.test(text), `${name}: no markup read as text: ${JSON.stringify(text)}`);
+}
+
+const r12Text = (value: string, extra: Record<string, unknown> = {}) => ({ type: 'text', text: value, ...extra });
+const r12Figure = (ocr?: string, metadata: Record<string, unknown> = { url: 'a.png' }) => ({ type: 'image', text: ocr, metadata: { altText: 'alt1', caption: 'c1 c2', ...metadata } });
+const r12Item = (children: unknown[]) => ({ type: 'list', metadata: { listType: 'unordered', indentation: 0, itemIndex: 0, listId: 'L' }, children });
+
+/**
+ * A figure's caption is written in every image mode, and the figure stands apart from the words beside it:
+ * over maxInlineImageBytes its recognized text takes the picture's place and the caption follows it (it was
+ * lost in a line); under 'ocr-text-only' and 'none' the caption is written (it was dropped, and the words
+ * around the picture were glued to its text or split by nothing).
+ */
+export async function testFigureCaptionInEveryImageMode(): Promise<void> {
+    const big = [{ type: 'image', name: 'p.png', mimeType: 'image/png', data: Buffer.alloc(3000, 7).toString('base64') }];
+    const oversized = r12Figure('o1 o2', { attachmentName: 'p.png' });
+    const run = [r12Text('w1 '), oversized, r12Text(' w2')];
+    const cases: Array<[string, unknown[], Record<string, unknown>, unknown[], RegExp]> = [
+        ['oversized, paragraph', [{ type: 'paragraph', children: run }], { maxInlineImageBytes: 100 }, big, /^w1\n\no1 o2\n\nc1 c2\n\nw2$/],
+        ['oversized, list item', [r12Item(run)], { maxInlineImageBytes: 100 }, big, /^- w1<br>o1 o2<br>c1 c2<br>w2$/],
+        ['oversized, heading', [{ type: 'heading', metadata: { level: 2 }, children: run }], { maxInlineImageBytes: 100 }, big, /^## w1<br>o1 o2<br>c1 c2<br> ?w2/],
+        ['ocr-text-only, paragraph', [{ type: 'paragraph', children: [r12Text('w1 '), r12Figure('o1 o2'), r12Text(' w2')] }], { includeImages: 'ocr-text-only' }, [], /^w1\n\no1 o2\n\nc1 c2\n\nw2$/],
+        ['ocr-text-only, bold then a space, paragraph', [{ type: 'paragraph', children: [r12Text('w1', { formatting: { bold: true } }), r12Text(' '), r12Figure('o1 o2'), r12Text(' w2')] }], { includeImages: 'ocr-text-only' }, [], /^\*\*w1\*\*\n\no1 o2\n\nc1 c2\n\nw2$/],
+        ['ocr-text-only, bold then a space, list item', [r12Item([r12Text('w1', { formatting: { bold: true } }), r12Text(' '), r12Figure('o1 o2'), r12Text(' w2')])], { includeImages: 'ocr-text-only' }, [], /^- \*\*w1\*\*<br>o1 o2<br>c1 c2<br>w2$/],
+        ['image-only, bold then a space, list item', [r12Item([r12Text('w1', { formatting: { bold: true } }), r12Text(' '), r12Figure(), r12Text('w2', { formatting: { bold: true } })])], {}, [], /^- \*\*w1\*\*<br>!\[alt1\]\(a\.png\) c1 c2<br>\*\*w2\*\*$/],
+        ['ocr-text-only, two lines after a word', [{ type: 'paragraph', children: [r12Text('w1'), r12Figure('o1\no2')] }], { includeImages: 'ocr-text-only' }, [], /^w1\n\no1 {2}\no2\n\nc1 c2$/],
+        ['image+ocr-text, two lines, list item', [r12Item([r12Text('w1 '), r12Figure('o1\no2'), r12Text(' w2')])], { includeImages: 'image+ocr-text' }, [], /^- w1<br>!\[alt1\]\(a\.png\) c1 c2<br>o1<br>o2<br>w2$/],
+        ['none, paragraph', [{ type: 'paragraph', children: [r12Text('w1 '), r12Figure(), r12Text(' w2')] }], { includeImages: 'none' }, [], /^w1\n\nc1 c2\n\nw2$/],
+        ['none, heading', [{ type: 'heading', metadata: { level: 2 }, children: [r12Text('w1 '), r12Figure(), r12Text(' w2')] }], { includeImages: 'none' }, [], /^## w1<br>c1 c2<br> ?w2/],
+    ];
+    for (const [name, content, config, attachments, expected] of cases) {
+        const { md, text, md2, md3 } = await pictureRoundTrip(content, config, attachments);
+        assert.ok(expected.test(md.trim()), `Caption in every mode: ${name}: ${JSON.stringify(md)}`);
+        const words = ['w1', 'w2', 'c1', 'c2', ...(/o1/.test(md) ? ['o1', 'o2'] : [])].filter(word => JSON.stringify(content).includes(word));
+        assertWordsApart(text, words, `Caption in every mode: ${name}`);
+        assert.strictEqual(md3, md2, `Caption in every mode: ${name} settles by the third save`);
+    }
+    console.log(`✓ A figure's caption in every image mode (${cases.length} shapes)`);
+}
+
+/**
+ * A footnote whose body is a figure alone closes the figure on a continuation line, so the definition is
+ * read as blocks: written on one line, it was read back as the note's text, the figure's markup with it.
+ */
+export async function testFigureAloneInFootnote(): Promise<void> {
+    const configs: Array<[string, Record<string, unknown> | undefined]> = [['default', undefined], ['fallbackToHtml false', { mdConfig: { fallbackToHtml: false } }],
+        ['line breaks off', { mdConfig: { fallbackToHtml: { itemLineBreaks: false, cellLineBreaks: false } } }]];
+    for (const [name, config] of configs) {
+        const note = { type: 'note', metadata: { noteType: 'footnote', noteId: 'n1' }, children: [{ type: 'paragraph', children: [r12Figure()] }] };
+        const { md, text, md2 } = await pictureRoundTrip([{ type: 'paragraph', children: [{ ...r12Text('w1'), notes: [note] }, r12Text(' w2')] }], config);
+        assert.ok(md.includes('[^n1]: <figure><img src="a.png" alt="alt1"><figcaption>c1 c2</figcaption>\n    </figure>'), `Footnote figure: ${name}: ${JSON.stringify(md)}`);
+        assertWordsApart(text, ['w1', 'w2', 'alt1', 'c1', 'c2'], `Footnote figure: ${name}`);
+        assert.strictEqual(md2, md, `Footnote figure: ${name} is stable at the second save`);
+    }
+    console.log(`✓ A figure alone in a footnote reads back as a figure (${configs.length} configurations)`);
+}
+
+/**
+ * A figure in a heading inside an HTML cell is written as the heading's lines (`<br>`), as a Markdown
+ * heading writes it: a `<figure>` in the `<h2>` was read with its caption after the heading's words.
+ */
+export async function testFigureInHtmlCellHeading(): Promise<void> {
+    const heading = { type: 'heading', metadata: { level: 2 }, children: [r12Text('w1 '), r12Figure(), r12Text(' w2')] };
+    const cases: Array<[string, unknown, Record<string, unknown> | undefined]> = [
+        ['commonmark cell', { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [heading] }, { type: 'cell', children: [r12Text('w8')] }] }] }, { mdConfig: { dialect: 'commonmark' } }],
+        ['spanned cell', { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', metadata: { colSpan: 2 }, children: [heading] }] }, { type: 'row', children: [{ type: 'cell', children: [r12Text('w5')] }, { type: 'cell', children: [r12Text('w6')] }] }] }, undefined],
+    ];
+    for (const [name, table, config] of cases) {
+        const { md, text, md2, md3 } = await pictureRoundTrip([{ type: 'paragraph', children: [r12Text('top')] }, table, { type: 'paragraph', children: [r12Text('end')] }], config);
+        assert.ok(md.includes('<br><img src="a.png" alt="alt1"> c1 c2<br>') && !/<h2>[^]*<figure/.test(md), `HTML cell heading: ${name}: ${JSON.stringify(md)}`);
+        assertWordsApart(text, ['w1', 'alt1', 'c1', 'c2', 'w2'], `HTML cell heading: ${name}`);
+        assert.ok(/w1\b.*\bc1 c2\b.*\bw2\b/s.test(text), `HTML cell heading: ${name} keeps the caption before w2: ${JSON.stringify(text)}`);
+        assert.strictEqual(md3, md2, `HTML cell heading: ${name} settles by the third save`);
+    }
+    console.log(`✓ A figure in an HTML cell's heading stays in its place (${cases.length} shapes)`);
+}
+
+/** A figure in an admonition's inline content gets one blank quote line before it, not three. */
+export async function testFigureInAdmonitionLine(): Promise<void> {
+    const content = [{ type: 'admonition', metadata: { admonitionType: 'note' }, children: [r12Text('w1 '), r12Figure(), r12Text(' w2')] }];
+    for (const [name, config] of [['default', undefined], ['commonmark', { mdConfig: { dialect: 'commonmark' } }]] as const) {
+        const { md, text } = await pictureRoundTrip(content, config);
+        assert.ok(md.includes('> w1\n>\n> <figure><img src="a.png" alt="alt1"><figcaption>c1 c2</figcaption></figure>\n>\n>'), `Admonition figure: ${name}: ${JSON.stringify(md)}`);
+        assert.ok(!/\n>\n>\n/.test(md), `Admonition figure: ${name} has no run of blank quote lines: ${JSON.stringify(md)}`);
+        assertWordsApart(text, ['w1', 'alt1', 'c1', 'c2', 'w2'], `Admonition figure: ${name}`);
+    }
+    console.log('✓ A figure in an admonition line, one blank line before it');
+}
+
+/**
+ * HTML and EPUB write a figure's caption in every image mode, as 8.6.0 did: a <figure> with its
+ * <figcaption> where the picture or its recognized text is written, the caption alone as a paragraph (a
+ * span in a heading) carrying the picture's ids where nothing else of it is. A picture without a caption
+ * still writes nothing under 'none'.
+ */
+export async function testHtmlFigureCaptionInEveryImageMode(): Promise<void> {
+    const figure = (ocr?: string) => ({ type: 'image', text: ocr, metadata: { url: 'a.png', altText: 'alt1', caption: 'c1 c2', anchorIds: ['x9'] } });
+    const paragraph = (picture: unknown) => [{ type: 'paragraph', children: [r12Text('w1 '), picture, r12Text(' w2')] }];
+    const heading = (picture: unknown) => [{ type: 'heading', metadata: { level: 2 }, children: [r12Text('w1 '), picture, r12Text(' w2')] }];
+    const item = (picture: unknown) => [r12Item([r12Text('w1 '), picture, r12Text(' w2')])];
+    const cases: Array<[string, string, unknown[], string]> = [
+        ['none, paragraph', 'none', paragraph(figure('o1 o2')), '<p id="x9">c1 c2</p>'],
+        ['none, list item', 'none', item(figure()), '<p id="x9">c1 c2</p>'],
+        ['none, heading', 'none', heading(figure()), '<a id="x9" name="x9"></a><span class="caption">c1 c2</span>'],
+        ['ocr-text-only, no text, paragraph', 'ocr-text-only', paragraph(figure()), '<p id="x9">c1 c2</p>'],
+        ['ocr-text-only, paragraph', 'ocr-text-only', paragraph(figure('o1 o2')), '<figure><pre class="ocr-text" id="x9">o1 o2</pre><figcaption>c1 c2</figcaption></figure>'],
+        ['ocr-text-only, list item', 'ocr-text-only', item(figure('o1 o2')), '<figure><pre class="ocr-text" id="x9">o1 o2</pre><figcaption>c1 c2</figcaption></figure>'],
+        ['ocr-text-only, heading', 'ocr-text-only', heading(figure('o1 o2')), '<pre class="ocr-text" id="x9">o1 o2</pre> <span class="caption">c1 c2</span>'],
+        ['image-only, paragraph', 'image-only', paragraph(figure('o1 o2')), '<figure><img src="a.png" alt="alt1" id="x9"><figcaption>c1 c2</figcaption></figure>'],
+        ['image+ocr-text, paragraph', 'image+ocr-text', paragraph(figure('o1 o2')), '<figure><img src="a.png" alt="alt1" id="x9"><pre class="ocr-text">o1 o2</pre><figcaption>c1 c2</figcaption></figure>'],
+    ];
+    for (const [name, mode, content, expected] of cases) {
+        const ast = { type: 'md', metadata: {}, attachments: [], content } as unknown as OfficeParserAST;
+        const html = (await OfficeGenerator.generate(ast, 'html', { includeImages: mode as any, htmlConfig: { standalone: false } })).value as string;
+        assert.ok(html.includes(expected), `HTML caption in every mode: ${name}: ${JSON.stringify(html)}`);
+        const back = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' });
+        assertWordsApart(String((await back.to('text')).value), ['w1', 'c1', 'c2', 'w2'], `HTML caption in every mode: ${name}`);
+        assert.ok(JSON.stringify(back.content).includes('"x9"'), `HTML caption in every mode: ${name} keeps the picture's id`);
+        if (mode === 'none' || mode === 'ocr-text-only') {
+            const epub = (await OfficeGenerator.generate(ast, 'epub', { includeImages: mode as any })).value as Uint8Array;
+            const epubText = String((await (await OfficeParser.parseOffice(Buffer.from(epub), { fileType: 'epub' })).to('text')).value);
+            assertWordsApart(epubText, ['w1', 'c1', 'c2', 'w2'], `EPUB caption in every mode: ${name}`);
+        }
+    }
+    const uncaptioned = { type: 'md', metadata: {}, attachments: [], content: paragraph({ type: 'image', text: 'o1', metadata: { url: 'a.png', altText: 'alt1' } }) } as unknown as OfficeParserAST;
+    const none = (await OfficeGenerator.generate(uncaptioned, 'html', { includeImages: 'none', htmlConfig: { standalone: false } })).value as string;
+    assert.ok(!/caption|<figure|o1/.test(none), `HTML caption in every mode: a picture without a caption writes nothing under 'none': ${JSON.stringify(none)}`);
+    console.log(`✓ HTML and EPUB write a figure's caption in every image mode (${cases.length} shapes)`);
+}
+
+/** The picture matrix's writer and reader: this tree's. */
+const pictureMatrixIo: PictureMatrixIo = {
+    generate: async (ast, format, config) => (await OfficeGenerator.generate(ast, format, config)).value as string,
+    parse: markdown => OfficeParser.parseOffice(Buffer.from(markdown), { fileType: 'md' }),
+};
+
+/**
+ * Generated documents over the picture matrix (64 image and Markdown configurations, every container,
+ * captioned pictures in every image mode): no joined, lost or markup words, settled by pass 3.
+ */
+export async function testPictureMatrixGenerated(): Promise<void> {
+    for (const [label, count, seed] of [['fast', 2000, 4242], ['full', 10000, 99]] as const) {
+        const started = Date.now();
+        const result = await runPictureMatrix(pictureMatrixIo, { count, seed, captions: true, clean: true });
+        console.log(`  picture matrix ${label}: docs=${result.docs} distinct ASTs=${result.distinctAsts} Markdown=${result.distinctMarkdown} configurations=${result.configCombos} documents with figures=${result.figureDocs} figures=${result.figures} data: picture ids (ledger)=${result.readerDataImgId} in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+        assert.deepStrictEqual(result.failures, {}, `Picture matrix (${label}, seed ${seed}): ${JSON.stringify(result.examples)}`);
+        assert.ok(result.configCombos === 64 && result.distinctAsts > count * 0.95 && result.figures > count, `Picture matrix (${label}) covers the shapes: ${JSON.stringify({ ...result, fingerprints: undefined })}`);
+    }
+    console.log('✓ Picture matrix generated, no joined, lost or markup words, settled by pass 3');
+}
+
+/**
+ * Generated documents over the picture matrix with no captions write the same Markdown (three passes) and
+ * HTML as before the round 12 change: the fingerprints in helpers/pictureMatrixFingerprints.json were made
+ * by runPictureMatrix with c56459ec's writer and reader.
+ */
+export async function testPictureMatrixCaptionFreeUnchanged(): Promise<void> {
+    const kept: { count: number; seed: number; fingerprints: string[] } = JSON.parse(fs.readFileSync(PICTURE_MATRIX_FINGERPRINTS_FILE, 'utf8'));
+    const result = await runPictureMatrix(pictureMatrixIo, { count: kept.count, seed: kept.seed, captions: false, clean: false });
+    assert.strictEqual(result.figures, 0, 'Picture matrix without captions: no figure');
+    assert.deepStrictEqual(result.failures, {}, `Picture matrix without captions: ${JSON.stringify(result.examples)}`);
+    const changed = result.fingerprints.map((fingerprint, i) => fingerprint === kept.fingerprints[i] ? -1 : i).filter(i => i >= 0);
+    assert.strictEqual(result.fingerprints.length, kept.fingerprints.length, 'Picture matrix without captions: as many documents as fingerprints');
+    assert.deepStrictEqual(changed, [], `Picture matrix without captions: written as before, but ${changed.length} differ, the first document ${changed[0]}`);
+    console.log(`✓ Picture matrix without captions written as before (docs=${result.docs} distinct ASTs=${result.distinctAsts} Markdown=${result.distinctMarkdown} configurations=${result.configCombos})`);
 }
 
 /** ODF namespaces of a note test file. */
