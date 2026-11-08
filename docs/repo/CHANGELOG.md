@@ -4,6 +4,36 @@ All notable changes to `officeParser` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.7.0] - 2026-11-08
+
+### Added
+- **OpenDocument text templates.** `OfficeTemplate.render`, `tags()` and `check()` fill `.odt` and `.ott` templates with the same tags and data as Word's: text split across spans, headers and footers, notes, comments, text boxes, list items and table rows, with fresh ids for every copy. An `.ott` renders to an `.odt`.
+- **Text that looks like a tag but is not one is reported.** `{{first name}}`, `{{ name }`, an unknown filter and full-width braces are listed by `tags()` as `kind: 'text'` with a `reason`, and `render()` and `check()` warn once with `TEMPLATE_NOT_A_TAG`. At most 1,000 are listed per template; the warning's `details.found` counts them all. Braces in ordinary prose, code and JSON are not reported.
+- **`dataNumberSeparators`.** Templates read numbers written as text with other separators (`'1.234,50'` with `{ decimal: ',', group: '.' }`), for `format` and for conditions. Groups must be three digits, so ambiguous text is refused rather than misread.
+- **A misspelt block keyword carries its fix as data.** `{{ elseif x }}`, `{{ elif x }}` and `{{ end if }}` give `details.suggestion` with the tag as it should be typed.
+- **Figure captions.** A `<figure>`'s caption is read as the picture's (`ImageMetadata.caption`). It is written back as a figure in HTML, EPUB and Markdown, and as a caption paragraph after the picture in every other format.
+- **Disclosures and keyboard input.** `<details>` in HTML and Markdown is read as a `disclosure` node (`DisclosureMetadata`), whose first child is a `summary` node holding the summary's content: headings, links, pictures and notes included. In Markdown a disclosure may span blocks, read as GitHub shows it. Disclosures are written back as such in HTML, EPUB and Markdown, and elsewhere as the summary in bold followed by the body. `<kbd>` is read as keyboard input (`TextFormatting.keyboard`), kept in HTML and Markdown and written as code elsewhere.
+- **`htmlConfig.sheetLayout: 'tables'`.** Writes each sheet of a workbook as a heading and a plain table, instead of the spreadsheet viewer with tabs, column letters and row numbers.
+- **`NoteMetadata.mark` and `customMark`.** The mark a note's source shows at its reference, and whether its author chose it.
+
+### Changed
+- **In a template condition, text that is a number compares with a number as that number.** `{{ if total > 100 }}` with `total: '250'` was refused as `incomparable`; text that is not a number still is.
+
+### Fixed
+- **Note references show the note's mark, not its internal id.** HTML, EPUB, slides and the native PDF engine printed DOCX's `2` for the first footnote, ODT's `ftn1` or EPUB's `dataF1`. A note shows the mark its source gives (ODT's notes configuration, a custom mark) or its number among notes of its kind.
+- **RTF bullet lists with numbered deeper levels stay bullet lists.** A list was read as numbered if any of its levels was.
+- **A quote of several paragraphs stays one quote** in HTML, EPUB, Markdown and LaTeX; it was written as one quote per paragraph.
+- **Markdown keeps text it dropped.** A list item holding a lone carriage return (or U+2028, U+2029) was dropped whole, and a list whose first item was empty lost the lines after it when the text started with a blank line or an indented line; both keep their text now.
+- **XHTML is read as HTML.** An HTML file with an XML declaration (LibreOffice's HTML export) warned `BUFFER_TYPE_MISMATCH`, and without `fileType` was refused.
+- **Header and footer parts shown in many sections are counted with their fonts and values** against `decompressionLimits.maxRepeatedContent`. A 2 KB ODT or 8 KB DOCX alternating two headers in a long font made hundreds of MB of JSON, and every writer failed.
+- **XLSX: a styled or linked cell showing a rich string keeps its run fonts within the budget.** They were counted twice and dropped. A cell showing a shared string again costs up to 128 characters less while 64 characters per byte of the document last, so large workbooks of repeated rich text are read whole.
+- **ODT: text boxes nested in text boxes no longer repeat their text at every level without bound.**
+- **Chunking a paragraph of millions of characters with no spaces no longer runs out of memory.**
+- **The native PDF engine's memory no longer grows with the words a document draws.** It holds each page's drawing compressed and lays a paragraph out piece by piece; the PDF is byte for byte the same.
+- **ODT: line breaks inside a link no longer use up the budget**, so text runs keep their links.
+- **Bold, italic and other style flags count toward `maxRepeatedContent`.**
+- **LaTeX writes a highlight through one command per colour.** Highlighted text is about half the size it was, and highlighted underlined text wraps instead of running off the page. A formula naming one of the generator's own commands (a highlight, the driver or a repeated note's number) prints its name instead of breaking the build or printing the note's number.
+
 ## [8.6.0] - 2026-11-05
 
 ### Added
