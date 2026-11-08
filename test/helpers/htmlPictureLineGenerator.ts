@@ -12,6 +12,12 @@
  * back four times: no word joined to another, no word lost (after pass 1 and pass 4), and each pass's
  * output recorded for when it settles.
  *
+ * runHtmlPictureCommentMatrix: the same documents with a source comment (a comment, or under sourceAttributes
+ * an empty `data-html-comment` span) at the start of each picture's line, right before or after the picture
+ * or at the line's end, read back five times: no joined or lost words, no line break written for a comment
+ * (after a line's start or another break with only hidden markup between), each pass recorded for settling.
+ * It takes a reader and writer (HtmlRoundTripIo), so another tree's can be compared.
+ *
  * runDisclosureHeadingGenerator: disclosures holding headings (in the body, the summary, a nested
  * disclosure, after loose text, two headings; ids none, the generated slug, another, two), as ASTs written
  * as HTML and EPUB with and without generateIds, and as HTML a person writes (a named anchor before the
@@ -52,16 +58,28 @@ function epubXhtml(value: Uint8Array): string {
     return Object.keys(files).sort().filter(name => /\.x?html$/.test(name)).map(name => `${name}\n${strFromU8(files[name]).replace(/urn:uuid:[0-9a-f-]+/g, 'UUID')}`).join('\n---\n');
 }
 
+/** A reader and writer to run the documents through (this tree's, or another's to compare with). */
+export interface HtmlRoundTripIo {
+    parse: (value: string | Uint8Array, format: 'html' | 'epub') => Promise<any>;
+    generate: (ast: any, format: 'html' | 'epub', config: Record<string, unknown>) => Promise<string | Uint8Array>;
+}
+
+/** This tree's reader and writer. */
+export const htmlRoundTripIo: HtmlRoundTripIo = {
+    parse: (value, format) => OfficeParser.parseOffice(typeof value === 'string' ? Buffer.from(value) : Buffer.from(value), { fileType: format }),
+    generate: async (ast, format, config) => (await OfficeGenerator.generate(ast, format, config as any)).value as string | Uint8Array,
+};
+
 /** Writes `ast` (or reads `source` first) and reads it back `passes` times: each pass's output and text. */
-async function roundTrip(ast: Node | undefined, format: 'html' | 'epub', config: Record<string, unknown>, passes: number, source?: string): Promise<{ outs: string[]; texts: string[] }> {
+async function roundTrip(ast: Node | undefined, format: 'html' | 'epub', config: Record<string, unknown>, passes: number, source?: string, io: HtmlRoundTripIo = htmlRoundTripIo): Promise<{ outs: string[]; texts: string[] }> {
     const outs: string[] = [];
     const texts: string[] = [];
-    let current: any = source === undefined ? ast : await OfficeParser.parseOffice(Buffer.from(source), { fileType: format });
+    let current: any = source === undefined ? ast : await io.parse(source, format);
     for (let pass = 0; pass < passes; pass++) {
-        const settings = format === 'html' ? { ...config, htmlConfig: { standalone: false } } : config;
-        const value = (await OfficeGenerator.generate(current, format, settings as any)).value as string | Uint8Array;
+        const settings = format === 'html' ? { ...config, htmlConfig: { standalone: false, ...(config.htmlConfig as object | undefined) } } : config;
+        const value = await io.generate(current, format, settings);
         outs.push(format === 'epub' ? epubXhtml(value as Uint8Array) : String(value));
-        current = await OfficeParser.parseOffice(typeof value === 'string' ? Buffer.from(value) : Buffer.from(value), { fileType: format });
+        current = await io.parse(value, format);
         texts.push(String((await current.to('text')).value));
     }
     return { outs, texts };
@@ -92,14 +110,23 @@ const IMAGE_MODES: Array<Record<string, unknown>> = [
 ];
 const POSITIONS = ['alone', 'start', 'middle', 'end', 'pair', 'breakBefore', 'breakAfter'] as const;
 
-/** Runs `count` captioned-picture documents from `seed`, each as HTML and EPUB. Failures: joined or lost words, throws. */
-export async function runHtmlPictureMatrix(count: number, seed: number): Promise<HtmlLineGeneratorResult> {
+/** One captioned-picture document of the matrix: its AST, image mode, container, position and the words a reader sees. */
+export interface PictureMatrixDoc {
+    i: number;
+    ast: { type: string; metadata: Node; attachments: Node[]; content: Node[] };
+    mode: Record<string, unknown>;
+    container: string;
+    position: string;
+    ocr: string | undefined;
+    /** The words a reader sees: text, every caption, alt text where the image is written, recognized text where it is. */
+    expected: Set<string>;
+}
+
+/** The matrix's `count` documents from `seed` (the draws runHtmlPictureMatrix has always made). */
+export function* htmlPictureMatrixDocs(count: number, seed: number): Generator<PictureMatrixDoc> {
     let state = seed >>> 0;
     const rnd = (): number => (state = (Math.imul(state, 1664525) + 1013904223) >>> 0) / 4294967296;
     const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)];
-    const result = newResult();
-    const fail = failer(result);
-    const sources = new Set<string>(), htmls = new Set<string>(), epubs = new Set<string>(), combos = new Set<string>();
 
     const text = (value: string, extra: Node = {}): Node => ({ type: 'text', text: value, ...extra });
     const paragraph = (children: Node[], metadata?: Node): Node => ({ type: 'paragraph', children, ...(metadata ? { metadata } : {}) });
@@ -157,7 +184,6 @@ export async function runHtmlPictureMatrix(count: number, seed: number): Promise
         const mode = IMAGE_MODES[i % IMAGE_MODES.length];
         const container = pick(containerNames);
         const position = pick(POSITIONS);
-        combos.add(`${i % IMAGE_MODES.length}/${container}/${position}`);
         const line: Node[] = [];
         if (position !== 'start' && position !== 'alone' && position !== 'pair') line.push(neighbour(), ...space());
         if (position === 'breakBefore') line.push({ type: 'break', metadata: { breakType: 'carriageReturn' } });
@@ -166,11 +192,7 @@ export async function runHtmlPictureMatrix(count: number, seed: number): Promise
         if (position === 'breakAfter') line.push({ type: 'break', metadata: { breakType: 'carriageReturn' } });
         if (position !== 'end' && position !== 'alone') line.push(...space(), neighbour());
         const ast = { type: 'md', metadata: {}, attachments, content: [paragraph([text('z9')]), ...CONTAINERS[container](line), paragraph([text('z8')])] };
-        const json = JSON.stringify(ast);
-        sources.add(json);
-        result.docs++;
 
-        // The words a reader sees: text, every caption, alt text where the image is written, recognized text where it is.
         const imageMode = (mode.includeImages as string | undefined) ?? 'image-only';
         const expected = new Set<string>();
         const add = (value?: string): void => (value?.match(/w\d+/g) ?? []).forEach(word => expected.add(word));
@@ -188,6 +210,30 @@ export async function runHtmlPictureMatrix(count: number, seed: number): Promise
             walk(node.notes);
         };
         walk(ast.content);
+        yield { i, ast, mode, container, position, ocr, expected };
+    }
+}
+
+/** Joined and lost words of a pass's text (see runHtmlPictureMatrix). */
+function wordFailures(text: string, expected: Set<string>): { joined: string[]; lost: string[] } {
+    const tokens = tokensOf(text);
+    const present = new Set(tokens);
+    const joined = tokens.filter(token => /w\d/.test(token) && !/^w\d+$/.test(token) && !/^idw\d+$/.test(token));
+    const lost = [...expected].filter(word => !present.has(word) && !joined.some(j => j.includes(word)));
+    return { joined, lost };
+}
+
+/** Runs `count` captioned-picture documents from `seed`, each as HTML and EPUB. Failures: joined or lost words, throws. */
+export async function runHtmlPictureMatrix(count: number, seed: number): Promise<HtmlLineGeneratorResult> {
+    const result = newResult();
+    const fail = failer(result);
+    const sources = new Set<string>(), htmls = new Set<string>(), epubs = new Set<string>(), combos = new Set<string>();
+
+    for (const { i, ast, mode, container, position, ocr, expected } of htmlPictureMatrixDocs(count, seed)) {
+        combos.add(`${i % IMAGE_MODES.length}/${container}/${position}`);
+        const json = JSON.stringify(ast);
+        sources.add(json);
+        result.docs++;
 
         for (const format of ['html', 'epub'] as const) {
             const tag = `${format} ${JSON.stringify(mode)} ${container} ${position} ocr=${ocr}`;
@@ -195,13 +241,84 @@ export async function runHtmlPictureMatrix(count: number, seed: number): Promise
             try { trip = await roundTrip(JSON.parse(json), format, mode, 4); } catch (error) { fail(`${format}:throw`, `${tag}: ${(error as Error).message}`); continue; }
             (format === 'html' ? htmls : epubs).add(trip.outs[0]);
             for (const pass of [0, 3]) {
-                const tokens = tokensOf(trip.texts[pass]);
-                const present = new Set(tokens);
-                const joined = tokens.filter(token => /w\d/.test(token) && !/^w\d+$/.test(token) && !/^idw\d+$/.test(token));
+                const { joined, lost } = wordFailures(trip.texts[pass], expected);
                 if (joined.length) fail(`${format}:joined`, `${tag} pass ${pass + 1} joined=${joined.join(',')}\nout1=${JSON.stringify(withoutData(trip.outs[0]))}\ntext=${JSON.stringify(trip.texts[pass])}`);
-                const lost = [...expected].filter(word => !present.has(word) && !joined.some(j => j.includes(word)));
                 if (lost.length) fail(`${format}:lost`, `${tag} pass ${pass + 1} lost=${lost.join(',')}\nout1=${JSON.stringify(withoutData(trip.outs[0]))}\ntext=${JSON.stringify(trip.texts[pass])}`);
             }
+            const at = settledAt(trip.outs.map(withoutData));
+            result.settledAtPass[`${format}:${at}`] = (result.settledAtPass[`${format}:${at}`] ?? 0) + 1;
+            if (!at || at > 3) {
+                const shape = `${format}:${container}/${position}`;
+                result.unsettledShapes[shape] = (result.unsettledShapes[shape] ?? 0) + 1;
+            }
+        }
+    }
+    result.distinctSources = sources.size;
+    result.distinctHtml = htmls.size;
+    result.distinctEpub = epubs.size;
+    result.distinctCombos = combos.size;
+    return result;
+}
+
+/**
+ * A line break written for a captioned picture (one followed by the picture, not by the white space a line
+ * break node writes after its own) right after a line's start or another line break, with hidden markup
+ * between, a source comment among it: the comment was counted as line content.
+ */
+const BREAK_AFTER_HIDDEN = /(?:<(?:h\d|summary|blockquote|p|li|td|th|dt|dd|div)\b[^>]*>|<br>)(?:\s|<!--(?:[^-]|-(?!->))*-->|<span data-html-comment="[^"]*"><\/span>|<a id="[^"]*" name="[^"]*"><\/a>)*(?:<!--(?:[^-]|-(?!->))*-->|<span data-html-comment="[^"]*"><\/span>)(?:\s|<!--(?:[^-]|-(?!->))*-->|<span data-html-comment="[^"]*"><\/span>|<a id="[^"]*" name="[^"]*"><\/a>)*<br>(?!\s)/;
+
+/**
+ * Runs the picture matrix's `count` documents from `seed` with a source comment (`<!--src-->`, or under
+ * `sourceAttributes` in HTML an empty `data-html-comment` span) put into each line holding a picture: at its
+ * start, right before or after the picture (inside a comment's range, when the picture is in one), or at its
+ * end. Each is written as HTML and EPUB and read back five times. Failures: joined or lost words (pass 1 and
+ * 5), a line break after a line's start or another line break with only hidden markup between, throws.
+ * Round trips settling after pass 3 are counted by shape in `unsettledShapes`.
+ */
+export async function runHtmlPictureCommentMatrix(count: number, seed: number, io: HtmlRoundTripIo = htmlRoundTripIo): Promise<HtmlLineGeneratorResult> {
+    let state = (seed ^ 0x5bd1e995) >>> 0;
+    const rnd = (): number => (state = (Math.imul(state, 1664525) + 1013904223) >>> 0) / 4294967296;
+    const result = newResult();
+    const fail = failer(result);
+    const sources = new Set<string>(), htmls = new Set<string>(), epubs = new Set<string>(), combos = new Set<string>();
+    const comment = (): Node => ({ type: 'comment', text: 'src', metadata: { sourceSyntax: 'html' } });
+    const withComments = (node: any): any => {
+        if (!node || typeof node !== 'object') return node;
+        if (Array.isArray(node)) return node.map(withComments);
+        const out = { ...node };
+        if (node.children) {
+            const kids = node.children.map(withComments);
+            const at = kids.findIndex((child: Node) => child.type === 'image');
+            if (at >= 0) {
+                const r = rnd();
+                kids.splice(r < 0.3 ? 0 : r < 0.55 ? at : r < 0.8 ? at + 1 : kids.length, 0, comment());
+            }
+            out.children = kids;
+        }
+        if (node.notes) out.notes = node.notes.map(withComments);
+        return out;
+    };
+
+    for (const { i, ast, mode, container, position, ocr, expected } of htmlPictureMatrixDocs(count, seed)) {
+        const doc = { ...ast, content: withComments(ast.content) };
+        const sourceAttributes = rnd() < 0.5;
+        const json = JSON.stringify(doc);
+        sources.add(json);
+        combos.add(`${i % IMAGE_MODES.length}/${container}/${position}`);
+        result.docs++;
+        for (const format of ['html', 'epub'] as const) {
+            const config = format === 'html' && sourceAttributes ? { ...mode, htmlConfig: { sourceAttributes: true } } : mode;
+            const tag = `${format} ${JSON.stringify(config)} ${container} ${position} ocr=${ocr}`;
+            let trip: { outs: string[]; texts: string[] };
+            try { trip = await roundTrip(JSON.parse(json), format, config, 5, undefined, io); } catch (error) { fail(`${format}:throw`, `${tag}: ${(error as Error).message}`); continue; }
+            (format === 'html' ? htmls : epubs).add(trip.outs[0]);
+            for (const pass of [0, 4]) {
+                const { joined, lost } = wordFailures(trip.texts[pass], expected);
+                if (joined.length) fail(`${format}:joined`, `${tag} pass ${pass + 1} joined=${joined.join(',')}\nout1=${JSON.stringify(withoutData(trip.outs[0]))}`);
+                if (lost.length) fail(`${format}:lost`, `${tag} pass ${pass + 1} lost=${lost.join(',')}\nout1=${JSON.stringify(withoutData(trip.outs[0]))}`);
+            }
+            const broken = trip.outs.findIndex(out => BREAK_AFTER_HIDDEN.test(out));
+            if (broken >= 0) fail(`${format}:breakAfterComment`, `${tag} pass ${broken + 1}: ${JSON.stringify(withoutData(trip.outs[broken]).match(BREAK_AFTER_HIDDEN)?.[0])}\nout=${JSON.stringify(withoutData(trip.outs[broken]))}`);
             const at = settledAt(trip.outs.map(withoutData));
             result.settledAtPass[`${format}:${at}`] = (result.settledAtPass[`${format}:${at}`] ?? 0) + 1;
             if (!at || at > 3) {

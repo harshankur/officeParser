@@ -13,7 +13,8 @@ import { MARKDOWN_FINGERPRINTS_FILE, markdownFingerprints, markdownWithoutDisclo
 import { referenceHasDisclosureElement } from '../helpers/disclosureReference';
 import { runFigureLineGenerator } from '../helpers/figureLineGenerator';
 import { PICTURE_MATRIX_FINGERPRINTS_FILE, type PictureMatrixIo, runPictureMatrix } from '../helpers/pictureMatrixGenerator';
-import { runDisclosureHeadingGenerator, runHtmlPictureMatrix } from '../helpers/htmlPictureLineGenerator';
+import { runDisclosureHeadingGenerator, runHtmlPictureCommentMatrix, runHtmlPictureMatrix } from '../helpers/htmlPictureLineGenerator';
+import { runAnchorPositionGenerator } from '../helpers/anchorPositionGenerator';
 import { runLineSeparatorGenerator } from '../helpers/lineSeparatorGenerator';
 
 /** The text of a node: a line's runs joined, blocks set apart by a space. */
@@ -1761,8 +1762,9 @@ export async function testMarkdownItemLineSeparators(): Promise<void> {
 
 /**
  * Generated captioned pictures in every image mode, 17 line and block containers and 7 positions, written as
- * HTML and EPUB and read back four times: no joined or lost words. Round trips settle by pass 3, except in
- * list items and cells' headings, which settle as they did before this round's fixes (next-release ledger).
+ * HTML and EPUB and read back four times: no joined or lost words. Round trips settle by pass 3, list items
+ * included (a caption in an item was read as a paragraph on pass 3), except cells' headings, which settle at
+ * pass 4 as they did before (next-release ledger).
  */
 export async function testHtmlPictureMatrixGenerated(): Promise<void> {
     for (const [label, count, seed] of [['fast', 300, 13], ['full', 3000, 1313]] as const) {
@@ -1771,12 +1773,12 @@ export async function testHtmlPictureMatrixGenerated(): Promise<void> {
         const unsettled = Object.values(result.unsettledShapes).reduce((sum, n) => sum + n, 0);
         console.log(`  HTML picture matrix ${label}: docs=${result.docs} distinct ASTs=${result.distinctSources} HTML=${result.distinctHtml} EPUB=${result.distinctEpub} mode x container x position=${result.distinctCombos} settled at pass=${JSON.stringify(result.settledAtPass)} in ${((Date.now() - started) / 1000).toFixed(1)}s`);
         assert.deepStrictEqual(result.failures, {}, `HTML picture matrix (${label}, seed ${seed}): ${JSON.stringify(result.examples)}`);
-        const elsewhere = Object.keys(result.unsettledShapes).filter(shape => !/^(html|epub):(itemInline|itemPara|cellHeading)\//.test(shape));
-        assert.deepStrictEqual(elsewhere, [], `HTML picture matrix (${label}): settles by pass 3 outside list items and cells' headings`);
-        assert.ok(unsettled <= result.docs * 2 * 0.1, `HTML picture matrix (${label}): at most a tenth of the round trips settle after pass 3: ${unsettled}`);
+        const elsewhere = Object.keys(result.unsettledShapes).filter(shape => !/^(html|epub):cellHeading\//.test(shape));
+        assert.deepStrictEqual(elsewhere, [], `HTML picture matrix (${label}): settles by pass 3 outside cells' headings: ${JSON.stringify(result.unsettledShapes)}`);
+        assert.ok(unsettled <= result.docs * 2 * 0.01, `HTML picture matrix (${label}): at most one round trip in a hundred settles after pass 3: ${unsettled}`);
         assert.ok(result.distinctSources > count * 0.9 && result.distinctCombos > Math.min(count, 952) * 0.6, `HTML picture matrix (${label}) covers the shapes: ${JSON.stringify({ ...result, examples: undefined })}`);
     }
-    console.log('✓ HTML picture matrix generated, no joined or lost words, settled by pass 3 outside list items and cells\' headings');
+    console.log('✓ HTML picture matrix generated, no joined or lost words, settled by pass 3 outside cells\' headings');
 }
 
 /** Generated disclosures holding headings, as ASTs and as HTML: settled at pass 1, no empty paragraph, never growing. */
@@ -1801,6 +1803,212 @@ export async function testLineSeparatorsGenerated(): Promise<void> {
         assert.ok(result.distinctReaderKinds === 26 && result.distinctWriterContainers === 22 && result.distinctReaderSources > count * 0.95 && result.distinctWriterAsts > count * 0.95, `Line separators (${label}) cover the shapes: ${JSON.stringify({ ...result, examples: undefined })}`);
     }
     console.log('✓ Line separators in every Markdown block kind generated, no word lost');
+}
+
+/** Every anchor id in a tree, with the type of the node holding it. */
+function anchorIdHolders(content: unknown): Map<string, string> {
+    const out = new Map<string, string>();
+    const walk = (node: any): void => {
+        if (!node || typeof node !== 'object') return;
+        if (Array.isArray(node)) { node.forEach(walk); return; }
+        for (const id of node.metadata?.anchorIds ?? []) if (!out.has(id)) out.set(id, node.type);
+        walk(node.children);
+        walk(node.notes);
+    };
+    walk(content);
+    return out;
+}
+
+/** `ast` written as `format` and read back three times: each pass's output (an EPUB's XHTML) and the last tree. */
+async function threePasses(ast: OfficeParserAST, format: 'html' | 'epub' | 'md', config: Record<string, unknown> = {}): Promise<{ outs: string[]; last: OfficeParserAST }> {
+    const outs: string[] = [];
+    let current = ast;
+    for (let pass = 0; pass < 3; pass++) {
+        const value = (await OfficeGenerator.generate(current, format, (format === 'html' ? { ...config, htmlConfig: { standalone: false } } : config) as any)).value as string | Uint8Array;
+        outs.push(format === 'epub' ? Object.entries(unzipSync(value as Uint8Array)).filter(([name]) => /\.x?html$/.test(name)).map(([, data]) => Buffer.from(data).toString('utf8')).join('\n') : String(value));
+        current = await OfficeParser.parseOffice(typeof value === 'string' ? Buffer.from(value) : Buffer.from(value), { fileType: format });
+    }
+    return { outs, last: current };
+}
+
+/**
+ * A named anchor before a disclosure's summary, after it with no body, as its only content or ending the
+ * disclosure keeps its id through three saves as HTML, EPUB and Markdown. An anchor after a summary with no
+ * body, or alone in one, gave its id to the summary, which takes none: `<summary id>` was written and never
+ * read, and Markdown wrote nothing, so a link to it went nowhere after one save.
+ */
+export async function testDisclosureAnchorPositionsKept(): Promise<void> {
+    const anchor = '<a id="q1" name="q1"></a>';
+    const positions: Record<string, string> = {
+        'before the summary': `<details>${anchor}<summary>Q</summary></details>`,
+        'before the summary, a body after': `<details>${anchor}<summary>Q</summary><p>A</p></details>`,
+        'after the summary, no body': `<details><summary>Q</summary>${anchor}</details>`,
+        'after the summary, the disclosure an id of its own': `<details id="d1"><summary>Q</summary>${anchor}</details>`,
+        'after the summary, in a list item': `<ul><li><details><summary>Q</summary>${anchor}</details></li></ul>`,
+        'the summary\'s only content': `<details><summary>${anchor}</summary><p>A</p></details>`,
+        'the summary\'s only content, holding a space': '<details><summary><a id="q1"> </a></summary></details>',
+        'ending the summary\'s line': '<details><summary>Q <a name="q1"></a></summary></details>',
+        'ending the disclosure': `<details><summary>Q</summary><p>A</p>${anchor}</details>`,
+    };
+    let trips = 0;
+    for (const [name, disclosure] of Object.entries(positions)) {
+        const source = `<p><a href="#q1">go</a></p>${disclosure}<p>z9</p>`;
+        const ast = await OfficeParser.parseOffice(Buffer.from(source), { fileType: 'html' });
+        const read = anchorIdHolders(ast.content);
+        assert.ok(read.has('q1'), `Disclosure anchor ${name}: read: ${JSON.stringify(ast.content)}`);
+        assert.ok(![...read.values()].includes('summary'), `Disclosure anchor ${name}: no id on a summary: ${JSON.stringify(ast.content)}`);
+        for (const format of ['html', 'epub', 'md'] as const) {
+            const { outs, last } = await threePasses(ast, format);
+            const after = anchorIdHolders(last.content);
+            for (const id of read.keys()) assert.ok(after.has(id), `Disclosure anchor ${name}, ${format}: ${id} kept by pass 3: ${JSON.stringify(outs[2])}`);
+            assert.ok(outs.every(out => !/<summary[^>]* id=/.test(out)), `Disclosure anchor ${name}, ${format}: no id written on a summary: ${JSON.stringify(outs[0])}`);
+            if (format !== 'epub') assert.ok(outs[2].includes('id="q1"'), `Disclosure anchor ${name}, ${format}: the link's target written: ${JSON.stringify(outs[2])}`);
+            trips++;
+        }
+    }
+
+    // Markdown: anchors waiting from an empty paragraph are written before the disclosure (a plain summary's
+    // line took them and dropped them), and a rule's and a table's ids in a cell or item written as HTML.
+    const text = (value: string) => ({ type: 'text', text: value });
+    const paragraph = (value: string, metadata?: Record<string, unknown>) => ({ type: 'paragraph', children: value ? [text(value)] : [], ...(metadata ? { metadata } : {}) });
+    const disclosure = () => ({ type: 'disclosure', metadata: {}, children: [{ type: 'summary', children: [paragraph('Q')] }, paragraph('A')] });
+    const rule = { type: 'break', metadata: { breakType: 'thematic', anchorIds: ['h1'] } };
+    const table = { type: 'table', metadata: { anchorIds: ['t1'] }, children: [{ type: 'row', children: [{ type: 'cell', children: [text('c')] }] }] };
+    const writerCases: Array<[string, unknown[], string[], string[]]> = [
+        ['an empty paragraph\'s ids before a disclosure', [paragraph('go'), paragraph('', { anchorIds: ['p1'] }), disclosure()], ['p1'], ['<a id="p1"></a>\n\n<details>']],
+        ['a rule and a table in an HTML cell', [{ type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [disclosure(), rule, table] }] }] }], ['h1', 't1'], ['<hr id="h1">', '<table id="t1">']],
+        ['a rule and a table in an HTML list item', [{ type: 'list', metadata: { listType: 'unordered', indentation: 0, itemIndex: 0 }, children: [disclosure(), rule, table] }], ['h1', 't1'], ['<hr id="h1">', '<table id="t1">']],
+    ];
+    for (const [name, content, ids, markup] of writerCases) {
+        const { outs, last } = await threePasses({ type: 'md', metadata: {}, attachments: [], content } as unknown as OfficeParserAST, 'md');
+        for (const piece of markup) assert.ok(outs[0].includes(piece), `Markdown disclosure ids, ${name}: writes ${piece}: ${JSON.stringify(outs[0])}`);
+        const after = anchorIdHolders(last.content);
+        for (const id of ids) assert.ok(after.has(id), `Markdown disclosure ids, ${name}: ${id} kept by pass 3: ${JSON.stringify(outs[2])}`);
+        assert.strictEqual(outs[1], outs[2], `Markdown disclosure ids, ${name}: settles`);
+        trips++;
+    }
+    console.log(`✓ An anchor before, after or inside a disclosure's summary keeps its id (${trips} round trips of 3 passes)`);
+}
+
+/**
+ * A figure's caption in an aligned block (a centred div, an aligned cell, a list item, which the HTML writer
+ * writes with `text-align: left`) is the picture's caption, as in an unaligned one: the alignment its runs
+ * inherit was taken for formatting of the caption's own, and it was read as a paragraph after the picture (in
+ * a list item, on the third save). A figcaption aligned apart from its figure still stays a paragraph.
+ */
+export async function testHtmlFigureCaptionInAlignedBlock(): Promise<void> {
+    const figure = (figcaption = '<figcaption>Cap one</figcaption>', attributes = '') => `<figure${attributes}><img src="a.png" alt="a">${figcaption}</figure>`;
+    const captioned: Record<string, string> = {
+        'a centred div': `<div style="text-align: center">${figure()}</div>`,
+        'a right-aligned cell': `<table><tr><td style="text-align: right">${figure()}</td></tr></table>`,
+        'a list item aligned left': `<ul><li style="text-align: left">${figure()}</li></ul>`,
+        'a list item after a word': `<ul><li>w1${figure()}</li></ul>`,
+        'a centred figure': figure(undefined, ' style="text-align: center"'),
+        'a figcaption aligned as its figure': `<div style="text-align: center">${figure('<figcaption style="text-align: center">Cap one</figcaption>')}</div>`,
+    };
+    const captionOf = (content: unknown): string | undefined => JSON.stringify(content).match(/"caption":"([^"]*)"/)?.[1];
+    for (const [name, source] of Object.entries(captioned)) {
+        const ast = await OfficeParser.parseOffice(Buffer.from(source), { fileType: 'html' });
+        assert.strictEqual(captionOf(ast.content), 'Cap one', `Figure caption in ${name}: the picture's: ${JSON.stringify(ast.content)}`);
+        for (const format of ['html', 'epub'] as const) {
+            const { last } = await threePasses(ast, format);
+            assert.strictEqual(captionOf(last.content), 'Cap one', `Figure caption in ${name}, ${format}: kept by pass 3: ${JSON.stringify(last.content)}`);
+        }
+    }
+    for (const source of [figure('<figcaption style="text-align: center">Cap one</figcaption>'), `<div style="text-align: center">${figure('<figcaption style="text-align: right">Cap one</figcaption>')}</div>`]) {
+        const ast = await OfficeParser.parseOffice(Buffer.from(source), { fileType: 'html' });
+        assert.strictEqual(captionOf(ast.content), undefined, `Figure caption aligned apart: a paragraph: ${source}`);
+        assert.ok(String((await ast.to('text')).value).includes('Cap one'), `Figure caption aligned apart: its text kept: ${source}`);
+    }
+
+    // A captioned picture in a list item (of inline content or a paragraph) settles by pass 3 in HTML and EPUB.
+    const picture = { type: 'image', metadata: { url: 'a.png', altText: 'alt1', caption: 'c1 c2' } };
+    const item = (children: unknown[]) => ({ type: 'list', metadata: { listType: 'unordered', indentation: 0, itemIndex: 0, listId: 'L' }, children });
+    const lines: Record<string, unknown[]> = { alone: [picture], start: [picture, { type: 'text', text: 'w2' }], middle: [{ type: 'text', text: 'w1' }, picture, { type: 'text', text: 'w2' }], end: [{ type: 'text', text: 'w1' }, picture] };
+    let trips = 0;
+    for (const [position, line] of Object.entries(lines)) {
+        for (const [shape, content] of [['inline', [item(line)]], ['paragraph', [item([{ type: 'paragraph', children: line }])]]] as const) {
+            for (const format of ['html', 'epub'] as const) {
+                const ast = { type: 'md', metadata: {}, attachments: [], content: [{ type: 'paragraph', children: [{ type: 'text', text: 'z9' }] }, ...JSON.parse(JSON.stringify(content))] } as unknown as OfficeParserAST;
+                const { outs, last } = await threePasses(ast, format);
+                const fourth = await threePasses(last, format);
+                assert.strictEqual(fourth.outs[0], outs[2], `List item figure, ${shape} ${position}, ${format}: settles by pass 3:\n${outs[2]}\n${fourth.outs[0]}`);
+                assert.strictEqual(captionOf(last.content), 'c1 c2', `List item figure, ${shape} ${position}, ${format}: caption kept: ${JSON.stringify(last.content)}`);
+                trips++;
+            }
+        }
+    }
+    console.log(`✓ A figure caption in an aligned block or a list item is the picture's (${Object.keys(captioned).length} sources, ${trips} item round trips settled by pass 3)`);
+}
+
+/**
+ * A source comment in a line holding a captioned picture is no line content: a heading opening with one
+ * wrote `<!--src--><br>` before its picture, and one after a line break gave the picture a second break.
+ */
+export async function testHtmlSourceCommentBesideCaptionedPicture(): Promise<void> {
+    const source = () => ({ type: 'comment', text: 'src', metadata: { sourceSyntax: 'html' } });
+    const picture = () => ({ type: 'image', metadata: { url: 'a.png', altText: 'alt1', caption: 'c1 c2' } });
+    const lineBreak = () => ({ type: 'break', metadata: { breakType: 'carriageReturn' } });
+    const cases: Array<[string, unknown[], string]> = [
+        ['opening the line', [source(), picture(), r12Text('w2')], '>#<img src="a.png" alt="alt1"> <span class="caption">c1 c2</span><br>w2</h2>'],
+        ['after a line break', [r12Text('w1'), lineBreak(), source(), picture(), r12Text('w2')], 'w1<br>#<img src="a.png" alt="alt1"> <span class="caption">c1 c2</span><br>w2</h2>'],
+        ['between the picture and the next word', [r12Text('w1'), picture(), source(), r12Text('w2')], 'w1<br><img src="a.png" alt="alt1"> <span class="caption">c1 c2</span>#<br>w2</h2>'],
+        ['in a comment\'s range before the picture', [r12Text('w1'), { type: 'comment', metadata: { author: 'x' }, children: [source(), picture()] }, r12Text('w2')], 'w1<br>#<img src="a.png" alt="alt1"> <span class="caption">c1 c2</span><br>w2</h2>'],
+    ];
+    let trips = 0;
+    for (const [name, line, expected] of cases) {
+        for (const [hidden, config] of [['<!--src-->', {}], ['<span data-html-comment="src"></span>', { sourceAttributes: true }]] as const) {
+            const ast = { type: 'md', metadata: {}, attachments: [], content: [{ type: 'heading', metadata: { level: 2 }, children: JSON.parse(JSON.stringify(line)) }] } as unknown as OfficeParserAST;
+            const html = (await OfficeGenerator.generate(ast, 'html', { htmlConfig: { standalone: false, ...config } })).value as string;
+            // A line break node writes its own white space after its <br>.
+            assert.ok(html.replace(/\n/g, '').includes(expected.replace('#', hidden)), `Source comment beside a captioned picture, ${name}, ${hidden}: ${JSON.stringify(html)}`);
+            assert.ok(!/<br>\s*(?:<!--src-->|<span data-html-comment="src"><\/span>)?<br>/.test(html), `Source comment beside a captioned picture, ${name}, ${hidden}: no second line break: ${JSON.stringify(html)}`);
+            const text = String((await (await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' })).to('text')).value);
+            assertWordsApart(text, ['c1', 'c2', 'w2'], `Source comment beside a captioned picture, ${name}, ${hidden}`);
+            trips++;
+        }
+    }
+    console.log(`✓ A source comment beside a captioned picture is no line content (${trips} cases)`);
+}
+
+/**
+ * Generated HTML with named anchors (five forms) and element ids in every position around every element kind,
+ * disclosures in every summary shape: no id lost by pass 3 in HTML, EPUB or Markdown, none read onto a
+ * summary, no word lost. Markdown's ids of cells and headings in a table holding a nested table in a list
+ * item, lost the same way by 8.6.0 (next-release ledger), are counted apart.
+ */
+export async function testAnchorPositionsGenerated(): Promise<void> {
+    for (const [label, count, seed] of [['fast', 300, 13], ['full', 3000, 2026]] as const) {
+        const started = Date.now();
+        const result = await runAnchorPositionGenerator(count, seed);
+        const ids = Object.values(result.holders).reduce((sum, n) => sum + n, 0);
+        console.log(`  anchor positions ${label}: docs=${result.docs} distinct sources=${result.distinctSources} HTML=${result.distinctOutputs.html} EPUB=${result.distinctOutputs.epub} Markdown=${result.distinctOutputs.md} ids read=${ids} holders=${Object.keys(result.holders).length} lost (HTML, EPUB, Markdown)=${result.lostDocs.html}, ${result.lostDocs.epub}, ${result.lostDocs.md} counted apart (8.6.0)=${result.excludedLost} in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+        assert.deepStrictEqual(result.failures, {}, `Anchor positions (${label}, seed ${seed}): ${JSON.stringify(result.examples)}`);
+        assert.ok(result.distinctSources > count * 0.95 && result.distinctOutputs.md > count * 0.85 && (result.holders.disclosure ?? 0) > count * 0.2 && Object.keys(result.holders).length >= 12,
+            `Anchor positions (${label}) cover the shapes: ${JSON.stringify({ ...result, examples: undefined })}`);
+    }
+    console.log('✓ Anchor positions generated, no id lost in HTML, EPUB or Markdown');
+}
+
+/**
+ * The HTML picture matrix with a source comment at the start of each picture's line, right before or after
+ * the picture or at its end, written with comments and under sourceAttributes: no joined or lost words, no
+ * line break after a line's start or another break with only hidden markup between, and round trips settled
+ * by pass 3 (list items included) except cells' headings (next-release ledger).
+ */
+export async function testHtmlPictureCommentMatrixGenerated(): Promise<void> {
+    for (const [label, count, seed] of [['fast', 300, 13], ['full', 2000, 1414]] as const) {
+        const started = Date.now();
+        const result = await runHtmlPictureCommentMatrix(count, seed);
+        const unsettled = Object.values(result.unsettledShapes).reduce((sum, n) => sum + n, 0);
+        console.log(`  HTML picture comment matrix ${label}: docs=${result.docs} distinct ASTs=${result.distinctSources} HTML=${result.distinctHtml} EPUB=${result.distinctEpub} mode x container x position=${result.distinctCombos} settled at pass=${JSON.stringify(result.settledAtPass)} in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+        assert.deepStrictEqual(result.failures, {}, `HTML picture comment matrix (${label}, seed ${seed}): ${JSON.stringify(result.examples)}`);
+        const elsewhere = Object.keys(result.unsettledShapes).filter(shape => !/^(html|epub):cellHeading\//.test(shape));
+        assert.deepStrictEqual(elsewhere, [], `HTML picture comment matrix (${label}): settles by pass 3 outside cells' headings: ${JSON.stringify(result.unsettledShapes)}`);
+        assert.ok(unsettled <= result.docs * 2 * 0.01, `HTML picture comment matrix (${label}): at most one round trip in a hundred settles after pass 3: ${unsettled}`);
+        assert.ok(result.distinctSources > count * 0.9 && result.distinctCombos > Math.min(count, 952) * 0.6, `HTML picture comment matrix (${label}) covers the shapes: ${JSON.stringify({ ...result, examples: undefined })}`);
+    }
+    console.log('✓ HTML picture matrix with source comments generated, no line break for a comment, settled by pass 3 outside cells\' headings');
 }
 
 /** ODF namespaces of a note test file. */
