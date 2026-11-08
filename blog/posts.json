@@ -102,10 +102,10 @@
             "published": "2026-10-29",
             "updated": "2026-11-01",
             "revisions": [
+                { "id": "lines-apart", "date": "2026-11-01", "release": "8.5.0", "note": "Lines are now moved one by one, and to the pages of their part, and a header may be missing from some pages. A number counting from elsewhere is a field too." },
                 { "id": "ranges", "date": "2026-11-01", "release": "8.5.0", "note": "A range from a later page now keeps its page numbers out of the text, as fields." },
                 { "id": "parts", "date": "2026-11-01", "release": "8.5.0", "note": "Lines that differ are now parts as a word processor's are, and a tagged PDF's artifacts go there whatever they say." },
                 { "id": "book-parts", "date": "2026-11-01", "release": "8.5.0", "note": "Even and odd heads, a cover without a header, roman front matter and an article's numbers are now handled." },
-                { "id": "lines-apart", "date": "2026-11-01", "release": "8.5.0", "note": "Lines are now moved one by one, and to the pages of their part, and a header may be missing from some pages. A number counting from elsewhere is a field too." },
                 { "id": "roman-untagged", "date": "2026-11-01", "note": "This holds for an untagged PDF: a tagged PDF's artifacts in roman numerals are page numbers without page labels too." }
             ],
             "description": "How officeParser 8.4.1 finds an untagged PDF's running headers and footers by comparing its pages, turns a printed page number back into a field, and leaves a header in its pages when no single header could hold it.",
@@ -209,8 +209,9 @@
             "shortTitle": "From String Scraping to AST",
             "category": "architecture",
             "published": "2026-10-04",
-            "updated": "2026-10-28",
+            "updated": "2026-11-08",
             "revisions": [
+                { "id": "disclosure-nodes", "date": "2026-11-08", "release": "8.7.0", "note": "Two node types joined the set: a details block in HTML or Markdown is now read as a disclosure node, whose first child is a summary node holding its summary." },
                 { "id": "more-outputs", "date": "2026-10-28", "release": "8.3.0", "note": "XLSX, ODS, PPTX and ODP output took the outputs from 11 to 15." },
                 { "id": "bundle-size", "date": "2026-10-28", "release": "8.3.0", "note": "The browser bundle was about 5.5 MB when this post went out, and grew to about 6 MB with this release." },
                 { "id": "own-fonts", "date": "2026-10-28", "release": "8.2.0", "note": "The native engine now also draws in TrueType and OpenType fonts you give it, for any script." }
@@ -226,9 +227,9 @@
             "published": "2026-10-04",
             "updated": "2026-11-01",
             "revisions": [
-                { "id": "fixed-node-releases", "date": "2026-11-01", "release": "8.5.0", "note": "Earlier Node.js releases have a flaw in their Brotli decoder (CVE-2026-111497), so the package now asks for one with the fix." },
                 { "id": "xlsx-written", "date": "2026-10-28", "release": "8.3.0", "note": "officeParser now writes .xlsx files, with each cell's value and not its formula." },
-                { "id": "spreadsheets-and-slides", "date": "2026-10-26", "release": "8.3.0", "note": "officeParser now writes .xlsx, .ods, .pptx and .odp files, so this section is now about what those files leave out." }
+                { "id": "spreadsheets-and-slides", "date": "2026-10-26", "release": "8.3.0", "note": "officeParser now writes .xlsx, .ods, .pptx and .odp files, so this section is now about what those files leave out." },
+                { "id": "fixed-node-releases", "date": "2026-11-01", "release": "8.5.0", "note": "Earlier Node.js releases have a flaw in their Brotli decoder (CVE-2026-111497), so the package now asks for one with the fix." }
             ],
             "description": "The jobs officeParser does not do: PDFs that match Word exactly, formula recalculation, legacy .doc files, formulas and native charts in what it writes, macros, and TeX typesetting, and what to use instead.",
             "deck": "Most documentation reads like a sales pitch, with the drawbacks in the fine print. I would rather be plain: here are the problems officeParser does not solve, and the tools to use instead."

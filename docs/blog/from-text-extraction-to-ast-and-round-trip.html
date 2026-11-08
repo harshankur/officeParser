@@ -23,7 +23,7 @@
     <meta property="og:url" content="https://officeparser.harshankur.com/blog/from-text-extraction-to-ast-and-round-trip.html">
     <meta property="og:site_name" content="officeParser">
     <meta property="article:published_time" content="2026-10-04">
-    <meta property="article:modified_time" content="2026-10-28">
+    <meta property="article:modified_time" content="2026-11-08">
 
     <!-- Fonts: the site's own copies (docs/fonts), shared with the home page. -->
     <link rel="stylesheet" href="../fonts/fonts.css">
@@ -86,7 +86,7 @@
                     <div>
                         <a href="https://harshankur.com" target="_blank" rel="noopener" class="author-name">Harsh
                             Ankur</a>
-                        <div>Published <time datetime="2026-10-04">4 October 2026</time>, updated <time datetime="2026-10-28">28 October 2026</time> · <a href="#revisions" class="byline-changes">3 changes</a> · 6 min read</div>
+                        <div>Published <time datetime="2026-10-04">4 October 2026</time>, updated <time datetime="2026-11-08">8 November 2026</time> · <a href="#revisions" class="byline-changes">4 changes</a> · 6 min read</div>
                     </div>
                 </div>
             </div>
@@ -174,7 +174,7 @@
     | 'image' | 'chart' | 'drawing' | 'embed'
     | 'slide' | 'sheet' | 'page' | 'slideMaster'
     | 'note' | 'comment' | 'header' | 'footer'
-    | 'admonition'
+    | 'admonition'<ins datetime="2026-11-08" cite="../#doc/changelog/870---2026-11-08"> | 'disclosure' | 'summary'</ins><button type="button" class="revision-mark" id="change-disclosure-nodes" popovertarget="change-disclosure-nodes-note">Updated</button><span class="revision-note" id="change-disclosure-nodes-note" popover><strong>Updated 8 Nov 2026 for <a href="../#doc/changelog/870---2026-11-08">8.7.0</a>.</strong> Two node types joined the set: a details block in HTML or Markdown is now read as a disclosure node, whose first child is a summary node holding its summary. <a href="#revisions">All revisions</a><button type="button" class="revision-note-hide" hidden>Hide all changes</button></span>
     | 'definitionList' | 'definitionTerm' | 'definitionDescription';</code></pre>
 
 <p>
@@ -321,6 +321,7 @@ DOCX   HTML   PDF   Markdown   chunks</code></pre>
                 <section class="article-revisions" id="revisions" aria-labelledby="revisions-title">
                     <h2 id="revisions-title">Revisions</h2>
                     <ol>
+                        <li><strong>Updated</strong> <time datetime="2026-11-08">8 November 2026</time> for <a href="../#doc/changelog/870---2026-11-08">8.7.0</a>: Two node types joined the set: a details block in HTML or Markdown is now read as a disclosure node, whose first child is a summary node holding its summary. <a href="#change-disclosure-nodes">See the change</a></li>
                         <li><strong>Updated</strong> <time datetime="2026-10-28">28 October 2026</time> for <a href="../#doc/changelog/830---2026-10-26">8.3.0</a>: XLSX, ODS, PPTX and ODP output took the outputs from 11 to 15. <a href="#change-more-outputs">See the change</a></li>
                         <li><strong>Updated</strong> <time datetime="2026-10-28">28 October 2026</time> for <a href="../#doc/changelog/830---2026-10-26">8.3.0</a>: The browser bundle was about 5.5 MB when this post went out, and grew to about 6 MB with this release. <a href="#change-bundle-size">See the change</a></li>
                         <li><strong>Updated</strong> <time datetime="2026-10-28">28 October 2026</time> for <a href="../#doc/changelog/820---2026-10-20">8.2.0</a>: The native engine now also draws in TrueType and OpenType fonts you give it, for any script. <a href="#change-own-fonts">See the change</a></li>

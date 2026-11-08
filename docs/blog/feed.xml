@@ -3749,7 +3749,7 @@ if (entry.uncompressedSize &gt; 50 * 1024 * 1024) {
     | 'image' | 'chart' | 'drawing' | 'embed'
     | 'slide' | 'sheet' | 'page' | 'slideMaster'
     | 'note' | 'comment' | 'header' | 'footer'
-    | 'admonition'
+    | 'admonition'<ins datetime="2026-11-08" cite="https://officeparser.harshankur.com/#doc/changelog/870---2026-11-08"> | 'disclosure' | 'summary'</ins> <em>(Updated 8 Nov 2026 for <a href="https://officeparser.harshankur.com/#doc/changelog/870---2026-11-08">8.7.0</a>: Two node types joined the set: a details block in HTML or Markdown is now read as a disclosure node, whose first child is a summary node holding its summary.)</em>
     | 'definitionList' | 'definitionTerm' | 'definitionDescription';</code></pre>
 
 <p>
