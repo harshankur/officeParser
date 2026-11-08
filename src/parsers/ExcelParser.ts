@@ -33,7 +33,7 @@ import { documentBytesOf, REPEATED_CELL_CHARACTERS_PER_BYTE, TABLE_CELLS_PER_BYT
 import { chargeRawContent, decodeXmlEntities, getChildElements, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, takeNodes } from '../utils/xmlUtils.js';
 import { MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
 import { BUILTIN_NUMBER_FORMATS, BUILTIN_OTHER_FORMATS, excelShownText } from '../utils/excelFormat.js';
-import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
+import { extractFiles, findRequiredPart, resolvePartPath } from '../utils/zipUtils.js';
 import { inRanges } from '../utils/sheetUtils.js';
 
 /** Whether the character at `at` of `xml` can continue a tag name (so `<c` there opens `<col`, not `<c`). */
@@ -849,42 +849,37 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         }
     }
 
-    // Parse workbook.xml to get sheet names and map them to sheet files
-    // Null-prototype, as every map keyed by the document's own names and ids is here.
-    const sheetNameMap: Record<string, string> = Object.create(null);
-    // The sheets the workbook hides (`state="hidden"` or `"veryHidden"`), by file.
-    const hiddenSheets = new Set<string>();
+    const workbookTabs = new Map<string, { index: number; name: string | null; hidden: boolean }>();
     const workbookRelsFile = files.find(f => f.path === 'xl/_rels/workbook.xml.rels');
 
     if (workbookRelsFile) {
-        // Parse rels to get rId -> file mapping
+        // Resolve sheet references to package paths, not basenames: different
+        // kinds of sheet can have the same filename in separate directories.
         const relsXml = parseXmlString(workbookRelsFile.content.toString(), { config });
         const relationships = getElementsByTagName(relsXml, "Relationship");
-        const rIdToFile: Record<string, string> = Object.create(null);
+        const rIdToPath = new Map<string, string>();
 
         for (const rel of relationships) {
             const rId = rel.getAttribute("Id");
             const target = rel.getAttribute("Target");
-            if (rId && target) {
-                // Target is like "worksheets/sheet1.xml"
-                const filename = target.split('/').pop() || '';
-                rIdToFile[rId] = filename;
-            }
+            if (rId && target) rIdToPath.set(rId, resolvePartPath('xl/', target));
         }
 
-        // Parse workbook.xml to get sheet name -> rId mapping
+        // Read worksheet metadata and tab order from workbook.xml.
         const workbookXml = parseXmlString(workbookFile.content.toString(), { config });
         const sheets = getElementsByTagName(workbookXml, "sheet");
 
         for (const sheet of sheets) {
             checkAbortSignal(config.abortSignal);
-            const name = sheet.getAttribute("name");
             const rId = sheet.getAttribute("r:id");
-            if (name && rId && rIdToFile[rId]) {
-                sheetNameMap[rIdToFile[rId]] = name;
-                const state = sheet.getAttribute("state");
-                if (state === 'hidden' || state === 'veryHidden') hiddenSheets.add(rIdToFile[rId]);
-            }
+            const path = rId ? rIdToPath.get(rId) : undefined;
+            if (!path || workbookTabs.has(path)) continue;
+            const state = sheet.getAttribute("state");
+            workbookTabs.set(path, {
+                index: workbookTabs.size,
+                name: sheet.getAttribute("name"),
+                hidden: state === 'hidden' || state === 'veryHidden',
+            });
         }
     }
 
@@ -896,6 +891,11 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     const fileByPath = new Map<string, (typeof files)[number]>();
     for (const f of files) if (!fileByPath.has(f.path)) fileByPath.set(f.path, f);
     const attachedCommentParts = new Set<string>();
+
+    // The ZIP can store sheets in any order. Stable sorting keeps unlisted
+    // worksheet parts in archive order after the workbook's tabs.
+    const tabIndex = (path: string) => workbookTabs.get(path)?.index ?? Number.MAX_SAFE_INTEGER;
+    files.sort((a, b) => tabIndex(a.path) - tabIndex(b.path));
 
     for (const file of files) {
         if (file.path.match(mediaFileRegex)) continue;
@@ -1260,13 +1260,14 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
 
             // Get proper sheet name from workbook.xml mapping, fallback to filename
             const sheetFileName = file.path.split('/').pop() || 'Sheet';
-            const sheetName = sheetNameMap[sheetFileName] || sheetFileName;
+            const tab = workbookTabs.get(file.path);
+            const sheetName = tab?.name || sheetFileName;
 
             const pageSetup = config.ignorePageGeometry ? undefined : sheetPageSetup(sheetXml);
             content.push({
                 type: 'sheet',
                 children: rows,
-                metadata: { sheetName, ...(hiddenSheets.has(sheetFileName) ? { hidden: true } : {}), ...(pageSetup ? { pageSetup } : {}) },
+                metadata: { sheetName, ...(tab?.hidden ? { hidden: true } : {}), ...(pageSetup ? { pageSetup } : {}) },
                 rawContent: config.includeRawContent ? chargeRawContent(file.content.toString(), config) : undefined
             });
         }
