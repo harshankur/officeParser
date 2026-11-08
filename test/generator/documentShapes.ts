@@ -796,18 +796,25 @@ export async function testMarkdownDisclosureSubDocuments(): Promise<void> {
     const { out: nestedPasses, text: nestedTexts } = await passesWithText(nestedMd, 'md', 'md');
     assert.deepStrictEqual(nestedPasses, [nestedMd, nestedMd, nestedMd], 'Disclosure sub-document: 20 nested stable over three passes');
     assert.ok(nestedTexts.every(t => t === allText), 'Disclosure sub-document: 20 nested keep their text over three passes');
-    // Linear: each against plain paragraphs of the same size, in the same run.
+    // Linear: each shape at n against the same shape at n / 4. Not against plain paragraphs of the same
+    // size: a shape that opens a disclosure in every quote does more work per byte than plain text (about
+    // six times, at every size), which says nothing about how its time grows and failed on slower machines.
     const n = 4000;
-    const plain = (length: number) => 'Some *plain* text here.\n\n'.repeat(Math.ceil(length / 25));
-    for (const [name, source] of [
-        ['inline closers and openers', ('<details>\n\n' + 'a </details> b\n\n').repeat(n)],
-        ['nested blocks', '<details><summary>s</summary>\n\nx\n\n'.repeat(n) + '</details>\n\n'.repeat(n)],
-        ['openers in quotes', '<details>\n\n' + '> <details>\n>\n> x\n\n'.repeat(n)],
-        ['tables of Markdown cells', '<details>\n\n' + '<table><tr><td>\n\nc *x*\n\n</td></tr></table>\n\n'.repeat(n) + '</details>\n'],
-    ]) {
-        const { within, time, plain: baseline } = await linearAgainst(() => OfficeParser.parseOffice(Buffer.from(source), { fileType: 'md' }),
-            () => OfficeParser.parseOffice(Buffer.from(plain(source.length)), { fileType: 'md' }));
-        assert.ok(within, `Disclosure sub-document: ${name} (${source.length} bytes) in ${time.toFixed(0)} ms, paragraphs in ${baseline.toFixed(0)} ms`);
+    const read = (source: string) => OfficeParser.parseOffice(Buffer.from(source), { fileType: 'md' });
+    for (const [name, shape] of [
+        ['inline closers and openers', (k: number) => ('<details>\n\n' + 'a </details> b\n\n').repeat(k)],
+        ['nested blocks', (k: number) => '<details><summary>s</summary>\n\nx\n\n'.repeat(k) + '</details>\n\n'.repeat(k)],
+        ['openers in quotes', (k: number) => '<details>\n\n' + '> <details>\n>\n> x\n\n'.repeat(k)],
+        ['tables of Markdown cells', (k: number) => '<details>\n\n' + '<table><tr><td>\n\nc *x*\n\n</td></tr></table>\n\n'.repeat(k) + '</details>\n'],
+    ] as const) {
+        const [source, quarter] = [shape(n), shape(n / 4)];
+        let small = await timed(() => read(quarter));
+        let large = await timed(() => read(source));
+        if (large > 8 * small + 250) {
+            small = Math.max(small, await timed(() => read(quarter)));
+            large = Math.min(large, await timed(() => read(source)));
+        }
+        assert.ok(large <= 8 * small + 250, `Disclosure sub-document: ${name} at ${n} (${source.length} bytes) in ${large.toFixed(0)} ms, at ${n / 4} in ${small.toFixed(0)} ms`);
     }
     console.log('✓ Markdown disclosure as a sub-document');
 }
@@ -1121,16 +1128,23 @@ export async function testMarkdownDisclosureTagAttributes(): Promise<void> {
     assert.strictEqual(inline.text, 'Text\nDetails\ninline\nBody\ntail', 'Disclosure tag: inline, its text in order');
     const upper = await markdownRead('<DETAILS OPEN>\n<SUMMARY>S</SUMMARY>\n\nBody\n\n</DETAILS >\n\nAfter\n');
     assert.strictEqual(upper.shape, 'disclosure[S](paragraph(text)),paragraph(text)', 'Disclosure tag: upper case');
+    // Linear: each shape at n against the same shape at n / 4 (a shape's cost per byte against plain
+    // text says nothing about how its time grows).
     const n = 4000;
-    const plain = (length: number) => 'Some *plain* text here.\n\n'.repeat(Math.ceil(length / 25));
-    for (const [name, source] of [
-        ['unclosed values in HTML', '<details title="'.repeat(n) + '\n\nx\n'],
-        ['unclosed values inline', 'x ' + '<details a="'.repeat(n) + '\n\nx\n'],
-        ['values with >', '<details title="a>b">\n\nbody\n\n</details>\n\n'.repeat(n)],
-    ]) {
-        const { within, time, plain: baseline } = await linearAgainst(() => OfficeParser.parseOffice(Buffer.from(source), { fileType: 'md' }),
-            () => OfficeParser.parseOffice(Buffer.from(plain(source.length)), { fileType: 'md' }));
-        assert.ok(within, `Disclosure tag: ${name} (${source.length} bytes) in ${time.toFixed(0)} ms, paragraphs in ${baseline.toFixed(0)} ms`);
+    const read = (source: string) => OfficeParser.parseOffice(Buffer.from(source), { fileType: 'md' });
+    for (const [name, shape] of [
+        ['unclosed values in HTML', (k: number) => '<details title="'.repeat(k) + '\n\nx\n'],
+        ['unclosed values inline', (k: number) => 'x ' + '<details a="'.repeat(k) + '\n\nx\n'],
+        ['values with >', (k: number) => '<details title="a>b">\n\nbody\n\n</details>\n\n'.repeat(k)],
+    ] as const) {
+        const [source, quarter] = [shape(n), shape(n / 4)];
+        let small = await timed(() => read(quarter));
+        let large = await timed(() => read(source));
+        if (large > 8 * small + 250) {
+            small = Math.max(small, await timed(() => read(quarter)));
+            large = Math.min(large, await timed(() => read(source)));
+        }
+        assert.ok(large <= 8 * small + 250, `Disclosure tag: ${name} at ${n} (${source.length} bytes) in ${large.toFixed(0)} ms, at ${n / 4} in ${small.toFixed(0)} ms`);
     }
     console.log('✓ Markdown disclosure tags with attributes');
 }
@@ -1353,7 +1367,6 @@ const DISCLOSURE_SHAPES: Record<string, (n: number) => string> = {
  */
 export async function testMarkdownDisclosureShapesLinear(): Promise<void> {
     const n = 4000;
-    const plain = (length: number) => 'Some *plain* text here.\n\n'.repeat(Math.ceil(length / 25));
     const readAndWrite = async (source: string): Promise<void> => {
         try {
             await (await OfficeParser.parseOffice(Buffer.from(source), { fileType: 'md' })).to('md');
@@ -1362,13 +1375,11 @@ export async function testMarkdownDisclosureShapesLinear(): Promise<void> {
         }
     };
     for (const [name, shape] of Object.entries(DISCLOSURE_SHAPES)) {
-        const source = shape(n);
-        const { within, time, plain: baseline } = await linearAgainst(() => readAndWrite(source), () => readAndWrite(plain(source.length)));
-        assert.ok(within, `Disclosure shapes: ${name} (${source.length} bytes) in ${time.toFixed(0)} ms, paragraphs in ${baseline.toFixed(0)} ms`);
-        // n against 4n: the time at 4000 against the time at 1000, taken again once where it is over.
-        const quarter = shape(n / 4);
+        // n against 4n: the time at 4000 against the time at 1000, taken again once where it is over. (Not
+        // against plain paragraphs of the same size: a shape's cost per byte says nothing of how it grows.)
+        const [source, quarter] = [shape(n), shape(n / 4)];
         let small = await timed(() => readAndWrite(quarter));
-        let large = time;
+        let large = await timed(() => readAndWrite(source));
         if (large > 8 * small + 250) {
             small = Math.max(small, await timed(() => readAndWrite(quarter)));
             large = Math.min(large, await timed(() => readAndWrite(source)));
