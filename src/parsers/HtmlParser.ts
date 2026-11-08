@@ -1939,7 +1939,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 // its anchors are the disclosure's: a summary has no ids (see resolveAnchorMarks).
                 const ids = [...anchorIds];
                 if (summary.every(isAnchorMark)) {
-                    for (const mark of summary) for (const id of (mark.metadata as { anchorIds?: string[] }).anchorIds ?? []) if (!ids.includes(id)) ids.push(id);
+                    const seen = new Set(ids);
+                    for (const mark of summary) for (const id of (mark.metadata as { anchorIds?: string[] }).anchorIds ?? []) if (!seen.has(id)) { seen.add(id); ids.push(id); }
                     summary = [];
                 }
                 const body = blocksOf(node.children.filter(c => c !== summaryElement), node);

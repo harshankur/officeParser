@@ -48,7 +48,7 @@ function placedNode(node: OfficeContentNode, done: NodeMemo<Placed>): Placed {
             const kept = node.children.map(child => {
                 const placed = placedNode(child, done);
                 if (placed.node !== child) changed = true;
-                captions.push(...placed.captions);
+                for (const caption of placed.captions) captions.push(caption);
                 return placed.node;
             });
             children = changed ? kept : node.children;

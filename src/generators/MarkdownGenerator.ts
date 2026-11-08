@@ -1615,7 +1615,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             if (node.type === 'heading') this.inHeading--;
             if (definition) this.inDefinition--;
         }
-        if (waitingBeforeDisclosure) this.pendingAnchorIds.unshift(...waitingBeforeDisclosure);
+        if (waitingBeforeDisclosure) this.pendingAnchorIds = waitingBeforeDisclosure.concat(this.pendingAnchorIds);
 
         this.inImplicitBold = wasInImplicitBold;
 
