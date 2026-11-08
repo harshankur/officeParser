@@ -21,7 +21,7 @@ import { CommentMetadata, HeadingMetadata, ImageMode, ListMetadata, NodeBounds, 
 import { lengthToPt } from '../../utils/officeGenUtils.js';
 import { sanitizeOfficePackageUrl } from '../../utils/sanitize.js';
 import { layoutTableRows } from '../../utils/tableLayout.js';
-import { droppedHyphenRuns } from '../../utils/lineJoins.js';
+import { droppedHyphen } from '../../utils/lineJoins.js';
 
 /** A box on a slide, in points from its top left. */
 export interface Box { x: number; y: number; w: number; h: number }
@@ -172,23 +172,26 @@ function placedLines(node: OfficeContentNode, runs: DeckRun[]): PlacedLine[] | u
     // Each run of text's box, its size and whether it is raised or lowered, from its node (as runsOf reads it: the
     // runs given may be plain ones, without their looks).
     const placed: { b: NodeBounds; size?: number; shifted: boolean }[] = [];
-    // (And each run, for the lines whose word, divided by a hyphen, the parser joined: see droppedHyphenRuns.)
+    // (And each run, and those the parser took a word's hyphen off, joining the word across a line: see
+    // droppedHyphen. A hyphen that was a run of its own goes on the run before it.)
     const placedNodes: OfficeContentNode[] = [];
+    const hyphenNodes = new Set<OfficeContentNode>();
     // (A box of numbers: a hand-made one's height of '12' made a frame 8,925 points tall.)
     const walk = (n: OfficeContentNode, d: number, inherited: TextFormatting) => {
         for (const c of n.children ?? []) {
             const fmt: TextFormatting = { ...inherited, ...(c.formatting ?? {}) };
             if ((c.type === 'text' || c.type === 'code') && c.text) { if (isBox(c.bounds)) { placed.push({ b: c.bounds, size: sizeOf(fmt), shifted: !!(fmt.superscript || fmt.subscript) }); placedNodes.push(c); } else { placed.length = 0; placedNodes.length = 0; } }
             else if (d < 16) walk(c, d + 1, fmt);
+            if (droppedHyphen(c) && placedNodes.length) hyphenNodes.add(placedNodes[placedNodes.length - 1]);
         }
     };
     walk(node, 0, {});
     // (A note's number, which no text node gave, is no placed run.)
     const texts = runs.filter(r => !r.lineBreak && r.text && !(r.superscript && /^\d+$/.test(r.text)));
     if (!texts.length || placed.length !== texts.length) return undefined;
-    // The runs ending a line whose word, divided by a hyphen, the parser joined across the break, taking the
-    // hyphen off (see droppedHyphenRuns): the line ends in it again.
-    const hyphenated = new Set([...droppedHyphenRuns(placedNodes)].map(i => texts[i]));
+    // The runs the parser took a word's hyphen off, joining the word across a line (see droppedHyphen): a line
+    // ending in one ends in the hyphen again.
+    const hyphenated = new Set(texts.filter((_, i) => hyphenNodes.has(placedNodes[i])));
     const lines: PlacedLine[] = [];
     let pending: DeckRun[] = [], at = 0, last: NodeBounds | undefined, main = placed[0];
     for (const run of runs) {

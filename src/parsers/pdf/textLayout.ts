@@ -15,7 +15,7 @@ import { CellMetadata, ListMetadata, NodeBounds, OfficeContentNode, TextFormatti
 import { rotateBoundsToRendered, roundBounds, unionAll, unionBounds } from './geometry.js';
 import { PdfLayoutConfig, PdfLine, RawRun, TextFragment } from './pdfTypes.js';
 import { median } from '../../utils/numberUtils.js';
-import { CJK_CHAR, endsInWordHyphen } from '../../utils/lineJoins.js';
+import { CJK_CHAR, endsInWordHyphen, markDroppedHyphen } from '../../utils/lineJoins.js';
 import { appendAll } from '../../utils/nodeListUtils.js';
 import { MarkerRun, MarkerWord, markerWord, readMarkerWord } from '../../utils/listMarkers.js';
 
@@ -2187,9 +2187,14 @@ function paragraphNode(group: ParaGroup, page: PageContext, doc: DocContext, for
             const cjkJoin = (CJK_CHAR.test(prevEnd.slice(-1)) && CJK_CHAR.test(curText.charAt(0)))
                 || (CJK_CHAR.test(prevEnd) && !/\s/.test(prevEnd.trim()) && /^[\p{L}\p{N}]/u.test(curText) && /[\p{L}\p{N}]$/u.test(prevEnd));
             if (cfg.mergeHyphenatedWords && wordHyphen) {
-                // drop the trailing hyphen from the last emitted child and join with no space
+                // drop the trailing hyphen from the last emitted child and join with no space; the child is
+                // marked as one that lost it (see markDroppedHyphen), for the writers that keep the page's
+                // lines to write it again
                 const lastChild = children[children.length - 1];
-                if (lastChild?.text) { lastChild.text = lastChild.text.replace(/[-­]$/, ''); }
+                if (lastChild?.text) {
+                    const kept = lastChild.text.replace(/[-\u00AD]$/, '');
+                    if (kept !== lastChild.text) { lastChild.text = kept; markDroppedHyphen(lastChild); }
+                }
                 let last = parts.length - 1;
                 while (last >= 0 && parts[last] === '') last--;
                 if (last >= 0) parts[last] = parts[last].replace(/[-­]$/, '');

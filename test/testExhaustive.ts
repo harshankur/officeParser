@@ -20,6 +20,8 @@ import { OfficeTemplate } from '../src/OfficeTemplate';
 import { readTag } from '../src/template/templateTags';
 import { pictureKindOf, pictureKindOfBase64 } from '../src/utils/imageUtils';
 import { getWarningMessage } from '../src/utils/errorUtils';
+import { markDroppedHyphen } from '../src/utils/lineJoins';
+import { runHyphenBreakGenerator } from './helpers/hyphenBreakGenerator';
 import { OfficeConverter } from '../src/OfficeConverter';
 import { zipSync, strToU8, unzipSync, unzlibSync, strFromU8 } from 'fflate';
 import { PDFDict, PDFDocument, PDFHexString, PDFName, PDFOperator, PDFRawStream, StandardFonts, TextAlignment, degrees, rgb } from 'pdf-lib';
@@ -11715,8 +11717,15 @@ async function testPdfHyphenAtLineBreak(): Promise<void> {
     // text and PPTX, each at n against n / 4.
     const run = (text: string, x: number, y: number, width: number) => ({ type: 'text', text, formatting: { font: 'Helvetica', size: '12pt' }, bounds: { x, y, width, height: 11, baseline: y + 9 } });
     const pageOf = (runs: any[], height: number) => ({ type: 'pdf', metadata: { pages: 1, pageSetup: { width: 612, height } }, attachments: [], content: [{ type: 'page', metadata: { pageNumber: 1, pageWidth: 612, pageHeight: height }, children: [{ type: 'paragraph', text: runs.map(r => r.text).join(''), children: runs }] }] } as any);
-    const divided = (k: number) => pageOf(Array.from({ length: k }, (_, i) => run(i ? 'ment agree' : 'agree', 72, 20 + i * 14, 60)), 40 + k * 14);
-    assert.strictEqual(String((await OfficeGenerator.generate(divided(3), 'text')).value), 'agree-\nment agree-\nment agree', 'a hand-built page of divided lines');
+    // (Each run but the last marked as the parser marks a run it took a hyphen off; unmarked, a run is written as it reads.)
+    const divided = (k: number, marked = true) => pageOf(Array.from({ length: k }, (_, i) => {
+        const r = run(i ? 'ment agree' : 'agree', 72, 20 + i * 14, 60);
+        if (marked && i < k - 1) markDroppedHyphen(r as OfficeContentNode);
+        return r;
+    }), 40 + k * 14);
+    assert.strictEqual(String((await OfficeGenerator.generate(divided(3), 'text')).value), 'agree-\nment agree-\nment agree', 'a page of divided lines');
+    assert.strictEqual(String((await OfficeGenerator.generate(divided(3, false), 'text')).value), 'agree\nment agree\nment agree', 'a hand-built page of lines, unmarked: written as it reads, as 8.7.0 did');
+    assert.strictEqual(String((await OfficeGenerator.generate(JSON.parse(JSON.stringify(divided(3))), 'text')).value), 'agree\nment agree\nment agree', 'a JSON copy: written as it reads, as 8.7.0 did');
     const oneLine = (k: number) => pageOf(Array.from({ length: k }, (_, i) => run('w ', 72 + i * 0.05, 20, 0.05)), 100);
     const timed = async (work: () => Promise<unknown>) => { const started = performance.now(); await work(); return performance.now() - started; };
     const n = 10000;
@@ -11733,6 +11742,114 @@ async function testPdfHyphenAtLineBreak(): Promise<void> {
         }
     }
     console.log('✓ PDF hyphen at a line break');
+}
+
+/**
+ * The hyphen layout text, PPTX and ODP write back at a line break is the one the PDF parser took off where it
+ * joined a word across the line, and only that one (#145): a superscript with a subscript set under it, or a
+ * subscript kerned back under its letter, is no line break and takes no hyphen, as in 8.7.0. A letter whose
+ * accent is a character of its own (e and U+0301) before a hyphen is joined as any letter is.
+ */
+async function testPdfHyphenOnlyWhereTakenOff(): Promise<void> {
+    // A PDF of pages, each a content stream, each turned by `rotate`; F1 Helvetica, F2 Helvetica-Bold, F3
+    // Helvetica with a ToUnicode map reading 0xE9 as e and U+0301.
+    const pdfOf = (pages: string[], rotate = 0): Buffer => {
+        const cmap = '/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /X def 1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <E9> <00650301> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end';
+        const fonts = 3 + pages.length * 2;
+        const objs = ['<< /Type /Catalog /Pages 2 0 R >>', `<< /Type /Pages /Kids [${pages.map((_, i) => `${3 + i * 2} 0 R`).join(' ')}] /Count ${pages.length} >>`];
+        pages.forEach((c, i) => {
+            objs.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Rotate ${rotate} /Resources << /Font << /F1 ${fonts} 0 R /F2 ${fonts + 1} 0 R /F3 ${fonts + 2} 0 R >> >> /Contents ${4 + i * 2} 0 R >>`);
+            objs.push(`<< /Length ${Buffer.byteLength(c, 'latin1')} >>\nstream\n${c}\nendstream`);
+        });
+        objs.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>',
+            `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /ToUnicode ${fonts + 3} 0 R >>`, `<< /Length ${cmap.length} >>\nstream\n${cmap}\nendstream`);
+        let pdf = '%PDF-1.4\n';
+        const offsets = objs.map((o, i) => { const at = Buffer.byteLength(pdf, 'latin1'); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; return at; });
+        const xref = Buffer.byteLength(pdf, 'latin1');
+        pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`;
+        pdf += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+        return Buffer.from(pdf, 'latin1');
+    };
+    const read = (pages: string[], more: any = {}, rotate = 0) => OfficeParser.parseOffice(pdfOf(pages, rotate), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false, ...more } } as any) as Promise<OfficeParserAST>;
+    const slides = async (ast: OfficeParserAST, format: 'pptx' | 'odp') => {
+        const zip = unzipSync(new Uint8Array((await OfficeGenerator.generate(ast, format)).value as unknown as Uint8Array));
+        const xml = format === 'pptx' ? strFromU8(zip['ppt/slides/slide1.xml']).replace(/<a:br[^>]*\/?>(<\/a:br>)?/g, '\n').replace(/<\/a:p>/g, '\n')
+            : strFromU8(zip['content.xml']).replace(/<text:line-break\/>/g, '\n').replace(/<\/text:p>/g, '\n');
+        return xml.replace(/<[^>]+>/g, '').trim();
+    };
+    const written = async (ast: OfficeParserAST) => ({ layout: String((await OfficeGenerator.generate(ast, 'text')).value), pptx: await slides(ast, 'pptx'), odp: await slides(ast, 'odp') });
+    const paragraphs = (ast: OfficeParserAST) => collectAllNodes(ast).filter(n => n.type === 'paragraph').map(n => n.text);
+
+    // A superscript with a subscript under it, and a subscript kerned under its letter: 8.7.0's lines in each writer, no hyphen.
+    for (const [name, page, layout, deck] of [
+        ['x with n over i', 'BT /F1 12 Tf 72 700 Td (The sum x) Tj ET BT /F1 8 Tf 128.02 704 Td (n) Tj ET BT /F1 8 Tf 128.02 697 Td (i) Tj ET BT /F1 12 Tf 132.47 700 Td ( is large and goes on.) Tj ET',
+            'The sum xn is large and goes on.\n         i', 'The sum xn\ni is large and goes on.'],
+        ['T with ab over cd', 'BT /F1 12 Tf 72 700 Td (The tensor T) Tj ET BT /F1 8 Tf 140.03 705 Td (ab) Tj ET BT /F1 8 Tf 140.03 697 Td (cd) Tj ET BT /F1 12 Tf 148.93 700 Td ( is symmetric here.) Tj ET',
+            'The tensor Tab is symmetric here.\n            cd', 'The tensor Tab\ncd is symmetric here.'],
+        ['x with n over i, then a second line', 'BT /F1 12 Tf 72 700 Td (Then the sum x) Tj ET BT /F1 8 Tf 141.36 704 Td (n) Tj ET BT /F1 8 Tf 141.36 697 Td (i) Tj ET BT /F1 12 Tf 145.81 700 Td ( is large and the rest of the line goes on) Tj ET BT /F1 12 Tf 72 686 Td (and a second line follows it here.) Tj ET',
+            'Then the sum xn is large and the rest of the line goes on\n              i\nand a second line follows it here.', 'Then the sum xn\ni is large and the rest of the line goes on\nand a second line follows it here.'],
+        ['x with i kerned under it', 'BT /F1 12 Tf 72 700 Td (The value x) Tj ET BT /F1 8 Tf 133.728 696 Td (i) Tj ET BT /F1 12 Tf 135.504 700 Td ( is large and goes on.) Tj ET',
+            'The value x is large and goes on.\n           i', 'The value x\ni is large and goes on.'],
+    ]) {
+        const out = await written(await read([page]));
+        assert.deepStrictEqual(out, { layout, pptx: deck, odp: deck }, `${name}: written as 8.7.0 wrote it, no hyphen; got ${JSON.stringify(out)}`);
+    }
+
+    // An accent written as a character of its own before the hyphen: the word is joined, and the hyphen is written back at the break.
+    const acute = String.fromCodePoint(0x301);
+    const accentPage = 'BT /F3 12 Tf 72 700 Td (The committee reached a d\\351-) Tj 0 -14 Td (cision after a long debate on it.) Tj ET';
+    const accented = await read([accentPage]);
+    const joined = `The committee reached a de${acute}cision after a long debate on it.`;
+    assert.deepStrictEqual(paragraphs(accented), [joined], `a decomposed accent: the paragraph holds the word whole; got ${JSON.stringify(paragraphs(accented))}`);
+    assert.strictEqual(String((await accented.to('text', { textConfig: { preserveLayout: false } } as any)).value).trim(), joined, 'a decomposed accent: flat text holds the word whole');
+    const accentLines = `The committee reached a de${acute}-\ncision after a long debate on it.`;
+    assert.deepStrictEqual(await written(accented), { layout: accentLines, pptx: accentLines, odp: accentLines }, 'a decomposed accent: the hyphen at the break in layout text, PPTX and ODP');
+    assert.deepStrictEqual(paragraphs(await read([accentPage], { mergeHyphenatedWords: false })), [`The committee reached a de${acute}- cision after a long debate on it.`], 'a decomposed accent, mergeHyphenatedWords false: as before');
+
+    // Every word joined at a hyphen is written as the page draws it, as with mergeHyphenatedWords false: a
+    // hyphen of a run of its own after a superscript, one in a subscript, a bold one, and the accent.
+    const issuePage = 'BT /F1 12 Tf 72 700 Td (The committee reached an agree-) Tj 0 -14 Td (ment after a long debate.) Tj ET';
+    for (const [name, page, paragraph] of [
+        ['the issue', issuePage, 'The committee reached an agreement after a long debate.'],
+        ['a hyphen after a superscript', 'BT /F1 12 Tf 72 700 Td (The committee reached an agree) Tj /F1 8 Tf 4.2 Ts (n) Tj /F1 12 Tf 0 Ts (-) Tj ET BT /F1 12 Tf 72 686 Td (ment after a long debate.) Tj ET', 'The committee reached an agreenment after a long debate.'],
+        ['a hyphen in a subscript', 'BT /F1 12 Tf 72 700 Td (The committee reached an agree) Tj /F1 8 Tf -3 Ts (i-) Tj /F1 12 Tf 0 Ts ET BT /F1 12 Tf 72 686 Td (ment after a long debate.) Tj ET', 'The committee reached an agreeiment after a long debate.'],
+        ['a bold hyphen of its own', 'BT /F1 12 Tf 72 700 Td (The committee reached an agree) Tj /F2 12 Tf (-) Tj ET BT /F1 12 Tf 72 686 Td (ment after a long debate.) Tj ET', 'The committee reached an agreement after a long debate.'],
+        ['a decomposed accent', accentPage, joined],
+    ]) {
+        const merged = await read([page]);
+        assert.deepStrictEqual(paragraphs(merged), [paragraph], `${name}: the word is joined; got ${JSON.stringify(paragraphs(merged))}`);
+        const [on, off] = [await written(merged), await written(await read([page], { mergeHyphenatedWords: false }))];
+        assert.deepStrictEqual(on, off, `${name}: written as the page draws it`);
+    }
+    const afterSuperscript = await written(await read(['BT /F1 12 Tf 72 700 Td (The committee reached an agree) Tj /F1 8 Tf 4.2 Ts (n) Tj /F1 12 Tf 0 Ts (-) Tj ET BT /F1 12 Tf 72 686 Td (ment after a long debate.) Tj ET']));
+    assert.strictEqual(afterSuperscript.layout, 'The committee reached an agreen-\nment after a long debate.', 'a hyphen after a superscript is on the main line');
+
+    // A page turned upside down: its line keeps the hyphen (8.7.1's first try took it for no break).
+    const upsideDown = String((await (await read([issuePage], {}, 180)).to('text')).value);
+    assert.ok(upsideDown.split('\n').map(l => l.trim()).includes('The committee reached an agree-'), `/Rotate 180: the line keeps its hyphen; got ${JSON.stringify(upsideDown)}`);
+
+    // A JSON copy of a parsed page carries no mark: it is written as it reads, as 8.7.0 wrote it, in every writer.
+    const copied = await written(JSON.parse(JSON.stringify(await read([issuePage]))));
+    const asRead = 'The committee reached an agree\nment after a long debate.';
+    assert.deepStrictEqual(copied, { layout: asRead, pptx: asRead, odp: asRead }, `a JSON copy: written as it reads; got ${JSON.stringify(copied)}`);
+    console.log('✓ PDF hyphen written back only where the parser took one off');
+}
+
+/**
+ * Generated PDFs of words divided at line ends among raised, lowered, stacked and kerned runs, columns, ruled
+ * tables, Hebrew and Han (test/helpers/hyphenBreakGenerator.ts): the runs the parser marks are the hyphens it
+ * took off, and layout text, PPTX and ODP write back those and no others, line by line as with
+ * mergeHyphenatedWords false. No stray hyphen, none missing.
+ */
+async function testPdfHyphenBreaksGenerated(): Promise<void> {
+    const [count, seed] = [300, 1];
+    const started = Date.now();
+    const result = await runHyphenBreakGenerator(count, seed);
+    console.log(`  hyphen breaks: docs=${result.docs} distinct PDFs=${result.distinctPdfs} merges written=${result.mergesWritten} marks=${result.marks} hyphens taken off=${result.hyphensRemoved} marked run shapes=${result.distinctMarkedShapes} stray=${result.stray} missing=${result.missing} other=${result.other} flowed=${result.flowJoined} in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+    assert.deepStrictEqual({ lostMarks: result.lostMarks, stray: result.stray, missing: result.missing, other: result.other }, { lostMarks: 0, stray: 0, missing: 0, other: 0 }, `Hyphen breaks (seed ${seed}): ${JSON.stringify(result.examples)}`);
+    const shapes = ['end:hyphen', 'end:ownRun', 'end:decomposed', 'end:soft', 'end:supThenHyphen', 'end:subHyphen', 'end:capital', 'end:digit', 'end:hyphen:heb', 'end:hyphen:han', 'sup', 'sub', 'stack', 'subKern', 'stackKern', 'kernTJ', 'bold', 'block:single', 'block:columns', 'block:table', 'block:heb', 'block:han'];
+    assert.ok(result.distinctPdfs === count && result.marks > count && result.distinctMarkedShapes >= 4 && shapes.every(s => (result.features[s] ?? 0) > 0), `Hyphen breaks cover the shapes: ${JSON.stringify(result)}`);
+    console.log('✓ PDF hyphen breaks generated, no stray hyphen and none missing');
 }
 
 /**
@@ -13714,6 +13831,8 @@ async function runTests(): Promise<void> {
         ['Many ids waiting before a disclosure are all written', testMarkdownManyAnchorsBeforeDisclosure],
         ['Many captions in a nested paragraph are all written', testNestedParagraphCaptionsMany],
         ['PDF hyphen at a line break', testPdfHyphenAtLineBreak],
+        ['PDF hyphen written back only where the parser took one off', testPdfHyphenOnlyWhereTakenOff],
+        ['PDF hyphen breaks generated', testPdfHyphenBreaksGenerated],
         ['Template mistyped operators', testTemplateMistypedOperators],
         ['Pictures left out named', testPicturesLeftOutNamed],
         ['Cancellation', testCancellation],
