@@ -18,6 +18,8 @@ import { fillPageNumber, pageNumberText } from '../src/utils/pageNumbers';
 import { guardShaping } from '../src/generators/pdf/nativePdfEngine';
 import { OfficeTemplate } from '../src/OfficeTemplate';
 import { readTag } from '../src/template/templateTags';
+import { pictureKindOf, pictureKindOfBase64 } from '../src/utils/imageUtils';
+import { getWarningMessage } from '../src/utils/errorUtils';
 import { OfficeConverter } from '../src/OfficeConverter';
 import { zipSync, strToU8, unzipSync, unzlibSync, strFromU8 } from 'fflate';
 import { PDFDict, PDFDocument, PDFHexString, PDFName, PDFOperator, PDFRawStream, StandardFonts, TextAlignment, degrees, rgb } from 'pdf-lib';
@@ -25,6 +27,7 @@ import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
 import type { ImageMetadata, OfficeContentNode, OfficeParserAST, ShapeMetadata } from '../src/types';
+import { OfficeWarningType } from '../src/types';
 import { parseXmlString } from '../src/utils/xmlUtils';
 import { decodeWindows1252, textDecoder } from '../src/utils/encodingUtils';
 import { ocrTestHooks, performOcr, terminateOcr } from '../src/utils/ocrUtils';
@@ -8566,7 +8569,7 @@ async function testPresentationWriters(): Promise<void> {
             { type: 'paragraph', children: [{ type: 'image', metadata: { attachmentName: 'odd', altText: 'Odd' } }] }] } as any;
     const headedOut = await OfficeGenerator.generate(headed, 'pptx');
     const headedParts = Object.keys(unzipSync(new Uint8Array(headedOut.value as Uint8Array)));
-    assert.ok(headedParts.includes('ppt/media/image1.png') && headedParts.filter(p => p.startsWith('ppt/media/')).every(p => /^ppt\/media\/image\d+\.[a-z]+$/.test(p)) && headedOut.messages.some((m: any) => /kind PPTX output does not hold/.test(m.details?.reason ?? '')), `pptx: a heading's picture is written, a type no picture has reported; got ${headedParts}`);
+    assert.ok(headedParts.includes('ppt/media/image1.png') && headedParts.filter(p => p.startsWith('ppt/media/')).every(p => /^ppt\/media\/image\d+\.[a-z]+$/.test(p)) && headedOut.messages.some((m: any) => /^PPTX output does not take /.test(m.details?.reason ?? '')), `pptx: a heading's picture is written, a type no picture has reported; got ${headedParts}`);
     // EMF and WMF pictures are held, with their content types.
     const emf = new Uint8Array(88); emf[0] = 1; emf.set([0x20, 0x45, 0x4d, 0x46], 40);
     const emfOut = unzipSync(new Uint8Array((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [{ type: 'image', name: 'a.emf', mimeType: 'image/x-emf', extension: 'emf', data: Buffer.from(emf).toString('base64') }], content: [{ type: 'image', metadata: { attachmentName: 'a.emf' } }] } as any, 'pptx')).value as Uint8Array));
@@ -11437,6 +11440,80 @@ async function testTemplateMistypedOperators(): Promise<void> {
 }
 
 /**
+ * A picture a writer leaves out (IMAGE_PROCESSING_FAILED) is reported by its name and why: the kind its
+ * bytes are (EMF, WMF, TIFF, WebP, XML that is no picture, damaged data) and the output that does not
+ * take it, in a whole sentence. The words of the PDF parser's own use of the code, a picture pdf.js
+ * decoded whose pixels could not be read, stay as they are.
+ */
+async function testPicturesLeftOutNamed(): Promise<void> {
+    const emf = new Uint8Array(88); new DataView(emf.buffer).setUint32(0, 1, true); new DataView(emf.buffer).setUint32(4, 88, true); emf.set([0x20, 0x45, 0x4d, 0x46], 40);
+    const wmf = new Uint8Array([0xd7, 0xcd, 0xc6, 0x9a, ...new Array(40).fill(0)]);
+    const tiff = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0, 0, 0]);
+    const webp = new Uint8Array([...Buffer.from('RIFF'), 20, 0, 0, 0, ...Buffer.from('WEBPVP8 '), ...new Array(12).fill(0)]);
+    const xml = new Uint8Array(Buffer.from('<?xml version="1.0"?><root/>'));
+    // A PNG cut off inside its header (its size read, 1 x 1), and a JPEG of a few bytes.
+    const brokenPng = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1]);
+    const brokenJpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0, 1, 2, 3]);
+    const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64');
+    const pictures: [string, string, Uint8Array][] = [['image1.emf', 'image/x-emf', emf], ['image2.wmf', 'image/x-wmf', wmf], ['image3.tiff', 'image/tiff', tiff],
+        ['image4.webp', 'image/webp', webp], ['item1.xml', 'image/png', xml], ['broken.png', 'image/png', brokenPng], ['broken.jpg', 'image/jpeg', brokenJpeg]];
+    const docOf = (names: string[], attachments: any[]) => ({ type: 'docx', metadata: {}, content: names.map(name => ({ type: 'paragraph', children: [{ type: 'image', metadata: { attachmentName: name, altText: `Alt of ${name}` } }] })), attachments } as any);
+    const all = docOf(pictures.map(([name]) => name), pictures.map(([name, mimeType, bytes]) => ({ type: 'image', name, mimeType, extension: name.split('.').pop(), data: b64(bytes) })));
+    const leftOut = async (ast: any, format: string, config: any = {}) => {
+        const result = await OfficeGenerator.generate(ast, format as any, { ...config, onWarning: () => {} } as any);
+        return new Map(((result.messages ?? []) as any[]).filter(m => m.code === 'IMAGE_PROCESSING_FAILED').map(m => [m.details?.name as string, String(m.message)]));
+    };
+    const sentence = (message: string | undefined, name: string, why: string, where: string) => {
+        assert.ok(message, `${where}: ${name} is reported`);
+        assert.ok(message!.startsWith(`Picture '${name}' was left out of the output: `) && message!.includes(why), `${where}: ${name} says ${why}; got ${message}`);
+        assert.ok(!message!.includes('ImageBitmap'), `${where}: ${name} is not said to come from an ImageBitmap; got ${message}`);
+    };
+
+    // The native PDF engine: each kind it does not embed by name, XML as no picture, damaged data as such.
+    const native = await leftOut(all, 'pdf', { pdfConfig: { engine: 'native' } });
+    for (const [name, kind] of [['image1.emf', 'EMF'], ['image2.wmf', 'WMF'], ['image3.tiff', 'TIFF'], ['image4.webp', 'WebP']]) {
+        sentence(native.get(name), name, `the native PDF engine does not embed ${kind} pictures (it embeds PNG, JPEG, GIF, BMP and SVG)`, 'native PDF');
+    }
+    sentence(native.get('item1.xml'), 'item1.xml', 'its data is XML, not a picture', 'native PDF');
+    sentence(native.get('broken.png'), 'broken.png', 'its PNG data could not be read', 'native PDF');
+    sentence(native.get('broken.jpg'), 'broken.jpg', 'its JPEG data could not be read', 'native PDF');
+    assert.ok(native.get('image1.emf')!.endsWith('Its alternative text, where it has one, stands in its place.'), 'native PDF: the message says what stands in its place');
+    const badGif = await leftOut(docOf(['bad.gif'], [{ type: 'image', name: 'bad.gif', mimeType: 'image/gif', extension: 'gif', data: b64(new Uint8Array([...Buffer.from('GIF89a'), 1, 0, 1, 0, 0, 0, 0, 0x2c, 9, 9])) }]), 'pdf', { pdfConfig: { engine: 'native' } });
+    sentence(badGif.get('bad.gif'), 'bad.gif', 'its GIF data could not be read', 'native PDF');
+
+    // DOCX, ODT and LaTeX: an EMF or a WMF picture, which none of them takes, named with the output.
+    for (const [format, label] of [['docx', 'DOCX'], ['odt', 'ODT'], ['tex', 'LaTeX']]) {
+        const named = await leftOut(all, format);
+        sentence(named.get('image1.emf'), 'image1.emf', `${label} output does not take EMF pictures`, label);
+        sentence(named.get('image2.wmf'), 'image2.wmf', `${label} output does not take WMF pictures`, label);
+    }
+    // A type named but data that is no base64: DOCX and ODT say it could not be decoded.
+    const undecodable = docOf(['bad.png', 'bad.png'], [{ type: 'image', name: 'bad.png', mimeType: 'image/png', extension: 'png', data: '%%%' }]);
+    for (const [format, label] of [['docx', 'DOCX'], ['odt', 'ODT']]) sentence((await leftOut(undecodable, format)).get('bad.png'), 'bad.png', 'its data could not be decoded', label);
+    // An unknown type with no name to go by.
+    sentence((await leftOut(docOf(['blob'], [{ type: 'image', name: 'blob', mimeType: 'application/octet-stream', data: b64(new Uint8Array([1, 2, 3, 4, 5, 6])) }]), 'docx')).get('blob'), 'blob', 'DOCX output does not take pictures of its kind', 'DOCX');
+
+    // PPTX and ODP: a WebP picture, and a picture whose attachment is missing.
+    for (const [format, label, takes] of [['pptx', 'PPTX', 'PNG, JPEG, GIF, BMP, TIFF, EMF and WMF'], ['odp', 'ODP', 'PNG, JPEG, GIF, BMP, TIFF, EMF, WMF and SVG']]) {
+        const deck = await leftOut(docOf(['image4.webp', 'gone.png'], [{ type: 'image', name: 'image4.webp', mimeType: 'image/webp', extension: 'webp', data: b64(webp) }]), format);
+        sentence(deck.get('image4.webp'), 'image4.webp', `${label} output does not take WebP pictures (it takes ${takes})`, label);
+        sentence(deck.get('gone.png'), 'gone.png', 'missing attachment', label);
+    }
+
+    // The kinds, read from the bytes first.
+    assert.deepStrictEqual([emf, wmf, tiff, webp, xml, brokenPng].map(bytes => pictureKindOf(bytes)), ['EMF', 'WMF', 'TIFF', 'WebP', 'XML', 'PNG'], 'each kind by its signature');
+    assert.strictEqual(pictureKindOf(new Uint8Array(Buffer.from('<?xml version="1.0"?>\n<!-- drawn -->\n<svg xmlns="http://www.w3.org/2000/svg"/>'))), 'SVG', 'an SVG by its element');
+    assert.deepStrictEqual([pictureKindOf(new Uint8Array(0), 'image/x-emf'), pictureKindOf(new Uint8Array(0), undefined, 'jpg'), pictureKindOf(new Uint8Array(0))], ['EMF', 'JPEG', 'unknown'], 'else by its type or extension');
+    assert.strictEqual(pictureKindOfBase64(b64(emf)), 'EMF', 'base64 is read from its start');
+    assert.strictEqual(pictureKindOfBase64('%%% not base64 %%%', 'image/tiff'), 'TIFF', 'data that is no base64 is named by its type');
+
+    // The PDF parser's own use: no picture named, the ImageBitmap it could not read.
+    assert.strictEqual(getWarningMessage(OfficeWarningType.IMAGE_PROCESSING_FAILED), "A PDF picture's pixels could not be read from the ImageBitmap pdf.js decoded it into:", 'the parser\'s words are kept');
+    assert.strictEqual(getWarningMessage(OfficeWarningType.IMAGE_PROCESSING_FAILED, { reason: 'why' }), 'A picture was left out of the output: why.', 'a picture with no name');
+    console.log('✓ Pictures left out named');
+}
+
+/**
  * Cancellation: once a parse's signal has fired it rejects with AbortError and never resolves, in
  * every format that runs OCR, even when the abort lands while an image is being recognized (which
  * was taken for a failed recognition, so the parse resolved without the text). An OCR timeout is
@@ -13284,6 +13361,7 @@ async function runTests(): Promise<void> {
         ['Many captions in a nested paragraph are all written', testNestedParagraphCaptionsMany],
         ['PDF hyphen at a line break', testPdfHyphenAtLineBreak],
         ['Template mistyped operators', testTemplateMistypedOperators],
+        ['Pictures left out named', testPicturesLeftOutNamed],
         ['Cancellation', testCancellation],
     ];
 

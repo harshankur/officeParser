@@ -9,6 +9,7 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { onDocumentPage } from '../utils/pageLimits.js';
 import { clampInt } from '../utils/numberUtils.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, fillSheetRowGaps, hexColor, isHeaderRow, furnitureKind, lengthToPt, MIME_EXT, resolvePaper, resolveZipInstant, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
+import { pictureKindOf, pictureKindOfBase64, picturesOfKind } from '../utils/imageUtils.js';
 import { LatexMathPlan, LatexScripts, LatexUnicodePlan, LISTINGS_LANGUAGES, mathCommandsOf, planLatexMath, planLatexUnicode, withLatexMathMacros, withoutGeneratorCommands } from '../utils/latexUtils.js';
 import { escapeLatex, latexComment, latexSourceComment, sanitizeLatexImagePath, sanitizeLatexMath, sanitizeLatexUrl } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
@@ -1803,7 +1804,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         if (!att || !att.data) {
             this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName, reason: 'missing attachment' });
         } else if (!ext) {
-            this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName, reason: 'unsupported mime' });
+            this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName, reason: `LaTeX output does not take ${picturesOfKind(pictureKindOfBase64(att.data, att.mimeType, att.extension))}` });
         } else {
             try {
                 const bytes = decodeBase64(att.data);
@@ -1814,7 +1815,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                     ref = { path, includable: !!INCLUDABLE_IMAGE_EXT[mime], mime, intrinsic: sniffImageSize(bytes) };
                 }
             } catch {
-                this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName });
+                this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName, reason: 'its data could not be decoded' });
             }
         }
         this.mediaByAttachment.set(attachmentName, ref);
@@ -1834,7 +1835,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         const mime = (m?.[1] || '').trim().toLowerCase();
         const ext = INCLUDABLE_IMAGE_EXT[mime] ?? MIME_EXT[mime];
         if (!m || !ext) {
-            this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: 'data: URI image', reason: m ? 'unsupported mime' : 'malformed data: URI' });
+            this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: 'data: URI image', reason: m ? `LaTeX output does not take ${picturesOfKind(m[3] ? pictureKindOfBase64(m[4], mime) : pictureKindOf(new Uint8Array(0), mime))}` : 'its data: URI could not be read' });
         } else {
             try {
                 const bytes = m[3] ? decodeBase64(m[4]) : new TextEncoder().encode(decodeURIComponent(m[4]));
@@ -1845,7 +1846,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                     ref = { path, includable: !!INCLUDABLE_IMAGE_EXT[mime], mime, intrinsic: sniffImageSize(bytes) };
                 }
             } catch {
-                this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: 'data: URI image', reason: 'undecodable data' });
+                this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: 'data: URI image', reason: 'its data could not be decoded' });
             }
         }
         this.mediaByDataUri.set(uri, ref);
