@@ -5621,7 +5621,7 @@ async function testExcelRelationshipTargetsNotToTheLetter(): Promise<void> {
     // taken by name. One part of the name is.
     const notes = (parts: string[]) => sheetWith({ ...standard, comments: 'notes/comments7.xml' }, Object.fromEntries(parts.map(p => [p, note])));
     assert.deepStrictEqual(sheetParts.shape(await parse(notes(['a/xl/comments7.xml', 'b/xl/comments7.xml']), false)), [['Data', undefined, ['row:data']]], 'two comments parts of one name: neither is attached');
-    assert.deepStrictEqual(sheetParts.shape(await parse(notes(['a/xl/comments7.xml']), false)), [['Data', undefined, ['row:data+comment']]], 'the one comments part of a name is attached');
+    assert.deepStrictEqual(sheetParts.shape(await parse(notes(['a/xl/comments7.xml']), false)), [['Data', undefined, ['row:data']]], 'a comments part of that name outside xl/ is a stray copy: not attached');
     const graphs = sheetWith({ ...standard, chart: '../graphs/chart7.xml' }, { 'a/xl/charts/chart7.xml': sheetParts.chart('A'), 'b/xl/charts/chart7.xml': sheetParts.chart('B') });
     assert.deepStrictEqual(sheetParts.shape(await parse(graphs, true)), [['Data', undefined, ['row:data+comment', 'image:image1.png/ALT']]], 'two charts of one name: neither is placed');
     const strayChart = sheetWith({ ...standard, chart: '../graphs/chart1.xml' }, { 'backup/xl/charts/chart1.xml': sheetParts.chart('Stray') });
@@ -5673,6 +5673,72 @@ async function testExcelRelationshipTargetsNotToTheLetter(): Promise<void> {
         }
         assert.ok(big <= 8 * small + 250, `${name}: ${n} in ${big.toFixed(0)} ms, ${n / 4} in ${small.toFixed(0)} ms`);
     }
+}
+
+/**
+ * A fallback by file name takes only a part of the kind the relationship names, in that kind's folder:
+ * a missing worksheet's tab never takes the chart sheet of the same file name (nor the reverse), and a
+ * stray copy elsewhere in the package (`old/xl/comments1.xml`) is never attached.
+ */
+async function testExcelFallbackTakesOnlyItsKind(): Promise<void> {
+    const parse = async (buffer: Buffer, extractAttachments: boolean) => await OfficeParser.parseOffice(buffer, { fileType: 'xlsx', extractAttachments } as any) as OfficeParserAST;
+    const note = '<?xml version="1.0"?><comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><authors><author>A</author></authors><commentList><comment ref="A1" authorId="0"><text><t>NOTE</t></text></comment></commentList></comments>';
+    const both = sheetParts.rels([['rId1', 'worksheet', 'worksheets/sheet1.xml'], ['rId2', 'chartsheet', 'chartsheets/sheet1.xml']]);
+    const chartPart = {
+        'xl/chartsheets/sheet1.xml': sheetParts.chartsheet(),
+        'xl/chartsheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId1', 'drawing', '../drawings/drawing1.xml']]),
+        'xl/drawings/drawing1.xml': sheetParts.drawing(sheetParts.frame('rId1')),
+        'xl/drawings/_rels/drawing1.xml.rels': sheetParts.rels([['rId1', 'chart', '../charts/chart1.xml']]),
+        'xl/charts/chart1.xml': sheetParts.chart('CT'),
+    };
+    // The worksheet part is missing: its tab (hidden) reads nothing and takes not the chart sheet.
+    const noWorksheet = sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/workbook.xml': sheetParts.workbook([['Data', 'rId1', true], ['Chart1', 'rId2']]),
+        'xl/_rels/workbook.xml.rels': both,
+        ...chartPart,
+    });
+    const tabs = sheetParts.shape(await parse(noWorksheet, true));
+    assert.deepStrictEqual(tabs.find(t => t[0] === 'Chart1'), ['Chart1', undefined, ['chart:chart1.xml']], `the chart sheet keeps its own tab; got ${JSON.stringify(tabs)}`);
+    assert.ok(!tabs.some(t => t[0] === 'Data' && (t[2] as string[]).length > 0), `the missing worksheet's tab does not take the chart; got ${JSON.stringify(tabs)}`);
+    // The chart sheet part is missing: the worksheet keeps its tab, its rows and its visibility.
+    const noChartsheet = sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/workbook.xml': sheetParts.workbook([['Chart1', 'rId2', true], ['Data', 'rId1']]),
+        'xl/_rels/workbook.xml.rels': both,
+        'xl/worksheets/sheet1.xml': sheetParts.worksheet(['VISIBLE']),
+    });
+    const shape = sheetParts.shape(await parse(noChartsheet, false));
+    assert.ok(shape.some(s => s[0] === 'Data' && s[1] === undefined && (s[2] as string[]).includes('row:VISIBLE')), `the worksheet keeps its tab and visibility; got ${JSON.stringify(shape)}`);
+    assert.ok(!shape.some(s => s[0] === 'Chart1' && (s[2] as string[]).includes('row:VISIBLE')), 'the missing chart sheet\'s tab does not take the worksheet');
+
+    // Stray copies elsewhere in the package are not attached.
+    const withSheet = (comments: string, extra: Record<string, string | Uint8Array>) => sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/workbook.xml': sheetParts.workbook([['Data', 'rId1']]),
+        'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', 'worksheets/sheet1.xml']]),
+        'xl/worksheets/sheet1.xml': sheetParts.worksheet(['data'], '<drawing r:id="rId1"/>'),
+        'xl/worksheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId1', 'drawing', '../drawings/drawing1.xml'], ['rId2', 'comments', comments]]),
+        'xl/drawings/drawing1.xml': sheetParts.drawing(sheetParts.picture('rId1', 'PIC')),
+        'xl/drawings/_rels/drawing1.xml.rels': sheetParts.rels([['rId1', 'image', '../media/image7.png']]),
+        ...extra,
+    });
+    assert.deepStrictEqual(sheetParts.shape(await parse(withSheet('../comments1.xml', { 'old/xl/comments1.xml': note }), false)), [['Data', undefined, ['row:data']]], 'a stray old/xl/comments1.xml is never attached');
+    assert.deepStrictEqual(sheetParts.shape(await parse(withSheet('../comments1.xml', { 'xl/comments1.xml': note }), false)), [['Data', undefined, ['row:data+comment']]], 'the comments part in xl/ is');
+    assert.deepStrictEqual(sheetParts.shape(await parse(withSheet('comments1.xml', { 'xl/comments1.xml': note }), false)), [['Data', undefined, ['row:data+comment']]], 'a target missing its ../ still finds it');
+    assert.deepStrictEqual(sheetParts.shape(await parse(withSheet('../comments1.xml', { 'xl/media/x/image7.png': sheetParts.png }), true)), [['Data', undefined, ['row:data']]], 'an image kept in a subfolder of media is not taken for xl/media/image7.png');
+    assert.deepStrictEqual(sheetParts.shape(await parse(withSheet('../comments1.xml', { 'xl/media/image7.png': sheetParts.png }), true)), [['Data', undefined, ['row:data', 'image:image7.png/PIC']]], 'the image in xl/media is placed');
+    const strayDrawing = sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/workbook.xml': sheetParts.workbook([['Data', 'rId1']]),
+        'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', 'worksheets/sheet1.xml']]),
+        'xl/worksheets/sheet1.xml': sheetParts.worksheet(['data'], '<drawing r:id="rId1"/>'),
+        'xl/worksheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId1', 'drawing', '../drawings/drawing5.xml']]),
+        'old/xl/drawings/drawing5.xml': sheetParts.drawing(sheetParts.picture('rId1', 'STRAY')),
+        'old/xl/drawings/_rels/drawing5.xml.rels': sheetParts.rels([['rId1', 'image', '../media/image1.png']]),
+        'xl/media/image1.png': sheetParts.png,
+    });
+    assert.deepStrictEqual(sheetParts.shape(await parse(strayDrawing, true)), [['Data', undefined, ['row:data']]], 'a stray drawing outside xl/ is never read');
 }
 
 /**
@@ -13710,6 +13776,7 @@ async function runTests(): Promise<void> {
         ['ExcelChartSheetKeepsWorksheetIdentity', testExcelChartSheetKeepsWorksheetIdentity],
         ['ExcelRelationshipsByPartPath', testExcelRelationshipsByPartPath],
         ['ExcelRelationshipTargetsNotToTheLetter', testExcelRelationshipTargetsNotToTheLetter],
+        ['ExcelFallbackTakesOnlyItsKind', testExcelFallbackTakesOnlyItsKind],
         ['ExcelChartSheetPlacedInItsTab', testExcelChartSheetPlacedInItsTab],
         ['GeneratedOutput', testGeneratedOutput],
         ['ODG', testOdg],

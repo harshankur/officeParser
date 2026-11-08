@@ -45,18 +45,23 @@ const relsOf = (partPath: string): string => `${folderOf(partPath)}_rels/${partP
 /** The part a relationships part belongs to: the inverse of relsOf. */
 const partOfRels = (relsPath: string): string => relsPath.replace(/(^|\/)_rels\/([^/]*)\.rels$/, '$1$2');
 
+/** The folders of SpreadsheetML's kinds of part, by the name a target gives them (`worksheets/sheet1.xml`). */
+const KIND_FOLDERS = new Set(['worksheets', 'chartsheets', 'dialogsheets', 'macrosheets', 'drawings', 'charts', 'media']);
+
 /**
  * Finds the part a relationship's target names, among the package's parts (`partPaths`, every entry
  * of the archive). The index is built once; each lookup is a few map reads.
  *
  * The part the target resolves to, from the folder of the part holding the relationship, when the
  * package has it. Failing that, the part whose path matches it ignoring case, as Excel matches part
- * names (`Worksheets/Sheet1.xml`, `../Charts/chart1.xml`). Only when neither finds one, the target's
- * file name: the part of that name in the folder the relationship's kind of part lives in
- * (`xl/worksheets/` for a worksheet), else the one part of that name in the package. So a target
- * written from the wrong folder (`xl/worksheets/sheet1.xml`, `comments1.xml`, `charts/chart1.xml`)
- * still names its part, and a file name two parts share (a chart sheet and a worksheet both
- * `sheet1.xml`) never picks one of them by name alone.
+ * names (`Worksheets/Sheet1.xml`, `../Charts/chart1.xml`). Only when neither finds one, the part of the
+ * target's file name in the folder its kind of part lives in: the folder of the relationship's type
+ * (`xl/worksheets/` for a worksheet), or, for a relationship whose type names no kind, the folder its
+ * target names (`xl/worksheets/sheet1.xml`). So a target written from the wrong folder
+ * (`xl/worksheets/sheet1.xml`, `comments1.xml`, `charts/chart1.xml`) still names its part, and a
+ * target whose part is missing names nothing: never a part of another kind of the same file name (a
+ * chart sheet and a worksheet both `sheet1.xml`), nor a copy of it elsewhere in the archive
+ * (`old/xl/comments1.xml`).
  *
  * An external relationship (`TargetMode="External"`, or a target with a scheme such as `https:`) names
  * no part, so it gets no fallback: a web picture whose address ends in `media/image1.png` is not the
@@ -65,32 +70,27 @@ const partOfRels = (relsPath: string): string => relsPath.replace(/(^|\/)_rels\/
  */
 const partLocator = (partPaths: Iterable<string>) => {
     const exact = new Set<string>();
-    // The first part of each path in lower case, and the parts of each file name in lower case.
+    // The first part of each path in lower case.
     const byLowerPath = new Map<string, string>();
-    const byLowerName = new Map<string, { part: string; count: number }>();
     for (const part of partPaths) {
         if (part.endsWith('/') || exact.has(part)) continue;
         exact.add(part);
         const lower = part.toLowerCase();
         if (!byLowerPath.has(lower)) byLowerPath.set(lower, part);
-        const name = lower.slice(lower.lastIndexOf('/') + 1);
-        const named = byLowerName.get(name);
-        if (named) named.count++;
-        else byLowerName.set(name, { part, count: 1 });
     }
-    return (folder: string, rel: { getAttribute(name: string): string | null }, expectedFolder?: string): string => {
+    return (folder: string, rel: { getAttribute(name: string): string | null }, kindFolder?: string): string => {
         const target = rel.getAttribute("Target") ?? '';
         const resolved = resolvePartPath(folder, target);
         if (exact.has(resolved) || rel.getAttribute("TargetMode") === 'External' || /^[a-z][a-z\d+.-]*:/i.test(target)) return resolved;
         const lower = resolved.toLowerCase();
         const sameButCase = byLowerPath.get(lower);
         if (sameButCase !== undefined) return sameButCase;
-        const name = lower.slice(lower.lastIndexOf('/') + 1);
-        if (!name) return resolved;
-        const inFolder = expectedFolder === undefined ? undefined : byLowerPath.get(expectedFolder.toLowerCase() + name);
-        if (inFolder !== undefined) return inFolder;
-        const named = byLowerName.get(name);
-        return named && named.count === 1 ? named.part : resolved;
+        const slash = lower.lastIndexOf('/');
+        const name = lower.slice(slash + 1);
+        // (The folder the target names: `worksheets` for `xl/xl/worksheets/sheet1.xml`.)
+        const named = slash === -1 ? '' : lower.slice(lower.lastIndexOf('/', slash - 1) + 1, slash);
+        const kind = kindFolder?.toLowerCase() ?? (KIND_FOLDERS.has(named) ? `xl/${named}/` : undefined);
+        return (name && kind !== undefined ? byLowerPath.get(kind + name) : undefined) ?? resolved;
     };
 };
 
