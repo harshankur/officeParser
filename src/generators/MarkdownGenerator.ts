@@ -1555,6 +1555,10 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
 
         const walkedByProcessor = node.type === 'table' || node.type === 'sheet' || this.writesItemAsHtml(node);
         if (node.type === 'disclosure') { const summary = summaryOf(node); if (summary) this.disclosureSummaries.add(summary); }
+        // Anchors waiting (see pendingAnchorIds) as a disclosure is reached are written before it, not taken by
+        // its summary's line inside it, which a plain summary writes as text (they were lost): set aside while
+        // its content is written, they wait again for the disclosure's own anchors, first.
+        const waitingBeforeDisclosure = node.type === 'disclosure' && this.pendingAnchorIds.length ? this.pendingAnchorIds.splice(0) : undefined;
         const wasInImplicitBold = this.inImplicitBold;
         if (node.type === 'heading' && this.hasUniformFormatting(node, f => f?.bold === true)) this.inImplicitBold = true;
         let childrenOutput = '';
@@ -1611,6 +1615,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             if (node.type === 'heading') this.inHeading--;
             if (definition) this.inDefinition--;
         }
+        if (waitingBeforeDisclosure) this.pendingAnchorIds.unshift(...waitingBeforeDisclosure);
 
         this.inImplicitBold = wasInImplicitBold;
 
@@ -2135,7 +2140,12 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             }
             case 'break':
                 if ((n.metadata as BreakMetadata | undefined)?.breakType === 'section' || typeof (n.metadata as BreakMetadata | undefined)?.section === 'number') return '';
-                return (n.metadata as BreakMetadata | undefined)?.breakType === 'page' || (n.metadata as BreakMetadata | undefined)?.breakType === 'thematic' ? '<hr>' : '<br>';
+                if ((n.metadata as BreakMetadata | undefined)?.breakType === 'page' || (n.metadata as BreakMetadata | undefined)?.breakType === 'thematic') {
+                    // (Its ids as the HTML writer's <hr> has them: an anchor before a block in a disclosure marks it.)
+                    const { attr, extra } = this.htmlIds(n.metadata);
+                    return `${extra}<hr${attr}>`;
+                }
+                return '<br>';
             case 'code': {
                 const meta = n.metadata as CodeMetadata | undefined;
                 const code = n.text || '';
@@ -2188,7 +2198,10 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 const shown = label === undefined || label.trim() === `${number}.` ? '' : ` style="list-style-type: ${cssListMarker(label)}"`;
                 return `<ol${number > 1 ? ` start="${number}"` : ''}${shown}><li${attr}>${extra}${co}</li></ol>`;
             }
-            case 'table': return await this.renderTableAsHtml(n);
+            case 'table': {
+                const { attr, extra } = this.htmlIds(n.metadata);
+                return `${extra}${(await this.renderTableAsHtml(n)).replace(/^<table/, `<table${attr}`)}`;
+            }
             case 'embed': {
                 const meta = n.metadata as EmbedMetadata | undefined;
                 const url = meta?.url || (meta?.videoId ? `https://youtu.be/${meta.videoId}` : '');

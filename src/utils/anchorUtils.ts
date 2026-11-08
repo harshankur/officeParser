@@ -9,6 +9,12 @@ const ANCHOR_MARK = '__anchor_mark__';
 /** Nodes whose content is a line of text: an anchor mark inside one is one of its own ids. */
 const ANCHOR_INLINE_HOLDERS = new Set<string>(['paragraph', 'heading', 'list', 'cell', 'definitionTerm', 'definitionDescription']);
 
+/**
+ * Nodes that take no ids: a disclosure's summary (`summary` has no metadata, and only the disclosure's ids
+ * are written and read back). Ids that would be its own are the disclosure's.
+ */
+const NO_ANCHOR_IDS = new Set<string>(['summary']);
+
 /** Nodes that sit in a line of text: a mark right before one stands in that line. */
 const isInlineNode = (node: OfficeContentNode): boolean => node.type === 'text' || node.type === 'break'
     || (node.type === 'code' && (node.metadata as { math?: string } | undefined)?.math === 'inline');
@@ -33,10 +39,11 @@ function addIds(node: OfficeContentNode, ids: string[]): void {
  * the rest as anchors before it). In a line of text that is the picture the mark stands right before,
  * else the line's container (also a note's or admonition's, holding text itself: a text run has no
  * ids); among blocks it is the next block (the one before, when none follows; the container, when
- * there is none; an empty paragraph, at the top of a document holding nothing else). Marks starting a
- * note are the note's, where the generators write a note's ids. Each node's ids are added once, so
- * many marks cost time in proportion to their number. The tree is at most the parser's depth limit
- * deep.
+ * there is none; an empty paragraph, at the top of a document holding nothing else). A disclosure's
+ * summary takes none (NO_ANCHOR_IDS): marks before or after it are the disclosure's, and marks alone in
+ * it an empty paragraph's. Marks starting a note are the note's, where the generators write a note's
+ * ids. Each node's ids are added once, so many marks cost time in proportion to their number. The tree
+ * is at most the parser's depth limit deep.
  */
 export function resolveAnchorMarks(nodes: OfficeContentNode[], parent?: OfficeContentNode, resolved = new Set<OfficeContentNode>()): OfficeContentNode[] {
     // Each node's own lists once: a note is one node every reference to it holds, and resolved again at
@@ -59,7 +66,9 @@ export function resolveAnchorMarks(nodes: OfficeContentNode[], parent?: OfficeCo
             continue;
         }
         if (carried.length) {
-            const toParent = parent && ((inLine && node.type !== 'image') || isInlineNode(node) || (parent.type === 'note' && !out.length));
+            // (Before a node taking no ids, with no parent to take them: the node after it.)
+            if (NO_ANCHOR_IDS.has(node.type) && !parent) { out.push(node); continue; }
+            const toParent = parent && ((inLine && node.type !== 'image') || isInlineNode(node) || (parent.type === 'note' && !out.length) || NO_ANCHOR_IDS.has(node.type));
             if (toParent) for (const id of carried) parentIds.push(id);
             else addIds(node, carried);
             carried = [];
@@ -67,11 +76,17 @@ export function resolveAnchorMarks(nodes: OfficeContentNode[], parent?: OfficeCo
         out.push(node);
     }
     if (carried.length) {
-        if (inLine || (parent && out.length && isInlineNode(out[out.length - 1]))) for (const id of carried) parentIds.push(id);
-        else if (out.length) addIds(out[out.length - 1], carried);
-        else if (parent) addIds(parent, carried);
+        const last = out[out.length - 1];
+        if (inLine || (parent && last && isInlineNode(last))) for (const id of carried) parentIds.push(id);
+        else if (last && !NO_ANCHOR_IDS.has(last.type)) addIds(last, carried);
+        // After a disclosure's summary with no body: the disclosure's.
+        else if (parent && !NO_ANCHOR_IDS.has(parent.type)) addIds(parent, carried);
+        // Alone in a summary (or at the top of a document holding nothing else): an empty paragraph's.
         else out.push({ type: 'paragraph', metadata: { anchorIds: carried } as any, children: [] });
     }
-    if (parentIds.length) addIds(parent!, parentIds);
+    if (parentIds.length) {
+        if (!NO_ANCHOR_IDS.has(parent!.type)) addIds(parent!, parentIds);
+        else out.push({ type: 'paragraph', metadata: { anchorIds: parentIds } as any, children: [] });
+    }
     return out;
 }

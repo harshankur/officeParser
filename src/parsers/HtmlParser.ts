@@ -1934,11 +1934,18 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     flush();
                     return blocks;
                 };
-                const summary = summaryElement ? blocksOf(summaryElement.children, summaryElement) : [];
+                let summary = summaryElement ? blocksOf(summaryElement.children, summaryElement) : [];
+                // A summary holding only named anchors is empty, as one holding nothing is (none is kept), and
+                // its anchors are the disclosure's: a summary has no ids (see resolveAnchorMarks).
+                const ids = [...anchorIds];
+                if (summary.every(isAnchorMark)) {
+                    for (const mark of summary) for (const id of (mark.metadata as { anchorIds?: string[] }).anchorIds ?? []) if (!ids.includes(id)) ids.push(id);
+                    summary = [];
+                }
                 const body = blocksOf(node.children.filter(c => c !== summaryElement), node);
                 const meta: DisclosureMetadata = {
                     ...(node.attributes?.open !== undefined ? { open: true } : {}),
-                    ...(anchorIds.length ? { anchorIds } : {}),
+                    ...(ids.length ? { anchorIds: ids } : {}),
                 };
                 // No text of its own, as a quote or an admonition has none: its blocks hold its text. A copy of
                 // its summary and body, made again at every level of nesting, was 200 times the input, and a
