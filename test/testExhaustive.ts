@@ -5539,6 +5539,76 @@ async function testExcelRelationshipsByPartPath(): Promise<void> {
 }
 
 /**
+ * Issue #142: a chart moved to a chart sheet of its own reached the attachments but not the content, so
+ * the text, chunks and every writer left it out. With extractAttachments, a chart sheet is a sheet node in
+ * its tab's place holding its drawing's charts and pictures, under its name and hidden state; without it,
+ * the content is as before.
+ */
+async function testExcelChartSheetPlacedInItsTab(): Promise<void> {
+    const parse = async (buffer: Buffer, extractAttachments = true) => await OfficeParser.parseOffice(buffer, { fileType: 'xlsx', extractAttachments } as any) as OfficeParserAST;
+    const rows = ['row:Month', 'row:January', 'row:February', 'row:VISIBLE-ROW'];
+
+    // The issue's package: the chart sheet second in tab order, its chart's text on the chart node.
+    for (const hidden of [false, true]) {
+        const ast = await parse(chartSheetBesideWorksheet(hidden));
+        assert.deepStrictEqual(sheetParts.shape(ast), [['Sheet1', undefined, rows], ['Chart1', hidden || undefined, ['chart:chart1.xml']]], `hidden ${hidden}: the chart sheet is placed after the worksheet, under its name`);
+        const chartNode = ast.content[1].children![0];
+        assert.strictEqual(chartNode.text, ast.attachments.find(a => a.name === 'chart1.xml')!.chartData!.rawTexts.join('\n'), `hidden ${hidden}: the chart node carries its chart's text`);
+        const setup = (ast.content[1].metadata as SheetMetadata).pageSetup;
+        assert.ok((setup?.width ?? 0) > (setup?.height ?? 0), `hidden ${hidden}: the chart sheet's own page setup (landscape) is read; got ${JSON.stringify(setup)}`);
+    }
+
+    // Without extractAttachments, the chart sheet adds nothing: the content is that of the package without it.
+    const withoutChartSheet = sheetParts.zip(Object.fromEntries(Object.entries(unzipSync(chartSheetBesideWorksheet(false))).filter(([name]) => !name.startsWith('xl/chartsheets/'))));
+    assert.deepStrictEqual(JSON.stringify((await parse(chartSheetBesideWorksheet(false), false)).content), JSON.stringify((await parse(withoutChartSheet, false)).content), 'without extractAttachments the content is unchanged');
+
+    // A hidden chart sheet first in tab order: placed first, hidden, and printed only with printHidden.
+    const chartFirst = (hidden: boolean, picture: boolean, worksheetExtra = '', extra: Record<string, string | Uint8Array> = {}) => sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/workbook.xml': sheetParts.workbook([['Chart1', 'rId2', hidden], ['Data', 'rId1']]),
+        'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', 'worksheets/sheet1.xml'], ['rId2', 'chartsheet', 'chartsheets/sheet1.xml']]),
+        'xl/worksheets/sheet1.xml': sheetParts.worksheet(['data'], worksheetExtra),
+        'xl/chartsheets/sheet1.xml': sheetParts.chartsheet(),
+        'xl/chartsheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId1', 'drawing', '../drawings/drawing1.xml']]),
+        'xl/drawings/drawing1.xml': sheetParts.drawing(sheetParts.frame('rId1') + (picture ? sheetParts.picture('rId2', 'LOGO') : '')),
+        'xl/drawings/_rels/drawing1.xml.rels': sheetParts.rels([['rId1', 'chart', '../charts/chart1.xml'], ...(picture ? [['rId2', 'image', '../media/image1.png'] as [string, string, string]] : [])]),
+        'xl/charts/chart1.xml': sheetParts.chart('OnChartSheet', [11, 12]),
+        ...(picture ? { 'xl/media/image1.png': sheetParts.png } : {}),
+        ...extra,
+    });
+    const hiddenFirst = await parse(chartFirst(true, false));
+    assert.deepStrictEqual(sheetParts.shape(hiddenFirst), [['Chart1', true, ['chart:chart1.xml']], ['Data', undefined, ['row:data']]], 'a hidden chart sheet first in tab order is placed first, hidden');
+    for (const printHidden of [false, true]) {
+        const pdf = (await hiddenFirst.to('pdf', { pdfConfig: { engine: 'native', printHidden } } as any)).value as Uint8Array;
+        const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+        const printed = String((await back.to('text')).value);
+        if (printHidden) assert.ok(printed.includes('Chart1') && printed.includes('OnChartSheet') && printed.indexOf('OnChartSheet') < printed.indexOf('Data'), `printHidden prints the hidden chart sheet, first; got ${JSON.stringify(printed)}`);
+        else assert.deepStrictEqual(printed.split(/\s+/).filter(Boolean), ['data'], `the PDF leaves the hidden chart sheet out; got ${JSON.stringify(printed)}`);
+    }
+
+    // Its HTML tabs and its chunks follow the tabs.
+    const visibleFirst = await parse(chartFirst(false, false));
+    const html = String((await visibleFirst.to('html')).value);
+    const tabs = [...html.matchAll(/class="spreadsheet-tab"[^>]*>([^<]*)/g)].map(m => m[1]);
+    assert.deepStrictEqual(tabs, ['Chart1', 'Data'], `the HTML tabs follow the workbook's; got ${JSON.stringify(tabs)}`);
+    // The sheets the chunks name, in order (a sheet of several rows gives several chunks).
+    const chunkSheets = async (ast: OfficeParserAST) => ((await ast.to('chunks', { chunksConfig: { splitBy: 'sheet' } } as any)).value as any[])
+        .map(c => c.metadata?.sheetName).filter((name, i, names) => name !== names[i - 1]);
+    assert.deepStrictEqual(await chunkSheets(visibleFirst), ['Chart1', 'Data'], 'the chunks follow the workbook\'s tabs');
+    assert.deepStrictEqual(await chunkSheets(await parse(chartSheetBesideWorksheet(false))), ['Sheet1', 'Chart1'], 'the issue\'s chart sheet is chunked after its worksheet');
+
+    // A chart sheet whose drawing holds a picture as well: the picture, then the chart.
+    const withPicture = await parse(chartFirst(false, true));
+    assert.deepStrictEqual(sheetParts.shape(withPicture)[0], ['Chart1', undefined, ['image:image1.png/LOGO', 'chart:chart1.xml']], 'a chart sheet\'s picture is placed beside its chart');
+
+    // A drawing a worksheet names too: placed once, on the first tab naming it.
+    const shared = await parse(chartFirst(false, false, '<drawing r:id="rId1"/>', {
+        'xl/worksheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId1', 'drawing', '../drawings/drawing1.xml']]),
+    }));
+    assert.deepStrictEqual(sheetParts.shape(shared), [['Chart1', undefined, ['chart:chart1.xml']], ['Data', undefined, ['row:data']]], 'a drawing shared with a worksheet is placed once, at the first tab');
+}
+
+/**
  * A sheet is printed as a spreadsheet prints it: a merged range is one cell (XLSX keeps its covered cells,
  * empty, and they were drawn as boxes under the merged one's text, which was wrapped to its first column),
  * each column as wide as its content asks so a number is never broken over two lines (equal columns broke
@@ -13110,6 +13180,7 @@ async function runTests(): Promise<void> {
         ['ExcelSheetOrder', testExcelSheetOrder],
         ['ExcelChartSheetKeepsWorksheetIdentity', testExcelChartSheetKeepsWorksheetIdentity],
         ['ExcelRelationshipsByPartPath', testExcelRelationshipsByPartPath],
+        ['ExcelChartSheetPlacedInItsTab', testExcelChartSheetPlacedInItsTab],
         ['GeneratedOutput', testGeneratedOutput],
         ['ODG', testOdg],
         ['ODFComments', testOdfComments],
