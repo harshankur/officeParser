@@ -115,6 +115,16 @@ const OPERATORS: [string, CompareOperator][] = [
     ['\u2264', '<='], ['\u2265', '>='], ['\u2260', '!='],
 ];
 
+/**
+ * Operators of other languages a condition does not take, as typed, each with what to write instead: checked
+ * before {@link OPERATORS}, which would read their start (`==` of `===`, `<` of `<>`) and blame what follows.
+ */
+const MISTYPED: [string, string][] = [
+    ['===', 'use == to compare'], ['!==', 'use != to compare'], ['<>', 'use != to compare'],
+    ['=>', 'use >= to compare'], ['=<', 'use <= to compare'], ['=!', 'use != to compare'],
+    ['&&', 'write and to join conditions'], ['||', 'write or to join conditions'],
+];
+
 type Token =
     | { t: 'name'; text: string }
     | { t: 'number'; value: number }
@@ -131,11 +141,14 @@ function tokenize(text: string): Tokens {
         const ch = text[at];
         if (/\s/u.test(ch)) { at++; continue; }
         if (ch === '(' || ch === ')') { tokens.push({ t: ch }); at++; continue; }
+        const mistyped = MISTYPED.find(([typed]) => text.startsWith(typed, at));
+        if (mistyped) return { ok: false, reason: `uses ${mistyped[0]}; ${mistyped[1]}` };
         const operator = OPERATORS.find(([typed]) => text.startsWith(typed, at));
         if (operator) { tokens.push({ t: 'op', op: operator[1] }); at += operator[0].length; continue; }
         if (ch === '=') return { ok: false, reason: 'compares with a single =; use == to compare' };
         if (ch === '!') return { ok: false, reason: 'uses !; write not before a condition, or != to compare' };
-        if (ch === '&' || ch === '|') return { ok: false, reason: `uses ${ch}${ch}; write and, or` };
+        if (ch === '&') return { ok: false, reason: 'uses &; write and to join conditions' };
+        if (ch === '|') return { ok: false, reason: 'uses |, which a condition does not take (a filter goes on a field, and conditions are joined with or)' };
         const family = DOUBLE_QUOTES.includes(ch) ? DOUBLE_QUOTES : SINGLE_QUOTES.includes(ch) ? SINGLE_QUOTES : null;
         if (family) {
             let close = at + 1;

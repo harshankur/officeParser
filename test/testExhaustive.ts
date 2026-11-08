@@ -17,6 +17,7 @@ import { excelShownText } from '../src/utils/excelFormat';
 import { fillPageNumber, pageNumberText } from '../src/utils/pageNumbers';
 import { guardShaping } from '../src/generators/pdf/nativePdfEngine';
 import { OfficeTemplate } from '../src/OfficeTemplate';
+import { readTag } from '../src/template/templateTags';
 import { OfficeConverter } from '../src/OfficeConverter';
 import { zipSync, strToU8, unzipSync, unzlibSync, strFromU8 } from 'fflate';
 import { PDFDict, PDFDocument, PDFHexString, PDFName, PDFOperator, PDFRawStream, StandardFonts, TextAlignment, degrees, rgb } from 'pdf-lib';
@@ -11383,6 +11384,59 @@ async function testPdfHyphenAtLineBreak(): Promise<void> {
 }
 
 /**
+ * A condition written with an operator of another language (`|`, `&`, `||`, `&&`, `===`, `!==`, `=>`, `=<`,
+ * `=!`, `<>`) is refused with the operator as it was typed and what to write instead, not with the
+ * character found doubled or the `=` it starts with blamed.
+ */
+async function testTemplateMistypedOperators(): Promise<void> {
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+    const docx = (text: string): Buffer => Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        'word/document.xml': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W}><w:body><w:p><w:r><w:t xml:space="preserve">${text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</w:t></w:r></w:p></w:body></w:document>`),
+    }));
+    const data = { a: 1, b: 2, answer: 'YES' };
+    const refusal = async (tag: string) => {
+        let error: any;
+        try { await OfficeTemplate.render(docx(`${tag}T{{ endif }}`), { data }); } catch (e) { error = e; }
+        assert.strictEqual(error?.officeIssue?.code, 'TEMPLATE_SYNTAX', `${tag} is refused; got ${error}`);
+        assert.strictEqual(error.officeIssue.details?.reason, 'unreadable', `${tag}: reason unreadable`);
+        assert.ok(String(error.message).includes(tag), `${tag}: the message names the tag; got ${error.message}`);
+        return { detail: String(error.officeIssue.details.detail), message: String(error.message) };
+    };
+    for (const [tag, typed, write] of [
+        ['{{ if a && b }}', '&&', 'and'], ['{{ if a || b }}', '||', 'or'], ['{{ if a & b }}', '&', 'and'],
+        ['{{ if a === b }}', '===', '=='], ['{{ if a !== b }}', '!==', '!='], ['{{ if a <> 1 }}', '<>', '!='],
+        ['{{ if a => 1 }}', '=>', '>='], ['{{ if a =< 1 }}', '=<', '<='], ['{{ if a =! 1 }}', '=!', '!='],
+    ]) {
+        const { detail } = await refusal(tag);
+        assert.ok(detail.startsWith(`uses ${typed};`), `${tag}: the operator is named as typed; got ${detail}`);
+        assert.ok(new RegExp(`(write|use) ${write.replace(/[|=!<>]/g, '\\$&')} to`).test(detail), `${tag}: says to write ${write}; got ${detail}`);
+        assert.ok(!detail.includes('single ='), `${tag}: no single = is blamed; got ${detail}`);
+    }
+    // && names and alone, || or alone.
+    assert.ok(!(await refusal('{{ if a && b }}')).detail.includes(' or '), '&& does not name or');
+    assert.ok(!(await refusal('{{ if a || b }}')).detail.includes(' and '), '|| does not name and');
+    // A single bar: a filter where a condition takes none.
+    for (const tag of ['{{ if (answer | lower) == "yes" }}', '{{ if a | b }}']) {
+        const { detail, message } = await refusal(tag);
+        assert.ok(detail.startsWith('uses |,') && detail.includes('filter') && !detail.includes('||'), `${tag}: the single bar is named, as a filter; got ${detail}`);
+        assert.ok(message.includes('cannot be read: it uses |,'), `${tag}: the message reads whole; got ${message}`);
+    }
+    // An else if's condition is read alike (inside blocks that pair, it stays text as typed).
+    const elseIf = readTag('else if a | b');
+    assert.ok(elseIf?.ok === false && elseIf.reason.startsWith('uses |,') && !elseIf.reason.includes('||'), `an else if with a single bar names it; got ${JSON.stringify(elseIf)}`);
+    // What a condition does take is unchanged: a filter on a field, a bar inside a string.
+    const rendered = async (text: string) => {
+        const xml = strFromU8(unzipSync(new Uint8Array(await OfficeTemplate.render(docx(text), { data }) as Uint8Array))['word/document.xml']);
+        return xml.slice(xml.indexOf('<w:body>')).replace(/<[^>]+>/g, '');
+    };
+    assert.strictEqual(await rendered('{{ answer | lower }}'), 'yes', 'a filter on a field still fills');
+    assert.strictEqual(await rendered('{{ if answer == "x|y" }}T{{ else }}F{{ endif }}'), 'F', 'a bar inside a string is text');
+    assert.strictEqual(await rendered('{{ if a <= 1 and b >= 2 and a != b }}T{{ else }}F{{ endif }}'), 'T', 'the operators a condition takes still read');
+    console.log('✓ Template mistyped operators');
+}
+
+/**
  * Cancellation: once a parse's signal has fired it rejects with AbortError and never resolves, in
  * every format that runs OCR, even when the abort lands while an image is being recognized (which
  * was taken for a failed recognition, so the parse resolved without the text). An OCR timeout is
@@ -13229,6 +13283,7 @@ async function runTests(): Promise<void> {
         ['Many ids waiting before a disclosure are all written', testMarkdownManyAnchorsBeforeDisclosure],
         ['Many captions in a nested paragraph are all written', testNestedParagraphCaptionsMany],
         ['PDF hyphen at a line break', testPdfHyphenAtLineBreak],
+        ['Template mistyped operators', testTemplateMistypedOperators],
         ['Cancellation', testCancellation],
     ];
 
