@@ -18,6 +18,22 @@ import { isBlockInParagraph } from '../utils/nodeTypeUtils.js';
 const MAX_NO_SCRIPT_TAB_RULES = 200;
 
 /**
+ * Whether `node`, written in a line, starts (or with `last`, ends) with a captioned picture: one, or a node
+ * written as its children (a comment's range, a drawing) whose first (last) child that is not white space does.
+ */
+function figureAtEdge(node: OfficeContentNode, last: boolean): boolean {
+    let current: OfficeContentNode | undefined = node;
+    for (let depth = 0; current && depth < 64; depth++) {
+        if (current.type === 'image') return !!captionOf(current);
+        const throughChildren = (current.type === 'comment' && !isSourceComment(current)) || ['drawing', 'header', 'footer', 'slideMaster'].includes(current.type);
+        if (!throughChildren) return false;
+        const kids: OfficeContentNode[] = (current.children ?? []).filter(child => child.type !== 'text' || !!child.text?.trim() || !!child.notes?.length);
+        current = last ? kids[kids.length - 1] : kids[0];
+    }
+    return false;
+}
+
+/**
  * A child that is a block of its own, which a <p> cannot hold: a code block or display equation, a
  * rule or page break (an <hr>; a Word page break is a break in its paragraph), and every node written
  * as a block element (a table, a list, an embed's <div>...), or holding one. Only these were split
@@ -764,6 +780,20 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         // Whether these siblings form a run of text (a paragraph's children) rather than a list of blocks.
         const runHasText = nodes.some(n => n.type === 'text');
         let html = '';
+        // In a line (a heading's, a quote's, a summary's), whether the last thing written was a captioned
+        // picture: what follows it starts a line of its own (see the captioned picture's line break below).
+        let afterFigure = false;
+        // What the line holds so far, kept as each piece is written (looking through `html` at each node took
+        // time quadratic in a long line): whether anything but named anchors and white space is written, and
+        // whether the last piece that is not white space ends in a line break.
+        let lineHasContent = false;
+        let lineEndsWithBreak = false;
+        const write = (piece: string): void => {
+            html += piece;
+            if (!piece.trim()) return;
+            if (!lineHasContent && piece.replace(/<a id="[^"]*" name="[^"]*"><\/a>/g, '').trim()) lineHasContent = true;
+            lineEndsWithBreak = piece.trimEnd().endsWith('<br>');
+        };
         // The node written before this one (see afterPage).
         let previous: OfficeContentNode | undefined;
         // Stack to track active lists. `liClose` is the currently-open item's deferred closing
@@ -784,7 +814,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         const closeListsToLevel = (level: number) => {
             while (listStack.length > 0 && listStack[listStack.length - 1].indentation > level) {
                 const list = listStack.pop();
-                html += list!.liClose + closeListTag(list!.type) + '\n\n';
+                write(list!.liClose + closeListTag(list!.type) + '\n\n');
             }
         };
 
@@ -792,7 +822,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         let openQuote: OfficeContentNode | undefined;
         const closeQuote = () => {
             if (!openQuote) return;
-            html += '</blockquote>\n\n';
+            write('</blockquote>\n\n');
             openQuote = undefined;
         };
 
@@ -847,21 +877,21 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                         // Kind changed at the same level: close the open item and the old list,
                         // then open the replacement list.
                         const last = listStack.pop();
-                        html += last!.liClose + closeListTag(last!.type) + '\n';
-                        html += openListTag(type, isTask) + '\n';
+                        write(last!.liClose + closeListTag(last!.type) + '\n');
+                        write(openListTag(type, isTask) + '\n');
                         listStack.push({ indentation, type, isTask, liClose: '' });
                     } else {
                         // Sibling at the same level: close the previous item before this one opens.
-                        html += top.liClose;
+                        write(top.liClose);
                     }
                 } else {
                     // Deeper level (or the first list): open a nested list INSIDE the currently
                     // open item, leaving the parent <li>'s close pending on its stack frame.
-                    html += openListTag(type, isTask) + '\n';
+                    write(openListTag(type, isTask) + '\n');
                     listStack.push({ indentation, type, isTask, liClose: '' });
                 }
 
-                html += await this.processNodeRecursive(node, this.boundNodeProcessor, { value: override });
+                write(await this.processNodeRecursive(node, this.boundNodeProcessor, { value: override }));
                 // Defer this item's close so a nested list can land inside it. A string override is
                 // a complete replacement item that already carries its own close, so add none.
                 listStack[listStack.length - 1].liClose = (typeof override === 'string')
@@ -874,7 +904,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 const member = typeof override !== 'string' && this.quoteMember(node);
                 if (openQuote && !(member && sameQuote(openQuote, node))) closeQuote();
                 if (member && !openQuote && sameQuote(node, nodes[index + 1]) && this.quoteMember(nodes[index + 1])) {
-                    html += '<blockquote>';
+                    write('<blockquote>');
                     openQuote = node;
                 }
                 if (openQuote) this.quoteParagraphs++;
@@ -886,7 +916,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 }
                 if (openQuote) {
                     openQuote = node;
-                    html += result;
+                    write(result);
                     continue;
                 }
                 // (A section's start after a page writes nothing, and no gap either.)
@@ -900,11 +930,21 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // anything in a paragraph's or heading's line (a picture, inline math) but a line
                 // break, after which the line starts afresh.
                 const inlineNode = node.type === 'text' || (isSourceComment(node) && runHasText) || (this.inlineDepth > 0 && node.type !== 'break');
+                // A captioned picture in a line (a heading's, a quote's, a summary's: where no <figure> goes) is
+                // on a line of its own, as the Markdown writer writes one there: a line break before it after
+                // what the line holds, and one after it before more, so its caption, its recognized text and
+                // the words beside it are never one run of text ('w1<span class="caption">c</span>w2' read back
+                // as `w1cw2`). Where the line starts or breaks already, none.
+                if (this.inlineDepth > 0 && result.trim()) {
+                    const atLineStart = !lineHasContent || lineEndsWithBreak;
+                    if ((afterFigure || figureAtEdge(node, false)) && !atLineStart && !result.startsWith('<br>')) result = `<br>${result}`;
+                    afterFigure = figureAtEdge(node, true);
+                }
                 if (!inlineNode && !result.endsWith('\n\n')) {
                     if (result.endsWith('\n')) result += '\n';
                     else result += '\n\n';
                 }
-                html += result;
+                write(result);
             }
         }
 
