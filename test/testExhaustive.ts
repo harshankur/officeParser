@@ -11258,6 +11258,131 @@ function abortWhenOcrListens(): { signal: AbortSignal; listened: () => boolean }
 }
 
 /**
+ * A word the PDF parser joined across a line break, taking off the hyphen that divided it (#145): the
+ * writers that keep the page's lines (layout text, PPTX, ODP) write the hyphen at the break again, as
+ * 7.x did and pdftotext does, while flowing text holds the word whole. A dash after a space, a second
+ * hyphen and a hyphen after a digit divide no word, and keep their place in every output.
+ */
+async function testPdfHyphenAtLineBreak(): Promise<void> {
+    // A PDF of pages, each a content stream; F1 Helvetica, F2 Helvetica-Bold.
+    const pdfOf = (pages: string[]): Buffer => {
+        const objs = ['<< /Type /Catalog /Pages 2 0 R >>', `<< /Type /Pages /Kids [${pages.map((_, i) => `${5 + i * 2} 0 R`).join(' ')}] /Count ${pages.length} >>`,
+            '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>'];
+        pages.forEach((c, i) => {
+            objs.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${6 + i * 2} 0 R >>`);
+            objs.push(`<< /Length ${Buffer.byteLength(c, 'latin1')} >>\nstream\n${c}\nendstream`);
+        });
+        let pdf = '%PDF-1.4\n';
+        const offsets = objs.map((o, i) => { const at = Buffer.byteLength(pdf, 'latin1'); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; return at; });
+        const xref = Buffer.byteLength(pdf, 'latin1');
+        pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`;
+        pdf += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+        return Buffer.from(pdf, 'latin1');
+    };
+    const lines = (x: number, y: number, texts: string[], lead = 14, font = 'F1', size = 12) =>
+        `BT /${font} ${size} Tf ${x} ${y} Td ${texts.map((l, i) => `${i ? `0 -${lead} Td ` : ''}(${l}) Tj`).join(' ')} ET`;
+    const read = (pages: string[], more: any = {}) => OfficeParser.parseOffice(pdfOf(pages), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false, ...more } } as any) as Promise<OfficeParserAST>;
+    const layout = async (ast: OfficeParserAST) => String((await ast.to('text')).value);
+    const flat = async (ast: OfficeParserAST) => String((await ast.to('text', { textConfig: { preserveLayout: false } } as any)).value);
+    const paragraphs = (ast: OfficeParserAST) => collectAllNodes(ast).filter(n => n.type === 'paragraph').map(n => n.text);
+
+    // The issue's page: two lines of Helvetica, "agree-" at the end of the first.
+    const issuePage = lines(72, 700, ['The committee reached an agree-', 'ment after a long debate.']);
+    const issue = await read([issuePage]);
+    assert.strictEqual(await layout(issue), 'The committee reached an agree-\nment after a long debate.', `#145: layout text keeps the hyphen at the break; got ${JSON.stringify(await layout(issue))}`);
+    assert.deepStrictEqual(paragraphs(issue), ['The committee reached an agreement after a long debate.'], 'the paragraph holds the word whole');
+    assert.strictEqual((await flat(issue)).trim(), 'The committee reached an agreement after a long debate.', 'flat text holds the word whole');
+    const md = String((await issue.to('md')).value);
+    assert.ok(md.includes('agreement') && !md.includes('agree-'), `Markdown holds the word whole; got ${JSON.stringify(md)}`);
+    assert.ok(!collectAllNodes(issue).some(n => n.type === 'text' && (n.text || '').endsWith('-')), 'the AST is as before: the run gave its hyphen up');
+
+    // Not merged: the line ends in the hyphen and a space, and the layout is the page's.
+    const unmerged = await read([issuePage], { mergeHyphenatedWords: false });
+    assert.strictEqual(await layout(unmerged), 'The committee reached an agree-\nment after a long debate.', 'mergeHyphenatedWords false: layout text as before');
+    assert.deepStrictEqual(paragraphs(unmerged), ['The committee reached an agree- ment after a long debate.'], 'mergeHyphenatedWords false: the paragraph as before');
+
+    // A compound broken at its hyphen: the page shows the hyphen, so layout text does.
+    const compound = await layout(await read([lines(72, 700, ['It is a fact that is well-', 'known to the whole committee.'])]));
+    assert.strictEqual(compound, 'It is a fact that is well-\nknown to the whole committee.', `a compound keeps its hyphen at the break; got ${JSON.stringify(compound)}`);
+
+    // Two columns, each with a word divided at a line end: each column's line ends in its hyphen, the columns apart.
+    const columns = await layout(await read([`${lines(72, 700, ['Left column text with an agree-', 'ment that wraps across lines', 'and goes on for a while longer.'])} ${lines(330, 700, ['Right column text that has a', 'deve-', 'lopment in it too, and more.'])}`]));
+    const columnRows = columns.split('\n').map(l => l.split(/ {3,}/));
+    assert.deepStrictEqual(columnRows.map(r => r[0]), ['Left column text with an agree-', 'ment that wraps across lines', 'and goes on for a while longer.'], `the left column's lines; got ${JSON.stringify(columns)}`);
+    assert.deepStrictEqual(columnRows.map(r => r[1]), ['Right column text that has a', 'deve-', 'lopment in it too, and more.'], `the right column's lines; got ${JSON.stringify(columns)}`);
+
+    // A ruled table: a cell's divided word keeps its hyphen in its cell.
+    const rules = '0.5 w 72 700 m 372 700 l S 72 650 m 372 650 l S 72 600 m 372 600 l S 72 600 m 72 700 l S 222 600 m 222 700 l S 372 600 m 372 700 l S';
+    const tableAst = await read([`${rules} ${lines(76, 685, ['Cell with agree-', 'ment inside'], 12, 'F1', 10)} ${lines(226, 685, ['Second', 'cell'], 12, 'F1', 10)} ${lines(76, 635, ['Row two', 'left'], 12, 'F1', 10)} ${lines(226, 635, ['Row two deve-', 'lopment'], 12, 'F1', 10)}`]);
+    const cells = collectAllNodes(tableAst).filter(n => n.type === 'cell').map(n => n.text);
+    assert.deepStrictEqual(cells, ['Cell with agreement inside', 'Second cell', 'Row two left', 'Row two development'], `the cells hold their words whole; got ${JSON.stringify(cells)}`);
+    const tableRows = (await layout(tableAst)).split('\n').filter(Boolean).map(l => l.split(/ {3,}/));
+    assert.deepStrictEqual(tableRows, [['Cell with agree-', 'Second'], ['ment inside', 'cell'], ['Row two', 'Row two deve-'], ['left', 'lopment']], `each cell keeps its lines and their hyphens; got ${JSON.stringify(tableRows)}`);
+
+    // A bold run, and a hyphen drawn as a run of its own in another font.
+    const bold = await layout(await read([`BT /F1 12 Tf 72 700 Td (The committee reached an ) Tj /F2 12 Tf (agree-) Tj ET ${lines(72, 686, ['ment after a long debate.'], 14, 'F2')}`]));
+    assert.strictEqual(bold, 'The committee reached an agree-\nment after a long debate.', `a bold run keeps its hyphen; got ${JSON.stringify(bold)}`);
+    const ownRun = await read([`BT /F1 12 Tf 72 700 Td (The committee reached an agree) Tj /F2 12 Tf (-) Tj ET ${lines(72, 686, ['ment after a long debate.'])}`]);
+    assert.strictEqual(await layout(ownRun), 'The committee reached an agree-\nment after a long debate.', `a hyphen in a run of its own is written once; got ${JSON.stringify(await layout(ownRun))}`);
+    assert.deepStrictEqual(paragraphs(ownRun), ['The committee reached an agreement after a long debate.'], 'and the word is whole');
+
+    // Dashes that divide no word: kept in the paragraph and in layout text.
+    for (const [first, second, joined] of [
+        ['Items one to four -', 'the rest come later in the day.', 'Items one to four - the rest come later in the day.'],
+        ['The committee reached nothing--', 'the debate went on all night.', 'The committee reached nothing-- the debate went on all night.'],
+        ['The trial measured COVID-19-', 'related outcomes in the clinic.', 'The trial measured COVID-19- related outcomes in the clinic.'],
+    ]) {
+        const dashed = await read([lines(72, 700, [first, second])]);
+        assert.deepStrictEqual(paragraphs(dashed), [joined], `"${first}" keeps every dash in the paragraph; got ${JSON.stringify(paragraphs(dashed))}`);
+        assert.strictEqual(await layout(dashed), `${first}\n${second}`, `"${first}" keeps every dash in layout text`);
+    }
+
+    // Joins without a space that are no hyphen's: stacked short glyphs, a subscript, Chinese and Japanese.
+    const stacked = await layout(await read(['BT /F1 10 Tf 300 700 Td (Su) Tj 0 -11 Td (n) Tj ET BT /F1 10 Tf 400 700 Td (1) Tj 0 -11 Td (1) Tj ET BT /F1 12 Tf 72 500 Td (Ordinary prose line that sits apart from the rest of it.) Tj ET']));
+    assert.ok(!stacked.includes('-'), `stacked glyphs take no hyphen; got ${JSON.stringify(stacked)}`);
+    const lowered = await layout(await read(['BT /F1 12 Tf 72 700 Td (The value of x) Tj -8 Ts /F1 7 Tf (i) Tj 0 Ts /F1 12 Tf ( is given) Tj ET']));
+    assert.ok(!lowered.includes('-'), `a subscript after a letter takes no hyphen; got ${JSON.stringify(lowered)}`);
+    const readFile = (name: string) => OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'pdf', name)), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as Promise<OfficeParserAST>;
+    assert.ok(!(await layout(await readFile('cjk_wrapped_chrome.pdf'))).includes('-'), 'wrapped Chinese and Japanese lines take no hyphen');
+
+    // PPTX and ODP keep a page's lines too: the first line ends in the hyphen.
+    const pptx = strFromU8(unzipSync(new Uint8Array((await issue.to('pptx')).value as Uint8Array))['ppt/slides/slide1.xml']);
+    assert.ok(/<a:t>The committee reached an agree-<\/a:t><\/a:r><a:br\b[^]*?<a:t>ment after a long debate\.<\/a:t>/.test(pptx), `PPTX: the first line ends in the hyphen; got ${JSON.stringify(pptx.match(/<a:t>[^<]*<\/a:t>/g))}`);
+    const odp = strFromU8(unzipSync(new Uint8Array((await issue.to('odp')).value as Uint8Array))['content.xml']);
+    assert.ok(/>The committee reached an agree-<\/text:span><text:line-break\/><text:span[^>]*>ment after a long debate\.</.test(odp), 'ODP: the first line ends in the hyphen');
+    const unmergedPptx = strFromU8(unzipSync(new Uint8Array((await unmerged.to('pptx')).value as Uint8Array))['ppt/slides/slide1.xml']);
+    assert.ok(unmergedPptx.includes('<a:t>The committee reached an agree-</a:t>') && !unmergedPptx.includes('agree--'), 'PPTX of an unmerged page: one hyphen');
+
+    // A pdfLaTeX page of two narrow columns: the line-end hyphens pdftotext -layout prints, in its order.
+    const latex = await layout(await readFile('two_columns_narrow_latex.pdf'));
+    const pdftotext = 'Mean- presen- sum- infor- ques- time- avail- af- dead- ques- time- com- quar- quar- bet- en- with- discus- intro- re- orga- di- sub- accord- of- in- in- facil- correc- meet- comple- intro-'.split(' ');
+    assert.deepStrictEqual(latex.match(/\p{L}+-(?= |$)/gmu), pdftotext, 'a pdfLaTeX page: the hyphens at its line ends are the ones pdftotext prints');
+
+    // Linear: a paragraph of many lines each divided at a hyphen, and one of many runs on a line, in layout
+    // text and PPTX, each at n against n / 4.
+    const run = (text: string, x: number, y: number, width: number) => ({ type: 'text', text, formatting: { font: 'Helvetica', size: '12pt' }, bounds: { x, y, width, height: 11, baseline: y + 9 } });
+    const pageOf = (runs: any[], height: number) => ({ type: 'pdf', metadata: { pages: 1, pageSetup: { width: 612, height } }, attachments: [], content: [{ type: 'page', metadata: { pageNumber: 1, pageWidth: 612, pageHeight: height }, children: [{ type: 'paragraph', text: runs.map(r => r.text).join(''), children: runs }] }] } as any);
+    const divided = (k: number) => pageOf(Array.from({ length: k }, (_, i) => run(i ? 'ment agree' : 'agree', 72, 20 + i * 14, 60)), 40 + k * 14);
+    assert.strictEqual(String((await OfficeGenerator.generate(divided(3), 'text')).value), 'agree-\nment agree-\nment agree', 'a hand-built page of divided lines');
+    const oneLine = (k: number) => pageOf(Array.from({ length: k }, (_, i) => run('w ', 72 + i * 0.05, 20, 0.05)), 100);
+    const timed = async (work: () => Promise<unknown>) => { const started = performance.now(); await work(); return performance.now() - started; };
+    const n = 10000;
+    for (const [name, shape] of [['divided lines', divided], ['runs on one line', oneLine]] as const) {
+        for (const format of ['text', 'pptx'] as const) {
+            const [large, quarter] = [shape(n), shape(n / 4)];
+            let small = await timed(() => OfficeGenerator.generate(quarter, format));
+            let big = await timed(() => OfficeGenerator.generate(large, format));
+            if (big > 8 * small + 250) {
+                small = Math.max(small, await timed(() => OfficeGenerator.generate(quarter, format)));
+                big = Math.min(big, await timed(() => OfficeGenerator.generate(large, format)));
+            }
+            assert.ok(big <= 8 * small + 250, `${name} to ${format}: ${n} in ${big.toFixed(0)} ms, ${n / 4} in ${small.toFixed(0)} ms`);
+        }
+    }
+    console.log('✓ PDF hyphen at a line break');
+}
+
+/**
  * Cancellation: once a parse's signal has fired it rejects with AbortError and never resolves, in
  * every format that runs OCR, even when the abort lands while an image is being recognized (which
  * was taken for a failed recognition, so the parse resolved without the text). An OCR timeout is
@@ -13103,6 +13228,7 @@ async function runTests(): Promise<void> {
         ['A summary of many anchors is linear and keeps each id once', testDisclosureSummaryAnchorsLinear],
         ['Many ids waiting before a disclosure are all written', testMarkdownManyAnchorsBeforeDisclosure],
         ['Many captions in a nested paragraph are all written', testNestedParagraphCaptionsMany],
+        ['PDF hyphen at a line break', testPdfHyphenAtLineBreak],
         ['Cancellation', testCancellation],
     ];
 

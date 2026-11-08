@@ -4,6 +4,7 @@ import { BaseGenerator } from './BaseGenerator.js';
 import { clampRepeat, median } from '../utils/numberUtils.js';
 import { base64ByteLength } from '../utils/officeGenUtils.js';
 import { trimRepeated } from '../utils/textUtils.js';
+import { droppedHyphenRuns } from '../utils/lineJoins.js';
 
 /** A letter of a right-to-left script (Hebrew, Arabic, Syriac, Thaana, N'Ko and their presentation forms). */
 const RTL_LETTER = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
@@ -302,6 +303,9 @@ export class TextGenerator extends BaseGenerator<'text'> {
             a < 0 ? b : b < 0 ? a : (atoms[b].y < atoms[a].y - 0.5 || (Math.abs(atoms[b].y - atoms[a].y) < 1 && atoms[b].x < atoms[a].x)) ? b : a;
         const place = (atom: Atom): number => atoms.push(atom) - 1;
         let cellCount = 0;
+        // The runs after which the parser joined a word divided by a hyphen across a line it took off (see
+        // droppedHyphenRuns): the page's lines are kept, so each is written with its hyphen.
+        const hyphenated = new WeakSet<OfficeContentNode>();
         // Places the atoms of `n`, and returns the one read first (-1 for none): a list folds its marker
         // into its own, found from its children's, where scanning every atom under each list took time
         // in the depth of the lists times the atoms.
@@ -311,8 +315,9 @@ export class TextGenerator extends BaseGenerator<'text'> {
             if (typeof ov === 'string') {
                 return n.bounds && ov ? place({ text: ov, x: n.bounds.x, y: n.bounds.y, w: n.bounds.width, h: n.bounds.height }) : -1;
             }
+            if (n.children && n.children.length > 1) for (const i of droppedHyphenRuns(n.children)) hyphenated.add(n.children[i]);
             if (n.type === 'text' && n.bounds && (n.text || '').length) {
-                const own = place({ text: n.text!, x: n.bounds.x, y: n.bounds.y, w: n.bounds.width, h: n.bounds.height });
+                const own = place({ text: hyphenated.has(n) ? n.text + '-' : n.text!, x: n.bounds.x, y: n.bounds.y, w: n.bounds.width, h: n.bounds.height });
                 let first = own;
                 for (const c of n.children || []) first = firstRead(first, await collect(c));
                 return first;
