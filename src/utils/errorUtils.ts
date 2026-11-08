@@ -93,6 +93,13 @@ const ERROR_MESSAGES: Record<OfficeErrorType, string | ((...args: any[]) => stri
 /** The fonts a PDF_NO_TEXT_EXTRACTED message names before saying how many more there are (`details.fonts` lists them all). */
 const MAX_FONTS_NAMED = 10;
 
+/** `text` shown to 80 characters: when longer, its first 77 and `...`, not splitting a surrogate pair. */
+const shownTo80 = (text: string): string => {
+    if (text.length <= 80) return text;
+    const code = text.charCodeAt(76);
+    return `${text.slice(0, code >= 0xD800 && code <= 0xDBFF ? 76 : 77)}...`;
+};
+
 /**
  * Lookup table for warning messages.
  */
@@ -109,7 +116,7 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
     [OfficeWarningType.IMAGE_PROCESSING_FAILED]: (info?: { name?: string; reason?: string }) => {
         if (!info || typeof info !== 'object' || !(info.name || info.reason)) return `A PDF picture's pixels could not be read from the ImageBitmap pdf.js decoded it into:`;
         // (The picture's name, the document's, is shown to 80 characters: the details hold it whole.)
-        const name = info.name && String(info.name).length > 80 ? `${String(info.name).slice(0, 77)}...` : info.name;
+        const name = info.name && String(info.name).length > 80 ? shownTo80(String(info.name)) : info.name;
         return `${name ? `Picture '${name}'` : 'A picture'} was left out of the output${info.reason ? `: ${info.reason}` : ''}.${name ? ' Its alternative text, where it has one, stands in its place.' : ''}`;
     },
     [OfficeWarningType.BROWSER_GENERATION_LIMITATION]: (msg: string) => msg,
@@ -194,7 +201,7 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
     [OfficeWarningType.INVALID_CONFIG_VALUE]: (info: { option: string; value: unknown; expected: string; fallback: unknown }) => {
         // A number JSON cannot write (NaN, -Infinity) is shown as itself, not as null.
         const shown = (typeof info.value === 'number' ? String(info.value) : JSON.stringify(info.value)) ?? String(info.value);
-        const value = shown.length > 80 ? `${shown.slice(0, 77)}...` : shown;
+        const value = shownTo80(shown);
         const fallback = info.fallback === '' || info.fallback === undefined ? 'the default is' : `the default (${JSON.stringify(info.fallback)}) is`;
         return `Invalid ${info.option}: ${value}. Expected ${info.expected}; ${fallback} used instead.`;
     },

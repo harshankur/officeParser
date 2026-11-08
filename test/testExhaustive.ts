@@ -12063,6 +12063,16 @@ async function testPicturesLeftOutNamed(): Promise<void> {
     const shown = getWarningMessage(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: 'n'.repeat(200), reason: 'why' });
     assert.ok(shown.startsWith(`Picture '${'n'.repeat(77)}...' was left out`), `a name over 80 characters is shown to 77 and ...; got ${shown.slice(0, 120)}`);
     assert.ok(getWarningMessage(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: 'n'.repeat(80), reason: 'why' }).startsWith(`Picture '${'n'.repeat(80)}' was left out`), 'a name of 80 characters is shown whole');
+    // A name cut inside a surrogate pair (an emoji at code units 75 and 76, or 76 and 77) is cut whole, in both messages.
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    for (const at of [74, 75, 76, 77]) {
+        const name = `${'n'.repeat(at)}\u{1F600}${'tail'.repeat(5)}`;
+        const picture = getWarningMessage(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name, reason: 'why' });
+        const option = getWarningMessage(OfficeWarningType.INVALID_CONFIG_VALUE, { option: 'o', value: name, expected: 'e', fallback: 1 });
+        assert.ok(!loneSurrogate.test(picture) && !loneSurrogate.test(option), `an emoji at code unit ${at} is not split by the cut`);
+        assert.ok(picture.includes('...') && option.includes('...'), `a long name at ${at} is still cut`);
+    }
+    assert.ok(getWarningMessage(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: `${'n'.repeat(75)}\u{1F600}`, reason: 'why' }).includes('\u{1F600}'), 'a name of 77 units with an emoji is shown whole');
 
     // The PDF parser's own use: no picture named, the ImageBitmap it could not read.
     assert.strictEqual(getWarningMessage(OfficeWarningType.IMAGE_PROCESSING_FAILED), "A PDF picture's pixels could not be read from the ImageBitmap pdf.js decoded it into:", 'the parser\'s words are kept');
