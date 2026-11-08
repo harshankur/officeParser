@@ -5417,6 +5417,128 @@ async function testExcelSheetOrder(): Promise<void> {
 }
 
 /**
+ * Parts for the XLSX packages of the sheet identity and chart sheet tests: worksheets of inline strings,
+ * chart sheets naming a drawing, drawings of charts and pictures, charts, and relationships parts.
+ */
+const sheetParts = (() => {
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const rel = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+    const cells = (texts: string[]) => texts.map((t, i) => `<row r="${i + 1}"><c r="A${i + 1}" t="inlineStr"><is><t>${t}</t></is></c></row>`).join('');
+    return {
+        zip: (files: Record<string, string | Uint8Array>) => Buffer.from(zipSync(Object.fromEntries(Object.entries(files).map(([k, v]) => [k, typeof v === 'string' ? strToU8(v) : v])))),
+        types: '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>',
+        /** A workbook of `<sheet>` elements: [name, relationship id, hidden?]. */
+        workbook: (sheets: [string, string, boolean?][]) => `<?xml version="1.0"?><workbook ${ns}><sheets>${sheets.map(([name, id, hidden], i) => `<sheet name="${name}" sheetId="${i + 1}"${hidden ? ' state="hidden"' : ''} r:id="${id}"/>`).join('')}</sheets></workbook>`,
+        /** A relationships part: [id, type (the last segment of its URI), target]. */
+        rels: (list: [string, string, string][]) => `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${list.map(([id, type, target]) => `<Relationship Id="${id}" Type="${rel}/${type}" Target="${target}"/>`).join('')}</Relationships>`,
+        worksheet: (texts: string[], extra = '') => `<?xml version="1.0"?><worksheet ${ns}><sheetData>${cells(texts)}</sheetData>${extra}</worksheet>`,
+        chartsheet: (extra = '<drawing r:id="rId1"/>') => `<?xml version="1.0"?><chartsheet ${ns}><sheetViews><sheetView workbookViewId="0"/></sheetViews><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><pageSetup orientation="landscape"/>${extra}</chartsheet>`,
+        drawing: (inner: string) => `<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="${rel}">${inner}</xdr:wsDr>`,
+        /** A drawing's frame holding the chart its relationship `id` names. */
+        frame: (id: string) => `<xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="8000000" cy="5000000"/><xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="${id}"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:absoluteAnchor>`,
+        /** A drawing's picture of the media its relationship `id` names. */
+        picture: (id: string, descr: string) => `<xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="100" cy="100"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="3" name="Picture" descr="${descr}"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="${id}"/></xdr:blipFill><xdr:spPr/></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>`,
+        /** A column chart titled `title` of the values given. */
+        chart: (title: string, values: number[] = [1, 2]) => `<?xml version="1.0"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>${title}</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numRef><c:numCache><c:ptCount val="${values.length}"/>${values.map((v, i) => `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`).join('')}</c:numCache></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>`,
+        png: Buffer.from(TINY_PNG_B64, 'base64'),
+        /** Each sheet node as [name, hidden, its children as `row:<first cell>` (`+comment` when it has one), `image:<attachment>/<alt>` or `chart:<attachment>`]. */
+        shape: (ast: OfficeParserAST) => ast.content.map(sheet => [(sheet.metadata as SheetMetadata).sheetName, (sheet.metadata as SheetMetadata).hidden, (sheet.children || []).map(child =>
+            child.type === 'row' ? `row:${child.children?.[0]?.text}${child.children?.[0]?.comments?.length ? '+comment' : ''}`
+                : `${child.type}:${(child.metadata as any)?.attachmentName}${(child.metadata as any)?.altText ? '/' + (child.metadata as any).altText : ''}`)]),
+    };
+})();
+
+/**
+ * The package of issue #141: a worksheet and a chart sheet stored as `worksheets/sheet1.xml` and
+ * `chartsheets/sheet1.xml`, with the chart sheet second in tab order (hidden when `hidden`) and its chart
+ * drawn from the worksheet's figures.
+ */
+const chartSheetBesideWorksheet = (hidden: boolean): Buffer => sheetParts.zip({
+    '[Content_Types].xml': sheetParts.types,
+    'xl/workbook.xml': sheetParts.workbook([['Sheet1', 'rId1'], ['Chart1', 'rId2', hidden]]),
+    'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', 'worksheets/sheet1.xml'], ['rId2', 'chartsheet', 'chartsheets/sheet1.xml']]),
+    'xl/worksheets/sheet1.xml': sheetParts.worksheet(['Month', 'January', 'February', 'VISIBLE-ROW']),
+    'xl/chartsheets/sheet1.xml': sheetParts.chartsheet(),
+    'xl/chartsheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId1', 'drawing', '../drawings/drawing1.xml']]),
+    'xl/drawings/drawing1.xml': sheetParts.drawing(sheetParts.frame('rId1')),
+    'xl/drawings/_rels/drawing1.xml.rels': sheetParts.rels([['rId1', 'chart', '../charts/chart1.xml']]),
+    'xl/charts/chart1.xml': sheetParts.chart('Monthly', [3, 4]),
+});
+
+/**
+ * Issue #141: a chart sheet stored under the same file number as a worksheet (`chartsheets/sheet1.xml`
+ * beside `worksheets/sheet1.xml`) gave the worksheet its name, and since 8.3.0 its hidden state, so a hidden
+ * chart sheet left the worksheet out of a PDF. The workbook's tabs are matched to parts by full path, so
+ * the worksheet keeps its own name and visibility, and the PDF prints it again as v8.2.0 did.
+ */
+async function testExcelChartSheetKeepsWorksheetIdentity(): Promise<void> {
+    const rows = ['row:Month', 'row:January', 'row:February', 'row:VISIBLE-ROW'];
+    for (const hidden of [false, true]) {
+        for (const extractAttachments of [false, true]) {
+            const ast = await OfficeParser.parseOffice(chartSheetBesideWorksheet(hidden), { fileType: 'xlsx', extractAttachments } as any) as OfficeParserAST;
+            assert.deepStrictEqual(sheetParts.shape(ast)[0], ['Sheet1', undefined, rows], `hidden ${hidden}, extractAttachments ${extractAttachments}: the worksheet keeps its name and visibility`);
+        }
+    }
+    const ast = await OfficeParser.parseOffice(chartSheetBesideWorksheet(true), { fileType: 'xlsx' } as any) as OfficeParserAST;
+    const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    const printed = String((await back.to('text')).value);
+    assert.deepStrictEqual(printed.split(/\s+/).filter(Boolean), ['Month', 'January', 'February', 'VISIBLE-ROW'], `a hidden chart sheet leaves the worksheet in the PDF; got ${JSON.stringify(printed)}`);
+}
+
+/**
+ * A worksheet's and a drawing's relationships are followed to the parts they name, resolved from the
+ * part's own folder, rather than rebuilt from a file name: absolute targets (`/xl/drawings/drawing1.xml`)
+ * placed no picture or chart and attached no comment, a stray copy of a sheet part elsewhere in the
+ * package took the real sheet's relationships, and a stray drawing relationships part was read as the
+ * real drawing's.
+ */
+async function testExcelRelationshipsByPartPath(): Promise<void> {
+    const absolute = sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/workbook.xml': sheetParts.workbook([['Data', 'rId1']]),
+        'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', '/xl/worksheets/sheet1.xml']]),
+        'xl/worksheets/sheet1.xml': sheetParts.worksheet(['data'], '<drawing r:id="rId1"/>'),
+        'xl/worksheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId1', 'drawing', '/xl/drawings/drawing1.xml'], ['rId2', 'comments', '/xl/comments1.xml']]),
+        'xl/comments1.xml': '<?xml version="1.0"?><comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><authors><author>A</author></authors><commentList><comment ref="A1" authorId="0"><text><t>NOTE</t></text></comment></commentList></comments>',
+        'xl/drawings/drawing1.xml': sheetParts.drawing(sheetParts.picture('rId2', 'ALT') + sheetParts.frame('rId1')),
+        'xl/drawings/_rels/drawing1.xml.rels': sheetParts.rels([['rId1', 'chart', '/xl/charts/chart1.xml'], ['rId2', 'image', '/xl/media/image1.png']]),
+        'xl/charts/chart1.xml': sheetParts.chart('Absolute', [5, 6]),
+        'xl/media/image1.png': sheetParts.png,
+    });
+    const plain = await OfficeParser.parseOffice(absolute, { fileType: 'xlsx' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(sheetParts.shape(plain), [['Data', undefined, ['row:data+comment']]], 'absolute targets: the comment is attached');
+    const withAttachments = await OfficeParser.parseOffice(absolute, { fileType: 'xlsx', extractAttachments: true } as any) as OfficeParserAST;
+    assert.deepStrictEqual(sheetParts.shape(withAttachments), [['Data', undefined, ['row:data+comment', 'image:image1.png/ALT', 'chart:chart1.xml']]], 'absolute targets: the picture, with its alt text, and the chart are placed');
+    const chartNode = withAttachments.content[0].children!.find(c => c.type === 'chart')!;
+    assert.strictEqual(chartNode.text, withAttachments.attachments.find(a => a.name === 'chart1.xml')!.chartData!.rawTexts.join('\n'), 'absolute targets: the chart node carries its chart\'s text');
+    assert.strictEqual(withAttachments.attachments.find(a => a.name === 'image1.png')!.altText, 'ALT', 'absolute targets: the picture\'s attachment carries its alt text');
+
+    // A stray copy of the sheet part and of the drawing's relationships part, stored before the real ones
+    // (the stray drawing relationships part names another chart under the real one's id).
+    const stray = (listed: boolean) => sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/workbook.xml': sheetParts.workbook([['Data', 'rId1']]),
+        ...(listed ? { 'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', 'worksheets/sheet1.xml']]) } : {}),
+        'backup/xl/worksheets/sheet1.xml': sheetParts.worksheet(['stray'], '<drawing r:id="rId1"/>'),
+        'xl/worksheets/sheet1.xml': sheetParts.worksheet(['data'], '<drawing r:id="rId1"/>'),
+        'xl/worksheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId1', 'drawing', '../drawings/drawing1.xml']]),
+        'xl/drawings/drawing1.xml': sheetParts.drawing(sheetParts.frame('rId1')),
+        'xl/drawings/_rels/drawing1.xml.rels': sheetParts.rels([['rId1', 'chart', '../charts/chart1.xml']]),
+        'backup/xl/drawings/_rels/drawing1.xml.rels': sheetParts.rels([['rId1', 'chart', '../charts/chart2.xml']]),
+        'xl/charts/chart1.xml': sheetParts.chart('Real', [7, 8]),
+        'xl/charts/chart2.xml': sheetParts.chart('Stray', [9, 10]),
+    });
+    for (const listed of [true, false]) {
+        const ast = await OfficeParser.parseOffice(stray(listed), { fileType: 'xlsx', extractAttachments: true } as any) as OfficeParserAST;
+        const shape = sheetParts.shape(ast);
+        const real = shape.find(sheet => (sheet[2] as string[])[0] === 'row:data');
+        const copy = shape.find(sheet => (sheet[2] as string[])[0] === 'row:stray');
+        assert.deepStrictEqual([real?.[2], copy?.[2]], [['row:data', 'chart:chart1.xml'], ['row:stray']], `listed ${listed}: the real sheet keeps its drawing and the drawing its own chart; got ${JSON.stringify(shape)}`);
+    }
+}
+
+/**
  * A sheet is printed as a spreadsheet prints it: a merged range is one cell (XLSX keeps its covered cells,
  * empty, and they were drawn as boxes under the merged one's text, which was wrapped to its first column),
  * each column as wide as its content asks so a number is never broken over two lines (equal columns broke
@@ -12986,6 +13108,8 @@ async function runTests(): Promise<void> {
         ['WordRunCharacters', testWordRunCharacters],
         ['ExcelDates', testExcelDates],
         ['ExcelSheetOrder', testExcelSheetOrder],
+        ['ExcelChartSheetKeepsWorksheetIdentity', testExcelChartSheetKeepsWorksheetIdentity],
+        ['ExcelRelationshipsByPartPath', testExcelRelationshipsByPartPath],
         ['GeneratedOutput', testGeneratedOutput],
         ['ODG', testOdg],
         ['ODFComments', testOdfComments],

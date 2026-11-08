@@ -36,6 +36,15 @@ import { BUILTIN_NUMBER_FORMATS, BUILTIN_OTHER_FORMATS, excelShownText } from '.
 import { extractFiles, findRequiredPart, resolvePartPath } from '../utils/zipUtils.js';
 import { inRanges } from '../utils/sheetUtils.js';
 
+/** The folder of a package part, with its trailing slash (`xl/worksheets/` for `xl/worksheets/sheet1.xml`). */
+const folderOf = (partPath: string): string => partPath.slice(0, partPath.lastIndexOf('/') + 1);
+
+/** The relationships part of a package part (`xl/worksheets/_rels/sheet1.xml.rels` for `xl/worksheets/sheet1.xml`). */
+const relsOf = (partPath: string): string => `${folderOf(partPath)}_rels/${partPath.slice(partPath.lastIndexOf('/') + 1)}.rels`;
+
+/** The part a relationships part belongs to: the inverse of relsOf. */
+const partOfRels = (relsPath: string): string => relsPath.replace(/(^|\/)_rels\/([^/]*)\.rels$/, '$1$2');
+
 /** Whether the character at `at` of `xml` can continue a tag name (so `<c` there opens `<col`, not `<c`). */
 const continuesName = (xml: string, at: number): boolean => /[\w:.-]/.test(xml[at] ?? '');
 
@@ -711,6 +720,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
 
     const attachments: OfficeAttachment[] = [];
     const attachmentsByName = attachmentLookup(attachments);
+    // The attachments read from the package's media and chart parts, by part path: a drawing's
+    // relationship names a part, and two parts can share a file name.
+    const attachmentByPart = new Map<string, OfficeAttachment>();
     // Drawings already placed on a sheet (see the sheet loop).
     const drawingsPlaced = new Set<string>();
     const mediaFiles = files.filter(f => f.path.match(/xl\/media\/.*/));
@@ -725,8 +737,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         // 1. Parse Drawing Rels to map rIds to media paths
         const drawingRelsFiles = files.filter(f => f.path.match(drawingRelsRegex));
         for (const relFile of drawingRelsFiles) {
-            const drawingFilename = relFile.path.split('/').pop()?.replace('.rels', '') || '';
-            const drawingPath = `xl/drawings/${drawingFilename}`;
+            const drawingPath = partOfRels(relFile.path);
 
             const relsXml = parseXmlString(relFile.content.toString(), { config });
             const relationships = getElementsByTagName(relsXml, "Relationship");
@@ -739,8 +750,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                 const id = rel.getAttribute("Id");
                 const target = rel.getAttribute("Target");
                 if (id && target && target.includes('media/')) {
-                    // Target is usually like "../media/image1.png"
-                    const mediaPath = 'xl/' + target.replace('../', '');
+                    // Target is usually like "../media/image1.png"; resolved, as every target is, from the
+                    // drawing's own folder, so "/xl/media/image1.png" names the same part.
+                    const mediaPath = resolvePartPath(folderOf(drawingPath), target);
                     drawingImageMap[drawingPath][id] = { path: mediaPath };
                 }
             }
@@ -792,6 +804,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             if (altText) attachment.altText = altText;
 
             attachments.push(attachment);
+            if (!attachmentByPart.has(media.path)) attachmentByPart.set(media.path, attachment);
 
             if (config.ocr && attachment.mimeType.startsWith('image/')) {
                 const ocrText = await ocrDuringParse(media.content, config, attachment.name);
@@ -817,6 +830,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             }
 
             attachments.push(attachment);
+            if (!attachmentByPart.has(chart.path)) attachmentByPart.set(chart.path, attachment);
         }
     }
 
@@ -826,8 +840,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     if (config.extractAttachments) {
         const drawingRelsFiles = files.filter(f => f.path.match(drawingRelsRegex));
         for (const relFile of drawingRelsFiles) {
-            const drawingFilename = relFile.path.split('/').pop()?.replace('.rels', '') || '';
-            const drawingPath = `xl/drawings/${drawingFilename}`;
+            const drawingPath = partOfRels(relFile.path);
 
             const relsXml = parseXmlString(relFile.content.toString(), { config });
             const relationships = getElementsByTagName(relsXml, "Relationship");
@@ -841,9 +854,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                 const target = rel.getAttribute("Target");
                 const type = rel.getAttribute("Type");
                 if (id && target && type && type.includes('chart')) {
-                    // Target is like "../charts/chart1.xml"
-                    const chartName = target.split('/').pop() || '';
-                    drawingChartMap[drawingPath][id] = chartName;
+                    // Target is like "../charts/chart1.xml": kept as the part's path, as every lookup
+                    // here is, since a file name alone can name parts in different folders.
+                    drawingChartMap[drawingPath][id] = resolvePartPath(folderOf(drawingPath), target);
                 }
             }
         }
@@ -907,9 +920,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         if (file.path.match(drawingRelsRegex)) continue;
 
         if (file.path.match(sheetsRegex)) {
-            const sheetFilename = file.path.split('/').pop() || '';
-            const relsFilename = `xl/worksheets/_rels/${sheetFilename}.rels`;
-            const relsFile = fileByPath.get(relsFilename);
+            const relsFile = fileByPath.get(relsOf(file.path));
 
             const drawingMap: Record<string, string> = Object.create(null); // rId -> drawingPath
             // Null-prototype: keyed by the document-derived cell ref, so a crafted ref of `__proto__`
@@ -929,9 +940,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     if (id && target && type) {
                         if (type.endsWith('/hyperlink')) hyperlinkTargets.set(id, target);
                         else if (config.extractAttachments && type.includes('drawing')) {
-                            drawingMap[id] = 'xl/drawings/' + target.replace('../drawings/', '');
+                            drawingMap[id] = resolvePartPath(folderOf(file.path), target);
                         } else if (!config.ignoreComments && type.includes('comments')) {
-                            const commentsPath = 'xl/' + target.replace('../', '');
+                            const commentsPath = resolvePartPath(folderOf(file.path), target);
                             const cFile = attachedCommentParts.has(commentsPath) ? undefined : fileByPath.get(commentsPath);
                             if (cFile) {
                                 attachedCommentParts.add(commentsPath);
@@ -1218,7 +1229,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                             if (images) {
                                 for (const imgId in images) {
                                     const imgInfo = images[imgId];
-                                    const attachment = attachmentsByName.get(imgInfo.path.split('/').pop());
+                                    const attachment = attachmentByPart.get(imgInfo.path);
                                     if (attachment) {
                                         const imageNode: OfficeContentNode = {
                                             type: 'image',
@@ -1238,15 +1249,14 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                             const charts = drawingChartMap[drawingPath];
                             if (charts) {
                                 for (const chartRId in charts) {
-                                    const chartName = charts[chartRId];
-                                    const attachment = attachmentsByName.get(chartName);
+                                    const attachment = attachmentByPart.get(charts[chartRId]);
                                     if (attachment) {
                                         const chartNode: OfficeContentNode = {
                                             type: 'chart',
                                             text: '', // Will be populated by assignAttachmentData
                                             children: [],
                                             metadata: {
-                                                attachmentName: chartName
+                                                attachmentName: attachment.name
                                             } as ChartMetadata
                                         };
                                         rows.push(chartNode);
