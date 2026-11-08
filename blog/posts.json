@@ -14,6 +14,42 @@
     ],
     "posts": [
         {
+            "slug": "filling-an-opendocument-template",
+            "title": "Filling an OpenDocument Template",
+            "shortTitle": "Filling an ODT Template",
+            "category": "deep-dive",
+            "published": "2026-11-08",
+            "description": "How officeParser 8.7.0 fills .odt and .ott templates with the same tags and data as Word's: tags split across spans, spaces stored as elements, blocks over list items and heading rows, and fresh names for every copy a loop makes.",
+            "deck": "An OpenDocument template splits a typed tag across spans, keeps a million spaces in 25 bytes, and holds names LibreOffice wants unique. Filling one means reading it short, writing it back whole, and renaming every copy."
+        },
+        {
+            "slug": "text-that-looks-like-a-tag",
+            "title": "Text That Looks Like a Tag: When Data for People Meets a Template for Machines",
+            "shortTitle": "Text That Looks Like a Tag",
+            "category": "deep-dive",
+            "published": "2026-11-08",
+            "description": "How officeParser 8.7.0 reports template text that only looks like a tag without flagging braces in prose, code or JSON, and how it reads numbers with a decimal comma, numbers stored as text and block keywords spelt as other template languages spell them.",
+            "deck": "{{first name}} was never a tag, so every document printed it as typed and nothing said so. Telling a near miss from braces that are meant takes a stack of braces, one linear pass, and a rule that took two rewrites to get right."
+        },
+        {
+            "slug": "reading-details-in-markdown",
+            "title": "Reading a Details Block in Markdown the Way GitHub Shows It",
+            "shortTitle": "Details Blocks in Markdown",
+            "category": "deep-dive",
+            "published": "2026-11-08",
+            "description": "How officeParser 8.7.0 reads a README's details and summary tags as a disclosure, following CommonMark for blocks and a browser's tree builder for which element an end tag closes, and how it is checked against a reference and a browser.",
+            "deck": "A disclosure in a README is a tag, Markdown, and another tag. CommonMark decides the blocks and a browser decides what each end tag closes, so reading it means following both."
+        },
+        {
+            "slug": "testing-a-document-library",
+            "title": "How a Document Library Is Tested",
+            "shortTitle": "Testing a Document Library",
+            "category": "architecture",
+            "published": "2026-11-08",
+            "description": "What officeParser 8.7.0's test suite holds and why: committed baselines and fingerprints, round trips that must settle, seeded generators and the references they are checked against, linear-time ratios, budgets tested from both sides, and LibreOffice as a referee.",
+            "deck": "A test that passes can still prove nothing: a baseline that churns, a generator that cycles through 367 cases while claiming 200,000, a time limit that depends on the machine. Each layer of the suite answers one of those."
+        },
+        {
             "slug": "two-versions-of-pdfjs-in-one-process",
             "title": "Two Versions of pdf.js in One Process",
             "shortTitle": "Two pdf.js in One Process",

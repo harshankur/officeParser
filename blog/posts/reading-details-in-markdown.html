@@ -1,0 +1,343 @@
+<p>
+    A README on GitHub often folds its longer parts away behind a triangle. "Building from source", a click, and
+    the steps open. In Markdown that is a few lines of HTML around ordinary Markdown:
+</p>
+<pre><code>&lt;details&gt;
+&lt;summary&gt;Building from source&lt;/summary&gt;
+
+Clone the repository, then:
+
+```bash
+npm ci
+npm run build
+```
+
+- Node 18 or later
+- No native modules
+
+&lt;/details&gt;
+
+Back in the README.</code></pre>
+<p>
+    officeParser 8.6.0 read that as text. The summary became a paragraph, the body followed it, and saved back to
+    Markdown the fold was gone, with no warning:
+</p>
+<pre><code>Building from source
+
+Clone the repository, then:
+
+```bash
+npm ci
+npm run build
+```
+
+- Node 18 or later
+- No native modules
+
+Back in the README.</code></pre>
+<p>
+    8.7.0 reads it as a <code>disclosure</code> node. This post is about why that is harder than it looks, the rule
+    the Markdown reader now follows, the designs it took to get there, and how I check it.
+</p>
+
+<h2>Neither Parser Alone</h2>
+<p>
+    Markdown hands HTML to HTML. But a disclosure in a README is not one piece of HTML: it is a tag, then Markdown
+    paragraphs, lists, quotes and code, then another tag.
+</p>
+<p>
+    First CommonMark decides the blocks. The <code>&lt;details&gt;</code> line starts an HTML block (its name is on
+    CommonMark's list of block-level tags), which runs to the next blank line and takes the
+    <code>&lt;summary&gt;</code> line with it. Then come a paragraph, a fenced code block and a list, all Markdown,
+    and then <code>&lt;/details&gt;</code>, another HTML block. The renderer passes the two HTML blocks through as
+    written and renders the rest. Nothing in CommonMark says the paragraph is inside anything.
+</p>
+<p>
+    Then a browser builds a tree from that HTML. Its tree builder opens a details element at
+    <code>&lt;details&gt;</code>, and everything after it is a child until <code>&lt;/details&gt;</code> closes it.
+    So the disclosure is a fact about the two together: CommonMark decides blocks and containers, and the browser
+    decides which element each end tag closes.
+</p>
+<p>
+    The browser's half has a rule worth knowing. An end tag closes the nearest open element of its name,
+    and every element opened after it. Here a <code>&lt;/details&gt;</code> stands inside a quote:
+</p>
+<pre><code>&lt;details&gt;
+&lt;summary&gt;Notes&lt;/summary&gt;
+
+&gt; Read this first.
+&gt; &lt;/details&gt;
+&gt; After the disclosure.</code></pre>
+<p>
+    CommonMark puts the last two lines in the quote, as one HTML block (it runs to a blank line). The quote opened
+    after the disclosure, so <code>&lt;/details&gt;</code> closes the quote too, and "After the disclosure." lands
+    after both. 8.7.0 reads it that way. The tree, then the Markdown it writes back:
+</p>
+<pre><code>disclosure
+  summary
+    paragraph
+      text "Notes"
+  paragraph
+    text "Read this first."
+paragraph
+  text "After the disclosure."</code></pre>
+<pre><code>&lt;details&gt;
+&lt;summary&gt;Notes&lt;/summary&gt;
+
+&gt; Read this first.
+
+&lt;/details&gt;
+
+After the disclosure.</code></pre>
+
+<h2>What 8.7.0 Reads</h2>
+<p>
+    The README above, read with <code>parseOffice(buffer, { fileType: 'md' })</code>, gives this tree (each
+    <code>list</code> node is an item, as everywhere in officeParser's AST):
+</p>
+<pre><code>disclosure
+  summary
+    paragraph
+      text "Building from source"
+  paragraph
+    text "Clone the repository, then:"
+  code "npm ci\nnpm run build"
+  list (unordered item)
+    text "Node 18 or later"
+  list (unordered item)
+    text "No native modules"
+paragraph
+  text "Back in the README."</code></pre>
+<p>
+    The Markdown written back is the input again, line for line. Written as HTML, it is a
+    <code>&lt;details&gt;</code> with its <code>&lt;summary&gt;</code>, a paragraph, a <code>&lt;pre&gt;</code> and a
+    <code>&lt;ul&gt;</code> inside it, and EPUB writes it the same way. Other formats have no fold, so every other
+    writer writes the summary in bold and then the body, nothing hidden.
+</p>
+<p>
+    The summary is a node of its own, the disclosure's first child, holding blocks, because a summary can hold more
+    than a line. GitHub shows a heading in a summary when it is written between a
+    <code>&lt;summary&gt;</code> line and a <code>&lt;/summary&gt;</code> line with blank lines around it:
+</p>
+<pre><code>&lt;details open&gt;
+&lt;summary&gt;
+
+### Changes in this release
+
+&lt;/summary&gt;
+
+Fixes and **new readers**.
+
+&lt;/details&gt;</code></pre>
+<pre><code>disclosure (open)
+  summary
+    heading 3
+      text "Changes in this release"
+  paragraph
+    text "Fixes and "
+    text "new readers"
+    text "."</code></pre>
+<p>Written as HTML, the heading stays in the summary:</p>
+<pre><code>&lt;details open=""&gt;&lt;summary&gt;&lt;h3 id="changes-in-this-release"&gt;Changes in this release&lt;/h3&gt;
+
+&lt;/summary&gt;
+
+&lt;p&gt;Fixes and &lt;b&gt;new readers&lt;/b&gt;.&lt;/p&gt;
+
+&lt;/details&gt;</code></pre>
+
+<h2>The Rule, Written Down</h2>
+<p>
+    The Markdown reader now follows one specification, in <code>src/parsers/MarkdownParser.ts</code>: what GitHub
+    shows is a CommonMark renderer's output, read by a browser's tree builder. In practice that is four things.
+</p>
+<p>
+    <strong>Blocks are CommonMark's.</strong> A line starting with <code>&lt;details</code>,
+    <code>&lt;/details</code> or <code>&lt;/summary</code> starts an HTML block, which interrupts a paragraph and is
+    never a lazy continuation line. So it ends a quote or list item it is not marked or indented into.
+</p>
+<p>
+    <strong>One tag scan per block</strong> (<code>analyzeBlock</code>). In an HTML block, tags are read as a
+    browser's tokenizer reads them: every tag of any name, whole, with its quoted attributes, and comments,
+    declarations and the content of elements such as <code>&lt;script&gt;</code> read past. In paragraph text they
+    are read in CommonMark's inline order: backslash escapes, code spans, link destinations and titles, then raw
+    HTML. In code and pipe tables there are none. So a tag's name inside another tag's attribute is not a tag:
+</p>
+<pre><code>&lt;p title="the &lt;details&gt; element"&gt;Disclosures fold content away.&lt;/p&gt;
+
+&lt;details&gt;
+&lt;summary&gt;Example&lt;/summary&gt;
+
+Folded text.
+
+&lt;/details&gt;
+
+After.</code></pre>
+<pre><code>paragraph
+  text "Disclosures fold content away."
+disclosure
+  summary
+    paragraph
+      text "Example"
+  paragraph
+    text "Folded text."
+paragraph
+  text "After."</code></pre>
+<p>
+    One disclosure, not two, and "After." outside it. A code span works the same way: in a body,
+    <code>`&lt;/details&gt;`</code> is text, and the disclosure goes on.
+</p>
+<p>
+    <strong>One tree pass</strong> (<code>planDisclosures</code>). The tags of all the blocks at a level go through
+    one stack, as a browser builds its tree. A start tag opens an element. An end tag closes the nearest open
+    element of its name in scope (a table and its cells bound the scope) and every element opened after it, or is
+    ignored. A quote, a list item and a heading are elements of their block, closed at its end. That is how
+    <code>&lt;/details&gt;</code> closes the quote above, and how a <code>&lt;/div&gt;</code> closes a disclosure
+    opened inside its div. Each element is pushed once and popped once, and an end tag finds its element from
+    counts of open elements by name, so the pass is linear in the number of tags.
+</p>
+<p>
+    <strong>The summary runs to its <code>&lt;/summary&gt;</code>.</strong> A disclosure's summary is a
+    <code>&lt;summary&gt;</code> that comes first in it, with only white space, blank lines and ignored end tags
+    before it, and it ends at its <code>&lt;/summary&gt;</code> wherever that falls, across blocks. What it holds is
+    read as the body is, Markdown where it spans blocks, and becomes the <code>summary</code> node's children.
+</p>
+<p>
+    Nesting is bounded. Disclosures nest 16 deep; a deeper one is flattened into the one holding it: its tags go,
+    its summary and body stay as text, in order. Eighteen nested disclosures, each with a summary and a line of
+    body, read like this:
+</p>
+<pre><code>disclosures written: 18, deepest disclosure in the tree: 16
+texts kept: 36 of 36
+--- the 16th disclosure
+disclosure
+  summary
+    paragraph
+      text "Level 16"
+  paragraph
+    text "Body 16."
+  paragraph
+    text "Level 17"
+  paragraph
+    text "Body 17."
+  paragraph
+    text "Level 18"
+  paragraph
+    text "Body 18."</code></pre>
+
+<h2>Three Designs</h2>
+<p>
+    I did not start with that rule. The git history of this release shows three designs, and each taught me
+    something about the problem. All three were written on the 8.7.0 branch before the release; only the third
+    was ever published.
+</p>
+<p>
+    The first joined pieces. The Markdown reader already joined an HTML table that spans blank lines into one HTML
+    block, with the Markdown pieces between set aside and read on their own afterwards. A disclosure was handled the
+    same way. Simple READMEs worked, but the body was never read as a document: a later line pass still cut the
+    joined block at a <code>&lt;div&gt;</code> line and left placeholders in the output, alignment did not carry
+    from one piece to the next, and an inline <code>&lt;details&gt;</code> in a body paragraph was counted but never
+    opened.
+</p>
+<p>
+    The second read the body as a document of its own: lift a disclosure's blocks out by its tags and read them with
+    the same block reading as the document, nested disclosures too. That structure was sound, and I kept it. What
+    was wrong was underneath. Where tags were was a list of cases, not a definition: it searched for the names
+    <code>details</code>, <code>summary</code> and <code>table</code> with a pattern, so a quoted attribute holding
+    "&lt;details&gt;" was a tag, and a <code>&lt;/div&gt;</code> closed nothing. There was no tree builder either.
+    After every close it cut the rest of the block and scanned it again, which took quadratic time on hostile
+    input, and a slice cut after a tag was read as a text of its own, so paragraph text became blocks and a code
+    span's <code>&lt;/details&gt;</code> became a real tag. And the summary was a string, so a heading or a link in
+    it was lost.
+</p>
+<p>
+    The third is the one in 8.7.0. It keeps the second's reading and replaces the machinery: one scan per block, one
+    tree pass per level, the cuts applied once, each slice read as what it was in its block, and the summary a node.
+    The specification above was written down during the second design, but its code still worked case by case, and
+    each fix was right about one case and silent about the next. The third was built from the specification, step
+    for step, with a check against it.
+</p>
+
+<h2>Checking It Against a Browser</h2>
+<p>
+    Examples cannot check a rule like this. So there is a second implementation,
+    <code>test/helpers/disclosureReference.ts</code>, written apart from the reader: a small CommonMark block parser (with GitHub's pipe tables) that renders HTML, then a small HTML tree builder with the
+    rules of the HTML standard that matter here. It is quadratic in places and does not care, because its texts
+    are short.
+</p>
+<p>
+    A generator draws random Markdown that mixes disclosures with quotes, admonitions, lists, headings, tables,
+    fenced and indented code and HTML blocks, with tags in attributes, comments, upper case, enclosing
+    <code>&lt;div&gt;</code> elements and summaries holding blocks. Here is the start of one it drew:
+</p>
+<pre><code>```
+w0 &lt;/details&gt;
+&lt;details&gt;
+```
+
+&lt;details &gt;
+&lt;summary&gt;
+
+w1 w2 w3
+
+&lt;/summary&gt;
+
+&lt;details title="a&gt;b"&gt;
+&lt;summary title="s&gt;t"&gt;</code></pre>
+<p>
+    For each text, the reader's disclosure tree has to be the reference's, and stay so over three round trips
+    through Markdown, with the Markdown settled. The fast test run draws 1,000 texts and the full run three seeds of
+    10,000. One seed of 1,000, run for this post:
+</p>
+<pre><code>{
+  checked: 987,
+  outOfDomain: 13,
+  distinct: 1000,
+  reasons: {
+    'summary not first in its disclosure': 11,
+    'disclosure in a list item, heading or cell closed in another block': 2
+  },
+  mismatches: 0,
+  unstable: 0
+}</code></pre>
+<p>
+    The texts out of its domain are the cases the reader does not follow yet. They are counted, not hidden.
+</p>
+<p>
+    That leaves the question of whether the reference is right. When I first wrote it, I checked its tree builder
+    against a real one: generated cases, the reference's HTML loaded in Chromium from a page served on my own
+    machine, and the browser's tree compared with the reference's. All 1,419 trees were the same. The generator has
+    learned more shapes since, tag names inside attributes, comments and enclosing elements among them, which that
+    comparison did not cover.
+</p>
+<p>
+    Beside it, random ASTs with disclosures are written to Markdown and HTML and read back over several passes
+    with nothing lost, and hostile shapes (closes in nested quotes, unclosed quoted values, long runs of summaries)
+    are each read at a size n and at 4n, to show the time grows in line with the text.
+</p>
+
+<h2>What It Does Not Read Yet</h2>
+<ul>
+    <li>
+        A <code>&lt;summary&gt;</code> placed after body content is the summary in a browser. officeParser reads it
+        as a body paragraph, and the disclosure has no summary.
+    </li>
+    <li>
+        A summary no <code>&lt;/summary&gt;</code> closes runs to the end of its disclosure in a browser. Here it ends
+        at the end of its block, so the body stays a body and does not become one long summary.
+    </li>
+    <li>
+        A disclosure written inside a Markdown list item (<code>- &lt;details&gt;...</code>), a heading or a pipe
+        table cell is read as that block's text, tags included, as 8.6.0 read it, and written back with the tags
+        escaped. One in an HTML list item is read, and the Markdown writer writes a list item holding a disclosure as
+        HTML so that it reads back. A disclosure opened in a list item and closed in a later block of that item does
+        not pair inside the item.
+    </li>
+    <li>Disclosures nested more than 16 deep are flattened, their text kept.</li>
+    <li>
+        A few of the Markdown reader's block readings from 8.6.0 still differ from CommonMark, such as lines after
+        an HTML block read as Markdown, some lazy lines in list items, and a <code>&lt;summary&gt;</code> line right
+        after a quote line read as the quote's text. The generator keeps them out, and the reference does not model
+        link destinations, raw-text elements or setext headings.
+    </li>
+</ul>

@@ -1,0 +1,216 @@
+<p>
+    officeParser reads fourteen file types and writes fifteen output formats, all through the same tree. A change
+    to how Markdown reads a disclosure can move a word in a Word file written from it. A new limit on repeated
+    content can cut a spreadsheet that was fine. So for any change the question is not only whether it works, but
+    what else it touched.
+</p>
+<p>
+    This post is about how the test suite of 8.7.0 answers that. Each kind of test below is a real one from
+    <code>test/</code>, and every number is one I measured on my Mac (an M1 Pro, Node 24) while writing this, or one the repository
+    records. <code>npm test</code> is the gate a change is done by; <code>npm run test:fast</code> is the same chain
+    without the build steps and with the long suites in fast mode, which leaves PDF out and prints a <code>SKIP</code> row for it.
+</p>
+
+<h2>Output a Change Must Not Touch</h2>
+<p>
+    The oldest layer is baselines. <code>test/parser/baseline</code> holds, for each of the fourteen sample files,
+    its tree as JSON and its text. <code>test/generator/baseline</code> holds 180 files written from those samples,
+    each beside a file of its metrics. The suites compare against them with some tolerance (a text must match
+    exactly, or else in at least 95% of its characters), but the real check is stricter:
+    <code>npm run test:baseline</code> writes them again, and the diff shows every byte that moved. For that to mean
+    anything the output must be reproducible, so the generator suite pins the modification date that packaged
+    formats such as EPUB write into their metadata and onto every zip entry. Its comment says why: while the
+    baselines changed on every run, they were reverted wholesale, and a real change would have gone with the noise.
+</p>
+<p>
+    Fourteen files are not many documents, though. For a change meant to leave a whole area alone, I fingerprint
+    more. Partway through 8.7.0, before I rewrote how Markdown reads <code>&lt;details&gt;</code>, I took 402 Markdown documents with no
+    disclosure in them: the two Markdown test files and 400 drawn from a seeded fuzz of every other block kind.
+    Each one's tree, metadata, Markdown, HTML and text are hashed into one fingerprint.
+    <code>test/helpers/markdownFingerprints.json</code> keeps them as commit 15a4c7ec gave them (one was written
+    again later, for a meant change to how a captioned picture ends its line), and the test fails if one changes. Running it again now:
+</p>
+<pre><code>kept from 15a4c7ec: 402 fingerprints; now: 402; differ: 0 (374 ms)</code></pre>
+<p>
+    The reader has one random value of its own, a token it uses inside HTML tables, so the helper pins
+    <code>Math.random</code> while it reads. Otherwise the same document would give a new fingerprint on every run.
+</p>
+
+<h2>Round Trips That Settle</h2>
+<p>
+    A writer whose output is read back should keep what it wrote. That is not the same as writing the same bytes
+    twice: writing Markdown, reading it and writing it again can move a space. What must not happen is a word lost,
+    two words run together, or output that never stops changing.
+</p>
+<p>
+    <code>test/helpers/htmlPathRoundTrip.ts</code> draws random list items holding a disclosure and tables with a
+    merged cell, the two that Markdown writes as HTML, and fills them with 25 kinds of node. Every word is named
+    <code>w0</code>, <code>w1</code>, <code>w2</code> in order, which makes a loss easy to see: a word missing from
+    the text was lost, and one that is there but not standing alone was joined. Each tree is written and read three
+    times; after every pass every word and anchor id must be there, and a fourth write must equal the third. Here
+    is part of one drawn tree's first write:
+</p>
+<pre><code>&lt;td&gt;&lt;ol&gt;&lt;li&gt;w3
+&lt;p&gt;&lt;a href="https://e.x/v"&gt;w4&lt;/a&gt;&lt;/p&gt;
+&lt;div class=&quot;admonition admonition-important&quot; data-type=&quot;important&quot;&gt;&lt;p&gt;&lt;b&gt;w5&lt;/b&gt;&lt;/p&gt;
+&lt;p&gt;w6&lt;/p&gt;&lt;/div&gt;</code></pre>
+<p>
+    The second write has one space more, after <code>w3</code>. The third is the second, and so is the fourth. That
+    is settling, and it is why the test compares the last passes, not the first two. The helper on 300 trees:
+</p>
+<pre><code>seed 1: 300 ASTs, 300 distinct, 25 of 25 kinds, 0 lose words, 0 join words, 0 lose anchors, 0 unsettled (1140 ms)</code></pre>
+<p>
+    <code>figureLineGenerator.ts</code> and <code>pictureMatrixGenerator.ts</code> do the same for captioned
+    pictures in every container that holds a line. Their tests also assert coverage: that all 54 pairs of
+    configuration and container were drawn, and that more than 95% of the picture documents were distinct.
+</p>
+
+<h2>A Generator That Repeated Itself</h2>
+<p>
+    That last assertion is there for a reason. Generated documents come from a seeded generator, so a failure can
+    be replayed. The helpers used the C library's linear congruential generator:
+</p>
+<pre><code>seed = (seed * 1103515245 + 12345) &amp; 0x7fffffff;</code></pre>
+<p>
+    In JavaScript that product is a floating-point number. Once the seed is large it passes 2^53 and loses its low
+    bits, which from seed 1 happens on the second draw. I ran the old formula until a value came back, and the
+    fixed one for a million draws:
+</p>
+<pre><code>old formula (floating point): { firstRepeatAt: 11155, cycleLength: 10466 }
+new formula (Math.imul):      { firstRepeatAt: null, cycleLength: 'none in 1,000,000 draws' }</code></pre>
+<p>
+    A cycle of 10,466 values. On the 8.7.0 branch, before the fix, the template engine's new property test drew
+    200,000 cases from it and passed, on far
+    fewer cases than it said. I counted the distinct cases (delimiters and text) in those 200,000 draws, before and
+    after commit 084c4afd:
+</p>
+<pre><code>200,000 look-alike cases, old generator: { distinctTexts: 362, distinctCases: 367 }
+200,000 look-alike cases, new generator: { distinctTexts: 188142, distinctCases: 197949 }</code></pre>
+<p>
+    367 against 197,949, the numbers in that commit's message. The fix multiplies in 32-bit integer arithmetic,
+    <code>Math.imul(seed, 1103515245)</code>, which keeps the full period of 2^31, and divides by 2^31 rather than
+    2^31 minus 1, so an index picked from a draw always falls inside its list.
+</p>
+<p>
+    A property test that passes says nothing about how much it tried, so the generated tests written since print
+    how many of their documents were distinct, and some assert it. The old
+    formula is still in a few places, among them the fingerprint corpus above, whose documents are fixed by the
+    fingerprints kept for them. I counted those too: all 402 are distinct.
+</p>
+
+<h2>Checked Against a Reference</h2>
+<p>
+    A random document needs an expected answer, and the code under test cannot give it. So two of 8.7.0's
+    readings have a second implementation, plain and slow on purpose, to be checked against.
+</p>
+<p>
+    <code>test/helpers/lookalikeReference.ts</code> is the template engine's look-alike scan, which reports text
+    that looks like a tag but is not one. The engine's scan is built to be fast; the reference keeps
+    braces as objects on a stack and, by its own comment, is quadratic. In
+    <code>Dear {{name}, your {{ order }} and {{total}}</code> it finds one look-alike, <code>{{name}</code>, as
+    <code>missing-delimiter</code>. Each random text is scanned with room to list 0, 1, 2, 3 and 1,000, and the
+    engine must list the reference's first ones and count the rest exactly. Fast mode runs 20,000 texts, the full
+    suite 200,000:
+</p>
+<pre><code>look-alike scan: 20,000 texts, 10645 with look-alikes, 0 differences (545 ms)</code></pre>
+<p>
+    <code>test/helpers/disclosureReference.ts</code> does the same for Markdown disclosures: a small CommonMark
+    block parser, then the HTML standard's tree-building rules that matter here, to say which words each disclosure
+    holds as GitHub shows it. A reference is only useful if it is honest about its edges. Texts the reader does not
+    read as the reference does, some by design and some open findings, are counted as out of its domain and named:
+</p>
+<pre><code>disclosures: 1,000 texts, 1000 distinct, 987 in the reference's domain, 0 differ, 0 unsettled (2088 ms)
+out of domain: {"summary not first in its disclosure":11,"disclosure in a list item, heading or cell closed in another block":2}</code></pre>
+
+<h2>Linear Time, Measured as a Ratio</h2>
+<p>
+    A small file must not cost minutes. The comments in <code>test/security/testSanitization.ts</code> record
+    why that needs saying: a line of backticks or of <code>[x](</code> once took
+    minutes to read, and 5,000 spaces in a table's delimiter row took 81 seconds.
+</p>
+<p>
+    A limit in seconds does not test this well: a fast machine passes a quadratic loop, a busy one fails a linear
+    one. So the suite's <code>linear</code> helper measures growth. It runs a shape at a quarter of its size, then at
+    full size, and allows the full run eight times the quarter's time plus 250 ms. Linear work takes four times as
+    long; quadratic work takes sixteen; the machine's speed cancels out. A case over the bound is measured once more
+    and the faster times kept, and a full run over two minutes fails whatever its ratio. Three of its Markdown
+    shapes, measured here at the same two sizes:
+</p>
+<pre><code>200 KB of backticks: 4 ms at a quarter, 11 ms at full size, ratio 2.4, within the bound: true
+200 KB of "[x](": 8 ms at a quarter, 27 ms at full size, ratio 3.5, within the bound: true
+a table and a line of 200,000 spaces: 5 ms at a quarter, 16 ms at full size, ratio 3.4, within the bound: true</code></pre>
+<p>
+    <code>test/helpers/timing.ts</code> sets the rule for the rest: no limit on wall-clock time is checked on a
+    single measurement. The last fix made before the 8.7.0 release, in code new to it, was of this kind: a disclosure summary made only of named anchors
+    looked each id up in the list so far (commit a77ddfbb), and its test now holds 80,000 anchors to eight times
+    the time of 20,000, plus 250 ms.
+</p>
+
+<h2>Budgets and What They Stop</h2>
+<p>
+    Size is the other cost. A document can refer to the same content many times, and every writer writes it out at
+    each use. <code>decompressionLimits.maxRepeatedContent</code>, 16 MiB by default plus 16 characters for each
+    byte of the document, bounds that. To see what it stops, I built the ODT of
+    <code>headerPartWeightTests</code>: two header parts whose one run has a font name of 50,000 characters, shown
+    by 2,000 paragraphs that alternate between them. I read it with the default budget, then with it lifted:
+</p>
+<pre><code>the file: 2,007 bytes
+default budget: 4000 headers, JSON 9,867,449 characters, 130 ms
+   REPEATED_CONTENT_LIMIT_EXCEEDED: Repeated content limit (16809328 characters: decompressionLimits.maxRepeatedContent, plus 16 per byte of the document) reached
+repeat budget lifted: 4000 headers, JSON 201,773,622 characters, 315 ms</code></pre>
+<p>
+    Two kilobytes that would become 200 MB of JSON. The test asserts that the ODT and DOCX versions warn, stay under
+    three times the budget and still write HTML, and that the same file with a 100-character font, alternated 200
+    times, keeps every header, unwarned. Running only that function, the ODT half:
+</p>
+<pre><code>PASS: odt: two headers in a 50,000-character font alternated 2,000 times are charged with the font, with REPEATED_CONTENT_LIMIT_EXCEEDED | REPEATED_CONTENT_LIMIT_EXCEEDED json 9867449, html &lt;!DOCTYPE html&gt;
+PASS: odt: two headers in a 100-character font alternated 200 times are all kept, unwarned | 400 headers, 0 empty</code></pre>
+<p>
+    That second line matters as much as the first, because a budget that cuts ordinary documents is a bug of its
+    own. In <code>xlsxCellAllowanceTests</code> that is the side that failed. A cell showing a shared string again
+    costs the zip three or four bytes, so a budget growing with the file's bytes grew too little: the comment
+    records 100,000 such cells over 500 rich strings losing the runs of 14,218. That happened on the 8.7.0 branch,
+    after I made each copied value count exactly once; 8.6.0, which counted less, cut none. The fix gives each such cell a small
+    allowance, and the test checks both the ordinary workbooks and the allowance, cell by cell:
+</p>
+<pre><code>PASS: xlsx: 200,000 cells showing 500 rich strings of four runs again (704 KB) keep every run, unwarned | 200000 cells, 0 cut
+PASS: xlsx: 50,000 cells showing a 228-character string are charged 128 less each while 64 characters a byte of the zip last, and no more | 2447 whole, expected 2447 (734 without the allowance) of 50000</code></pre>
+<p>
+    The expected 2,447 is not a snapshot: the test works it out from the parser's own constants, so a parser that
+    counts differently fails. <a href="post:security-war-stories-zip-bombs-and-ssrf">Security war stories</a> covers
+    the older limits in this family.
+</p>
+
+<h2>LibreOffice as a Referee</h2>
+<p>
+    Reading my own output back only proves that my reader agrees with my writer; both can be wrong the same way.
+    An independent program is a better judge, and the repository leans on LibreOffice: the commit that added the ODT writer records that all 13 of its baselines open cleanly in
+    LibreOffice Writer, and the note-number tests encode marks as LibreOffice 7.3 shows them. No test in
+    <code>npm test</code> runs LibreOffice, so I run it by hand. For this post I wrote <code>test.docx</code> as
+    DOCX, ODT and RTF and <code>test.xlsx</code> as XLSX and ODS, had LibreOffice 7.3.7.2 convert each to HTML, and
+    looked for every word of officeParser's own reading in LibreOffice's:
+</p>
+<pre><code>test.docx written as docx: 11,804 bytes; LibreOffice converted it: true; 416 distinct words in the library's reading, 1 not in LibreOffice's (iii)
+test.docx written as odt: 9,193 bytes; LibreOffice converted it: true; 416 distinct words in the library's reading, 1 not in LibreOffice's (iii)
+test.docx written as rtf: 54,778 bytes; LibreOffice converted it: true; 416 distinct words in the library's reading, 0 not in LibreOffice's
+test.xlsx written as xlsx: 12,331 bytes; LibreOffice converted it: true; 386 distinct words in the library's reading, 0 not in LibreOffice's
+test.xlsx written as ods: 6,400 bytes; LibreOffice converted it: true; 387 distinct words in the library's reading, 1 not in LibreOffice's (4000000000000004)</code></pre>
+<p>
+    The <code>iii</code> is a list number: in the HTML LibreOffice made from the ODT, that list is
+    <code>&lt;ol type="i" start="3"&gt;</code>, so its numbering carries on as the library reads it. The other is a
+    real difference. The sample workbook stores 4.4000000000000004; the library reads those digits, and the ODS
+    writer keeps them as the cell's text beside the value 4.4; LibreOffice shows 4.4. That is what a referee is for:
+    the two readings disagree, and now I know where to look.
+</p>
+
+<h2>What the Suite Does Not Do</h2>
+<p>
+    <code>AGENTS.md</code> keeps its own list of gaps. There is no coverage floor: tests are written per suite and
+    fixture, not per function. The browser tests of the visualizer exist but are not in the <code>npm test</code>
+    chain. And a fast run says nothing about PDF.
+</p>
+<p>
+    What the suite does have is a habit: for every kind of check, ask how it could pass while proving nothing. A
+    baseline that churns, a generator that cycles, a reference with no stated edges, a time limit that depends on
+    the machine, a budget that cuts ordinary files. Each layer above answers one of those.
+</p>

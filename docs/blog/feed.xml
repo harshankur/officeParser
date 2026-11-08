@@ -5,8 +5,1096 @@
     <link>https://officeparser.harshankur.com/blog/</link>
     <description>How document formats work inside, how officeParser reads and writes them, where it falls short, and how to chunk documents for retrieval. Written by Harsh Ankur, author of officeParser.</description>
     <language>en</language>
-    <lastBuildDate>Thu, 05 Nov 2026 00:00:00 GMT</lastBuildDate>
+    <lastBuildDate>Sun, 08 Nov 2026 00:00:00 GMT</lastBuildDate>
     <atom:link href="https://officeparser.harshankur.com/blog/feed.xml" rel="self" type="application/rss+xml"/>
+    <item>
+      <title>Filling an OpenDocument Template</title>
+      <link>https://officeparser.harshankur.com/blog/filling-an-opendocument-template.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/filling-an-opendocument-template.html</guid>
+      <pubDate>Sun, 08 Nov 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Format Deep Dives</category>
+      <description>How officeParser 8.7.0 fills .odt and .ott templates with the same tags and data as Word&#39;s: tags split across spans, spaces stored as elements, blocks over list items and heading rows, and fresh names for every copy a loop makes.</description>
+      <content:encoded><![CDATA[<p>
+    officeParser 8.7.0 fills OpenDocument text templates, <code>.odt</code> and <code>.ott</code>, with the same tags
+    and data as Word templates, through the same <code>OfficeTemplate.render</code>, <code>tags()</code> and
+    <code>check()</code>.
+</p>
+<p>
+    The tag language was never the hard part. The engine that pairs blocks and walks the data does not care which
+    format it is in, so I moved everything Word-specific out of it into a dialect, and wrote OpenDocument's. This post is about what that dialect had to know: where an ODT keeps its text, how a tag
+    gets split, why a 22-byte element is read as 16 spaces, and why every copy a loop makes needs new names.
+</p>
+
+<h2>A Small Template</h2>
+<p>
+    I built a template by hand, as an <code>.ott</code>: a greeting whose tag LibreOffice would have split across a
+    span, a reference after a long run of spaces, a loop over list items, a loop over table rows below a heading
+    row, and a loop over a paragraph holding a bookmark, a footnote and a comment. The header holds
+    <code>{{ company }} statement</code>. Then:
+</p>
+<pre><code>const data = {
+    company: 'Acme',
+    name: 'Ada',
+    ref: 'INV-7',
+    tasks: ['Sign', 'Return'],
+    lines: [{ item: 'Bolts', qty: 2 }, { item: 'Nuts', qty: 5 }],
+    people: [{ name: 'Ann' }, { name: 'Bob' }, { name: 'Cy' }],
+};
+const out = await OfficeTemplate.render(templatePath, { data });</code></pre>
+<p>Read back with <code>parseOffice</code> and written as text, the long run of spaces shortened to its count:</p>
+<pre><code>Dear Ada,
+Reference[256 spaces]INV-7
+To do: Sign
+To do: Return
+
+| Item  | Qty | 
+| Bolts | 2   | 
+| Nuts  | 5   | 
+
+Ann
+Bob
+Cy
+Checked.
+
+
+--- Notes ---
+About Ann
+About Bob
+About Cy</code></pre>
+<p>
+    I then opened the result in LibreOffice 7.3, headless, and printed it to PDF. It opened, the header read
+    "Acme statement", and LibreOffice numbered the three copied footnotes 1, 2 and 3.
+</p>
+
+<h2>What an ODT Keeps Where</h2>
+<p>
+    An ODT is a zip, like a DOCX, but flatter. There are no relationship files: parts are found by name.
+</p>
+<table role="table">
+    <thead role="rowgroup">
+        <tr role="row"><th role="columnheader">Part</th><th role="columnheader">What it holds</th><th role="columnheader">What a render does to it</th></tr>
+    </thead>
+    <tbody role="rowgroup">
+        <tr role="row"><td role="cell"><code>mimetype</code></td><td role="cell" data-label="What it holds">The package's media type, as plain text</td><td role="cell" data-label="What a render does to it">Writes it first and stored, not compressed; switches a template's type to a document's</td></tr>
+        <tr role="row"><td role="cell"><code>META-INF/manifest.xml</code></td><td role="cell" data-label="What it holds">Every part and its media type, the package's own under the path <code>/</code></td><td role="cell" data-label="What a render does to it">Switches the root's media type for an <code>.ott</code>; drops encryption data for a template that was decrypted</td></tr>
+        <tr role="row"><td role="cell"><code>content.xml</code></td><td role="cell" data-label="What it holds">The body, with the notes, comments and text boxes inside the paragraphs that hold them</td><td role="cell" data-label="What a render does to it">Fills tags</td></tr>
+        <tr role="row"><td role="cell"><code>styles.xml</code></td><td role="cell" data-label="What it holds">Styles, and the master pages, which hold the headers and footers</td><td role="cell" data-label="What a render does to it">Fills tags</td></tr>
+        <tr role="row"><td role="cell"><code>meta.xml</code>, pictures, the rest</td><td role="cell" data-label="What it holds">Title, author and the like; media</td><td role="cell" data-label="What a render does to it">Copied as they are</td></tr>
+    </tbody>
+</table>
+<p>
+    Word keeps each header in a part of its own (<code>word/header1.xml</code>); OpenDocument keeps them all with
+    the page styles, so <code>tags()</code> gives the sample's header tag, <code>{{ company }}</code>, the part <code>styles.xml</code>.
+    The <code>mimetype</code> entry must come first and stored, so the type can be read at a fixed place near the
+    start of the file without unzipping. The sample's entries come out as <code>mimetype, META-INF/manifest.xml,
+    content.xml, styles.xml</code>, <code>mimetype</code> at compression method 0.
+</p>
+
+<h2>A Tag Split Across Spans</h2>
+<p>
+    In <a href="https://officeparser.harshankur.com/blog/what-is-actually-inside-a-docx.html">what is actually inside a DOCX</a> I described Word's runs:
+    text sits in a <code>&lt;w:t&gt;</code> inside a <code>&lt;w:r&gt;</code>, and a new run starts at every change
+    of formatting, so a typed <code>{{name}}</code> can arrive in three. OpenDocument splits the same way with less
+    markup. Text sits straight in the paragraph, and only a stretch
+    with formatting of its own is wrapped, in a <code>&lt;text:span&gt;</code>. Type <code>{{name}}</code>, make
+    two letters italic, and the paragraph is:
+</p>
+<pre><code>&lt;text:p&gt;Dear {{&lt;text:span text:style-name="T1"&gt;na&lt;/text:span&gt;me}},&lt;/text:p&gt;</code></pre>
+<p>
+    The engine reads a paragraph as a list of runs. In a DOCX a run is the text of one <code>&lt;w:t&gt;</code>; in
+    an ODT it is each stretch of character data directly inside a paragraph
+    (<code>text:p</code>, <code>text:h</code>) or inside a span, a link (<code>text:a</code>) or a
+    <code>text:meta</code> in it. The runs of one paragraph are joined, the tags are found in the joined text, and
+    each run a tag touched gets a marker: the first stands for the tag, the others for nothing. So the value goes
+    where the tag began, and takes that place's formatting. Here the tag began outside the span, so
+    <code>Ada</code> is not italic, and the span is left behind, empty:
+</p>
+<pre><code>&lt;text:p&gt;Dear Ada&lt;text:span text:style-name="T1"&gt;&lt;/text:span&gt;,&lt;/text:p&gt;</code></pre>
+<p>
+    A note, a comment or a text box sits inside the paragraph that holds it, but its paragraphs are its own: a tag
+    never runs from the paragraph into its footnote. Some text is never read for tags at all: the text of a field
+    such as <code>text:date</code>, a note's citation, a comment's author and date, and deleted text kept for
+    tracked changes.
+</p>
+
+<h2>Spaces That Are Elements</h2>
+<p>
+    OpenDocument folds white space as HTML does: two spaces in a row read as one. A second space is kept as an
+    element, <code>&lt;text:s/&gt;</code>, and a run of them as one element with a count,
+    <code>&lt;text:s text:c="5"/&gt;</code>. A tag typed with spaces carries them in that form, and may be split
+    across a span besides:
+</p>
+<pre><code>template: &lt;text:p&gt;Hello {{&lt;text:s/&gt;who&lt;text:span text:style-name="T1"&gt;&lt;text:s text:c="2"/&gt;&lt;/text:span&gt;}}!&lt;/text:p&gt;
+rendered: &lt;text:p&gt;Hello Ann&lt;text:span text:style-name="T1"&gt;&lt;/text:span&gt;!&lt;/text:p&gt;</code></pre>
+<p>
+    A value is written back the same way, so it reads as typed. Here is one with a tab, three spaces and a new
+    line, in <code>[{{ v }}]</code>:
+</p>
+<pre><code>value:    'Qty:\t2   pcs\nboxed'
+rendered: [Qty:&lt;text:tab/&gt;2 &lt;text:s text:c="2"/&gt;pcs&lt;text:line-break/&gt;boxed]</code></pre>
+<p>
+    The count is where my first version went wrong, on the 8.7.0 branch before the release, so no published version did this. It read <code>&lt;text:s text:c="256"/&gt;</code> as the 256
+    spaces it stands for. That element is 22 bytes. Every limit on a template is a limit on its XML: the parts'
+    sizes, the number of elements. A paragraph's text had never been longer than its XML, so those limits also
+    bounded the text, and with it every pass the engine makes over the text. A run of spaces broke that:
+    22 bytes became 256 characters, 11.6 times, and a large part of such runs could pass the longest string V8 will
+    make.
+</p>
+<p>
+    So the engine now reads a long run short and writes it back whole. A <code>&lt;text:s/&gt;</code> is read as at
+    most 16 spaces, and the run keeps the count it stood for. <code>&lt;text:s/&gt;</code> is 9 characters and
+    reads as 1; any element with a count is at least 20 characters. The text is never longer than its XML again, and
+    a tag needs no more: the only spaces it looks at are its own and its delimiters'.
+    Where the caller's delimiters hold more than 7 spaces in a row, the limit rises to twice that run plus one, so a
+    run read short still holds the end of one tag and the start of the next. The spaces not read are written back
+    where no tag is: in the run's text outside tags, or between the tag ending in it and the tag starting in it.
+    Here is a run of 999,999 spaces, 25 bytes of XML, between two tags:
+</p>
+<pre><code>template: &lt;text:p&gt;{{ a }}&lt;text:s text:c="999999"/&gt;{{ b }}&lt;/text:p&gt;
+rendered: &lt;text:p&gt;left&lt;text:s text:c="999999"/&gt;right&lt;/text:p&gt; (1 ms)</code></pre>
+<p>
+    The element goes out as it came in, 25 bytes standing for the same million spaces. (The time is the whole
+    render, as the script measured it on my M1 Pro under Node 24.)
+</p>
+
+<h2>What a Block Can Cover</h2>
+<p>
+    Where a block's tags sit decides what it covers, as in Word: both tags in one paragraph, the text between them;
+    in paragraphs side by side, the paragraphs between them, a paragraph holding nothing but a tag removed with it;
+    in different cells of one table, whole rows. OpenDocument adds two places.
+</p>
+<ul>
+    <li>
+        <strong>List items.</strong> Tags in items of one list cover the items between them, and an item holding
+        nothing but a tag goes with it. In the sample, three items (<code>{{ for t in tasks }}</code>,
+        <code>To do: {{ t }}</code>, <code>{{ endfor }}</code>) became two: "To do: Sign" and "To do: Return".
+    </li>
+    <li>
+        <strong>Heading rows.</strong> A table's heading rows, the ones repeated on every page, sit in a
+        <code>table:table-header-rows</code> of their own. A loop inside them repeats there: one over
+        <code>Q1</code> and <code>Q2</code> left two heading rows. A block that starts in the heading rows and ends
+        in the body is refused, rather than writing a table whose heading rows are torn open:
+    </li>
+</ul>
+<pre><code>TEMPLATE_SYNTAX: [OfficeParser]: Template tag '{{ for h in heads }}' in content.xml and the other tags of its block do not
+enclose content together: one is in a table's heading rows and another is not.</code></pre>
+<p>
+    Afterwards the part is repaired where loops and branches left it invalid: a table or group of rows with no row
+    is removed, and a cell, header, footer, note, text box or comment with no paragraph gets an empty one (a
+    <code>style:header</code> left empty would also hide the left-page header in LibreOffice). A bookmark whose end went with a
+    branch is closed after its start.
+</p>
+
+<h2>Copies Need Fresh Names</h2>
+<p>
+    A loop copies content, and content carries names that must be unique: an <code>xml:id</code> any element may
+    have, a note's <code>text:id</code>, the names of bookmarks, reference marks, comments, frames, tables and
+    sections, a drawing's <code>draw:id</code>. Each first write keeps its name. Each later copy gets the name with a
+    number, <code>person_2</code>, counted past every name the template already holds, and a range's end follows its
+    start.
+</p>
+<p>
+    To see what is at stake, I wrote the sample's loop paragraph three times by hand with its names unchanged, as a
+    copy that ignored them would, and let LibreOffice 7.3 open and save it. Then I did the same with the render's
+    output:
+</p>
+<table role="table">
+    <thead role="rowgroup">
+        <tr role="row"><th role="columnheader">In each copy</th><th role="columnheader">Names kept, after LibreOffice</th><th role="columnheader">Rendered, after LibreOffice</th></tr>
+    </thead>
+    <tbody role="rowgroup">
+        <tr role="row"><td role="cell">Paragraph <code>xml:id</code></td><td role="cell" data-label="Names kept, after LibreOffice"><code>person</code>; the other two dropped</td><td role="cell" data-label="Rendered, after LibreOffice"><code>person</code>, <code>person_2</code>, <code>person_6</code></td></tr>
+        <tr role="row"><td role="cell">Bookmark</td><td role="cell" data-label="Names kept, after LibreOffice"><code>who</code>, <code>who1</code>, <code>who2</code>, renamed by LibreOffice</td><td role="cell" data-label="Rendered, after LibreOffice"><code>who</code>, <code>who_3</code>, <code>who_7</code></td></tr>
+        <tr role="row"><td role="cell">Footnote</td><td role="cell" data-label="Names kept, after LibreOffice">All three</td><td role="cell" data-label="Rendered, after LibreOffice">All three</td></tr>
+        <tr role="row"><td role="cell">Comment, its range ending after the loop</td><td role="cell" data-label="Names kept, after LibreOffice">"Check Ann" only</td><td role="cell" data-label="Rendered, after LibreOffice">"Check Ann", "Check Bob", "Check Cy"</td></tr>
+    </tbody>
+</table>
+<p>
+    Nothing was refused. LibreOffice opened every file and dropped or renamed what clashed, silently. The notes
+    survived either way. The comments are worth a closer look. A comment can cover a range: <code>office:annotation</code> where it starts, holding its text, and
+    <code>office:annotation-end</code> with the same name where it ends. In the sample the comment starts inside
+    the loop and ends after it, in "Checked.". Written three times under one name, with one end, LibreOffice kept
+    the first comment and lost the other two and their text. (Without the end, it kept all three.)
+</p>
+<p>
+    A range across a loop's edge has one start and one end, so the render writes it once. Most of what a range is
+    made of is then left out of the later copies. A comment cannot, since it holds its text, so each later
+    copy is written as a comment of its own, on a point, under a fresh name:
+</p>
+<pre><code>&lt;office:annotation office:name="c1"&gt;...Check Ann...&lt;/office:annotation&gt;
+&lt;office:annotation office:name="c1_5"&gt;...Check Bob...&lt;/office:annotation&gt;
+&lt;office:annotation office:name="c1_9"&gt;...Check Cy...&lt;/office:annotation&gt;
+&lt;text:p&gt;Checked.&lt;office:annotation-end office:name="c1"/&gt;&lt;/text:p&gt;</code></pre>
+<p>
+    One more place needed a name. A block may cut through a span, a link or a <code>text:meta</code>: the element is
+    closed before the cut and opened again after it. The half after the cut is a second element, so when the
+    element has an <code>xml:id</code>, that half gets one of its own.
+</p>
+
+<h2>A Template Becomes a Document</h2>
+<p>
+    An <code>.ott</code> is an <code>.odt</code> with another media type:
+    <code>application/vnd.oasis.opendocument.text-template</code> in <code>mimetype</code> and on the manifest's
+    root entry. Filling one gives a document, not another template, so the render switches both to
+    <code>application/vnd.oasis.opendocument.text</code>, as the sample's output shows. Nothing else in the
+    manifest, or in <code>meta.xml</code>, changes. A password-protected template is decrypted with
+    <code>password</code> or <code>onPassword</code>, and the document is written plain, its manifest without the
+    encryption data.
+</p>
+
+<h2>What It Does Not Do Yet</h2>
+<ul>
+    <li>
+        Presentations and spreadsheets are not templates yet. A <code>.pptx</code>, <code>.odp</code>,
+        <code>.xlsx</code> or <code>.ods</code> passed to <code>OfficeTemplate.render</code> rejects with
+        <code>TEMPLATE_UNSUPPORTED_FORMAT</code>. Of the two, slides are the easier; in spreadsheets, moving the rows
+        below a loop, with the formulas, merged cells and print areas that point at them, is the real work.
+    </li>
+    <li>
+        A <code>&lt;text:tab/&gt;</code> or <code>&lt;text:line-break/&gt;</code> typed inside a tag is read as
+        nothing, and a quoted string in a tag holding more than 16 spaces in a row reads as 16, the bound on
+        <code>&lt;text:s/&gt;</code>.
+    </li>
+</ul>]]></content:encoded>
+    </item>
+    <item>
+      <title>Text That Looks Like a Tag: When Data for People Meets a Template for Machines</title>
+      <link>https://officeparser.harshankur.com/blog/text-that-looks-like-a-tag.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/text-that-looks-like-a-tag.html</guid>
+      <pubDate>Sun, 08 Nov 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Format Deep Dives</category>
+      <description>How officeParser 8.7.0 reports template text that only looks like a tag without flagging braces in prose, code or JSON, and how it reads numbers with a decimal comma, numbers stored as text and block keywords spelt as other template languages spell them.</description>
+      <content:encoded><![CDATA[<p>
+    A Word template says "Dear {{first name}},". The data has a <code>first name</code> column, because the data
+    came from a spreadsheet and that is what the column is called. Render it with officeParser 8.6.0 and every
+    letter says "Dear {{first name}}," with nothing filled in and nothing said. The tag was never a tag: a
+    field's name has no spaces, so the engine read it as prose between braces, and prose is written as typed.
+</p>
+<p>
+    This post is about what 8.7.0 does with text that only looks like a tag, how it tells that apart from braces
+    that are just prose, code or JSON, and the other places where data written for people meets a template
+    written for machines: numbers with a decimal comma, numbers stored as text, and block keywords spelt the way
+    another template language spells them.
+</p>
+
+<h2>Four Ways to Almost Write a Tag</h2>
+<p>
+    Here is a template with four near misses and one real tag, made from Markdown with officeParser's own
+    converter, then listed with <code>OfficeTemplate.tags()</code> and rendered:
+</p>
+<pre><code>Dear {{first name}},
+Your order {{ order } ships on {{ date }}.
+Total: {{ total | fromat "0.00" }}
+Nom : ｛｛nom｝｝</code></pre>
+<p>What <code>tags()</code> lists, kind, tag and reason:</p>
+<pre><code>text "{{first name}}" space-in-name
+text "{{ order }" missing-delimiter
+field "{{ date }}"
+text "{{ total | fromat \"0.00\" }}" unknown-filter
+text "｛｛nom｝｝" full-width</code></pre>
+<p>
+    And what <code>render()</code> gives with data holding every one of those values, a <code>first name</code>,
+    an <code>order</code>, a <code>total</code> and a <code>nom</code>:
+</p>
+<pre><code>warning: TEMPLATE_NOT_A_TAG {"texts":[{"text":"{{first name}}","part":"word/document.xml","reason":"space-in-name"}, ... ],"found":4}
+Dear {{first name}},
+Your order {{ order } ships on 9 November.
+Total: {{ total | fromat "0.00" }}
+Nom : ｛｛nom｝｝</code></pre>
+<p>
+    The document is what 8.6.0 would write. What changed is that it is no longer silent.
+    <code>tags()</code> lists each near miss as <code>kind: 'text'</code> with a <code>reason</code>, and
+    <code>render()</code> and <code>check()</code> raise one <code>TEMPLATE_NOT_A_TAG</code> warning per call
+    with each text, its part and its reason. The four reasons are exactly these:
+</p>
+<table role="table">
+    <thead role="rowgroup">
+        <tr role="row"><th role="columnheader">Reason</th><th role="columnheader">Example</th><th role="columnheader">What it is</th></tr>
+    </thead>
+    <tbody role="rowgroup">
+        <tr role="row"><td role="cell"><code>space-in-name</code></td><td role="cell" data-label="Example"><code>{{first name}}</code></td><td role="cell" data-label="What it is">A name with white space in it: letters, digits, <code>_ . -</code> and spaces, starting with a letter or <code>_</code>, at most 64 characters</td></tr>
+        <tr role="row"><td role="cell"><code>unknown-filter</code></td><td role="cell" data-label="Example"><code>{{ total | fromat "0.00" }}</code></td><td role="cell" data-label="What it is">A field through a word after <code>|</code> that is no filter, built in or in <code>formatters</code></td></tr>
+        <tr role="row"><td role="cell"><code>missing-delimiter</code></td><td role="cell" data-label="Example"><code>{{ name }</code>, <code>{ name }}</code></td><td role="cell" data-label="What it is">A name between delimiters one of which is a character short</td></tr>
+        <tr role="row"><td role="cell"><code>full-width</code></td><td role="cell" data-label="Example"><code>｛｛nom｝｝</code></td><td role="cell" data-label="What it is">Delimiters typed with full-width characters, as a Japanese or Chinese keyboard types them</td></tr>
+    </tbody>
+</table>
+<p>
+    It is a warning, not an error, because 8.6.0 rendered every one of these templates and some such text is
+    meant. Refusing them would break templates that work.
+</p>
+
+<h2>Braces That Are Just Braces</h2>
+<p>
+    The first two reasons are easy, because they sit between whole delimiters, where the engine already looks
+    for tags. The hard one is <code>missing-delimiter</code>. A template can hold code, JSON, set notation and
+    sentences with braces in them, and none of that may be reported. Each line below is a template of its own,
+    with what <code>tags()</code> lists as text:
+</p>
+<pre><code>Use {x} or { x } in a set.                      -&gt; nothing
+Send `{"name": {"first": "Ana"}}` as the body.  -&gt; nothing
+const o = {a: {b}};                             -&gt; nothing
+A pair of sets: {{x}, {y}}.                     -&gt; nothing
+An empty {{}} stays.                            -&gt; nothing
+Dear {{ name }, welcome.                        -&gt; {{ name } (missing-delimiter)
+Dear { name }}, welcome.                        -&gt; { name }} (missing-delimiter)
+Dear {{ name }, see {x}.                        -&gt; {{ name } (missing-delimiter)
+Dear {{ name }, see {x}}.                       -&gt; nothing</code></pre>
+<p>
+    Look at <code>{{x}, {y}}</code>. Read alone, <code>{{x}</code> is a start delimiter, a name and an end one
+    character short, and <code>{y}}</code> is the same the other way round. Together they are a set of two sets.
+    The difference is balance: the brace <code>{{x}</code> leaves open, a later one closes.
+</p>
+<p>
+    So officeParser counts braces, typed as stored, as a stack. The start's character opens one. The end's
+    character closes one when any is open, so the count never goes below zero. A near miss opens its own start
+    characters and then closes its own end characters, the same way. Then:
+</p>
+<ul>
+    <li>
+        A short start (<code>{ name }}</code>) is not reported inside braces still open, or right after the start's
+        own character.
+    </li>
+    <li>
+        A short end (<code>{{ name }</code>) that leaves some of its braces open is pending: it is code if a later
+        brace closes everything it left open, and reported if anything is still open at the end of the paragraph.
+        That is why the last two lines above differ by one brace.
+    </li>
+    <li>
+        A short end that leaves nothing open is reported at once. Nothing later can make it balance.
+    </li>
+</ul>
+<p>
+    This is only done for delimiters of one character typed twice or more each side, such as the default
+    <code>{{</code> and <code>}}</code>, where "one character short" means something. With delimiters of one character for
+    both ends, such as <code>$$</code> and <code>$$</code>, a character both opens and closes, so it balances nothing,
+    and braces are not counted:
+</p>
+<pre><code>Total $5. Dear $ name $$   [$$ $$]   -&gt; $ name $$ (missing-delimiter)</code></pre>
+
+<h2>One Pass, and the Version That Was Wrong</h2>
+<p>
+    A template is input a caller may not control, so the scan has to be linear. It walks the paragraph's text
+    once and stops only at a character a delimiter can start with, its full-width form, or, when braces are
+    counted, a closing brace. Each stop looks ahead at most a delimiter, a name of up to 64 characters and another
+    delimiter, and builds nothing but that short name. Pending short ends sit on a stack whose levels rise strictly, so each is pushed once and popped once.
+    I timed the scan alone, one run each on my M1 Pro under Node 24, on three of the shapes the tests use, at two lengths:
+</p>
+<table role="table">
+    <thead role="rowgroup">
+        <tr role="row"><th role="columnheader">Paragraph</th><th role="columnheader">Smaller</th><th role="columnheader">Twice the length</th></tr>
+    </thead>
+    <tbody role="rowgroup">
+        <tr role="row"><td role="cell"><code>{{a}</code> repeated, every one left open</td><td role="cell" data-label="Smaller">2.0M characters, 43 ms</td><td role="cell" data-label="Twice the length">4.0M characters, 66 ms</td></tr>
+        <tr role="row"><td role="cell"><code>{{a}</code> repeated, then as many <code>}</code></td><td role="cell" data-label="Smaller">1.3M characters, 27 ms</td><td role="cell" data-label="Twice the length">2.5M characters, 53 ms</td></tr>
+        <tr role="row"><td role="cell"><code>{{ a }}}</code> repeated, end delimiter <code>}}}}</code></td><td role="cell" data-label="Smaller">2.0M characters, 25 ms</td><td role="cell" data-label="Twice the length">4.0M characters, 48 ms</td></tr>
+    </tbody>
+</table>
+<p>
+    It did not start out like this. 8.7.0 went through rounds of review before release, and the scan was
+    rewritten twice. The first version visited every character and allocated at each, five times the cost
+    of reading the text. It charged each near miss against the template's XML element limit, so plain text that
+    8.6.0 rendered was refused. And it reported both halves of <code>{{x}, {y}}</code>. The fix counted braces.
+</p>
+<p>
+    That counting is what the fourth round found broken. It applied each near miss to the depth as one signed
+    number, the start characters it opens minus the end characters it closes, and it made every short end pending.
+    That holds while the end is no longer than the start. With <code>{{</code> and <code>}}}</code>,
+    <code>{{ name }}</code> is a short end that opens two and closes two: it leaves nothing open, but it was still
+    made pending at the depth it found, and the next unrelated closing brace closed it as code.
+    <code>Dear {{ name }}, see {x}.</code> reported nothing; 8.7.0 as released reports <code>{{ name }}</code> there. With <code>}}}}</code>, the net was negative and the
+    depth went below zero. Past the 1,000 near misses a template lists, pending ends were kept in a bit set,
+    a bit per depth, and a depth of -1 became word <code>-1 &gt;&gt;&gt; 5</code>, 134,217,727: an array of 512 MB
+    for one paragraph. Listed and unlisted pending ends also followed different rules, so the same text was
+    counted only once the list was full.
+</p>
+<p>
+    That was two representations of one idea, and a signed number only one branch kept above zero. The fix
+    replaced them with one stack and wrote down what must stay true:
+</p>
+<ul>
+    <li>The depth never falls below zero and never exceeds the start characters read.</li>
+    <li>Only a short end that leaves its own braces open is pending, at the depth before it.</li>
+    <li>Pending levels rise strictly, so when one is closed, every one above it is closed too.</li>
+    <li>Each pending entry is pushed once and closed or reported once, so the count is exact.</li>
+</ul>
+<p>
+    The scan is now tested against a reference written as plainly as possible: braces are objects on an explicit
+    stack, each near miss owns the braces it opens, and a pending one is reported if one of its braces is still on
+    the stack at the end. It is quadratic, which is fine for short random texts. The suite runs 20,000 texts in its
+    fast mode and 200,000 in full, each with room for 0, 1, 2, 3 and 1,000 listings. Here, 20,000 texts, 10,645 of them
+    with near misses, gave no differences in 564 ms on the same machine.
+</p>
+
+<h2>A Thousand, Then a Count</h2>
+<p>
+    Each listing takes a few hundred bytes for a few characters of text, so a template lists at most 1,000 and
+    counts the rest. A template of 1,500 paragraphs, <code>Row 0: {{ value 0 }}</code> to <code>Row 1499: {{ value 1499 }}</code>:
+</p>
+<pre><code>tags() listed 1000 texts
+warning: TEMPLATE_NOT_A_TAG found 1500 listed 1000
+  1500 texts that look like template tags are not tags and are written as typed (only the first 1000 are listed): ...</code></pre>
+<p>
+    <code>tags()</code> lists, and raises the warning only when its list was cut. The 1,000 are for the whole
+    template. Notes that only loops refer to are compiled on their own, and earlier on the 8.7.0 branch they took a
+    second room of 1,000; one room now serves every part.
+</p>
+
+<h2>Numbers Written for People</h2>
+<p>
+    Data from a German or Brazilian spreadsheet writes one thousand two hundred and thirty-four and a half as
+    <code>1.234,50</code>, and French data as <code>1 234,50</code>. In 8.6.0 that was text, not a number, and a number picture refused it. 8.7.0 reads it with
+    <code>dataNumberSeparators</code>. The template here is <code>Total: {{ total | format "#,##0.00" }}</code>:
+</p>
+<table role="table">
+    <thead role="rowgroup">
+        <tr role="row"><th role="columnheader">Data</th><th role="columnheader">Config</th><th role="columnheader">Result</th></tr>
+    </thead>
+    <tbody role="rowgroup">
+        <tr role="row"><td role="cell"><code>"1.234,50"</code></td><td role="cell" data-label="Config">none</td><td role="cell" data-label="Result"><code>TEMPLATE_DATA_INVALID</code> (unformattable)</td></tr>
+        <tr role="row"><td role="cell"><code>"1.234,50"</code></td><td role="cell" data-label="Config"><code>dataNumberSeparators: { decimal: ',', group: '.' }</code></td><td role="cell" data-label="Result"><code>Total: 1,234.50</code></td></tr>
+        <tr role="row"><td role="cell"><code>"12,50"</code></td><td role="cell" data-label="Config">the same</td><td role="cell" data-label="Result"><code>Total: 12.50</code></td></tr>
+        <tr role="row"><td role="cell"><code>"1.5"</code>, <code>"1.50"</code></td><td role="cell" data-label="Config">the same</td><td role="cell" data-label="Result">unformattable</td></tr>
+        <tr role="row"><td role="cell"><code>"0.500"</code></td><td role="cell" data-label="Config">the same</td><td role="cell" data-label="Result">unformattable</td></tr>
+        <tr role="row"><td role="cell"><code>"1234.567"</code></td><td role="cell" data-label="Config">the same</td><td role="cell" data-label="Result">unformattable</td></tr>
+        <tr role="row"><td role="cell"><code>"1 234,50"</code> (no-break space)</td><td role="cell" data-label="Config"><code>{ decimal: ',', group: ' ' }</code></td><td role="cell" data-label="Result"><code>Total: 1,234.50</code></td></tr>
+    </tbody>
+</table>
+<p>
+    The refusals are the point. With <code>.</code> for groups, <code>1.5</code> could be one and a half written the
+    English way, or a typo. Rather than guess, a group separator must be followed by groups of exactly three digits,
+    and the first group is one to three digits. The first group also may not start with 0. That rule came from
+    review before the release: until then, <code>0.001</code> was read as 1 and <code>0.500</code> as 500, text written with a decimal
+    point read as a grouped integer. A grouped integer never starts with 0, so <code>0.500</code> is now refused.
+</p>
+<p>
+    The rule cannot catch everything. With the same setting, <code>"1.500"</code> is fifteen hundred, as German
+    data means it. If the data mixes both ways of writing numbers, no setting can read it right.
+</p>
+<p>
+    <code>numberSeparators</code>, which existed before, says how a picture writes numbers. It stays output only.
+    Data and document often come from different places, and tying the two together would break the common case:
+</p>
+<pre><code>"1250.5"   { numberSeparators: { decimal: ',', group: '.' } }       -&gt; Total: 1.250,50
+"1250.5"   { dataNumberSeparators: { decimal: ',', group: '.' } }   -&gt; TEMPLATE_DATA_INVALID unformattable</code></pre>
+<p>Data from a JSON API fills a German document with the first. With one setting for both, it would be refused.</p>
+
+<h2>Text That Is a Number</h2>
+<p>
+    An application filling templates from a table gets every value as text. In 8.6.0,
+    <code>{{ if total &gt; 100 }}</code> with <code>total: '250'</code> was refused as <code>incomparable</code>. In
+    8.7.0, text that is a number compares with a number as that number, read with
+    <code>dataNumberSeparators</code> when set. Text that is not a number is still refused, because a silent false
+    would pick the wrong branch. With <code>{{ if total &gt; 100 }}Large order{{ else }}Small order{{ endif }}</code>:
+</p>
+<pre><code>250         -&gt; Large order
+"250"       -&gt; Large order
+"99.5"      -&gt; Small order
+"150 EUR"   -&gt; TEMPLATE_DATA_INVALID incomparable (text with number)
+"1.234,50"  -&gt; TEMPLATE_DATA_INVALID incomparable (text with number)
+"1.234,50"  -&gt; Large order   (with dataNumberSeparators: { decimal: ',', group: '.' })</code></pre>
+
+<h2>A Keyword From Another Language</h2>
+<p>
+    Template languages spell their branches differently, and a hand used to another one types
+    <code>{{ elseif b }}</code>, <code>{{ elif b }}</code> or <code>{{ end if }}</code>. 8.6.0
+    already refused these with <code>TEMPLATE_SYNTAX</code> and the remedy in its message. 8.7.0 puts the fix in
+    <code>details.suggestion</code>, the tag as it should be typed, so an editor can offer it:
+</p>
+<pre><code>{{ elseif b }}   -&gt; TEMPLATE_SYNTAX unreadable, suggestion {{ else if b }}
+{{elif  b}}      -&gt; TEMPLATE_SYNTAX unreadable, suggestion {{else if b}}
+{{ end if }}     -&gt; TEMPLATE_SYNTAX unreadable, suggestion {{ endif }}</code></pre>
+<p>The spaces typed next to the delimiters are kept, so the suggestion matches how the tag was written.</p>
+
+<h2>What It Does Not Catch</h2>
+<ul>
+    <li>
+        <code>{{ name } }</code> balances, so it is read as code and not reported, though it is likely a typo. A rule
+        that reported it would also report code.
+    </li>
+    <li>A brace stored as a numeric character reference, <code>&amp;#123;</code>, is not counted as a brace.</li>
+    <li>The scan's cost grows with the length of the delimiters, which a caller sets.</li>
+    <li>Across parts, the 1,000 listings fill in the order the parts are compiled, not the order they are shown.</li>
+</ul>]]></content:encoded>
+    </item>
+    <item>
+      <title>Reading a Details Block in Markdown the Way GitHub Shows It</title>
+      <link>https://officeparser.harshankur.com/blog/reading-details-in-markdown.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/reading-details-in-markdown.html</guid>
+      <pubDate>Sun, 08 Nov 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Format Deep Dives</category>
+      <description>How officeParser 8.7.0 reads a README&#39;s details and summary tags as a disclosure, following CommonMark for blocks and a browser&#39;s tree builder for which element an end tag closes, and how it is checked against a reference and a browser.</description>
+      <content:encoded><![CDATA[<p>
+    A README on GitHub often folds its longer parts away behind a triangle. "Building from source", a click, and
+    the steps open. In Markdown that is a few lines of HTML around ordinary Markdown:
+</p>
+<pre><code>&lt;details&gt;
+&lt;summary&gt;Building from source&lt;/summary&gt;
+
+Clone the repository, then:
+
+```bash
+npm ci
+npm run build
+```
+
+- Node 18 or later
+- No native modules
+
+&lt;/details&gt;
+
+Back in the README.</code></pre>
+<p>
+    officeParser 8.6.0 read that as text. The summary became a paragraph, the body followed it, and saved back to
+    Markdown the fold was gone, with no warning:
+</p>
+<pre><code>Building from source
+
+Clone the repository, then:
+
+```bash
+npm ci
+npm run build
+```
+
+- Node 18 or later
+- No native modules
+
+Back in the README.</code></pre>
+<p>
+    8.7.0 reads it as a <code>disclosure</code> node. This post is about why that is harder than it looks, the rule
+    the Markdown reader now follows, the designs it took to get there, and how I check it.
+</p>
+
+<h2>Neither Parser Alone</h2>
+<p>
+    Markdown hands HTML to HTML. But a disclosure in a README is not one piece of HTML: it is a tag, then Markdown
+    paragraphs, lists, quotes and code, then another tag.
+</p>
+<p>
+    First CommonMark decides the blocks. The <code>&lt;details&gt;</code> line starts an HTML block (its name is on
+    CommonMark's list of block-level tags), which runs to the next blank line and takes the
+    <code>&lt;summary&gt;</code> line with it. Then come a paragraph, a fenced code block and a list, all Markdown,
+    and then <code>&lt;/details&gt;</code>, another HTML block. The renderer passes the two HTML blocks through as
+    written and renders the rest. Nothing in CommonMark says the paragraph is inside anything.
+</p>
+<p>
+    Then a browser builds a tree from that HTML. Its tree builder opens a details element at
+    <code>&lt;details&gt;</code>, and everything after it is a child until <code>&lt;/details&gt;</code> closes it.
+    So the disclosure is a fact about the two together: CommonMark decides blocks and containers, and the browser
+    decides which element each end tag closes.
+</p>
+<p>
+    The browser's half has a rule worth knowing. An end tag closes the nearest open element of its name,
+    and every element opened after it. Here a <code>&lt;/details&gt;</code> stands inside a quote:
+</p>
+<pre><code>&lt;details&gt;
+&lt;summary&gt;Notes&lt;/summary&gt;
+
+&gt; Read this first.
+&gt; &lt;/details&gt;
+&gt; After the disclosure.</code></pre>
+<p>
+    CommonMark puts the last two lines in the quote, as one HTML block (it runs to a blank line). The quote opened
+    after the disclosure, so <code>&lt;/details&gt;</code> closes the quote too, and "After the disclosure." lands
+    after both. 8.7.0 reads it that way. The tree, then the Markdown it writes back:
+</p>
+<pre><code>disclosure
+  summary
+    paragraph
+      text "Notes"
+  paragraph
+    text "Read this first."
+paragraph
+  text "After the disclosure."</code></pre>
+<pre><code>&lt;details&gt;
+&lt;summary&gt;Notes&lt;/summary&gt;
+
+&gt; Read this first.
+
+&lt;/details&gt;
+
+After the disclosure.</code></pre>
+
+<h2>What 8.7.0 Reads</h2>
+<p>
+    The README above, read with <code>parseOffice(buffer, { fileType: 'md' })</code>, gives this tree (each
+    <code>list</code> node is an item, as everywhere in officeParser's AST):
+</p>
+<pre><code>disclosure
+  summary
+    paragraph
+      text "Building from source"
+  paragraph
+    text "Clone the repository, then:"
+  code "npm ci\nnpm run build"
+  list (unordered item)
+    text "Node 18 or later"
+  list (unordered item)
+    text "No native modules"
+paragraph
+  text "Back in the README."</code></pre>
+<p>
+    The Markdown written back is the input again, line for line. Written as HTML, it is a
+    <code>&lt;details&gt;</code> with its <code>&lt;summary&gt;</code>, a paragraph, a <code>&lt;pre&gt;</code> and a
+    <code>&lt;ul&gt;</code> inside it, and EPUB writes it the same way. Other formats have no fold, so every other
+    writer writes the summary in bold and then the body, nothing hidden.
+</p>
+<p>
+    The summary is a node of its own, the disclosure's first child, holding blocks, because a summary can hold more
+    than a line. GitHub shows a heading in a summary when it is written between a
+    <code>&lt;summary&gt;</code> line and a <code>&lt;/summary&gt;</code> line with blank lines around it:
+</p>
+<pre><code>&lt;details open&gt;
+&lt;summary&gt;
+
+### Changes in this release
+
+&lt;/summary&gt;
+
+Fixes and **new readers**.
+
+&lt;/details&gt;</code></pre>
+<pre><code>disclosure (open)
+  summary
+    heading 3
+      text "Changes in this release"
+  paragraph
+    text "Fixes and "
+    text "new readers"
+    text "."</code></pre>
+<p>Written as HTML, the heading stays in the summary:</p>
+<pre><code>&lt;details open=""&gt;&lt;summary&gt;&lt;h3 id="changes-in-this-release"&gt;Changes in this release&lt;/h3&gt;
+
+&lt;/summary&gt;
+
+&lt;p&gt;Fixes and &lt;b&gt;new readers&lt;/b&gt;.&lt;/p&gt;
+
+&lt;/details&gt;</code></pre>
+
+<h2>The Rule, Written Down</h2>
+<p>
+    The Markdown reader now follows one specification, in <code>src/parsers/MarkdownParser.ts</code>: what GitHub
+    shows is a CommonMark renderer's output, read by a browser's tree builder. In practice that is four things.
+</p>
+<p>
+    <strong>Blocks are CommonMark's.</strong> A line starting with <code>&lt;details</code>,
+    <code>&lt;/details</code> or <code>&lt;/summary</code> starts an HTML block, which interrupts a paragraph and is
+    never a lazy continuation line. So it ends a quote or list item it is not marked or indented into.
+</p>
+<p>
+    <strong>One tag scan per block</strong> (<code>analyzeBlock</code>). In an HTML block, tags are read as a
+    browser's tokenizer reads them: every tag of any name, whole, with its quoted attributes, and comments,
+    declarations and the content of elements such as <code>&lt;script&gt;</code> read past. In paragraph text they
+    are read in CommonMark's inline order: backslash escapes, code spans, link destinations and titles, then raw
+    HTML. In code and pipe tables there are none. So a tag's name inside another tag's attribute is not a tag:
+</p>
+<pre><code>&lt;p title="the &lt;details&gt; element"&gt;Disclosures fold content away.&lt;/p&gt;
+
+&lt;details&gt;
+&lt;summary&gt;Example&lt;/summary&gt;
+
+Folded text.
+
+&lt;/details&gt;
+
+After.</code></pre>
+<pre><code>paragraph
+  text "Disclosures fold content away."
+disclosure
+  summary
+    paragraph
+      text "Example"
+  paragraph
+    text "Folded text."
+paragraph
+  text "After."</code></pre>
+<p>
+    One disclosure, not two, and "After." outside it. A code span works the same way: in a body,
+    <code>`&lt;/details&gt;`</code> is text, and the disclosure goes on.
+</p>
+<p>
+    <strong>One tree pass</strong> (<code>planDisclosures</code>). The tags of all the blocks at a level go through
+    one stack, as a browser builds its tree. A start tag opens an element. An end tag closes the nearest open
+    element of its name in scope (a table and its cells bound the scope) and every element opened after it, or is
+    ignored. A quote, a list item and a heading are elements of their block, closed at its end. That is how
+    <code>&lt;/details&gt;</code> closes the quote above, and how a <code>&lt;/div&gt;</code> closes a disclosure
+    opened inside its div. Each element is pushed once and popped once, and an end tag finds its element from
+    counts of open elements by name, so the pass is linear in the number of tags.
+</p>
+<p>
+    <strong>The summary runs to its <code>&lt;/summary&gt;</code>.</strong> A disclosure's summary is a
+    <code>&lt;summary&gt;</code> that comes first in it, with only white space, blank lines and ignored end tags
+    before it, and it ends at its <code>&lt;/summary&gt;</code> wherever that falls, across blocks. What it holds is
+    read as the body is, Markdown where it spans blocks, and becomes the <code>summary</code> node's children.
+</p>
+<p>
+    Nesting is bounded. Disclosures nest 16 deep; a deeper one is flattened into the one holding it: its tags go,
+    its summary and body stay as text, in order. Eighteen nested disclosures, each with a summary and a line of
+    body, read like this:
+</p>
+<pre><code>disclosures written: 18, deepest disclosure in the tree: 16
+texts kept: 36 of 36
+--- the 16th disclosure
+disclosure
+  summary
+    paragraph
+      text "Level 16"
+  paragraph
+    text "Body 16."
+  paragraph
+    text "Level 17"
+  paragraph
+    text "Body 17."
+  paragraph
+    text "Level 18"
+  paragraph
+    text "Body 18."</code></pre>
+
+<h2>Three Designs</h2>
+<p>
+    I did not start with that rule. The git history of this release shows three designs, and each taught me
+    something about the problem. All three were written on the 8.7.0 branch before the release; only the third
+    was ever published.
+</p>
+<p>
+    The first joined pieces. The Markdown reader already joined an HTML table that spans blank lines into one HTML
+    block, with the Markdown pieces between set aside and read on their own afterwards. A disclosure was handled the
+    same way. Simple READMEs worked, but the body was never read as a document: a later line pass still cut the
+    joined block at a <code>&lt;div&gt;</code> line and left placeholders in the output, alignment did not carry
+    from one piece to the next, and an inline <code>&lt;details&gt;</code> in a body paragraph was counted but never
+    opened.
+</p>
+<p>
+    The second read the body as a document of its own: lift a disclosure's blocks out by its tags and read them with
+    the same block reading as the document, nested disclosures too. That structure was sound, and I kept it. What
+    was wrong was underneath. Where tags were was a list of cases, not a definition: it searched for the names
+    <code>details</code>, <code>summary</code> and <code>table</code> with a pattern, so a quoted attribute holding
+    "&lt;details&gt;" was a tag, and a <code>&lt;/div&gt;</code> closed nothing. There was no tree builder either.
+    After every close it cut the rest of the block and scanned it again, which took quadratic time on hostile
+    input, and a slice cut after a tag was read as a text of its own, so paragraph text became blocks and a code
+    span's <code>&lt;/details&gt;</code> became a real tag. And the summary was a string, so a heading or a link in
+    it was lost.
+</p>
+<p>
+    The third is the one in 8.7.0. It keeps the second's reading and replaces the machinery: one scan per block, one
+    tree pass per level, the cuts applied once, each slice read as what it was in its block, and the summary a node.
+    The specification above was written down during the second design, but its code still worked case by case, and
+    each fix was right about one case and silent about the next. The third was built from the specification, step
+    for step, with a check against it.
+</p>
+
+<h2>Checking It Against a Browser</h2>
+<p>
+    Examples cannot check a rule like this. So there is a second implementation,
+    <code>test/helpers/disclosureReference.ts</code>, written apart from the reader: a small CommonMark block parser (with GitHub's pipe tables) that renders HTML, then a small HTML tree builder with the
+    rules of the HTML standard that matter here. It is quadratic in places and does not care, because its texts
+    are short.
+</p>
+<p>
+    A generator draws random Markdown that mixes disclosures with quotes, admonitions, lists, headings, tables,
+    fenced and indented code and HTML blocks, with tags in attributes, comments, upper case, enclosing
+    <code>&lt;div&gt;</code> elements and summaries holding blocks. Here is the start of one it drew:
+</p>
+<pre><code>```
+w0 &lt;/details&gt;
+&lt;details&gt;
+```
+
+&lt;details &gt;
+&lt;summary&gt;
+
+w1 w2 w3
+
+&lt;/summary&gt;
+
+&lt;details title="a&gt;b"&gt;
+&lt;summary title="s&gt;t"&gt;</code></pre>
+<p>
+    For each text, the reader's disclosure tree has to be the reference's, and stay so over three round trips
+    through Markdown, with the Markdown settled. The fast test run draws 1,000 texts and the full run three seeds of
+    10,000. One seed of 1,000, run for this post:
+</p>
+<pre><code>{
+  checked: 987,
+  outOfDomain: 13,
+  distinct: 1000,
+  reasons: {
+    'summary not first in its disclosure': 11,
+    'disclosure in a list item, heading or cell closed in another block': 2
+  },
+  mismatches: 0,
+  unstable: 0
+}</code></pre>
+<p>
+    The texts out of its domain are the cases the reader does not follow yet. They are counted, not hidden.
+</p>
+<p>
+    That leaves the question of whether the reference is right. When I first wrote it, I checked its tree builder
+    against a real one: generated cases, the reference's HTML loaded in Chromium from a page served on my own
+    machine, and the browser's tree compared with the reference's. All 1,419 trees were the same. The generator has
+    learned more shapes since, tag names inside attributes, comments and enclosing elements among them, which that
+    comparison did not cover.
+</p>
+<p>
+    Beside it, random ASTs with disclosures are written to Markdown and HTML and read back over several passes
+    with nothing lost, and hostile shapes (closes in nested quotes, unclosed quoted values, long runs of summaries)
+    are each read at a size n and at 4n, to show the time grows in line with the text.
+</p>
+
+<h2>What It Does Not Read Yet</h2>
+<ul>
+    <li>
+        A <code>&lt;summary&gt;</code> placed after body content is the summary in a browser. officeParser reads it
+        as a body paragraph, and the disclosure has no summary.
+    </li>
+    <li>
+        A summary no <code>&lt;/summary&gt;</code> closes runs to the end of its disclosure in a browser. Here it ends
+        at the end of its block, so the body stays a body and does not become one long summary.
+    </li>
+    <li>
+        A disclosure written inside a Markdown list item (<code>- &lt;details&gt;...</code>), a heading or a pipe
+        table cell is read as that block's text, tags included, as 8.6.0 read it, and written back with the tags
+        escaped. One in an HTML list item is read, and the Markdown writer writes a list item holding a disclosure as
+        HTML so that it reads back. A disclosure opened in a list item and closed in a later block of that item does
+        not pair inside the item.
+    </li>
+    <li>Disclosures nested more than 16 deep are flattened, their text kept.</li>
+    <li>
+        A few of the Markdown reader's block readings from 8.6.0 still differ from CommonMark, such as lines after
+        an HTML block read as Markdown, some lazy lines in list items, and a <code>&lt;summary&gt;</code> line right
+        after a quote line read as the quote's text. The generator keeps them out, and the reference does not model
+        link destinations, raw-text elements or setext headings.
+    </li>
+</ul>]]></content:encoded>
+    </item>
+    <item>
+      <title>How a Document Library Is Tested</title>
+      <link>https://officeparser.harshankur.com/blog/testing-a-document-library.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/testing-a-document-library.html</guid>
+      <pubDate>Sun, 08 Nov 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Build Notes</category>
+      <description>What officeParser 8.7.0&#39;s test suite holds and why: committed baselines and fingerprints, round trips that must settle, seeded generators and the references they are checked against, linear-time ratios, budgets tested from both sides, and LibreOffice as a referee.</description>
+      <content:encoded><![CDATA[<p>
+    officeParser reads fourteen file types and writes fifteen output formats, all through the same tree. A change
+    to how Markdown reads a disclosure can move a word in a Word file written from it. A new limit on repeated
+    content can cut a spreadsheet that was fine. So for any change the question is not only whether it works, but
+    what else it touched.
+</p>
+<p>
+    This post is about how the test suite of 8.7.0 answers that. Each kind of test below is a real one from
+    <code>test/</code>, and every number is one I measured on my Mac (an M1 Pro, Node 24) while writing this, or one the repository
+    records. <code>npm test</code> is the gate a change is done by; <code>npm run test:fast</code> is the same chain
+    without the build steps and with the long suites in fast mode, which leaves PDF out and prints a <code>SKIP</code> row for it.
+</p>
+
+<h2>Output a Change Must Not Touch</h2>
+<p>
+    The oldest layer is baselines. <code>test/parser/baseline</code> holds, for each of the fourteen sample files,
+    its tree as JSON and its text. <code>test/generator/baseline</code> holds 180 files written from those samples,
+    each beside a file of its metrics. The suites compare against them with some tolerance (a text must match
+    exactly, or else in at least 95% of its characters), but the real check is stricter:
+    <code>npm run test:baseline</code> writes them again, and the diff shows every byte that moved. For that to mean
+    anything the output must be reproducible, so the generator suite pins the modification date that packaged
+    formats such as EPUB write into their metadata and onto every zip entry. Its comment says why: while the
+    baselines changed on every run, they were reverted wholesale, and a real change would have gone with the noise.
+</p>
+<p>
+    Fourteen files are not many documents, though. For a change meant to leave a whole area alone, I fingerprint
+    more. Partway through 8.7.0, before I rewrote how Markdown reads <code>&lt;details&gt;</code>, I took 402 Markdown documents with no
+    disclosure in them: the two Markdown test files and 400 drawn from a seeded fuzz of every other block kind.
+    Each one's tree, metadata, Markdown, HTML and text are hashed into one fingerprint.
+    <code>test/helpers/markdownFingerprints.json</code> keeps them as commit 15a4c7ec gave them (one was written
+    again later, for a meant change to how a captioned picture ends its line), and the test fails if one changes. Running it again now:
+</p>
+<pre><code>kept from 15a4c7ec: 402 fingerprints; now: 402; differ: 0 (374 ms)</code></pre>
+<p>
+    The reader has one random value of its own, a token it uses inside HTML tables, so the helper pins
+    <code>Math.random</code> while it reads. Otherwise the same document would give a new fingerprint on every run.
+</p>
+
+<h2>Round Trips That Settle</h2>
+<p>
+    A writer whose output is read back should keep what it wrote. That is not the same as writing the same bytes
+    twice: writing Markdown, reading it and writing it again can move a space. What must not happen is a word lost,
+    two words run together, or output that never stops changing.
+</p>
+<p>
+    <code>test/helpers/htmlPathRoundTrip.ts</code> draws random list items holding a disclosure and tables with a
+    merged cell, the two that Markdown writes as HTML, and fills them with 25 kinds of node. Every word is named
+    <code>w0</code>, <code>w1</code>, <code>w2</code> in order, which makes a loss easy to see: a word missing from
+    the text was lost, and one that is there but not standing alone was joined. Each tree is written and read three
+    times; after every pass every word and anchor id must be there, and a fourth write must equal the third. Here
+    is part of one drawn tree's first write:
+</p>
+<pre><code>&lt;td&gt;&lt;ol&gt;&lt;li&gt;w3
+&lt;p&gt;&lt;a href="https://e.x/v"&gt;w4&lt;/a&gt;&lt;/p&gt;
+&lt;div class=&quot;admonition admonition-important&quot; data-type=&quot;important&quot;&gt;&lt;p&gt;&lt;b&gt;w5&lt;/b&gt;&lt;/p&gt;
+&lt;p&gt;w6&lt;/p&gt;&lt;/div&gt;</code></pre>
+<p>
+    The second write has one space more, after <code>w3</code>. The third is the second, and so is the fourth. That
+    is settling, and it is why the test compares the last passes, not the first two. The helper on 300 trees:
+</p>
+<pre><code>seed 1: 300 ASTs, 300 distinct, 25 of 25 kinds, 0 lose words, 0 join words, 0 lose anchors, 0 unsettled (1140 ms)</code></pre>
+<p>
+    <code>figureLineGenerator.ts</code> and <code>pictureMatrixGenerator.ts</code> do the same for captioned
+    pictures in every container that holds a line. Their tests also assert coverage: that all 54 pairs of
+    configuration and container were drawn, and that more than 95% of the picture documents were distinct.
+</p>
+
+<h2>A Generator That Repeated Itself</h2>
+<p>
+    That last assertion is there for a reason. Generated documents come from a seeded generator, so a failure can
+    be replayed. The helpers used the C library's linear congruential generator:
+</p>
+<pre><code>seed = (seed * 1103515245 + 12345) &amp; 0x7fffffff;</code></pre>
+<p>
+    In JavaScript that product is a floating-point number. Once the seed is large it passes 2^53 and loses its low
+    bits, which from seed 1 happens on the second draw. I ran the old formula until a value came back, and the
+    fixed one for a million draws:
+</p>
+<pre><code>old formula (floating point): { firstRepeatAt: 11155, cycleLength: 10466 }
+new formula (Math.imul):      { firstRepeatAt: null, cycleLength: 'none in 1,000,000 draws' }</code></pre>
+<p>
+    A cycle of 10,466 values. On the 8.7.0 branch, before the fix, the template engine's new property test drew
+    200,000 cases from it and passed, on far
+    fewer cases than it said. I counted the distinct cases (delimiters and text) in those 200,000 draws, before and
+    after commit 084c4afd:
+</p>
+<pre><code>200,000 look-alike cases, old generator: { distinctTexts: 362, distinctCases: 367 }
+200,000 look-alike cases, new generator: { distinctTexts: 188142, distinctCases: 197949 }</code></pre>
+<p>
+    367 against 197,949, the numbers in that commit's message. The fix multiplies in 32-bit integer arithmetic,
+    <code>Math.imul(seed, 1103515245)</code>, which keeps the full period of 2^31, and divides by 2^31 rather than
+    2^31 minus 1, so an index picked from a draw always falls inside its list.
+</p>
+<p>
+    A property test that passes says nothing about how much it tried, so the generated tests written since print
+    how many of their documents were distinct, and some assert it. The old
+    formula is still in a few places, among them the fingerprint corpus above, whose documents are fixed by the
+    fingerprints kept for them. I counted those too: all 402 are distinct.
+</p>
+
+<h2>Checked Against a Reference</h2>
+<p>
+    A random document needs an expected answer, and the code under test cannot give it. So two of 8.7.0's
+    readings have a second implementation, plain and slow on purpose, to be checked against.
+</p>
+<p>
+    <code>test/helpers/lookalikeReference.ts</code> is the template engine's look-alike scan, which reports text
+    that looks like a tag but is not one. The engine's scan is built to be fast; the reference keeps
+    braces as objects on a stack and, by its own comment, is quadratic. In
+    <code>Dear {{name}, your {{ order }} and {{total}}</code> it finds one look-alike, <code>{{name}</code>, as
+    <code>missing-delimiter</code>. Each random text is scanned with room to list 0, 1, 2, 3 and 1,000, and the
+    engine must list the reference's first ones and count the rest exactly. Fast mode runs 20,000 texts, the full
+    suite 200,000:
+</p>
+<pre><code>look-alike scan: 20,000 texts, 10645 with look-alikes, 0 differences (545 ms)</code></pre>
+<p>
+    <code>test/helpers/disclosureReference.ts</code> does the same for Markdown disclosures: a small CommonMark
+    block parser, then the HTML standard's tree-building rules that matter here, to say which words each disclosure
+    holds as GitHub shows it. A reference is only useful if it is honest about its edges. Texts the reader does not
+    read as the reference does, some by design and some open findings, are counted as out of its domain and named:
+</p>
+<pre><code>disclosures: 1,000 texts, 1000 distinct, 987 in the reference's domain, 0 differ, 0 unsettled (2088 ms)
+out of domain: {"summary not first in its disclosure":11,"disclosure in a list item, heading or cell closed in another block":2}</code></pre>
+
+<h2>Linear Time, Measured as a Ratio</h2>
+<p>
+    A small file must not cost minutes. The comments in <code>test/security/testSanitization.ts</code> record
+    why that needs saying: a line of backticks or of <code>[x](</code> once took
+    minutes to read, and 5,000 spaces in a table's delimiter row took 81 seconds.
+</p>
+<p>
+    A limit in seconds does not test this well: a fast machine passes a quadratic loop, a busy one fails a linear
+    one. So the suite's <code>linear</code> helper measures growth. It runs a shape at a quarter of its size, then at
+    full size, and allows the full run eight times the quarter's time plus 250 ms. Linear work takes four times as
+    long; quadratic work takes sixteen; the machine's speed cancels out. A case over the bound is measured once more
+    and the faster times kept, and a full run over two minutes fails whatever its ratio. Three of its Markdown
+    shapes, measured here at the same two sizes:
+</p>
+<pre><code>200 KB of backticks: 4 ms at a quarter, 11 ms at full size, ratio 2.4, within the bound: true
+200 KB of "[x](": 8 ms at a quarter, 27 ms at full size, ratio 3.5, within the bound: true
+a table and a line of 200,000 spaces: 5 ms at a quarter, 16 ms at full size, ratio 3.4, within the bound: true</code></pre>
+<p>
+    <code>test/helpers/timing.ts</code> sets the rule for the rest: no limit on wall-clock time is checked on a
+    single measurement. The last fix made before the 8.7.0 release, in code new to it, was of this kind: a disclosure summary made only of named anchors
+    looked each id up in the list so far (commit a77ddfbb), and its test now holds 80,000 anchors to eight times
+    the time of 20,000, plus 250 ms.
+</p>
+
+<h2>Budgets and What They Stop</h2>
+<p>
+    Size is the other cost. A document can refer to the same content many times, and every writer writes it out at
+    each use. <code>decompressionLimits.maxRepeatedContent</code>, 16 MiB by default plus 16 characters for each
+    byte of the document, bounds that. To see what it stops, I built the ODT of
+    <code>headerPartWeightTests</code>: two header parts whose one run has a font name of 50,000 characters, shown
+    by 2,000 paragraphs that alternate between them. I read it with the default budget, then with it lifted:
+</p>
+<pre><code>the file: 2,007 bytes
+default budget: 4000 headers, JSON 9,867,449 characters, 130 ms
+   REPEATED_CONTENT_LIMIT_EXCEEDED: Repeated content limit (16809328 characters: decompressionLimits.maxRepeatedContent, plus 16 per byte of the document) reached
+repeat budget lifted: 4000 headers, JSON 201,773,622 characters, 315 ms</code></pre>
+<p>
+    Two kilobytes that would become 200 MB of JSON. The test asserts that the ODT and DOCX versions warn, stay under
+    three times the budget and still write HTML, and that the same file with a 100-character font, alternated 200
+    times, keeps every header, unwarned. Running only that function, the ODT half:
+</p>
+<pre><code>PASS: odt: two headers in a 50,000-character font alternated 2,000 times are charged with the font, with REPEATED_CONTENT_LIMIT_EXCEEDED | REPEATED_CONTENT_LIMIT_EXCEEDED json 9867449, html &lt;!DOCTYPE html&gt;
+PASS: odt: two headers in a 100-character font alternated 200 times are all kept, unwarned | 400 headers, 0 empty</code></pre>
+<p>
+    That second line matters as much as the first, because a budget that cuts ordinary documents is a bug of its
+    own. In <code>xlsxCellAllowanceTests</code> that is the side that failed. A cell showing a shared string again
+    costs the zip three or four bytes, so a budget growing with the file's bytes grew too little: the comment
+    records 100,000 such cells over 500 rich strings losing the runs of 14,218. That happened on the 8.7.0 branch,
+    after I made each copied value count exactly once; 8.6.0, which counted less, cut none. The fix gives each such cell a small
+    allowance, and the test checks both the ordinary workbooks and the allowance, cell by cell:
+</p>
+<pre><code>PASS: xlsx: 200,000 cells showing 500 rich strings of four runs again (704 KB) keep every run, unwarned | 200000 cells, 0 cut
+PASS: xlsx: 50,000 cells showing a 228-character string are charged 128 less each while 64 characters a byte of the zip last, and no more | 2447 whole, expected 2447 (734 without the allowance) of 50000</code></pre>
+<p>
+    The expected 2,447 is not a snapshot: the test works it out from the parser's own constants, so a parser that
+    counts differently fails. <a href="https://officeparser.harshankur.com/blog/security-war-stories-zip-bombs-and-ssrf.html">Security war stories</a> covers
+    the older limits in this family.
+</p>
+
+<h2>LibreOffice as a Referee</h2>
+<p>
+    Reading my own output back only proves that my reader agrees with my writer; both can be wrong the same way.
+    An independent program is a better judge, and the repository leans on LibreOffice: the commit that added the ODT writer records that all 13 of its baselines open cleanly in
+    LibreOffice Writer, and the note-number tests encode marks as LibreOffice 7.3 shows them. No test in
+    <code>npm test</code> runs LibreOffice, so I run it by hand. For this post I wrote <code>test.docx</code> as
+    DOCX, ODT and RTF and <code>test.xlsx</code> as XLSX and ODS, had LibreOffice 7.3.7.2 convert each to HTML, and
+    looked for every word of officeParser's own reading in LibreOffice's:
+</p>
+<pre><code>test.docx written as docx: 11,804 bytes; LibreOffice converted it: true; 416 distinct words in the library's reading, 1 not in LibreOffice's (iii)
+test.docx written as odt: 9,193 bytes; LibreOffice converted it: true; 416 distinct words in the library's reading, 1 not in LibreOffice's (iii)
+test.docx written as rtf: 54,778 bytes; LibreOffice converted it: true; 416 distinct words in the library's reading, 0 not in LibreOffice's
+test.xlsx written as xlsx: 12,331 bytes; LibreOffice converted it: true; 386 distinct words in the library's reading, 0 not in LibreOffice's
+test.xlsx written as ods: 6,400 bytes; LibreOffice converted it: true; 387 distinct words in the library's reading, 1 not in LibreOffice's (4000000000000004)</code></pre>
+<p>
+    The <code>iii</code> is a list number: in the HTML LibreOffice made from the ODT, that list is
+    <code>&lt;ol type="i" start="3"&gt;</code>, so its numbering carries on as the library reads it. The other is a
+    real difference. The sample workbook stores 4.4000000000000004; the library reads those digits, and the ODS
+    writer keeps them as the cell's text beside the value 4.4; LibreOffice shows 4.4. That is what a referee is for:
+    the two readings disagree, and now I know where to look.
+</p>
+
+<h2>What the Suite Does Not Do</h2>
+<p>
+    <code>AGENTS.md</code> keeps its own list of gaps. There is no coverage floor: tests are written per suite and
+    fixture, not per function. The browser tests of the visualizer exist but are not in the <code>npm test</code>
+    chain. And a fast run says nothing about PDF.
+</p>
+<p>
+    What the suite does have is a habit: for every kind of check, ask how it could pass while proving nothing. A
+    baseline that churns, a generator that cycles, a reference with no stated edges, a time limit that depends on
+    the machine, a budget that cuts ordinary files. Each layer above answers one of those.
+</p>]]></content:encoded>
+    </item>
     <item>
       <title>Two Versions of pdf.js in One Process</title>
       <link>https://officeparser.harshankur.com/blog/two-versions-of-pdfjs-in-one-process.html</link>

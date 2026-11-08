@@ -1,0 +1,242 @@
+<p>
+    officeParser 8.7.0 fills OpenDocument text templates, <code>.odt</code> and <code>.ott</code>, with the same tags
+    and data as Word templates, through the same <code>OfficeTemplate.render</code>, <code>tags()</code> and
+    <code>check()</code>.
+</p>
+<p>
+    The tag language was never the hard part. The engine that pairs blocks and walks the data does not care which
+    format it is in, so I moved everything Word-specific out of it into a dialect, and wrote OpenDocument's. This post is about what that dialect had to know: where an ODT keeps its text, how a tag
+    gets split, why a 22-byte element is read as 16 spaces, and why every copy a loop makes needs new names.
+</p>
+
+<h2>A Small Template</h2>
+<p>
+    I built a template by hand, as an <code>.ott</code>: a greeting whose tag LibreOffice would have split across a
+    span, a reference after a long run of spaces, a loop over list items, a loop over table rows below a heading
+    row, and a loop over a paragraph holding a bookmark, a footnote and a comment. The header holds
+    <code>{{ company }} statement</code>. Then:
+</p>
+<pre><code>const data = {
+    company: 'Acme',
+    name: 'Ada',
+    ref: 'INV-7',
+    tasks: ['Sign', 'Return'],
+    lines: [{ item: 'Bolts', qty: 2 }, { item: 'Nuts', qty: 5 }],
+    people: [{ name: 'Ann' }, { name: 'Bob' }, { name: 'Cy' }],
+};
+const out = await OfficeTemplate.render(templatePath, { data });</code></pre>
+<p>Read back with <code>parseOffice</code> and written as text, the long run of spaces shortened to its count:</p>
+<pre><code>Dear Ada,
+Reference[256 spaces]INV-7
+To do: Sign
+To do: Return
+
+| Item  | Qty | 
+| Bolts | 2   | 
+| Nuts  | 5   | 
+
+Ann
+Bob
+Cy
+Checked.
+
+
+--- Notes ---
+About Ann
+About Bob
+About Cy</code></pre>
+<p>
+    I then opened the result in LibreOffice 7.3, headless, and printed it to PDF. It opened, the header read
+    "Acme statement", and LibreOffice numbered the three copied footnotes 1, 2 and 3.
+</p>
+
+<h2>What an ODT Keeps Where</h2>
+<p>
+    An ODT is a zip, like a DOCX, but flatter. There are no relationship files: parts are found by name.
+</p>
+<table>
+    <thead>
+        <tr><th>Part</th><th>What it holds</th><th>What a render does to it</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>mimetype</code></td><td>The package's media type, as plain text</td><td>Writes it first and stored, not compressed; switches a template's type to a document's</td></tr>
+        <tr><td><code>META-INF/manifest.xml</code></td><td>Every part and its media type, the package's own under the path <code>/</code></td><td>Switches the root's media type for an <code>.ott</code>; drops encryption data for a template that was decrypted</td></tr>
+        <tr><td><code>content.xml</code></td><td>The body, with the notes, comments and text boxes inside the paragraphs that hold them</td><td>Fills tags</td></tr>
+        <tr><td><code>styles.xml</code></td><td>Styles, and the master pages, which hold the headers and footers</td><td>Fills tags</td></tr>
+        <tr><td><code>meta.xml</code>, pictures, the rest</td><td>Title, author and the like; media</td><td>Copied as they are</td></tr>
+    </tbody>
+</table>
+<p>
+    Word keeps each header in a part of its own (<code>word/header1.xml</code>); OpenDocument keeps them all with
+    the page styles, so <code>tags()</code> gives the sample's header tag, <code>{{ company }}</code>, the part <code>styles.xml</code>.
+    The <code>mimetype</code> entry must come first and stored, so the type can be read at a fixed place near the
+    start of the file without unzipping. The sample's entries come out as <code>mimetype, META-INF/manifest.xml,
+    content.xml, styles.xml</code>, <code>mimetype</code> at compression method 0.
+</p>
+
+<h2>A Tag Split Across Spans</h2>
+<p>
+    In <a href="post:what-is-actually-inside-a-docx">what is actually inside a DOCX</a> I described Word's runs:
+    text sits in a <code>&lt;w:t&gt;</code> inside a <code>&lt;w:r&gt;</code>, and a new run starts at every change
+    of formatting, so a typed <code>{{name}}</code> can arrive in three. OpenDocument splits the same way with less
+    markup. Text sits straight in the paragraph, and only a stretch
+    with formatting of its own is wrapped, in a <code>&lt;text:span&gt;</code>. Type <code>{{name}}</code>, make
+    two letters italic, and the paragraph is:
+</p>
+<pre><code>&lt;text:p&gt;Dear {{&lt;text:span text:style-name="T1"&gt;na&lt;/text:span&gt;me}},&lt;/text:p&gt;</code></pre>
+<p>
+    The engine reads a paragraph as a list of runs. In a DOCX a run is the text of one <code>&lt;w:t&gt;</code>; in
+    an ODT it is each stretch of character data directly inside a paragraph
+    (<code>text:p</code>, <code>text:h</code>) or inside a span, a link (<code>text:a</code>) or a
+    <code>text:meta</code> in it. The runs of one paragraph are joined, the tags are found in the joined text, and
+    each run a tag touched gets a marker: the first stands for the tag, the others for nothing. So the value goes
+    where the tag began, and takes that place's formatting. Here the tag began outside the span, so
+    <code>Ada</code> is not italic, and the span is left behind, empty:
+</p>
+<pre><code>&lt;text:p&gt;Dear Ada&lt;text:span text:style-name="T1"&gt;&lt;/text:span&gt;,&lt;/text:p&gt;</code></pre>
+<p>
+    A note, a comment or a text box sits inside the paragraph that holds it, but its paragraphs are its own: a tag
+    never runs from the paragraph into its footnote. Some text is never read for tags at all: the text of a field
+    such as <code>text:date</code>, a note's citation, a comment's author and date, and deleted text kept for
+    tracked changes.
+</p>
+
+<h2>Spaces That Are Elements</h2>
+<p>
+    OpenDocument folds white space as HTML does: two spaces in a row read as one. A second space is kept as an
+    element, <code>&lt;text:s/&gt;</code>, and a run of them as one element with a count,
+    <code>&lt;text:s text:c="5"/&gt;</code>. A tag typed with spaces carries them in that form, and may be split
+    across a span besides:
+</p>
+<pre><code>template: &lt;text:p&gt;Hello {{&lt;text:s/&gt;who&lt;text:span text:style-name="T1"&gt;&lt;text:s text:c="2"/&gt;&lt;/text:span&gt;}}!&lt;/text:p&gt;
+rendered: &lt;text:p&gt;Hello Ann&lt;text:span text:style-name="T1"&gt;&lt;/text:span&gt;!&lt;/text:p&gt;</code></pre>
+<p>
+    A value is written back the same way, so it reads as typed. Here is one with a tab, three spaces and a new
+    line, in <code>[{{ v }}]</code>:
+</p>
+<pre><code>value:    'Qty:\t2   pcs\nboxed'
+rendered: [Qty:&lt;text:tab/&gt;2 &lt;text:s text:c="2"/&gt;pcs&lt;text:line-break/&gt;boxed]</code></pre>
+<p>
+    The count is where my first version went wrong, on the 8.7.0 branch before the release, so no published version did this. It read <code>&lt;text:s text:c="256"/&gt;</code> as the 256
+    spaces it stands for. That element is 22 bytes. Every limit on a template is a limit on its XML: the parts'
+    sizes, the number of elements. A paragraph's text had never been longer than its XML, so those limits also
+    bounded the text, and with it every pass the engine makes over the text. A run of spaces broke that:
+    22 bytes became 256 characters, 11.6 times, and a large part of such runs could pass the longest string V8 will
+    make.
+</p>
+<p>
+    So the engine now reads a long run short and writes it back whole. A <code>&lt;text:s/&gt;</code> is read as at
+    most 16 spaces, and the run keeps the count it stood for. <code>&lt;text:s/&gt;</code> is 9 characters and
+    reads as 1; any element with a count is at least 20 characters. The text is never longer than its XML again, and
+    a tag needs no more: the only spaces it looks at are its own and its delimiters'.
+    Where the caller's delimiters hold more than 7 spaces in a row, the limit rises to twice that run plus one, so a
+    run read short still holds the end of one tag and the start of the next. The spaces not read are written back
+    where no tag is: in the run's text outside tags, or between the tag ending in it and the tag starting in it.
+    Here is a run of 999,999 spaces, 25 bytes of XML, between two tags:
+</p>
+<pre><code>template: &lt;text:p&gt;{{ a }}&lt;text:s text:c="999999"/&gt;{{ b }}&lt;/text:p&gt;
+rendered: &lt;text:p&gt;left&lt;text:s text:c="999999"/&gt;right&lt;/text:p&gt; (1 ms)</code></pre>
+<p>
+    The element goes out as it came in, 25 bytes standing for the same million spaces. (The time is the whole
+    render, as the script measured it on my M1 Pro under Node 24.)
+</p>
+
+<h2>What a Block Can Cover</h2>
+<p>
+    Where a block's tags sit decides what it covers, as in Word: both tags in one paragraph, the text between them;
+    in paragraphs side by side, the paragraphs between them, a paragraph holding nothing but a tag removed with it;
+    in different cells of one table, whole rows. OpenDocument adds two places.
+</p>
+<ul>
+    <li>
+        <strong>List items.</strong> Tags in items of one list cover the items between them, and an item holding
+        nothing but a tag goes with it. In the sample, three items (<code>{{ for t in tasks }}</code>,
+        <code>To do: {{ t }}</code>, <code>{{ endfor }}</code>) became two: "To do: Sign" and "To do: Return".
+    </li>
+    <li>
+        <strong>Heading rows.</strong> A table's heading rows, the ones repeated on every page, sit in a
+        <code>table:table-header-rows</code> of their own. A loop inside them repeats there: one over
+        <code>Q1</code> and <code>Q2</code> left two heading rows. A block that starts in the heading rows and ends
+        in the body is refused, rather than writing a table whose heading rows are torn open:
+    </li>
+</ul>
+<pre><code>TEMPLATE_SYNTAX: [OfficeParser]: Template tag '{{ for h in heads }}' in content.xml and the other tags of its block do not
+enclose content together: one is in a table's heading rows and another is not.</code></pre>
+<p>
+    Afterwards the part is repaired where loops and branches left it invalid: a table or group of rows with no row
+    is removed, and a cell, header, footer, note, text box or comment with no paragraph gets an empty one (a
+    <code>style:header</code> left empty would also hide the left-page header in LibreOffice). A bookmark whose end went with a
+    branch is closed after its start.
+</p>
+
+<h2>Copies Need Fresh Names</h2>
+<p>
+    A loop copies content, and content carries names that must be unique: an <code>xml:id</code> any element may
+    have, a note's <code>text:id</code>, the names of bookmarks, reference marks, comments, frames, tables and
+    sections, a drawing's <code>draw:id</code>. Each first write keeps its name. Each later copy gets the name with a
+    number, <code>person_2</code>, counted past every name the template already holds, and a range's end follows its
+    start.
+</p>
+<p>
+    To see what is at stake, I wrote the sample's loop paragraph three times by hand with its names unchanged, as a
+    copy that ignored them would, and let LibreOffice 7.3 open and save it. Then I did the same with the render's
+    output:
+</p>
+<table>
+    <thead>
+        <tr><th>In each copy</th><th>Names kept, after LibreOffice</th><th>Rendered, after LibreOffice</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>Paragraph <code>xml:id</code></td><td><code>person</code>; the other two dropped</td><td><code>person</code>, <code>person_2</code>, <code>person_6</code></td></tr>
+        <tr><td>Bookmark</td><td><code>who</code>, <code>who1</code>, <code>who2</code>, renamed by LibreOffice</td><td><code>who</code>, <code>who_3</code>, <code>who_7</code></td></tr>
+        <tr><td>Footnote</td><td>All three</td><td>All three</td></tr>
+        <tr><td>Comment, its range ending after the loop</td><td>"Check Ann" only</td><td>"Check Ann", "Check Bob", "Check Cy"</td></tr>
+    </tbody>
+</table>
+<p>
+    Nothing was refused. LibreOffice opened every file and dropped or renamed what clashed, silently. The notes
+    survived either way. The comments are worth a closer look. A comment can cover a range: <code>office:annotation</code> where it starts, holding its text, and
+    <code>office:annotation-end</code> with the same name where it ends. In the sample the comment starts inside
+    the loop and ends after it, in "Checked.". Written three times under one name, with one end, LibreOffice kept
+    the first comment and lost the other two and their text. (Without the end, it kept all three.)
+</p>
+<p>
+    A range across a loop's edge has one start and one end, so the render writes it once. Most of what a range is
+    made of is then left out of the later copies. A comment cannot, since it holds its text, so each later
+    copy is written as a comment of its own, on a point, under a fresh name:
+</p>
+<pre><code>&lt;office:annotation office:name="c1"&gt;...Check Ann...&lt;/office:annotation&gt;
+&lt;office:annotation office:name="c1_5"&gt;...Check Bob...&lt;/office:annotation&gt;
+&lt;office:annotation office:name="c1_9"&gt;...Check Cy...&lt;/office:annotation&gt;
+&lt;text:p&gt;Checked.&lt;office:annotation-end office:name="c1"/&gt;&lt;/text:p&gt;</code></pre>
+<p>
+    One more place needed a name. A block may cut through a span, a link or a <code>text:meta</code>: the element is
+    closed before the cut and opened again after it. The half after the cut is a second element, so when the
+    element has an <code>xml:id</code>, that half gets one of its own.
+</p>
+
+<h2>A Template Becomes a Document</h2>
+<p>
+    An <code>.ott</code> is an <code>.odt</code> with another media type:
+    <code>application/vnd.oasis.opendocument.text-template</code> in <code>mimetype</code> and on the manifest's
+    root entry. Filling one gives a document, not another template, so the render switches both to
+    <code>application/vnd.oasis.opendocument.text</code>, as the sample's output shows. Nothing else in the
+    manifest, or in <code>meta.xml</code>, changes. A password-protected template is decrypted with
+    <code>password</code> or <code>onPassword</code>, and the document is written plain, its manifest without the
+    encryption data.
+</p>
+
+<h2>What It Does Not Do Yet</h2>
+<ul>
+    <li>
+        Presentations and spreadsheets are not templates yet. A <code>.pptx</code>, <code>.odp</code>,
+        <code>.xlsx</code> or <code>.ods</code> passed to <code>OfficeTemplate.render</code> rejects with
+        <code>TEMPLATE_UNSUPPORTED_FORMAT</code>. Of the two, slides are the easier; in spreadsheets, moving the rows
+        below a loop, with the formulas, merged cells and print areas that point at them, is the real work.
+    </li>
+    <li>
+        A <code>&lt;text:tab/&gt;</code> or <code>&lt;text:line-break/&gt;</code> typed inside a tag is read as
+        nothing, and a quoted string in a tag holding more than 16 spaces in a row reads as 16, the bound on
+        <code>&lt;text:s/&gt;</code>.
+    </li>
+</ul>
