@@ -128,10 +128,41 @@ const keyboardText = (text: string): string =>
     escapeHtml(text).replace(/[\\`*_[\]~=$|{}]/g, ch => `&#${ch.charCodeAt(0)};`).replace(/[\r\n]+/g, ' ');
 
 /**
- * A captioned picture: a figure, which is a block. Where no block can stand (a list item, a cell, a
- * definition), its caption is the end of a line, as a block's last line is.
+ * A captioned picture: a figure, which is a block, in every image mode (its caption is written in each,
+ * see MarkdownGenerator.pictureParts, so a figure is never empty). Where no block can stand (a list item,
+ * a cell, a definition, a heading), its lines end where it does, as a block's last line is.
  */
 const isFigure = (node: OfficeContentNode): boolean => node.type === 'image' && !!captionOf(node);
+
+/**
+ * A picture's recognized text as Markdown: one line as text, escaped as a line's start is; several in
+ * a fenced block, verbatim (a scanned page's layout is in its spaces and line breaks), its fence one
+ * backtick longer than any run in it.
+ */
+const ocrMarkdown = (ocr: string): string => {
+    if (!ocr) return '';
+    if (!/[\r\n]/.test(ocr)) return markdownEscapeInline(ocr, true);
+    const fence = '`'.repeat(Math.max(3, Math.max(0, ...(ocr.match(/`+/g) || []).map(run => run.length)) + 1));
+    return `${fence}\n${ocr}\n${fence}`;
+};
+
+/**
+ * A figure's recognized text as lines of text, each escaped as a line's start is: a fence was broken
+ * where a figure's lines are joined (one line of Markdown) or only its first is quoted (a quote paragraph).
+ */
+const ocrTextLines = (ocr: string): string[] =>
+    ocr.split(/\r?\n/).map(line => trimAsciiWhitespace(line)).filter(Boolean).map(line => markdownEscapeInline(line, true));
+
+/** A line of Markdown that is a figure's HTML block (see MarkdownGenerator.figureHtml): its anchors, then the <figure>. */
+const FIGURE_LINE = /^(?:<a id="[^"]*"><\/a>)*<figure>.*<\/figure>$/;
+
+/**
+ * A figure's lines where no block can go (a list item, cell, definition or heading): its picture with
+ * its caption after it, then its recognized text ('image+ocr-text'); with no image written, its
+ * recognized text, then its caption (after the anchors, when nothing else carries them).
+ */
+const pictureLines = (image: string, ocr: string, caption: string, anchors: string): string[] =>
+    image ? [`${image} ${caption}`, ...(ocr ? [ocr] : [])] : [...(ocr ? [ocr] : []), anchors + caption];
 
 const isBlockInLine = (node: OfficeContentNode): boolean =>
     (node.type === 'break' && (node.metadata as BreakMetadata | undefined)?.breakType === 'thematic')
@@ -1011,82 +1042,54 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 }
 
                 case 'image': {
-                    const mode = this.imageMode();
-                    if (mode === 'none') return '';
                     const meta = node.metadata as ImageMetadata;
+                    // What of the picture is written is pictureParts' to say; where it goes, the line's.
+                    const parts = this.pictureParts(node, false);
+                    if (!parts) return '';
                     const anchors = this.renderAnchors(meta, false);
                     // On the image's line, as a paragraph's are: a line break after them is a line break
                     // in the paragraph holding the image. On a line of their own only before a fenced
                     // block of recognized text, which must start a line.
                     const withAnchors = (markdown: string) => (anchors && markdown.startsWith('`') ? `${anchors}\n` : anchors) + markdown;
-                    const ocr = (node.text || '').trim();
-
-                    // OCR text from a scanned page carries meaning in its whitespace and line breaks
-                    // (columns, indentation, aligned rows). Regular Markdown collapses runs of spaces and
-                    // joins single line breaks, which destroys that layout, so render multi-line OCR
-                    // verbatim inside a fenced block (one backtick longer than any embedded run so an
-                    // inner ``` can't close it early) and keep single-line OCR as ordinary prose.
-                    let ocrMd = '';
-                    if (ocr) {
-                        if (/[\r\n]/.test(ocr)) {
-                            const longestRun = Math.max(0, ...(ocr.match(/`+/g) || []).map(s => s.length));
-                            const fence = '`'.repeat(Math.max(3, longestRun + 1));
-                            ocrMd = `${fence}\n${ocr}\n${fence}`;
-                        } else {
-                            ocrMd = markdownEscapeInline(ocr, true);
-                        }
+                    const ocrMd = ocrMarkdown(parts.ocr);
+                    let imageMd = '';
+                    if (parts.src !== undefined) {
+                        // Alt text on one line, escaped as text (a `]` would close the `![...]`, and a
+                        // renderer reads markup in alt text), and the URL scheme neutralized.
+                        // (No alt text is `![](...)`: a made-up `image` was read back as the picture's alt text.)
+                        const safeAlt = markdownEscapeInline(foldLines(meta?.altText || ''));
+                        const safeSrc = sanitizeMarkdownUrl(parts.src, { allowDataImage: true });
+                        const imgTitle = meta?.title ? markdownTitle(meta.title) : '';
+                        imageMd = withAnchors(this.linkedImage(meta, `![${safeAlt}](${safeSrc}${imgTitle})${this.renderAttributeList(meta)}`));
                     }
-
-                    // ocr-text-only: emit just the recognized text, no image markup.
-                    if (mode === 'ocr-text-only') return ocr ? withAnchors(ocrMd) : '';
-
-                    // A captioned picture (ImageMetadata.caption) is a figure, which Markdown has no syntax
-                    // for: an HTML <figure> block (CommonMark passes it through, and it reads back as one),
-                    // on lines of its own. In one line (a list item, a cell, a definition, a heading), where
-                    // no block can go, its caption follows it in the line, ending a line as a block does
-                    // (see isBlockNode), and that is reported.
-                    const caption = captionOf(node);
-                    if (caption && !this.inOneLine && this.inHeading === 0) {
-                        const figure = (await this.htmlCellNode(node, '')).trim();
-                        return `${this.atLineStart ? '' : '\n\n'}${figure}\n\n`;
+                    if (parts.caption === undefined) {
+                        // A picture without a caption runs in its line: its image, then its recognized
+                        // text ('image+ocr-text'), or that text alone in the image's place.
+                        if (parts.src === undefined) return withAnchors(ocrMd);
+                        return parts.ocr ? `${imageMd}\n\n${ocrMd}` : imageMd;
                     }
-                    if (caption) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'md', feature: 'a figure in a list item, table cell, definition or heading (its caption follows the picture as text)' });
-
-                    // Build the image markup: inline as a data URI when small, otherwise reference by
-                    // name (never inline a multi-MB image, which would emit a single line that overflows
-                    // downstream Markdown parsers).
-                    let src = meta?.url || meta?.attachmentName || '';
-                    if (!meta?.url && meta?.attachmentName && this.ast) {
-                        const attachment = this.getAttachment(meta.attachmentName);
-                        if (attachment) {
-                            const bytes = base64ByteLength(attachment.data);
-                            if (bytes <= this.config.maxInlineImageBytes) {
-                                if (this.inlineWithinBudget(bytes, meta.attachmentName)) src = `data:${attachment.mimeType || 'image/png'};base64,${attachment.data}`;
-                            } else {
-                                // Over the cap, so the picture itself cannot travel in the output
-                                // (inlining a multi-MB image would overflow downstream Markdown
-                                // parsers). Surface it, then keep the image's recognized text when it
-                                // has any - that is the readable content of a scanned page, and it is
-                                // what maxInlineImageBytes documents - falling back to the compact
-                                // name reference when there is none.
-                                // ('image+ocr-text' already emits both, so only 'image-only' changes.)
-                                this.warn(OfficeWarningType.IMAGE_NOT_INLINED, { name: meta.attachmentName, bytes, limit: this.config.maxInlineImageBytes });
-                                if (ocr && mode === 'image-only') return withAnchors(ocrMd);
-                            }
-                        }
+                    // A figure (a captioned picture, in every image mode: see pictureParts) stands apart
+                    // from the text before it on its line. The children loop puts a line end after that
+                    // text, but not where the node before the figure wrote nothing (a space, trimmed there).
+                    const after = this.previousOutputChar;
+                    if (!this.inOneLine && this.inHeading === 0) {
+                        const lead = this.atLineStart || after === '\n' ? '' : '\n\n';
+                        // Its picture as an HTML <figure> block, which Markdown has no syntax for (CommonMark
+                        // passes it through, and it reads back as one), on lines of its own.
+                        if (parts.src !== undefined) return `${lead}${this.figureHtml(meta, parts)}\n\n`;
+                        // No image written: its recognized text as a paragraph of its lines, then its caption as one.
+                        const ocrText = ocrTextLines(parts.ocr).join('  \n');
+                        const caption = markdownEscapeInline(parts.caption, true);
+                        return `${lead}${anchors}${ocrText ? `${ocrText}\n\n${caption}` : caption}\n\n`;
                     }
-                    // Alt text on one line, escaped as text (a `]` would close the `![...]`, and a
-                    // renderer reads markup in alt text), and the URL scheme neutralized.
-                    // (No alt text is `![](...)`: a made-up `image` was read back as the picture's alt text.)
-                    const safeAlt = markdownEscapeInline(foldLines(meta?.altText || ''));
-                    const safeSrc = sanitizeMarkdownUrl(src, { allowDataImage: true });
-                    const imgTitle = meta?.title ? markdownTitle(meta.title) : '';
-                    const imageMd = withAnchors(this.linkedImage(meta, `![${safeAlt}](${safeSrc}${imgTitle})${this.renderAttributeList(meta)}`));
-
-                    const captionInLine = caption ? ` ${markdownEscapeInline(caption)}` : '';
-                    // image+ocr-text: the image, then its recognized text.
-                    if (mode === 'image+ocr-text' && ocr) return `${imageMd}${captionInLine}\n\n${ocrMd}`;
-                    return imageMd + captionInLine;
+                    // In one line (a list item, a cell, a definition, a heading), where no block can go, its
+                    // lines as a block's are (see pictureLines): the line ends after it are the children loop's.
+                    this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'md', feature: 'a figure in a list item, table cell, definition or heading (its caption follows the picture as text)' });
+                    const caption = markdownEscapeInline(parts.caption);
+                    const lead = after === '' || after === '\n' ? '' : '\n\n';
+                    // Its recognized text as lines of the line (see ocrTextLines).
+                    const ocrLines = ocrTextLines(parts.ocr).join('\n\n');
+                    return lead + (parts.src !== undefined ? pictureLines(imageMd, ocrLines, caption, '') : pictureLines('', ocrLines && anchors + ocrLines, caption, ocrLines ? '' : anchors)).join('\n\n');
                 }
 
                 case 'table': {
@@ -1228,12 +1231,21 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                             // Dialect has no footnote syntax - the caller inlines this bare body
                             // as a parenthetical at the reference point instead of collecting it
                             // into an end-of-document "### Notes" section under a [^id] marker.
-                            return `${this.deferAnchors(meta)}${trimAsciiWhitespace(childrenOutput)}`;
+                            // A figure (see the image case) starting or ending the body keeps its own lines:
+                            // in the reference's line its HTML block would be text.
+                            const body = trimAsciiWhitespace(childrenOutput);
+                            const lead = FIGURE_LINE.test(body.slice(0, body.indexOf('\n') + 1 || undefined).trimEnd()) ? '\n\n' : '';
+                            const trail = FIGURE_LINE.test(body.slice(body.lastIndexOf('\n') + 1)) ? '\n\n' : '';
+                            return `${this.deferAnchors(meta)}${lead}${body}${trail}`;
                         }
                         // Indent continuation lines one level so a multi-line body re-parses as a
                         // single definition (a bare newline would end it). Single-line bodies, the
                         // common case, are unaffected. The note's ids start its body.
-                        return `[^${this.getFootnoteKey(node)}]: ${this.renderAnchors(meta)}${trimAsciiWhitespace(childrenOutput).replace(/\n/g, '\n    ')}\n\n`;
+                        // A body of one line is read back as the note's text, where a figure's HTML block
+                        // would be text: a figure alone (see the image case) closes on a line of its own.
+                        let body = trimAsciiWhitespace(childrenOutput);
+                        if (!body.includes('\n') && FIGURE_LINE.test(body)) body = `${body.slice(0, -'</figure>'.length)}\n</figure>`;
+                        return `[^${this.getFootnoteKey(node)}]: ${this.renderAnchors(meta)}${body.replace(/\n/g, '\n    ')}\n\n`;
                     }
                     return `> ${this.renderAnchors(meta)}**Note:** ${trimAsciiWhitespace(childrenOutput)}\n\n`;
                 }
@@ -2011,6 +2023,68 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     }
 
     /**
+     * What of a picture is written, the one place that decides it (both writers, Markdown and an HTML
+     * cell's, ask it, and nothing else does): undefined for nothing; else its image's source (undefined
+     * when no image is written), its recognized text when written (after the image in 'image+ocr-text';
+     * in its place in 'ocr-text-only', and in 'image-only' over maxInlineImageBytes), and its caption,
+     * written in every image mode (8.6.0 wrote a figure's caption as a paragraph whatever the mode, and
+     * the text writer does), so a captioned picture is a figure (see isFigure) whatever the mode.
+     * Inlining the image as a data: URI is counted (inlineWithinBudget), so each picture asks once.
+     */
+    private pictureParts(node: OfficeContentNode, inHtml: boolean): { src?: string; ocr: string; caption?: string } | undefined {
+        const mode = this.imageMode();
+        const meta = node.metadata as ImageMetadata | undefined;
+        const caption = captionOf(node);
+        const ocr = (node.text || '').trim();
+        if (mode === 'none') return caption ? { ocr: '', caption } : undefined;
+        if (mode === 'ocr-text-only') return ocr || caption ? { ocr, caption } : undefined;
+        let src = meta?.url || meta?.attachmentName || '';
+        const attachment = !meta?.url && meta?.attachmentName ? this.getAttachment(meta.attachmentName) : undefined;
+        if (attachment) {
+            const bytes = base64ByteLength(attachment.data);
+            if (bytes <= this.config.maxInlineImageBytes) {
+                if (this.inlineWithinBudget(bytes, meta!.attachmentName)) src = `data:${attachment.mimeType || 'image/png'};base64,${attachment.data}`;
+            } else {
+                // Over the cap the picture cannot travel (a multi-MB line overflows downstream Markdown
+                // parsers): surfaced, and in 'image-only' its recognized text, the readable content of a
+                // scanned page, takes its place, as maxInlineImageBytes documents ('image+ocr-text' writes
+                // both already). An HTML cell's picture without a caption keeps its name, as in 8.6.0.
+                this.warn(OfficeWarningType.IMAGE_NOT_INLINED, { name: meta!.attachmentName, bytes, limit: this.config.maxInlineImageBytes });
+                if (ocr && mode === 'image-only' && (caption || !inHtml)) return { ocr, caption };
+            }
+        }
+        return { src, ocr: mode === 'image+ocr-text' ? ocr : '', caption };
+    }
+
+    /** A picture's <img>, with its link, and its id unless `withId` is false, as HtmlGenerator writes it. */
+    private imgHtml(meta: ImageMetadata | undefined, src: string, withId = true): string {
+        const esc = (value: string) => this.escapeInHtmlBlock(value);
+        const attr = withId ? this.htmlIds(meta).attr : '';
+        const img = `<img src="${sanitizeImageUrl(src)}" alt="${esc(meta?.altText || '')}"${meta?.title ? ` title="${esc(meta.title)}"` : ''}${attr}>`;
+        if (!meta?.link) return img;
+        const internal = meta.linkType !== 'external';
+        if (internal && this.config.ignoreInternalLinks) return img;
+        const target = internal && meta.link.startsWith('#') && (this.config.generateIds || this.resolvedFallbackToHtml.anchors) ? `#${this.slugify(meta.link.slice(1))}` : meta.link;
+        return `<a href="${sanitizeUrl(target)}"${meta.linkTitle ? ` title="${esc(meta.linkTitle)}"` : ''}>${img}</a>`;
+    }
+
+    /**
+     * A captioned picture's ids as anchors, written before its <img> (in its <figure>, where they cannot
+     * join a line of text before it): on the <img> an id was lost where the picture is inlined (the HTML
+     * reader drops a data: picture's id, ledger). They read back as the picture's.
+     */
+    private figureAnchors(meta: ImageMetadata | undefined): string {
+        if (!this.resolvedFallbackToHtml.anchors || this.config.ignoreInternalLinks) return '';
+        return this.anchorSlugs(meta?.anchorIds || []).map(id => `<a id="${escapeHtml(id)}"></a>`).join('');
+    }
+
+    /** A captioned picture whose image is written, as a <figure>: the picture, its recognized text, its caption. */
+    private figureHtml(meta: ImageMetadata | undefined, parts: { src?: string; ocr: string; caption?: string }): string {
+        const esc = (value: string) => this.escapeInHtmlBlock(value);
+        return `<figure>${this.figureAnchors(meta)}${this.imgHtml(meta, parts.src ?? '', false)}${parts.ocr ? `<pre class="ocr-text">${esc(parts.ocr)}</pre>` : ''}<figcaption>${esc(parts.caption ?? '')}</figcaption></figure>`;
+    }
+
+    /**
      * Renders a complex table as HTML since Markdown doesn't support nested tables or rowspans.
      */
     /**
@@ -2072,25 +2146,27 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 return `${extra}<pre${attr}><code${lang}>${esc(code)}</code></pre>`;
             }
             case 'image': {
-                const mode = this.imageMode();
                 const meta = n.metadata as ImageMetadata | undefined;
-                const ocr = esc((n.text || '').trim());
-                if (mode === 'none') return '';
-                if (mode === 'ocr-text-only') return ocr;
-                let src = meta?.url || meta?.attachmentName || '';
-                const attachment = !meta?.url && meta?.attachmentName ? this.getAttachment(meta.attachmentName) : undefined;
-                if (attachment) {
-                    const bytes = base64ByteLength(attachment.data);
-                    if (bytes <= this.config.maxInlineImageBytes) { if (this.inlineWithinBudget(bytes, meta!.attachmentName)) src = `data:${attachment.mimeType || 'image/png'};base64,${attachment.data}`; }
-                    else this.warn(OfficeWarningType.IMAGE_NOT_INLINED, { name: meta!.attachmentName, bytes, limit: this.config.maxInlineImageBytes });
+                const parts = this.pictureParts(n, true);
+                if (!parts) return '';
+                const ocr = esc(parts.ocr);
+                // A picture without a caption: in its line, its recognized text after it or in its place.
+                if (parts.caption === undefined) {
+                    if (parts.src === undefined) return ocr;
+                    const img = this.imgHtml(meta, parts.src);
+                    return this.htmlIds(meta).extra + (ocr ? `${img}<br>${ocr}` : img);
                 }
-                const { attr, extra } = this.htmlIds(meta);
-                let img = `<img src="${sanitizeImageUrl(src)}" alt="${esc(meta?.altText || '')}"${meta?.title ? ` title="${esc(meta.title)}"` : ''}${attr}>`;
-                if (meta?.link) img = link(meta.link, meta.linkType, meta.linkTitle, img);
-                // A captioned picture is a figure (see the image case of generate).
-                const caption = captionOf(n);
-                if (caption) return `${extra}<figure>${img}${mode === 'image+ocr-text' && ocr ? `<pre class="ocr-text">${ocr}</pre>` : ''}<figcaption>${esc(caption)}</figcaption></figure>`;
-                return extra + (mode === 'image+ocr-text' && ocr ? `${img}<br>${ocr}` : img);
+                const img = parts.src === undefined ? '' : this.imgHtml(meta, parts.src, false);
+                const anchors = this.figureAnchors(meta);
+                // A captioned picture is a figure (see the image case of generate). A heading holds no
+                // block: there its lines are the heading's, as in a Markdown heading, set apart by line breaks.
+                if (this.inHeading > 0) {
+                    const lines = pictureLines(img && anchors + img, ocr && (img ? ocr : anchors + ocr), esc(parts.caption), img || ocr ? '' : anchors).join('<br>');
+                    return `${this.previousOutputChar ? '<br>' : ''}${lines}${this.nextSibling ? '<br>' : ''}`;
+                }
+                if (img) return this.figureHtml(meta, parts);
+                // No image written: its recognized text, then its caption, each a paragraph.
+                return `<p>${anchors}${ocr || esc(parts.caption)}</p>${ocr ? `<p>${esc(parts.caption)}</p>` : ''}`;
             }
             case 'paragraph': {
                 const { attr, extra } = this.htmlIds(n.metadata);
