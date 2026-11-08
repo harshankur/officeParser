@@ -5543,6 +5543,137 @@ async function testExcelRelationshipsByPartPath(): Promise<void> {
 }
 
 /**
+ * A relationship whose target names its part other than to the letter of the spec still finds the part, as
+ * in v8.7.0: a target written from the package root (`xl/worksheets/sheet1.xml`), one missing its `../`
+ * (`comments1.xml`, `charts/chart1.xml`), a bare file name, or a folder or file name in another case
+ * (`Worksheets/Sheet1.xml`, `../Charts/chart1.xml`). A file name alone finds a part only in the folder its
+ * kind of part lives in, or when no other part in the package has that name, so the worksheet and chart
+ * sheet of issue #141, both `sheet1.xml`, keep their own tabs, and an external picture never takes one of
+ * the package's images.
+ */
+async function testExcelRelationshipTargetsNotToTheLetter(): Promise<void> {
+    const parse = async (buffer: Buffer, extractAttachments: boolean) => await OfficeParser.parseOffice(buffer, { fileType: 'xlsx', extractAttachments } as any) as OfficeParserAST;
+    const note = '<?xml version="1.0"?><comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><authors><author>A</author></authors><commentList><comment ref="A1" authorId="0"><text><t>NOTE</t></text></comment></commentList></comments>';
+    // One worksheet with a comment and a drawing of a picture and a chart, under the targets given.
+    const sheetWith = (t: { sheet: string; drawing: string; comments: string; chart: string; media: string }, extra: Record<string, string | Uint8Array> = {}) => sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/workbook.xml': sheetParts.workbook([['Data', 'rId1']]),
+        'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', t.sheet]]),
+        'xl/worksheets/sheet1.xml': sheetParts.worksheet(['data'], '<drawing r:id="rId1"/>'),
+        'xl/worksheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId1', 'drawing', t.drawing], ['rId2', 'comments', t.comments]]),
+        'xl/comments1.xml': note,
+        'xl/drawings/drawing1.xml': sheetParts.drawing(sheetParts.picture('rId2', 'ALT') + sheetParts.frame('rId1')),
+        'xl/drawings/_rels/drawing1.xml.rels': sheetParts.rels([['rId1', 'chart', t.chart], ['rId2', 'image', t.media]]),
+        'xl/charts/chart1.xml': sheetParts.chart('Sloppy', [5, 6]),
+        'xl/media/image1.png': sheetParts.png,
+        ...extra,
+    });
+    const standard = { sheet: 'worksheets/sheet1.xml', drawing: '../drawings/drawing1.xml', comments: '../comments1.xml', chart: '../charts/chart1.xml', media: '../media/image1.png' };
+
+    // Each variant reads the tab's name, its comment, picture and chart, as v8.7.0 did. (A picture is placed
+    // only from a target naming a `media/` folder, so a bare file name or a cased `Media/` places none, as before.)
+    const variants: [string, typeof standard, boolean][] = [
+        ['the workbook target from the package root', { ...standard, sheet: 'xl/worksheets/sheet1.xml' }, true],
+        ['every target from the package root', { sheet: 'xl/worksheets/sheet1.xml', drawing: 'xl/drawings/drawing1.xml', comments: 'xl/comments1.xml', chart: 'xl/charts/chart1.xml', media: 'xl/media/image1.png' }, true],
+        ['drawing and comments without ../', { ...standard, drawing: 'drawings/drawing1.xml', comments: 'comments1.xml' }, true],
+        ['chart and picture without ../', { ...standard, chart: 'charts/chart1.xml', media: 'media/image1.png' }, true],
+        ['bare file names', { sheet: 'sheet1.xml', drawing: 'drawing1.xml', comments: 'comments1.xml', chart: 'chart1.xml', media: 'image1.png' }, false],
+        ['folders in another case', { sheet: 'Worksheets/sheet1.xml', drawing: '../Drawings/drawing1.xml', comments: '../Comments1.xml', chart: '../Charts/chart1.xml', media: '../media/image1.png' }, true],
+        ['file names in another case', { sheet: 'worksheets/Sheet1.xml', drawing: '../drawings/Drawing1.xml', comments: '../COMMENTS1.xml', chart: '../charts/Chart1.xml', media: '../media/Image1.png' }, true],
+    ];
+    for (const [name, targets, picture] of variants) {
+        const xlsx = sheetWith(targets);
+        assert.deepStrictEqual(sheetParts.shape(await parse(xlsx, false)), [['Data', undefined, ['row:data+comment']]], `${name}: the tab's name and the comment`);
+        const placed = sheetParts.shape(await parse(xlsx, true));
+        assert.deepStrictEqual(placed, [['Data', undefined, ['row:data+comment', ...(picture ? ['image:image1.png/ALT'] : []), 'chart:chart1.xml']]], `${name}: the picture and the chart are placed; got ${JSON.stringify(placed)}`);
+    }
+
+    // Issue #141's package, its targets written from the root, bare or in another case: the worksheet keeps its
+    // name and visibility, the hidden chart sheet its own (a bare `sheet1.xml` names both, and each tab's
+    // relationship type says which folder its part is in).
+    const rows = ['row:Month', 'row:January', 'row:February', 'row:VISIBLE-ROW'];
+    const issue141 = (worksheet: string, chartsheet: string, drawing = '../drawings/drawing1.xml') => sheetParts.zip({
+        ...unzipSync(chartSheetBesideWorksheet(true)),
+        'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', worksheet], ['rId2', 'chartsheet', chartsheet]]),
+        'xl/chartsheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId1', 'drawing', drawing]]),
+    });
+    for (const [name, xlsx] of [
+        ['from the package root', issue141('xl/worksheets/sheet1.xml', 'xl/chartsheets/sheet1.xml')],
+        ['bare file names', issue141('sheet1.xml', 'sheet1.xml')],
+        ['in another case', issue141('Worksheets/Sheet1.xml', 'ChartSheets/sheet1.xml', '../Drawings/drawing1.xml')],
+    ] as const) {
+        assert.deepStrictEqual(sheetParts.shape(await parse(xlsx, false)), [['Sheet1', undefined, rows]], `#141 ${name}: the worksheet keeps its name and visibility`);
+        assert.deepStrictEqual(sheetParts.shape(await parse(xlsx, true)), [['Sheet1', undefined, rows], ['Chart1', true, ['chart:chart1.xml']]], `#141 ${name}: the chart sheet keeps its name, hidden state and chart`);
+    }
+    // A tab of no known sheet type naming `sheet1.xml` from elsewhere picks neither part.
+    const untyped = sheetParts.zip({
+        ...unzipSync(chartSheetBesideWorksheet(true)),
+        'xl/workbook.xml': sheetParts.workbook([['Sheet1', 'rId1'], ['Odd', 'rId2', true]]),
+        'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', 'worksheets/sheet1.xml'], ['rId2', 'customsheet', 'other/sheet1.xml']]),
+    });
+    const untypedShape = sheetParts.shape(await parse(untyped, true));
+    assert.ok(!JSON.stringify(untypedShape).includes('Odd'), `a file name two parts share names neither; got ${JSON.stringify(untypedShape)}`);
+    assert.deepStrictEqual(untypedShape[0], ['Sheet1', undefined, rows], 'and the worksheet keeps its name and visibility');
+
+    // Two parts sharing a file name, neither in the folder the target's kind of part lives in: neither is
+    // taken by name. One part of the name is.
+    const notes = (parts: string[]) => sheetWith({ ...standard, comments: 'notes/comments7.xml' }, Object.fromEntries(parts.map(p => [p, note])));
+    assert.deepStrictEqual(sheetParts.shape(await parse(notes(['a/xl/comments7.xml', 'b/xl/comments7.xml']), false)), [['Data', undefined, ['row:data']]], 'two comments parts of one name: neither is attached');
+    assert.deepStrictEqual(sheetParts.shape(await parse(notes(['a/xl/comments7.xml']), false)), [['Data', undefined, ['row:data+comment']]], 'the one comments part of a name is attached');
+    const graphs = sheetWith({ ...standard, chart: '../graphs/chart7.xml' }, { 'a/xl/charts/chart7.xml': sheetParts.chart('A'), 'b/xl/charts/chart7.xml': sheetParts.chart('B') });
+    assert.deepStrictEqual(sheetParts.shape(await parse(graphs, true)), [['Data', undefined, ['row:data+comment', 'image:image1.png/ALT']]], 'two charts of one name: neither is placed');
+    const strayChart = sheetWith({ ...standard, chart: '../graphs/chart1.xml' }, { 'backup/xl/charts/chart1.xml': sheetParts.chart('Stray') });
+    const strayShape = await parse(strayChart, true);
+    assert.deepStrictEqual(sheetParts.shape(strayShape), [['Data', undefined, ['row:data+comment', 'image:image1.png/ALT', 'chart:chart1.xml']]], 'a chart named from the wrong folder is the one in the charts folder');
+    assert.strictEqual(strayShape.content[0].children!.find(c => c.type === 'chart')!.text, '5\n6', 'and not its stray copy');
+
+    // An external picture (by its scheme, or TargetMode="External") never takes the package's image of its name.
+    const external = sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/workbook.xml': sheetParts.workbook([['Data', 'rId1']]),
+        'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', 'worksheets/sheet1.xml']]),
+        'xl/worksheets/sheet1.xml': sheetParts.worksheet(['data'], '<drawing r:id="rId1"/>'),
+        'xl/worksheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId1', 'drawing', '../drawings/drawing1.xml']]),
+        'xl/drawings/drawing1.xml': sheetParts.drawing(sheetParts.picture('rId1', 'WEB') + sheetParts.picture('rId3', 'LINKED') + sheetParts.picture('rId2', 'INT')),
+        'xl/drawings/_rels/drawing1.xml.rels': sheetParts.rels([['rId1', 'image', 'https://example.com/media/image1.png'], ['rId2', 'image', '../media/image1.png']])
+            .replace('</Relationships>', '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png" TargetMode="External"/></Relationships>'),
+        'xl/media/image1.png': sheetParts.png,
+    });
+    const pictures = (await parse(external, true)).content[0].children!.filter(c => (c.metadata as any)?.attachmentName === 'image1.png').map(c => (c.metadata as any).altText);
+    assert.deepStrictEqual(pictures, ['INT'], `only the internal picture is the package's image; got ${JSON.stringify(pictures)}`);
+
+    // Linear time: lookups that fall through every step. Sheets named from the package root, each with
+    // relationships to a missing part whose file name half as many parts share; and one sheet of many missing,
+    // long targets.
+    const many = (n: number) => sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/workbook.xml': sheetParts.workbook(Array.from({ length: n }, (_, i) => [`S${i + 1}`, `rId${i + 1}`] as [string, string])),
+        'xl/_rels/workbook.xml.rels': sheetParts.rels(Array.from({ length: n }, (_, i) => [`rId${i + 1}`, 'worksheet', `xl/worksheets/sheet${i + 1}.xml`] as [string, string, string])),
+        ...Object.fromEntries(Array.from({ length: n }, (_, i) => [
+            [`xl/worksheets/sheet${i + 1}.xml`, sheetParts.worksheet([`r${i + 1}`])],
+            [`xl/worksheets/_rels/sheet${i + 1}.xml.rels`, sheetParts.rels(Array.from({ length: 10 }, (_, j) => [`rId${j + 1}`, 'comments', 'nothere/shared.xml'] as [string, string, string]))],
+            ...(i % 2 ? [[`dup${i}/shared.xml`, '<x/>']] : []),
+        ]).flat()),
+    });
+    const wide = (m: number) => sheetWith(standard, {
+        'xl/worksheets/_rels/sheet1.xml.rels': sheetParts.rels(Array.from({ length: m }, (_, j) => [`rId${j + 1}`, j % 2 ? 'comments' : 'drawing', `../${'Deep/'.repeat(40)}missing${j}.xml`] as [string, string, string])),
+    });
+    const timed = async (xlsx: Buffer) => { const started = performance.now(); await parse(xlsx, true); return performance.now() - started; };
+    for (const [name, shape, n] of [['sheets named from the root', many, 2000], ['missing long targets', wide, 40000]] as const) {
+        const [large, quarter] = [shape(n), shape(n / 4)];
+        const named = sheetParts.shape(await parse(large, false));
+        if (shape === many) assert.ok(named.length === n && named.every((s, i) => s[0] === `S${i + 1}`), `${name}: every tab keeps its name`);
+        let small = await timed(quarter);
+        let big = await timed(large);
+        if (big > 8 * small + 250) {
+            small = Math.max(small, await timed(quarter));
+            big = Math.min(big, await timed(large));
+        }
+        assert.ok(big <= 8 * small + 250, `${name}: ${n} in ${big.toFixed(0)} ms, ${n / 4} in ${small.toFixed(0)} ms`);
+    }
+}
+
+/**
  * Issue #142: a chart moved to a chart sheet of its own reached the attachments but not the content, so
  * the text, chunks and every writer left it out. With extractAttachments, a chart sheet is a sheet node in
  * its tab's place holding its drawing's charts and pictures, under its name and hidden state; without it,
@@ -13436,6 +13567,7 @@ async function runTests(): Promise<void> {
         ['ExcelSheetOrder', testExcelSheetOrder],
         ['ExcelChartSheetKeepsWorksheetIdentity', testExcelChartSheetKeepsWorksheetIdentity],
         ['ExcelRelationshipsByPartPath', testExcelRelationshipsByPartPath],
+        ['ExcelRelationshipTargetsNotToTheLetter', testExcelRelationshipTargetsNotToTheLetter],
         ['ExcelChartSheetPlacedInItsTab', testExcelChartSheetPlacedInItsTab],
         ['GeneratedOutput', testGeneratedOutput],
         ['ODG', testOdg],

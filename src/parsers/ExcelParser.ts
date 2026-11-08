@@ -45,6 +45,61 @@ const relsOf = (partPath: string): string => `${folderOf(partPath)}_rels/${partP
 /** The part a relationships part belongs to: the inverse of relsOf. */
 const partOfRels = (relsPath: string): string => relsPath.replace(/(^|\/)_rels\/([^/]*)\.rels$/, '$1$2');
 
+/**
+ * Finds the part a relationship's target names, among the package's parts (`partPaths`, every entry
+ * of the archive). The index is built once; each lookup is a few map reads.
+ *
+ * The part the target resolves to, from the folder of the part holding the relationship, when the
+ * package has it. Failing that, the part whose path matches it ignoring case, as Excel matches part
+ * names (`Worksheets/Sheet1.xml`, `../Charts/chart1.xml`). Only when neither finds one, the target's
+ * file name: the part of that name in the folder the relationship's kind of part lives in
+ * (`xl/worksheets/` for a worksheet), else the one part of that name in the package. So a target
+ * written from the wrong folder (`xl/worksheets/sheet1.xml`, `comments1.xml`, `charts/chart1.xml`)
+ * still names its part, and a file name two parts share (a chart sheet and a worksheet both
+ * `sheet1.xml`) never picks one of them by name alone.
+ *
+ * An external relationship (`TargetMode="External"`, or a target with a scheme such as `https:`) names
+ * no part, so it gets no fallback: a web picture whose address ends in `media/image1.png` is not the
+ * package's `xl/media/image1.png`. Answers the resolved path itself when no part matches, so a lookup by
+ * it finds nothing, as before.
+ */
+const partLocator = (partPaths: Iterable<string>) => {
+    const exact = new Set<string>();
+    // The first part of each path in lower case, and the parts of each file name in lower case.
+    const byLowerPath = new Map<string, string>();
+    const byLowerName = new Map<string, { part: string; count: number }>();
+    for (const part of partPaths) {
+        if (part.endsWith('/') || exact.has(part)) continue;
+        exact.add(part);
+        const lower = part.toLowerCase();
+        if (!byLowerPath.has(lower)) byLowerPath.set(lower, part);
+        const name = lower.slice(lower.lastIndexOf('/') + 1);
+        const named = byLowerName.get(name);
+        if (named) named.count++;
+        else byLowerName.set(name, { part, count: 1 });
+    }
+    return (folder: string, rel: { getAttribute(name: string): string | null }, expectedFolder?: string): string => {
+        const target = rel.getAttribute("Target") ?? '';
+        const resolved = resolvePartPath(folder, target);
+        if (exact.has(resolved) || rel.getAttribute("TargetMode") === 'External' || /^[a-z][a-z\d+.-]*:/i.test(target)) return resolved;
+        const lower = resolved.toLowerCase();
+        const sameButCase = byLowerPath.get(lower);
+        if (sameButCase !== undefined) return sameButCase;
+        const name = lower.slice(lower.lastIndexOf('/') + 1);
+        if (!name) return resolved;
+        const inFolder = expectedFolder === undefined ? undefined : byLowerPath.get(expectedFolder.toLowerCase() + name);
+        if (inFolder !== undefined) return inFolder;
+        const named = byLowerName.get(name);
+        return named && named.count === 1 ? named.part : resolved;
+    };
+};
+
+/** The folder a workbook relationship's kind of sheet lives in (`xl/worksheets/` for a worksheet), if it names a sheet. */
+const sheetFolderOf = (type: string | null): string | undefined => {
+    const kind = /\/(worksheet|chartsheet|dialogsheet|xlMacrosheet)$/.exec(type ?? '')?.[1];
+    return kind === undefined ? undefined : kind === 'xlMacrosheet' ? 'xl/macrosheets/' : `xl/${kind}s/`;
+};
+
 /** Whether the character at `at` of `xml` can continue a tag name (so `<c` there opens `<col`, not `<c`). */
 const continuesName = (xml: string, at: number): boolean => /[\w:.-]/.test(xml[at] ?? '');
 
@@ -485,25 +540,31 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     const chartSheetsRegex = /^xl\/chartsheets\/sheet\d+\.xml$/;
     const chartSheetRelsRegex = /^xl\/chartsheets\/_rels\/sheet\d+\.xml\.rels$/;
 
+    // Every entry of the archive, read or not, for the relationships' targets to be found among.
+    const partPaths: string[] = [];
     const files = await extractFiles(
         buffer,
-        (x: string) =>
-            !!x.match(sheetsRegex) ||
-            !!x.match(drawingsRegex) ||
-            !!x.match(chartsRegex) ||
-            (!config.ignoreComments && !!x.match(commentsRegex)) ||
-            x === stringsFilePath ||
-            x === 'xl/styles.xml' ||
-            x === 'xl/workbook.xml' ||
-            x === 'xl/_rels/workbook.xml.rels' ||
-            !!x.match(corePropsFileRegex) ||
-            !!x.match(customPropsFileRegex) ||
-            !!x.match(appPropsFileRegex) ||
-            (!!config.extractAttachments && (!!x.match(mediaFileRegex) || !!x.match(drawingRelsRegex) || chartSheetsRegex.test(x) || chartSheetRelsRegex.test(x))) ||
-            !!x.match(relsRegex),
+        (x: string) => {
+            partPaths.push(x);
+            return !!x.match(sheetsRegex) ||
+                !!x.match(drawingsRegex) ||
+                !!x.match(chartsRegex) ||
+                (!config.ignoreComments && !!x.match(commentsRegex)) ||
+                x === stringsFilePath ||
+                x === 'xl/styles.xml' ||
+                x === 'xl/workbook.xml' ||
+                x === 'xl/_rels/workbook.xml.rels' ||
+                !!x.match(corePropsFileRegex) ||
+                !!x.match(customPropsFileRegex) ||
+                !!x.match(appPropsFileRegex) ||
+                (!!config.extractAttachments && (!!x.match(mediaFileRegex) || !!x.match(drawingRelsRegex) || chartSheetsRegex.test(x) || chartSheetRelsRegex.test(x))) ||
+                !!x.match(relsRegex);
+        },
         config.decompressionLimits,
         config
     );
+
+    const locatePart = partLocator(partPaths);
 
     // Every workbook has xl/workbook.xml; without it the archive is not a spreadsheet.
     // Resolved up front so a file that cannot be a workbook fails before any of the parsing
@@ -756,7 +817,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                 if (id && target && target.includes('media/')) {
                     // Target is usually like "../media/image1.png"; resolved, as every target is, from the
                     // drawing's own folder, so "/xl/media/image1.png" names the same part.
-                    const mediaPath = resolvePartPath(folderOf(drawingPath), target);
+                    const mediaPath = locatePart(folderOf(drawingPath), rel, 'xl/media/');
                     drawingImageMap[drawingPath][id] = { path: mediaPath };
                 }
             }
@@ -859,8 +920,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                 const type = rel.getAttribute("Type");
                 if (id && target && type && type.includes('chart')) {
                     // Target is like "../charts/chart1.xml": kept as the part's path, as every lookup
-                    // here is, since a file name alone can name parts in different folders.
-                    drawingChartMap[drawingPath][id] = resolvePartPath(folderOf(drawingPath), target);
+                    // here is (see partLocator), since a file name alone can name parts in different folders.
+                    drawingChartMap[drawingPath][id] = locatePart(folderOf(drawingPath), rel, 'xl/charts/');
                 }
             }
         }
@@ -879,7 +940,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         for (const rel of relationships) {
             const rId = rel.getAttribute("Id");
             const target = rel.getAttribute("Target");
-            if (rId && target) rIdToPath.set(rId, resolvePartPath('xl/', target));
+            if (rId && target) rIdToPath.set(rId, locatePart('xl/', rel, sheetFolderOf(rel.getAttribute("Type"))));
         }
 
         // Read worksheet metadata and tab order from workbook.xml.
@@ -998,9 +1059,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     if (id && target && type) {
                         if (type.endsWith('/hyperlink')) hyperlinkTargets.set(id, target);
                         else if (config.extractAttachments && type.includes('drawing')) {
-                            drawingMap[id] = resolvePartPath(folderOf(file.path), target);
+                            drawingMap[id] = locatePart(folderOf(file.path), rel, 'xl/drawings/');
                         } else if (!config.ignoreComments && type.includes('comments')) {
-                            const commentsPath = resolvePartPath(folderOf(file.path), target);
+                            const commentsPath = locatePart(folderOf(file.path), rel, 'xl/');
                             const cFile = attachedCommentParts.has(commentsPath) ? undefined : fileByPath.get(commentsPath);
                             if (cFile) {
                                 attachedCommentParts.add(commentsPath);
@@ -1295,7 +1356,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     const id = rel.getAttribute("Id");
                     const target = rel.getAttribute("Target");
                     const type = rel.getAttribute("Type");
-                    if (id && target && type && type.endsWith('/drawing')) drawingMap[id] = resolvePartPath(folderOf(file.path), target);
+                    if (id && target && type && type.endsWith('/drawing')) drawingMap[id] = locatePart(folderOf(file.path), rel, 'xl/drawings/');
                 }
             }
             const sheetXml = file.content.toString();
