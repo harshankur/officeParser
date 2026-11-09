@@ -63,12 +63,19 @@ const KIND_FOLDERS = new Set(['worksheets', 'chartsheets', 'dialogsheets', 'macr
  * chart sheet and a worksheet both `sheet1.xml`), nor a copy of it elsewhere in the archive
  * (`old/xl/comments1.xml`).
  *
+ * A fallback never answers a part another relationship names more closely: not a part some relationship
+ * of the package (`relationships`, each with the part holding it) names exactly, and, from the folder of
+ * its kind, not one some relationship names but for case. A sheet whose own part is missing does not take
+ * another sheet's part, comments or drawing that shares its file name, whichever sheet is read first:
+ * these are known from the whole package before any lookup, so no order of reading changes them.
+ * Relationships of a part the package lacks name nothing, and are left out.
+ *
  * An external relationship (`TargetMode="External"`, or a target with a scheme such as `https:`) names
  * no part, so it gets no fallback: a web picture whose address ends in `media/image1.png` is not the
  * package's `xl/media/image1.png`. Answers the resolved path itself when no part matches, so a lookup by
  * it finds nothing, as before.
  */
-const partLocator = (partPaths: Iterable<string>) => {
+const partLocator = (partPaths: Iterable<string>, relationships: Iterable<{ source: string; rel: { getAttribute(name: string): string | null } }>) => {
     const exact = new Set<string>();
     // The first part of each path in lower case.
     const byLowerPath = new Map<string, string>();
@@ -78,19 +85,40 @@ const partLocator = (partPaths: Iterable<string>) => {
         const lower = part.toLowerCase();
         if (!byLowerPath.has(lower)) byLowerPath.set(lower, part);
     }
-    return (folder: string, rel: { getAttribute(name: string): string | null }, kindFolder?: string): string => {
+    /** The path a relationship's target resolves to, or undefined when it names no part (an external one). */
+    const resolvedOf = (folder: string, rel: { getAttribute(name: string): string | null }): string | undefined => {
         const target = rel.getAttribute("Target") ?? '';
-        const resolved = resolvePartPath(folder, target);
-        if (exact.has(resolved) || rel.getAttribute("TargetMode") === 'External' || /^[a-z][a-z\d+.-]*:/i.test(target)) return resolved;
+        return rel.getAttribute("TargetMode") === 'External' || /^[a-z][a-z\d+.-]*:/i.test(target) ? undefined : resolvePartPath(folder, target);
+    };
+    // The parts some relationship names exactly, and, of the others, those some relationship names but for case.
+    const namedExactly = new Set<string>();
+    const namedButCase = new Set<string>();
+    const unmatched: string[] = [];
+    for (const { source, rel } of relationships) {
+        if (!exact.has(source)) continue;
+        const resolved = resolvedOf(folderOf(source), rel);
+        if (resolved === undefined) continue;
+        if (exact.has(resolved)) namedExactly.add(resolved);
+        else unmatched.push(resolved);
+    }
+    for (const resolved of unmatched) {
+        const part = byLowerPath.get(resolved.toLowerCase());
+        if (part !== undefined && !namedExactly.has(part)) namedButCase.add(part);
+    }
+    return (folder: string, rel: { getAttribute(name: string): string | null }, kindFolder?: string): string => {
+        const resolved = resolvedOf(folder, rel);
+        if (resolved === undefined) return resolvePartPath(folder, rel.getAttribute("Target") ?? '');
+        if (exact.has(resolved)) return resolved;
         const lower = resolved.toLowerCase();
         const sameButCase = byLowerPath.get(lower);
-        if (sameButCase !== undefined) return sameButCase;
+        if (sameButCase !== undefined && !namedExactly.has(sameButCase)) return sameButCase;
         const slash = lower.lastIndexOf('/');
         const name = lower.slice(slash + 1);
         // (The folder the target names: `worksheets` for `xl/xl/worksheets/sheet1.xml`.)
         const named = slash === -1 ? '' : lower.slice(lower.lastIndexOf('/', slash - 1) + 1, slash);
         const kind = kindFolder?.toLowerCase() ?? (KIND_FOLDERS.has(named) ? `xl/${named}/` : undefined);
-        return (name && kind !== undefined ? byLowerPath.get(kind + name) : undefined) ?? resolved;
+        const ofKind = name && kind !== undefined ? byLowerPath.get(kind + name) : undefined;
+        return ofKind !== undefined && !namedExactly.has(ofKind) && !namedButCase.has(ofKind) ? ofKind : resolved;
     };
 };
 
@@ -564,7 +592,18 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         config
     );
 
-    const locatePart = partLocator(partPaths);
+    // Every relationship of the relationships parts read, with the part holding it (see partLocator), each
+    // part parsed as it is reached and let go after. One that cannot be read is left to fail where it is
+    // read, as before.
+    const locatePart = partLocator(partPaths, (function* () {
+        for (const file of files) {
+            if (!file.path.endsWith('.rels')) continue;
+            let rels;
+            try { rels = getElementsByTagName(parseXmlString(file.content.toString(), { config }), "Relationship"); } catch { continue; }
+            const source = partOfRels(file.path);
+            for (const rel of rels) yield { source, rel };
+        }
+    })());
 
     // Every workbook has xl/workbook.xml; without it the archive is not a spreadsheet.
     // Resolved up front so a file that cannot be a workbook fails before any of the parsing

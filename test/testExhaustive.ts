@@ -5742,6 +5742,91 @@ async function testExcelFallbackTakesOnlyItsKind(): Promise<void> {
 }
 
 /**
+ * A fallback never takes a part another relationship names more closely. A sheet whose own part is
+ * missing does not take the sheet, comments or drawing that another sheet names exactly, whichever tab is
+ * read first. Two relationships that both miss and fall back to one part are a tie: the first tab keeps it.
+ */
+async function testExcelFallbackNeverTakesNamedPart(): Promise<void> {
+    const parse = async (buffer: Buffer, extractAttachments: boolean) => await OfficeParser.parseOffice(buffer, { fileType: 'xlsx', extractAttachments, onWarning: () => {} } as any) as OfficeParserAST;
+    const note = '<?xml version="1.0"?><comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><authors><author>A</author></authors><commentList><comment ref="A1" authorId="0"><text><t>NOTE</t></text></comment></commentList></comments>';
+    const two = sheetParts.rels([['rId1', 'worksheet', 'worksheets/sheet1.xml'], ['rId2', 'worksheet', 'worksheets/sheet2.xml']]);
+    const orders: [string, string, boolean?][][] = [[['A', 'rId1'], ['B', 'rId2']], [['B', 'rId2'], ['A', 'rId1']]];
+    const byName = (shape: ReturnType<typeof sheetParts.shape>, name: string) => shape.find(s => s[0] === name);
+    for (const order of orders) {
+        const label = order.map(t => t[0]).join(',');
+        // B names old/sheet1.xml, a part the package lacks, while A names worksheets/sheet1.xml exactly.
+        const sheets = sheetParts.zip({
+            '[Content_Types].xml': sheetParts.types,
+            'xl/workbook.xml': sheetParts.workbook(order as [string, string, boolean?][]),
+            'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', 'worksheets/sheet1.xml'], ['rId2', 'worksheet', 'old/sheet1.xml']]),
+            'xl/worksheets/sheet1.xml': sheetParts.worksheet(['a']),
+        });
+        const shape = sheetParts.shape(await parse(sheets, false));
+        assert.deepStrictEqual(byName(shape, 'A'), ['A', undefined, ['row:a']], `sheet, tabs ${label}: A keeps its own sheet; got ${JSON.stringify(shape)}`);
+        assert.ok(!(byName(shape, 'B')?.[2] as string[] | undefined)?.length, `sheet, tabs ${label}: B does not take A's sheet; got ${JSON.stringify(shape)}`);
+
+        // The same for a comments part: B names ../old/comments1.xml, A names ../comments1.xml.
+        const comments = (target: string) => sheetParts.zip({
+            '[Content_Types].xml': sheetParts.types,
+            'xl/workbook.xml': sheetParts.workbook(order as [string, string, boolean?][]),
+            'xl/_rels/workbook.xml.rels': two,
+            'xl/worksheets/sheet1.xml': sheetParts.worksheet(['a']),
+            'xl/worksheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId2', 'comments', '../comments1.xml']]),
+            'xl/worksheets/sheet2.xml': sheetParts.worksheet(['b']),
+            'xl/worksheets/_rels/sheet2.xml.rels': sheetParts.rels([['rId2', 'comments', target]]),
+            'xl/comments1.xml': note,
+        });
+        const withNote = sheetParts.shape(await parse(comments('../old/comments1.xml'), false));
+        assert.deepStrictEqual(byName(withNote, 'A'), ['A', undefined, ['row:a+comment']], `comments, tabs ${label}: A keeps its comment; got ${JSON.stringify(withNote)}`);
+        assert.deepStrictEqual(byName(withNote, 'B'), ['B', undefined, ['row:b']], `comments, tabs ${label}: B takes none; got ${JSON.stringify(withNote)}`);
+
+        // And for a drawing, with its picture and chart.
+        const drawings = (target: string) => sheetParts.zip({
+            '[Content_Types].xml': sheetParts.types,
+            'xl/workbook.xml': sheetParts.workbook(order as [string, string, boolean?][]),
+            'xl/_rels/workbook.xml.rels': two,
+            'xl/worksheets/sheet1.xml': sheetParts.worksheet(['a'], '<drawing r:id="rId1"/>'),
+            'xl/worksheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId1', 'drawing', '../drawings/drawing1.xml']]),
+            'xl/worksheets/sheet2.xml': sheetParts.worksheet(['b'], '<drawing r:id="rId1"/>'),
+            'xl/worksheets/_rels/sheet2.xml.rels': sheetParts.rels([['rId1', 'drawing', target]]),
+            'xl/drawings/drawing1.xml': sheetParts.drawing(sheetParts.picture('rId1', 'PIC') + sheetParts.frame('rId2')),
+            'xl/drawings/_rels/drawing1.xml.rels': sheetParts.rels([['rId1', 'image', '../media/image1.png'], ['rId2', 'chart', '../charts/chart1.xml']]),
+            'xl/media/image1.png': sheetParts.png,
+            'xl/charts/chart1.xml': sheetParts.chart('CH', [7, 8]),
+        });
+        const withDrawing = sheetParts.shape(await parse(drawings('../drawings/old/drawing1.xml'), true));
+        assert.deepStrictEqual(byName(withDrawing, 'A'), ['A', undefined, ['row:a', 'image:image1.png/PIC', 'chart:chart1.xml']], `drawing, tabs ${label}: A keeps its picture and chart; got ${JSON.stringify(withDrawing)}`);
+        assert.deepStrictEqual(byName(withDrawing, 'B'), ['B', undefined, ['row:b']], `drawing, tabs ${label}: B takes none; got ${JSON.stringify(withDrawing)}`);
+    }
+
+    // Both relationships miss and fall back to the one part: a tie, the first tab keeps it.
+    for (const order of orders) {
+        const tie = sheetParts.zip({
+            '[Content_Types].xml': sheetParts.types,
+            'xl/workbook.xml': sheetParts.workbook(order as [string, string, boolean?][]),
+            'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', 'old/sheet1.xml'], ['rId2', 'worksheet', 'older/sheet1.xml']]),
+            'xl/worksheets/sheet1.xml': sheetParts.worksheet(['a']),
+        });
+        const shape = sheetParts.shape(await parse(tie, false));
+        const holders = shape.filter(s => (s[2] as string[]).includes('row:a')).map(s => s[0]);
+        assert.deepStrictEqual(holders, [order[0][0]], `a tie: the first tab (${order[0][0]}) keeps the part; got ${JSON.stringify(shape)}`);
+    }
+
+    // Many relationships to missing parts stay linear: a packages of 20000 sheets answers in a few seconds.
+    const many = 20000;
+    const ids = Array.from({ length: many }, (_, i) => i + 1);
+    const big = sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/workbook.xml': sheetParts.workbook(ids.map(i => [`S${i}`, `rId${i}`] as [string, string])),
+        'xl/_rels/workbook.xml.rels': sheetParts.rels(ids.map(i => [`rId${i}`, 'worksheet', `old/sheet${i}.xml`] as [string, string, string])),
+        'xl/worksheets/sheet1.xml': sheetParts.worksheet(['a']),
+    });
+    const started = Date.now();
+    await parse(big, false);
+    assert.ok(Date.now() - started < 20000, `${many} relationships to missing parts are read in linear time; took ${Date.now() - started} ms`);
+}
+
+/**
  * Issue #142: a chart moved to a chart sheet of its own reached the attachments but not the content, so
  * the text, chunks and every writer left it out. With extractAttachments, a chart sheet is a sheet node in
  * its tab's place holding its drawing's charts and pictures, under its name and hidden state; without it,
@@ -13787,6 +13872,7 @@ async function runTests(): Promise<void> {
         ['ExcelRelationshipsByPartPath', testExcelRelationshipsByPartPath],
         ['ExcelRelationshipTargetsNotToTheLetter', testExcelRelationshipTargetsNotToTheLetter],
         ['ExcelFallbackTakesOnlyItsKind', testExcelFallbackTakesOnlyItsKind],
+        ['ExcelFallbackNeverTakesNamedPart', testExcelFallbackNeverTakesNamedPart],
         ['ExcelChartSheetPlacedInItsTab', testExcelChartSheetPlacedInItsTab],
         ['GeneratedOutput', testGeneratedOutput],
         ['ODG', testOdg],
