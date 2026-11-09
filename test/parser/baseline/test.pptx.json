@@ -490,22 +490,6 @@
               ],
               "metadata": {},
               "rawContent": "<a:p xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:r><a:rPr lang=\"en-US\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t>Slide Note 1.</a:t></a:r></a:p>"
-            },
-            {
-              "type": "paragraph",
-              "text": "1",
-              "children": [
-                {
-                  "type": "text",
-                  "text": "1",
-                  "formatting": {},
-                  "metadata": {
-                    "field": "page"
-                  }
-                }
-              ],
-              "metadata": {},
-              "rawContent": "<a:p xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:fld id=\"{089B58DF-6DB6-4FA5-83E1-46BF508CDB74}\" type=\"slidenum\"><a:t>1</a:t></a:fld><a:endParaRPr lang=\"en-US\"/></a:p>"
             }
           ],
           "metadata": {
@@ -1163,22 +1147,6 @@
               ],
               "metadata": {},
               "rawContent": "<a:p xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:r><a:rPr lang=\"en-US\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t>Slide Note 2. This is a </a:t></a:r><a:r><a:rPr lang=\"en-US\" b=\"1\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t>bold</a:t></a:r><a:r><a:rPr lang=\"en-US\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t> text, but no </a:t></a:r><a:r><a:rPr lang=\"en-US\" i=\"1\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t>italic</a:t></a:r><a:r><a:rPr lang=\"en-US\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t>. Let's strike </a:t></a:r><a:r><a:rPr lang=\"en-US\" strike=\"sngStrike\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t>that</a:t></a:r><a:r><a:rPr lang=\"en-US\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t> out.</a:t></a:r></a:p>"
-            },
-            {
-              "type": "paragraph",
-              "text": "2",
-              "children": [
-                {
-                  "type": "text",
-                  "text": "2",
-                  "formatting": {},
-                  "metadata": {
-                    "field": "page"
-                  }
-                }
-              ],
-              "metadata": {},
-              "rawContent": "<a:p xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:fld id=\"{089B58DF-6DB6-4FA5-83E1-46BF508CDB74}\" type=\"slidenum\"><a:t>2</a:t></a:fld><a:endParaRPr lang=\"en-US\"/></a:p>"
             }
           ],
           "metadata": {
@@ -2696,22 +2664,6 @@
               ],
               "metadata": {},
               "rawContent": "<a:p xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:r><a:rPr lang=\"en-US\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t>And then about tables</a:t></a:r></a:p>"
-            },
-            {
-              "type": "paragraph",
-              "text": "3",
-              "children": [
-                {
-                  "type": "text",
-                  "text": "3",
-                  "formatting": {},
-                  "metadata": {
-                    "field": "page"
-                  }
-                }
-              ],
-              "metadata": {},
-              "rawContent": "<a:p xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:fld id=\"{089B58DF-6DB6-4FA5-83E1-46BF508CDB74}\" type=\"slidenum\"><a:t>3</a:t></a:fld><a:endParaRPr lang=\"en-US\"/></a:p>"
             }
           ],
           "metadata": {
@@ -8400,22 +8352,6 @@
               ],
               "metadata": {},
               "rawContent": "<a:p xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:r><a:rPr lang=\"en-US\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t>7. Sat</a:t></a:r></a:p>"
-            },
-            {
-              "type": "paragraph",
-              "text": "5",
-              "children": [
-                {
-                  "type": "text",
-                  "text": "5",
-                  "formatting": {},
-                  "metadata": {
-                    "field": "page"
-                  }
-                }
-              ],
-              "metadata": {},
-              "rawContent": "<a:p xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:fld id=\"{089B58DF-6DB6-4FA5-83E1-46BF508CDB74}\" type=\"slidenum\"><a:t>5</a:t></a:fld><a:endParaRPr lang=\"en-US\"/></a:p>"
             }
           ],
           "metadata": {
