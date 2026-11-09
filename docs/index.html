@@ -3273,6 +3273,11 @@
             margin: 0 auto;
         }
 
+        .sample-picker-more {
+            margin-top: 1.5rem;
+            font-size: 0.85rem;
+        }
+
         .sample-btn {
             display: flex;
             align-items: center;
@@ -4359,6 +4364,14 @@
                     </p>
                 </div>
                 <div class="feature-card">
+                    <span class="feature-icon">📐</span>
+                    <h3>Pages and Forms</h3>
+                    <p>Pages are read as the document sets them: size, margins and sections, each section's own headers,
+                        footers and page numbering (restarts included), and DOCX, ODT and RTF output keep them. Form
+                        fields read as they show: Word's legacy check boxes and drop-downs, ODT and ODP form controls, and a
+                        filled PDF form's values. A scanned PDF's invisible text layer is read and marked.</p>
+                </div>
+                <div class="feature-card">
                     <span class="feature-icon">⚡</span>
                     <h3>Extreme Performance</h3>
                     <p>Up to 23x speedup for ODP parsing; highly optimized engines for RTF, PDF, and large Excel
@@ -4520,6 +4533,8 @@
                 <div class="sample-picker-container">
                     <div class="sample-picker-title">Or try one of our pre-loaded test documents:</div>
                     <div class="sample-picker-grid" id="sample-picker-grid"></div>
+                    <div class="sample-picker-title sample-picker-more" id="sample-picker-more-title">More samples, for what recent releases read:</div>
+                    <div class="sample-picker-grid" id="sample-picker-more" aria-labelledby="sample-picker-more-title"></div>
                 </div>
 
                 <div class="config-bar" style="flex-direction: column; align-items: stretch; gap: 0;">
@@ -5982,37 +5997,56 @@
             });
 
             // --- Sample Document Picker ---
+            // A sample is a file under test/files: its name loads it as an upload would, its title says what it shows.
+            const sampleButton = (samplePath, title) => {
+                const sampleName = samplePath.split('/').pop();
+                const fmt = sampleName.split('.').pop();
+                const btn = document.createElement('button');
+                btn.className = 'sample-btn';
+                btn.type = 'button';
+                if (title) btn.title = title;
+                btn.innerHTML = `
+                    ${BRAND_ICONS[fmt] || BRAND_ICONS.default}
+                    <span>${sampleName}</span>
+                `;
+                btn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    try {
+                        statusMsg.textContent = `Loading ${sampleName}...`;
+                        const fileUrl = `./test/files/${samplePath}`;
+                        const response = await fetch(fileUrl);
+                        if (!response.ok) {
+                            throw new Error(`Failed to load sample document: ${response.statusText}`);
+                        }
+                        const blob = await response.blob();
+                        const file = new File([blob], sampleName, { type: blob.type || 'application/octet-stream' });
+                        handleFile(file);
+                    } catch (err) {
+                        console.error(err);
+                        statusMsg.textContent = `Error loading ${sampleName}: ${err.message}`;
+                    }
+                });
+                return btn;
+            };
             const samplePickerGrid = document.getElementById('sample-picker-grid');
             if (samplePickerGrid) {
                 const sampleFormats = ['docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp', 'odg', 'epub', 'tex'];
-                sampleFormats.forEach(fmt => {
-                    const sampleName = `test.${fmt}`;
-                    const btn = document.createElement('button');
-                    btn.className = 'sample-btn';
-                    btn.type = 'button';
-                    btn.innerHTML = `
-                        ${BRAND_ICONS[fmt] || BRAND_ICONS.default}
-                        <span>${sampleName}</span>
-                    `;
-                    btn.addEventListener('click', async (e) => {
-                        e.stopPropagation();
-                        try {
-                            statusMsg.textContent = `Loading ${sampleName}...`;
-                            const fileUrl = `./test/files/${sampleName}`;
-                            const response = await fetch(fileUrl);
-                            if (!response.ok) {
-                                throw new Error(`Failed to load sample document: ${response.statusText}`);
-                            }
-                            const blob = await response.blob();
-                            const file = new File([blob], sampleName, { type: blob.type || 'application/octet-stream' });
-                            handleFile(file);
-                        } catch (err) {
-                            console.error(err);
-                            statusMsg.textContent = `Error loading ${sampleName}: ${err.message}`;
-                        }
-                    });
-                    samplePickerGrid.appendChild(btn);
-                });
+                sampleFormats.forEach(fmt => samplePickerGrid.appendChild(sampleButton(`test.${fmt}`)));
+            }
+            const moreSamplesGrid = document.getElementById('sample-picker-more');
+            if (moreSamplesGrid) {
+                [
+                    ['forms/legacy-fields.docx', 'Word legacy form fields: check boxes as ☒ or ☐, drop-downs as their selected entry'],
+                    ['forms/controls.odt', 'ODT form controls read as they show: check boxes, text fields, list and combo boxes'],
+                    ['page-numbers/restart.docx', 'Word sections that restart their page numbers (PageSetup.pageNumberStart)'],
+                    ['page-numbers/restart.odt', 'ODT page styles that restart their page numbers'],
+                    ['page-numbers/restart.rtf', 'RTF sections that restart their page numbers'],
+                    ['pdf/invisible_text.pdf', 'A scan\'s invisible text layer, marked TextFormatting.invisible'],
+                    ['pdf/page_sizes.pdf', 'Pages of other sizes read as sections, each with its own page'],
+                    ['pdf/rotated.pdf', 'Turned pages read as sections, each with its own orientation'],
+                    ['pdf/form_labels_libreoffice.pdf', 'A filled PDF form\'s values, each at its field beside its label'],
+                    ['template/invoice.ott', 'An OpenDocument text template: its {{ tags }} as text (fill it in the Template Studio)'],
+                ].forEach(([path, title]) => moreSamplesGrid.appendChild(sampleButton(path, title)));
             }
 
             // Config Persistence Logic
@@ -6581,17 +6615,23 @@
                     <div class="mapping-group">
                         <span class="mapping-group-label">Selector</span>
                         <div class="mapping-inputs">
-                            <select class="map-node-type">
+                            <select class="map-node-type" aria-label="Node type">
                                 <option value="paragraph">Paragraph</option>
-                                <option value="run">Run (Text)</option>
+                                <option value="text">Text run</option>
                                 <option value="heading">Heading</option>
+                                <option value="list">List item</option>
                                 <option value="table">Table</option>
+                                <option value="cell">Table cell</option>
                                 <option value="image">Image</option>
                                 <option value="chart">Chart</option>
+                                <option value="drawing">Drawing</option>
                                 <option value="slide">Slide</option>
                                 <option value="sheet">Sheet</option>
                                 <option value="note">Note/Footnote</option>
-                                <option value="hyperlink">Link</option>
+                                <option value="header">Header</option>
+                                <option value="footer">Footer</option>
+                                <option value="disclosure">Disclosure</option>
+                                <option value="summary">Disclosure summary</option>
                             </select>
                             <input type="text" class="map-style-name" placeholder="Style Name (e.g. Heading 1)">
                         </div>
@@ -6609,7 +6649,12 @@
 
                 if (data) {
                     if (data.selector) {
-                        row.querySelector('.map-node-type').value = data.selector.nodeType || 'paragraph';
+                        // A run is a `text` node (an older version of this page wrote `run`); a type the list does
+                        // not name is kept as typed rather than dropped.
+                        const typeSelect = row.querySelector('.map-node-type');
+                        const nodeType = data.selector.nodeType === 'run' ? 'text' : (data.selector.nodeType || 'paragraph');
+                        if (![...typeSelect.options].some(o => o.value === nodeType)) typeSelect.add(new Option(nodeType, nodeType));
+                        typeSelect.value = nodeType;
                         row.querySelector('.map-style-name').value = (data.selector.attributes && data.selector.attributes.style) || '';
                     }
                     if (data.output) {
@@ -6655,13 +6700,8 @@
 
                 if (format === 'mammoth') {
                     textareaRaw.value = mappings.map(m => {
-                        let selType = 'p';
-                        if (m.selector.nodeType === 'run') selType = 'r';
-                        else if (m.selector.nodeType === 'table') selType = 'table';
-                        else if (m.selector.nodeType === 'heading') selType = 'h';
-                        else if (m.selector.nodeType === 'paragraph') selType = 'p';
-                        else if (m.selector.nodeType === 'image') selType = 'img';
-                        else selType = m.selector.nodeType;
+                        // The style map's short names (p, h, img); every other type by its own name.
+                        const selType = { paragraph: 'p', heading: 'h', image: 'img' }[m.selector.nodeType] || m.selector.nodeType;
 
                         const styleName = m.selector.attributes ? m.selector.attributes.style : '';
                         const selAttr = styleName ? `[style-name='${styleName}']` : '';
@@ -6709,10 +6749,10 @@
                 const selectorRaw = parts[0];
                 const outputRaw = parts[1];
 
-                let nodeType = 'paragraph';
-                if (selectorRaw.startsWith('p')) nodeType = 'paragraph';
-                else if (selectorRaw.startsWith('span') || selectorRaw.startsWith('run') || selectorRaw.startsWith('r[')) nodeType = 'run';
-                else if (selectorRaw.startsWith('table')) nodeType = 'table';
+                // The selector's type as the style map reads it: p, h, t, tr, td, li and img are short names, r, run
+                // and span a text run, anything else a node type by its own name.
+                const typeName = (/^[a-z]+/i.exec(selectorRaw) || [''])[0];
+                const nodeType = { '': 'paragraph', p: 'paragraph', h: 'heading', t: 'table', tr: 'row', td: 'cell', li: 'list', img: 'image', r: 'text', run: 'text', span: 'text' }[typeName] || typeName;
 
                 const styleMatch = selectorRaw.match(/style-name=["\'](.*?)["\']/);
                 const styleName = styleMatch ? styleMatch[1] : '';

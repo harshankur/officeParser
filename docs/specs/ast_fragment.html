@@ -179,7 +179,15 @@
             <code>colspan</code>/<code>rowspan</code> attributes so merged cells survive an HTML round-trip, from
             XLSX merged ranges, from PPTX <code>gridSpan</code>/<code>rowSpan</code> (the positions a merged cell
             covers are no cells of their own), and from PDF tables that are tagged or drawn with ruling lines. A spreadsheet cell can also carry <code>shownText</code> (what its number format
-            shows: <code>'19%'</code>, <code>'€120.00'</code>) and <code>hidden</code> (in a hidden row or column).</li>
+            shows: <code>'19%'</code>, <code>'€120.00'</code>), <code>valueType</code> (the kind of value its file says it
+            holds: <code>'number' | 'date' | 'time' | 'boolean' | 'error' | 'text'</code>, from XLSX's cell type and number
+            format and ODS's <code>office:value-type</code>; not set for CSV or a document's tables), <code>value</code>
+            (the value it holds where that is other than <code>text</code>: a number in full, <code>'10.456'</code> where
+            ODS's text shows <code>10.46</code>; a date's or time's count of days in Excel's 1900 date system,
+            <code>'45000.5'</code>; <code>'true'</code> or <code>'false'</code>), <code>numberFormat</code> (the XLSX number
+            format it is shown in, as Excel writes one: <code>'0.0 "kg"'</code>, <code>'mm/dd/yyyy'</code>; none for
+            General) and <code>hidden</code> (in a hidden row or column). XLSX and ODS output hold the cell as that kind
+            of value, so text that reads as a number (<code>1E5</code>, a card number) stays text.</li>
     </ul>
 
     <h3>2a. Paragraph Layout</h3>

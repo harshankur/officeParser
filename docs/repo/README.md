@@ -987,6 +987,11 @@ Table Node (type: 'table')
   out, and if that is not enough, each row's cells follow one another
 - `rowSpan` / `colSpan`: merged cells (DOCX, PPTX, XLSX merged ranges, ODF, HTML, Markdown HTML-tables, and PDF tables that are tagged or drawn with ruling lines, or whose merged cell is set between the rows it covers)
 - `backgroundColor`: the cell's shading, where the source sets one (a PDF table's cell takes the colour of the filled rectangle drawn last under its middle, tagged or not, and none where that rectangle is white)
+- `shownText` (spreadsheets): the text the sheet shows for the cell's number through its number format, where that differs from `text` (`19%`, `€120.00`; XLSX stores the number and the format, ODS the shown text itself)
+- `valueType` (spreadsheets): the kind of value the file says the cell holds, `'number' | 'date' | 'time' | 'boolean' | 'error' | 'text'` (XLSX's cell type and number format, ODS's `office:value-type`); not set for CSV or a document's tables, whose cells are read from their text. XLSX and ODS output hold the cell as that kind, so text that reads as a number (`1E5`, a card number) stays text
+- `value` (spreadsheets): the value the cell holds where it is other than `text`: a number in full (`10.456` where ODS's text shows `10.46`), a date's or time's count of days in Excel's 1900 date system (`45000` for 2023-03-15, `45000.5` at noon), `true` or `false`
+- `numberFormat` (XLSX): the number format the cell is shown in, as Excel writes one (`0.0 "kg"`, `mm/dd/yyyy`), where it has one other than General; XLSX output writes it as it is
+- `hidden` (spreadsheets): the cell's row or column is hidden; every output keeps it as data, and PDF output leaves it out unless `pdfConfig.printHidden` is set
 - Cells can contain nested tables
 
 > [!NOTE]
