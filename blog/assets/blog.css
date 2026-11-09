@@ -221,6 +221,105 @@ button:focus-visible {
     border-color: var(--text-muted);
 }
 
+/*
+   A post's text width: a header button like the theme's, opening a small panel under it with a
+   slider. Shown by the script (a page without it reads at the default width), and not on a narrow
+   screen, where the text already fills the width.
+*/
+.width-control {
+    position: relative;
+}
+
+.width-control[hidden],
+.width-panel[hidden] {
+    display: none;
+}
+
+.header-btn[aria-expanded="true"] {
+    background-color: var(--bg-subtle);
+    color: var(--text-primary);
+    border-color: var(--accent);
+}
+
+.width-panel {
+    position: absolute;
+    top: calc(100% + 0.5rem);
+    right: 0;
+    z-index: 20;
+    width: 16rem;
+    padding: 0.85rem 1rem 0.75rem;
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: var(--shadow-hover);
+}
+
+.width-panel-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 0.55rem;
+}
+
+.width-panel-head label {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.width-panel-head output {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+}
+
+.width-panel input[type="range"] {
+    display: block;
+    width: 100%;
+    margin: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.width-panel-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 0.45rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.width-reset {
+    font: inherit;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--accent);
+    background: none;
+    border: 0;
+    padding: 0.1rem 0.4rem;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.width-reset:hover,
+.width-reset:focus-visible {
+    background-color: var(--bg-subtle);
+}
+
+.width-reset:disabled {
+    color: var(--text-muted);
+    cursor: default;
+    background: none;
+}
+
+@media (max-width: 900px) {
+    .width-control {
+        display: none;
+    }
+}
+
 /* ==========================================================================
    Blog Hero (Index Page)
    ========================================================================== */
@@ -485,7 +584,8 @@ button:focus-visible {
    ========================================================================== */
 
 .article-wrapper {
-    max-width: 760px;
+    /* The reader's own text width when they chose one in the header (blog.js sets the variable). */
+    max-width: var(--article-width, 760px);
     margin: 3.5rem auto 6rem;
     padding: 0 1.5rem;
 }

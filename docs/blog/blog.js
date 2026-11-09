@@ -20,6 +20,20 @@
     const changesStored = () => { try { return localStorage.getItem(CHANGES_KEY); } catch { return null; } };
     root.classList.toggle('changes-hidden', changesStored() === 'hidden');
 
+    // ── A post's text width: the reader's choice, kept for every post and set before the first paint ──
+    const WIDTH_KEY = 'blog-width';
+    const WIDTH = { min: 640, max: 1280, step: 20, default: 760 };
+    const validWidth = value => {
+        const n = Number(value);
+        return Number.isFinite(n) && n >= WIDTH.min && n <= WIDTH.max ? Math.round(n / WIDTH.step) * WIDTH.step : null;
+    };
+    const storedWidth = () => { try { return validWidth(localStorage.getItem(WIDTH_KEY)); } catch { return null; } };
+    const applyWidth = width => {
+        if (width === null || width === WIDTH.default) root.style.removeProperty('--article-width');
+        else root.style.setProperty('--article-width', `${width}px`);
+    };
+    applyWidth(storedWidth());
+
     const wireThemeToggle = () => {
         const button = document.getElementById('theme-toggle');
         const icon = document.getElementById('theme-icon');
@@ -548,8 +562,54 @@
         }
     };
 
+    /**
+     * The text width control in a post's header: a button that opens a panel with a slider. Moving
+     * the slider widens or narrows the post at once; the choice is kept for every post (where the
+     * browser allows it, else for this page). Escape or a click elsewhere closes the panel.
+     */
+    const wireWidthControl = () => {
+        const control = document.getElementById('width-control');
+        if (!control) return;
+        const toggle = document.getElementById('width-toggle');
+        const panel = document.getElementById('width-panel');
+        const range = document.getElementById('width-range');
+        const shown = document.getElementById('width-value');
+        const reset = document.getElementById('width-reset');
+        const paint = width => {
+            range.value = String(width);
+            shown.textContent = `${width} px`;
+            reset.disabled = width === WIDTH.default;
+        };
+        const choose = width => {
+            applyWidth(width);
+            paint(width);
+            try {
+                if (width === WIDTH.default) localStorage.removeItem(WIDTH_KEY);
+                else localStorage.setItem(WIDTH_KEY, String(width));
+            } catch { /* the choice lasts for this page */ }
+        };
+        const open = isOpen => {
+            panel.hidden = !isOpen;
+            toggle.setAttribute('aria-expanded', String(isOpen));
+        };
+        paint(storedWidth() ?? WIDTH.default);
+        control.hidden = false;
+        toggle.addEventListener('click', () => {
+            const isOpen = panel.hidden;
+            open(isOpen);
+            if (isOpen) range.focus();
+        });
+        range.addEventListener('input', () => choose(validWidth(range.value) ?? WIDTH.default));
+        reset.addEventListener('click', () => { choose(WIDTH.default); range.focus(); });
+        document.addEventListener('click', event => { if (!panel.hidden && !control.contains(event.target)) open(false); });
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && !panel.hidden) { open(false); toggle.focus(); }
+        });
+    };
+
     const start = () => {
         wireThemeToggle();
+        wireWidthControl();
         wireRevisionToggle();
         wireListFilter();
         wireDemos();
