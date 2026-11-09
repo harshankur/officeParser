@@ -4,7 +4,7 @@ import { getAbortError, getOfficeError } from '../utils/errorUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { HtmlGenerator } from './HtmlGenerator.js';
 import { renderNativePdf } from './pdf/nativePdfEngine.js';
-import { withoutHiddenSheetContent, withoutSpeakerNotes, withShownCellText } from '../utils/officeGenUtils.js';
+import { withoutHiddenSheetContent, withoutHiddenSlides, withoutSpeakerNotes, withShownCellText } from '../utils/officeGenUtils.js';
 
 /**
  * Generates high-fidelity PDF documents using a headless browser engine.
@@ -23,9 +23,9 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
         // Native engine: lay the AST out directly with pdf-lib, no browser required (works in Node
         // and the browser alike). The default 'html' engine falls through to the browser path below.
         // A printout of a spreadsheet leaves its hidden sheets, rows and columns out, and one of slides its
-        // speaker notes (which printed at the end, on the last slide).
+        // speaker notes (which printed at the end, on the last slide) and hidden slides.
         // Cells print the text the sheet shows for their numbers (`19%`, not 0.19).
-        const visible = this.config.pdfConfig.printHidden ? this.ast : withoutHiddenSheetContent(this.ast);
+        const visible = this.config.pdfConfig.printHidden ? this.ast : withoutHiddenSlides(withoutHiddenSheetContent(this.ast));
         const shown = withShownCellText(visible);
         const ast = this.config.pdfConfig.printSpeakerNotes ? shown : withoutSpeakerNotes(shown);
         if (this.config.pdfConfig.engine === 'native') {

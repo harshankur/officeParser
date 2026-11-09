@@ -471,7 +471,7 @@ if (fileArg && !showHelp) {
     console.log('  --pdfConfig.fonts.regular=Sans.ttf          Font file the native engine draws in; also .bold, .italic, .boldItalic, .mono');
     console.log('  --pdfConfig.fallbackFonts=a.ttf,b.otf       Font files tried, in order, for characters the fonts before them lack (native engine)');
     console.log('  --pdfConfig.subsetFonts=false               Embed whole font files, not only the glyphs used (default: true)');
-    console.log('  --pdfConfig.printHidden                     Print a spreadsheet\'s hidden sheets, rows and columns (default: false)');
+    console.log('  --pdfConfig.printHidden                     Print hidden sheets, rows, columns and slides (default: false)');
     console.log('  --pdfConfig.printSpeakerNotes               Print each slide\'s speaker notes under it (default: false)');
     console.log('  --pdfConfig.outline                         Write a bookmark outline from the headings (default: false)');
     console.log('  --pdfConfig.format=Letter                   PDF paper format (auto: as the document sets it; A4 | Letter | Legal ...)');
