@@ -5,8 +5,233 @@
     <link>https://officeparser.harshankur.com/blog/</link>
     <description>How document formats work inside, how officeParser reads and writes them, where it falls short, and how to chunk documents for retrieval. Written by Harsh Ankur, author of officeParser.</description>
     <language>en</language>
-    <lastBuildDate>Sun, 08 Nov 2026 00:00:00 GMT</lastBuildDate>
+    <lastBuildDate>Mon, 09 Nov 2026 00:00:00 GMT</lastBuildDate>
     <atom:link href="https://officeparser.harshankur.com/blog/feed.xml" rel="self" type="application/rss+xml"/>
+    <item>
+      <title>What a Workbook Means by Sheet1</title>
+      <link>https://officeparser.harshankur.com/blog/what-a-workbook-means-by-sheet1.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/what-a-workbook-means-by-sheet1.html</guid>
+      <pubDate>Mon, 09 Nov 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Format Deep Dives</category>
+      <description>How an XLSX ties a tab to its cells through the workbook and its relationships, why keying sheets by file name gave a worksheet a hidden chart sheet&#39;s name, and how officeParser 8.7.1 finds a part when a target is not spelled to the letter.</description>
+      <content:encoded><![CDATA[<p>
+    Unzip an XLSX and you will find a file called <code>sheet1.xml</code>. Which tab is it? Not necessarily
+    the first tab, not necessarily the one called Sheet1, and in a workbook with a chart on a sheet of its
+    own, there can be two files of that name. The file name tells you almost nothing. The workbook says
+    which part each tab is, and where it stands, in two other files.
+</p>
+<p>
+    officeParser 8.7.1 fixes three bugs in getting from a tab to its cells: sheets came out in the order
+    of the files in the package instead of the order of the tabs, a chart sheet's name and hidden state
+    landed on a worksheet that shared its file name, and a chart moved to a sheet of its own was read but
+    placed nowhere. This post is about how a reader should follow a tab to its part, and about the lookup
+    8.7.1 uses when a target is not written the way its part is named.
+</p>
+
+<h2>Three Files Between a Tab and Its Cells</h2>
+<p>
+    The tabs live in <code>xl/workbook.xml</code>, one <code>&lt;sheet&gt;</code> each, in the order the
+    tabs are shown. A tab has a name, a state (shown, hidden or very hidden), and a relationship id:
+</p>
+<pre><code>&lt;sheets&gt;
+  &lt;sheet name="Summary" sheetId="2" r:id="rId2"/&gt;
+  &lt;sheet name="Sales" sheetId="1" r:id="rId1"/&gt;
+  &lt;sheet name="Chart1" sheetId="3" state="hidden" r:id="rId3"/&gt;
+&lt;/sheets&gt;</code></pre>
+<p>
+    The id is looked up in the workbook's relationships, <code>xl/_rels/workbook.xml.rels</code>, which
+    give each id a type and a target. The target is a path, read from the folder of the part that holds the
+    relationship, here <code>xl/</code>:
+</p>
+<pre><code>&lt;Relationship Id="rId1" Type="…/worksheet" Target="worksheets/sheet1.xml"/&gt;
+&lt;Relationship Id="rId2" Type="…/worksheet" Target="worksheets/sheet2.xml"/&gt;
+&lt;Relationship Id="rId3" Type="…/chartsheet" Target="chartsheets/sheet1.xml"/&gt;</code></pre>
+<p>
+    Only then do you reach a part with cells in it. Nothing along the way ties a tab to a file name or a
+    file number. <code>sheet2.xml</code> can be the first tab. Excel numbers chart sheets apart from
+    worksheets, so a workbook with one of each holds <code>worksheets/sheet1.xml</code> and
+    <code>chartsheets/sheet1.xml</code>. And the order of the files in the zip is whatever the program that
+    wrote it chose: nothing in the format makes it the order of the tabs.
+</p>
+
+<h2>The Workbook I Built</h2>
+<p>
+    I wrote a small workbook by hand, so I knew exactly what was in it. A Summary tab first, then a Sales
+    tab with three months of figures, then a chart of those figures moved to a chart sheet of its own,
+    Chart1, which I hid. In the package, the Sales part comes before the Summary part, the other way round
+    from the tabs.
+</p>
+<p>
+    Then I listed the sheets officeParser returns, with each sheet's name, whether it is hidden, and the
+    kinds of node it holds:
+</p>
+<pre><code>const { OfficeParser } = require('officeparser');
+
+(async () =&gt; {
+    const ast = await OfficeParser.parseOffice('sales.xlsx', { extractAttachments: true });
+    for (const sheet of ast.content) {
+        console.log(sheet.metadata.sheetName, sheet.metadata.hidden ?? false, sheet.children.map(node =&gt; node.type).join(' '));
+    }
+})();</code></pre>
+<p>
+    With 8.7.0:
+</p>
+<pre><code>Chart1 true row row row row
+Summary false row</code></pre>
+<p>
+    With 8.7.1:
+</p>
+<pre><code>Summary false row
+Sales false row row row row
+Chart1 true chart</code></pre>
+
+<h2>What Went Wrong, Step by Step</h2>
+<p>
+    8.7.0 built a map from file name to tab name. For each relationship it kept only the last segment of
+    the target, <code>target.split('/').pop()</code>, and for each tab it filed the tab's name, and whether it
+    was hidden, under that file name. Summary went under <code>sheet2.xml</code>. Sales went under
+    <code>sheet1.xml</code>. Then Chart1 went under <code>sheet1.xml</code> too, and wrote over Sales.
+</p>
+<p>
+    It then walked the files in the package, read each worksheet it met, and looked its name up by file
+    name. <code>xl/worksheets/sheet1.xml</code> came first in the package, so it came first in the output,
+    under the name Chart1, and hidden. The chart sheet itself was never read as a sheet: its chart reached
+    <code>ast.attachments</code> and nothing in the content pointed to it.
+</p>
+<p>
+    Pick a tab below to follow it through each reader, and switch to the PDF view to see what the wrong
+    hidden flag cost:
+</p>
+<figure class="demo demo-workbook" data-demo="workbook" data-workbook='{"tabs":[{"name":"Summary","id":"rId2","target":"worksheets/sheet2.xml"},{"name":"Sales","id":"rId1","target":"worksheets/sheet1.xml"},{"name":"Chart1","id":"rId3","target":"chartsheets/sheet1.xml","hidden":true}],"readers":{"8.7.0":{"label":"8.7.0: by file name","keyedBy":"Filed under the file name","keys":{"Summary":"sheet2.xml","Sales":"sheet1.xml","Chart1":"sheet1.xml"},"lost":{"Sales":"Chart1"},"sheets":[{"name":"Chart1","hidden":true,"part":"xl/worksheets/sheet1.xml","from":["Sales","Chart1"],"content":["Month     Sales","January   120","February  150","March     90"]},{"name":"Summary","part":"xl/worksheets/sheet2.xml","from":["Summary"],"content":["Quarter total  360"]}],"note":"The Sales rows come back named Chart1 and hidden, before Summary, in the order of the files in the package. The chart reached the attachments and no sheet.","pdf":"A PDF leaves hidden sheets out, so the sales figures are not printed: the PDF holds the quarter total alone."},"8.7.1":{"label":"8.7.1: by part path","keyedBy":"Filed under the part path","keys":{"Summary":"xl/worksheets/sheet2.xml","Sales":"xl/worksheets/sheet1.xml","Chart1":"xl/chartsheets/sheet1.xml"},"sheets":[{"name":"Summary","part":"xl/worksheets/sheet2.xml","from":["Summary"],"content":["Quarter total  360"]},{"name":"Sales","part":"xl/worksheets/sheet1.xml","from":["Sales"],"content":["Month     Sales","January   120","February  150","March     90"]},{"name":"Chart1","hidden":true,"part":"xl/chartsheets/sheet1.xml","from":["Chart1"],"content":["chart node: chart1.xml"]}],"note":"Each tab gets its own part: the sheets come in tab order, under their own names, and the chart sheet holds its chart.","pdf":"The PDF prints Summary and Sales. Chart1 is hidden, so it is left out unless pdfConfig.printHidden is set."}}}'>
+    <table role="table">
+        <thead role="rowgroup">
+            <tr role="row"><th role="columnheader">Tab</th><th role="columnheader">8.7.0 filed it under</th><th role="columnheader">8.7.1 filed it under</th></tr>
+        </thead>
+        <tbody role="rowgroup">
+            <tr role="row"><td role="cell">Summary</td><td role="cell" data-label="8.7.0 filed it under"><code>sheet2.xml</code></td><td role="cell" data-label="8.7.1 filed it under"><code>xl/worksheets/sheet2.xml</code></td></tr>
+            <tr role="row"><td role="cell">Sales</td><td role="cell" data-label="8.7.0 filed it under"><code>sheet1.xml</code>, written over by Chart1</td><td role="cell" data-label="8.7.1 filed it under"><code>xl/worksheets/sheet1.xml</code></td></tr>
+            <tr role="row"><td role="cell">Chart1 (hidden)</td><td role="cell" data-label="8.7.0 filed it under"><code>sheet1.xml</code></td><td role="cell" data-label="8.7.1 filed it under"><code>xl/chartsheets/sheet1.xml</code></td></tr>
+        </tbody>
+    </table>
+    <figcaption>The sample workbook's tabs, the key each version filed a tab's name and state under, and the
+        sheets it returned, read with <code>extractAttachments: true</code>. Every sheet shown is the real
+        output of that version.</figcaption>
+</figure>
+<p>
+    For a long time the cost was a wrong name: tabs were keyed this way at least since 6.0. It became lost content in
+    8.3.0, when PDF output began to leave hidden sheets out, as a printout does. From then on, a worksheet
+    that shared its file name with a hidden chart sheet was hidden too, and its figures were missing from the
+    PDF. A native PDF of this workbook from 8.7.0 holds one line of text, <code>Quarter total 360</code>.
+    The CSV shows the wrong name plainly:
+</p>
+<pre><code># Sheet: Chart1
+Month,Sales
+January,120
+February,150
+March,90
+
+# Sheet: Summary
+Quarter total,360</code></pre>
+
+<h2>Keyed by the Part</h2>
+<p>
+    The first half of the fix came as a pull request from jihtsan (<a href="https://github.com/harshankur/officeParser/pull/133">#133</a>). It resolves each
+    tab's target from the folder of the part that holds the relationship, so <code>worksheets/sheet1.xml</code>
+    from <code>xl/</code> is <code>xl/worksheets/sheet1.xml</code>, and so is an absolute target,
+    <code>/xl/worksheets/sheet1.xml</code>. Tabs are filed under that path, so two kinds of sheet with the
+    same file name stay two sheets. And the sheets are sorted by their place in <code>xl/workbook.xml</code>,
+    with a worksheet part no tab names kept in its place in the package after them. Text, Markdown, CSV and
+    chunks all follow the order of the content, so all of them follow the tabs now.
+</p>
+<p>
+    I took the same rule to every relationship a sheet or a drawing follows: its drawings, comments,
+    pictures and charts are found by the path the target resolves to, not by a file name or a folder glued
+    on in front.
+</p>
+<p>
+    A chart sheet is a sheet. With <code>extractAttachments</code> on, a chart sheet whose drawing holds a
+    chart or a picture becomes a sheet node in its tab's place, under its own name and state, holding a
+    <code>chart</code> node for the chart (or an <code>image</code> node for a picture). Hidden, it is left out of a PDF unless <code>pdfConfig.printHidden</code> is set;
+    with it set, the native engine draws the chart. With attachments off, the content is
+    what it was.
+</p>
+<p>
+    That is what found the things absolute targets used to lose. 8.7.0 built a comment's path by gluing
+    <code>xl/</code> to the target, so <code>/xl/comments1.xml</code> became <code>xl//xl/comments1.xml</code>,
+    a part no package has. I gave the Sales sheet a comment that way. 8.7.0 dropped it. 8.7.1 puts it on the
+    cell it belongs to. A drawing named by an absolute target went the same way in 8.7.0, and the pictures
+    and charts on it with it.
+</p>
+
+<h2>When a Target Is Spelled Another Way</h2>
+<p>
+    A file-name key had one virtue: it did not care which folder a target was written from. A target of
+    <code>xl/worksheets/sheet1.xml</code>, written from the package's root instead of from <code>xl/</code>,
+    still ended in <code>sheet1.xml</code>. Resolved properly, it names <code>xl/xl/worksheets/sheet1.xml</code>,
+    which is not there. Read by path alone, such a sheet would lose its tab's name, state and place, and
+    such a comment or drawing would be lost outright. So 8.7.1 looks for a part in three steps, and stops at
+    the first that finds one:
+</p>
+<ol>
+    <li><strong>The part at the resolved path.</strong> A target written as the specification says is
+        found here, and so is an absolute one.</li>
+    <li><strong>The same path, ignoring case.</strong> The package format does not tell part names apart by
+        case, so <code>Worksheets/Sheet1.xml</code> names <code>xl/worksheets/sheet1.xml</code>.</li>
+    <li><strong>The file name, in the folder of its kind.</strong> The relationship's type says what kind
+        of part it names, and each kind has its folder: a worksheet's is <code>xl/worksheets/</code>, a chart
+        sheet's <code>xl/chartsheets/</code>. So a bare <code>sheet1.xml</code> finds a worksheet when the
+        relationship is a worksheet's, and a chart sheet when it is a chart sheet's.</li>
+</ol>
+<p>
+    The third step is a guess, and the second, though the format allows it, can make two tabs name one
+    part. Neither may take a part that is someone else's. So the second step never answers with a part
+    that another tab, sheet or drawing names exactly, and the third never with one that another names
+    exactly or but for case. Both rules came out of reviewing this fix before the release: without them, a
+    tab whose own part was missing could take another tab's sheet. And a target whose part is not there
+    finds nothing. The sheet it may have meant is not lost, though: a worksheet in
+    <code>xl/worksheets/</code> that no tab names is still read, after the tabs, under its file name.
+</p>
+<p>
+    Try each spelling of a target below. Every answer comes from 8.7.1's own lookup, and the sheets listed
+    are what a real parse of a workbook with that target returned:
+</p>
+<figure class="demo demo-locate-figure" data-demo="locate" data-locate='{"parts":["xl/workbook.xml","xl/_rels/workbook.xml.rels","xl/worksheets/sheet1.xml","xl/worksheets/sheet2.xml","xl/chartsheets/sheet1.xml","xl/chartsheets/_rels/sheet1.xml.rels","xl/drawings/drawing1.xml","xl/drawings/_rels/drawing1.xml.rels","xl/charts/chart1.xml"],"cases":[{"tab":"Sales","id":"rId1","kind":"worksheet","target":"worksheets/sheet1.xml","resolved":"xl/worksheets/sheet1.xml","steps":[{"status":"hit","part":"xl/worksheets/sheet1.xml"},{"status":"skipped"},{"status":"skipped"}],"found":"xl/worksheets/sheet1.xml","tabs":["Summary: Quarter total 360","Sales: Month Sales / January 120 / February 150 / March 90","Chart1 (hidden): chart"]},{"tab":"Sales","id":"rId1","kind":"worksheet","target":"/xl/worksheets/sheet1.xml","resolved":"xl/worksheets/sheet1.xml","steps":[{"status":"hit","part":"xl/worksheets/sheet1.xml"},{"status":"skipped"},{"status":"skipped"}],"found":"xl/worksheets/sheet1.xml","tabs":["Summary: Quarter total 360","Sales: Month Sales / January 120 / February 150 / March 90","Chart1 (hidden): chart"]},{"tab":"Sales","id":"rId1","kind":"worksheet","target":"Worksheets/Sheet1.xml","resolved":"xl/Worksheets/Sheet1.xml","steps":[{"status":"miss"},{"status":"hit","part":"xl/worksheets/sheet1.xml"},{"status":"skipped"}],"found":"xl/worksheets/sheet1.xml","tabs":["Summary: Quarter total 360","Sales: Month Sales / January 120 / February 150 / March 90","Chart1 (hidden): chart"]},{"tab":"Sales","id":"rId1","kind":"worksheet","target":"xl/worksheets/sheet1.xml","resolved":"xl/xl/worksheets/sheet1.xml","steps":[{"status":"miss"},{"status":"miss"},{"status":"hit","part":"xl/worksheets/sheet1.xml","looked":"xl/worksheets/sheet1.xml"}],"found":"xl/worksheets/sheet1.xml","tabs":["Summary: Quarter total 360","Sales: Month Sales / January 120 / February 150 / March 90","Chart1 (hidden): chart"]},{"tab":"Sales","id":"rId1","kind":"worksheet","target":"sheet1.xml","resolved":"xl/sheet1.xml","steps":[{"status":"miss"},{"status":"miss"},{"status":"hit","part":"xl/worksheets/sheet1.xml","looked":"xl/worksheets/sheet1.xml"}],"found":"xl/worksheets/sheet1.xml","tabs":["Summary: Quarter total 360","Sales: Month Sales / January 120 / February 150 / March 90","Chart1 (hidden): chart"]},{"tab":"Chart1","id":"rId3","kind":"chartsheet","target":"sheet1.xml","resolved":"xl/sheet1.xml","steps":[{"status":"miss"},{"status":"miss"},{"status":"hit","part":"xl/chartsheets/sheet1.xml","looked":"xl/chartsheets/sheet1.xml"}],"found":"xl/chartsheets/sheet1.xml","tabs":["Summary: Quarter total 360","Sales: Month Sales / January 120 / February 150 / March 90","Chart1 (hidden): chart"]},{"tab":"Sales","id":"rId1","kind":"worksheet","target":"worksheets/sheet9.xml","resolved":"xl/worksheets/sheet9.xml","steps":[{"status":"miss"},{"status":"miss"},{"status":"miss","looked":"xl/worksheets/sheet9.xml"}],"found":null,"tabs":["Summary: Quarter total 360","Chart1 (hidden): chart","sheet1.xml: Month Sales / January 120 / February 150 / March 90"]},{"tab":"Summary","id":"rId2","kind":"worksheet","target":"WORKSHEETS/SHEET1.XML","resolved":"xl/WORKSHEETS/SHEET1.XML","steps":[{"status":"miss"},{"status":"refused","part":"xl/worksheets/sheet1.xml","by":"Sales"},{"status":"refused","part":"xl/worksheets/sheet1.xml","by":"Sales","looked":"xl/worksheets/sheet1.xml"}],"found":null,"tabs":["Sales: Month Sales / January 120 / February 150 / March 90","Chart1 (hidden): chart","sheet2.xml: Quarter total 360"]}]}'>
+    <table role="table">
+        <thead role="rowgroup">
+            <tr role="row"><th role="columnheader">Tab and target</th><th role="columnheader">Resolved from <code>xl/</code></th><th role="columnheader">Found</th></tr>
+        </thead>
+        <tbody role="rowgroup">
+            <tr role="row"><td role="cell">Sales: <code>worksheets/sheet1.xml</code></td><td role="cell" data-label="Resolved from xl/"><code>xl/worksheets/sheet1.xml</code></td><td role="cell" data-label="Found"><code>xl/worksheets/sheet1.xml</code>, step 1</td></tr>
+            <tr role="row"><td role="cell">Sales: <code>/xl/worksheets/sheet1.xml</code></td><td role="cell" data-label="Resolved from xl/"><code>xl/worksheets/sheet1.xml</code></td><td role="cell" data-label="Found"><code>xl/worksheets/sheet1.xml</code>, step 1</td></tr>
+            <tr role="row"><td role="cell">Sales: <code>Worksheets/Sheet1.xml</code></td><td role="cell" data-label="Resolved from xl/"><code>xl/Worksheets/Sheet1.xml</code></td><td role="cell" data-label="Found"><code>xl/worksheets/sheet1.xml</code>, step 2</td></tr>
+            <tr role="row"><td role="cell">Sales: <code>xl/worksheets/sheet1.xml</code></td><td role="cell" data-label="Resolved from xl/"><code>xl/xl/worksheets/sheet1.xml</code></td><td role="cell" data-label="Found"><code>xl/worksheets/sheet1.xml</code>, step 3</td></tr>
+            <tr role="row"><td role="cell">Sales: <code>sheet1.xml</code></td><td role="cell" data-label="Resolved from xl/"><code>xl/sheet1.xml</code></td><td role="cell" data-label="Found"><code>xl/worksheets/sheet1.xml</code>, step 3</td></tr>
+            <tr role="row"><td role="cell">Chart1: <code>sheet1.xml</code></td><td role="cell" data-label="Resolved from xl/"><code>xl/sheet1.xml</code></td><td role="cell" data-label="Found"><code>xl/chartsheets/sheet1.xml</code>, step 3</td></tr>
+            <tr role="row"><td role="cell">Sales: <code>worksheets/sheet9.xml</code></td><td role="cell" data-label="Resolved from xl/"><code>xl/worksheets/sheet9.xml</code></td><td role="cell" data-label="Found">Nothing</td></tr>
+            <tr role="row"><td role="cell">Summary: <code>WORKSHEETS/SHEET1.XML</code></td><td role="cell" data-label="Resolved from xl/"><code>xl/WORKSHEETS/SHEET1.XML</code></td><td role="cell" data-label="Found">Nothing</td></tr>
+        </tbody>
+    </table>
+    <figcaption>Eight targets in the sample workbook: the Sales tab's spelled six ways, then one each for
+        Chart1 and Summary. The steps are taken in order; a step marked refused found a part that another tab
+        names exactly.</figcaption>
+</figure>
+
+<h2>What Changed</h2>
+<ul>
+    <li>Sheets come out in the workbook's tab order, in every output (<a href="https://github.com/harshankur/officeParser/issues/130">#130</a>).</li>
+    <li>A sheet's name and hidden state are its own tab's, never those of a tab whose part shares its file
+        name (<a href="https://github.com/harshankur/officeParser/issues/141">#141</a>).</li>
+    <li>With <code>extractAttachments</code>, a chart sheet's chart is placed in its tab (<a href="https://github.com/harshankur/officeParser/issues/142">#142</a>).</li>
+    <li>Comments behind absolute targets are attached, pictures and charts in a drawing named by one are
+        placed, and a stray copy of a part elsewhere in the archive no longer stands in for the real one.</li>
+</ul>
+<p>
+    The whole list is in the <a href="https://github.com/harshankur/officeParser/blob/master/CHANGELOG.md#871---2026-11-09">changelog</a>. If you have a workbook whose sheets
+    still come out wrong, I would like to see it: open an issue with the file, or the smallest copy of it that
+    shows the problem.
+</p>]]></content:encoded>
+    </item>
     <item>
       <title>Filling an OpenDocument Template</title>
       <link>https://officeparser.harshankur.com/blog/filling-an-opendocument-template.html</link>
