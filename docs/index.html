@@ -1168,6 +1168,73 @@
             margin: 0 0 1.25rem;
         }
 
+        .export-options {
+            display: flex;
+            flex-direction: column;
+            gap: 0.55rem;
+            margin: 0 0 1.25rem;
+            padding: 0.7rem 0.8rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+
+        .export-option-row {
+            display: grid;
+            grid-template-columns: 8.5rem minmax(0, 1fr);
+            align-items: center;
+            gap: 0.35rem 1rem;
+            font-size: 0.75rem;
+        }
+
+        .export-option-items {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.45rem 1.25rem;
+            min-width: 0;
+        }
+
+        .export-option-items .window-config-item {
+            flex-wrap: wrap;
+            min-width: 0;
+        }
+
+        .export-option-title {
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--text-dim);
+        }
+
+        @media (max-width: 600px) {
+            .export-option-row {
+                grid-template-columns: minmax(0, 1fr);
+            }
+        }
+
+        .export-file-input {
+            max-width: 100%;
+            font-size: 0.7rem;
+            color: var(--text-main);
+        }
+
+        .export-file-input::file-selector-button {
+            margin-right: 0.5rem;
+            padding: 0.2rem 0.5rem;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg-deep);
+            color: var(--text-main);
+            font: inherit;
+            cursor: pointer;
+        }
+
+        .export-file-count {
+            font-size: 0.7rem;
+            color: var(--text-dim);
+        }
+
         .export-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
@@ -3450,6 +3517,24 @@
                             }
                         });
                     }
+                } else if (popover.getAttribute('role') === 'dialog') {
+                    // A dialog of fields (the margin popovers) takes the keyboard too: focus moves to its first
+                    // field, and Escape, or Tab past its last one, closes it and returns focus to its button.
+                    const first = popover.querySelector('input, select, textarea');
+                    if (first) first.focus();
+                    if (!popover.__keyboard) {
+                        popover.__keyboard = true;
+                        popover.addEventListener('keydown', (e) => {
+                            const fields = [...popover.querySelectorAll('input, select, textarea, button')];
+                            const leaving = e.key === 'Tab' && (e.shiftKey ? document.activeElement === fields[0] : document.activeElement === fields[fields.length - 1]);
+                            if (e.key === 'Escape' || leaving) {
+                                e.preventDefault();
+                                const opener = popover.__opener;
+                                window.closeConfigPopovers();
+                                if (opener) opener.focus();
+                            }
+                        });
+                    }
                 }
             }
         };
@@ -3487,9 +3572,15 @@
         window.SITE_OCR_CORE_PATH = new URL('vendor/tesseract.js-core-7.0.0/', document.baseURI).href;
         window.SITE_OCR_LANG_PATH = 'https://tessdata.harshankur.com/4.0.0_best_int';
 
+        /** The paper sizes the page options offer (PaperFormat): Auto is the document's own page, else A4. */
+        const PAPER_FORMATS = ['auto', 'a3', 'a4', 'a5', 'letter', 'legal', 'tabloid', 'ledger'];
+        const PAPER_NAMES = ['Auto', 'A3', 'A4', 'A5', 'Letter', 'Legal', 'Tabloid', 'Ledger'];
+        /** The sides of a margin popover, each its own text input (`<id>_<side>`). */
+        const MARGIN_SIDES = ['top', 'right', 'bottom', 'left'];
+
         // A setting may say `persist: false` (never kept in this browser: a secret, held for this visit
         // only) or `replaces` (the values an earlier version of the site had as its default, which give
-        // way to today's default when a visitor's browser still holds one).
+        // way to today's default when a visitor's browser still holds one). `title` is its tooltip.
         window.CONFIG_SCHEMAS = {
             parser: [
                 // General Parser Settings - Everyday / Primary (First 2 rows when collapsed)
@@ -3508,6 +3599,7 @@
                 { id: 'cfg_includeRawContent', label: 'Include Raw Source', type: 'switch', default: false, advanced: true },
                 { id: 'cfg_serializeRawContent', label: 'Serialize Raw XML', type: 'switch', default: true, advanced: true },
                 { id: 'cfg_preserveXmlWhitespace', label: 'Preserve XML Space', type: 'switch', default: false, advanced: true },
+                { id: 'cfg_ignorePageGeometry', label: 'Ignore Page Geometry (boxes, pages, shapes)', type: 'switch', default: false, advanced: true, title: 'Leaves out where things stand on the page: every node\'s box, page sizes and margins, slides\' shapes and floating frames, in every format (PDF, DOCX, ODT, RTF, PPTX, ODP...)' },
 
                 { id: 'cfg_ocrPreserveLayout', label: 'OCR Preserve Layout', type: 'switch', default: true, advanced: true },
                 { id: 'cfg_ocrAutoTerminate', label: 'OCR Auto Terminate (s)', type: 'number', default: 10, width: '70px', min: 0, advanced: true },
@@ -3532,7 +3624,6 @@
                 { id: 'cfg_pdfNormalizeText', label: 'PDF Normalize Text', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfExtractTextColor', label: 'PDF Extract Text Color', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfKeepHeadersAndFootersInPages', label: 'PDF Headers and Footers in Pages', type: 'switch', default: false, formatGroup: 'pdf', formats: ['pdf'] },
-                { id: 'cfg_ignorePageGeometry', label: 'Ignore Page Geometry', type: 'switch', default: false, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfWorkerSrc', label: 'PDF Worker URL', type: 'text', default: window.SITE_PDF_WORKER_SRC, replaces: /^https:\/\/cdn\.jsdelivr\.net\/npm\/pdfjs-dist@[^/]+\/build\/pdf\.worker\.min\.mjs$/, fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfCMapUrl', label: 'PDF CMaps Folder URL', type: 'text', default: window.SITE_PDF_CMAP_URL, fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
                 { id: 'cfg_pdfDecoderUrl', label: 'PDF Image Decoders Folder URL', type: 'text', default: window.SITE_PDF_DECODER_URL, fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
@@ -3571,11 +3662,13 @@
                 { id: 'cfg_html_inj_headEnd', label: 'Inj Head End', type: 'inline-popover-textarea', default: '', height: '100px' },
                 { id: 'cfg_html_inj_bodyStart', label: 'Inj Body Start', type: 'inline-popover-textarea', default: '', height: '100px' },
                 { id: 'cfg_html_inj_bodyEnd', label: 'Inj Body End', type: 'inline-popover-textarea', default: '', height: '100px' },
-                { id: 'cfg_html_sourceAttributes', label: 'Source Attributes', type: 'switch', default: false }
+                { id: 'cfg_html_sourceAttributes', label: 'Source Attributes', type: 'switch', default: false },
+                { id: 'cfg_html_sheetLayout', label: 'Sheets', type: 'inline-select', options: ['viewer', 'tables'], names: ['Viewer with tabs', 'Heading and table'], default: 'viewer', title: 'How a workbook\'s sheets (XLSX, ODS, CSV) are written: a spreadsheet viewer, its sheets switched by tabs, or each sheet a heading and a plain table, as a document holds them' }
             ],
             md: [
                 { id: 'cfg_md_dialect', label: 'Dialect', type: 'inline-select', options: ['extended', 'github', 'gitlab', 'obsidian', 'pandoc', 'commonmark'], names: ['Extended', 'GitHub', 'GitLab', 'Obsidian', 'Pandoc', 'CommonMark'], default: 'extended' },
                 { id: 'cfg_md_fallbackToHtml', label: 'HTML Fallback', type: 'inline-switch', default: true },
+                { id: 'cfg_md_listMarkers', label: 'List Labels', type: 'inline-select', options: ['keep', 'numbers'], names: ['Keep: - (a) item', 'Numbers: 1. item'], default: 'keep', title: 'How an ordered list item the document labels other than 1. is written: its label kept as text after a bullet, or the item\'s number as a native Markdown list' },
                 { id: 'cfg_md_dialectOverrides', label: 'Dialect Detail', type: 'popover-panel', inline: true, panelId: 'cfg_md_dialect_popover' },
                 { id: 'cfg_md_fallbackDetail', label: 'Fallback Detail', type: 'popover-panel', inline: true, panelId: 'cfg_md_fallback_popover' }
             ],
@@ -3595,13 +3688,26 @@
                 { id: 'cfg_tex_documentClass', label: 'Class', type: 'inline-select', options: ['auto', 'article', 'report', 'book', 'beamer'], names: ['Auto', 'Article', 'Report', 'Book', 'Beamer'], default: 'auto' },
                 { id: 'cfg_tex_standalone', label: 'Standalone', type: 'inline-switch', default: true },
                 { id: 'cfg_tex_embedImages', label: 'Images inside', type: 'inline-switch', default: true },
-                { id: 'cfg_tex_numberSections', label: 'Numbered', type: 'inline-switch', default: false }
+                { id: 'cfg_tex_numberSections', label: 'Numbered', type: 'inline-switch', default: false },
+                { id: 'cfg_tex_format', label: 'Paper', type: 'inline-select', options: PAPER_FORMATS, names: PAPER_NAMES, default: 'auto', title: 'The page size: the document\'s own (Auto), else A4. Ignored by beamer.' },
+                { id: 'cfg_tex_landscape', label: 'Landscape', type: 'inline-switch', default: false, title: 'Turns an upright page. Ignored by beamer.' },
+                { id: 'cfg_tex_margin', label: 'Margins', type: 'inline-popover-margins', rerender: 'tex' }
             ],
             text: [
                 { id: 'cfg_text_preserveLayout', label: 'Layout', type: 'inline-switch', default: true },
                 { id: 'cfg_text_renderNotes', label: 'Notes', type: 'inline-switch', default: true },
                 { id: 'cfg_text_newlineDelimiter', label: 'Newline', type: 'inline-text', default: '\\n', width: '60px' },
                 { id: 'cfg_text_pageSeparator', label: 'Page Sep', type: 'inline-text', default: '\\n', width: '60px' }
+            ],
+            // The Export window's options for the formats with no window of their own, by group.
+            export: [
+                { id: 'cfg_export_format', group: 'page', label: 'Paper', type: 'inline-select', options: PAPER_FORMATS, names: PAPER_NAMES, default: 'auto', title: 'The page size of DOCX, ODT and PDF: the document\'s own (Auto), else A4' },
+                { id: 'cfg_export_landscape', group: 'page', label: 'Landscape', type: 'inline-switch', default: false, title: 'Turns an upright page (DOCX, ODT, PDF)' },
+                { id: 'cfg_export_margin', group: 'page', label: 'Margins', type: 'inline-popover-margins' },
+                { id: 'cfg_pdf_printHidden', group: 'pdf', label: 'Hidden Sheet Content', type: 'inline-switch', default: false, title: 'Print a spreadsheet\'s hidden sheets, rows and columns, which a printout leaves out' },
+                { id: 'cfg_pdf_printSpeakerNotes', group: 'pdf', label: 'Speaker Notes', type: 'inline-switch', default: false, title: 'Print each slide\'s speaker notes under it, which a PDF of slides leaves out' },
+                { id: 'cfg_sheet_sheetPerTable', group: 'sheets', label: 'Sheet per Table', type: 'inline-switch', default: true, title: 'Each of a document\'s tables on a sheet of its own (on), or all on one sheet (off)' },
+                { id: 'cfg_sheet_includeText', group: 'sheets', label: 'Text Sheet', type: 'inline-switch', default: true, title: 'A document\'s text outside its tables, a block a row, on a sheet named Text' }
             ]
         };
 
@@ -3632,17 +3738,21 @@
             const saved = storedConfigValue(item);
             const value = saved !== null ? (item.type.includes('switch') ? saved === 'true' : saved) : item.default;
             const isInline = item.type.startsWith('inline-');
+            const attr = (text) => String(text).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
             const cfgAttr = `data-cfg-id="${item.id}"` +
                 (item.formats ? ` data-cfg-formats="${item.formats.join(',')}"` : '') +
                 (item.formatGroup ? ` data-cfg-group="${item.formatGroup}"` : '') +
-                (item.advanced ? ` data-cfg-advanced="true"` : '');
+                (item.advanced ? ` data-cfg-advanced="true"` : '') +
+                (item.title ? ` title="${attr(item.title)}"` : '');
+            // The control's accessible name: the label shown beside it is a span, not a <label>.
+            const named = ` aria-label="${attr(item.label)}"`;
 
             if (item.type.includes('switch')) {
                 return `
                     <div ${cfgAttr} class="${isInline ? 'window-config-item' : 'config-item'}">
                         <span class="config-label">${item.label}</span>
                         <label class="switch">
-                            <input type="checkbox" id="${item.id}" ${value ? 'checked' : ''}>
+                            <input type="checkbox" id="${item.id}"${named} ${value ? 'checked' : ''}>
                             <span class="slider"></span>
                         </label>
                     </div>
@@ -3651,9 +3761,39 @@
                 return `
                     <div ${cfgAttr} class="${isInline ? 'window-config-item' : 'config-item'}">
                         <span class="config-label">${item.label}</span>
-                        <select id="${item.id}" class="btn btn-outline" style="padding: ${isInline ? '0.2rem' : '0.4rem'}; font-size: 0.8rem; width: ${item.width || 'auto'};">
+                        <select id="${item.id}"${named} class="btn btn-outline" style="padding: ${isInline ? '0.2rem' : '0.4rem'}; font-size: 0.8rem; width: ${item.width || 'auto'};">
                             ${item.options.map((opt, i) => `<option value="${opt}" ${opt === value ? 'selected' : ''} ${item.disabledOptions && item.disabledOptions.includes(opt) ? 'disabled' : ''}>${item.names[i]}</option>`).join('')}
                         </select>
+                    </div>
+                `;
+            } else if (item.type.includes('popover-margins')) {
+                // Four sides in a popover; a blank side is the document's own margin.
+                const sides = MARGIN_SIDES.map(side => {
+                    const saved = localStorage.getItem(`${item.id}_${side}`) || '';
+                    const name = side[0].toUpperCase() + side.slice(1);
+                    return `
+                        <label style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;">
+                            <span class="config-label" style="font-size: 0.7rem;">${name}</span>
+                            <input type="text" id="${item.id}_${side}" class="btn btn-outline" value="${attr(saved)}" placeholder="document's"
+                                aria-label="${attr(item.label)}: ${side}" spellcheck="false" autocomplete="off"
+                                style="padding: 0.2rem 0.4rem; width: 90px; font-size: 0.7rem; cursor: text;">
+                        </label>`;
+                }).join('');
+                return `
+                    <div ${cfgAttr} class="window-config-item">
+                        <button type="button" class="btn btn-outline" style="padding: 0.2rem 0.5rem; font-size: 0.75rem; display: flex; align-items: center; gap: 0.25rem; border-color: var(--border);"
+                            aria-haspopup="dialog" aria-expanded="false" aria-controls="${item.id}_popover" onclick="window.toggleConfigPopover('${item.id}_popover', this)">
+                            ${item.label}
+                            <svg style="width:10px;height:10px;opacity:0.7;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+                        </button>
+                        <div id="${item.id}_popover" class="config-popover" role="dialog" aria-label="${attr(item.label)}" style="display: none; position: fixed; z-index: 9999; background: var(--bg-deep); border: 1px solid var(--border); padding: 0.75rem; border-radius: 6px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); width: 230px; max-width: calc(100vw - 40px); white-space: normal;">
+                            <div style="font-size: 0.7rem; color: var(--text-dim); margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
+                                ${item.label}
+                                <button type="button" class="modal-close-btn" style="font-size: 0.8rem;" aria-label="Close" onclick="window.toggleConfigPopover('${item.id}_popover')">✕</button>
+                            </div>
+                            <div style="font-size: 0.65rem; color: var(--text-dim); margin-bottom: 0.5rem; line-height: 1.4;">Blank keeps the document's own margin. A number is points (1/72 in); or give a unit: <code>1in</code>, <code>2cm</code>, <code>20mm</code>, <code>36pt</code>.</div>
+                            <div style="display: flex; flex-direction: column; gap: 0.4rem;">${sides}</div>
+                        </div>
                     </div>
                 `;
             } else if (item.type === 'popover-panel') {
@@ -3677,7 +3817,7 @@
                                 ${item.label}
                                 <button class="modal-close-btn" style="font-size: 0.8rem;" onclick="window.toggleConfigPopover('${item.id}_popover')">✕</button>
                             </div>
-                            <textarea id="${item.id}" class="btn btn-outline" 
+                            <textarea id="${item.id}"${named} class="btn btn-outline" 
                                 style="padding: 0.5rem; width: 100%; min-height: ${item.height || '100px'}; font-size: 0.75rem; font-family: monospace; resize: vertical; background: var(--bg-card); color: var(--text-main); cursor: text;" 
                                 ${item.placeholder ? `placeholder="${item.placeholder}"` : ''}>${value}</textarea>
                         </div>
@@ -3687,7 +3827,7 @@
                 return `
                     <div ${cfgAttr} class="${isInline ? 'window-config-item' : (item.fullWidth ? 'config-item full-width' : 'config-item')}" style="align-items: flex-start;">
                         <span class="config-label">${item.label}</span>
-                        <textarea id="${item.id}" class="btn btn-outline" 
+                        <textarea id="${item.id}"${named} class="btn btn-outline" 
                             style="padding: ${isInline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; width: ${item.width || '100%'}; min-height: ${item.height || '60px'}; font-size: ${isInline ? '0.75rem' : '0.8rem'}; font-family: monospace; resize: vertical;" 
                             ${item.placeholder ? `placeholder="${item.placeholder}"` : ''}>${value}</textarea>
                     </div>
@@ -3696,7 +3836,7 @@
                 return `
                     <div ${cfgAttr} class="${isInline ? 'window-config-item' : (item.fullWidth ? 'config-item full-width' : 'config-item')}">
                         <span class="config-label">${item.label}</span>
-                        <input type="${item.type.replace('inline-', '')}" id="${item.id}" class="btn btn-outline" 
+                        <input type="${item.type.replace('inline-', '')}" id="${item.id}"${named} class="btn btn-outline" 
                             style="padding: ${isInline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; width: ${item.width || '100%'}; font-size: ${isInline ? '0.75rem' : '0.8rem'};" 
                             value="${value}" ${item.min !== undefined ? `min="${item.min}"` : ''} ${item.placeholder ? `placeholder="${item.placeholder}"` : ''}>
                     </div>
@@ -3704,11 +3844,11 @@
             }
         }
 
-        function renderConfigItems(sectionKey) {
+        function renderConfigItems(sectionKey, group) {
             const schema = window.CONFIG_SCHEMAS[sectionKey];
             if (!schema) return;
             let html = '';
-            const items = sectionKey === 'parser' ? schema.filter(it => !it.formatGroup) : schema;
+            const items = sectionKey === 'parser' ? schema.filter(it => !it.formatGroup) : group ? schema.filter(it => it.group === group) : schema;
             items.forEach(item => {
                 html += renderSingleConfigItem(item);
             });
@@ -4373,7 +4513,7 @@
                         </div>
                     </div>
                     <input type="file" id="file-input" class="hidden-input"
-                        accept=".docx,.pptx,.xlsx,.odt,.odp,.ods,.odg,.ott,.ots,.otp,.otg,.pdf,.rtf,.csv,.md,.html,.epub,.tex,.latex,.ltx,.zip">
+                        accept=".docx,.pptx,.xlsx,.odt,.odp,.ods,.odg,.ott,.ots,.otp,.otg,.pdf,.rtf,.csv,.md,.markdown,.html,.htm,.xhtml,.epub,.tex,.latex,.ltx,.zip">
                 </div>
 
                 <!-- Sample Document Picker -->
@@ -4975,9 +5115,35 @@
                     <h4 style="margin:0;">EXPORT</h4>
                 </div>
                 <div class="panel-body" id="visual-export">
-                    <p class="export-intro">Convert the loaded document to any format officeParser generates. Each
-                        download uses the options set in the matching window above (the HTML window's for PDF, EPUB,
-                        DOCX, ODT, XLSX, ODS, PPTX and ODP).</p>
+                    <p class="export-intro">Convert the loaded document to any format officeParser generates. HTML,
+                        Markdown, RAG chunks, CSV, LaTeX and plain text use the options of their windows above, and PDF
+                        and EPUB the HTML window's too. DOCX, ODT, XLSX, ODS, PPTX and ODP are written from the document
+                        itself, with the options below (PDF's page too). The general generator options apply to all.</p>
+                    <div class="export-options">
+                        <div class="export-option-row" role="group" aria-labelledby="export-opt-page">
+                            <span class="export-option-title" id="export-opt-page">Page: DOCX, ODT, PDF</span>
+                            <div class="export-option-items"><script>renderConfigItems('export', 'page');</script></div>
+                        </div>
+                        <div class="export-option-row" role="group" aria-labelledby="export-opt-pdf">
+                            <span class="export-option-title" id="export-opt-pdf">PDF prints</span>
+                            <div class="export-option-items"><script>renderConfigItems('export', 'pdf');</script></div>
+                        </div>
+                        <div class="export-option-row" role="group" aria-labelledby="export-opt-sheets">
+                            <span class="export-option-title" id="export-opt-sheets">XLSX, ODS</span>
+                            <div class="export-option-items"><script>renderConfigItems('export', 'sheets');</script></div>
+                        </div>
+                        <div class="export-option-row" role="group" aria-labelledby="export-opt-slides">
+                            <span class="export-option-title" id="export-opt-slides">PPTX, ODP</span>
+                            <div class="export-option-items">
+                                <div class="window-config-item" title="A picture for each page or slide, drawn under its text: PNG or JPEG files, in page order by file name (page-1.png, page-2.png...)">
+                                    <label class="config-label" for="cfg_slide_backgrounds">Slide Backgrounds</label>
+                                    <input type="file" id="cfg_slide_backgrounds" class="export-file-input" accept="image/png,image/jpeg,.png,.jpg,.jpeg" multiple>
+                                    <span id="cfg_slide_backgrounds_count" class="export-file-count" aria-live="polite"></span>
+                                    <button type="button" id="cfg_slide_backgrounds_clear" class="btn btn-outline hidden" style="padding: 0.15rem 0.5rem; font-size: 0.7rem;">Clear</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                     <div class="export-grid" id="export-grid"></div>
                 </div>
             </div>
@@ -5025,8 +5191,8 @@
             .ts-hint { font-size: 0.75rem; color: var(--text-dim); opacity: 0.85; margin-top: 0.6rem; }
             .ts-hint code { font-family: 'Ubuntu Mono', monospace; }
             .ts-sample-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; margin-top: 0.8rem; font-size: 0.82rem; color: var(--text-dim); }
-            .ts-sample-row label { display: flex; align-items: center; gap: 0.4rem; }
-            .ts-sample-row select.ts-mini { max-width: 100%; }
+            .ts-sample-row label { display: flex; align-items: center; gap: 0.4rem; flex: 1 1 14rem; min-width: 0; }
+            .ts-sample-row select.ts-mini { flex: 1 1 auto; min-width: 0; max-width: 100%; }
             .ts-sample-btn { align-self: flex-start; padding: 0.4rem 0.8rem; font-size: 0.8rem; }
             .ts-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; justify-content: center; max-width: 1100px; margin: 1.5rem auto 0; }
             .ts-status { font-size: 0.85rem; font-weight: 600; color: var(--accent); }
@@ -5864,6 +6030,20 @@
                         localStorage.setItem(item.id, el.value);
                     });
                 }
+            });
+
+            // A margin popover's four fields are kept as the other settings are, and redraw the window that
+            // previews them (`rerender`) as they are typed.
+            Object.values(window.CONFIG_SCHEMAS).flat().filter(item => item.type.includes('popover-margins')).forEach(item => {
+                MARGIN_SIDES.forEach(side => {
+                    const el = document.getElementById(`${item.id}_${side}`);
+                    if (!el) return;
+                    el.addEventListener('input', () => {
+                        localStorage.setItem(el.id, el.value);
+                        readMargins(item.id); // marks a side that is no length
+                        if (item.rerender && window.currentAst) window.renderFormatWindow(item.rerender);
+                    });
+                });
             });
 
             // Signal ready state to show body (prevent FOUC/flicker)
@@ -6805,7 +6985,7 @@
             };
             document.getElementById('cfg_html_standalone_all_on').addEventListener('click', () => setAllStandaloneOptions(true));
             document.getElementById('cfg_html_standalone_all_off').addEventListener('click', () => setAllStandaloneOptions(false));
-            ['cfg_md_dialect', 'cfg_md_fallbackToHtml'].forEach(id => {
+            ['cfg_md_dialect', 'cfg_md_fallbackToHtml', 'cfg_md_listMarkers'].forEach(id => {
                 document.getElementById(id).addEventListener('change', () => window.renderFormatWindow('md'));
             });
             ['cfg_chunks_strategy', 'cfg_chunks_maxChunkSize', 'cfg_chunks_chunkOverlap', 'cfg_chunks_splitBy', 'cfg_chunks_tableSplitStrategy'].forEach(id => {
@@ -7468,13 +7648,71 @@ ${sectioning.filter(Boolean).join('\n')}
                 }
             }
 
+            /**
+             * A margin popover's sides, as a generator's `margin` takes them: a bare number is points, a length
+             * with its unit is passed as typed. A blank side is left out (the document's own margin), and so is
+             * one that is no length, which its field marks. Undefined when no side is set.
+             */
+            function readMargins(id) {
+                const margin = {};
+                for (const side of MARGIN_SIDES) {
+                    const el = document.getElementById(`${id}_${side}`);
+                    const raw = el.value.trim();
+                    const length = /^(\d+(?:\.\d+)?|\.\d+)\s*(pt|in|cm|mm|px)?$/i.exec(raw);
+                    el.setAttribute('aria-invalid', raw && !length ? 'true' : 'false');
+                    el.style.borderColor = raw && !length ? '#ef4444' : '';
+                    if (!length) continue;
+                    margin[side] = length[2] ? length[1] + length[2].toLowerCase() : Number(length[1]);
+                }
+                return Object.keys(margin).length ? margin : undefined;
+            }
+
             /** The LaTeX window's generator options, as a texConfig. */
             function readTexPanelConfig() {
+                const margin = readMargins('cfg_tex_margin');
                 return {
                     documentClass: document.getElementById('cfg_tex_documentClass').value,
                     standalone: document.getElementById('cfg_tex_standalone').checked,
                     embedImages: document.getElementById('cfg_tex_embedImages').checked,
-                    numberSections: document.getElementById('cfg_tex_numberSections').checked
+                    numberSections: document.getElementById('cfg_tex_numberSections').checked,
+                    format: document.getElementById('cfg_tex_format').value,
+                    landscape: document.getElementById('cfg_tex_landscape').checked,
+                    ...(margin ? { margin } : {})
+                };
+            }
+
+            /** The Markdown window's options, as an mdConfig. */
+            function readMdPanelConfig() {
+                return {
+                    dialect: getMdDialect(),
+                    fallbackToHtml: getMdFallbackToHtml(),
+                    listMarkers: document.getElementById('cfg_md_listMarkers').value
+                };
+            }
+
+            /**
+             * The Chunks window's options, as a chunksConfig. Its size is the fixed-size strategy's `chunkSize`,
+             * and the other strategies' `maxChunkSize`.
+             */
+            function readChunksPanelConfig() {
+                const strategy = document.getElementById('cfg_chunks_strategy').value;
+                const size = parseInt(document.getElementById('cfg_chunks_maxChunkSize').value, 10);
+                return {
+                    strategy,
+                    ...(strategy === 'fixed-size' ? { chunkSize: size } : { maxChunkSize: size }),
+                    chunkOverlap: parseInt(document.getElementById('cfg_chunks_chunkOverlap').value, 10),
+                    splitBy: document.getElementById('cfg_chunks_splitBy').value,
+                    tableSplitStrategy: document.getElementById('cfg_chunks_tableSplitStrategy').value
+                };
+            }
+
+            /** The Plain Text window's options, as a textConfig: what the preview shows, Copy and Download give. */
+            function readTextPanelConfig() {
+                return {
+                    preserveLayout: document.getElementById('cfg_text_preserveLayout').checked,
+                    renderNotes: document.getElementById('cfg_text_renderNotes').checked,
+                    newlineDelimiter: document.getElementById('cfg_text_newlineDelimiter').value.replace(/\\n/g, '\n'),
+                    pageSeparator: document.getElementById('cfg_text_pageSeparator').value.replace(/\\n/g, '\n')
                 };
             }
 
@@ -7501,15 +7739,9 @@ ${sectioning.filter(Boolean).join('\n')}
                             // (gatePreviewEmbeds); the source view shows the output the panel's options give.
                             genConfig.htmlConfig = { ...readHtmlPanelConfigInputs(), ...(window.viewerStates['html'] === 'preview' ? { gatedEmbeds: true } : {}) };
                         } else if (format === 'md') {
-                            genConfig.mdConfig = { dialect: getMdDialect(), fallbackToHtml: getMdFallbackToHtml() };
+                            genConfig.mdConfig = readMdPanelConfig();
                         } else if (format === 'chunks') {
-                            genConfig.chunksConfig = {
-                                strategy: document.getElementById('cfg_chunks_strategy').value,
-                                maxChunkSize: parseInt(document.getElementById('cfg_chunks_maxChunkSize').value, 10),
-                                chunkOverlap: parseInt(document.getElementById('cfg_chunks_chunkOverlap').value, 10),
-                                splitBy: document.getElementById('cfg_chunks_splitBy').value,
-                                tableSplitStrategy: document.getElementById('cfg_chunks_tableSplitStrategy').value
-                            };
+                            genConfig.chunksConfig = readChunksPanelConfig();
                         } else if (format === 'csv') {
                             genConfig.csvConfig = {
                                 sheets: document.getElementById('cfg_csv_sheets').value,
@@ -7517,12 +7749,7 @@ ${sectioning.filter(Boolean).join('\n')}
                                 columnDelimiter: document.getElementById('cfg_csv_columnDelimiter').value
                             };
                         } else if (format === 'text') {
-                            genConfig.textConfig = {
-                                preserveLayout: document.getElementById('cfg_text_preserveLayout').checked,
-                                renderNotes: document.getElementById('cfg_text_renderNotes').checked,
-                                newlineDelimiter: document.getElementById('cfg_text_newlineDelimiter').value.replace(/\\n/g, '\n'),
-                                pageSeparator: document.getElementById('cfg_text_pageSeparator').value.replace(/\\n/g, '\n')
-                            };
+                            genConfig.textConfig = readTextPanelConfig();
                         } else if (format === 'tex') {
                             genConfig.texConfig = readTexPanelConfig();
                         }
@@ -7972,7 +8199,8 @@ ${sectioning.filter(Boolean).join('\n')}
                         bodyStart: document.getElementById('cfg_html_inj_bodyStart').value || undefined,
                         bodyEnd: document.getElementById('cfg_html_inj_bodyEnd').value || undefined
                     },
-                    sourceAttributes: document.getElementById('cfg_html_sourceAttributes').checked
+                    sourceAttributes: document.getElementById('cfg_html_sourceAttributes').checked,
+                    sheetLayout: document.getElementById('cfg_html_sheetLayout').value
                 };
             }
 
@@ -7999,7 +8227,7 @@ ${sectioning.filter(Boolean).join('\n')}
                     const genConfig = {
                         ...getGeneratorConfig(),
                         ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
-                        mdConfig: { dialect: getMdDialect(), fallbackToHtml: getMdFallbackToHtml() }
+                        mdConfig: readMdPanelConfig()
                     };
                     return (await window.officeParser.OfficeGenerator.generate(window.currentAst, 'md', genConfig)).value;
                 },
@@ -8007,13 +8235,7 @@ ${sectioning.filter(Boolean).join('\n')}
                     const genConfig = {
                         ...getGeneratorConfig(),
                         ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
-                        chunksConfig: {
-                            strategy: document.getElementById('cfg_chunks_strategy').value,
-                            maxChunkSize: parseInt(document.getElementById('cfg_chunks_maxChunkSize').value, 10),
-                            chunkOverlap: parseInt(document.getElementById('cfg_chunks_chunkOverlap').value, 10),
-                            splitBy: document.getElementById('cfg_chunks_splitBy').value,
-                            tableSplitStrategy: document.getElementById('cfg_chunks_tableSplitStrategy').value
-                        }
+                        chunksConfig: readChunksPanelConfig()
                     };
                     const res = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'chunks', genConfig);
                     return JSON.stringify(res.value, null, 2);
@@ -8034,11 +8256,7 @@ ${sectioning.filter(Boolean).join('\n')}
                     const genConfig = {
                         ...getGeneratorConfig(),
                         ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
-                        textConfig: {
-                            preserveLayout: document.getElementById('cfg_text_preserveLayout').checked,
-                            renderNotes: document.getElementById('cfg_text_renderNotes').checked,
-                            newlineDelimiter: document.getElementById('cfg_text_newlineDelimiter').value.replace(/\\n/g, '\n')
-                        }
+                        textConfig: readTextPanelConfig()
                     };
                     return (await window.officeParser.OfficeGenerator.generate(window.currentAst, 'text', genConfig)).value;
                 },
@@ -8178,15 +8396,86 @@ ${sectioning.filter(Boolean).join('\n')}
                 }
             };
 
-            // Exports with no preview window of their own, keyed by the panel whose options they use and
-            // whose "Download ▾" dropdown lists them (PDF, EPUB, DOCX, ODT, XLSX, ODS, PPTX and ODP take the HTML panel's
-            // options; the LaTeX + images zip takes the LaTeX panel's). The Export panel lists them too.
+            // --- The Export window's options for the formats with no window of their own ---
+
+            /** The Export window's page options (DOCX, ODT, PDF): paper, orientation and margins. */
+            function readExportPageConfig() {
+                const margin = readMargins('cfg_export_margin');
+                return {
+                    format: document.getElementById('cfg_export_format').value,
+                    landscape: document.getElementById('cfg_export_landscape').checked,
+                    ...(margin ? { margin } : {})
+                };
+            }
+            /** What a PDF prints that a printout leaves out by default. */
+            function readPdfExportConfig() {
+                return {
+                    printHidden: document.getElementById('cfg_pdf_printHidden').checked,
+                    printSpeakerNotes: document.getElementById('cfg_pdf_printSpeakerNotes').checked
+                };
+            }
+            /** How XLSX and ODS write a document's tables and text. */
+            function readSheetExportConfig() {
+                return {
+                    sheetPerTable: document.getElementById('cfg_sheet_sheetPerTable').checked,
+                    includeText: document.getElementById('cfg_sheet_includeText').checked
+                };
+            }
+
+            // Slide backgrounds for PPTX and ODP: the pictures chosen, in page order by file name (a picker
+            // gives its files in no set order), held for this visit only.
+            let slideBackgrounds = [];
+            const backgroundsInput = document.getElementById('cfg_slide_backgrounds');
+            const backgroundsCount = document.getElementById('cfg_slide_backgrounds_count');
+            const backgroundsClear = document.getElementById('cfg_slide_backgrounds_clear');
+            const showBackgrounds = () => {
+                backgroundsCount.textContent = slideBackgrounds.length ? slideBackgrounds.length + (slideBackgrounds.length === 1 ? ' picture' : ' pictures') : '';
+                backgroundsClear.classList.toggle('hidden', !slideBackgrounds.length);
+            };
+            backgroundsInput.addEventListener('change', async () => {
+                const files = [...backgroundsInput.files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+                slideBackgrounds = await Promise.all(files.map(async f => new Uint8Array(await f.arrayBuffer())));
+                showBackgrounds();
+            });
+            backgroundsClear.addEventListener('click', () => {
+                slideBackgrounds = [];
+                backgroundsInput.value = '';
+                showBackgrounds();
+                backgroundsInput.focus();
+            });
+            const slidesConfig = () => slideBackgrounds.length ? { backgrounds: slideBackgrounds } : {};
+
+            /**
+             * The page a printed PDF takes. In a browser the library's PDF is the page's HTML, which the browser's
+             * print dialog lays out, so the page options reach it as an @page rule (Puppeteer's paper sizes, a
+             * bare margin in points as for DOCX and ODT). Auto with no margin set adds nothing: the document's own.
+             */
+            const PRINT_PAPER = { a3: ['297mm', '420mm'], a4: ['210mm', '297mm'], a5: ['148mm', '210mm'], letter: ['8.5in', '11in'], legal: ['8.5in', '14in'], tabloid: ['11in', '17in'], ledger: ['17in', '11in'] };
+            function withPrintPage(html, page) {
+                const rules = [];
+                const paper = PRINT_PAPER[page.format];
+                if (paper) rules.push('size: ' + (page.landscape ? [paper[1], paper[0]] : paper).join(' ') + ';');
+                else if (page.landscape) rules.push('size: landscape;');
+                for (const side of MARGIN_SIDES) {
+                    const value = page.margin && page.margin[side];
+                    if (value !== undefined) rules.push(`margin-${side}: ${typeof value === 'number' ? value + 'pt' : value};`);
+                }
+                if (!rules.length) return html;
+                const css = `<style>@page { ${rules.join(' ')} }</style>`;
+                return /<\/head>/i.test(html) ? html.replace(/<\/head>/i, css + '</head>') : css + html;
+            }
+
+            // Exports with no preview window of their own, keyed by the panel whose "Download ▾" dropdown lists
+            // them (PDF and EPUB are the HTML panel's HTML; DOCX, ODT, XLSX, ODS, PPTX and ODP are written from the
+            // AST with the Export window's options; the LaTeX + images zip takes the LaTeX panel's). The Export
+            // panel lists them too.
             const DERIVED_EXPORTS = {
                 html: {
                     pdf: {
                         kind: 'print',
                         run: async () => {
-                            const genConfig = htmlDerivedConfig(true); // always standalone for print
+                            const page = readExportPageConfig();
+                            const genConfig = { ...htmlDerivedConfig(true), pdfConfig: readPdfExportConfig() }; // always standalone for print
                             const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'pdf', genConfig);
                             // The browser implementation returns a standalone HTML string for PDF format.
                             const printWindow = window.open('', '_blank');
@@ -8194,7 +8483,7 @@ ${sectioning.filter(Boolean).join('\n')}
                                 throw new Error("Pop-up blocked! Please allow pop-ups for this site to export PDF.");
                             }
                             printWindow.document.open();
-                            printWindow.document.write(gatePreviewEmbeds(result.value, { media: false }));
+                            printWindow.document.write(withPrintPage(gatePreviewEmbeds(result.value, { media: false }), page));
                             printWindow.document.close();
                             // Wait for assets (like Chart.js) to load before printing.
                             printWindow.onload = () => printWindow.print();
@@ -8213,9 +8502,9 @@ ${sectioning.filter(Boolean).join('\n')}
                     docx: {
                         kind: 'binary',
                         run: async () => {
-                            // DocxGenerator writes a WordprocessingML package straight from the AST; it ignores
-                            // the html-specific keys in the derived config.
-                            const genConfig = htmlDerivedConfig(false);
+                            // DocxGenerator writes a WordprocessingML package straight from the AST, on the Export
+                            // window's page; it ignores the html-specific keys in the derived config.
+                            const genConfig = { ...htmlDerivedConfig(false), docxConfig: readExportPageConfig() };
                             const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'docx', genConfig);
                             const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.docx';
                             downloadFile(result.value, name, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
@@ -8224,9 +8513,9 @@ ${sectioning.filter(Boolean).join('\n')}
                     odt: {
                         kind: 'binary',
                         run: async () => {
-                            // OdtGenerator writes an OpenDocument Text package straight from the AST; it ignores
-                            // the html-specific keys in the derived config.
-                            const genConfig = htmlDerivedConfig(false);
+                            // OdtGenerator writes an OpenDocument Text package straight from the AST, on the Export
+                            // window's page; it ignores the html-specific keys in the derived config.
+                            const genConfig = { ...htmlDerivedConfig(false), odtConfig: readExportPageConfig() };
                             const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'odt', genConfig);
                             const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.odt';
                             downloadFile(result.value, name, 'application/vnd.oasis.opendocument.text');
@@ -8236,7 +8525,7 @@ ${sectioning.filter(Boolean).join('\n')}
                         kind: 'binary',
                         run: async () => {
                             // XlsxGenerator writes a workbook straight from the AST; it ignores the html-specific keys in the derived config.
-                            const genConfig = htmlDerivedConfig(false);
+                            const genConfig = { ...htmlDerivedConfig(false), xlsxConfig: readSheetExportConfig() };
                             const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'xlsx', genConfig);
                             const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.xlsx';
                             downloadFile(result.value, name, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -8246,7 +8535,7 @@ ${sectioning.filter(Boolean).join('\n')}
                         kind: 'binary',
                         run: async () => {
                             // OdsGenerator writes an OpenDocument spreadsheet straight from the AST; it ignores the html-specific keys in the derived config.
-                            const genConfig = htmlDerivedConfig(false);
+                            const genConfig = { ...htmlDerivedConfig(false), odsConfig: readSheetExportConfig() };
                             const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'ods', genConfig);
                             const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.ods';
                             downloadFile(result.value, name, 'application/vnd.oasis.opendocument.spreadsheet');
@@ -8256,7 +8545,7 @@ ${sectioning.filter(Boolean).join('\n')}
                         kind: 'binary',
                         run: async () => {
                             // PptxGenerator writes a presentation straight from the AST; it ignores the html-specific keys in the derived config.
-                            const genConfig = htmlDerivedConfig(false);
+                            const genConfig = { ...htmlDerivedConfig(false), pptxConfig: slidesConfig() };
                             const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'pptx', genConfig);
                             const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.pptx';
                             downloadFile(result.value, name, 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
@@ -8266,7 +8555,7 @@ ${sectioning.filter(Boolean).join('\n')}
                         kind: 'binary',
                         run: async () => {
                             // OdpGenerator writes an OpenDocument presentation straight from the AST; it ignores the html-specific keys in the derived config.
-                            const genConfig = htmlDerivedConfig(false);
+                            const genConfig = { ...htmlDerivedConfig(false), odpConfig: slidesConfig() };
                             const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'odp', genConfig);
                             const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.odp';
                             downloadFile(result.value, name, 'application/vnd.oasis.opendocument.presentation');
