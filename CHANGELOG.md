@@ -4,6 +4,16 @@ All notable changes to `officeParser` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.7.1] - 2026-11-09
+
+### Fixed
+- **PDF: layout text keeps a word's hyphen at the line break it was merged across.** With `mergeHyphenatedWords` (the default), a word hyphenated at a line end ("agree-" then "ment") was printed in layout text as "agree" and "ment" on two lines, its hyphen gone; it is printed "agree-" and "ment" again, as before 8.0.0. Slides (PPTX, ODP) keep it the same way. A dash that divides no word (`four -`, `COVID-19-`) is no longer taken for a hyphen, and a word whose accent is written as a separate mark merges like any other. (#145)
+- **XLSX: sheets come out in the workbook's tab order**, not the order of the files in the package. (#130)
+- **XLSX: a chart sheet no longer takes the name and hidden state of the worksheet with the same number.** A workbook with `Sheet1` and a hidden chart sheet `Chart1` read its worksheet as `Chart1`, and hidden, so its content was left out of PDF output. Every part a workbook names is now found by its full path, so pictures, charts and comments behind absolute targets are placed too, and a stray copy of a part no longer stands in for the real one. Targets that do not follow the specification to the letter are still found, each only as a part of the kind it names. (#141)
+- **XLSX: a chart sheet's chart is placed in its tab** when attachments are extracted; it reached the attachments but no place in the content. (#142)
+- **Templates: a mistyped operator in a condition is named as typed.** A single `|` was reported as `||`, and `===`, `!==`, `<>` and others were blamed on a different operator.
+- **A picture left out of the output says which and why.** `IMAGE_PROCESSING_FAILED` read "Failed to extract from ImageBitmap" for pictures the native PDF engine and the DOCX, ODT, LaTeX, PPTX and ODP writers cannot take; it now names the picture, its format and what the output accepts.
+
 ## [8.7.0] - 2026-11-08
 
 ### Added
