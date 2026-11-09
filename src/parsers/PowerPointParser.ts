@@ -1238,6 +1238,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         try {
             const metadata: SlideMetadata = { slideNumber };
             slideNode = readPart(file, { type: 'slide', children: [], metadata }, xml => {
+                const show = xml.documentElement?.getAttribute("show");
+                if (show === "0" || show === "false") metadata.hidden = true;
                 // A slide's own colour map, over its layout's and master's.
                 const slideMap = colorMapOf(xml);
                 if (slideMap) {

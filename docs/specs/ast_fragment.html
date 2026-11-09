@@ -247,7 +247,8 @@
     <ul>
         <li><strong><code>slide</code></strong>: Container for PPTX/ODP slides and LaTeX <code>beamer</code> frames. <code>metadata.slideNumber</code>
             provides the position: for PPTX, the slide's place in the presentation's slide list, which is also the
-            order slides are read in (a slide part the list no longer names is not read). Slide speaker notes are now attached via <code>slideNode.notes[]</code> instead of
+            order slides are read in (a slide part the list no longer names is not read). <code>metadata.hidden</code> marks a
+            slide the presentation hides (PPTX); the slide keeps its <code>slideNumber</code>. Slide speaker notes are now attached via <code>slideNode.notes[]</code> instead of
             being inserted as top-level <code>note</code> nodes.</li>
         <li><strong><code>page</code></strong>: Container for PDF pages. <code>metadata.pageNumber</code> provides the
             position.</li>

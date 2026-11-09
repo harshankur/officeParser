@@ -9,7 +9,7 @@
  * @module officeGenUtils
  */
 
-import { CellMetadata, EmbedMetadata, HeaderFooterMetadata, ImageMode, OfficeContentNode, OfficeParserAST, PageSetup, ParagraphSpacing, RowMetadata, SheetMetadata } from '../types.js';
+import { CellMetadata, EmbedMetadata, HeaderFooterMetadata, ImageMode, OfficeContentNode, OfficeParserAST, PageSetup, ParagraphSpacing, RowMetadata, SheetMetadata, SlideMetadata } from '../types.js';
 import { cssColorHex } from './colorUtils.js';
 import { escapeXml, stripInvalidXmlChars } from './sanitize.js';
 import { lookupTable } from './lookupUtils.js';
@@ -606,6 +606,17 @@ export function withShownCellText(ast: OfficeParserAST): OfficeParserAST {
 export function withoutSpeakerNotes(ast: OfficeParserAST): OfficeParserAST {
     if (!ast.content.some(n => n.type === 'slide' && n.notes?.length)) return ast;
     return { ...ast, content: ast.content.map(n => n.type === 'slide' && n.notes?.length ? { ...n, notes: undefined } : n) };
+}
+
+/**
+ * A presentation's content as a printout shows it: hidden slides (SlideMetadata.hidden) left out, their
+ * speaker notes with them. The AST as given when no slide is hidden; otherwise a copy that shares the
+ * nodes it keeps.
+ */
+export function withoutHiddenSlides(ast: OfficeParserAST): OfficeParserAST {
+    const isHidden = (n: OfficeContentNode) => n.type === 'slide' && !!(n.metadata as SlideMetadata | undefined)?.hidden;
+    if (!ast.content.some(isHidden)) return ast;
+    return { ...ast, content: ast.content.filter(n => !isHidden(n)) };
 }
 
 /**

@@ -9323,6 +9323,53 @@ async function testHiddenSheetContent(): Promise<void> {
 }
 
 /**
+ * A presentation's hidden slides (PPTX `show="0"` or `"false"`) are read and marked, keep their place in
+ * the slide numbers, stay in text output, and are left out of PDF output with their speaker notes, as a
+ * printout of the deck leaves them (pdfConfig.printHidden prints them).
+ */
+async function testHiddenSlides(): Promise<void> {
+    const P = 'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const rel = (id: string, type: string, target: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${target}"/>`;
+    const rels = (...items: string[]) => strToU8(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${items.join('')}</Relationships>`);
+    const tree = (text: string) => `<p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Text"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:t>${text}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>`;
+    // Each slide has speaker notes `NOTEOF<its word>`.
+    const deck = (slides: [show: string | undefined, word: string][]) => Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>'),
+        'ppt/presentation.xml': strToU8(`<?xml version="1.0"?><p:presentation ${P}><p:sldIdLst>${slides.map((_, i) => `<p:sldId id="${256 + i}" r:id="rId${i + 1}"/>`).join('')}</p:sldIdLst></p:presentation>`),
+        'ppt/_rels/presentation.xml.rels': rels(...slides.map((_, i) => rel(`rId${i + 1}`, 'slide', `slides/slide${i + 1}.xml`))),
+        ...Object.fromEntries(slides.flatMap(([show, word], i) => [
+            [`ppt/slides/slide${i + 1}.xml`, strToU8(`<?xml version="1.0"?><p:sld ${P}${show === undefined ? '' : ` show="${show}"`}>${tree(word)}</p:sld>`)],
+            [`ppt/slides/_rels/slide${i + 1}.xml.rels`, rels(rel('rId1', 'notesSlide', `../notesSlides/notesSlide${i + 1}.xml`))],
+            [`ppt/notesSlides/notesSlide${i + 1}.xml`, strToU8(`<?xml version="1.0"?><p:notes ${P}>${tree(`NOTEOF${word}`)}</p:notes>`)],
+        ])),
+    }));
+    const printed = async (ast: OfficeParserAST, pdfConfig: object) => {
+        const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native', ...pdfConfig } } as any)).value as Uint8Array;
+        const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+        return { pages: back.content.length, text: String((await back.to('text')).value) };
+    };
+
+    const words = ['SHOWNONE', 'HIDDENZERO', 'SHOWNTWO', 'HIDDENFALSE'];
+    const shown = ['SHOWNONE', 'SHOWNTWO'];
+    const ast = await OfficeParser.parseOffice(deck([[undefined, 'SHOWNONE'], ['0', 'HIDDENZERO'], ['1', 'SHOWNTWO'], ['false', 'HIDDENFALSE']]), { fileType: 'pptx' } as any) as OfficeParserAST;
+    const slides = ast.content.filter(n => n.type === 'slide');
+    assert.deepStrictEqual(slides.map(s => [(s.metadata as any).slideNumber, (s.metadata as any).hidden]), [[1, undefined], [2, true], [3, undefined], [4, true]],
+        'show="0" and show="false" mark the slide hidden, a shown slide carries no mark, and hidden slides keep their numbers');
+    const text = String((await ast.to('text')).value);
+    assert.deepStrictEqual(words.filter(w => text.includes(w) && text.includes(`NOTEOF${w}`)), words, 'text output keeps hidden slides and their notes');
+    for (const printHidden of [false, true]) {
+        const slidesOnly = await printed(ast, { printHidden });
+        assert.strictEqual(slidesOnly.pages, printHidden ? 4 : 2, `printHidden ${printHidden}: a page for each slide printed`);
+        const withNotes = await printed(ast, { printHidden, printSpeakerNotes: true });
+        assert.deepStrictEqual(words.filter(w => withNotes.text.includes(w)), printHidden ? words : shown, `printHidden ${printHidden}: the slides printed; got ${JSON.stringify(withNotes.text)}`);
+        assert.deepStrictEqual(words.filter(w => withNotes.text.includes(`NOTEOF${w}`)), printHidden ? words : shown, `printHidden ${printHidden}: the speaker notes printed are the printed slides'`);
+    }
+
+    const allHidden = await OfficeParser.parseOffice(deck([['0', 'HIDDENONLY']]), { fileType: 'pptx' } as any) as OfficeParserAST;
+    assert.ok(!(await printed(allHidden, {})).text.includes('HIDDENONLY'), 'a deck of hidden slides prints none of them');
+}
+
+/**
  * A CSV file's delimiter is read from it by default: European spreadsheets write `;` with decimal commas,
  * which a comma split (`Müller;1.234,56` came out as `Müller;1.234 | 56`). An explicit one is used as
  * given, CSV output keeps the one read, and a byte order mark is no text of the first cell.
@@ -13987,6 +14034,7 @@ async function runTests(): Promise<void> {
         ['Text table cells apart', testTextTableCellsApart],
         ['CSV delimiter detection', testCsvDelimiterDetection],
         ['Hidden sheet content', testHiddenSheetContent],
+        ['Hidden slides', testHiddenSlides],
         ['Speaker notes in PDF', testSpeakerNotesInPdf],
         ['Native PDF GIF and BMP', testNativePdfGifAndBmp],
         ['XLSX shown text', testXlsxShownText],

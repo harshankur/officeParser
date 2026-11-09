@@ -1831,10 +1831,10 @@ export interface PdfGeneratorConfig {
      */
     subsetFonts?: boolean;
     /**
-     * Print a spreadsheet's hidden sheets, rows and columns. A spreadsheet's printout leaves them out,
-     * and so does PDF output by default (both engines): they are marked when read
-     * (SheetMetadata.hidden, RowMetadata.hidden, CellMetadata.hidden) and kept as data by every other
-     * format. Defaults to false.
+     * Print a spreadsheet's hidden sheets, rows and columns, and a presentation's hidden slides. A
+     * printout leaves them out, and so does PDF output by default (both engines): they are marked when
+     * read (SheetMetadata.hidden, RowMetadata.hidden, CellMetadata.hidden, SlideMetadata.hidden) and kept
+     * as data by every other format. Defaults to false.
      */
     printHidden?: boolean;
     /**
@@ -3151,6 +3151,12 @@ export interface SlideMetadata {
     anchorIds?: string[];
     /** The colour the slide is filled with (its own background, else its layout's or master's), `#RRGGBB`. */
     background?: string;
+    /**
+     * The presentation hides the slide (PPTX `show="0"`). Its content is read as any slide's and
+     * `slideNumber` counts it; a slideshow and a printout leave it out, as PDF output does unless
+     * `pdfConfig.printHidden` is set.
+     */
+    hidden?: boolean;
 }
 
 /**

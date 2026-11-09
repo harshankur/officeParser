@@ -216,7 +216,7 @@ npx officeparser my_document --fileType=docx --to=json
 | `--pdfConfig.subsetFonts` | boolean | `true` | `false` embeds whole font files, not only the glyphs used |
 | `--pdfConfig.outline` | boolean | `false` | Write a bookmark outline from the headings |
 | `--pdfConfig.format` | `auto\|A4\|Letter\|...` | `auto` | Paper format; `auto` is the document's own pages (each section's, each sheet's, a slide's size), else A4 |
-| `--pdfConfig.printHidden` | boolean | `false` | Print hidden sheets, rows and columns |
+| `--pdfConfig.printHidden` | boolean | `false` | Print hidden sheets, rows, columns and slides |
 | `--pdfConfig.printSpeakerNotes` | boolean | `false` | Print each slide's speaker notes after it |
 | `--xlsxConfig.sheetPerTable` | boolean | `true` | XLSX: each of a document's tables on a sheet of its own; `false` puts them all on one sheet. `--odsConfig.sheetPerTable` for ODS |
 | `--xlsxConfig.includeText` | boolean | `true` | XLSX: a document's text outside its tables on a sheet named `Text`; `false` leaves it out. `--odsConfig.includeText` for ODS |
@@ -942,7 +942,9 @@ change deleted or moved away (DOCX, ODT) is not read; insertions are.
 A PPTX's slides are read in the order its slide list (`p:sldIdLst`) shows them, not the order of their
 file names, and `slideNumber` is a slide's place in that order. Each slide has the notes page its own
 relationships name. A slide part the list no longer names (a deleted slide an editor left in the
-package) is not read. A slide list or presentation relationships that are not XML leave the slides in
+package) is not read. A hidden slide (`show="0"`) is read like any other and marked with
+`SlideMetadata.hidden`. It keeps its `slideNumber`, and PDF output leaves it out unless
+`pdfConfig.printHidden` is set. A slide list or presentation relationships that are not XML leave the slides in
 the order of their file numbers, and relationships of a notes page or a slide master that are not XML
 leave its links and pictures unresolved; each is reported with a `CONTENT_PART_NOT_READ` warning.
 
@@ -1795,7 +1797,7 @@ Each font is the bytes of a TrueType, OpenType, WOFF or WOFF2 file (a web font, 
 | `scale` | `number` | `1` | Rendering scale factor. **HTML engine only** |
 | `launchOptions` | `object` | headless defaults | Puppeteer launch options (e.g., `executablePath`). **HTML engine only** |
 | `timeout` | `number` | `30000` | PDF rendering timeout in milliseconds. Set to `0` to disable. **HTML engine only** |
-| `printHidden` | `boolean` | `false` | Print hidden sheets, rows and columns, which a printout leaves out. Both engines |
+| `printHidden` | `boolean` | `false` | Print hidden sheets, rows, columns and slides, which a printout leaves out. Both engines |
 | `printSpeakerNotes` | `boolean` | `false` | Print each slide's speaker notes after it; a printout leaves them out. Both engines |
 
 > **Native engine (`engine: 'native'`) differences beyond fidelity:** it ignores the Puppeteer-only
