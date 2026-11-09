@@ -5827,6 +5827,81 @@ async function testExcelFallbackNeverTakesNamedPart(): Promise<void> {
 }
 
 /**
+ * Each relationships part is read and charged to the element budget once, and only relationships a reader
+ * follows claim a part: a workbook of hyperlinks needs the elements it holds (not twice as many), and a
+ * hyperlink, an unreferenced workbook relationship or a sheet's background picture never blocks the
+ * fallback of a relationship that names a part its reader follows.
+ */
+async function testExcelRelationshipsReadOnce(): Promise<void> {
+    const parse = async (buffer: Buffer, cfg: Record<string, unknown>) => await OfficeParser.parseOffice(buffer, { fileType: 'xlsx', onWarning: () => {}, ...cfg } as any) as OfficeParserAST;
+    const note = '<?xml version="1.0"?><comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><authors><author>A</author></authors><commentList><comment ref="A1" authorId="0"><text><t>NOTE</t></text></comment></commentList></comments>';
+    const one = sheetParts.rels([['rId1', 'worksheet', 'worksheets/sheet1.xml']]);
+
+    // One sheet of 1000 hyperlinks: the smallest maxXmlElements that parses is what the XML holds
+    // (1009 in v8.7.0), whether or not attachments are read.
+    const n = 1000;
+    const links = Array.from({ length: n }, (_, i) => i + 1);
+    const hyperlinks = `<hyperlinks>${links.map(i => `<hyperlink ref="A${i}" r:id="rId${i}"/>`).join('')}</hyperlinks>`;
+    const linked = sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/workbook.xml': sheetParts.workbook([['Links', 'rId1']]),
+        'xl/_rels/workbook.xml.rels': one,
+        'xl/worksheets/sheet1.xml': sheetParts.worksheet(links.map(i => `link${i}`), hyperlinks),
+        'xl/worksheets/_rels/sheet1.xml.rels': `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${links.map(i => `<Relationship Id="rId${i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/${i}" TargetMode="External"/>`).join('')}</Relationships>`,
+    });
+    for (const extractAttachments of [false, true]) {
+        const parses = async (maxXmlElements: number) => { try { await parse(linked, { extractAttachments, decompressionLimits: { maxXmlElements } }); return true; } catch { return false; } };
+        let lo = 1, hi = 10 * n;
+        while (lo < hi) { const mid = (lo + hi) >> 1; if (await parses(mid)) hi = mid; else lo = mid + 1; }
+        assert.strictEqual(lo, 1009, `${n} hyperlinks (extractAttachments ${extractAttachments}): the smallest maxXmlElements that parses is the 1009 v8.7.0 needed; got ${lo}`);
+    }
+
+    // A hyperlink naming a comments part exactly does not block the comments relationship's fallback.
+    const hyperlinkNamesComments = sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/workbook.xml': sheetParts.workbook([['A', 'rId1']]),
+        'xl/_rels/workbook.xml.rels': one,
+        'xl/worksheets/sheet1.xml': sheetParts.worksheet(['a'], '<hyperlinks><hyperlink ref="A1" r:id="rId3"/></hyperlinks>'),
+        'xl/worksheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId2', 'comments', 'comments1.xml'], ['rId3', 'hyperlink', '../comments1.xml']]),
+        'xl/comments1.xml': note,
+    });
+    assert.deepStrictEqual(sheetParts.shape(await parse(hyperlinkNamesComments, {})), [['A', undefined, ['row:a+comment']]], 'a hyperlink naming the comments part does not block its fallback');
+
+    // An unreferenced workbook relationship naming a sheet exactly does not block the tab's fallback.
+    const unreferenced = sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/workbook.xml': sheetParts.workbook([['A', 'rId1']]),
+        'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', 'xl/worksheets/sheet1.xml'], ['rId9', 'worksheet', 'worksheets/sheet1.xml']]),
+        'xl/worksheets/sheet1.xml': sheetParts.worksheet(['a']),
+    });
+    assert.deepStrictEqual(sheetParts.shape(await parse(unreferenced, {})), [['A', undefined, ['row:a']]], 'a workbook relationship no tab names does not block a tab\'s fallback');
+
+    // A sheet's background picture naming the picture exactly does not block the drawing picture's fallback.
+    const background = sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/workbook.xml': sheetParts.workbook([['A', 'rId1']]),
+        'xl/_rels/workbook.xml.rels': one,
+        'xl/worksheets/sheet1.xml': sheetParts.worksheet(['a'], '<drawing r:id="rId1"/><picture r:id="rId2"/>'),
+        'xl/worksheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId1', 'drawing', '../drawings/drawing1.xml'], ['rId2', 'image', '../media/image1.png']]),
+        'xl/drawings/drawing1.xml': sheetParts.drawing(sheetParts.picture('rId1', 'PIC')),
+        'xl/drawings/_rels/drawing1.xml.rels': sheetParts.rels([['rId1', 'image', 'media/image1.png']]),
+        'xl/media/image1.png': sheetParts.png,
+    });
+    assert.deepStrictEqual(sheetParts.shape(await parse(background, { extractAttachments: true })), [['A', undefined, ['row:a', 'image:image1.png/PIC']]], 'a sheet background picture does not block the drawing picture\'s fallback');
+
+    // A relationship a reader follows still claims its part: A's exact sheet is not taken by B's fallback.
+    const claimed = sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/workbook.xml': sheetParts.workbook([['B', 'rId2'], ['A', 'rId1']]),
+        'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', 'worksheets/sheet1.xml'], ['rId2', 'worksheet', 'old/sheet1.xml']]),
+        'xl/worksheets/sheet1.xml': sheetParts.worksheet(['a']),
+    });
+    const claimedShape = sheetParts.shape(await parse(claimed, {}));
+    assert.deepStrictEqual(claimedShape.find(s => s[0] === 'A'), ['A', undefined, ['row:a']], 'A keeps the sheet it names exactly');
+    assert.ok(!(claimedShape.find(s => s[0] === 'B')?.[2] as string[] | undefined)?.length, 'B does not take it');
+}
+
+/**
  * Issue #142: a chart moved to a chart sheet of its own reached the attachments but not the content, so
  * the text, chunks and every writer left it out. With extractAttachments, a chart sheet is a sheet node in
  * its tab's place holding its drawing's charts and pictures, under its name and hidden state; without it,
@@ -13873,6 +13948,7 @@ async function runTests(): Promise<void> {
         ['ExcelRelationshipTargetsNotToTheLetter', testExcelRelationshipTargetsNotToTheLetter],
         ['ExcelFallbackTakesOnlyItsKind', testExcelFallbackTakesOnlyItsKind],
         ['ExcelFallbackNeverTakesNamedPart', testExcelFallbackNeverTakesNamedPart],
+        ['ExcelRelationshipsReadOnce', testExcelRelationshipsReadOnce],
         ['ExcelChartSheetPlacedInItsTab', testExcelChartSheetPlacedInItsTab],
         ['GeneratedOutput', testGeneratedOutput],
         ['ODG', testOdg],

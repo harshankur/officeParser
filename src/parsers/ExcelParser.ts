@@ -45,6 +45,12 @@ const relsOf = (partPath: string): string => `${folderOf(partPath)}_rels/${partP
 /** The part a relationships part belongs to: the inverse of relsOf. */
 const partOfRels = (relsPath: string): string => relsPath.replace(/(^|\/)_rels\/([^/]*)\.rels$/, '$1$2');
 
+/** A relationship of a relationships part, kept as the four attributes its readers read, without its XML. */
+class PartRelationship {
+    constructor(readonly Id: string | null, readonly Type: string | null, readonly Target: string | null, readonly TargetMode: string | null) {}
+    getAttribute(name: 'Id' | 'Type' | 'Target' | 'TargetMode'): string | null { return this[name]; }
+}
+
 /** The folders of SpreadsheetML's kinds of part, by the name a target gives them (`worksheets/sheet1.xml`). */
 const KIND_FOLDERS = new Set(['worksheets', 'chartsheets', 'dialogsheets', 'macrosheets', 'drawings', 'charts', 'media']);
 
@@ -592,19 +598,6 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         config
     );
 
-    // Every relationship of the relationships parts read, with the part holding it (see partLocator), each
-    // part parsed as it is reached and let go after. One that cannot be read is left to fail where it is
-    // read, as before.
-    const locatePart = partLocator(partPaths, (function* () {
-        for (const file of files) {
-            if (!file.path.endsWith('.rels')) continue;
-            let rels;
-            try { rels = getElementsByTagName(parseXmlString(file.content.toString(), { config }), "Relationship"); } catch { continue; }
-            const source = partOfRels(file.path);
-            for (const rel of rels) yield { source, rel };
-        }
-    })());
-
     // Every workbook has xl/workbook.xml; without it the archive is not a spreadsheet.
     // Resolved up front so a file that cannot be a workbook fails before any of the parsing
     // work below, and read again further down for the sheet-name map.
@@ -618,6 +611,88 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     // tell "nothing to read here" from "we read nothing".
     if (!files.some(file => !!file.path.match(sheetsRegex)))
         logWarning(OfficeWarningType.NO_WORKSHEETS_FOUND, config);
+
+    // The package's parts by path (a scan of all of them per sheet and per relationship took sheets x
+    // parts), and the comments parts already attached: each is read, and its comments attached, once
+    // (to the first sheet naming it). Read again for each relationship naming it, one comments part of
+    // 1 MB named 2,000 times (3.7 KB of XLSX) ended the process out of memory.
+    const fileByPath = new Map<string, (typeof files)[number]>();
+    for (const f of files) if (!fileByPath.has(f.path)) fileByPath.set(f.path, f);
+    const attachedCommentParts = new Set<string>();
+
+    /** What the sheet loop below reads a part as: a worksheet, a chart sheet, or neither. */
+    const sheetKindOf = (path: string): 'worksheet' | 'chartsheet' | undefined =>
+        path.match(mediaFileRegex) || path === stringsFilePath || path === 'xl/styles.xml' || path.match(drawingsRegex) ||
+            path.match(chartsRegex) || path.match(relsRegex) || path.match(drawingRelsRegex) ? undefined
+            : path.match(sheetsRegex) ? 'worksheet' : chartSheetsRegex.test(path) ? 'chartsheet' : undefined;
+
+    // Each relationships part's relationships, parsed (and charged to the element budget) once, by the
+    // first reader to need them, and kept, as their four attributes, for the others: parsed again by each
+    // reader, a part was charged once per read, and a workbook of a million hyperlinks (17 MB) within the
+    // default limits was refused. A part that cannot be parsed throws the same error at every read.
+    const readRelationships = new Map<(typeof files)[number], PartRelationship[] | { error: unknown }>();
+    const relationshipsOf = (file: (typeof files)[number]): PartRelationship[] => {
+        let read = readRelationships.get(file);
+        if (read === undefined) {
+            try {
+                read = getElementsByTagName(parseXmlString(file.content.toString(), { config }), "Relationship").map(rel => new PartRelationship(
+                    rel.getAttribute("Id"), rel.getAttribute("Type"), rel.getAttribute("Target"), rel.getAttribute("TargetMode")));
+            } catch (error) { read = { error }; }
+            readRelationships.set(file, read);
+        }
+        if (!Array.isArray(read)) throw read.error;
+        return read;
+    };
+    // The workbook's XML, parsed (and charged) once, for its tabs; as relationshipsOf.
+    let workbookRead: { xml: Document } | { error: unknown } | undefined;
+    const workbookXmlOf = (): Document => {
+        if (workbookRead === undefined) {
+            try { workbookRead = { xml: parseXmlString(workbookFile.content.toString(), { config }) }; } catch (error) { workbookRead = { error }; }
+        }
+        if ('error' in workbookRead) throw workbookRead.error;
+        return workbookRead.xml;
+    };
+    const workbookRelsFile = files.find(f => f.path === 'xl/_rels/workbook.xml.rels');
+
+    // The relationships the readers below look a part up for, each with the part holding it (see
+    // partLocator), by each reader's own test: the workbook's that its tabs name, a sheet's drawing and
+    // comments, a chart sheet's drawing, a drawing's pictures and charts. A hyperlink, a sheet's
+    // background picture or any other relationship no reader follows names no part here, so it takes no
+    // part from a fallback. Read only where a reader reads them, so no part is parsed or charged that
+    // was not before; one that cannot be read names nothing here and fails where it is read, as before.
+    const locatePart = partLocator(partPaths, (function* () {
+        const read = (file: (typeof files)[number]): PartRelationship[] => { try { return relationshipsOf(file); } catch { return []; } };
+        if (workbookRelsFile) {
+            let tabIds: Set<string | null>;
+            try { tabIds = new Set(getElementsByTagName(workbookXmlOf(), "sheet").map(sheet => sheet.getAttribute("r:id"))); } catch { tabIds = new Set(); }
+            for (const rel of read(workbookRelsFile)) {
+                if (rel.Id && rel.Target && tabIds.has(rel.Id)) yield { source: 'xl/workbook.xml', rel };
+            }
+        }
+        for (const file of files) {
+            const kind = sheetKindOf(file.path);
+            if (kind === undefined) {
+                if (!config.extractAttachments || !file.path.match(drawingRelsRegex)) continue;
+                const source = partOfRels(file.path);
+                for (const rel of read(file)) {
+                    if (rel.Id && rel.Target && (rel.Target.includes('media/') || rel.Type?.includes('chart'))) yield { source, rel };
+                }
+                continue;
+            }
+            const relsFile = fileByPath.get(relsOf(file.path));
+            if (!relsFile) continue;
+            // These type tests mirror the readers' own below (the sheet loop's worksheet and chart sheet
+            // relationships, the drawing readers' media and chart tests) and must change with them.
+            for (const rel of read(relsFile)) {
+                const type = rel.Type;
+                if (!rel.Id || !rel.Target || !type) continue;
+                if (kind === 'chartsheet' ? type.endsWith('/drawing')
+                    : !type.endsWith('/hyperlink') && ((!!config.extractAttachments && type.includes('drawing')) || (!config.ignoreComments && type.includes('comments')))) {
+                    yield { source: file.path, rel };
+                }
+            }
+        }
+    })());
 
     const sharedStringsFile = files.find(f => f.path === stringsFilePath);
     // Updated to store structured content (rich text runs) or simple string
@@ -843,8 +918,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         for (const relFile of drawingRelsFiles) {
             const drawingPath = partOfRels(relFile.path);
 
-            const relsXml = parseXmlString(relFile.content.toString(), { config });
-            const relationships = getElementsByTagName(relsXml, "Relationship");
+            const relationships = relationshipsOf(relFile);
 
             if (!drawingImageMap[drawingPath]) {
                 drawingImageMap[drawingPath] = Object.create(null);
@@ -946,8 +1020,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         for (const relFile of drawingRelsFiles) {
             const drawingPath = partOfRels(relFile.path);
 
-            const relsXml = parseXmlString(relFile.content.toString(), { config });
-            const relationships = getElementsByTagName(relsXml, "Relationship");
+            const relationships = relationshipsOf(relFile);
 
             if (!drawingChartMap[drawingPath]) {
                 drawingChartMap[drawingPath] = Object.create(null);
@@ -967,13 +1040,10 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     }
 
     const workbookTabs = new Map<string, { index: number; name: string | null; hidden: boolean }>();
-    const workbookRelsFile = files.find(f => f.path === 'xl/_rels/workbook.xml.rels');
-
     if (workbookRelsFile) {
         // Resolve sheet references to package paths, not basenames: different
         // kinds of sheet can have the same filename in separate directories.
-        const relsXml = parseXmlString(workbookRelsFile.content.toString(), { config });
-        const relationships = getElementsByTagName(relsXml, "Relationship");
+        const relationships = relationshipsOf(workbookRelsFile);
         const rIdToPath = new Map<string, string>();
 
         for (const rel of relationships) {
@@ -983,7 +1053,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         }
 
         // Read worksheet metadata and tab order from workbook.xml.
-        const workbookXml = parseXmlString(workbookFile.content.toString(), { config });
+        const workbookXml = workbookXmlOf();
         const sheets = getElementsByTagName(workbookXml, "sheet");
 
         for (const sheet of sheets) {
@@ -1001,13 +1071,6 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     }
 
     const content: OfficeContentNode[] = [];
-    // The package's parts by path (a scan of all of them per sheet and per relationship took sheets x
-    // parts), and the comments parts already attached: each is read, and its comments attached, once
-    // (to the first sheet naming it). Read again for each relationship naming it, one comments part of
-    // 1 MB named 2,000 times (3.7 KB of XLSX) ended the process out of memory.
-    const fileByPath = new Map<string, (typeof files)[number]>();
-    for (const f of files) if (!fileByPath.has(f.path)) fileByPath.set(f.path, f);
-    const attachedCommentParts = new Set<string>();
 
     // The ZIP can store sheets in any order. Stable sorting keeps unlisted
     // worksheet parts in archive order after the workbook's tabs.
@@ -1069,15 +1132,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     };
 
     for (const file of files) {
-        if (file.path.match(mediaFileRegex)) continue;
-        if (file.path === stringsFilePath) continue;
-        if (file.path === 'xl/styles.xml') continue;
-        if (file.path.match(drawingsRegex)) continue;
-        if (file.path.match(chartsRegex)) continue;
-        if (file.path.match(relsRegex)) continue;
-        if (file.path.match(drawingRelsRegex)) continue;
-
-        if (file.path.match(sheetsRegex)) {
+        const sheetKind = sheetKindOf(file.path);
+        if (sheetKind === 'worksheet') {
             const relsFile = fileByPath.get(relsOf(file.path));
 
             const drawingMap: Record<string, string> = Object.create(null); // rId -> drawingPath
@@ -1088,8 +1144,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             const hyperlinkTargets = new Map<string, string>();
 
             if (relsFile) {
-                const relsXml = parseXmlString(relsFile.content.toString(), { config });
-                const relationships = getElementsByTagName(relsXml, "Relationship");
+                const relationships = relationshipsOf(relsFile);
                 for (const rel of relationships) {
                     const id = rel.getAttribute("Id");
                     const target = rel.getAttribute("Target");
@@ -1382,7 +1437,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                 metadata: { sheetName, ...(tab?.hidden ? { hidden: true } : {}), ...(pageSetup ? { pageSetup } : {}) },
                 rawContent: config.includeRawContent ? chargeRawContent(file.content.toString(), config) : undefined
             });
-        } else if (chartSheetsRegex.test(file.path)) {
+        } else if (sheetKind === 'chartsheet') {
             // A chart sheet (read only when attachments are, see extractFiles above) holds no cells: its
             // chart is drawn as a worksheet's are, through a <drawing> its relationships name. It is
             // placed, in its tab's place, when that drawing places something, so a chart moved to a
@@ -1390,8 +1445,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             const drawingMap: Record<string, string> = Object.create(null);
             const relsFile = fileByPath.get(relsOf(file.path));
             if (relsFile) {
-                const relsXml = parseXmlString(relsFile.content.toString(), { config });
-                for (const rel of getElementsByTagName(relsXml, "Relationship")) {
+                for (const rel of relationshipsOf(relsFile)) {
                     const id = rel.getAttribute("Id");
                     const target = rel.getAttribute("Target");
                     const type = rel.getAttribute("Type");
