@@ -385,11 +385,16 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     const relsRegex = /xl\/worksheets\/_rels\/sheet\d+\.xml\.rels/g;
     const drawingRelsRegex = /xl\/drawings\/_rels\/drawing\d+\.xml\.rels/g;
     const commentsRegex = /xl\/comments\d+\.xml/g;
+    // A chart sheet (a chart moved to its own tab) links to its chart through a drawing, as a worksheet does.
+    const chartsheetsRegex = /^xl\/chartsheets\/sheet\d+\.xml$/;
+    const chartsheetRelsRegex = /^xl\/chartsheets\/_rels\/sheet\d+\.xml\.rels$/;
 
     const files = await extractFiles(
         buffer,
         (x: string) =>
             !!x.match(sheetsRegex) ||
+            chartsheetsRegex.test(x) ||
+            (!!config.extractAttachments && chartsheetRelsRegex.test(x)) ||
             !!x.match(drawingsRegex) ||
             !!x.match(chartsRegex) ||
             (!config.ignoreComments && !!x.match(commentsRegex)) ||
@@ -805,6 +810,55 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     const tabIndex = (path: string) => workbookTabs.get(path)?.index ?? Number.MAX_SAFE_INTEGER;
     files.sort((a, b) => tabIndex(a.path) - tabIndex(b.path));
 
+    /**
+     * Adds to `into` the pictures and charts of each drawing that the sheet's `<drawing r:id="...">`
+     * elements name. `drawingMap` maps a relationship id to its drawing's path.
+     */
+    const placeDrawings = (sheetXml: string, drawingMap: Record<string, string>, into: OfficeContentNode[]): void => {
+        for (const drawing of xmlElements(sheetXml, 'drawing')) {
+            const rId = /(?:^|\s)r:id="([^"]*)"/.exec(drawing.attrs)?.[1] ?? null;
+
+            // Each drawing's pictures and charts once, on the first sheet naming it: placed at
+            // every reference, 4.5 KB naming one drawing of 1,000 pictures 1,000 times made a
+            // million picture nodes, and 20 KB ran the process out of memory.
+            if (!rId || !drawingMap[rId] || drawingsPlaced.has(drawingMap[rId])) continue;
+            const drawingPath = drawingMap[rId];
+            drawingsPlaced.add(drawingPath);
+
+            const images = drawingImageMap[drawingPath];
+            if (images) {
+                for (const imgId in images) {
+                    const imgInfo = images[imgId];
+                    const attachment = attachmentsByName.get(imgInfo.path.split('/').pop());
+                    if (!attachment) continue;
+                    into.push({
+                        type: 'image',
+                        text: '', // Will be populated by assignAttachmentData
+                        children: [],
+                        metadata: {
+                            attachmentName: attachment.name || 'unknown',
+                            altText: imgInfo.altText || undefined
+                        } as ImageMetadata
+                    });
+                }
+            }
+
+            const charts = drawingChartMap[drawingPath];
+            if (charts) {
+                for (const chartRId in charts) {
+                    const chartName = charts[chartRId];
+                    if (!attachmentsByName.get(chartName)) continue;
+                    into.push({
+                        type: 'chart',
+                        text: '', // Will be populated by assignAttachmentData
+                        children: [],
+                        metadata: { attachmentName: chartName } as ChartMetadata
+                    });
+                }
+            }
+        }
+    };
+
     for (const file of files) {
         if (file.path.match(mediaFileRegex)) continue;
         if (file.path === stringsFilePath) continue;
@@ -813,6 +867,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         if (file.path.match(chartsRegex)) continue;
         if (file.path.match(relsRegex)) continue;
         if (file.path.match(drawingRelsRegex)) continue;
+        if (chartsheetRelsRegex.test(file.path)) continue;
 
         if (file.path.match(sheetsRegex)) {
             const sheetFilename = file.path.split('/').pop() || '';
@@ -1114,64 +1169,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             }
 
             // Handle Drawings in Sheet (images and charts)
-            if (config.extractAttachments) {
-                // Each <drawing r:id="..."> the sheet holds (scanned as its rows are: a pattern looking
-                // for the closing quote from each start read the rest of the line again for each).
-                {
-                    for (const drawing of xmlElements(sheetXml, 'drawing')) {
-                        const rId = /(?:^|\s)r:id="([^"]*)"/.exec(drawing.attrs)?.[1] ?? null;
-
-                        // Each drawing's pictures and charts once, on the first sheet naming it: placed at
-                        // every reference, 4.5 KB naming one drawing of 1,000 pictures 1,000 times made a
-                        // million picture nodes, and 20 KB ran the process out of memory.
-                        if (rId && drawingMap[rId] && !drawingsPlaced.has(drawingMap[rId])) {
-                            const drawingPath = drawingMap[rId];
-                            drawingsPlaced.add(drawingPath);
-
-                            // Find all images in this drawing
-                            const images = drawingImageMap[drawingPath];
-                            if (images) {
-                                for (const imgId in images) {
-                                    const imgInfo = images[imgId];
-                                    const attachment = attachmentsByName.get(imgInfo.path.split('/').pop());
-                                    if (attachment) {
-                                        const imageNode: OfficeContentNode = {
-                                            type: 'image',
-                                            text: '', // Will be populated by assignAttachmentData
-                                            children: [],
-                                            metadata: {
-                                                attachmentName: attachment.name || 'unknown',
-                                                altText: imgInfo.altText || undefined
-                                            } as ImageMetadata
-                                        };
-                                        rows.push(imageNode);
-                                    }
-                                }
-                            }
-
-                            // Find all charts in this drawing
-                            const charts = drawingChartMap[drawingPath];
-                            if (charts) {
-                                for (const chartRId in charts) {
-                                    const chartName = charts[chartRId];
-                                    const attachment = attachmentsByName.get(chartName);
-                                    if (attachment) {
-                                        const chartNode: OfficeContentNode = {
-                                            type: 'chart',
-                                            text: '', // Will be populated by assignAttachmentData
-                                            children: [],
-                                            metadata: {
-                                                attachmentName: chartName
-                                            } as ChartMetadata
-                                        };
-                                        rows.push(chartNode);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            if (config.extractAttachments) placeDrawings(sheetXml, drawingMap, rows);
 
             // Get proper sheet name from workbook.xml mapping, fallback to filename
             const sheetFileName = file.path.split('/').pop() || 'Sheet';
@@ -1184,6 +1182,30 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                 children: rows,
                 metadata: { sheetName, ...(tab?.hidden ? { hidden: true } : {}), ...(pageSetup ? { pageSetup } : {}) },
                 rawContent: config.includeRawContent ? chargeRawContent(file.content.toString(), config) : undefined
+            });
+        } else if (chartsheetsRegex.test(file.path)) {
+            const sheetXml = file.content.toString();
+            const sheetFileName = file.path.split('/').pop() || 'Sheet';
+            // Charts are read only with extractAttachments, as on worksheets.
+            const charts: OfficeContentNode[] = [];
+            const relsFile = config.extractAttachments ? fileByPath.get(`xl/chartsheets/_rels/${sheetFileName}.rels`) : undefined;
+            if (relsFile) {
+                const drawingMap: Record<string, string> = Object.create(null); // rId -> drawingPath
+                for (const rel of getElementsByTagName(parseXmlString(relsFile.content.toString(), { config }), "Relationship")) {
+                    const id = rel.getAttribute("Id");
+                    const target = rel.getAttribute("Target");
+                    if (id && target && rel.getAttribute("Type")?.endsWith('/drawing')) drawingMap[id] = resolvePartPath('xl/chartsheets/', target);
+                }
+                placeDrawings(sheetXml, drawingMap, charts);
+            }
+
+            const tab = workbookTabs.get(file.path);
+            const pageSetup = config.ignorePageGeometry ? undefined : sheetPageSetup(sheetXml);
+            content.push({
+                type: 'sheet',
+                children: charts,
+                metadata: { sheetName: tab?.name || sheetFileName, ...(tab?.hidden ? { hidden: true } : {}), ...(pageSetup ? { pageSetup } : {}) },
+                rawContent: config.includeRawContent ? chargeRawContent(sheetXml, config) : undefined
             });
         }
     }

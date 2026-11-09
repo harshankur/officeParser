@@ -4679,11 +4679,82 @@ async function testExcelSheetOrder(): Promise<void> {
         const metadata = node.metadata as SheetMetadata;
         return [metadata.sheetName, metadata.hidden, node.children?.[0]?.children?.[0]?.text];
     }), [
+        ['Chart', undefined, undefined],
         ['First', undefined, '2'],
         ['Hidden', true, '1'],
         ['sheet4.xml', undefined, '4'],
         ['sheet3.xml', undefined, '3'],
     ]);
+}
+
+/**
+ * A chart sheet (Excel's Move Chart > New sheet) becomes a sheet node in its tab's place, holding the
+ * chart its drawing anchors. The parts follow Excel for Mac 16, which numbers the worksheet and the
+ * chart sheet both 1.
+ */
+async function testExcelChartSheets(): Promise<void> {
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const rels = (...items: [string, string, string][]) => strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        + items.map(([id, type, target]) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${target}"/>`).join('') + '</Relationships>');
+    const inline = (ref: string, text: string) => `<c r="${ref}" t="inlineStr"><is><t>${text}</t></is></c>`;
+    const series = (idx: number, name: string, col: string, values: number[]) => `<c:ser><c:idx val="${idx}"/><c:order val="${idx}"/>`
+        + `<c:tx><c:strRef><c:f>Sheet1!$${col}$1</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>${name}</c:v></c:pt></c:strCache></c:strRef></c:tx>`
+        + `<c:val><c:numRef><c:f>Sheet1!$${col}$2:$${col}$4</c:f><c:numCache><c:ptCount val="3"/>${values.map((v, i) => `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`).join('')}</c:numCache></c:numRef></c:val></c:ser>`;
+    const drawing = '<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+        + '<xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="9313333" cy="6074341"/><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>'
+        + '<xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">'
+        + '<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1"/>'
+        + '</a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:absoluteAnchor></xdr:wsDr>';
+    const book = (tabs: string, worksheetDrawing = false): Record<string, Uint8Array> => ({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets>${tabs}</sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': rels(['rId2', 'chartsheet', 'chartsheets/sheet1.xml'], ['rId1', 'worksheet', 'worksheets/sheet1.xml']),
+        'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData>`
+            + `<row r="1">${inline('B1', 'Revenue')}${inline('C1', 'Margin')}</row>`
+            + '<row r="2"><c r="A2"><v>45658</v></c><c r="B2"><v>1250000</v></c><c r="C2"><v>0.12</v></c></row>'
+            + '<row r="3"><c r="A3"><v>45689</v></c><c r="B3"><v>1500000</v></c><c r="C3"><v>0.15</v></c></row>'
+            + '<row r="4"><c r="A4"><v>45717</v></c><c r="B4"><v>1100000</v></c><c r="C4"><v>0.09</v></c></row>'
+            + `</sheetData><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>${worksheetDrawing ? '<drawing r:id="rId1"/>' : ''}</worksheet>`),
+        ...(worksheetDrawing ? { 'xl/worksheets/_rels/sheet1.xml.rels': rels(['rId1', 'drawing', '../drawings/drawing1.xml']) } : {}),
+        'xl/chartsheets/sheet1.xml': strToU8(`<?xml version="1.0"?><chartsheet ${ns}><sheetPr/><sheetViews><sheetView tabSelected="1" zoomScale="129" workbookViewId="0" zoomToFit="1"/></sheetViews>`
+            + '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><drawing r:id="rId1"/></chartsheet>'),
+        'xl/chartsheets/_rels/sheet1.xml.rels': rels(['rId1', 'drawing', '../drawings/drawing1.xml']),
+        'xl/drawings/drawing1.xml': strToU8(drawing),
+        'xl/drawings/_rels/drawing1.xml.rels': rels(['rId1', 'chart', '../charts/chart1.xml']),
+        'xl/charts/chart1.xml': strToU8('<?xml version="1.0"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            + `<c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>${series(0, 'Revenue', 'B', [1250000, 1500000, 1100000])}${series(1, 'Margin', 'C', [0.12, 0.15, 0.09])}</c:barChart></c:plotArea></c:chart></c:chartSpace>`),
+    });
+    const tabs = '<sheet name="Sheet1" sheetId="1" r:id="rId1"/><sheet name="Chart1" sheetId="2" r:id="rId2"/>';
+    const parse = async (parts: Record<string, Uint8Array>, extractAttachments = true) =>
+        OfficeParser.parseOffice(Buffer.from(zipSync(parts)), { fileType: 'xlsx', extractAttachments } as any) as Promise<OfficeParserAST>;
+    const shape = (ast: OfficeParserAST) => ast.content.map(node => {
+        const metadata = node.metadata as SheetMetadata;
+        return [metadata.sheetName, metadata.hidden ?? false, (node.children ?? []).map(child => child.type)];
+    });
+
+    const ast = await parse(book(tabs));
+    assert.deepStrictEqual(shape(ast), [['Sheet1', false, ['row', 'row', 'row', 'row']], ['Chart1', false, ['chart']]], 'the chart sheet is a sheet holding its chart');
+    const chart = ast.content[1].children![0];
+    assert.strictEqual((chart.metadata as any).attachmentName, 'chart1.xml', 'the chart node names its attachment');
+    assert.ok(chart.text && chart.text.includes('Revenue') && chart.text.includes('Margin'), `the chart node carries its data's text; got ${JSON.stringify(chart.text)}`);
+    const text = String((await ast.to('text')).value);
+    assert.strictEqual(text.split('Revenue').length - 1, 2, `the text output has Revenue in the worksheet's header and in the chart; got ${JSON.stringify(text)}`);
+
+    // Tab order
+    const chartFirst = book('<sheet name="Chart1" sheetId="2" r:id="rId2"/><sheet name="Sheet1" sheetId="1" r:id="rId1"/>');
+    const reversed = Object.fromEntries(Object.entries(chartFirst).reverse());
+    assert.deepStrictEqual(shape(await parse(reversed)).map(s => s[0]), ['Chart1', 'Sheet1'], 'the chart sheet keeps its tab order');
+
+    // Hidden state
+    const hidden = await parse(book('<sheet name="Sheet1" sheetId="1" r:id="rId1"/><sheet name="Chart1" sheetId="2" state="hidden" r:id="rId2"/>'));
+    assert.deepStrictEqual(shape(hidden).map(s => [s[0], s[1]]), [['Sheet1', false], ['Chart1', true]], 'only the chart sheet is hidden');
+
+    // Without attachments
+    assert.deepStrictEqual(shape(await parse(book(tabs), false)), [['Sheet1', false, ['row', 'row', 'row', 'row']], ['Chart1', false, []]], 'without attachments the chart sheet is an empty sheet');
+
+    // Shared drawing
+    const shared = shape(await parse(book(tabs, true)));
+    assert.deepStrictEqual(shared.map(s => (s[2] as string[]).filter(t => t === 'chart').length), [1, 0], 'a drawing named by the worksheet and the chart sheet is placed once, on the worksheet');
 }
 
 /**
@@ -11714,6 +11785,7 @@ async function runTests(): Promise<void> {
         ['WordRunCharacters', testWordRunCharacters],
         ['ExcelDates', testExcelDates],
         ['ExcelSheetOrder', testExcelSheetOrder],
+        ['ExcelChartSheets', testExcelChartSheets],
         ['GeneratedOutput', testGeneratedOutput],
         ['ODG', testOdg],
         ['ODFComments', testOdfComments],
