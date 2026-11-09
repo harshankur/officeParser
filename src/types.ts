@@ -4113,8 +4113,16 @@ export interface ChartData {
         name?: string;
         /** Actual numeric or string values for this group */
         values: string[];
+        /**
+         * The point index of each value (OpenXML's `c:pt idx`), ascending. A chart's cache leaves out blank
+         * points, so `values[i]` belongs to point `valueIndexes[i]`. Absent when the chart gives no point
+         * indexes: the values then hold the points in order.
+         */
+        valueIndexes?: number[];
         /** Specific labels for each point in this dataset (if defined per point) */
         pointLabels: string[];
+        /** The point index of each point label (OpenXML's `c:dLbl/c:idx`), ascending. */
+        pointLabelIndexes?: number[];
     }[];
 
     /** 
@@ -4122,6 +4130,19 @@ export interface ChartData {
      * These typically correspond to the data points in each dataSet.
      */
     labels: string[];
+
+    /**
+     * The point index of each label (OpenXML's `c:pt idx`), ascending. A label and a value of one point
+     * share its index, and a point missing from either list is blank in it. Absent when the chart gives no
+     * point indexes: the labels then hold the points in order.
+     */
+    labelIndexes?: number[];
+
+    /**
+     * How many points the chart's categories span (OpenXML's `c:ptCount`), blank ones included. No list
+     * holds an entry for each of them.
+     */
+    pointCount?: number;
 
     /** Every text node discovered in the chart XML (for keyword search/raw extraction) */
     rawTexts: string[];

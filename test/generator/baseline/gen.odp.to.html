@@ -1351,9 +1351,15 @@
             try {
                 const canvas = document.getElementById('chart-1');
                 if (!canvas) return;
+                const positions = chartData.positions;
+                const atPoints = (list, indexes) => {
+                    const byPosition = new Map();
+                    (indexes || []).forEach((position, i) => byPosition.set(position, list[i]));
+                    return positions.map(position => byPosition.get(position));
+                };
                 const datasets = chartData.dataSets.map((ds, index) => ({
                     label: ds.name || 'Series ' + (index + 1),
-                    data: ds.values.map(Number),
+                    data: positions ? atPoints(ds.values, ds.valueIndexes).map(v => v === undefined ? null : Number(v)) : ds.values.map(Number),
                     backgroundColor: getRandomColor(index, 0.5),
                     borderColor: getRandomColor(index, 1),
                     borderWidth: 1
@@ -1361,7 +1367,7 @@
                 new Chart(canvas, {
                     type: 'bar',
                     data: {
-                        labels: chartData.labels,
+                        labels: positions ? atPoints(chartData.labels, chartData.labelIndexes).map(label => label === undefined ? '' : label) : chartData.labels,
                         datasets: datasets
                     },
                     options: {
