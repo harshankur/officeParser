@@ -1,6 +1,7 @@
 import { ChartData, OfficeParserConfig } from "../types";
 import { parseXmlString, getElementsByTagName, getDirectChildren, getFirstElementByTagName, getChildElements } from "./xmlUtils";
 import { repeatPreview, takeRepeats } from "./repeatUtils";
+import { excelShownText } from "./excelFormat";
 
 /**
  * Extracts a single text element located at:
@@ -69,6 +70,33 @@ const repeats = (value: string | null): number => {
     return Number.isFinite(n) && n > 1 ? n : 1;
 };
 
+/** A series' values or categories; `shown` lines up with `values` and is set only with `formatCode`. */
+interface OpenXmlCache {
+    values: string[];
+    formatCode?: string;
+    shown?: string[];
+}
+
+/** Reads at most `limit` values from a series' `c:val`, `c:yVal`, `c:cat` or `c:xVal` (see ChartData's `shownValues`). */
+const readOpenXmlCache = (node: Element, limit: number, date1904: boolean): OpenXmlCache => {
+    const cache = getElementsByTagName(node, "c:numCache")[0] ?? getElementsByTagName(node, "c:numLit")[0];
+    const code = cache ? getChildElements(cache, "c:formatCode")[0]?.textContent?.trim() : undefined;
+    const formatCode = code && code.length <= 255 && !/^general$/i.test(code) ? code : undefined;
+    const values: string[] = [];
+    const shown: string[] = [];
+    const vNodes = getElementsByTagName(node, "c:v");
+    for (let j = 0; j < vNodes.length && values.length < limit; j++) {
+        const v = vNodes[j].textContent?.trim();
+        if (!v) continue;
+        values.push(v);
+        if (!formatCode) continue;
+        const point = vNodes[j].parentNode as Element | null;
+        const pointCode = point?.localName === "pt" ? point.getAttribute("formatCode") : null;
+        shown.push(excelShownText(v, pointCode || formatCode, date1904) ?? v);
+    }
+    return formatCode ? { values, formatCode, shown } : { values };
+};
+
 /**
  * Extracts fully structured chart data from OpenXML (PPTX, XLSX) chart XML.
  * @param xmlBuffer Chart XML buffer
@@ -100,7 +128,10 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
     const seriesNodes = getElementsByTagName(root, "c:ser").slice(0, MAX_CHART_SERIES);
     let valuesLeft = MAX_CHART_VALUES;
     const dataSets: ChartData['dataSets'] = [];
-    const sharedLabels: string[] = [];
+    let sharedLabels: OpenXmlCache = { values: [] };
+    // `c:date1904` with no `val` means true (OOXML's CT_Boolean default).
+    const date1904Val = getChildElements(root, "c:date1904")[0]?.getAttribute("val");
+    const date1904 = date1904Val !== undefined && !/^(?:0|false)$/i.test((date1904Val ?? "").trim());
 
     for (let i = 0; i < seriesNodes.length; i++) {
         const ser = seriesNodes[i] as Element;
@@ -109,15 +140,9 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
         const name = extractOpenXmlRichText(ser, "c:tx");
 
         // Values (c:val)
-        const values: string[] = [];
         const valNode = getChildElements(ser, "c:val")[0] || getChildElements(ser, "c:yVal")[0];
-        if (valNode) {
-            const vNodes = getElementsByTagName(valNode, "c:v");
-            for (let j = 0; j < vNodes.length && valuesLeft > 0; j++) {
-                const v = vNodes[j].textContent?.trim();
-                if (v) { values.push(v); valuesLeft--; }
-            }
-        }
+        const valCache: OpenXmlCache = valNode ? readOpenXmlCache(valNode, valuesLeft, date1904) : { values: [] };
+        valuesLeft -= valCache.values.length;
 
         // Point Labels (data labels)
         const pointLabels: string[] = [];
@@ -129,33 +154,24 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
 
         // Categories (labels) - c:cat or c:xVal
         const catNode = getChildElements(ser, "c:cat")[0] || getChildElements(ser, "c:xVal")[0];
-        if (catNode) {
-            const vNodes = getElementsByTagName(catNode, "c:v");
-            const localLabels: string[] = [];
-            for (let j = 0; j < vNodes.length && localLabels.length < MAX_CHART_VALUES; j++) {
-                const v = vNodes[j].textContent?.trim();
-                if (v) localLabels.push(v);
-            }
-            if (localLabels.length > 0 && sharedLabels.length === 0) {
-                for (const label of localLabels) sharedLabels.push(label);
-            }
-        }
+        if (catNode && sharedLabels.values.length === 0) sharedLabels = readOpenXmlCache(catNode, MAX_CHART_VALUES, date1904);
 
-        dataSets.push({ name, values, pointLabels });
+        dataSets.push({ name, values: valCache.values, ...(valCache.formatCode ? { formatCode: valCache.formatCode, shownValues: valCache.shown } : {}), pointLabels });
     }
 
     // A title of no text of its own is the one Office draws for it: a chart of one series its name, else "Chart
     // Title" (as PowerPoint, Excel and LibreOffice show it; it was left out).
     if (titleEl && title === undefined && !getDirectChildren(titleEl, "c:tx").length) title = dataSets.length === 1 && dataSets[0].name ? dataSets[0].name : "Chart Title";
 
-    const rawTexts = chartRawTexts(undefined, dataSets, sharedLabels);
+    const rawTexts = chartRawTexts(undefined, dataSets, sharedLabels.values);
 
     return {
         title,
         xAxisTitle,
         yAxisTitle,
         dataSets,
-        labels: sharedLabels,
+        labels: sharedLabels.values,
+        ...(sharedLabels.formatCode ? { labelFormatCode: sharedLabels.formatCode, shownLabels: sharedLabels.shown } : {}),
         rawTexts
     };
 };
