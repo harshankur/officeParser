@@ -1,6 +1,6 @@
-import { isPointIndexList } from './chartUtils.js';
+import { isLabelLevels, isPointIndexList } from './chartUtils.js';
 import { mapNodeLists, NodeMemo, nodeMemo } from './nodeListUtils.js';
-import { OfficeContentNode, OfficeParserAST } from '../types.js';
+import { ChartData, OfficeContentNode, OfficeParserAST } from '../types.js';
 
 /**
  * Metadata and formatting fields whose type is not a string: numbers (levels, indices, positions,
@@ -37,13 +37,14 @@ const MAX_JOINED_LENGTH = 65536;
 interface ReadOnce {
     joinedLists: WeakMap<unknown[], string>;
     stringLists: WeakMap<unknown[], string[]>;
+    labelLevels: WeakMap<unknown[], ChartData['labelLevels'] | null>;
     idLists: WeakMap<unknown[], string[] | null>;
     records: { formatting: WeakMap<object, Record<string, unknown>>; metadata: WeakMap<object, Record<string, unknown>> };
     attributes: WeakMap<object, Record<string, string>>;
 }
 let readOnce: ReadOnce | undefined;
 const newReadOnce = (): ReadOnce => ({
-    joinedLists: new WeakMap(), stringLists: new WeakMap(), idLists: new WeakMap(),
+    joinedLists: new WeakMap(), stringLists: new WeakMap(), labelLevels: new WeakMap(), idLists: new WeakMap(),
     records: { formatting: new WeakMap(), metadata: new WeakMap() }, attributes: new WeakMap(),
 });
 
@@ -283,6 +284,20 @@ const asStrings = (value: unknown): string[] => {
 };
 
 /**
+ * `value` as label levels, each label rebuilt as `{ index, value }`, read once however many charts share
+ * it. Undefined when `value` is not label levels of at most MAX_CHART_ENTRIES labels (see isLabelLevels).
+ */
+const asLabelLevels = (value: unknown): ChartData['labelLevels'] => {
+    if (!Array.isArray(value)) return undefined;
+    let levels = readOnce?.labelLevels.get(value);
+    if (levels === undefined) {
+        levels = isLabelLevels(value, MAX_CHART_ENTRIES) ? value.map(level => level.map(label => ({ index: label.index, value: label.value }))) : null;
+        readOnce?.labelLevels.set(value, levels);
+    }
+    return levels ?? undefined;
+};
+
+/**
  * Each attachment's text fields as strings and its chart data as lists of plain strings. A chart's
  * labels and values are written into a table at every chart showing it, and a label that was a list
  * holding a list ten times each, eight levels down, was written out as a hundred million values
@@ -309,6 +324,7 @@ function normalizeAttachments(attachments: OfficeParserAST['attachments']): Offi
             else {
                 const dataSets = Array.isArray(chart.dataSets) ? chart.dataSets.slice(0, MAX_CHART_ENTRIES) : [];
                 const labels = asStrings(chart.labels);
+                const labelLevels = asLabelLevels(chart.labelLevels);
                 set('chartData', {
                     ...(chart.title !== undefined && { title: asString(chart.title) }),
                     ...(chart.xAxisTitle !== undefined && { xAxisTitle: asString(chart.xAxisTitle) }),
@@ -334,6 +350,7 @@ function normalizeAttachments(attachments: OfficeParserAST['attachments']): Offi
                     labels,
                     ...(isPointIndexList(chart.labelIndexes, labels.length) && { labelIndexes: chart.labelIndexes }),
                     ...(Number.isSafeInteger(chart.pointCount) && chart.pointCount >= 0 && { pointCount: chart.pointCount }),
+                    ...(labelLevels && { labelLevels }),
                     rawTexts: asStrings(chart.rawTexts),
                 });
             }

@@ -4136,7 +4136,8 @@ export interface ChartData {
     /** 
      * Labels for the chart facets (e.g., 'Jan', 'Feb', 'Mar' on X-axis).
      * These typically correspond to the data points in each dataSet. In a scatter or bubble chart, they are
-     * the first series' X values only: read each series' own from its `xValues`.
+     * the first series' X values only: read each series' own from its `xValues`. For multi-level
+     * categories, they are the innermost level (see labelLevels).
      */
     labels: string[];
 
@@ -4152,6 +4153,14 @@ export interface ChartData {
      * holds an entry for each of them.
      */
     pointCount?: number;
+
+    /**
+     * The levels of a multi-level category cache (OpenXML's `c:multiLvlStrCache`), innermost first, as the
+     * chart caches them, each label with its point index. An outer label covers the points from its own index
+     * up to the next label's (quarters under years: `2025` at 0 and `2026` at 2 group points 0-1 and 2-3). A
+     * level with no labels is empty. Absent for categories of one level.
+     */
+    labelLevels?: { index: number; value: string }[][];
 
     /** Every text node discovered in the chart XML (for keyword search/raw extraction) */
     rawTexts: string[];

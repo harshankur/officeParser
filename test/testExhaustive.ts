@@ -5370,15 +5370,47 @@ async function testChartPointPositions(): Promise<void> {
             `${fileType}: each entry keeps its point index past blank points`);
     }
 
-    // These lists get no point indexes: `c:v` outside a `c:pt`, a point with no index, two points with one
-    // index, and a cache of several levels, whose indexes start again at 0 in each level.
+    // These lists get no point indexes: `c:v` outside a `c:pt`, a point with no index, and two points with one
+    // index.
     const unpositioned = await chartOf(pptx(chartXml('<c:v>Jan</c:v><c:v>Feb</c:v>', '<c:v>1</c:v><c:v>2</c:v>')), 'pptx');
     assert.deepStrictEqual([unpositioned.labels, unpositioned.labelIndexes, unpositioned.dataSets[0].values, unpositioned.dataSets[0].valueIndexes], [['Jan', 'Feb'], undefined, ['1', '2'], undefined], 'c:v outside c:pt gives no point indexes');
     const clashing = await chartOf(pptx(chartXml('<c:strCache><c:pt idx="0"><c:v>a</c:v></c:pt><c:pt idx="0"><c:v>b</c:v></c:pt></c:strCache>', '<c:numCache><c:pt><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numCache>')), 'pptx');
     assert.deepStrictEqual([clashing.labels, clashing.labelIndexes, clashing.dataSets[0].values, clashing.dataSets[0].valueIndexes], [['a', 'b'], undefined, ['1', '2'], undefined], 'a repeated or missing idx gives its list no point indexes');
-    const levels = `<c:multiLvlStrRef><c:multiLvlStrCache><c:ptCount val="4"/><c:lvl>${pts(['Q1', 'Q2', 'Q1', 'Q2'])}</c:lvl><c:lvl>${pts(['2025', undefined, '2026'])}</c:lvl></c:multiLvlStrCache></c:multiLvlStrRef>`;
+    // The parser keeps each level of a multi-level category cache apart, innermost first, with each label's
+    // point index. `labels` holds the innermost level, and the chart's text holds all levels.
+    const lvl = (values: (string | undefined)[]) => `<c:lvl>${pts(values)}</c:lvl>`;
+    const multiLvl = (...levels: string[]) => `<c:multiLvlStrRef><c:f>S!$A$2:$B$5</c:f><c:multiLvlStrCache><c:ptCount val="4"/>${levels.join('')}</c:multiLvlStrCache></c:multiLvlStrRef>`;
+    const levels = multiLvl(lvl(['Q1', 'Q2', 'Q1', 'Q2']), lvl(['2025', undefined, '2026']));
+    const quarters = [{ index: 0, value: 'Q1' }, { index: 1, value: 'Q2' }, { index: 2, value: 'Q1' }, { index: 3, value: 'Q2' }];
+    const years = [{ index: 0, value: '2025' }, { index: 2, value: '2026' }];
+    for (const fileType of ['pptx', 'xlsx'] as const) {
+        const chart = await chartOf((fileType === 'pptx' ? pptx : xlsx)(chartXml(levels, numCache(['1', '2', '3', '4']))), fileType);
+        assert.deepStrictEqual(
+            { labels: chart.labels, labelIndexes: chart.labelIndexes, pointCount: chart.pointCount, labelLevels: chart.labelLevels, valueIndexes: chart.dataSets[0].valueIndexes, rawTexts: chart.rawTexts },
+            { labels: ['Q1', 'Q2', 'Q1', 'Q2'], labelIndexes: [0, 1, 2, 3], pointCount: 4, labelLevels: [quarters, years], valueIndexes: [0, 1, 2, 3], rawTexts: ['Q1', 'Q2', 'Q1', 'Q2', '2025', '2026', 'Sales', '1', '2', '3', '4'] },
+            `${fileType}: a multi-level category cache keeps its levels apart`);
+    }
     const multiLevel = await chartOf(pptx(chartXml(levels, numCache(['1', '2', '3', '4']))), 'pptx');
-    assert.deepStrictEqual([multiLevel.labels, multiLevel.labelIndexes, multiLevel.dataSets[0].valueIndexes], [['Q1', 'Q2', 'Q1', 'Q2', '2025', '2026'], undefined, [0, 1, 2, 3]], 'a multi-level cache keeps its labels and gives them no point indexes');
+    const levelsOf = async (cat: string) => {
+        const chart = await chartOf(pptx(chartXml(cat, numCache(['1', '2', '3', '4']))), 'pptx');
+        return { labels: chart.labels, labelIndexes: chart.labelIndexes, labelLevels: chart.labelLevels };
+    };
+    assert.deepStrictEqual(await levelsOf(multiLvl(lvl(['Q1', 'Q2', 'Q1', 'Q2']), lvl(['2025', undefined, '2026']), lvl(['H1']))),
+        { labels: ['Q1', 'Q2', 'Q1', 'Q2'], labelIndexes: [0, 1, 2, 3], labelLevels: [quarters, years, [{ index: 0, value: 'H1' }]] }, 'a cache of three levels keeps all three');
+    assert.deepStrictEqual(await levelsOf(multiLvl(lvl(['Q1', 'Q2', 'Q1', 'Q2']), lvl([]), lvl(['All']))),
+        { labels: ['Q1', 'Q2', 'Q1', 'Q2'], labelIndexes: [0, 1, 2, 3], labelLevels: [quarters, [], [{ index: 0, value: 'All' }]] }, 'an empty level keeps its place');
+    // A level without valid point indexes makes the parser keep the cache's labels in one flat list, with no levels.
+    assert.deepStrictEqual(await levelsOf(multiLvl(lvl(['Q1', 'Q2']), '<c:lvl><c:v>2025</c:v></c:lvl>')),
+        { labels: ['Q1', 'Q2', '2025'], labelIndexes: undefined, labelLevels: undefined }, 'a level with a c:v outside c:pt gives no levels');
+    assert.deepStrictEqual(await levelsOf(multiLvl(lvl(['Q1', 'Q2']), '<c:lvl><c:pt idx="0"><c:v>2025</c:v></c:pt><c:pt idx="0"><c:v>2026</c:v></c:pt></c:lvl>')),
+        { labels: ['Q1', 'Q2', '2025', '2026'], labelIndexes: undefined, labelLevels: undefined }, 'a level with a repeated idx gives no levels');
+    // A blank innermost level keeps the first series' categories as the chart's labels.
+    const twoSeries = `<?xml version="1.0"?><c:chartSpace ${cns}><c:chart><c:plotArea><c:barChart>`
+        + `<c:ser><c:cat>${multiLvl(lvl([]), lvl(['2025', undefined, '2026']))}</c:cat><c:val>${numCache(['1', '2', '3', '4'])}</c:val></c:ser>`
+        + `<c:ser><c:cat>${strCache(['Jan', 'Feb'])}</c:cat><c:val>${numCache(['5', '6'])}</c:val></c:ser>`
+        + `</c:barChart></c:plotArea></c:chart></c:chartSpace>`;
+    const blankInner = await chartOf(pptx(twoSeries), 'pptx');
+    assert.deepStrictEqual([blankInner.labels, blankInner.labelIndexes, blankInner.labelLevels], [[], undefined, [[], years]], 'a blank innermost level keeps the first series\' levels');
 
     const gappedChart = await chartOf(pptx(gapped), 'pptx');
     const astOf = (chartData: unknown) => ({ type: 'docx', metadata: {}, content: [{ type: 'chart', metadata: { attachmentName: 'c' } }], attachments: [{ type: 'chart', name: 'c', mimeType: 'application/xml', extension: 'xml', data: '', chartData }] }) as any;
@@ -5392,6 +5424,9 @@ async function testChartPointPositions(): Promise<void> {
     const aligned = [['', 'Sales'], ['Jan', '10'], ['', '20'], ['Mar', ''], ['Apr', '40']];
     assert.deepStrictEqual(await tableRows(gappedChart, 'html'), aligned, 'HTML: a chart table pairs labels and values by point index');
     assert.deepStrictEqual(await tableRows(gappedChart, 'docx'), aligned, 'DOCX: a chart table pairs labels and values by point index');
+    const quarterRows = [['', 'Sales'], ['Q1', '1'], ['Q2', '2'], ['Q1', '3'], ['Q2', '4']];
+    assert.deepStrictEqual(await tableRows(multiLevel, 'html'), quarterRows, 'HTML: a multi-level chart\'s table pairs its innermost labels with its values');
+    assert.deepStrictEqual(await tableRows(multiLevel, 'docx'), quarterRows, 'DOCX: a multi-level chart\'s table pairs its innermost labels with its values');
     const html = String((await OfficeGenerator.generate(astOf(gappedChart), 'html', { onWarning: () => { } } as any)).value);
     const inline = /<script type="application\/json" id="[^"]+">([\s\S]*?)<\/script>/.exec(html);
     assert.deepStrictEqual(inline && JSON.parse(inline[1]).positions, [0, 1, 2, 3], 'HTML: the Chart.js data holds the chart\'s point indexes');
@@ -5401,6 +5436,13 @@ async function testChartPointPositions(): Promise<void> {
     for (const [labelIndexes, valueIndexes] of [[[1, 0], [0, 1]], [[-1, 0], [0, 1]], [[0, 1], [0, 1, 2]], [[0, 0.5], [0, 1]]]) {
         const rows = await tableRows({ labels: ['a', 'b'], labelIndexes, dataSets: [{ name: 's', values: ['1', '2'], valueIndexes, pointLabels: [] }], rawTexts: [] }, 'html');
         assert.deepStrictEqual(rows, [['', 's'], ['a', '1'], ['b', '2']], `normalization drops point indexes ${JSON.stringify([labelIndexes, valueIndexes])}`);
+    }
+
+    // Normalization keeps label levels whose labels are strings with ascending point indexes, and drops others.
+    const normalizedLevels = (labelLevels: unknown) => withWellTypedValues({ type: 'pptx', metadata: {}, content: [], attachments: [{ type: 'chart', name: 'c', mimeType: 'application/xml', data: '', chartData: { labels: [], dataSets: [], rawTexts: [], labelLevels } }] } as any).attachments[0].chartData?.labelLevels;
+    assert.deepStrictEqual(normalizedLevels([quarters, [], years]), [quarters, [], years], 'normalization keeps valid label levels');
+    for (const labelLevels of [[[{ index: 1, value: 'a' }, { index: 0, value: 'b' }]], [[{ index: -1, value: 'a' }]], [[{ index: 0.5, value: 'a' }]], [[{ index: 0, value: 1 }]], [{ index: 0, value: 'a' }], [[null]], 'a']) {
+        assert.strictEqual(normalizedLevels(labelLevels), undefined, `normalization drops label levels ${JSON.stringify(labelLevels)}`);
     }
 }
 

@@ -1025,6 +1025,8 @@ A PPTX or XLSX chart's cache leaves out blank points, so `labels[i]` and `values
 
 In a scatter or bubble chart, `labels` holds only the first series' X values. Read each series' own X values from its `xValues`, and a bubble series' sizes from its `bubbleSizes`. `xValueIndexes` and `bubbleSizeIndexes` give their point indexes.
 
+For a chart whose categories have several levels (quarters grouped under years), `labels` holds the innermost level and `labelLevels` holds all levels, innermost first, each label with its point index. An outer label covers the points from its own index up to the next label's.
+
 ### 5. Text Formatting
 
 ```ts

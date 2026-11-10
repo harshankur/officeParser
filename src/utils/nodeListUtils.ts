@@ -183,9 +183,9 @@ export function sharedNodeVisits(ast: OfficeParserAST, limit = Infinity, weigh?:
         }
         return list.length;
     };
-    // A chart's data as writers read it (see normalizeAttachments): its labels and texts, and each
-    // series' name, values, X values, bubble sizes and point labels, with their point indexes, one level
-    // deep (an entry that is a list is written empty).
+    // A chart's data as writers read it (see normalizeAttachments): its labels, label levels and texts, and
+    // each series' name, values, X values, bubble sizes and point labels, with their point indexes, one
+    // level deep (an entry that is a list is written empty).
     // Each list, series and chart is counted once towards what the AST holds.
     const chartTotals = new Map<object, number>();
     const entriesTotal = (list: unknown): number => {
@@ -201,11 +201,27 @@ export function sharedNodeVisits(ast: OfficeParserAST, limit = Infinity, weigh?:
         chartTotals.set(list, total);
         return total;
     };
+    const levelsTotal = (levels: unknown): number => {
+        let total = entriesTotal(levels);
+        if (!Array.isArray(levels) || tooLong) return total;
+        for (const level of levels) {
+            if (!Array.isArray(level) || chartTotals.has(level)) { total += entriesTotal(level); continue; }
+            let own = entriesTotal(level);
+            if (tooLong) return total;
+            for (const label of level) {
+                const value = (label as { value?: unknown } | null)?.value;
+                if (typeof value === 'string') { own += stringWeight(value, 64); held += heldWeight(value, 64); }
+            }
+            chartTotals.set(level, own);
+            total += own;
+        }
+        return total;
+    };
     const chartTotal = (chart: Record<string, unknown>): number => {
         const known = chartTotals.get(chart);
         if (known !== undefined) return known;
         chartTotals.set(chart, 0);
-        let total = entriesTotal(chart.labels) + entriesTotal(chart.labelIndexes) + entriesTotal(chart.rawTexts) + entriesTotal(chart.title) + entriesTotal(chart.xAxisTitle) + entriesTotal(chart.yAxisTitle);
+        let total = entriesTotal(chart.labels) + entriesTotal(chart.labelIndexes) + levelsTotal(chart.labelLevels) + entriesTotal(chart.rawTexts) + entriesTotal(chart.title) + entriesTotal(chart.xAxisTitle) + entriesTotal(chart.yAxisTitle);
         const dataSets = chart.dataSets;
         if (Array.isArray(dataSets)) {
             if (dataSets.length > limit) { tooLong = true; return 0; }

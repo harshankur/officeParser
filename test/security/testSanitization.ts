@@ -3211,6 +3211,11 @@ async function parserHardeningTests() {
     const nestedSeries = nestedChart.ast?.attachments.find(a => a.chartData)?.chartData?.dataSets ?? [];
     const nestedTotal = nestedSeries.reduce((sum, series) => sum + (series.xValues?.length ?? 0) + (series.bubbleSizes?.length ?? 0), 0);
     check('pptx: nested X values and bubble sizes hold at most 1,000,000 entries in all', nestedTotal > 0 && nestedTotal <= 1_000_000, `${nestedTotal}`);
+    const nestedLevels = () => `<?xml version="1.0"?><c:chartSpace ${pns}><c:chart><c:ser><c:cat><c:multiLvlStrRef><c:multiLvlStrCache>${nest(Array.from({ length: n(20000) }, (_, i) => `<c:pt idx="${i}"><c:v>1</c:v></c:pt>`).join(''), 2000, s => `<c:lvl>${s}</c:lvl>`)}</c:multiLvlStrCache></c:multiLvlStrRef></c:cat></c:ser></c:chart></c:chartSpace>`;
+    await timed('pptx: category levels nested 2,000 deep around 20,000 labels are read', () => parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': nestedLevels() }), 'pptx', { extractAttachments: true }));
+    const levelsChart = await parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': nestedLevels() }), 'pptx', { extractAttachments: true });
+    const levelLabels = levelsChart.ast?.attachments.find(a => a.chartData)?.chartData?.labelLevels?.reduce((sum, level) => sum + level.length, 0);
+    check('pptx: nested category levels read each label once', levelLabels === 20000, `${levelLabels}`);
     await timed('odt: styles nested 2,000 deep around 60,000 elements are read', () => parseQuiet(odfOf('text', '<text:p>hi</text:p>', {}, nest(empties(60000), 2000, (s, i) => `<style:style style:name="s${i}">${s}</style:style>`)), 'odt'));
 
     // rawContent: a node's markup holds everything nested in it, so nested tables repeat it at every
@@ -4224,6 +4229,9 @@ async function parserHardeningTests() {
     await refusedQuickly('10,000 custom properties sharing one list of 10,000 values', [], 'html', { metadata: { customProperties: Object.fromEntries(Array.from({ length: 10000 }, (_, i) => [`p${i}`, sharedValues])) } });
     const sharedSeries = { name: 's', values: Array.from({ length: 100000 }, (_, i) => i), pointLabels: [] };
     await refusedQuickly('1,000 chart series sharing one list of 100,000 values', [{ type: 'chart', metadata: { attachmentName: 'c' } }], 'html', { attachments: [{ type: 'chart', name: 'c', mimeType: 'application/json', data: '', extension: 'json', chartData: { labels: [], dataSets: Array(1000).fill(sharedSeries), rawTexts: [] } }] });
+    const sharedLevels = [Array.from({ length: 100000 }, (_, i) => ({ index: i, value: `q${i}` }))];
+    await refusedQuickly('1,000 charts sharing label levels of 100,000 labels', Array.from({ length: 1000 }, (_, i) => ({ type: 'chart', metadata: { attachmentName: `c${i}` } })), 'html',
+        { attachments: Array.from({ length: 1000 }, (_, i) => ({ type: 'chart', name: `c${i}`, mimeType: 'application/json', data: '', extension: 'json', chartData: { labels: [], dataSets: [], rawTexts: [], labelLevels: sharedLevels } })) });
     // Records are weighed by what writers write at each holder (keys, short values), a list item by its
     // indentation, and a table by the empty positions its grid fills, at every path to it.
     const indented = { type: 'list', metadata: { listType: 'unordered', indentation: 64 }, children: [] };

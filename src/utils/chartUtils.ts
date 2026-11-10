@@ -81,6 +81,25 @@ export const isPointIndexList = (indexes: unknown, length: number): indexes is n
     return true;
 };
 
+/**
+ * Whether `levels` has the shape of ChartData.labelLevels: lists of labels, each with a string value and a
+ * point index that ascends within its list, at most `limit` labels in all.
+ */
+export const isLabelLevels = (levels: unknown, limit = Infinity): levels is NonNullable<ChartData['labelLevels']> => {
+    if (!Array.isArray(levels) || levels.length > limit) return false;
+    let left = limit;
+    for (const level of levels) {
+        if (!Array.isArray(level) || (left -= level.length) < 0) return false;
+        const indexes: unknown[] = [];
+        for (const label of level) {
+            if (!label || typeof label !== "object" || typeof label.value !== "string") return false;
+            indexes.push(label.index);
+        }
+        if (!isPointIndexList(indexes, level.length)) return false;
+    }
+    return true;
+};
+
 /** Collects the point indexes of a list's entries. Gives none when an entry has no index, the indexes do not ascend, or the list is empty. */
 const pointIndexes = () => {
     const indexes: number[] = [];
@@ -112,6 +131,26 @@ const readPoints = (cache: Element, limit: number): { texts: string[]; indexes?:
         indexes.add(pt?.nodeType === 1 && pt.tagName === "c:pt" ? pointIndex(pt.getAttribute("idx")) : undefined);
     }
     return { texts, indexes: indexes.get() };
+};
+
+/**
+ * Reads a multi-level category cache (`c:multiLvlStrRef/c:multiLvlStrCache/c:lvl`) as ChartData.labelLevels,
+ * at most `limit` labels in all. Undefined when `cat` holds no such cache, no level has a label, or a level's
+ * labels lack valid point indexes.
+ */
+const readLabelLevels = (cat: Element, limit: number): ChartData['labelLevels'] => {
+    const ref = getChildElements(cat, "c:multiLvlStrRef")[0];
+    const cache = ref && getChildElements(ref, "c:multiLvlStrCache")[0];
+    if (!cache) return undefined;
+    const levels: NonNullable<ChartData['labelLevels']> = [];
+    let left = limit;
+    for (const lvl of getChildElements(cache, "c:lvl")) {
+        const { texts, indexes } = readPoints(lvl, left);
+        if (texts.length > 0 && !indexes) return undefined;
+        left -= texts.length;
+        levels.push(texts.map((value, i) => ({ index: indexes![i], value })));
+    }
+    return left < limit ? levels : undefined;
 };
 
 /**
@@ -200,6 +239,8 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
     const sharedLabels: string[] = [];
     let labelIndexes: number[] | undefined;
     let pointCount: number | undefined;
+    let labelLevels: ChartData['labelLevels'];
+    let labelTexts: string[] | undefined;
 
     for (let i = 0; i < seriesNodes.length; i++) {
         const ser = seriesNodes[i] as Element;
@@ -223,11 +264,21 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
             pointLabelPoints.add(pointIndex(getDirectChildren(dLbls[j], "c:idx")[0]?.getAttribute("val")));
         }
 
-        // Categories (labels) - c:cat or c:xVal
-        const catNode = getChildElements(ser, "c:cat")[0] || getChildElements(ser, "c:xVal")[0];
-        if (catNode && sharedLabels.length === 0) {
+        // Categories (labels) - c:cat or c:xVal, from the first series that has some. For multi-level
+        // categories, labels hold the innermost level and the chart's text holds all levels in cache order.
+        const cat = getChildElements(ser, "c:cat")[0];
+        const catNode = cat || getChildElements(ser, "c:xVal")[0];
+        const levels = cat && !labelTexts ? readLabelLevels(cat, MAX_CHART_VALUES) : undefined;
+        if (levels) {
+            labelLevels = levels;
+            labelTexts = levels.flatMap(level => level.map(label => label.value));
+            for (const label of levels[0]) sharedLabels.push(label.value);
+            if (levels[0].length > 0) labelIndexes = levels[0].map(label => label.index);
+            pointCount = pointIndex(getElementsByTagName(cat, "c:ptCount")[0]?.getAttribute("val"));
+        } else if (catNode && !labelTexts) {
             const { texts, indexes } = readPoints(catNode, MAX_CHART_VALUES);
             if (texts.length > 0) {
+                labelTexts = texts;
                 for (const label of texts) sharedLabels.push(label);
                 labelIndexes = indexes;
                 pointCount = pointIndex(getElementsByTagName(catNode, "c:ptCount")[0]?.getAttribute("val"));
@@ -256,7 +307,7 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
     // Title" (as PowerPoint, Excel and LibreOffice show it; it was left out).
     if (titleEl && title === undefined && !getDirectChildren(titleEl, "c:tx").length) title = dataSets.length === 1 && dataSets[0].name ? dataSets[0].name : "Chart Title";
 
-    const rawTexts = chartRawTexts(undefined, dataSets, sharedLabels);
+    const rawTexts = chartRawTexts(undefined, dataSets, labelTexts ?? []);
 
     return {
         title,
@@ -266,6 +317,7 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
         labels: sharedLabels,
         ...(labelIndexes && { labelIndexes }),
         ...(pointCount !== undefined && { pointCount }),
+        ...(labelLevels && { labelLevels }),
         rawTexts
     };
 };
