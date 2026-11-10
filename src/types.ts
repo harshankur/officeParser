@@ -4113,15 +4113,54 @@ export interface ChartData {
         name?: string;
         /** Actual numeric or string values for this group */
         values: string[];
+        /**
+         * The point index of each value (OpenXML's `c:pt idx`), ascending. A chart's cache leaves out blank
+         * points, so `values[i]` belongs to point `valueIndexes[i]`. Absent when the chart gives no point
+         * indexes: the values then hold the points in order.
+         */
+        valueIndexes?: number[];
+        /** This series' X values (OpenXML's `c:xVal`), in scatter and bubble charts. Absent when the series has none. */
+        xValues?: string[];
+        /** The point index of each X value (OpenXML's `c:pt idx`), ascending (see valueIndexes). */
+        xValueIndexes?: number[];
+        /** This series' bubble sizes (OpenXML's `c:bubbleSize`), in bubble charts. Absent when the series has none. */
+        bubbleSizes?: string[];
+        /** The point index of each bubble size (OpenXML's `c:pt idx`), ascending (see valueIndexes). */
+        bubbleSizeIndexes?: number[];
         /** Specific labels for each point in this dataset (if defined per point) */
         pointLabels: string[];
+        /** The point index of each point label (OpenXML's `c:dLbl/c:idx`), ascending. */
+        pointLabelIndexes?: number[];
     }[];
 
     /** 
      * Labels for the chart facets (e.g., 'Jan', 'Feb', 'Mar' on X-axis).
-     * These typically correspond to the data points in each dataSet.
+     * These typically correspond to the data points in each dataSet. In a scatter or bubble chart, they are
+     * the first series' X values only: read each series' own from its `xValues`. For multi-level
+     * categories, they are the innermost level (see labelLevels).
      */
     labels: string[];
+
+    /**
+     * The point index of each label (OpenXML's `c:pt idx`), ascending. A label and a value of one point
+     * share its index, and a point missing from either list is blank in it. Absent when the chart gives no
+     * point indexes: the labels then hold the points in order.
+     */
+    labelIndexes?: number[];
+
+    /**
+     * How many points the chart's categories span (OpenXML's `c:ptCount`), blank ones included. No list
+     * holds an entry for each of them.
+     */
+    pointCount?: number;
+
+    /**
+     * The levels of a multi-level category cache (OpenXML's `c:multiLvlStrCache`), innermost first, as the
+     * chart caches them, each label with its point index. An outer label covers the points from its own index
+     * up to the next label's (quarters under years: `2025` at 0 and `2026` at 2 group points 0-1 and 2-3). A
+     * level with no labels is empty. Absent for categories of one level.
+     */
+    labelLevels?: { index: number; value: string }[][];
 
     /** Every text node discovered in the chart XML (for keyword search/raw extraction) */
     rawTexts: string[];
