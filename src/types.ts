@@ -4103,6 +4103,22 @@ export interface ChartData {
     /** Y-axis title (for value or continuous axes) */
     yAxisTitle?: string;
 
+    /**
+     * Every axis of an OpenXML chart's plot area, in document order (secondary axes included).
+     * Absent when the chart has none (pie charts).
+     */
+    axes?: {
+        /** The axis id (`c:axId`) */
+        id: string;
+        /** From `c:catAx`, `c:dateAx`, `c:valAx` or `c:serAx`, in that order */
+        kind: 'category' | 'date' | 'value' | 'series';
+        /** Where the axis is drawn: bottom, left, right or top (`c:axPos`) */
+        position?: 'b' | 'l' | 'r' | 't';
+        title?: string;
+        /** True when the axis is hidden (`c:delete`) */
+        deleted?: boolean;
+    }[];
+
     /** 
      * Collections of data points. 
      * For bar/line charts, each dataset is one 'line' or group of bars.
@@ -4115,6 +4131,16 @@ export interface ChartData {
         values: string[];
         /** Specific labels for each point in this dataset (if defined per point) */
         pointLabels: string[];
+        /**
+         * The OpenXML chart group that holds this series, its element name without "Chart"
+         * (e.g., 'bar', 'line', 'pie', 'scatter', 'surface3D')
+         */
+        chartType?: string;
+        /**
+         * The ids of the axes this series uses (its group's `c:axId`), matching `axes[].id`.
+         * Series of one group share one array. Absent for groups without axes (pie charts).
+         */
+        axisIds?: string[];
     }[];
 
     /** 

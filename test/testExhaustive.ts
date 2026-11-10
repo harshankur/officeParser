@@ -28,7 +28,7 @@ import { PDFDict, PDFDocument, PDFHexString, PDFName, PDFOperator, PDFRawStream,
 import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
-import type { ImageMetadata, OfficeContentNode, OfficeParserAST, ShapeMetadata, SheetMetadata } from '../src/types';
+import type { ChartData, ImageMetadata, OfficeContentNode, OfficeParserAST, ShapeMetadata, SheetMetadata } from '../src/types';
 import { OfficeWarningType } from '../src/types';
 import { parseXmlString } from '../src/utils/xmlUtils';
 import { decodeWindows1252, textDecoder } from '../src/utils/encodingUtils';
@@ -5319,6 +5319,85 @@ async function testChartScripts(): Promise<void> {
     const tableHtml = (await withChart.to('html', { htmlConfig: { chartJsSrc: '' }, onWarning: (w: any) => tableWarnings.push(w) } as any)).value as string;
     assert.ok(!tableHtml.includes('<script') && !tableHtml.includes('<canvas') && /<table[\s>]/.test(tableHtml), 'with no chart script to draw with, a chart is written as its data table');
     assert.ok(tableWarnings.some(w => w.code === 'CONTENT_NOT_REPRESENTABLE'), 'a chart written as a table is reported');
+}
+
+/**
+ * The parser reads a chart's axes in plot-area order and gives each series its group's chart type and
+ * axes. The x-axis title falls back to a date axis's when no category axis has one.
+ */
+async function testChartAxes(): Promise<void> {
+    const cns = 'xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"';
+    const rich = (text: string) => `<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>${text}</a:t></a:r></a:p></c:rich></c:tx></c:title>`;
+    const ser = (name: string, value: string) => `<c:ser><c:tx><c:v>${name}</c:v></c:tx><c:val><c:v>${value}</c:v></c:val></c:ser>`;
+    const chartXml = (plotArea: string) => `<?xml version="1.0"?><c:chartSpace ${cns}><c:chart><c:plotArea>${plotArea}</c:plotArea></c:chart></c:chartSpace>`;
+    const comboChart = chartXml(
+        `<c:barChart><c:barDir val="col"/>${ser('Revenue', '1250000')}<c:axId val="996847872"/><c:axId val="996794240"/></c:barChart>`
+        + `<c:lineChart>${ser('Margin', '0.12')}<c:axId val="996781888"/><c:axId val="996778304"/></c:lineChart>`
+        + `<c:dateAx><c:axId val="996847872"/><c:axPos val="b"/>${rich('Month')}<c:crossAx val="996794240"/></c:dateAx>`
+        + `<c:valAx><c:axId val="996794240"/><c:axPos val="l"/>${rich('Revenue (£)')}<c:crossAx val="996847872"/></c:valAx>`
+        + `<c:valAx><c:axId val="996778304"/><c:axPos val="r"/>${rich('Margin %')}<c:crossAx val="996781888"/></c:valAx>`
+        + `<c:dateAx><c:axId val="996781888"/><c:delete val="1"/><c:axPos val="b"/><c:crossAx val="996778304"/></c:dateAx>`);
+
+    const pns = 'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const sns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const zip = (parts: Record<string, string>) => Buffer.from(zipSync(Object.fromEntries(Object.entries(parts).map(([name, value]) => [name, strToU8(value)]))));
+    const pptx = (chart: string) => zip({
+        '[Content_Types].xml': '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/></Types>',
+        '_rels/.rels': '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/></Relationships>',
+        'ppt/presentation.xml': `<?xml version="1.0"?><p:presentation ${pns}><p:sldIdLst><p:sldId id="256" r:id="rId2"/></p:sldIdLst></p:presentation>`,
+        'ppt/slides/slide1.xml': `<?xml version="1.0"?><p:sld ${pns}><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>hi</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>`,
+        'ppt/charts/chart1.xml': chart,
+    });
+    const xlsx = (chart: string) => zip({
+        '[Content_Types].xml': '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>',
+        'xl/workbook.xml': `<?xml version="1.0"?><workbook ${sns}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+        'xl/_rels/workbook.xml.rels': '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>',
+        'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><worksheet ${sns}><sheetData><row r="1"><c r="A1"><v>7</v></c></row></sheetData></worksheet>`,
+        'xl/charts/chart1.xml': chart,
+    });
+    const chartOf = async (bytes: Buffer, fileType: 'pptx' | 'xlsx') => {
+        const ast = await OfficeParser.parseOffice(bytes, { fileType, extractAttachments: true, onWarning: () => { } } as any) as OfficeParserAST;
+        const chart = ast.attachments.find(a => a.chartData)?.chartData;
+        assert.ok(chart, `${fileType}: the chart is read`);
+        return chart;
+    };
+    const seriesAxes = (chart: ChartData) => chart.dataSets.map(({ name, chartType, axisIds }) => ({ name, chartType, axisIds }));
+
+    for (const fileType of ['pptx', 'xlsx'] as const) {
+        const chart = await chartOf((fileType === 'pptx' ? pptx : xlsx)(comboChart), fileType);
+        assert.deepStrictEqual(chart.axes, [
+            { id: '996847872', kind: 'date', position: 'b', title: 'Month' },
+            { id: '996794240', kind: 'value', position: 'l', title: 'Revenue (£)' },
+            { id: '996778304', kind: 'value', position: 'r', title: 'Margin %' },
+            { id: '996781888', kind: 'date', position: 'b', deleted: true },
+        ], `${fileType}: every axis is read in plot-area order`);
+        assert.deepStrictEqual(seriesAxes(chart), [
+            { name: 'Revenue', chartType: 'bar', axisIds: ['996847872', '996794240'] },
+            { name: 'Margin', chartType: 'line', axisIds: ['996781888', '996778304'] },
+        ], `${fileType}: each series names its group's chart type and axes`);
+        assert.strictEqual(chart.xAxisTitle, 'Month', `${fileType}: with no category axis, the x-axis title is the date axis's`);
+        assert.strictEqual(chart.yAxisTitle, 'Revenue (£)', `${fileType}: the y-axis title is still the first value axis's`);
+    }
+
+    // A category axis's title wins over a date axis's. The parser skips an axis without an id, drops a
+    // position outside b/l/r/t and `c:delete val="0"`, and reads a `c:delete` without a value as deleted.
+    const edge = await chartOf(pptx(chartXml(
+        `<c:surface3DChart>${ser('Depth', '3')}<c:axId val="1"/><c:axId val="2"/><c:axId val="3"/></c:surface3DChart>`
+        + `<c:catAx><c:axId val="1"/><c:axPos val="x"/>${rich('Across')}</c:catAx>`
+        + `<c:dateAx>${rich('When')}</c:dateAx>`
+        + `<c:valAx><c:axId val="2"/><c:delete val="0"/></c:valAx>`
+        + `<c:serAx><c:axId val="3"/><c:delete/></c:serAx>`)), 'pptx');
+    assert.deepStrictEqual(edge.axes, [
+        { id: '1', kind: 'category', title: 'Across' },
+        { id: '2', kind: 'value' },
+        { id: '3', kind: 'series', deleted: true },
+    ], 'axes keep only an id, a valid position and a deletion');
+    assert.strictEqual(edge.xAxisTitle, 'Across', 'a category axis title wins over a date axis title');
+    assert.deepStrictEqual(seriesAxes(edge), [{ name: 'Depth', chartType: 'surface3D', axisIds: ['1', '2', '3'] }], 'a 3-D surface series names its group and three axes');
+
+    const pie = await chartOf(pptx(chartXml(`<c:pieChart><c:varyColors val="1"/>${ser('Share', '40')}<c:firstSliceAng val="0"/></c:pieChart>`)), 'pptx');
+    assert.ok(!('axes' in pie), 'a chart without axes has no axes list');
+    assert.ok(pie.dataSets[0].chartType === 'pie' && !('axisIds' in pie.dataSets[0]), 'a pie series names its chart type and no axes');
 }
 
 /**
@@ -13980,6 +14059,7 @@ async function runTests(): Promise<void> {
         ['Template near-tags balance and limit', testTemplateNearTagsBalanceAndLimit],
         ['DOCX templates as before', testDocxTemplatesAsBefore],
         ['Chart scripts', testChartScripts],
+        ['Chart axes', testChartAxes],
         ['Markdown header rows', testMarkdownHeaderRows],
         ['RTF header rows', testRtfHeaderRows],
         ['RTF symbol words', testRtfSymbols],

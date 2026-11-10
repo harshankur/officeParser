@@ -1021,6 +1021,8 @@ Chart Node (type: 'chart')
 └── → Attachment: { chartData: { title, dataSets, labels } }
 ```
 
+For PPTX and XLSX charts, `chartData.axes` lists every axis of the plot area in document order, secondary axes included. Each axis has an `id` and a `kind` (`'category'`, `'date'`, `'value'` or `'series'`), plus `position`, `title` and `deleted` when the chart sets them. Each series in `dataSets` names its chart group in `chartType` (`'bar'`, `'line'`, `'pie'`, ...) and its axes in `axisIds`, which match `axes[].id`. A pie chart has no `axes`, and its series have no `axisIds`. `xAxisTitle` takes the first category axis's title, or the first date axis's when no category axis has one.
+
 ### 5. Text Formatting
 
 ```ts
