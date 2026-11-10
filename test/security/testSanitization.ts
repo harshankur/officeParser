@@ -3067,6 +3067,15 @@ async function parserHardeningTests() {
         ...Object.fromEntries(Object.entries(extra).map(([k, v]) => [k, enc(v)])),
     }));
     await heapBudget('pptx: a chart of 20,000 series and 30,000 labels is read', () => parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': `<?xml version="1.0"?><c:chartSpace ${pns}><c:chart><c:plotArea><c:barChart><c:ser><c:cat>${'<c:v>1</c:v>'.repeat(30000)}</c:cat></c:ser>${'<c:ser/>'.repeat(20000)}</c:barChart></c:plotArea></c:chart></c:chartSpace>` }), 'pptx', { extractAttachments: true }));
+    // The parser keeps a cache's point count as a number: a cache that counts a billion points and holds
+    // three gives three entries in each list and in each output.
+    const farPoints = ['0', '500000000', '999999999'].map((idx, i) => `<c:pt idx="${idx}"><c:v>${i + 1}</c:v></c:pt>`).join('');
+    const countedChart = await heapBudget('pptx: a chart counting a billion points and holding three is read', () => parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': `<?xml version="1.0"?><c:chartSpace ${pns}><c:chart><c:plotArea><c:barChart><c:ser><c:cat><c:strCache><c:ptCount val="1000000000"/>${farPoints}</c:strCache></c:cat><c:val><c:numCache><c:ptCount val="1000000000"/>${farPoints}</c:numCache></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>` }), 'pptx', { extractAttachments: true })) as Awaited<ReturnType<typeof parseQuiet>>;
+    const countedData = countedChart.ast?.attachments.find(a => a.chartData)?.chartData;
+    check('pptx: a billion-point count is kept as a count', countedData?.pointCount === 1_000_000_000 && countedData.labelIndexes?.length === 3, JSON.stringify(countedData?.labelIndexes));
+    const countedAst = countedChart.ast && { ...countedChart.ast, content: [{ type: 'chart', metadata: { attachmentName: 'chart1.xml' } }] };
+    const countedOutputs = await heapBudget('docx, html, pdf: a chart counting a billion points is written', () => Promise.all((['docx', 'html', 'pdf'] as const).map(format => countedAst ? OfficeGenerator.generate(countedAst as any, format, { onWarning: () => {}, pdfConfig: { engine: 'native' } } as any) : undefined))) as ({ value: unknown } | undefined)[];
+    check('docx, html, pdf: a chart counting a billion points is written at the size of its three', (countedOutputs ?? []).every(out => out && (out.value as any).length < 2_000_000), (countedOutputs ?? []).map(out => (out?.value as any)?.length).join(' '));
     const sharedComments = await heapBudget('pptx: one comments part named 2,000 times is read', () => parseQuiet(pptxOf({
         'ppt/slides/_rels/slide1.xml.rels': `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${Array.from({ length: 2000 }, (_, i) => `<Relationship Id="rId${i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments/comment1.xml"/>`).join('')}</Relationships>`,
         'ppt/comments/comment1.xml': `<?xml version="1.0"?><p:cmLst ${pns}>${'<p:cm authorId="0"><p:text>c</p:text></p:cm>'.repeat(20000)}</p:cmLst>`,
@@ -3195,6 +3204,13 @@ async function parserHardeningTests() {
     const mns = 'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"';
     await timed('pptx: 200 paragraphs of math nested 1,000 deep are read', () => parseQuiet(pptxOf({ 'ppt/slides/slide1.xml': `<?xml version="1.0"?><p:sld ${pns} ${mns}><p:cSld><p:spTree><p:sp><p:txBody>${`<a:p><x>${nest(`<m:r><m:t>${'A'.repeat(1000)}</m:t></m:r>`, 1000, s => `<m:oMath>${s}</m:oMath>`)}</x></a:p>`.repeat(200)}</p:txBody></p:sp></p:spTree></p:cSld></p:sld>` }), 'pptx'));
     await timed('pptx: chart series nested 2,000 deep around 20,000 values are read', () => parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': `<?xml version="1.0"?><c:chartSpace ${pns}><c:chart>${nest('<c:v>1</c:v>'.repeat(n(20000)), 2000, s => `<c:ser><c:val>${s}</c:val></c:ser>`)}</c:chart></c:chartSpace>` }), 'pptx', { extractAttachments: true }));
+    const nestedPoints = (depth: number) => `<?xml version="1.0"?><c:chartSpace ${pns}><c:chart>${nest('<c:v>1</c:v>'.repeat(n(20000)), depth, (s, i) => `<c:ser>${i % 2 ? `<c:bubbleSize>${s}</c:bubbleSize>` : `<c:xVal>${s}</c:xVal>`}</c:ser>`)}</c:chart></c:chartSpace>`;
+    await timed('pptx: X values and bubble sizes nested 2,000 deep around 20,000 values are read', () => parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': nestedPoints(2000) }), 'pptx', { extractAttachments: true }));
+    // Each level reads every value below it: 200 levels around 20,000 values ask for 4,000,000.
+    const nestedChart = await heapBudget('pptx: X values and bubble sizes nested 200 deep are read', () => parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': nestedPoints(200) }), 'pptx', { extractAttachments: true })) as Awaited<ReturnType<typeof parseQuiet>>;
+    const nestedSeries = nestedChart.ast?.attachments.find(a => a.chartData)?.chartData?.dataSets ?? [];
+    const nestedTotal = nestedSeries.reduce((sum, series) => sum + (series.xValues?.length ?? 0) + (series.bubbleSizes?.length ?? 0), 0);
+    check('pptx: nested X values and bubble sizes hold at most 1,000,000 entries in all', nestedTotal > 0 && nestedTotal <= 1_000_000, `${nestedTotal}`);
     await timed('odt: styles nested 2,000 deep around 60,000 elements are read', () => parseQuiet(odfOf('text', '<text:p>hi</text:p>', {}, nest(empties(60000), 2000, (s, i) => `<style:style style:name="s${i}">${s}</style:style>`)), 'odt'));
 
     // rawContent: a node's markup holds everything nested in it, so nested tables repeat it at every
