@@ -1021,6 +1021,8 @@ Chart Node (type: 'chart')
 └── → Attachment: { chartData: { title, dataSets, labels } }
 ```
 
+A PPTX or XLSX chart's cache leaves out blank points, so `labels[i]` and `values[i]` can belong to different points. `labelIndexes`, each series' `valueIndexes` and `pointLabelIndexes` give the point index of every entry, and `pointCount` gives the number of points, blank ones included. Pair a label with a value through their point indexes. A list without point indexes holds the points in order.
+
 ### 5. Text Formatting
 
 ```ts

@@ -1,3 +1,4 @@
+import { isPointIndexList } from './chartUtils.js';
 import { mapNodeLists, NodeMemo, nodeMemo } from './nodeListUtils.js';
 import { OfficeContentNode, OfficeParserAST } from '../types.js';
 
@@ -307,14 +308,26 @@ function normalizeAttachments(attachments: OfficeParserAST['attachments']): Offi
             if (typeof chart !== 'object' || Array.isArray(chart)) set('chartData', undefined);
             else {
                 const dataSets = Array.isArray(chart.dataSets) ? chart.dataSets.slice(0, MAX_CHART_ENTRIES) : [];
+                const labels = asStrings(chart.labels);
                 set('chartData', {
                     ...(chart.title !== undefined && { title: asString(chart.title) }),
                     ...(chart.xAxisTitle !== undefined && { xAxisTitle: asString(chart.xAxisTitle) }),
                     ...(chart.yAxisTitle !== undefined && { yAxisTitle: asString(chart.yAxisTitle) }),
-                    dataSets: dataSets.map((series: any) => series && typeof series === 'object'
-                        ? { ...(series.name !== undefined && { name: asString(series.name) }), values: asStrings(series.values), pointLabels: asStrings(series.pointLabels) }
-                        : { values: [], pointLabels: [] }),
-                    labels: asStrings(chart.labels),
+                    dataSets: dataSets.map((series: any) => {
+                        if (!series || typeof series !== 'object') return { values: [], pointLabels: [] };
+                        const values = asStrings(series.values);
+                        const pointLabels = asStrings(series.pointLabels);
+                        return {
+                            ...(series.name !== undefined && { name: asString(series.name) }),
+                            values,
+                            ...(isPointIndexList(series.valueIndexes, values.length) && { valueIndexes: series.valueIndexes }),
+                            pointLabels,
+                            ...(isPointIndexList(series.pointLabelIndexes, pointLabels.length) && { pointLabelIndexes: series.pointLabelIndexes }),
+                        };
+                    }),
+                    labels,
+                    ...(isPointIndexList(chart.labelIndexes, labels.length) && { labelIndexes: chart.labelIndexes }),
+                    ...(Number.isSafeInteger(chart.pointCount) && chart.pointCount >= 0 && { pointCount: chart.pointCount }),
                     rawTexts: asStrings(chart.rawTexts),
                 });
             }
