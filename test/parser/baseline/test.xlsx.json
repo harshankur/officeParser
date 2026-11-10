@@ -8746,6 +8746,18 @@
       "extension": "xml",
       "chartData": {
         "title": "Chart Title",
+        "axes": [
+          {
+            "id": "1402597383",
+            "kind": "category",
+            "position": "b"
+          },
+          {
+            "id": "1291682311",
+            "kind": "value",
+            "position": "l"
+          }
+        ],
         "dataSets": [
           {
             "name": "Series 1",
@@ -8755,7 +8767,12 @@
               "3.5",
               "4.5"
             ],
-            "pointLabels": []
+            "pointLabels": [],
+            "chartType": "bar",
+            "axisIds": [
+              "1402597383",
+              "1291682311"
+            ]
           },
           {
             "name": "Series 2",
@@ -8765,7 +8782,12 @@
               "1.8",
               "2.8"
             ],
-            "pointLabels": []
+            "pointLabels": [],
+            "chartType": "bar",
+            "axisIds": [
+              "1402597383",
+              "1291682311"
+            ]
           },
           {
             "name": "Series 3",
@@ -8775,7 +8797,12 @@
               "3",
               "5"
             ],
-            "pointLabels": []
+            "pointLabels": [],
+            "chartType": "bar",
+            "axisIds": [
+              "1402597383",
+              "1291682311"
+            ]
           }
         ],
         "labels": [

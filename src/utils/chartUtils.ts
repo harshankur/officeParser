@@ -69,6 +69,44 @@ const repeats = (value: string | null): number => {
     return Number.isFinite(n) && n > 1 ? n : 1;
 };
 
+type ChartAxis = NonNullable<ChartData['axes']>[number];
+
+const AXIS_KINDS: Record<string, ChartAxis['kind']> = { catAx: 'category', dateAx: 'date', valAx: 'value', serAx: 'series' };
+const AXIS_POSITIONS = new Set(['b', 'l', 'r', 't']);
+
+const axisIdsOf = (el: Element): string[] => {
+    const ids: string[] = [];
+    for (const axId of getChildElements(el, "c:axId")) {
+        const id = axId.getAttribute("val");
+        if (id) ids.push(id);
+    }
+    return ids;
+};
+
+/** The axes of a chart's plot area, in document order: those without an id are left out. */
+const extractOpenXmlAxes = (plotArea: Element): ChartAxis[] => {
+    const axes: ChartAxis[] = [];
+    for (let i = 0; i < plotArea.childNodes.length && axes.length < MAX_CHART_SERIES; i++) {
+        const el = plotArea.childNodes[i] as Element;
+        const kind = el.nodeType === 1 ? AXIS_KINDS[el.localName] : undefined;
+        if (!kind) continue;
+        const id = axisIdsOf(el)[0];
+        if (!id) continue;
+
+        const axis: ChartAxis = { id, kind };
+        const position = getChildElements(el, "c:axPos")[0]?.getAttribute("val");
+        if (position && AXIS_POSITIONS.has(position)) axis.position = position as ChartAxis['position'];
+        const titleEl = getChildElements(el, "c:title")[0];
+        const title = titleEl ? extractOpenXmlRichText(titleEl, "c:title") : undefined;
+        if (title !== undefined) axis.title = title;
+        // An OpenXML boolean without a value is true.
+        const deleted = getChildElements(el, "c:delete")[0];
+        if (deleted && !['0', 'false'].includes(deleted.getAttribute("val") ?? '')) axis.deleted = true;
+        axes.push(axis);
+    }
+    return axes;
+};
+
 /**
  * Extracts fully structured chart data from OpenXML (PPTX, XLSX) chart XML.
  * @param xmlBuffer Chart XML buffer
@@ -90,9 +128,14 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
 
     const catAxes = getElementsByTagName(root, "c:catAx");
     if (catAxes.length > 0) xAxisTitle = extractOpenXmlRichText(catAxes[0] as Element, "c:title");
+    const dateAxes = getElementsByTagName(root, "c:dateAx");
+    if (xAxisTitle === undefined && dateAxes.length > 0) xAxisTitle = extractOpenXmlRichText(dateAxes[0] as Element, "c:title");
 
     const valAxes = getElementsByTagName(root, "c:valAx");
     if (valAxes.length > 0) yAxisTitle = extractOpenXmlRichText(valAxes[0] as Element, "c:title");
+
+    const plotArea = getDirectChildren(chartEl, "c:plotArea")[0];
+    const axes = plotArea ? extractOpenXmlAxes(plotArea) : [];
 
     // Extract Series (dataSets)
     // The outermost series, at most MAX_CHART_SERIES of them, holding at most MAX_CHART_VALUES values
@@ -101,9 +144,23 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
     let valuesLeft = MAX_CHART_VALUES;
     const dataSets: ChartData['dataSets'] = [];
     const sharedLabels: string[] = [];
+    // Each group's chart type and axis ids, read once for all its series. Reading them per series takes
+    // time in the product of the group's series and axis ids.
+    let group: Node | null = null;
+    let chartType: string | undefined;
+    let axisIds: string[] | undefined;
 
     for (let i = 0; i < seriesNodes.length; i++) {
         const ser = seriesNodes[i] as Element;
+
+        if (ser.parentNode !== group) {
+            group = ser.parentNode;
+            const groupName = (group as Element | null)?.localName ?? '';
+            const isChartGroup = groupName.endsWith("Chart");
+            chartType = isChartGroup ? groupName.slice(0, -"Chart".length) : undefined;
+            const ids = isChartGroup ? axisIdsOf(group as Element) : [];
+            axisIds = ids.length > 0 ? ids : undefined;
+        }
 
         // DataSet Name (c:tx)
         const name = extractOpenXmlRichText(ser, "c:tx");
@@ -141,7 +198,10 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
             }
         }
 
-        dataSets.push({ name, values, pointLabels });
+        const dataSet: ChartData['dataSets'][number] = { name, values, pointLabels };
+        if (chartType) dataSet.chartType = chartType;
+        if (axisIds) dataSet.axisIds = axisIds;
+        dataSets.push(dataSet);
     }
 
     // A title of no text of its own is the one Office draws for it: a chart of one series its name, else "Chart
@@ -154,6 +214,7 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
         title,
         xAxisTitle,
         yAxisTitle,
+        ...(axes.length > 0 && { axes }),
         dataSets,
         labels: sharedLabels,
         rawTexts
