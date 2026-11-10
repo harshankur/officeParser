@@ -317,10 +317,16 @@ function normalizeAttachments(attachments: OfficeParserAST['attachments']): Offi
                         if (!series || typeof series !== 'object') return { values: [], pointLabels: [] };
                         const values = asStrings(series.values);
                         const pointLabels = asStrings(series.pointLabels);
+                        const xValues = series.xValues !== undefined ? asStrings(series.xValues) : undefined;
+                        const bubbleSizes = series.bubbleSizes !== undefined ? asStrings(series.bubbleSizes) : undefined;
                         return {
                             ...(series.name !== undefined && { name: asString(series.name) }),
                             values,
                             ...(isPointIndexList(series.valueIndexes, values.length) && { valueIndexes: series.valueIndexes }),
+                            ...(xValues && { xValues }),
+                            ...(xValues && isPointIndexList(series.xValueIndexes, xValues.length) && { xValueIndexes: series.xValueIndexes }),
+                            ...(bubbleSizes && { bubbleSizes }),
+                            ...(bubbleSizes && isPointIndexList(series.bubbleSizeIndexes, bubbleSizes.length) && { bubbleSizeIndexes: series.bubbleSizeIndexes }),
                             pointLabels,
                             ...(isPointIndexList(series.pointLabelIndexes, pointLabels.length) && { pointLabelIndexes: series.pointLabelIndexes }),
                         };

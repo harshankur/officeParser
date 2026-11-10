@@ -3204,6 +3204,13 @@ async function parserHardeningTests() {
     const mns = 'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"';
     await timed('pptx: 200 paragraphs of math nested 1,000 deep are read', () => parseQuiet(pptxOf({ 'ppt/slides/slide1.xml': `<?xml version="1.0"?><p:sld ${pns} ${mns}><p:cSld><p:spTree><p:sp><p:txBody>${`<a:p><x>${nest(`<m:r><m:t>${'A'.repeat(1000)}</m:t></m:r>`, 1000, s => `<m:oMath>${s}</m:oMath>`)}</x></a:p>`.repeat(200)}</p:txBody></p:sp></p:spTree></p:cSld></p:sld>` }), 'pptx'));
     await timed('pptx: chart series nested 2,000 deep around 20,000 values are read', () => parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': `<?xml version="1.0"?><c:chartSpace ${pns}><c:chart>${nest('<c:v>1</c:v>'.repeat(n(20000)), 2000, s => `<c:ser><c:val>${s}</c:val></c:ser>`)}</c:chart></c:chartSpace>` }), 'pptx', { extractAttachments: true }));
+    const nestedPoints = (depth: number) => `<?xml version="1.0"?><c:chartSpace ${pns}><c:chart>${nest('<c:v>1</c:v>'.repeat(n(20000)), depth, (s, i) => `<c:ser>${i % 2 ? `<c:bubbleSize>${s}</c:bubbleSize>` : `<c:xVal>${s}</c:xVal>`}</c:ser>`)}</c:chart></c:chartSpace>`;
+    await timed('pptx: X values and bubble sizes nested 2,000 deep around 20,000 values are read', () => parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': nestedPoints(2000) }), 'pptx', { extractAttachments: true }));
+    // Each level reads every value below it: 200 levels around 20,000 values ask for 4,000,000.
+    const nestedChart = await heapBudget('pptx: X values and bubble sizes nested 200 deep are read', () => parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': nestedPoints(200) }), 'pptx', { extractAttachments: true })) as Awaited<ReturnType<typeof parseQuiet>>;
+    const nestedSeries = nestedChart.ast?.attachments.find(a => a.chartData)?.chartData?.dataSets ?? [];
+    const nestedTotal = nestedSeries.reduce((sum, series) => sum + (series.xValues?.length ?? 0) + (series.bubbleSizes?.length ?? 0), 0);
+    check('pptx: nested X values and bubble sizes hold at most 1,000,000 entries in all', nestedTotal > 0 && nestedTotal <= 1_000_000, `${nestedTotal}`);
     await timed('odt: styles nested 2,000 deep around 60,000 elements are read', () => parseQuiet(odfOf('text', '<text:p>hi</text:p>', {}, nest(empties(60000), 2000, (s, i) => `<style:style style:name="s${i}">${s}</style:style>`)), 'odt'));
 
     // rawContent: a node's markup holds everything nested in it, so nested tables repeat it at every

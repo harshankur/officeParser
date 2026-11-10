@@ -184,8 +184,8 @@ export function sharedNodeVisits(ast: OfficeParserAST, limit = Infinity, weigh?:
         return list.length;
     };
     // A chart's data as writers read it (see normalizeAttachments): its labels and texts, and each
-    // series' name, values and point labels, with their point indexes, one level deep (an entry that
-    // is a list is written empty).
+    // series' name, values, X values, bubble sizes and point labels, with their point indexes, one level
+    // deep (an entry that is a list is written empty).
     // Each list, series and chart is counted once towards what the AST holds.
     const chartTotals = new Map<object, number>();
     const entriesTotal = (list: unknown): number => {
@@ -216,8 +216,9 @@ export function sharedNodeVisits(ast: OfficeParserAST, limit = Infinity, weigh?:
                 let own = chartTotals.get(series);
                 if (own === undefined) {
                     chartTotals.set(series, 0);
-                    const { name, values, valueIndexes, pointLabels, pointLabelIndexes } = series as Record<string, unknown>;
-                    own = entriesTotal(name) + entriesTotal(values) + entriesTotal(valueIndexes) + entriesTotal(pointLabels) + entriesTotal(pointLabelIndexes);
+                    const { name, values, valueIndexes, xValues, xValueIndexes, bubbleSizes, bubbleSizeIndexes, pointLabels, pointLabelIndexes } = series as Record<string, unknown>;
+                    own = entriesTotal(name) + entriesTotal(values) + entriesTotal(valueIndexes) + entriesTotal(xValues) + entriesTotal(xValueIndexes)
+                        + entriesTotal(bubbleSizes) + entriesTotal(bubbleSizeIndexes) + entriesTotal(pointLabels) + entriesTotal(pointLabelIndexes);
                     chartTotals.set(series, own);
                 }
                 total += own;

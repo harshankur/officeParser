@@ -4119,6 +4119,14 @@ export interface ChartData {
          * indexes: the values then hold the points in order.
          */
         valueIndexes?: number[];
+        /** This series' X values (OpenXML's `c:xVal`), in scatter and bubble charts. Absent when the series has none. */
+        xValues?: string[];
+        /** The point index of each X value (OpenXML's `c:pt idx`), ascending (see valueIndexes). */
+        xValueIndexes?: number[];
+        /** This series' bubble sizes (OpenXML's `c:bubbleSize`), in bubble charts. Absent when the series has none. */
+        bubbleSizes?: string[];
+        /** The point index of each bubble size (OpenXML's `c:pt idx`), ascending (see valueIndexes). */
+        bubbleSizeIndexes?: number[];
         /** Specific labels for each point in this dataset (if defined per point) */
         pointLabels: string[];
         /** The point index of each point label (OpenXML's `c:dLbl/c:idx`), ascending. */
@@ -4127,7 +4135,8 @@ export interface ChartData {
 
     /** 
      * Labels for the chart facets (e.g., 'Jan', 'Feb', 'Mar' on X-axis).
-     * These typically correspond to the data points in each dataSet.
+     * These typically correspond to the data points in each dataSet. In a scatter or bubble chart, they are
+     * the first series' X values only: read each series' own from its `xValues`.
      */
     labels: string[];
 

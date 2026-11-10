@@ -31,6 +31,7 @@ import * as fs from 'fs';
 import type { ImageMetadata, OfficeContentNode, OfficeParserAST, ShapeMetadata, SheetMetadata } from '../src/types';
 import { OfficeWarningType } from '../src/types';
 import { parseXmlString } from '../src/utils/xmlUtils';
+import { withWellTypedValues } from '../src/utils/valueTypeUtils';
 import { decodeWindows1252, textDecoder } from '../src/utils/encodingUtils';
 import { ocrTestHooks, performOcr, terminateOcr } from '../src/utils/ocrUtils';
 import { imageFromPdf, imageToTextPdf, newDecodeBudget } from '../src/utils/textPdf';
@@ -5401,6 +5402,82 @@ async function testChartPointPositions(): Promise<void> {
         const rows = await tableRows({ labels: ['a', 'b'], labelIndexes, dataSets: [{ name: 's', values: ['1', '2'], valueIndexes, pointLabels: [] }], rawTexts: [] }, 'html');
         assert.deepStrictEqual(rows, [['', 's'], ['a', '1'], ['b', '2']], `normalization drops point indexes ${JSON.stringify([labelIndexes, valueIndexes])}`);
     }
+}
+
+/**
+ * Each series of a scatter or bubble chart has its own X values (`c:xVal`), and a bubble series its sizes
+ * (`c:bubbleSize`). The parser keeps them on the series, with their point indexes. `labels` holds the
+ * first series' X values, and `rawTexts` holds the labels, names and values, as for any other chart.
+ */
+async function testChartScatterBubble(): Promise<void> {
+    const cns = 'xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"';
+    const pts = (values: (string | undefined)[]) => values.map((v, i) => v === undefined ? '' : `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`).join('');
+    const numCache = (values: (string | undefined)[]) => `<c:numRef><c:f>S!$B$2:$B$5</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${values.length}"/>${pts(values)}</c:numCache></c:numRef>`;
+    const ser = (name: string, parts: Record<string, string>) => `<c:ser><c:tx><c:v>${name}</c:v></c:tx>${Object.entries(parts).map(([tag, body]) => `<c:${tag}>${body}</c:${tag}>`).join('')}</c:ser>`;
+    const chartXml = (kind: string, series: string) => `<?xml version="1.0"?><c:chartSpace ${cns}><c:chart><c:plotArea><c:${kind}>${series}</c:${kind}></c:plotArea></c:chart></c:chartSpace>`;
+    const scatter = chartXml('scatterChart',
+        ser('Series A', { xVal: numCache(['1', '2']), yVal: numCache(['10', '20']) }) +
+        ser('Series B', { xVal: numCache(['100', '200']), yVal: numCache(['30', '40']) }));
+    const bubble = chartXml('bubbleChart', ser('Series C', { xVal: numCache(['1', '2', '3']), yVal: numCache(['10', '20', '30']), bubbleSize: numCache(['5', '15', '25']) }));
+
+    const pns = 'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const sns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const zip = (parts: Record<string, string>) => Buffer.from(zipSync(Object.fromEntries(Object.entries(parts).map(([name, value]) => [name, strToU8(value)]))));
+    const pptx = (chart: string) => zip({
+        '[Content_Types].xml': '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/></Types>',
+        '_rels/.rels': '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/></Relationships>',
+        'ppt/presentation.xml': `<?xml version="1.0"?><p:presentation ${pns}><p:sldIdLst><p:sldId id="256" r:id="rId2"/></p:sldIdLst></p:presentation>`,
+        'ppt/slides/slide1.xml': `<?xml version="1.0"?><p:sld ${pns}><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>hi</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>`,
+        'ppt/charts/chart1.xml': chart,
+    });
+    const xlsx = (chart: string) => zip({
+        '[Content_Types].xml': '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>',
+        'xl/workbook.xml': `<?xml version="1.0"?><workbook ${sns}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+        'xl/_rels/workbook.xml.rels': '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>',
+        'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><worksheet ${sns}><sheetData><row r="1"><c r="A1"><v>7</v></c></row></sheetData></worksheet>`,
+        'xl/charts/chart1.xml': chart,
+    });
+    const chartOf = async (bytes: Buffer, fileType: 'pptx' | 'xlsx') => {
+        const ast = await OfficeParser.parseOffice(bytes, { fileType, extractAttachments: true, onWarning: () => { } } as any) as OfficeParserAST;
+        const chart = ast.attachments.find(a => a.chartData)?.chartData;
+        assert.ok(chart, `${fileType}: the chart is read`);
+        return chart;
+    };
+    const seriesOf = (chart: Awaited<ReturnType<typeof chartOf>>) => chart.dataSets.map(({ name, xValues, xValueIndexes, values, bubbleSizes, bubbleSizeIndexes }) => ({ name, xValues, xValueIndexes, values, bubbleSizes, bubbleSizeIndexes }));
+
+    for (const fileType of ['pptx', 'xlsx'] as const) {
+        const build = fileType === 'pptx' ? pptx : xlsx;
+        const scatterChart = await chartOf(build(scatter), fileType);
+        assert.deepStrictEqual(seriesOf(scatterChart), [
+            { name: 'Series A', xValues: ['1', '2'], xValueIndexes: [0, 1], values: ['10', '20'], bubbleSizes: undefined, bubbleSizeIndexes: undefined },
+            { name: 'Series B', xValues: ['100', '200'], xValueIndexes: [0, 1], values: ['30', '40'], bubbleSizes: undefined, bubbleSizeIndexes: undefined },
+        ], `${fileType}: each scatter series keeps its own X values`);
+        assert.deepStrictEqual([scatterChart.labels, scatterChart.labelIndexes], [['1', '2'], [0, 1]], `${fileType}: a scatter chart's labels are still its first series' X values`);
+        assert.deepStrictEqual(scatterChart.rawTexts, ['1', '2', 'Series A', '10', '20', 'Series B', '30', '40'], `${fileType}: a scatter chart's text holds its labels, names and values`);
+
+        const bubbleChart = await chartOf(build(bubble), fileType);
+        assert.deepStrictEqual(seriesOf(bubbleChart), [
+            { name: 'Series C', xValues: ['1', '2', '3'], xValueIndexes: [0, 1, 2], values: ['10', '20', '30'], bubbleSizes: ['5', '15', '25'], bubbleSizeIndexes: [0, 1, 2] },
+        ], `${fileType}: a bubble series keeps its X values and bubble sizes`);
+        assert.deepStrictEqual(bubbleChart.rawTexts, ['1', '2', '3', 'Series C', '10', '20', '30'], `${fileType}: a bubble chart's text holds its labels, name and values`);
+    }
+
+    // The cache leaves out blank points, and the indexes name the points that remain. A `c:v` outside a
+    // `c:pt` gives its list no indexes.
+    const gapped = await chartOf(pptx(chartXml('bubbleChart', ser('G', { xVal: numCache(['1', undefined, '3']), yVal: numCache(['10', '20', '30']), bubbleSize: numCache([undefined, '15', '25']) }))), 'pptx');
+    assert.deepStrictEqual(seriesOf(gapped), [{ name: 'G', xValues: ['1', '3'], xValueIndexes: [0, 2], values: ['10', '20', '30'], bubbleSizes: ['15', '25'], bubbleSizeIndexes: [1, 2] }], 'blank X values and bubble sizes keep their point indexes');
+    const unpositioned = await chartOf(pptx(chartXml('scatterChart', ser('U', { xVal: '<c:v>1</c:v><c:v>2</c:v>', yVal: '<c:v>10</c:v><c:v>20</c:v>' }))), 'pptx');
+    assert.deepStrictEqual(seriesOf(unpositioned), [{ name: 'U', xValues: ['1', '2'], xValueIndexes: undefined, values: ['10', '20'], bubbleSizes: undefined, bubbleSizeIndexes: undefined }], 'X values outside c:pt have no point indexes');
+
+    const bar = await chartOf(pptx(chartXml('barChart', ser('Sales', { cat: numCache(['1', '2']), val: numCache(['10', '20']) }))), 'pptx');
+    assert.deepStrictEqual(Object.keys(bar.dataSets[0]).filter(key => key.startsWith('xValue') || key.startsWith('bubbleSize')), [], 'a bar series has no X values or bubble sizes');
+
+    const normalized = (series: Record<string, unknown>) => withWellTypedValues({ type: 'pptx', metadata: {}, content: [], attachments: [{ type: 'chart', name: 'c', mimeType: 'application/xml', data: '', chartData: { labels: [], dataSets: [{ values: ['10', '20'], pointLabels: [], ...series }], rawTexts: [] } }] } as any).attachments[0].chartData?.dataSets[0];
+    assert.deepStrictEqual(normalized({ xValues: [1, '2'], xValueIndexes: [0, 1], bubbleSizes: ['5', '6'], bubbleSizeIndexes: [0, 3] }),
+        { values: ['10', '20'], xValues: ['1', '2'], xValueIndexes: [0, 1], pointLabels: [], bubbleSizes: ['5', '6'], bubbleSizeIndexes: [0, 3] }, 'normalization keeps X values, bubble sizes and their point indexes');
+    assert.deepStrictEqual(normalized({ xValues: ['1', '2'], xValueIndexes: [1, 0], bubbleSizes: ['5', '6'], bubbleSizeIndexes: [0] }),
+        { values: ['10', '20'], xValues: ['1', '2'], pointLabels: [], bubbleSizes: ['5', '6'] }, 'normalization drops point indexes that descend or miss entries');
+    assert.deepStrictEqual(normalized({}), { values: ['10', '20'], pointLabels: [] }, 'normalization adds no X values or bubble sizes');
 }
 
 /**
@@ -14063,6 +14140,7 @@ async function runTests(): Promise<void> {
         ['DOCX templates as before', testDocxTemplatesAsBefore],
         ['Chart scripts', testChartScripts],
         ['Chart point positions', testChartPointPositions],
+        ['Chart scatter and bubble series', testChartScatterBubble],
         ['Markdown header rows', testMarkdownHeaderRows],
         ['RTF header rows', testRtfHeaderRows],
         ['RTF symbol words', testRtfSymbols],

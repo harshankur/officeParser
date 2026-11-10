@@ -188,6 +188,14 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
     // in all: series nested in series each read every value below them (22 KB, out of memory).
     const seriesNodes = getElementsByTagName(root, "c:ser").slice(0, MAX_CHART_SERIES);
     let valuesLeft = MAX_CHART_VALUES;
+    // X values and bubble sizes share their own MAX_CHART_VALUES budget, so they never cut a chart's values short.
+    let pointsLeft = MAX_CHART_VALUES;
+    const readSeriesPoints = (node: Element | undefined) => {
+        if (!node) return { texts: undefined, indexes: undefined };
+        const points = readPoints(node, pointsLeft);
+        pointsLeft -= points.texts.length;
+        return points;
+    };
     const dataSets: ChartData['dataSets'] = [];
     const sharedLabels: string[] = [];
     let labelIndexes: number[] | undefined;
@@ -226,8 +234,22 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
             }
         }
 
+        // X values and bubble sizes (scatter and bubble charts)
+        const { texts: xValues, indexes: xValueIndexes } = readSeriesPoints(getChildElements(ser, "c:xVal")[0]);
+        const { texts: bubbleSizes, indexes: bubbleSizeIndexes } = readSeriesPoints(getChildElements(ser, "c:bubbleSize")[0]);
+
         const pointLabelIndexes = pointLabelPoints.get();
-        dataSets.push({ name, values, ...(valueIndexes && { valueIndexes }), pointLabels, ...(pointLabelIndexes && { pointLabelIndexes }) });
+        dataSets.push({
+            name,
+            values,
+            ...(valueIndexes && { valueIndexes }),
+            ...(xValues && { xValues }),
+            ...(xValueIndexes && { xValueIndexes }),
+            ...(bubbleSizes && { bubbleSizes }),
+            ...(bubbleSizeIndexes && { bubbleSizeIndexes }),
+            pointLabels,
+            ...(pointLabelIndexes && { pointLabelIndexes }),
+        });
     }
 
     // A title of no text of its own is the one Office draws for it: a chart of one series its name, else "Chart
