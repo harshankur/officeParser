@@ -5306,6 +5306,56 @@ async function testTemplateBlocks(): Promise<void> {
 }
 
 /**
+ * Chart caches keep their raw values and add their number format and the text the chart shows, in the
+ * chart's own date system.
+ */
+async function testChartNumberFormats(): Promise<void> {
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const cns = 'xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"';
+    const points = (values: string[], formats: (string | undefined)[] = []) => values.map((v, i) => `<c:pt idx="${i}"${formats[i] ? ` formatCode="${formats[i]}"` : ''}><c:v>${v}</c:v></c:pt>`).join('');
+    const numCache = (code: string, values: string[], formats?: (string | undefined)[]) => `<c:numRef><c:f>S!A1</c:f><c:numCache><c:formatCode>${code}</c:formatCode><c:ptCount val="${values.length}"/>${points(values, formats)}</c:numCache></c:numRef>`;
+    const strCache = (values: string[]) => `<c:strRef><c:f>S!A1</c:f><c:strCache><c:ptCount val="${values.length}"/>${points(values)}</c:strCache></c:strRef>`;
+    const ser = (name: string, cat: string, val: string) => `<c:ser><c:idx val="0"/><c:tx>${strCache([name])}</c:tx><c:cat>${cat}</c:cat><c:val>${val}</c:val></c:ser>`;
+    const chartOf = async (series: string, date1904 = '') => {
+        const chart = `<?xml version="1.0"?><c:chartSpace ${cns}>${date1904}<c:chart><c:plotArea><c:barChart>${series}</c:barChart></c:plotArea></c:chart></c:chartSpace>`;
+        const xlsx = Buffer.from(zipSync({
+            '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+            'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+            'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+            'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData/></worksheet>`),
+            'xl/charts/chart1.xml': strToU8(chart),
+        }));
+        const ast = await OfficeParser.parseOffice(xlsx, { fileType: 'xlsx', extractAttachments: true } as any) as OfficeParserAST;
+        const data = ast.attachments.find(a => a.chartData)?.chartData;
+        assert.ok(data, 'the chart has its data');
+        return data;
+    };
+
+    // `mmm\-yy` dates, a pound series and a percentage series, in the 1900 date system.
+    const months = numCache('mmm\\-yy', ['45658', '45689', '45717']);
+    const issue = await chartOf(ser('Revenue', months, numCache('&quot;£&quot;#,##0', ['1250000', '1500000', '1100000'])) + ser('Margin', months, numCache('0%', ['0.12', '0.15', '0.09'])), '<c:date1904 val="0"/>');
+    assert.deepStrictEqual([issue.labels, issue.dataSets.map(d => d.values)], [['45658', '45689', '45717'], [['1250000', '1500000', '1100000'], ['0.12', '0.15', '0.09']]], 'the raw labels and values are kept');
+    assert.deepStrictEqual([issue.labelFormatCode, issue.shownLabels], ['mmm\\-yy', ['Jan-25', 'Feb-25', 'Mar-25']], 'the labels have their format and their shown text');
+    assert.deepStrictEqual(issue.dataSets.map(d => [d.formatCode, d.shownValues]), [['"£"#,##0', ['£1,250,000', '£1,500,000', '£1,100,000']], ['0%', ['12%', '15%', '9%']]], 'each series has its format and its shown values');
+    assert.deepStrictEqual(issue.rawTexts, ['45658', '45689', '45717', 'Revenue', '1250000', '1500000', '1100000', 'Margin', '0.12', '0.15', '0.09'], 'the raw texts are the raw values');
+
+    // The 1904 date system shows the same day counts 1,462 days later; `<c:date1904/>` with no value is 1904 too.
+    for (const date1904 of ['<c:date1904 val="1"/>', '<c:date1904/>']) {
+        const later = await chartOf(ser('Revenue', months, numCache('0', ['1', '2', '3'])), date1904);
+        assert.deepStrictEqual(later.shownLabels, ['Jan-29', 'Feb-29', 'Mar-29'], `${date1904}: the labels are read as 1904 dates`);
+    }
+
+    // General and text caches set none of the format fields.
+    const plain = await chartOf(ser('Units', strCache(['North', 'South']), numCache('General', ['12', '30'])));
+    assert.deepStrictEqual([plain.labelFormatCode, plain.shownLabels, plain.dataSets[0].formatCode, plain.dataSets[0].shownValues], [undefined, undefined, undefined, undefined], 'General and text caches have no format or shown text');
+    assert.ok(!('shownValues' in plain.dataSets[0]) && !('shownLabels' in plain), 'the fields are left out, not set to undefined');
+
+    // A point's own format wins; scientific notation has no text form here, so its points keep the raw value.
+    const mixed = await chartOf(ser('Share', strCache(['a', 'b', 'c']), numCache('0%', ['0.1', '0.15', '0.2'], [undefined, '0.0%', undefined])) + ser('Big', strCache(['a', 'b', 'c']), numCache('0.00E+00', ['1', '2', '3'])));
+    assert.deepStrictEqual(mixed.dataSets.map(d => d.shownValues), [['10%', '15.0%', '20%'], ['1', '2', '3']], 'a point\'s own format wins; scientific notation keeps the raw value');
+}
+
+/**
  * A page with no chart loads no Chart.js, and with no chart script to draw with a chart is written as its data.
  */
 async function testChartScripts(): Promise<void> {
@@ -13980,6 +14030,7 @@ async function runTests(): Promise<void> {
         ['Template near-tags balance and limit', testTemplateNearTagsBalanceAndLimit],
         ['DOCX templates as before', testDocxTemplatesAsBefore],
         ['Chart scripts', testChartScripts],
+        ['Chart number formats', testChartNumberFormats],
         ['Markdown header rows', testMarkdownHeaderRows],
         ['RTF header rows', testRtfHeaderRows],
         ['RTF symbol words', testRtfSymbols],

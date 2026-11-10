@@ -4113,6 +4113,17 @@ export interface ChartData {
         name?: string;
         /** Actual numeric or string values for this group */
         values: string[];
+        /**
+         * The value cache's Excel number format (`c:formatCode`, e.g. `"£"#,##0` or `0%`). Absent for General
+         * and for ODF charts.
+         */
+        formatCode?: string;
+        /**
+         * Each of `values` as the chart shows it (`£1,250,000`, `12%`), in the chart's date system. A point's
+         * own format wins over `formatCode`. Where the format has no text form here (scientific notation,
+         * fractions), the entry is the raw value. Present only with `formatCode`.
+         */
+        shownValues?: string[];
         /** Specific labels for each point in this dataset (if defined per point) */
         pointLabels: string[];
     }[];
@@ -4122,6 +4133,12 @@ export interface ChartData {
      * These typically correspond to the data points in each dataSet.
      */
     labels: string[];
+
+    /** The category cache's Excel number format (e.g. `mmm\-yy`), read as a series' `formatCode` is. */
+    labelFormatCode?: string;
+
+    /** Each of `labels` as the chart shows it (`Jan-25` for 45658), read as a series' `shownValues` are. */
+    shownLabels?: string[];
 
     /** Every text node discovered in the chart XML (for keyword search/raw extraction) */
     rawTexts: string[];
