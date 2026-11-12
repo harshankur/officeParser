@@ -137,6 +137,15 @@ const sheetFolderOf = (type: string | null): string | undefined => {
 /** Whether the character at `at` of `xml` can continue a tag name (so `<c` there opens `<col`, not `<c`). */
 const continuesName = (xml: string, at: number): boolean => /[\w:.-]/.test(xml[at] ?? '');
 
+/**
+ * Removes the prefix some writers (the .NET Open XML SDK, for one) put on SpreadsheetML elements,
+ * as in `<x:row>`, since the readers below match the plain element names.
+ */
+function withoutMainPrefix(xml: string): string {
+    const prefix = /xmlns:([\w.-]+)=["']http:\/\/schemas\.openxmlformats\.org\/spreadsheetml\/2006\/main["']/.exec(xml)?.[1];
+    return prefix ? xml.replaceAll(`<${prefix}:`, '<').replaceAll(`</${prefix}:`, '</') : xml;
+}
+
 /** Where the next `<tag` element starts in `xml`, from `from` on; -1 when none does. */
 function nextElement(xml: string, tag: string, from: number): number {
     for (let at = xml.indexOf(`<${tag}`, from); at !== -1; at = xml.indexOf(`<${tag}`, at + tag.length + 1)) {
@@ -647,7 +656,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     let workbookRead: { xml: Document } | { error: unknown } | undefined;
     const workbookXmlOf = (): Document => {
         if (workbookRead === undefined) {
-            try { workbookRead = { xml: parseXmlString(workbookFile.content.toString(), { config }) }; } catch (error) { workbookRead = { error }; }
+            try { workbookRead = { xml: parseXmlString(withoutMainPrefix(workbookFile.content.toString()), { config }) }; } catch (error) { workbookRead = { error }; }
         }
         if ('error' in workbookRead) throw workbookRead.error;
         return workbookRead.xml;
@@ -726,7 +735,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         // charged to the element budget as elements are; a plain string costs an array entry, and eight
         // of them are charged as one element (an empty `<si/>` is five bytes of a zip's XML).
         let plainStrings = 0;
-        for (const si of xmlElements(sharedStringsFile.content.toString(), 'si')) {
+        for (const si of xmlElements(withoutMainPrefix(sharedStringsFile.content.toString()), 'si')) {
             // A string's text and runs come before its phonetic readings (`rPh`), which are not its text.
             const phonetic = nextElement(si.content, 'rPh', 0);
             const body = phonetic === -1 ? si.content : si.content.slice(0, phonetic);
@@ -763,7 +772,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     const cellBuiltinFormatMap: Record<number, string> = {};
 
     if (stylesFile) {
-        const xml = parseXmlString(stylesFile.content.toString(), { config });
+        const xml = parseXmlString(withoutMainPrefix(stylesFile.content.toString()), { config });
 
         // Parse custom number formats (numFmtId -> format code)
         // Classified once per number format, however many cell formats share it.
@@ -1189,7 +1198,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             }
 
             const rows: OfficeContentNode[] = [];
-            const sheetXml = file.content.toString();
+            const sheetXml = withoutMainPrefix(file.content.toString());
             // The <row> elements as they stand, rather than a walk over the (possibly vast, sparse)
             // row range the sheet's dimensions declare.
             const rowElements = xmlElements(sheetXml, 'row');
