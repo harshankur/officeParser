@@ -60,13 +60,7 @@ function getBrowserConfig(isSlim, externalPdfLib = false) {
         },
         inject: ['./scripts/browser-shims.js'],
         banner: {
-            js: `
-// officeparser browser bundle
-// Shim for setImmediate (not available in all browsers)
-if (typeof setImmediate === 'undefined') {
-  window.setImmediate = function(callback) { return setTimeout(callback, 0); };
-}
-`.trim(),
+            js: '// officeparser browser bundle',
         },
         plugins: [
             // Polyfill Node.js built-ins for the browser.

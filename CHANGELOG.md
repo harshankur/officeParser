@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **XLSX: cell values are read with their XML references decoded.** A formula's text result `AT&amp;T` read as written, and so did an error, number, date or boolean value written with references.
 - **XLSX: workbooks whose elements carry a namespace prefix are read** (`<x:row>`, as the .NET Open XML SDK writes them). They read as one empty sheet named `sheet1.xml`, with no warning; their sheets, strings, styles, comments and chart sheets are now read as any workbook's. (#153)
 - **XLSX: a workbook saved without calculated results no longer reads as empty sheets.** A formula cell with no result (as a program that writes formulas without calculating them leaves it) was left out; it is a cell of its formula and no text, and `FORMULA_RESULTS_MISSING` says so once per sheet.
+- **`abortSignal` stops reading an archive.** An abort during ZIP extraction took effect only once the whole archive was read, and an aborted signal was not checked before it; extraction now checks it as it reads and yields to the event loop every megabyte, and format detection and OpenDocument decryption stop too, without asking for another password.
+- **The browser bundles no longer define `window.setImmediate`.** Loading one set a stand-in without `clearImmediate` on the page (left from a dependency removed earlier), which other scripts could take for the real pair, and which stopped a bundle from loading in a Web Worker.
 
 ## [8.7.1] - 2026-11-09
 

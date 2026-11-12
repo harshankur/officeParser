@@ -381,7 +381,7 @@ export class OfficeParser {
             // A file named `.zip` is routed by what the archive holds (a LaTeX project, a renamed
             // office package), since `zip` itself is not a format.
             if (routedExt === GENERIC_ZIP_EXTENSION) {
-                routedExt = archiveType ?? (await detectOfficeTypeFromZip(buffer, internalConfig.decompressionLimits ?? {})) ?? routedExt;
+                routedExt = archiveType ?? (await detectOfficeTypeFromZip(buffer, internalConfig.decompressionLimits ?? {}, internalConfig.abortSignal)) ?? routedExt;
             }
 
             // OCR runs over extracted images in EVERY format (not just PDF), so `ocr: true` without

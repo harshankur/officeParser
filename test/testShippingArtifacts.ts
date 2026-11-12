@@ -282,6 +282,8 @@ function checkBrowserIife(isSlim = false): CheckResult[] {
         results.push(fail(`${label}: has @vite-ignore for pdfjs dynamic import`, 'Missing — Vite will warn about unanalyzable dynamic import'));
     }
 
+    results.push(...checkNoGlobalSetImmediate(content, label));
+
     // Reasonable size (must be > 100KB and < 10MB)
     const sizeMb = (size / 1024 / 1024).toFixed(2);
     if (size > 100 * 1024 && size < 10 * 1024 * 1024) {
@@ -290,6 +292,29 @@ function checkBrowserIife(isSlim = false): CheckResult[] {
         results.push(fail(`${label}: size is reasonable`, `${sizeMb} MB — expected between 100KB and 10MB`));
     }
 
+    return results;
+}
+
+/**
+ * A browser bundle neither defines nor calls a global `setImmediate`. Browsers have none; the bundles'
+ * banner once defined one without `clearImmediate` (left from a dependency removed long before), which
+ * other scripts on the page could take for the real pair, which steered archive extraction to a clamped
+ * timer, and which stopped a bundle from loading where there is no `window`. Every `setImmediate` a
+ * bundle holds is a guarded property read (`x.setImmediate`); this guards a dependency that would need
+ * the shim again.
+ */
+function checkNoGlobalSetImmediate(content: string, label: string): CheckResult[] {
+    const results: CheckResult[] = [];
+    if (/setImmediate\s*=(?!=)/.test(content)) {
+        results.push(fail(`${label}: assigns no global setImmediate`, 'the bundle assigns setImmediate (the old banner wrote window.setImmediate=)'));
+    } else {
+        results.push(pass(`${label}: assigns no global setImmediate`));
+    }
+    if (/(?<![\w$.'"`]|typeof\s)setImmediate(?![\w$])/.test(content)) {
+        results.push(fail(`${label}: calls no bare setImmediate`, 'the bundle refers to a global setImmediate, which browsers do not have: feature-detect it with clearImmediate (see eventLoopTurns in src/utils/zipUtils.ts)'));
+    } else {
+        results.push(pass(`${label}: calls no bare setImmediate`));
+    }
     return results;
 }
 
@@ -337,6 +362,13 @@ function checkBrowserEsm(isSlim = false): CheckResult[] {
         results.push(pass(`${label}: has @vite-ignore for pdfjs dynamic import`));
     } else {
         results.push(fail(`${label}: has @vite-ignore for pdfjs dynamic import`, 'Missing — Vite will warn about unanalyzable dynamic import'));
+    }
+
+    results.push(...checkNoGlobalSetImmediate(content, label));
+    // (The pdf-lib-external build of the full bundle, with the same banner.)
+    const nativePdfPath = 'dist/officeparser.browser.native-pdf.mjs';
+    if (!isSlim && fileExists(nativePdfPath)) {
+        results.push(...checkNoGlobalSetImmediate(readFile(nativePdfPath), 'Browser ESM (pdf-lib external)'));
     }
 
     // Reasonable size

@@ -59,6 +59,94 @@ export interface ZipFileContent {
 }
 
 /**
+ * Compressed chunks (of 64 KiB) pushed between two turns of the event loop when extraction is given an
+ * abort signal: 16, a megabyte of input, whose inflation `maxUncompressedBytes` bounds.
+ */
+const YIELD_EVERY_CHUNKS = 16;
+
+/**
+ * Turns of the event loop for one extraction: `next` runs a function on a later turn, after what is
+ * queued meanwhile (an abort from a timer or an I/O callback), and `close` cancels the one pending and
+ * lets go of what it holds.
+ *
+ * The kind of turn is chosen once, when the extraction makes its turns, in this order:
+ * - `setImmediate` (Node, Bun): unclamped;
+ * - a message through a `MessageChannel` (browsers; one an extraction, made on its first turn): unclamped,
+ *   and not throttled in a background tab;
+ * - `setTimeout(0)`: timers are clamped, to about a millisecond in Node and to 4 ms in browsers once
+ *   nested, and to one a second in a background tab, so a turn by timer after every chunk made a 40 MB
+ *   archive take 850 ms to read with a signal, against 10 ms without;
+ * - a microtask, where the host has none of these: extraction settles, but no timer runs between its
+ *   turns, so an abort from a timer is seen only at the end.
+ *
+ * A kind is taken only where its whole set exists (`setImmediate` with `clearImmediate`), because a page
+ * or a polyfill may define `setImmediate` alone, as officeParser's own browser bundles did. `close`
+ * cancels by a token, not by the host's canceller: a turn the host still delivers after it runs nothing,
+ * the host's canceller is called only for a turn not yet run, and `close` never throws.
+ */
+const eventLoopTurns = (): { next: (fn: () => void) => void; close: () => void } => {
+    const host = globalThis as any;
+    // The function the last turn queued, until it runs or is cancelled: the token a turn runs by.
+    let queued: (() => void) | undefined;
+    let hostCancel: (() => void) | undefined;
+    let channel: any;
+    const run = () => {
+        const fn = queued;
+        queued = undefined;
+        hostCancel = undefined;
+        fn?.();
+    };
+    const fallback = (): 'timer' | 'microtask' => typeof host.setTimeout === 'function' ? 'timer' : 'microtask';
+    let kind: 'immediate' | 'channel' | 'timer' | 'microtask' =
+        typeof host.setImmediate === 'function' && typeof host.clearImmediate === 'function' ? 'immediate'
+            : typeof host.MessageChannel === 'function' ? 'channel'
+                : fallback();
+    return {
+        next(fn) {
+            queued = fn;
+            if (kind === 'channel') {
+                try {
+                    if (!channel) {
+                        channel = new host.MessageChannel();
+                        channel.port1.onmessage = run;
+                    }
+                    channel.port2.postMessage(null);
+                    return;
+                } catch {
+                    // (A channel that cannot be made or posted to: this extraction takes timers from here on.)
+                    try { channel?.port1.close(); } catch { /* nothing more to let go of */ }
+                    channel = undefined;
+                    kind = fallback();
+                }
+            }
+            if (kind === 'immediate') {
+                const id = host.setImmediate(run);
+                hostCancel = () => host.clearImmediate(id);
+            } else if (kind === 'timer') {
+                const id = host.setTimeout(run, 0);
+                hostCancel = typeof host.clearTimeout === 'function' ? () => host.clearTimeout(id) : undefined;
+            } else {
+                Promise.resolve().then(run);
+            }
+        },
+        close() {
+            queued = undefined;
+            const cancel = hostCancel;
+            hostCancel = undefined;
+            try { cancel?.(); } catch { /* the queued turn runs nothing */ }
+            try { channel?.port1.close(); } catch { /* nothing more to let go of */ }
+            channel = undefined;
+        },
+    };
+};
+
+/** The bytes one archive may inflate to: `limits.maxUncompressedBytes` when it is a valid limit, else 512 MB. */
+export const maxUncompressedBytesOf = (limits: DecompressionLimits | undefined): number =>
+    limits?.maxUncompressedBytes !== undefined && Number.isFinite(limits.maxUncompressedBytes) && limits.maxUncompressedBytes >= 0
+        ? limits.maxUncompressedBytes
+        : 512 * 1024 * 1024;
+
+/**
  * Extracts files from a ZIP archive with optional filtering.
  * 
  * This function:
@@ -75,7 +163,7 @@ export interface ZipFileContent {
  *                   Receives the filename and returns true to extract, false to skip.
  * @param limits - Decompression limits guarding against zip bombs
  * @param config - Parser configuration, so extraction failures honour `onWarning` like every other
- *                 reported issue
+ *                 reported issue, and its `abortSignal` stops extraction (see YIELD_EVERY_CHUNKS)
  * @returns A promise resolving to an array of extracted files
  * @throws {Error} If the ZIP file cannot be opened or an entry cannot be read
  * 
@@ -100,12 +188,6 @@ export interface ZipFileContent {
  * 
  * @see https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT ZIP file format specification
  */
-/** The bytes one archive may inflate to: `limits.maxUncompressedBytes` when it is a valid limit, else 512 MB. */
-export const maxUncompressedBytesOf = (limits: DecompressionLimits | undefined): number =>
-    limits?.maxUncompressedBytes !== undefined && Number.isFinite(limits.maxUncompressedBytes) && limits.maxUncompressedBytes >= 0
-        ? limits.maxUncompressedBytes
-        : 512 * 1024 * 1024;
-
 export const extractFiles = (
     zipInput: Buffer,
     filterFn: (fileName: string) => boolean,
@@ -131,11 +213,11 @@ export const extractFiles = (
         let pendingFiles = 0;
         let pushComplete = false;
         let settled = false;
-        let timer: ReturnType<typeof setTimeout> | undefined;
+        const turns = eventLoopTurns();
         const activeFiles = new Map<UnzipFile, Buffer[]>();
 
         const cleanup = () => {
-            clearTimeout(timer);
+            turns.close();
             signal?.removeEventListener('abort', onAbort);
             for (const [file, chunks] of activeFiles) {
                 chunks.length = 0;
@@ -144,17 +226,19 @@ export const extractFiles = (
             activeFiles.clear();
         };
 
+        // (A cleanup that threw between `settled` and the settle left the promise pending for good.)
+        const release = () => { try { cleanup(); } catch { /* the promise settles regardless */ } };
         const fail = (err: unknown) => {
             if (settled) return;
             settled = true;
-            cleanup();
+            release();
             results.length = 0;
             reject(err);
         };
         const maybeResolve = () => {
             if (!settled && pushComplete && pendingFiles === 0) {
                 settled = true;
-                cleanup();
+                release();
                 resolve(results);
             }
         };
@@ -207,6 +291,7 @@ export const extractFiles = (
         // bomb early; the worst-case overshoot is one chunk's worth of inflation.
         const PUSH_CHUNK = 1 << 16; // 64 KiB
         let offset = 0;
+        let pushedSinceTurn = 0;
         const pushInput = () => {
             if (settled) return;
             try {
@@ -215,10 +300,11 @@ export const extractFiles = (
                     const end = Math.min(offset + PUSH_CHUNK, src.length);
                     unzipper.push(src.subarray(offset, end), end >= src.length);
                     offset = end;
-                    // A microtask yield would still starve timers. Only signal-enabled
-                    // parses pay for an event-loop turn between compressed chunks.
-                    if (signal && offset < src.length && !settled) {
-                        timer = setTimeout(pushInput, 0);
+                    // A microtask yield would still starve timers. Only signal-enabled parses pay for
+                    // an event-loop turn, once a megabyte of compressed input (see eventLoopTurns).
+                    if (signal && offset < src.length && !settled && ++pushedSinceTurn >= YIELD_EVERY_CHUNKS) {
+                        pushedSinceTurn = 0;
+                        turns.next(pushInput);
                         return;
                     }
                 }

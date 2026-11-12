@@ -367,21 +367,15 @@ pdf.js in the host stops at its next time slice.
 > [!NOTE]
 > **Cancellation is cooperative**
 > The signal is checked between steps: an already-aborted signal rejects before any work, and an abort
-> is seen at the next check (between archive reads, pages, OCR jobs, or batches of parsed tokens). A
-> step that runs synchronously, such as parsing a `.tex` file or one large XML part, finishes before a
-> timer's abort can run; those steps are bounded in size instead.
+> is seen at the next check: between archive reads (an archive yields to the event loop every megabyte
+> when a signal is given), pages, OCR jobs or batches of parsed tokens. Format detection and OpenDocument
+> decryption stop too, and decryption asks for no other password after an abort. A step that runs
+> synchronously, such as parsing a `.tex` file or one large XML part, finishes before a timer's abort can
+> run; those steps are bounded in size instead, and `abortSignal` is not a hard execution-time limit.
 
 > [!NOTE]
 > **Worker Cleanup on Abort**
 > If an OCR job is actively running in the background when the signal is aborted, `officeParser` automatically terminates the Tesseract worker process immediately and removes it from the pool to prevent thread/memory leaks.
-
-Cancellation is cooperative. Archive extraction checks the signal before starting and
-between compressed-input chunks, yielding to the event loop so timer-driven aborts can
-run. Only calls with a signal yield between chunks. Cancellation stops further archive input and also propagates through archive-based
-format detection and OpenDocument encryption sniffing. Cancellation during decryption
-is preserved as `AbortError`, including after password callbacks and key derivation.
-A synchronous chunk or another synchronous parsing phase must finish
-before a timer can run; `abortSignal` is not a hard execution-time limit.
 
 ### Custom OCR Timeouts
 

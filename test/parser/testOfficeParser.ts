@@ -2509,6 +2509,43 @@ async function testAbortSignal(): Promise<FeatureTest[]> {
         });
     }
 
+    // ── Test 3: Signal aborted while a .zip is routed ────────────────────────
+    // A file given as a .zip is routed by what it holds (here a LaTeX project beside 4 MB of stored
+    // bytes); that sniff reads the archive with the parse's signal too, so an abort queued as the next
+    // turn's work lands in it and the parse rejects with AbortError.
+    {
+        const startTime = Date.now();
+        const fflate = require('fflate');
+        const project = Buffer.from(fflate.zipSync({
+            'data.bin': new Uint8Array(4 * 1024 * 1024),
+            'main.tex': fflate.strToU8('\\documentclass{article}\\begin{document}Routed project\\end{document}'),
+        }, { level: 0 }));
+        let outcome: { status: 'PASS' | 'FAIL'; actual: string; details: string };
+        const unaborted = await OfficeParser.parseOffice(project, { fileType: 'zip', onWarning: () => {} } as any);
+        const routed = String((await unaborted.to('text')).value).includes('Routed project');
+        const controller = new AbortController();
+        const turn = setImmediate(() => controller.abort());
+        try {
+            await OfficeParser.parseOffice(project, { fileType: 'zip', abortSignal: controller.signal, onWarning: () => {} } as any);
+            outcome = { status: 'FAIL', actual: 'Resolved', details: 'The parse resolved after its signal fired while the .zip was routed' };
+        } catch (err: any) {
+            const ok = err.name === 'AbortError' && routed;
+            outcome = {
+                status: ok ? 'PASS' : 'FAIL',
+                actual: `${err.name}: ${err.message}`,
+                details: ok ? 'An abort while a .zip was routed rejected with AbortError' : routed ? `Expected AbortError but got ${err.name}` : 'The project did not read as LaTeX without a signal',
+            };
+        } finally {
+            clearImmediate(turn);
+        }
+        results.push({
+            category: 'Cancellation',
+            feature: 'A .zip routed by its contents honours the signal',
+            fileType: 'zip',
+            result: { ...outcome, expected: 'AbortError rejection', duration: Date.now() - startTime }
+        });
+    }
+
     return results;
 }
 
